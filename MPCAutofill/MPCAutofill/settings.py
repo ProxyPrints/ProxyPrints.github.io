@@ -107,8 +107,7 @@ CORS_ALLOWED_ORIGINS = env.list(
         "http://127.0.0.1:3000",
         "http://localhost",
         "http://localhost:3000",
-        "https://mpcautofill.github.io",
-        "https://mpcfill.com",
+        "https://proxyprints.ca",
     ],
 )
 
