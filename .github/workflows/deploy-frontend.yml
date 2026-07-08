@@ -34,9 +34,9 @@ jobs:
 
       - run: npm ci
 
-      # Deliberately NOT setting NEXT_PUBLIC_BACKEND_URL so users can
-      # pick any public backend via "Configure Server"
       - run: npm run build
+        env:
+          NEXT_PUBLIC_BACKEND_URL: https://mpcfill.com/2
 
       - uses: actions/upload-pages-artifact@v3
         with:
