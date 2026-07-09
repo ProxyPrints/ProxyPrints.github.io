@@ -35,7 +35,7 @@ If ProxyPrints is useful to you, consider supporting the original developer on P
           <li>
             Allowing him to spend more time developing and improving this project
             for us all. Several large features are in the pipeline that
-            He's excited to share when they&apos;re ready!
+            He&apos;s excited to share when they&apos;re ready!
           </li>
         </ul>
         <hr />
