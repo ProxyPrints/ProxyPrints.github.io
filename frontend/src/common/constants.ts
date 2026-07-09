@@ -7,7 +7,7 @@ export const CardHeightMM = 88;
 export const BleedEdgeMM = Math.round(0.12 * 25.4 * 1000) / 1000;
 export const CornerRadiusMM = 2.5;
 
-export const ProjectName = "MPC Autofill";
+export const ProjectName = "ProxyPrints";
 export const MakePlayingCards = "MakePlayingCards.com";
 export const MakePlayingCardsURL = "https://www.makeplayingcards.com";
 
