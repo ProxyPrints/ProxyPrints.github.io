@@ -33,7 +33,7 @@ test.describe("DynamicLogo visual tests", () => {
     await expect(page.getByAltText("Your Design Here").first()).toBeVisible();
 
     await expect(page.getByTestId("dynamic-logo")).toMatchAriaSnapshot(`
-      - paragraph: MPC Autofill
+      - paragraph: ProxyPrints
       - img "logo-arrow"
       - img "Your Design Here"
       - img "Your Design Here"
