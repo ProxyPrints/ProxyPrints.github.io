@@ -187,3 +187,5 @@ node_modules/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+docker/nginx/certs/
+docker/django/env.txt
