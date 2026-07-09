@@ -36,7 +36,7 @@ jobs:
 
       - run: npm run build
         env:
-          NEXT_PUBLIC_BACKEND_URL: https://proxyprints.ca/2
+          NEXT_PUBLIC_BACKEND_URL: https://api.proxyprints.ca/2
 
       - uses: actions/upload-pages-artifact@v3
         with:
