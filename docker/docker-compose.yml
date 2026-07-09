@@ -8,7 +8,7 @@ services:
     image: postgres:15.0-alpine
     container_name: mpcautofill_postgres
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_DB=mpcautofill
       - POSTGRES_USER=mpcautofill
@@ -21,7 +21,7 @@ services:
     image: elasticsearch:7.14.1
     container_name: mpcautofill_elasticsearch
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
     environment:
       - discovery.type=single-node
       - logger.level=WARN
