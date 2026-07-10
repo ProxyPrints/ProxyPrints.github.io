@@ -6,8 +6,7 @@ import Modal from "react-bootstrap/Modal";
 import { ModalFooterHeight, ModalHeaderHeight } from "@/common/constants";
 
 const PDFGenerator = dynamic(
-  () =>
-    import("@/features/pdf/PDFGenerator").then((mod) => mod.PDFGenerator),
+  () => import("@/features/pdf/PDFGenerator").then((mod) => mod.PDFGenerator),
   { ssr: false }
 );
 
