@@ -12,9 +12,9 @@ export const renderPDF = async (props: PDFProps) => {
   return pdf(createElement(PDF, props)).toBlob();
 };
 
-const renderPDFInWorker = async (props: PDFProps) => {
+const renderPDFInWorker = async (props: PDFProps): Promise<Blob> => {
   try {
-    return URL.createObjectURL(await renderPDF(props));
+    return await renderPDF(props);
   } catch (error) {
     log(error);
     throw error;
