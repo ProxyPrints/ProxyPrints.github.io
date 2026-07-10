@@ -13,12 +13,15 @@ import {
   NavbarHeight,
   NavPillButtonHeight,
   NavUnderlineButtonHeight,
+  OtherPrintShopsHeight,
+  PringlePrintsURL,
 } from "@/common/constants";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { Coffee } from "@/components/Coffee";
 import { RightPaddedIcon } from "@/components/icon";
 import { MakePlayingCardsLink } from "@/components/MakePlayingCardsLink";
 import { NavBanner, NavBannerItem } from "@/components/NavBanner";
+import { NotMPCLink } from "@/components/NotMPCLink";
 import { OverflowCol } from "@/components/OverflowCol";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { useLocalFilesDirectoryHandle } from "@/features/clientSearch/clientSearchHooks";
@@ -298,40 +301,110 @@ const MakePlayingCardsInstructions = () => {
   );
 };
 
-type FinishedMyProjectExportType = "mpc" | "pdf";
+// TODO: verify this NotMPC ordering flow is accurate and up to date — steps
+// below were derived from a one-time read of notmpc.com's site copy, not a
+// manual walkthrough of their order process.
+const NotMPCInstructions = () => {
+  return (
+    <Container className="py-3">
+      <h5 className="text-center">
+        Nice work! There are three simple steps for turning your project into an
+        order with <NotMPCLink />.
+      </h5>
+      <BigOL>
+        <BigLI className="py-3">
+          <h3>Export Your Card Images</h3>
+          <p>
+            Head back to the <b>Export</b> menu and choose <b>Card Images</b> to
+            download all your card images to your computer. You&apos;ll upload
+            these to NotMPC in the next step.
+          </p>
+        </BigLI>
+        <BigLI className="py-3">
+          <h3>Set Up Your Order on NotMPC</h3>
+          <p>
+            Head over to <NotMPCLink /> and choose your card size, then select
+            your card stock, quantity and finishing options.
+          </p>
+        </BigLI>
+        <BigLI className="py-3">
+          <h3>Upload Your Images &amp; Checkout</h3>
+          <p>
+            Open NotMPC&apos;s online card maker and drag-and-drop your
+            downloaded images onto the card fronts and backs. Preview your
+            design, then add it to your cart and check out.
+          </p>
+        </BigLI>
+      </BigOL>
+      <hr />
+      <h5 className="text-center">
+        And that&apos;s all there is to it!{" "}
+        <i className="bi bi-rocket-takeoff" />
+      </h5>
+    </Container>
+  );
+};
+
+const OtherPrintShops = () => (
+  <Container
+    className="text-center small"
+    style={{ height: OtherPrintShopsHeight }}
+  >
+    Other Print Shops:{" "}
+    <a href={PringlePrintsURL} target="_blank">
+      PringlePrints
+    </a>{" "}
+    — small print shop, Canada only
+  </Container>
+);
+
+type FinishedMyProjectExportType = "mpc" | "notmpc" | "pdf";
 
 export function FinishedMyProject() {
   const [key, setKey] = useState<FinishedMyProjectExportType>("mpc");
   const navBannerItems: Array<NavBannerItem<FinishedMyProjectExportType>> = [
     { key: "mpc", label: "MakePlayingCards", bootstrapIconName: "bag-check" },
+    { key: "notmpc", label: "NotMPC", bootstrapIconName: "box-seam" },
     { key: "pdf", label: "PDF", bootstrapIconName: "file-pdf" },
   ];
   return (
-    <Tab.Container
-      activeKey={key}
-      onSelect={(k) => {
-        if (k) setKey(k as FinishedMyProjectExportType);
-      }}
-    >
-      <NavBanner items={navBannerItems} variant="underline" />
-      <OverflowCol
-        heightDelta={
-          NavPillButtonHeight + NavUnderlineButtonHeight + NavbarHeight
-        }
+    <>
+      <Tab.Container
+        activeKey={key}
+        onSelect={(k) => {
+          if (k) setKey(k as FinishedMyProjectExportType);
+        }}
       >
-        <Tab.Content>
-          <Tab.Pane eventKey="mpc">
-            <MakePlayingCardsInstructions />
-          </Tab.Pane>
-          <Tab.Pane eventKey="pdf" mountOnEnter>
-            <PDFGenerator
-              heightDelta={
-                NavPillButtonHeight + NavUnderlineButtonHeight + NavbarHeight
-              }
-            />
-          </Tab.Pane>
-        </Tab.Content>
-      </OverflowCol>
-    </Tab.Container>
+        <NavBanner items={navBannerItems} variant="underline" />
+        <OverflowCol
+          heightDelta={
+            NavPillButtonHeight +
+            NavUnderlineButtonHeight +
+            NavbarHeight +
+            OtherPrintShopsHeight
+          }
+        >
+          <Tab.Content>
+            <Tab.Pane eventKey="mpc">
+              <MakePlayingCardsInstructions />
+            </Tab.Pane>
+            <Tab.Pane eventKey="notmpc">
+              <NotMPCInstructions />
+            </Tab.Pane>
+            <Tab.Pane eventKey="pdf" mountOnEnter>
+              <PDFGenerator
+                heightDelta={
+                  NavPillButtonHeight +
+                  NavUnderlineButtonHeight +
+                  NavbarHeight +
+                  OtherPrintShopsHeight
+                }
+              />
+            </Tab.Pane>
+          </Tab.Content>
+        </OverflowCol>
+      </Tab.Container>
+      <OtherPrintShops />
+    </>
   );
 }
