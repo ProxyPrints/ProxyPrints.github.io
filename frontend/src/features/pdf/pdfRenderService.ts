@@ -25,7 +25,7 @@ export class PDFRenderService {
   }
 
   // TODO: awful naming. fix.
-  public renderPDFInWorker(props: PDFProps): Promise<string> {
+  public renderPDFInWorker(props: PDFProps): Promise<Blob> {
     if (this.worker === undefined) {
       throw new Error("PDFRenderService was not initialised!");
     }

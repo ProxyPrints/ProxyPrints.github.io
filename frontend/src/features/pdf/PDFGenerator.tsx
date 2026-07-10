@@ -47,7 +47,22 @@ import { useClientSearchContext } from "../clientSearch/clientSearchContext";
 import { useRenderPDF } from "./useRenderPDF";
 
 const PDFPreview = (props: PDFProps & { url: string | undefined }) => {
-  return <iframe width="100%" height="100%" src={props.url} {...props} />;
+  // Firefox downloads PDF blobs embedded in an <iframe> instead of rendering them inline
+  // (a long-standing Firefox limitation, not specific to this app). <object> avoids the
+  // unwanted download in both Chrome and Firefox, though Firefox still won't render the
+  // preview inline - its fallback content (rendered here) covers that case.
+  return (
+    <object
+      style={{ width: "100%", height: "100%" }}
+      data={props.url}
+      type="application/pdf"
+    >
+      <p className="text-center p-4">
+        Your browser can&apos;t show a live preview of this PDF. Click{" "}
+        <b>Generate PDF</b> below to download and view it.
+      </p>
+    </object>
+  );
 };
 
 const downloadPDF = async (
