@@ -36,7 +36,7 @@ jobs:
 
       - run: npm run build
         env:
-          NEXT_PUBLIC_BACKEND_URL: https://mpcfill.com/2
+          NEXT_PUBLIC_BACKEND_URL: https://api.proxyprints.ca
 
       - uses: actions/upload-pages-artifact@v3
         with:
