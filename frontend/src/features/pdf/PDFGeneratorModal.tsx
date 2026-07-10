@@ -1,9 +1,15 @@
+import dynamic from "next/dynamic";
 import React from "react";
 import Button from "react-bootstrap/Button";
 import Modal from "react-bootstrap/Modal";
 
 import { ModalFooterHeight, ModalHeaderHeight } from "@/common/constants";
-import { PDFGenerator } from "@/features/pdf/PDFGenerator";
+
+const PDFGenerator = dynamic(
+  () =>
+    import("@/features/pdf/PDFGenerator").then((mod) => mod.PDFGenerator),
+  { ssr: false }
+);
 
 interface PDFGeneratorProps {
   show: boolean;

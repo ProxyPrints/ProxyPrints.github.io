@@ -1,4 +1,5 @@
 import styled from "@emotion/styled";
+import dynamic from "next/dynamic";
 import React, { useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
@@ -28,7 +29,12 @@ import { showModal } from "@/store/slices/modalsSlice";
 import { selectIsProjectEmpty } from "@/store/slices/projectSlice";
 
 import { MobileStatus } from "../mobile/MobileStatus";
-import { PDFGenerator } from "../pdf/PDFGenerator";
+
+const PDFGenerator = dynamic(
+  () => import("../pdf/PDFGenerator").then((mod) => mod.PDFGenerator),
+  { ssr: false }
+);
+
 interface ExitModal {
   show: boolean;
   handleClose: {
@@ -317,7 +323,7 @@ export function FinishedMyProject() {
           <Tab.Pane eventKey="mpc">
             <MakePlayingCardsInstructions />
           </Tab.Pane>
-          <Tab.Pane eventKey="pdf">
+          <Tab.Pane eventKey="pdf" mountOnEnter>
             <PDFGenerator
               heightDelta={
                 NavPillButtonHeight + NavUnderlineButtonHeight + NavbarHeight
