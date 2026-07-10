@@ -189,3 +189,4 @@ node_modules/
 /playwright/.auth/
 docker/nginx/certs/
 docker/django/env.txt
+*.bak
