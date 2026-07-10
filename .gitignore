@@ -190,3 +190,4 @@ node_modules/
 docker/nginx/certs/
 docker/django/env.txt
 *.bak
+CLAUDE.md
