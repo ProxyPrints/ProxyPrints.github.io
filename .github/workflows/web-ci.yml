@@ -83,7 +83,7 @@ jobs:
       - uses: ./.github/actions/test-pre-commit
   build-frontend:
     name: Build frontend
-    needs: [test-backend, test-frontend, test-pre-commit]
+    needs: [test-frontend, test-pre-commit]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
