@@ -20,7 +20,9 @@ export function PDFGeneratorModal({ show, handleClose }: PDFGeneratorProps) {
         <Modal.Title>Download PDF</Modal.Title>
       </Modal.Header>
       <Modal.Body className="p-0 mx-0" style={{ overflow: "hidden" }}>
-        {show && <PDFGenerator heightDelta={ModalHeaderHeight + ModalFooterHeight} />}
+        {show && (
+          <PDFGenerator heightDelta={ModalHeaderHeight + ModalFooterHeight} />
+        )}
       </Modal.Body>
       <Modal.Footer>
         <Button variant="secondary" onClick={handleClose}>
