@@ -24,51 +24,18 @@ export function SupportDeveloperModal({
         <Modal.Title>Support the Developer</Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        <h4>A bit about me</h4>
+        <h4>A bit about the developer</h4>
         <p>
-          Hey there! Thanks for checking out {ProjectName}. I&apos;m Nick /
-          chilli_axe, the creator and primary developer of this project.
-        </p>
-        <p>
-          I&apos;m responsible for the software development of this project
-          &mdash; this website, the code that image repository servers run on,
-          thumbnail cloud infrastructure, and the desktop tool that automates{" "}
-          <MakePlayingCardsLink />.
-        </p>
-        <p>
-          I started developing {ProjectName} in early 2020 while I was in uni to
-          simplify how the tabletop gaming community shares its MPC print-ready
-          images &mdash; at the time, we were manually browsing through Google
-          Drives to find cards we wanted to print and dragging & dropping them
-          into MPC.
-        </p>
-        <p>
-          These days, I&apos;m working full-time and continuing to develop{" "}
-          {ProjectName} by night, and I&apos;m passionate about delivering the
-          best print tooling I can to the tabletop gaming community.
-        </p>
-        <p>
-          {ProjectName} is completely open source software (licensed under
-          GPL-3) and all of its features will always be free.
-        </p>
-        <p>
-          You can support my continued development of this project through{" "}
-          <i>Buy Me a Coffee</i> below ♥️
-        </p>
-        <h4>Where does my donation go?</h4>
-        <p>
-          I don&apos;t host any {ProjectName} servers &mdash; just{" "}
-          <a href={"https://mpcautofill.github.io"}>mpcautofill.github.io</a>{" "}
-          (which GitHub allows me to host for free) and some cloud
-          infrastructure in CloudFlare.
+          ProxyPrints is built on MPC Autofill, an open-source project created and maintained by chilli_axe. All the heavy lifting — the card search engine, the project editor, and the desktop tool that automates your MakePlayingCards order — comes from that project.
+If ProxyPrints is useful to you, consider supporting the original developer on Patreon, or starring the project on GitHub.
         </p>
         <p>Any donation goes towards:</p>
         <ul>
-          <li>Fuelling my coffee addiction, and</li>
+          <li>Fuelling his coffee addiction, and</li>
           <li>
-            Allowing me to spend more time developing and improving this project
-            for you all. Several large features are in the pipeline that
-            I&apos;m excited to share when they&apos;re ready!
+            Allowing him to spend more time developing and improving this project
+            for us all. Several large features are in the pipeline that
+            He&apos;s excited to share when they&apos;re ready!
           </li>
         </ul>
         <hr />
