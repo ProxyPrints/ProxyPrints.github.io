@@ -7,10 +7,14 @@ const FlagSvg = styled.svg`
   vertical-align: -0.15em;
 `;
 
+// Simplified 3-lobe maple leaf silhouette (apex at top, two side lobes,
+// short stem at the base) — legible at ~1em rather than a precise botanical
+// outline.
 const MapleLeafPath =
-  "M12 2 L13 5 L16 3.8 L14.6 6.4 L17.2 6.8 L14.7 8.3 L16.3 10.7 L13.3 10 " +
-  "L13.7 13 L12 11.2 L10.3 13 L10.7 10 L7.7 10.7 L9.3 8.3 L6.8 6.8 L9.4 6.4 " +
-  "L8 3.8 L11 5 Z";
+  "M12 2.2 L12.9 5 L15.4 3.6 L14.6 6.1 L17 5.6 L14.9 7.6 L16.6 8.6 " +
+  "L14.3 9 L15 11 L12.9 10.2 L13.1 12 L12 10.8 L10.9 12 L11.1 10.2 " +
+  "L9 11 L9.7 9 L7.4 8.6 L9.1 7.6 L7 5.6 L9.4 6.1 L8.6 3.6 L11.1 5 Z " +
+  "M11.4 12 L12.6 12 L12.4 13.6 L11.6 13.6 Z";
 
 export const CanadaFlag = () => (
   <FlagSvg viewBox="0 0 24 16" role="img" aria-label="Canada flag">
@@ -50,7 +54,7 @@ export const USAFlag = () => (
     {Array.from({ length: 7 }, (_, i) => (
       <rect
         key={i}
-        y={(i * 16) / 13}
+        y={(i * 2 * 16) / 13}
         width="24"
         height={16 / 13}
         fill="#B22234"
