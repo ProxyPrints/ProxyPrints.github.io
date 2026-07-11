@@ -46,8 +46,9 @@ export function FilterSettings({
           At a fixed physical size, a higher DPI yields a higher resolution
           print.
           <br />
-          MakePlayingCards prints cards up to <b>800 DPI</b>, meaning an 800 DPI
-          print and a 1200 DPI print will <b>look the same</b>.
+          Print resolution has a practical ceiling, though &mdash; beyond a
+          certain point, a higher DPI print will <b>look the same</b> as a lower
+          one.
           <br />
           <br />
         </>

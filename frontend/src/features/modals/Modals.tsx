@@ -5,8 +5,6 @@ import { MemoizedCardDetailedView } from "@/features/cardDetailedView/CardDetail
 import { ChangeQueryModal } from "@/features/changeQuery/ChangeQueryModal";
 import { InvalidIdentifiersModal } from "@/features/invalidIdentifiers/InvalidIdentifiersModal";
 import { PDFGeneratorModal } from "@/features/pdf/PDFGeneratorModal";
-import { SupportBackendModal } from "@/features/support/SupportBackendModal";
-import { SupportDeveloperModal } from "@/features/support/SupportDeveloperModal";
 import {
   hideModal,
   selectModalProps,
@@ -51,14 +49,6 @@ export function Modals() {
           )}
         </>
       )}
-      <SupportDeveloperModal
-        show={shownModal === "supportDeveloper"}
-        handleClose={handleClose}
-      />
-      <SupportBackendModal
-        show={shownModal === "supportBackend"}
-        handleClose={handleClose}
-      />
       <InvalidIdentifiersModal
         show={shownModal === "invalidIdentifiers"}
         handleClose={handleClose}

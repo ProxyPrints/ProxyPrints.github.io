@@ -6,7 +6,6 @@ import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
 import { ProjectName } from "@/common/constants";
-import { MakePlayingCardsLink } from "@/components/MakePlayingCardsLink";
 import { DynamicLogo } from "@/features/ui/DynamicLogo";
 import Footer from "@/features/ui/Footer";
 import { ProjectContainer } from "@/features/ui/Layout";
@@ -45,8 +44,7 @@ function ProjectOverview() {
           <ul>
             <li>
               {ProjectName} is the easiest way to print professional-quality
-              playtest cards for kitchen-table tabletop gaming with
-              MakePlayingCards (MPC).
+              playtest cards for kitchen-table tabletop gaming.
             </li>
             <li>
               It&apos;s fully open-source software (licensed under GPL-3) and
@@ -80,15 +78,12 @@ function ProjectOverview() {
       <br />
       <Row>
         <Col lg={6} md={6} sm={12} xs={12}>
-          <h1>
-            Automatic Ordering with <MakePlayingCardsLink />
-          </h1>
+          <h1>Order From the Print Shop of Your Choice</h1>
           <ul>
             <li>
-              Our desktop tool will download all the images required for your
-              order and automatically place your order with{" "}
-              <MakePlayingCardsLink />, who will mail the cards right to your
-              door!
+              Export your finished project as a print-ready PDF, or hand it off
+              to one of the print shops available on the site &mdash; whichever
+              suits your project best.
             </li>
           </ul>
         </Col>
@@ -106,7 +101,7 @@ export default function Index() {
         <title>{`${projectName}`}</title>
         <meta
           name="description"
-          content="The easiest way to print professional-quality playtest cards for kitchen-table tabletop gaming with MakePlayingCards (MPC)."
+          content="The easiest way to print professional-quality playtest cards for kitchen-table tabletop gaming."
         />
       </Head>
       <br />

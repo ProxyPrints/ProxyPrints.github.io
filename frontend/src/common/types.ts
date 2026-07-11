@@ -215,8 +215,6 @@ export type Modals =
   | "cardDetailedView"
   | "gridSelector"
   | "changeQuery"
-  | "supportDeveloper"
-  | "supportBackend"
   | "invalidIdentifiers"
   | "PDFGenerator";
 

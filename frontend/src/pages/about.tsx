@@ -2,7 +2,6 @@ import styled from "@emotion/styled";
 import Head from "next/head";
 
 import { ProjectName } from "@/common/constants";
-import { MakePlayingCardsLink } from "@/components/MakePlayingCardsLink";
 import Footer from "@/features/ui/Footer";
 import { ProjectContainer } from "@/features/ui/Layout";
 import { useGetBackendInfoQuery } from "@/store/api";
@@ -72,22 +71,21 @@ export default function About() {
       <h3>Disclaimer</h3>
       <p>
         Custom card images displayed on {ProjectName} are subject to the license
-        terms under which they were uploaded to their hosts. MPC Autofill is not
-        responsible for the content of user-uploaded images.
+        terms under which they were uploaded to their hosts. {ProjectName} is
+        not responsible for the content of user-uploaded images.
       </p>
       <p>
         {ProjectName} does not condone or support the resale (or other
-        commercial use) of cards printed with this website in any way. As per{" "}
-        <MakePlayingCardsLink />
-        &apos;s user agreement, users acknowledge that they{" "}
+        commercial use) of cards printed with this website in any way. Per your
+        chosen print shop&apos;s user agreement, users acknowledge that they{" "}
         <i>
           &quot;...own all copyrights for [card images used in orders] or have
           full authorization to use them.&quot;
         </i>
       </p>
       <p>
-        {ProjectName} is not affiliated with, produced by, or endorsed by{" "}
-        <MakePlayingCardsLink /> or any other commercial entities.
+        {ProjectName} is not affiliated with, produced by, or endorsed by any of
+        the print shops listed on this site or any other commercial entities.
       </p>
       <h3>Privacy Policy</h3>
       <b>Last updated: 20th April, 2026</b>

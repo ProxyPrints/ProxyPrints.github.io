@@ -17,7 +17,10 @@ export default function Footer() {
         <div className="footer-copyright text-center py-3">
           Made with ♥️ by chilli_axe
           <Spacer />•<Spacer />
-          <a href="https://github.com/chilli-axe/mpc-autofill" target="_blank">
+          <a
+            href="https://github.com/ProxyPrints/ProxyPrints.github.io"
+            target="_blank"
+          >
             GitHub
           </a>
           {backendInfoQuery.isSuccess && backendInfoQuery.data?.reddit != null && (

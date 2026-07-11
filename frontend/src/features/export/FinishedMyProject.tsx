@@ -16,7 +16,7 @@ import {
 } from "@/common/constants";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { Coffee } from "@/components/Coffee";
-import { RightPaddedIcon } from "@/components/icon";
+import { CanadaFlag, ChinaFlag, USAFlag } from "@/components/flags";
 import { MakePlayingCardsLink } from "@/components/MakePlayingCardsLink";
 import { NavBanner, NavBannerItem } from "@/components/NavBanner";
 import { NotMPCLink } from "@/components/NotMPCLink";
@@ -393,16 +393,12 @@ const PringlePrintsInstructions = () => {
 type FinishedMyProjectExportType = "mpc" | "notmpc" | "pringleprints" | "pdf";
 
 export function FinishedMyProject() {
-  const [key, setKey] = useState<FinishedMyProjectExportType>("mpc");
+  const [key, setKey] = useState<FinishedMyProjectExportType>("pringleprints");
   const navBannerItems: Array<NavBannerItem<FinishedMyProjectExportType>> = [
-    { key: "mpc", label: "MakePlayingCards", bootstrapIconName: "bag-check" },
-    { key: "notmpc", label: "NotMPC", bootstrapIconName: "box-seam" },
-    {
-      key: "pringleprints",
-      label: "PringlePrints",
-      bootstrapIconName: "geo-alt",
-    },
     { key: "pdf", label: "PDF", bootstrapIconName: "file-pdf" },
+    { key: "pringleprints", label: "PringlePrints", icon: <CanadaFlag /> },
+    { key: "mpc", label: "MakePlayingCards", icon: <ChinaFlag /> },
+    { key: "notmpc", label: "NotMPC", icon: <USAFlag /> },
   ];
   return (
     <Tab.Container
@@ -418,21 +414,21 @@ export function FinishedMyProject() {
         }
       >
         <Tab.Content>
-          <Tab.Pane eventKey="mpc">
-            <MakePlayingCardsInstructions />
-          </Tab.Pane>
-          <Tab.Pane eventKey="notmpc">
-            <NotMPCInstructions />
-          </Tab.Pane>
-          <Tab.Pane eventKey="pringleprints">
-            <PringlePrintsInstructions />
-          </Tab.Pane>
           <Tab.Pane eventKey="pdf" mountOnEnter>
             <PDFGenerator
               heightDelta={
                 NavPillButtonHeight + NavUnderlineButtonHeight + NavbarHeight
               }
             />
+          </Tab.Pane>
+          <Tab.Pane eventKey="pringleprints">
+            <PringlePrintsInstructions />
+          </Tab.Pane>
+          <Tab.Pane eventKey="mpc">
+            <MakePlayingCardsInstructions />
+          </Tab.Pane>
+          <Tab.Pane eventKey="notmpc">
+            <NotMPCInstructions />
           </Tab.Pane>
         </Tab.Content>
       </OverflowCol>
