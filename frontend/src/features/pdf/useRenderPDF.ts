@@ -51,7 +51,7 @@ export const useRenderPDF = ({
     const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
       cardDocumentsByIdentifier
     );
-    return pdfRenderService.renderPDFInWorker({
+    const blob = await pdfRenderService.renderPDFInWorker({
       cardSelectionMode,
       pageSize,
       pageWidth,
@@ -88,6 +88,7 @@ export const useRenderPDF = ({
       scmOffsetAngleDeg,
       fileHandles,
     });
+    return URL.createObjectURL(blob);
   }, [
     cardSelectionMode,
     pageSize,

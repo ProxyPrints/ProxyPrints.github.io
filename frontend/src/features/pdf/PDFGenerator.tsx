@@ -25,6 +25,7 @@ import {
   PageSize,
   PDFProps,
 } from "@/features/pdf/PDF";
+import { PDFCanvasPreview } from "@/features/pdf/PDFCanvasPreview";
 import { pdfRenderService } from "@/features/pdf/pdfRenderService";
 import {
   BORDERLESS_STUDIO_EXPANSION_MM,
@@ -45,10 +46,6 @@ import { AppDispatch } from "@/store/store";
 
 import { useClientSearchContext } from "../clientSearch/clientSearchContext";
 import { useRenderPDF } from "./useRenderPDF";
-
-const PDFPreview = (props: PDFProps & { url: string | undefined }) => {
-  return <iframe width="100%" height="100%" src={props.url} {...props} />;
-};
 
 const downloadPDF = async (
   props: Omit<PDFProps, "fileHandles">,
@@ -1076,7 +1073,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
             disabled={showSpinner}
             style={{ height: 100 + "%", overflowY: "hidden" }}
           >
-            <PDFPreview url={url} {...debouncedPDFProps} fileHandles={{}} />
+            <PDFCanvasPreview url={url} />
           </Blurrable>
         </Col>
       </Row>

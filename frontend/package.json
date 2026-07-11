@@ -5,6 +5,7 @@
   "license": "GPL-3.0-only",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/copy-pdf-worker.js",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -37,6 +38,7 @@
     "lil-csv": "^1.4.5",
     "next": "^14.2.26",
     "nextjs-google-analytics": "^2.3.3",
+    "pdfjs-dist": "^4.10.38",
     "ping.js": "^0.3.0",
     "react": "^18.3.1",
     "react-bootstrap": "^2.7.2",
