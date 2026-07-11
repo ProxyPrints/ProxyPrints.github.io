@@ -1,5 +1,4 @@
 import styled from "@emotion/styled";
-import dynamic from "next/dynamic";
 import React, { useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
@@ -29,11 +28,7 @@ import { showModal } from "@/store/slices/modalsSlice";
 import { selectIsProjectEmpty } from "@/store/slices/projectSlice";
 
 import { MobileStatus } from "../mobile/MobileStatus";
-
-const PDFGenerator = dynamic(
-  () => import("../pdf/PDFGenerator").then((mod) => mod.PDFGenerator),
-  { ssr: false }
-);
+import { PDFGenerator } from "../pdf/PDFGenerator";
 
 interface ExitModal {
   show: boolean;
