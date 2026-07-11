@@ -191,4 +191,5 @@ node_modules/
 docker/nginx/certs/
 docker/django/env.txt
 *.bak
+/.claude/
 CLAUDE.md
