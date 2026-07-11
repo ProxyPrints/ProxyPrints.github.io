@@ -1,4 +1,4 @@
-import { getWorkerImageURL } from "@/common/image";
+import { getBucketImageURL, getWorkerImageURL } from "@/common/image";
 import { SourceType } from "@/common/schema_types";
 import { CardDocument } from "@/common/types";
 
@@ -6,6 +6,33 @@ export type PDFImageQuality =
   | "small-thumbnail"
   | "large-thumbnail"
   | "full-resolution";
+
+/**
+ * Small/large thumbnails: try the R2 bucket domain first (no Worker compute
+ * on a cache hit), falling back to the Worker on a miss (which also
+ * populates the cache for next time). Mirrors Card.tsx's bucket-first /
+ * worker-fallback behaviour, but via a HEAD check instead of <img onError>
+ * since @react-pdf/renderer's <Image> component has no onError hook to key a
+ * retry off of.
+ */
+const getThumbnailURL = async (
+  cardDocument: CardDocument,
+  size: "small" | "large",
+  jpgQuality: number
+): Promise<string | undefined> => {
+  const bucketURL = getBucketImageURL(cardDocument, size);
+  if (bucketURL !== undefined) {
+    try {
+      const response = await fetch(bucketURL, { method: "HEAD" });
+      if (response.ok) {
+        return bucketURL;
+      }
+    } catch {
+      // network error reaching the bucket domain - fall through to the worker
+    }
+  }
+  return getWorkerImageURL(cardDocument, size, undefined, jpgQuality);
+};
 
 /**
  * Resolve the image source for a card in a PDF, honouring the requested quality
@@ -23,19 +50,9 @@ export const getPDFImageURL = async (
     case SourceType.GoogleDrive:
       switch (imageQuality) {
         case "small-thumbnail":
-          return getWorkerImageURL(
-            cardDocument,
-            "small",
-            undefined,
-            jpgQuality
-          );
+          return getThumbnailURL(cardDocument, "small", jpgQuality);
         case "large-thumbnail":
-          return getWorkerImageURL(
-            cardDocument,
-            "large",
-            undefined,
-            jpgQuality
-          );
+          return getThumbnailURL(cardDocument, "large", jpgQuality);
         case "full-resolution":
           return getWorkerImageURL(cardDocument, "full", dpi, jpgQuality);
         default:
