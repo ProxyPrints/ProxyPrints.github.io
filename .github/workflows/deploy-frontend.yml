@@ -37,7 +37,7 @@ jobs:
       - run: npm run build
         env:
           NEXT_PUBLIC_BACKEND_URL: https://api.proxyprints.ca
-          NEXT_PUBLIC_IMAGE_WORKER_URL: https://image-cdn.pringle-b89.workers.dev
+          NEXT_PUBLIC_IMAGE_WORKER_URL: https://cdn.proxyprints.ca
           NEXT_PUBLIC_IMAGE_BUCKET_URL: https://img.proxyprints.ca
 
       - uses: actions/upload-pages-artifact@v3

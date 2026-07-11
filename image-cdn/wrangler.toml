@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2026-06-13"
 workers_dev = true
 
+[[routes]]
+pattern = "cdn.proxyprints.ca"
+custom_domain = true
+
 [secrets]
 required = [ "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN" ]
 
