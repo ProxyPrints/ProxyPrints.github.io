@@ -177,6 +177,7 @@ MPCAutofill/scryfall_cache/*
 *.woff
 *.woff2
 frontend/public/mockServiceWorker.js
+frontend/public/pdf.worker.min.mjs
 /image-cdn/node_modules/*
 /image-cdn/.wrangler/*
 

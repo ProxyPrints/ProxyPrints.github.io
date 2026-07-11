@@ -25,6 +25,7 @@ import {
   PageSize,
   PDFProps,
 } from "@/features/pdf/PDF";
+import { PDFCanvasPreview } from "@/features/pdf/PDFCanvasPreview";
 import { pdfRenderService } from "@/features/pdf/pdfRenderService";
 import {
   BORDERLESS_STUDIO_EXPANSION_MM,
@@ -45,25 +46,6 @@ import { AppDispatch } from "@/store/store";
 
 import { useClientSearchContext } from "../clientSearch/clientSearchContext";
 import { useRenderPDF } from "./useRenderPDF";
-
-const PDFPreview = (props: PDFProps & { url: string | undefined }) => {
-  // Firefox downloads PDF blobs embedded in an <iframe> instead of rendering them inline
-  // (a long-standing Firefox limitation, not specific to this app). <object> avoids the
-  // unwanted download in both Chrome and Firefox, though Firefox still won't render the
-  // preview inline - its fallback content (rendered here) covers that case.
-  return (
-    <object
-      style={{ width: "100%", height: "100%" }}
-      data={props.url}
-      type="application/pdf"
-    >
-      <p className="text-center p-4">
-        Your browser can&apos;t show a live preview of this PDF. Click{" "}
-        <b>Generate PDF</b> below to download and view it.
-      </p>
-    </object>
-  );
-};
 
 const downloadPDF = async (
   props: Omit<PDFProps, "fileHandles">,
@@ -1091,7 +1073,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
             disabled={showSpinner}
             style={{ height: 100 + "%", overflowY: "hidden" }}
           >
-            <PDFPreview url={url} {...debouncedPDFProps} fileHandles={{}} />
+            <PDFCanvasPreview url={url} />
           </Blurrable>
         </Col>
       </Row>
