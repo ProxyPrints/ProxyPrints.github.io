@@ -1,4 +1,4 @@
-import { getBucketImageURL, getWorkerImageURL } from "@/common/image";
+import { getWorkerImageURL } from "@/common/image";
 import { SourceType } from "@/common/schema_types";
 import { CardDocument } from "@/common/types";
 
@@ -9,7 +9,7 @@ export type PDFImageQuality =
 
 /**
  * Resolve the image source for a card in a PDF, honouring the requested quality
- * tier and the card's source (Google Drive bucket/worker, or a local file).
+ * tier and the card's source (Google Drive image worker, or a local file).
  * Shared by the standard PDF render path and the SCM render path.
  */
 export const getPDFImageURL = async (
@@ -23,9 +23,19 @@ export const getPDFImageURL = async (
     case SourceType.GoogleDrive:
       switch (imageQuality) {
         case "small-thumbnail":
-          return getBucketImageURL(cardDocument, "small");
+          return getWorkerImageURL(
+            cardDocument,
+            "small",
+            undefined,
+            jpgQuality
+          );
         case "large-thumbnail":
-          return getBucketImageURL(cardDocument, "large");
+          return getWorkerImageURL(
+            cardDocument,
+            "large",
+            undefined,
+            jpgQuality
+          );
         case "full-resolution":
           return getWorkerImageURL(cardDocument, "full", dpi, jpgQuality);
         default:
