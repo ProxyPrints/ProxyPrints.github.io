@@ -13,8 +13,6 @@ import {
   NavbarHeight,
   NavPillButtonHeight,
   NavUnderlineButtonHeight,
-  OtherPrintShopsHeight,
-  PringlePrintsURL,
 } from "@/common/constants";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { Coffee } from "@/components/Coffee";
@@ -23,6 +21,7 @@ import { MakePlayingCardsLink } from "@/components/MakePlayingCardsLink";
 import { NavBanner, NavBannerItem } from "@/components/NavBanner";
 import { NotMPCLink } from "@/components/NotMPCLink";
 import { OverflowCol } from "@/components/OverflowCol";
+import { PringlePrintsLink } from "@/components/PringlePrintsLink";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { useLocalFilesDirectoryHandle } from "@/features/clientSearch/clientSearchHooks";
 import { useDownloadDesktopTool } from "@/features/download/downloadDesktopTool";
@@ -345,66 +344,98 @@ const NotMPCInstructions = () => {
   );
 };
 
-const OtherPrintShops = () => (
-  <Container
-    className="text-center small"
-    style={{ height: OtherPrintShopsHeight }}
-  >
-    Other Print Shops:{" "}
-    <a href={PringlePrintsURL} target="_blank">
-      PringlePrints
-    </a>{" "}
-    — small print shop, Canada only
-  </Container>
-);
+// TODO: verify this PringlePrints ordering flow is accurate and up to date —
+// steps below (and the batch size / finish options) were derived from a
+// one-time read of pringleprints.ca's site copy, not a manual walkthrough of
+// their order process. Pricing and service area in particular may have
+// changed since.
+const PringlePrintsInstructions = () => {
+  return (
+    <Container className="py-3">
+      <h5 className="text-center">
+        Nice work! There are three simple steps for turning your project into an
+        order with <PringlePrintsLink />.
+      </h5>
+      <BigOL>
+        <BigLI className="py-3">
+          <h3>Prepare Your Print File</h3>
+          <p>
+            Head to the <b>PDF</b> tab and generate a print-ready PDF or PNG of
+            your project at <b>300 DPI or higher</b>.
+          </p>
+        </BigLI>
+        <BigLI className="py-3">
+          <h3>Choose Your Finish &amp; Batch Size</h3>
+          <p>
+            Head over to <PringlePrintsLink /> and pick a cardstock finish and a
+            batch size for your order.
+          </p>
+        </BigLI>
+        <BigLI className="py-3">
+          <h3>Email Your Order</h3>
+          <p>
+            Send your file &mdash; or a shared link if it&apos;s large &mdash;
+            along with your finish and batch size, using their order form or
+            email. They&apos;ll confirm receipt and share a timeline and payment
+            details.
+          </p>
+        </BigLI>
+      </BigOL>
+      <hr />
+      <h5 className="text-center">
+        And that&apos;s all there is to it!{" "}
+        <i className="bi bi-rocket-takeoff" />
+      </h5>
+    </Container>
+  );
+};
 
-type FinishedMyProjectExportType = "mpc" | "notmpc" | "pdf";
+type FinishedMyProjectExportType = "mpc" | "notmpc" | "pringleprints" | "pdf";
 
 export function FinishedMyProject() {
   const [key, setKey] = useState<FinishedMyProjectExportType>("mpc");
   const navBannerItems: Array<NavBannerItem<FinishedMyProjectExportType>> = [
     { key: "mpc", label: "MakePlayingCards", bootstrapIconName: "bag-check" },
     { key: "notmpc", label: "NotMPC", bootstrapIconName: "box-seam" },
+    {
+      key: "pringleprints",
+      label: "PringlePrints",
+      bootstrapIconName: "geo-alt",
+    },
     { key: "pdf", label: "PDF", bootstrapIconName: "file-pdf" },
   ];
   return (
-    <>
-      <Tab.Container
-        activeKey={key}
-        onSelect={(k) => {
-          if (k) setKey(k as FinishedMyProjectExportType);
-        }}
+    <Tab.Container
+      activeKey={key}
+      onSelect={(k) => {
+        if (k) setKey(k as FinishedMyProjectExportType);
+      }}
+    >
+      <NavBanner items={navBannerItems} variant="underline" />
+      <OverflowCol
+        heightDelta={
+          NavPillButtonHeight + NavUnderlineButtonHeight + NavbarHeight
+        }
       >
-        <NavBanner items={navBannerItems} variant="underline" />
-        <OverflowCol
-          heightDelta={
-            NavPillButtonHeight +
-            NavUnderlineButtonHeight +
-            NavbarHeight +
-            OtherPrintShopsHeight
-          }
-        >
-          <Tab.Content>
-            <Tab.Pane eventKey="mpc">
-              <MakePlayingCardsInstructions />
-            </Tab.Pane>
-            <Tab.Pane eventKey="notmpc">
-              <NotMPCInstructions />
-            </Tab.Pane>
-            <Tab.Pane eventKey="pdf" mountOnEnter>
-              <PDFGenerator
-                heightDelta={
-                  NavPillButtonHeight +
-                  NavUnderlineButtonHeight +
-                  NavbarHeight +
-                  OtherPrintShopsHeight
-                }
-              />
-            </Tab.Pane>
-          </Tab.Content>
-        </OverflowCol>
-      </Tab.Container>
-      <OtherPrintShops />
-    </>
+        <Tab.Content>
+          <Tab.Pane eventKey="mpc">
+            <MakePlayingCardsInstructions />
+          </Tab.Pane>
+          <Tab.Pane eventKey="notmpc">
+            <NotMPCInstructions />
+          </Tab.Pane>
+          <Tab.Pane eventKey="pringleprints">
+            <PringlePrintsInstructions />
+          </Tab.Pane>
+          <Tab.Pane eventKey="pdf" mountOnEnter>
+            <PDFGenerator
+              heightDelta={
+                NavPillButtonHeight + NavUnderlineButtonHeight + NavbarHeight
+              }
+            />
+          </Tab.Pane>
+        </Tab.Content>
+      </OverflowCol>
+    </Tab.Container>
   );
 }

@@ -12,6 +12,7 @@ export const MakePlayingCards = "MakePlayingCards.com";
 export const MakePlayingCardsURL = "https://www.makeplayingcards.com";
 export const NotMPC = "NotMPC.com";
 export const NotMPCURL = "https://www.notmpc.com";
+export const PringlePrints = "PringlePrints";
 export const PringlePrintsURL = "https://pringleprints.ca";
 
 export const Card: CardType = CardTypeSchema.Card;
@@ -48,7 +49,6 @@ export const NavbarLogoHeight = 40; // pixels
 export const ContentMaxWidth = 1200; // pixels - aligns with bootstrap's large breakpoint
 export const ModalHeaderHeight = 68.7;
 export const ModalFooterHeight = 71;
-export const OtherPrintShopsHeight = 32; // pixels
 
 export const MinimumDPI = 0;
 export const MaximumDPI = 1500;
