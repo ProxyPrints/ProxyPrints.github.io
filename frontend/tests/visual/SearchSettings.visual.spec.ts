@@ -47,7 +47,7 @@ test.describe("SearchSettings visual tests", () => {
       - button "Filters Apply to Cardbacks Include All Cardbacks"
       - separator
       - heading "Filters" [level=5]
-      - text: "/Configure the DPI \\\\(dots per inch\\\\) and file size ranges the search results must be within\\\\. At a fixed physical size, a higher DPI yields a higher resolution print\\\\. MakePlayingCards prints cards up to \\\\d+ DPI, meaning an \\\\d+ DPI print and a \\\\d+ DPI print will look the same\\\\. Min resolution: 0 DPI/"
+      - text: "Configure the DPI (dots per inch) and file size ranges the search results must be within. At a fixed physical size, a higher DPI yields a higher resolution print. Print resolution has a practical ceiling, though — beyond a certain point, a higher DPI print will look the same as a lower one. Min resolution: 0 DPI"
       - slider: "0"
       - text: "/Max resolution: \\\\d+ DPI/"
       - slider: /\\d+/
