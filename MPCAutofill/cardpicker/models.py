@@ -318,6 +318,21 @@ class ArtistVoteStatus(models.TextChoices):
     UNRESOLVED = "unresolved", gettext_lazy("Unresolved")
     RESOLVED = "resolved", gettext_lazy("Resolved")
     UNKNOWN = "unknown", gettext_lazy("Unknown")
+    CONTESTED = "contested", gettext_lazy("Contested")
+
+
+class TagVoteStatus(models.TextChoices):
+    """
+    Per-tag status stored in `Card.tag_vote_statuses` (a JSONField, not a plain model field -
+    see that field's own comment for why - so this isn't wired up as a `choices=` kwarg
+    anywhere, just symbolic constants for `cardpicker.tag_consensus` to use instead of raw
+    strings). Written by `resolve_and_persist_tag_votes`.
+    """
+
+    RESOLVED_APPLY = "resolved_apply", gettext_lazy("Resolved (apply)")
+    RESOLVED_REJECT = "resolved_reject", gettext_lazy("Resolved (reject)")
+    CONTESTED = "contested", gettext_lazy("Contested")
+    UNRESOLVED = "unresolved", gettext_lazy("Unresolved")
 
 
 class Card(models.Model):
@@ -356,6 +371,15 @@ class Card(models.Model):
     artist_vote_status = models.CharField(
         max_length=10, choices=ArtistVoteStatus.choices, default=ArtistVoteStatus.UNRESOLVED, db_index=True
     )
+    # Per-tag vote status, written by cardpicker.tag_consensus.resolve_and_persist_tag_votes:
+    # {tag.name: "resolved_apply" | "resolved_reject" | "contested" | "unresolved"}. An absent
+    # key means no votes at all for that tag on this card - entries are never written for a
+    # tag with zero votes. Bookkeeping alongside the existing `tags` array/overlay-merge logic
+    # above, not a replacement for it. INVARIANT: keys are `Tag.name` values, which must stay
+    # stable - renaming a Tag orphans its entries here and (per docs/federation-v1.md) breaks
+    # cross-instance verdict portability, since tags travel by name in that format too. A Tag
+    # rename is a data migration, not a plain edit.
+    tag_vote_statuses = models.JSONField(default=dict, blank=True)
     # a lowercase CanonicalExpansion.code guessed from a lone set-code bracket token in the
     # source filename (e.g. "[MH3]") - not resolved to a specific printing (no collector
     # number was present to pair with it), just a ranking hint for get_ranked_printing_candidates
@@ -374,6 +398,26 @@ class Card(models.Model):
         )
 
     def serialise(self) -> SerialisedCard:
+        # Explicit if/elif chain (rather than a nested-ternary fallback) so the rung that
+        # actually supplied the artist is captured as it's found, not re-derived afterwards by
+        # checking which other fields are empty - that "all others empty" style of check would
+        # silently misclassify if this chain ever grows a fifth rung. `canonicalArtistIsFromVoteOnly`
+        # (used by the frontend's "wrong?" affordance to distinguish a confidently-known artist
+        # from a vote-derived one) and the debug-only `canonicalArtistSource` field both derive
+        # directly from `artist_source`, so they can never drift out of sync with this chain.
+        artist_source: str | None
+        resolved_artist: CanonicalArtist | None
+        if self.canonical_artist is not None:
+            artist_source, resolved_artist = "canonical_artist", self.canonical_artist
+        elif self.canonical_card is not None:
+            artist_source, resolved_artist = "canonical_card", self.canonical_card.artist
+        elif self.inferred_canonical_card is not None:
+            artist_source, resolved_artist = "inferred_canonical_card", self.inferred_canonical_card.artist
+        elif self.inferred_canonical_artist is not None:
+            artist_source, resolved_artist = "inferred_canonical_artist", self.inferred_canonical_artist
+        else:
+            artist_source, resolved_artist = None, None
+
         return SerialisedCard(
             identifier=self.identifier,
             cardType=CardType(self.card_type),
@@ -401,19 +445,9 @@ class Card(models.Model):
                 if self.canonical_card
                 else (self.inferred_canonical_card.serialise() if self.inferred_canonical_card else None)
             ),
-            canonicalArtist=(
-                self.canonical_artist.serialise()
-                if self.canonical_artist
-                else (
-                    self.canonical_card.artist.serialise()
-                    if self.canonical_card
-                    else (
-                        self.inferred_canonical_card.artist.serialise()
-                        if self.inferred_canonical_card
-                        else (self.inferred_canonical_artist.serialise() if self.inferred_canonical_artist else None)
-                    )
-                )
-            ),
+            canonicalArtist=resolved_artist.serialise() if resolved_artist is not None else None,
+            canonicalArtistIsFromVoteOnly=artist_source == "inferred_canonical_artist",
+            canonicalArtistSource=artist_source,
         )
 
     def to_dict(self) -> dict[str, Any]:

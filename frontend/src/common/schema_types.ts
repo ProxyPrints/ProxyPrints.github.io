@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, PrintingCandidate, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse } from "./file";
+//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, PrintingCandidate, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse } from "./file";
 //
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
@@ -30,6 +30,7 @@
 //   const tag = Convert.toTag(json);
 //   const tagConsensusEntry = Convert.toTagConsensusEntry(json);
 //   const tagVoteTallyEntry = Convert.toTagVoteTallyEntry(json);
+//   const voteQueueItem = Convert.toVoteQueueItem(json);
 //   const voteTallyEntry = Convert.toVoteTallyEntry(json);
 //   const artistCandidatesRequest = Convert.toArtistCandidatesRequest(json);
 //   const artistCandidatesResponse = Convert.toArtistCandidatesResponse(json);
@@ -70,6 +71,8 @@
 //   const tagConsensusRequest = Convert.toTagConsensusRequest(json);
 //   const tagConsensusResponse = Convert.toTagConsensusResponse(json);
 //   const tagsResponse = Convert.toTagsResponse(json);
+//   const voteQueueRequest = Convert.toVoteQueueRequest(json);
+//   const voteQueueResponse = Convert.toVoteQueueResponse(json);
 //
 // These functions will throw an error if the JSON doesn't
 // match the expected interface, even if the JSON is valid.
@@ -176,6 +179,18 @@ export interface CardsResponse {
 
 export interface Card {
   canonicalArtist?: CanonicalArtist | null;
+  /**
+   * True only when canonicalArtist was supplied by artist-vote consensus alone, with no
+   * confirmed indexing match or resolved printing backing it - lets the frontend distinguish
+   * a confidently-known artist from a vote-derived one (e.g. for the ArtistVotePicker
+   * 'wrong?' affordance) without needing to know serialise()'s fallback chain itself.
+   */
+  canonicalArtistIsFromVoteOnly: boolean;
+  /**
+   * Which rung of the artist fallback chain actually supplied canonicalArtist -
+   * debug/introspection field, not load-bearing for any current frontend logic.
+   */
+  canonicalArtistSource?: null | string;
   canonicalCard?: CanonicalCard | null;
   cardType: CardType;
   /**
@@ -523,6 +538,28 @@ export interface ChildElement {
   parent: null | string;
 }
 
+export interface VoteQueueRequest {
+  kind: Kind;
+  page: number;
+}
+
+export enum Kind {
+  Artist = "artist",
+  Printing = "printing",
+  Tag = "tag",
+}
+
+export interface VoteQueueResponse {
+  hits: number;
+  items: VoteQueueItem[];
+  pages: number;
+}
+
+export interface VoteQueueItem {
+  card: Card;
+  tagName?: null | string;
+}
+
 // Converts JSON strings to/from your types
 // and asserts the results of JSON.parse at runtime
 export class Convert {
@@ -738,6 +775,14 @@ export class Convert {
 
   public static tagVoteTallyEntryToJson(value: TagVoteTallyEntry): string {
     return JSON.stringify(uncast(value, r("TagVoteTallyEntry")), null, 2);
+  }
+
+  public static toVoteQueueItem(json: string): VoteQueueItem {
+    return cast(JSON.parse(json), r("VoteQueueItem"));
+  }
+
+  public static voteQueueItemToJson(value: VoteQueueItem): string {
+    return JSON.stringify(uncast(value, r("VoteQueueItem")), null, 2);
   }
 
   public static toVoteTallyEntry(json: string): VoteTallyEntry {
@@ -1181,6 +1226,22 @@ export class Convert {
   public static tagsResponseToJson(value: TagsResponse): string {
     return JSON.stringify(uncast(value, r("TagsResponse")), null, 2);
   }
+
+  public static toVoteQueueRequest(json: string): VoteQueueRequest {
+    return cast(JSON.parse(json), r("VoteQueueRequest"));
+  }
+
+  public static voteQueueRequestToJson(value: VoteQueueRequest): string {
+    return JSON.stringify(uncast(value, r("VoteQueueRequest")), null, 2);
+  }
+
+  public static toVoteQueueResponse(json: string): VoteQueueResponse {
+    return cast(JSON.parse(json), r("VoteQueueResponse"));
+  }
+
+  public static voteQueueResponseToJson(value: VoteQueueResponse): string {
+    return JSON.stringify(uncast(value, r("VoteQueueResponse")), null, 2);
+  }
 }
 
 function invalidValue(typ: any, val: any, key: any, parent: any = ""): never {
@@ -1476,6 +1537,16 @@ const typeMap: any = {
         json: "canonicalArtist",
         js: "canonicalArtist",
         typ: u(undefined, u(r("CanonicalArtist"), null)),
+      },
+      {
+        json: "canonicalArtistIsFromVoteOnly",
+        js: "canonicalArtistIsFromVoteOnly",
+        typ: true,
+      },
+      {
+        json: "canonicalArtistSource",
+        js: "canonicalArtistSource",
+        typ: u(undefined, u(null, "")),
       },
       {
         json: "canonicalCard",
@@ -1894,6 +1965,28 @@ const typeMap: any = {
     ],
     false
   ),
+  VoteQueueRequest: o(
+    [
+      { json: "kind", js: "kind", typ: r("Kind") },
+      { json: "page", js: "page", typ: 0 },
+    ],
+    false
+  ),
+  VoteQueueResponse: o(
+    [
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "items", js: "items", typ: a(r("VoteQueueItem")) },
+      { json: "pages", js: "pages", typ: 0 },
+    ],
+    false
+  ),
+  VoteQueueItem: o(
+    [
+      { json: "card", js: "card", typ: r("Card") },
+      { json: "tagName", js: "tagName", typ: u(undefined, u(null, "")) },
+    ],
+    false
+  ),
   Game: ["MTG"],
   CardType: ["CARD", "CARDBACK", "TOKEN"],
   SourceType: ["AWS S3", "Google Drive", "Local File"],
@@ -1905,4 +1998,5 @@ const typeMap: any = {
     "nameAscending",
     "nameDescending",
   ],
+  Kind: ["artist", "printing", "tag"],
 };

@@ -2,10 +2,17 @@ from typing import Literal, TypedDict
 
 from django.conf import settings
 
-from cardpicker.models import ArtistVoteStatus, CanonicalArtist, Card, VoteSource
+from cardpicker.models import (
+    ArtistVoteStatus,
+    CanonicalArtist,
+    Card,
+    CardArtistVote,
+    VoteSource,
+)
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
     VoteTuple,
+    contested_queryset,
     resolve_weighted_consensus,
 )
 
@@ -67,11 +74,22 @@ def resolve_and_persist_artist(card: Card) -> CanonicalArtist | Literal["UNKNOWN
     `card.printing_tag_status` at all: the precedence rule ("a resolved printing's artist wins")
     is enforced entirely by `Card.serialise()`'s fallback chain, not here, so this function
     stays decoupled from printing-tag state.
+
+    When unresolved, additionally distinguishes `CONTESTED` (more than one distinct outcome
+    has votes) from plain `UNRESOLVED` (not enough votes yet to conclude anything) - a second,
+    lightweight query, only taken on this branch, so the common resolved case pays nothing
+    extra for it.
     """
     result = resolve_artist(card)
     if result is None:
+        distinct_outcomes = {
+            UNKNOWN if is_unknown else artist_id
+            for is_unknown, artist_id in card.artist_votes.values_list("is_unknown", "artist_id")
+        }
         card.inferred_canonical_artist = None
-        card.artist_vote_status = ArtistVoteStatus.UNRESOLVED
+        card.artist_vote_status = (
+            ArtistVoteStatus.CONTESTED if len(distinct_outcomes) > 1 else ArtistVoteStatus.UNRESOLVED
+        )
     elif result == UNKNOWN:
         card.inferred_canonical_artist = None
         card.artist_vote_status = ArtistVoteStatus.UNKNOWN
@@ -108,4 +126,23 @@ def get_artist_vote_tally(card: Card) -> list[ArtistVoteTallyEntry]:
     return sorted(tally.values(), key=lambda entry: entry["count"], reverse=True)
 
 
-__all__ = ["UNKNOWN", "resolve_artist", "resolve_and_persist_artist", "get_artist_vote_tally", "ArtistVoteTallyEntry"]
+def get_contested_artist_card_ids() -> list[int]:
+    """
+    IDs of cards with conflicting artist votes on record - mirrors
+    `cardpicker.printing_consensus.get_contested_card_ids` exactly, generalized via
+    `vote_consensus.contested_queryset`. See that function's docstring for what "contested"
+    means here and why this is a cheap proxy, not a full consensus recomputation.
+    """
+    return contested_queryset(
+        CardArtistVote.objects.all(), group_by="card_id", outcome_field="artist_id", sentinel_field="is_unknown"
+    )
+
+
+__all__ = [
+    "UNKNOWN",
+    "resolve_artist",
+    "resolve_and_persist_artist",
+    "get_artist_vote_tally",
+    "get_contested_artist_card_ids",
+    "ArtistVoteTallyEntry",
+]

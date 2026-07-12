@@ -7,6 +7,7 @@ from cardpicker import views
 from cardpicker.artist_consensus import (
     UNKNOWN,
     get_artist_vote_tally,
+    get_contested_artist_card_ids,
     resolve_and_persist_artist,
     resolve_artist,
 )
@@ -119,6 +120,30 @@ class TestResolveAndPersistArtist:
         assert card.inferred_canonical_artist is None
         assert card.artist_vote_status == ArtistVoteStatus.UNRESOLVED
 
+    def test_persists_contested_when_multiple_outcomes_have_votes(self, db):
+        card = CardFactory()
+        artist_a = CanonicalArtistFactory()
+        artist_b = CanonicalArtistFactory()
+        CardArtistVoteFactory(card=card, artist=artist_a, source=VoteSource.USER)
+        CardArtistVoteFactory(card=card, artist=artist_b, source=VoteSource.USER)
+
+        result = resolve_and_persist_artist(card)
+
+        assert result is None
+        card.refresh_from_db()
+        assert card.artist_vote_status == ArtistVoteStatus.CONTESTED
+
+    def test_persists_unresolved_not_contested_for_a_single_outcome_below_threshold(self, db):
+        card = CardFactory()
+        artist = CanonicalArtistFactory()
+        CardArtistVoteFactory(card=card, artist=artist, source=VoteSource.USER)
+
+        result = resolve_and_persist_artist(card)
+
+        assert result is None
+        card.refresh_from_db()
+        assert card.artist_vote_status == ArtistVoteStatus.UNRESOLVED
+
     def test_does_not_consult_printing_tag_status(self, db):
         # resolve_and_persist_artist is deliberately decoupled from printing_tag_status - the
         # precedence rule (a resolved printing's artist wins) lives entirely in
@@ -147,6 +172,33 @@ class TestGetArtistVoteTally:
         tally = get_artist_vote_tally(card)
 
         assert {(entry["count"], entry["is_unknown"]) for entry in tally} == {(2, False), (1, True)}
+
+
+class TestGetContestedArtistCardIds:
+    def test_multiple_distinct_artists_is_contested(self, db):
+        card = CardFactory()
+        artist_a = CanonicalArtistFactory()
+        artist_b = CanonicalArtistFactory()
+        CardArtistVoteFactory(card=card, artist=artist_a)
+        CardArtistVoteFactory(card=card, artist=artist_b)
+
+        assert card.pk in get_contested_artist_card_ids()
+
+    def test_an_artist_vote_alongside_an_unknown_vote_is_contested(self, db):
+        card = CardFactory()
+        artist = CanonicalArtistFactory()
+        CardArtistVoteFactory(card=card, artist=artist)
+        CardArtistVoteFactory(card=card, artist=None, is_unknown=True)
+
+        assert card.pk in get_contested_artist_card_ids()
+
+    def test_agreeing_votes_are_not_contested(self, db):
+        card = CardFactory()
+        artist = CanonicalArtistFactory()
+        CardArtistVoteFactory(card=card, artist=artist)
+        CardArtistVoteFactory(card=card, artist=artist)
+
+        assert card.pk not in get_contested_artist_card_ids()
 
 
 class TestSerialisePrecedenceChain:

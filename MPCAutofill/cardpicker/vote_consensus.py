@@ -1,7 +1,8 @@
 from collections import defaultdict
-from typing import Hashable, Iterable, NamedTuple, TypedDict
+from typing import Any, Hashable, Iterable, NamedTuple, TypedDict
 
 from django.conf import settings
+from django.db.models import Case, Count, IntegerField, Q, QuerySet, When
 
 from cardpicker.models import VoteSource
 
@@ -78,4 +79,40 @@ def resolve_weighted_consensus(votes: Iterable[VoteTuple], min_weight: float, mi
     return None
 
 
-__all__ = ["VoteTuple", "resolve_weighted_consensus", "_SOURCE_WEIGHTS"]
+def contested_queryset(
+    queryset: "QuerySet[Any]",
+    group_by: str | list[str],
+    outcome_field: str,
+    sentinel_field: str | None = None,
+) -> list[Any]:
+    """
+    Generalizes what was originally `printing_consensus.get_contested_card_ids`'s logic across
+    any `AbstractWeightedVote` subclass - see that function for the original "what does
+    contested mean, and why is this a cheap proxy rather than a full consensus
+    recomputation" reasoning, unchanged here.
+
+    Takes an unfiltered base `queryset` (e.g. `CardPrintingTag.objects.all()` - a queryset
+    rather than the model class itself, since django-stubs can't statically resolve `.objects`
+    off a bare `type[Model]`) and groups its rows by `group_by` (a field name, e.g. `"card_id"`,
+    or a list of field names for a composite grouping, e.g. `["card_id", "tag_id"]`), counts
+    distinct `outcome_field` values per group, and flags a group as contested if it has more
+    than one distinct outcome, or - only when `sentinel_field` is given - if it has exactly one
+    outcome AND at least one sentinel vote alongside it (e.g. a printing vote coexisting with
+    an `is_no_match` vote). Returns a plain list of group-by values (or tuples, for a composite
+    `group_by`) - materialized eagerly, same rationale as the original: the contested set is
+    always a small fraction of the total.
+    """
+    group_fields = [group_by] if isinstance(group_by, str) else group_by
+    condition = Q(distinct_outcomes__gt=1)
+    annotations = {"distinct_outcomes": Count(outcome_field, distinct=True)}
+    if sentinel_field is not None:
+        annotations["has_sentinel"] = Count(Case(When(**{sentinel_field: True}, then=1), output_field=IntegerField()))
+        condition = condition | (Q(distinct_outcomes__gte=1) & Q(has_sentinel__gt=0))
+
+    grouped = queryset.values(*group_fields).annotate(**annotations).filter(condition)
+    if len(group_fields) == 1:
+        return list(grouped.values_list(group_fields[0], flat=True))
+    return list(grouped.values_list(*group_fields))
+
+
+__all__ = ["VoteTuple", "resolve_weighted_consensus", "_SOURCE_WEIGHTS", "contested_queryset"]

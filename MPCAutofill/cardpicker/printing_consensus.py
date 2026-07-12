@@ -1,7 +1,6 @@
 from typing import Literal, TypedDict
 
 from django.conf import settings
-from django.db.models import Case, Count, IntegerField, Q, When
 
 from cardpicker.models import (
     CanonicalCard,
@@ -13,6 +12,7 @@ from cardpicker.models import (
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
     VoteTuple,
+    contested_queryset,
     resolve_weighted_consensus,
 )
 
@@ -106,15 +106,13 @@ def get_contested_card_ids() -> list[int]:
     Materialized to a plain list (rather than returning the lazy QuerySet) since the set of
     actually-contested cards is always a small fraction of the total - cheap to evaluate
     eagerly, and sidesteps django-stubs' QuerySet generic entirely for callers.
+
+    Delegates to the shared `vote_consensus.contested_queryset` - this function's name,
+    signature, and behavior are unchanged; it's the reference point that function's own
+    docstring calls "behavior-preserving".
     """
-    return list(
-        CardPrintingTag.objects.values("card_id")
-        .annotate(
-            distinct_printings=Count("printing_id", distinct=True),
-            has_no_match=Count(Case(When(is_no_match=True, then=1), output_field=IntegerField())),
-        )
-        .filter(Q(distinct_printings__gt=1) | (Q(distinct_printings__gte=1) & Q(has_no_match__gt=0)))
-        .values_list("card_id", flat=True)
+    return contested_queryset(
+        CardPrintingTag.objects.all(), group_by="card_id", outcome_field="printing_id", sentinel_field="is_no_match"
     )
 
 

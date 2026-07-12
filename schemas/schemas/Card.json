@@ -73,6 +73,14 @@
     },
     "canonicalArtist": {
       "$ref": "./CanonicalArtist.json"
+    },
+    "canonicalArtistIsFromVoteOnly": {
+      "description": "True only when canonicalArtist was supplied by artist-vote consensus alone, with no confirmed indexing match or resolved printing backing it - lets the frontend distinguish a confidently-known artist from a vote-derived one (e.g. for the ArtistVotePicker 'wrong?' affordance) without needing to know serialise()'s fallback chain itself.",
+      "type": "boolean"
+    },
+    "canonicalArtistSource": {
+      "description": "Which rung of the artist fallback chain actually supplied canonicalArtist - debug/introspection field, not load-bearing for any current frontend logic.",
+      "type": ["string", "null"]
     }
   },
   "required": [
@@ -93,7 +101,8 @@
     "smallThumbnailUrl",
     "mediumThumbnailUrl",
     "language",
-    "tags"
+    "tags",
+    "canonicalArtistIsFromVoteOnly"
   ],
   "additionalProperties": false
 }

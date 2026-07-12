@@ -29,6 +29,7 @@ from django.views.decorators.csrf import csrf_exempt
 from cardpicker.artist_consensus import UNKNOWN as ARTIST_UNKNOWN
 from cardpicker.artist_consensus import (
     get_artist_vote_tally,
+    get_contested_artist_card_ids,
     resolve_and_persist_artist,
     resolve_artist,
 )
@@ -44,6 +45,7 @@ from cardpicker.documents import CardSearch
 from cardpicker.integrations.integrations import get_configured_game_integration
 from cardpicker.integrations.patreon import get_patreon_campaign_details, get_patrons
 from cardpicker.models import (
+    ArtistVoteStatus,
     CanonicalArtist,
     CanonicalCard,
     Card,
@@ -97,6 +99,9 @@ from cardpicker.schema_types import (
     ImportSitesResponse,
     Info,
     InfoResponse,
+)
+from cardpicker.schema_types import Kind as VoteQueueKind
+from cardpicker.schema_types import (
     Language,
     LanguagesResponse,
     NewCardsFirstPage,
@@ -123,6 +128,9 @@ from cardpicker.schema_types import (
     TagConsensusResponse,
     TagsResponse,
     TagVoteTallyEntry,
+    VoteQueueItem,
+    VoteQueueRequest,
+    VoteQueueResponse,
     VoteTallyEntry,
 )
 from cardpicker.search.sanitisation import to_searchable
@@ -137,6 +145,7 @@ from cardpicker.search.search_functions import (
 from cardpicker.sources.api import PathTraversalError, resolve_within_root
 from cardpicker.sources.source_types import SourceTypeChoices
 from cardpicker.tag_consensus import (
+    get_tag_review_queue_pairs,
     get_tag_vote_tally,
     resolve_and_persist_tag_votes,
     resolve_tag,
@@ -1040,3 +1049,65 @@ def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
         resolve_and_persist_tag_votes(card)
 
     return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
+
+
+def _paginate(items: Any, page: int) -> Any:
+    """Shared page-index validation for the vote queue, mirroring `get_printing_tag_queue`'s
+    own inline validation (not reused directly - that view's validation lives inline, not as
+    a separate helper, and duplicating six lines here is simpler than refactoring it out from
+    under a view this task doesn't otherwise touch)."""
+    paginator: Paginator[Any] = Paginator(items, PRINTING_TAG_QUEUE_PAGE_SIZE)
+    if not (paginator.num_pages >= page > 0):
+        raise BadRequestException(f"Invalid page {page} specified - must be between 1 and {paginator.num_pages}.")
+    return paginator
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def post_vote_queue(request: HttpRequest) -> HttpResponse:
+    """
+    Generalizes the review queue across all three vote kinds via a `kind` request field - a
+    new sibling endpoint (POST, unlike `2/printingTagQueue/`'s GET) rather than a mutation of
+    that one, which stays completely untouched/reachable for anything still calling it.
+
+    One queue item per card for `kind=printing`/`artist` (`tagName` always null, exactly
+    `2/printingTagQueue/`'s existing shape plus that field) - printing mode's candidate
+    set/ordering is byte-for-byte what `get_printing_tag_queue` already does (unresolved,
+    contested-first). Artist mode is the same shape, generalized to also include `CONTESTED`
+    (a status `PrintingTagStatus` has no equivalent for - printing's own contested cards are
+    already tagged `UNRESOLVED`, distinguished only by the ordering annotation).
+
+    For `kind=tag`, one item per (card, tag) pair - see `get_tag_review_queue_pairs` for the
+    persisted-state candidate filter and the net-polarity-weight/card-interleave ordering.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = VoteQueueRequest.model_validate(json.loads(request.body))
+
+    if req.kind == VoteQueueKind.tag:
+        pairs = get_tag_review_queue_pairs()
+        paginator = _paginate(pairs, req.page)
+        page_pairs = paginator.page(req.page).object_list
+        cards_by_id = {card.pk: card for card in Card.objects.filter(pk__in=[card_id for card_id, _ in page_pairs])}
+        items = [
+            VoteQueueItem(card=cards_by_id[card_id].serialise(), tagName=tag_name) for card_id, tag_name in page_pairs
+        ]
+    else:
+        if req.kind == VoteQueueKind.printing:
+            cards = Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED).annotate(
+                is_contested=Case(When(pk__in=get_contested_card_ids(), then=1), default=0, output_field=IntegerField())
+            )
+        else:
+            cards = Card.objects.filter(
+                artist_vote_status__in=[ArtistVoteStatus.UNRESOLVED, ArtistVoteStatus.CONTESTED]
+            ).annotate(
+                is_contested=Case(
+                    When(pk__in=get_contested_artist_card_ids(), then=1), default=0, output_field=IntegerField()
+                )
+            )
+        cards = cards.order_by("-is_contested", "-date_created", "name")
+        paginator = _paginate(cards, req.page)
+        items = [VoteQueueItem(card=card.serialise(), tagName=None) for card in paginator.page(req.page).object_list]
+
+    return JsonResponse(VoteQueueResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump())

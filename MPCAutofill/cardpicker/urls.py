@@ -31,4 +31,5 @@ urlpatterns = [
     path("2/submitArtistVote/", views.post_submit_artist_vote),
     path("2/tagConsensus/", views.post_tag_consensus),
     path("2/submitTagVote/", views.post_submit_tag_vote),
+    path("2/voteQueue/", views.post_vote_queue),
 ]

@@ -1,7 +1,11 @@
+from functools import reduce
+from operator import or_
+
 from django.contrib import admin
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 from django.http import HttpRequest
 
+from .artist_consensus import get_contested_artist_card_ids
 from .models import (
     CanonicalArtist,
     CanonicalCard,
@@ -21,6 +25,7 @@ from .models import (
 )
 from .printing_consensus import get_contested_card_ids
 from .sources.update_database import update_database
+from .tag_consensus import get_contested_tag_pairs
 
 
 # Register your models here.
@@ -133,26 +138,64 @@ class AdminCardPrintingTag(admin.ModelAdmin[CardPrintingTag]):
     raw_id_fields = ["card", "printing"]
 
 
+class ContestedArtistFilter(admin.SimpleListFilter):
+    """Admin-triage wrapper around `cardpicker.artist_consensus.get_contested_artist_card_ids` -
+    mirrors `ContestedCardFilter` exactly, generalized to artist votes."""
+
+    title = "contested"
+    parameter_name = "contested"
+
+    def lookups(self, request: HttpRequest, model_admin: admin.ModelAdmin[CardArtistVote]) -> list[tuple[str, str]]:
+        return [("yes", "Yes")]
+
+    def queryset(self, request: HttpRequest, queryset: QuerySet[CardArtistVote]) -> QuerySet[CardArtistVote]:
+        if self.value() != "yes":
+            return queryset
+        return queryset.filter(card_id__in=get_contested_artist_card_ids())
+
+
+class ContestedTagFilter(admin.SimpleListFilter):
+    """Admin-triage wrapper around `cardpicker.tag_consensus.get_contested_tag_pairs` - same
+    idea as `ContestedCardFilter`, but the unit is a (card, tag) pair rather than just a card,
+    so the queryset filter is an OR of per-pair conditions rather than a plain `card_id__in`."""
+
+    title = "contested"
+    parameter_name = "contested"
+
+    def lookups(self, request: HttpRequest, model_admin: admin.ModelAdmin[CardTagVote]) -> list[tuple[str, str]]:
+        return [("yes", "Yes")]
+
+    def queryset(self, request: HttpRequest, queryset: QuerySet[CardTagVote]) -> QuerySet[CardTagVote]:
+        if self.value() != "yes":
+            return queryset
+        pairs = get_contested_tag_pairs()
+        if not pairs:
+            return queryset.none()
+        condition = reduce(or_, (Q(card_id=card_id, tag_id=tag_id) for card_id, tag_id in pairs))
+        return queryset.filter(condition)
+
+
 @admin.register(CardArtistVote)
 class AdminCardArtistVote(admin.ModelAdmin[CardArtistVote]):
-    """
-    Plain registration, no `ContestedCardFilter`-equivalent yet - generalizing the
-    contested-first review queue to artist/tag votes is a deferred follow-up, not part of
-    this stage (see `cardpicker.artist_consensus`/`cardpicker.tag_consensus`).
-    """
-
-    list_display = ("card", "artist", "is_unknown", "source", "confidence", "anonymous_id", "created_at")
-    list_filter = ("source", "is_unknown")
+    list_display = (
+        "card",
+        "artist",
+        "is_unknown",
+        "source",
+        "peer",
+        "confidence",
+        "anonymous_id",
+        "created_at",
+    )
+    list_filter = ("source", "is_unknown", "peer", ContestedArtistFilter)
     search_fields = ("card__name",)
     raw_id_fields = ["card", "artist"]
 
 
 @admin.register(CardTagVote)
 class AdminCardTagVote(admin.ModelAdmin[CardTagVote]):
-    """Plain registration - see `AdminCardArtistVote`'s docstring for the deferred-filter note."""
-
-    list_display = ("card", "tag", "polarity", "source", "confidence", "anonymous_id", "created_at")
-    list_filter = ("source", "polarity")
+    list_display = ("card", "tag", "polarity", "source", "peer", "confidence", "anonymous_id", "created_at")
+    list_filter = ("source", "polarity", "peer", ContestedTagFilter)
     search_fields = ("card__name", "tag__name")
     raw_id_fields = ["card", "tag"]
 
