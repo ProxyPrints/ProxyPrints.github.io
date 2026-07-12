@@ -3,14 +3,17 @@ import { mkdirSync } from "fs";
 
 const STORAGE_STATE_PATH = "playwright/.auth/cookies.json";
 
+/**
+ * Historically this opted out of the analytics cookie-consent toast so
+ * individual tests didn't have to dismiss it. That toast (and analytics
+ * entirely) has since been removed from the app, so this now just produces
+ * an empty storage state for tests to reuse.
+ */
 async function globalSetup(config: FullConfig) {
-  const baseURL = config.projects[0].use.baseURL;
   mkdirSync("playwright/.auth", { recursive: true });
   const browser = await chromium.launch();
-  const page = await browser.newPage();
-  await page.goto(`${baseURL}/about`);
-  await page.getByRole("button", { name: "Opt out" }).click();
-  await page.context().storageState({ path: STORAGE_STATE_PATH });
+  const context = await browser.newContext();
+  await context.storageState({ path: STORAGE_STATE_PATH });
   await browser.close();
 }
 
