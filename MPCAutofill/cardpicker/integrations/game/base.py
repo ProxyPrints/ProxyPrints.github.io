@@ -102,6 +102,7 @@ class GameIntegration(ABC):
         cls,
         default_cards_path: Path | None = None,
         oracle_cards_path: Path | None = None,
+        skip_image_hash: bool = False,
     ) -> tuple[list[CanonicalCard], list[CanonicalArtist]]:
         ...
 
@@ -132,12 +133,14 @@ class GameIntegration(ABC):
         cls,
         default_cards_path: Path | None = None,
         oracle_cards_path: Path | None = None,
+        skip_image_hash: bool = False,
     ) -> None:
         @section_timer("retrieve_all_cards_and_identifiers")
         def retrieve_all_cards_and_identifiers() -> tuple[list[CanonicalCard], list[CanonicalArtist]]:
             return cls.get_canonical_cards_and_artists(
                 default_cards_path=default_cards_path,
                 oracle_cards_path=oracle_cards_path,
+                skip_image_hash=skip_image_hash,
             )
 
         @section_timer("bulk_sync_canonical_artists")

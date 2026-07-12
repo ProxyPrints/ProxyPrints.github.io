@@ -401,6 +401,7 @@ class MTGIntegration(GameIntegration):
         cls,
         default_cards_path: Path | None = None,
         oracle_cards_path: Path | None = None,
+        skip_image_hash: bool = False,
     ) -> tuple[list[CanonicalCard], list[CanonicalArtist]]:
         artists_by_name: dict[str, CanonicalArtist] = {artist.name: artist for artist in CanonicalArtist.objects.all()}
         expansions_by_code: dict[str, CanonicalExpansion] = {
@@ -483,7 +484,7 @@ class MTGIntegration(GameIntegration):
                     artists_by_name[artist_name] = CanonicalArtist(name=artist_name)
 
                 image_hash_int: int | None = None
-                if row.image_uris is not None:
+                if row.image_uris is not None and not skip_image_hash:
                     try:
                         im = Image.open(
                             requests.get(

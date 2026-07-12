@@ -445,4 +445,25 @@ class TestMTGIntegration:
         for msg in expected_log_messages:
             assert msg in caplog.text
 
+    def test_import_canonical_cards_and_artists_skip_image_hash(self, django_settings, tmp_path: Path):
+        # arrange
+        CanonicalExpansionFactory(code="lea")
+        default_path = tmp_path / "default_cards.json"
+        oracle_path = tmp_path / "oracle_cards.json"
+        default_path.write_text(self.get_scryfall_data_file([self._SWAMP_WITH_IMAGE_URL_RECORD]))
+        oracle_path.write_text(self.get_scryfall_data_file([]))
+
+        # act
+        with patch("cardpicker.integrations.game.mtg.requests.get") as mock_get:
+            MTGIntegration.import_canonical_cards_and_artists(
+                default_cards_path=default_path,
+                oracle_cards_path=oracle_path,
+                skip_image_hash=True,
+            )
+
+        # assert - the per-card image fetch is skipped entirely, not just discarded
+        mock_get.assert_not_called()
+        db_card = CanonicalCard.objects.get(identifier=self.TestUUIDs.UUID_1)
+        assert db_card.image_hash == 0
+
     # endregion
