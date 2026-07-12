@@ -199,7 +199,7 @@ const ZoomableThumbnail = styled.div`
   }
 
   &:hover img {
-    transform: scale(1.35);
+    transform: scale(1.6);
   }
 `;
 
@@ -316,16 +316,20 @@ const CandidateButton = styled(Button)`
   }
 `;
 
-// A smaller, static copy of the same starburst geometry (just its first frame - this is a
-// quick hover flourish, not worth animating a whole extra burst per grid cell) centred on
-// and scaled up from the button's own box, the same way the page-level burst is centred on
-// the subject card. Faded/scaled in via CSS on CandidateButton's `:hover` above rather than
-// JS state, so nothing needs to track which card is currently hovered.
+// A smaller copy of the same starburst geometry, driven by the same shared
+// `starburstFrame` state as the page-level burst (see useStarburstFrame below) rather than
+// a frame of its own, so a zoomed card's highlight visibly flickers/moves in lockstep with
+// the big one on the left instead of holding still - every instance ticks over together
+// regardless of which card is actually hovered, since only the hovered one is visible
+// (opacity 0 otherwise) and re-rendering a handful of invisible polygons every frame is
+// cheap. Centred on and scaled up from the button's own box, the same way the page-level
+// burst is centred on the subject card. Faded/scaled in via CSS on CandidateButton's
+// `:hover` above rather than JS state, so nothing needs to track which card is hovered.
 const HoverBurst = styled.svg`
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 230%;
+  width: 276%;
   aspect-ratio: 1;
   transform: translate(-50%, -50%) scale(0.75);
   opacity: 0;
@@ -578,11 +582,11 @@ export function PrintingTagQueue() {
                           viewBox={STARBURST_VIEWBOX}
                         >
                           <polygon
-                            points={STARBURST_OUTER_FRAMES[0]}
+                            points={STARBURST_OUTER_FRAMES[starburstFrame]}
                             fill={STARBURST_OUTER_COLOR}
                           />
                           <polygon
-                            points={STARBURST_INNER_FRAMES[0]}
+                            points={STARBURST_INNER_FRAMES[starburstFrame]}
                             fill={STARBURST_INNER_COLOR}
                           />
                         </HoverBurst>
@@ -608,11 +612,11 @@ export function PrintingTagQueue() {
                             viewBox={STARBURST_VIEWBOX}
                           >
                             <polygon
-                              points={STARBURST_OUTER_FRAMES[0]}
+                              points={STARBURST_OUTER_FRAMES[starburstFrame]}
                               fill={STARBURST_OUTER_COLOR}
                             />
                             <polygon
-                              points={STARBURST_INNER_FRAMES[0]}
+                              points={STARBURST_INNER_FRAMES[starburstFrame]}
                               fill={STARBURST_INNER_COLOR}
                             />
                           </HoverBurst>
