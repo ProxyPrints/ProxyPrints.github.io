@@ -1,7 +1,9 @@
 import itertools
 import json
 import logging
+import mimetypes
 from collections import defaultdict
+from pathlib import Path
 from random import sample
 from typing import Any, Callable, TypeVar, Union, cast
 
@@ -11,7 +13,7 @@ from pydantic import ValidationError
 
 from django.conf import settings
 from django.db.models import Q
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import FileResponse, HttpRequest, HttpResponse, HttpResponseBase, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from cardpicker.constants import (
@@ -66,6 +68,8 @@ from cardpicker.search.search_functions import (
     retrieve_card_identifiers,
     retrieve_cardback_identifiers,
 )
+from cardpicker.sources.api import PathTraversalError, resolve_within_root
+from cardpicker.sources.source_types import SourceTypeChoices
 from cardpicker.tags import Tags
 
 logger = logging.getLogger(__name__)
@@ -548,3 +552,47 @@ def get_search_engine_health(request: HttpRequest) -> HttpResponse:
         raise BadRequestException("Expected GET request.")
 
     return JsonResponse(SearchEngineHealthResponse(online=ping_elasticsearch()).model_dump())
+
+
+@csrf_exempt
+def get_local_file_image(request: HttpRequest) -> HttpResponseBase:
+    """
+    Serve image bytes for a card whose source is of type `LOCAL_FILE`. This is a security-sensitive
+    view: the `identifier` query parameter is treated as untrusted client input, and this function is
+    responsible for ensuring that the file it ultimately reads is (a) actually catalogued in the
+    database as belonging to a LOCAL_FILE source, and (b) still located within that source's
+    currently-configured root directory - even if the path contains `../` segments, or is (or passes
+    through) a symlink. Nothing outside of that root directory is ever served.
+    """
+
+    if request.method != "GET":
+        return HttpResponse(status=405)
+
+    identifier = request.GET.get("identifier")
+    if not identifier:
+        return HttpResponse("Missing 'identifier' query parameter.", status=400)
+
+    try:
+        card = Card.objects.select_related("source").get(
+            identifier=identifier, source__source_type=SourceTypeChoices.LOCAL_FILE
+        )
+    except Card.DoesNotExist:
+        return HttpResponse(status=404)
+
+    try:
+        resolved_path = resolve_within_root(root=Path(card.source.identifier), candidate=Path(card.identifier))
+    except PathTraversalError:
+        logger.warning(
+            "Refusing to serve identifier %r for source %r: resolves outside of the source's root directory",
+            identifier,
+            card.source.key,
+        )
+        return HttpResponse(status=404)
+
+    if not resolved_path.is_file():
+        return HttpResponse(status=404)
+
+    content_type, _ = mimetypes.guess_type(resolved_path.name)
+    response = FileResponse(resolved_path.open("rb"), content_type=content_type or "application/octet-stream")
+    response["Cache-Control"] = "public, max-age=3600"
+    return response

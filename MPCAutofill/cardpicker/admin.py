@@ -15,6 +15,7 @@ from .models import (
     Source,
     Tag,
 )
+from .sources.update_database import update_database
 
 
 # Register your models here.
@@ -41,6 +42,7 @@ class AdminDFCPair(admin.ModelAdmin[DFCPair]):
 class AdminSource(admin.ModelAdmin[Source]):
     list_display = ("name", "identifier", "contribution", "description")
     search_fields = ("name", "identifier")
+    actions = ["rescan_sources"]
 
     def contribution(self, obj: Source) -> str:
         qty_all, qty_cards, qty_cardbacks, qty_tokens, avgdpi = obj.count()
@@ -48,6 +50,11 @@ class AdminSource(admin.ModelAdmin[Source]):
         return "{} images - {} cards, {} cardbacks, and {} tokens @ {} DPI on average".format(
             qty_all, qty_cards, qty_cardbacks, qty_tokens, avgdpi
         )
+
+    @admin.action(description="Re-scan selected sources for new/updated/removed images")
+    def rescan_sources(self, request: HttpRequest, queryset: QuerySet[Source]) -> None:
+        for source in queryset:
+            update_database(source_key=source.key)
 
 
 @admin.register(Project)

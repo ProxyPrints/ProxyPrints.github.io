@@ -133,4 +133,41 @@ def execute_google_drive_api_call(service: Resource) -> Optional[dict[str, Any]]
 
 # endregion
 
-__all__ = ["Image", "Folder", "find_or_create_google_drive_service", "execute_google_drive_api_call"]
+# region local file
+# Local filesystem source support: a `Source` of this type has its `identifier` field set to a root
+# directory path on disk, which is recursively crawled for images in the same way a Google Drive folder is.
+
+LOCAL_FILE_ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg"}
+
+
+class PathTraversalError(Exception):
+    """Raised when a path resolves outside of the root directory it's expected to stay within."""
+
+
+def resolve_within_root(root: Path, candidate: Path) -> Path:
+    """
+    Resolve `candidate` (following any symlinks) and verify that it lies within `root` (also resolved).
+    Raises `PathTraversalError` if `candidate` would escape `root` - e.g. via `../` segments in the
+    path, or a symlink that points outside of it. This is the single choke point responsible for
+    ensuring that local-file-backed images are never served from outside of their source's configured
+    root directory, so callers must not bypass it when resolving a path supplied by a client.
+    """
+
+    resolved_root = root.resolve()
+    resolved_candidate = candidate.resolve()
+    if not resolved_candidate.is_relative_to(resolved_root):
+        raise PathTraversalError(f"{candidate} resolves to a path outside of root directory {root}")
+    return resolved_candidate
+
+
+# endregion
+
+__all__ = [
+    "Image",
+    "Folder",
+    "find_or_create_google_drive_service",
+    "execute_google_drive_api_call",
+    "LOCAL_FILE_ALLOWED_IMAGE_EXTENSIONS",
+    "PathTraversalError",
+    "resolve_within_root",
+]
