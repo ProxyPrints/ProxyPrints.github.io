@@ -5,7 +5,7 @@
   "license": "GPL-3.0-only",
   "private": true,
   "scripts": {
-    "postinstall": "node scripts/copy-pdf-worker.js",
+    "postinstall": "patch-package && node scripts/copy-pdf-worker.js",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -82,6 +82,7 @@
     "jsdom": "^28.1.0",
     "mini-css-extract-plugin": "^2.7.5",
     "msw": "^2.12.7",
+    "patch-package": "^8.0.1",
     "postcss-loader": "^7.1.0",
     "sass": "^1.60.0",
     "sass-loader": "^13.2.1",

@@ -1,0 +1,51 @@
+diff --git a/node_modules/@msw/playwright/build/index.js b/node_modules/@msw/playwright/build/index.js
+index 76c5edd..bf151db 100644
+--- a/node_modules/@msw/playwright/build/index.js
++++ b/node_modules/@msw/playwright/build/index.js
+@@ -41,6 +41,24 @@ function createNetworkFixture(args) {
+ * without carrying the reference to the handler function around.
+ */
+ const INTERNAL_MATCH_ALL_REG_EXP = /.+(__MSW_PLAYWRIGHT_PREDICATE__)?/;
++/**
++* @note Ignore "Route is already handled!" errors.
++* Playwright has a bug where requests terminated due to navigation
++* cause in-flight route handlers to throw. There's no means to detect
++* that scenario ahead of time, so the error is caught and swallowed here.
++* @see https://github.com/mswjs/playwright/issues/35
++* @see https://github.com/mswjs/playwright/pull/40
++*/
++async function safelyHandleRoute(callback) {
++	try {
++		await callback();
++	} catch (error) {
++		if (error instanceof Error && /route is already handled/i.test(error.message)) {
++			return;
++		}
++		throw error;
++	}
++}
+ var NetworkFixture = class extends SetupApi {
+ 	constructor(args) {
+ 		super(...args.initialHandlers);
+@@ -66,17 +84,17 @@ var NetworkFixture = class extends SetupApi {
+ 			} });
+ 			if (response) {
+ 				if (response.status === 0) {
+-					route.abort();
++					await safelyHandleRoute(() => route.abort());
+ 					return;
+ 				}
+-				route.fulfill({
++				await safelyHandleRoute(async () => route.fulfill({
+ 					status: response.status,
+ 					headers: Object.fromEntries(response.headers),
+ 					body: response.body ? Buffer.from(await response.arrayBuffer()) : void 0
+-				});
++				}));
+ 				return;
+ 			}
+-			route.continue();
++			await safelyHandleRoute(() => route.continue());
+ 		});
+ 		await this.args.page.routeWebSocket(INTERNAL_MATCH_ALL_REG_EXP, async (ws) => {
+ 			const allWebSocketHandlers = this.handlersController.currentHandlers().filter((handler) => {
