@@ -183,7 +183,8 @@ test.describe("GridSelectorModal – modal title", () => {
     const printingDropdown = gridSelector
       .getByTestId("printing-filter")
       .locator(".react-dropdown-tree-select");
-    await selectDropdownOption(printingDropdown, "ABC Set [ABC]");
+    await printingDropdown.locator(".dropdown-trigger").click();
+    await printingDropdown.getByText("[ABC] 001").click();
 
     await expect(
       gridSelector.getByText("Select Version — 1 result")
@@ -541,11 +542,13 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
     ).toBeVisible({ timeout: 5000 });
   });
 
-  test("selecting a printing expansion limits results to cards in that expansion", async ({
+  test("selecting all printings in an expansion limits results to cards in that expansion", async ({
     page,
     network,
   }) => {
-    // XYZ Set contains card8 (001) and card9 (002); ABC Set contains card10 (001)
+    // XYZ Set contains card8 (001) and card9 (002); ABC Set contains card10 (001).
+    // The printing filter is a flat list (one row per printing, not a tree grouped by
+    // expansion), so "all of XYZ Set" means selecting both of its rows individually.
     network.use(
       cardDocumentsWithCanonicalCards,
       sourceDocumentsOneResult,
@@ -559,7 +562,9 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
     const printingDropdown = gridSelector
       .getByTestId("printing-filter")
       .locator(".react-dropdown-tree-select");
-    await selectDropdownOption(printingDropdown, "XYZ Set [XYZ]");
+    await printingDropdown.locator(".dropdown-trigger").click();
+    await printingDropdown.getByText("[XYZ] 001").click();
+    await printingDropdown.getByText("[XYZ] 002").click();
 
     // card8 and card9 are in XYZ Set → 2 results
     await expect(
@@ -581,18 +586,13 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
     await importText(page, "my search query");
     const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 4);
 
-    // Expand XYZ Set in the printing tree and select only collector number 001
+    // The printing filter is a flat list, so selecting a specific collector number is a
+    // single click - no tree to expand first.
     const printingDropdown = gridSelector
       .getByTestId("printing-filter")
       .locator(".react-dropdown-tree-select");
     await printingDropdown.locator(".dropdown-trigger").click();
-    // Expand the XYZ Set node to reveal child collector numbers
-    await printingDropdown
-      .locator("i.toggle")
-      .filter({ hasText: "" })
-      .first()
-      .click();
-    await printingDropdown.getByText("001", { exact: true }).first().click();
+    await printingDropdown.getByText("[XYZ] 001").click();
 
     // Only card8 (xyz/001) should match → 1 result
     await expect(

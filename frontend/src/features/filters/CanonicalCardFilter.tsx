@@ -1,24 +1,32 @@
-// TODO: this file was slopped together by claude, could do with a careful read and tidy up.
-
-import { useCallback, useMemo, useState } from "react";
+import styled from "@emotion/styled";
+import { useMemo } from "react";
 import Form from "react-bootstrap/Form";
-import { TreeNode } from "react-dropdown-tree-select";
 
 import { Printing, Unknown } from "@/common/constants";
+import { getKeyruneChar } from "@/common/keyrune";
 import { StyledDropdownTreeSelect } from "@/common/StyledDropdownTreeSelect";
 import { useAppSelector } from "@/common/types";
 import { selectCardDocumentsByIdentifiers } from "@/store/slices/cardDocumentsSlice";
 
+// Renders the Keyrune set-symbol glyph embedded in each printing row's label (see
+// common/keyrune.ts) - scoped to just this dropdown instance, not the shared
+// StyledDropdownTreeSelect, since every other filter using that component has plain-text
+// labels with no Keyrune glyph characters at all.
+const PrintingDropdownTreeSelect = styled(StyledDropdownTreeSelect)`
+  .node-label,
+  .tag {
+    font-family: "Keyrune", sans-serif;
+  }
+`;
+
 /**
- * Resolve the flat list of selected tree nodes from the printing dropdown into
- * a deduplicated array of Printing objects.
- *
- * The library may include both a parent expansion node and its children in
- * selectedNodes when all children are checked, so deduplication is required.
+ * Resolve the flat list of selected printing-dropdown nodes into a deduplicated array of
+ * Printing objects. Each node's value is either the Unknown sentinel or
+ * "${expansionCode} ${collectorNumber}" - the dropdown is a flat list (one row per
+ * printing), not a tree, so there's no parent/child expansion to resolve here.
  */
 export function resolveSelectedPrintings(
-  selectedNodes: Array<{ value: string }>,
-  expansionMap: Map<string, { code: string; numbers: Set<string> }>
+  selectedNodes: Array<{ value: string }>
 ): Array<Printing> {
   const printingMap = new Map<string, Printing>();
   for (const node of selectedNodes) {
@@ -28,26 +36,16 @@ export function resolveSelectedPrintings(
         expansionCode: Unknown,
         collectorNumber: Unknown,
       });
-    } else if (expansionMap.has(value)) {
-      // Parent expansion node — expand to all its collector numbers
-      const expansion = expansionMap.get(value)!;
-      for (const collectorNumber of expansion.numbers) {
-        printingMap.set(`${expansion.code}|${collectorNumber}`, {
-          expansionCode: expansion.code,
-          collectorNumber,
-        });
-      }
-    } else {
-      // Child node: value format is "${expansionCode} ${collectorNumber}"
-      const spaceIdx = value.indexOf(" ");
-      if (spaceIdx !== -1) {
-        const expansionCode = value.substring(0, spaceIdx);
-        const collectorNumber = value.substring(spaceIdx + 1);
-        printingMap.set(`${expansionCode}|${collectorNumber}`, {
-          expansionCode,
-          collectorNumber,
-        });
-      }
+      continue;
+    }
+    const spaceIdx = value.indexOf(" ");
+    if (spaceIdx !== -1) {
+      const expansionCode = value.substring(0, spaceIdx);
+      const collectorNumber = value.substring(spaceIdx + 1);
+      printingMap.set(`${expansionCode}|${collectorNumber}`, {
+        expansionCode,
+        collectorNumber,
+      });
     }
   }
   return Array.from(printingMap.values());
@@ -68,9 +66,6 @@ export const CanonicalCardFilter = ({
   artists,
   setArtists,
 }: CanonicalCardFilterProps) => {
-  const [expandedPrintingNodes, setExpandedPrintingNodes] = useState<
-    Array<string>
-  >([]);
   const cardDocumentsByIdentifier = useAppSelector((state) =>
     selectCardDocumentsByIdentifiers(state, imageIdentifiers)
   );
@@ -117,8 +112,6 @@ export const CanonicalCardFilter = ({
     return { expansionMap, hasUnknown };
   }, [cardDocumentsByIdentifier]);
 
-  const includesExpansionCode = (expansionCode: string): boolean =>
-    printings.some((value) => expansionCode === value.expansionCode);
   const includesPrinting = (printing: Printing): boolean =>
     printings.some(
       (value) =>
@@ -126,64 +119,46 @@ export const CanonicalCardFilter = ({
         printing.collectorNumber === value.collectorNumber
     );
 
-  // Tree node data for the dropdown, recomputed when checked/expanded state changes
+  // Flat list of dropdown rows (one per printing), not a tree - each row's label is
+  // "{Keyrune glyph}[SET] 123" for a compact, uniform look regardless of how long the
+  // expansion's full name is; the full name is only shown via the native `title` tooltip
+  // on hover. Sorted by expansion name, then collector number, so same-set printings sit
+  // together despite there being no parent node to group them under any more.
   const availablePrintingOptions = useMemo(() => {
     const { expansionMap, hasUnknown } = availablePrintingExpansions;
-    const nodes = Array.from(expansionMap.entries())
-      .sort(([, a], [, b]) => a.name.localeCompare(b.name))
-      .map(([expansionCode, { name, numbers }]) => {
-        const allChildrenSelected = Array.from(numbers).every((n) =>
-          includesPrinting({ expansionCode, collectorNumber: n })
-        );
-        const anyChildSelected = includesExpansionCode(expansionCode);
-        return {
-          label: `${name} [${expansionCode.toUpperCase()}]`,
-          value: expansionCode,
-          checked: allChildrenSelected,
-          partial: anyChildSelected && !allChildrenSelected,
-          expanded: expandedPrintingNodes.includes(expansionCode),
-          children: Array.from(numbers)
-            .sort()
-            .map((collectorNumber) => ({
-              label: collectorNumber,
-              value: `${expansionCode} ${collectorNumber}`,
-              checked: includesPrinting({ expansionCode, collectorNumber }),
-            })),
-        };
-      });
+    const nodes = Array.from(expansionMap.values())
+      .flatMap(({ name, code, numbers }) =>
+        Array.from(numbers).map((collectorNumber) => ({
+          name,
+          code,
+          collectorNumber,
+        }))
+      )
+      .sort(
+        (a, b) =>
+          a.name.localeCompare(b.name) ||
+          a.collectorNumber.localeCompare(b.collectorNumber)
+      )
+      .map(({ name, code, collectorNumber }) => ({
+        label: `${getKeyruneChar(
+          code
+        )} [${code.toUpperCase()}] ${collectorNumber}`,
+        value: `${code} ${collectorNumber}`,
+        title: name,
+        checked: includesPrinting({ expansionCode: code, collectorNumber }),
+      }));
     if (hasUnknown) {
       nodes.push({
         label: Unknown,
         value: Unknown,
+        title: Unknown,
         checked: printings.some(
           (p) => p.expansionCode === Unknown && p.collectorNumber === Unknown
         ),
-        partial: false,
-        expanded: false,
-        children: [],
       });
     }
     return nodes;
-  }, [availablePrintingExpansions, printings, expandedPrintingNodes]);
-
-  const onPrintingNodeToggle = useCallback(
-    (currentNode: TreeNode): void => {
-      if (
-        currentNode.expanded &&
-        !expandedPrintingNodes.includes(currentNode.value)
-      ) {
-        setExpandedPrintingNodes([...expandedPrintingNodes, currentNode.value]);
-      } else if (
-        !currentNode.expanded &&
-        expandedPrintingNodes.includes(currentNode.value)
-      ) {
-        setExpandedPrintingNodes(
-          expandedPrintingNodes.filter((v) => v !== currentNode.value)
-        );
-      }
-    },
-    [expandedPrintingNodes]
-  );
+  }, [availablePrintingExpansions, printings]);
 
   return (
     <>
@@ -191,15 +166,16 @@ export const CanonicalCardFilter = ({
         .length > 0 && (
         <div data-testid="printing-filter">
           <Form.Label>Canonical card printings</Form.Label>
-          <StyledDropdownTreeSelect
+          <PrintingDropdownTreeSelect
             data={availablePrintingOptions}
-            onChange={(_currentNode, selectedNodes) => {
-              const { expansionMap } = availablePrintingExpansions;
-              setPrintings(
-                resolveSelectedPrintings(selectedNodes, expansionMap)
-              );
-            }}
-            onNodeToggle={onPrintingNodeToggle}
+            onChange={(_currentNode, selectedNodes) =>
+              setPrintings(resolveSelectedPrintings(selectedNodes))
+            }
+            searchPredicate={(node, searchTerm) =>
+              `${node.label} ${node.title ?? ""}`
+                .toLowerCase()
+                .includes(searchTerm)
+            }
             inlineSearchInput
           />
         </div>
