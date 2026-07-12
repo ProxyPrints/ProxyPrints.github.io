@@ -28,11 +28,23 @@ import { setNotification } from "@/store/slices/toastsSlice";
 interface ArtistVotePickerProps {
   backendURL: string;
   cardIdentifier: string;
+  /**
+   * The card's already-known artist name, if confidently known independent of any artist
+   * vote - callers derive this from their own Card/CardDocument object as
+   * `canonicalArtist != null && !canonicalArtistIsFromVoteOnly ? canonicalArtist.name : null`
+   * (that derivation can't happen inside this component, since it only ever has the card's
+   * *identifier*, not the full card object). When set, renders as pre-filled text with a
+   * small "wrong?" link that reveals the full picker on click, instead of soliciting a vote
+   * outright for an artist that's already confidently known from indexing or a resolved
+   * printing. Omitted or null: today's unconditional-picker behavior is unchanged.
+   */
+  confidentlyKnownArtistName?: string | null;
 }
 
 export function ArtistVotePicker({
   backendURL,
   cardIdentifier,
+  confidentlyKnownArtistName,
 }: ArtistVotePickerProps) {
   const dispatch = useAppDispatch();
 
@@ -43,6 +55,7 @@ export function ArtistVotePicker({
   );
   const [loading, setLoading] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [revealPickerAnyway, setRevealPickerAnyway] = useState<boolean>(false);
 
   useEffect(() => {
     APIGetArtistConsensus(backendURL, cardIdentifier)
@@ -101,6 +114,24 @@ export function ArtistVotePicker({
       )
       .finally(() => setSubmitting(false));
   };
+
+  if (confidentlyKnownArtistName != null && !revealPickerAnyway) {
+    return (
+      <div data-testid="artist-vote-picker">
+        <span>{confidentlyKnownArtistName}</span>{" "}
+        <a
+          href="#"
+          data-testid="artist-vote-wrong-link"
+          onClick={(event) => {
+            event.preventDefault();
+            setRevealPickerAnyway(true);
+          }}
+        >
+          wrong?
+        </a>
+      </div>
+    );
+  }
 
   return (
     <div data-testid="artist-vote-picker">

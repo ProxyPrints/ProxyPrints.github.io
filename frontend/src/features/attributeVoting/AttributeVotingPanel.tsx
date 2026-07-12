@@ -14,11 +14,14 @@ import { TagVotePicker } from "@/features/attributeVoting/TagVotePicker";
 interface AttributeVotingPanelProps {
   backendURL: string;
   cardIdentifier: string;
+  /** Threaded straight through to ArtistVotePicker - see that component's own prop docstring. */
+  confidentlyKnownArtistName?: string | null;
 }
 
 export function AttributeVotingPanel({
   backendURL,
   cardIdentifier,
+  confidentlyKnownArtistName,
 }: AttributeVotingPanelProps) {
   return (
     <div data-testid="attribute-voting-panel">
@@ -26,6 +29,7 @@ export function AttributeVotingPanel({
       <ArtistVotePicker
         backendURL={backendURL}
         cardIdentifier={cardIdentifier}
+        confidentlyKnownArtistName={confidentlyKnownArtistName}
       />
       <h6 className="mt-3">Do any of these tags apply?</h6>
       <TagVotePicker backendURL={backendURL} cardIdentifier={cardIdentifier} />

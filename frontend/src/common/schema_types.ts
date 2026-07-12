@@ -185,7 +185,7 @@ export interface Card {
    * a confidently-known artist from a vote-derived one (e.g. for the ArtistVotePicker
    * 'wrong?' affordance) without needing to know serialise()'s fallback chain itself.
    */
-  canonicalArtistIsFromVoteOnly: boolean;
+  canonicalArtistIsFromVoteOnly?: boolean;
   /**
    * Which rung of the artist fallback chain actually supplied canonicalArtist -
    * debug/introspection field, not load-bearing for any current frontend logic.
@@ -1541,7 +1541,7 @@ const typeMap: any = {
       {
         json: "canonicalArtistIsFromVoteOnly",
         js: "canonicalArtistIsFromVoteOnly",
-        typ: true,
+        typ: u(undefined, true),
       },
       {
         json: "canonicalArtistSource",

@@ -101,8 +101,7 @@
     "smallThumbnailUrl",
     "mediumThumbnailUrl",
     "language",
-    "tags",
-    "canonicalArtistIsFromVoteOnly"
+    "tags"
   ],
   "additionalProperties": false
 }

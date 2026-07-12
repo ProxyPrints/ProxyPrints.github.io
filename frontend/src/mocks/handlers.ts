@@ -716,6 +716,40 @@ export const printingTagQueueNoResults = http.get(
   () => HttpResponse.json({ hits: 0, pages: 1, cards: [] }, { status: 200 })
 );
 
+// 2/voteQueue/ is shared by all three kinds (kind is in the POST body, not the URL), so this
+// one handler branches on it rather than registering three separate handlers for the same route.
+export const voteQueueArtistOneTagOneResults = http.post(
+  buildRoute("2/voteQueue/"),
+  async ({ request }) => {
+    const body = (await request.json()) as { kind: string; page: number };
+    if (body.kind === "artist") {
+      return HttpResponse.json(
+        { hits: 1, pages: 1, items: [{ card: cardDocument8, tagName: null }] },
+        { status: 200 }
+      );
+    }
+    if (body.kind === "tag") {
+      return HttpResponse.json(
+        {
+          hits: 1,
+          pages: 1,
+          // deliberately a different card than the printing/artist mock fixtures use - the
+          // printing tab's mount is never torn down when switching away (matches its
+          // existing, unchanged behavior), so reusing the same card here would produce two
+          // simultaneous elements with the same alt text once the tag tab is active
+          items: [{ card: cardDocument9, tagName: "Borderless" }],
+        },
+        { status: 200 }
+      );
+    }
+    return HttpResponse.json({ hits: 0, pages: 1, items: [] }, { status: 200 });
+  }
+);
+
+export const voteQueueNoResults = http.post(buildRoute("2/voteQueue/"), () =>
+  HttpResponse.json({ hits: 0, pages: 1, items: [] }, { status: 200 })
+);
+
 //# endregion
 
 //# region attribute voting

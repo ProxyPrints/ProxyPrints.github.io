@@ -196,6 +196,12 @@ export function CardDetailedViewModal({
                     <AttributeVotingPanel
                       backendURL={backendURL}
                       cardIdentifier={cardDocument.identifier}
+                      confidentlyKnownArtistName={
+                        cardDocument.canonicalArtist != null &&
+                        !cardDocument.canonicalArtistIsFromVoteOnly
+                          ? cardDocument.canonicalArtist.name
+                          : null
+                      }
                     />
                   </>
                 )}

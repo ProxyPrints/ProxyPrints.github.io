@@ -25,7 +25,7 @@ test.describe("NewCards", () => {
       newCardsPageForSource1,
       ...defaultHandlers
     );
-    loadPageWithDefaultBackend(page, "new");
+    await loadPageWithDefaultBackend(page, "new");
 
     await expect(page.getByText(cardDocument1.name)).toBeVisible();
     await expect(page.getByText(cardDocument2.name)).toBeVisible();

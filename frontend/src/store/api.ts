@@ -33,6 +33,7 @@ import {
   ImportSitesResponse,
   Info,
   InfoResponse,
+  Kind as VoteQueueKind,
   Language,
   LanguagesResponse,
   NewCardsFirstPage,
@@ -50,6 +51,7 @@ import {
   Tag,
   TagConsensusResponse,
   TagsResponse,
+  VoteQueueResponse,
 } from "@/common/schema_types";
 import {
   CardDocument,
@@ -529,6 +531,25 @@ export async function APIGetPrintingTagQueue(
   return rawResponse.json().then((content) => {
     if (rawResponse.status === 200 && content.cards != null) {
       return content as PrintingTagQueueResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APIGetVoteQueue(
+  backendURL: string,
+  kind: VoteQueueKind,
+  page: number
+): Promise<VoteQueueResponse> {
+  const rawResponse = await fetch(formatURL(backendURL, "/2/voteQueue/"), {
+    method: "POST",
+    body: JSON.stringify({ kind, page }),
+    credentials: "same-origin",
+    headers: getCSRFHeader(),
+  });
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.items != null) {
+      return content as VoteQueueResponse;
     }
     throw { name: content.name, message: content.message };
   });
