@@ -115,6 +115,26 @@ test.each([
       collectorNumber: "abcdef",
     },
   },
+  {
+    // a trailing foil marker (as commonly appended by decklist exports) must not end up
+    // baked into the collector number - "233 *F*" would never match any real card
+    input: "lightning bolt (LEA) 233 *F*",
+    expectedOutput: {
+      query: "lightning bolt",
+      cardType: CardType.Card,
+      expansionCode: "LEA",
+      collectorNumber: "233",
+    },
+  },
+  {
+    input: "lightning bolt (LEA) 233 *f*",
+    expectedOutput: {
+      query: "lightning bolt",
+      cardType: CardType.Card,
+      expansionCode: "LEA",
+      collectorNumber: "233",
+    },
+  },
 ])("processSearchQuery", ({ input, expectedOutput }) => {
   expect(processSearchQuery(input)).toEqual(expectedOutput);
 });

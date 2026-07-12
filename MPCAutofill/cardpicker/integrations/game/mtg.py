@@ -32,6 +32,21 @@ from cardpicker.utils import (
 
 logger = logging.getLogger(__name__)
 
+
+def format_decklist_line(quantity: int, name: str, expansion_code: str | None, collector_number: object) -> str:
+    """
+    Formats a single decklist-import line, appending "(SET) 123" when both a set code and
+    collector number are available so the frontend's existing `processSearchQuery` /
+    backend's existing Elasticsearch expansion_code+collector_number term filter resolve to
+    that exact printing - falls back to a bare name+quantity line otherwise. Foil status is
+    deliberately never included here: importing a decklist should select a specific
+    printing's art, not a specific foil/non-foil copy of it.
+    """
+    if expansion_code and collector_number is not None and str(collector_number).strip():
+        return f"{quantity} {name} ({expansion_code.upper()}) {collector_number}"
+    return f"{quantity} {name}"
+
+
 # region import sites
 
 
@@ -64,7 +79,17 @@ class Archidekt(ImportSite):
         if not deck_id:
             raise cls.InvalidURLException(url)
         response_json = cls.request(path=f"api/decks/{deck_id}/").json()
-        return "\n".join([f"{x['quantity']} {x['card']['oracleCard']['name']}" for x in response_json["cards"]])
+        return "\n".join(
+            [
+                format_decklist_line(
+                    quantity=x["quantity"],
+                    name=x["card"]["oracleCard"]["name"],
+                    expansion_code=x["card"].get("edition", {}).get("editioncode"),
+                    collector_number=x["card"].get("collectorNumber"),
+                )
+                for x in response_json["cards"]
+            ]
+        )
 
 
 class CubeCobra(ImportSite):
@@ -190,7 +215,16 @@ class Moxfield(ImportSite):
             "maybeboard",
         ]:
             for name, info in response_json.get(category, {}).items():
-                card_list += f"{info['quantity']} {name}\n"
+                card = info.get("card", {})
+                card_list += (
+                    format_decklist_line(
+                        quantity=info["quantity"],
+                        name=name,
+                        expansion_code=card.get("set"),
+                        collector_number=card.get("cn"),
+                    )
+                    + "\n"
+                )
         for token in response_json.get("tokens", []):
             if token["layout"] == "token":
                 card_list += f"t:{token['name']}\n"

@@ -64,6 +64,19 @@ export function processQuery(query: string): string {
 }
 
 /**
+ * Strip a trailing foil marker (e.g. "*F*", as commonly appended by decklist exports like
+ * Moxfield/MTGO-style plaintext) from a raw collector-number capture. Without this, a line
+ * like "Lightning Bolt (LEA) 233 *F*" would resolve to a collector number of "233 *F*",
+ * which won't match any real card's collector number and silently defeats the
+ * printing-specific search filter entirely for foil decklist entries. Foil status itself is
+ * intentionally not tracked anywhere - the request is only ever for a specific printing's
+ * art, not for a specific foil/non-foil copy of it.
+ */
+const stripFoilMarker = (
+  rawCollectorNumber: string | undefined
+): string | undefined => rawCollectorNumber?.replace(/\s*\*f\*\s*$/i, "");
+
+/**
  * Unpack `query` into its constituents.
  *
  * Inputs to this function are unpacked according to the below schema. For example, consider `t:opt (XYZ) 123`:
@@ -94,7 +107,7 @@ export const processSearchQuery = (query: string): SearchQuery => {
     cardType: CardTypePrefixes[match[1] ?? ""],
     query: processQuery(match[2]),
     expansionCode: match[3]?.toUpperCase()?.trim() || undefined,
-    collectorNumber: match[4]?.trim() || undefined,
+    collectorNumber: stripFoilMarker(match[4])?.trim() || undefined,
   };
 };
 

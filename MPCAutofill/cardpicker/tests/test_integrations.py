@@ -19,7 +19,11 @@ from PIL import Image
 
 from django.conf import settings as conf_settings
 
-from cardpicker.integrations.game.mtg import Moxfield, MTGIntegration
+from cardpicker.integrations.game.mtg import (
+    Moxfield,
+    MTGIntegration,
+    format_decklist_line,
+)
 from cardpicker.integrations.integrations import get_configured_game_integration
 from cardpicker.models import CanonicalCard
 from cardpicker.schema_types import Game
@@ -46,6 +50,27 @@ def _make_test_image_for_phash() -> tuple[bytes, int]:
 
 _TEST_IMAGE_BYTES, _TEST_IMAGE_HASH = _make_test_image_for_phash()
 _TEST_IMAGE_URL = "http://test.example.com/card.jpg"
+
+
+class TestFormatDecklistLine:
+    def test_includes_set_and_collector_number_when_both_present(self):
+        assert format_decklist_line(1, "Lightning Bolt", "lea", "233") == "1 Lightning Bolt (LEA) 233"
+
+    def test_uppercases_the_set_code(self):
+        assert format_decklist_line(4, "Brainstorm", "mmq", 123) == "4 Brainstorm (MMQ) 123"
+
+    def test_falls_back_to_bare_name_when_set_code_missing(self):
+        assert format_decklist_line(1, "Lightning Bolt", None, "233") == "1 Lightning Bolt"
+
+    def test_falls_back_to_bare_name_when_collector_number_missing(self):
+        assert format_decklist_line(1, "Lightning Bolt", "lea", None) == "1 Lightning Bolt"
+
+    def test_falls_back_to_bare_name_when_collector_number_is_blank(self):
+        assert format_decklist_line(1, "Lightning Bolt", "lea", "  ") == "1 Lightning Bolt"
+
+    def test_accepts_an_integer_collector_number(self):
+        # Archidekt's API returns collectorNumber as an int, not a string
+        assert format_decklist_line(1, "Brainstorm", "mmq", 55) == "1 Brainstorm (MMQ) 55"
 
 
 class TestGetIntegration:
