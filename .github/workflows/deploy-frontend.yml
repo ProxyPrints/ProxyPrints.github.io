@@ -39,6 +39,8 @@ jobs:
           NEXT_PUBLIC_BACKEND_URL: https://api.proxyprints.ca
           NEXT_PUBLIC_IMAGE_WORKER_URL: https://cdn.proxyprints.ca
           NEXT_PUBLIC_IMAGE_BUCKET_URL: https://img.proxyprints.ca
+          NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID }}
+          NEXT_PUBLIC_GOOGLE_DRIVE_APP_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_DRIVE_APP_ID }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
