@@ -1,6 +1,5 @@
 import { expect } from "@playwright/test";
 
-import { GoogleAnalyticsConsentKey } from "@/common/constants";
 import {
   cardbacksServerError,
   cardbacksTwoOtherResults,
@@ -26,62 +25,6 @@ import {
   loadPageWithDefaultBackend,
   openImportTextModal,
 } from "./test-utils";
-
-test.describe("google analytics toast", () => {
-  test.beforeEach(async ({ context }) => {
-    await context.clearCookies();
-  });
-
-  test("opting into google analytics", async ({ page, context }) => {
-    await page.goto("/about");
-    await expect(page.getByText("Cookie Usage")).toBeVisible();
-
-    await page.getByText("That's fine!").click();
-    await expect(page.getByText("Cookie Usage")).not.toBeVisible();
-
-    // Verify cookie was set
-    const cookies = await context.cookies();
-    const gaCookie = cookies.find((c) => c.name === GoogleAnalyticsConsentKey);
-    expect(gaCookie).toBeDefined();
-    expect(gaCookie?.value).toBe("true");
-
-    // Upon reloading the page, google analytics should now be turned on
-    await page.reload();
-    await expect(page.locator("#nextjs-google-analytics")).toBeAttached();
-  });
-
-  test("opting out of google analytics", async ({ page, context }) => {
-    await page.goto("/about");
-    await expect(page.getByText("Cookie Usage")).toBeVisible();
-
-    await page.getByRole("button", { name: "Opt out" }).click();
-    await expect(page.getByText("Cookie Usage")).not.toBeVisible();
-
-    // Verify cookie was set
-    const cookies = await context.cookies();
-    const gaCookie = cookies.find((c) => c.name === GoogleAnalyticsConsentKey);
-    expect(gaCookie).toBeDefined();
-    expect(gaCookie?.value).toBe("false");
-
-    // Upon reloading the page, google analytics should now be turned off
-    await page.reload();
-    await expect(page.locator("#nextjs-google-analytics")).not.toBeAttached();
-  });
-
-  test("google analytics consent popup does not appear once consent is specified", async ({
-    page,
-  }) => {
-    await page.goto("/about");
-    await expect(page.getByText("Cookie Usage")).toBeVisible();
-
-    await page.getByRole("button", { name: "That's fine!" }).click();
-    await expect(page.getByText("Cookie Usage")).not.toBeVisible();
-
-    // The popup should no longer appear upon page reload
-    await page.reload();
-    await expect(page.getByText("Cookie Usage")).not.toBeVisible();
-  });
-});
 
 test.describe("error reporting toasts", () => {
   async function assertErrorToast(

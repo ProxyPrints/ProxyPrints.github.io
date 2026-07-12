@@ -87,73 +87,16 @@ export default function About() {
         {ProjectName} is not affiliated with, produced by, or endorsed by any of
         the print shops listed on this site or any other commercial entities.
       </p>
-      <h3>Privacy Policy</h3>
-      <b>Last updated: 20th April, 2026</b>
+      <h3 id="privacy-policy">Privacy Policy</h3>
+      <b>Last updated: 12th July, 2026</b>
       <br />
       <br />
-      <h4>Google Analytics</h4>
       <p>
-        {ProjectName} collects site usage data through Google Analytics via
-        cookies. Understanding how users interact with the site allows me to
-        continue to improve the site to the best of my ability. Users are
-        presented with the option to opt-out of having their data collected by
-        Google Analytics.
-      </p>
-      <p>
-        We use local storage to remember your search settings and your server
-        configuration, which is considered core site functionality and cannot be
-        disabled.
-      </p>
-      <p>
-        {ProjectName} will never share information collected by Google Analytics
-        with third parties.
-      </p>
-      <p>
-        Information collected by Google Analytics includes the following items.{" "}
-        <b>Note</b>: this is not an exhaustive list, but captures the motivation
-        for implementing Google Analytics:
-      </p>
-      <ul>
-        <li>
-          Data on how many users interact with the site (real-time and
-          historical),
-        </li>
-        <li>
-          Statistics on how users interact with the site &mdash; session
-          duration, bounce rate, page views, pages per session, sessions per
-          user,
-        </li>
-        <li>
-          How users discover the site &mdash; organic search (including search
-          keywords), direct by URL, referral, etc.,
-        </li>
-        <li>
-          Audience demographics &mdash; the countries and cities my users hail
-          from, and the languages they speak,
-        </li>
-        <li>
-          The platforms/technology through which users interact with the site,
-        </li>
-        <li>
-          Average site usage across times of day and days of the week, allowing
-          me to schedule site maintenance more effectively.
-        </li>
-      </ul>
-      <p>
-        {ProjectName}&apos;s usage of Google Analytics does not include the
-        usage of Google Adwords or other advertising features.
-      </p>
-      <p>
-        You can find more information on Google&apos;s privacy policy{" "}
-        <a href="https://policies.google.com/privacy?hl=en-US" target="_blank">
-          here
-        </a>
-        . Google also provides a browser extension to disable Google Analytics,
-        which you can find{" "}
-        <a href="https://tools.google.com/dlpage/gaoptout" target="_blank">
-          here
-        </a>
-        .
+        {ProjectName} does not use Google Analytics or any other
+        visitor-tracking or analytics service. We use local storage to remember
+        your search settings and your server configuration, which is considered
+        core site functionality and cannot be disabled. No other usage data is
+        collected by {ProjectName} itself.
       </p>
       <h4>Google Drive API</h4>
       <p>

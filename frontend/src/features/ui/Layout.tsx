@@ -1,6 +1,5 @@
 import styled from "@emotion/styled";
 import { Queue } from "async-await-queue";
-import { GoogleAnalytics } from "nextjs-google-analytics";
 import React, { useEffect, useReducer } from "react";
 import { PropsWithChildren } from "react";
 import Container from "react-bootstrap/Container";
@@ -8,10 +7,7 @@ import SSRProvider from "react-bootstrap/SSRProvider";
 import { Provider } from "react-redux";
 
 import { ContentMaxWidth, NavbarHeight } from "@/common/constants";
-import {
-  getGoogleAnalyticsConsent,
-  getLocalStorageFavorites,
-} from "@/common/cookies";
+import { getLocalStorageFavorites } from "@/common/cookies";
 import { useAppDispatch } from "@/common/types";
 import { useBackendSetter } from "@/features/backend/useBackendSetter";
 import { ClientSearchContextProvider } from "@/features/clientSearch/clientSearchContext";
@@ -66,7 +62,6 @@ export function ProjectContainer({
 }
 
 export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
-  const consent = getGoogleAnalyticsConsent();
   const downloadContext: DownloadContext = new Queue(10, 50);
   const [forceUpdateValue, forceUpdate] = useReducer((x: number) => x + 1, 0);
   useBackendSetter();
@@ -89,9 +84,6 @@ export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
       <ClientSearchContextProvider
         value={{ clientSearchService, forceUpdate, forceUpdateValue }}
       >
-        {consent === true && (
-          <GoogleAnalytics trackPageViews gaMeasurementId="G-JV8WV3FQML" />
-        )}
         <Toasts />
         <Modals />
         <ProjectNavbar />

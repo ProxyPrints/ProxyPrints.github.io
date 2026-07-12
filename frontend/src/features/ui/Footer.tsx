@@ -42,6 +42,8 @@ export default function Footer() {
             )}
           <Spacer />•<Spacer />
           <Link href="/about">About</Link>
+          <Spacer />•<Spacer />
+          <Link href="/about#privacy-policy">Privacy Policy</Link>
         </div>
       </footer>
     </>

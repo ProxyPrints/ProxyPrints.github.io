@@ -8,7 +8,6 @@ import {
   BackendURLKey,
   CSRFKey,
   FavoritesKey,
-  GoogleAnalyticsConsentKey,
   SearchSettingsKey,
 } from "@/common/constants";
 import { Convert } from "@/common/schema_types";
@@ -120,22 +119,6 @@ export function setLocalStorageFavorites(
   favoriteRenders: FavoritesState["favoriteRenders"]
 ): void {
   localStorage.setItem(FavoritesKey, JSON.stringify(favoriteRenders));
-}
-
-//# endregion
-
-//# region google analytics consent
-
-export function getGoogleAnalyticsConsent(): boolean | undefined {
-  const rawConsent = Cookies.get(GoogleAnalyticsConsentKey);
-  return rawConsent != undefined ? JSON.parse(rawConsent) === true : undefined;
-}
-
-export function setGoogleAnalyticsConsent(consent: boolean): void {
-  Cookies.set(GoogleAnalyticsConsentKey, JSON.stringify(consent), {
-    expires: 365,
-    sameSite: "strict",
-  });
 }
 
 //# endregion
