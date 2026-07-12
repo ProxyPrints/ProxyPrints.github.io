@@ -54,6 +54,12 @@ MOXFIELD_SECRET: Optional[str] = env("MOXFIELD_SECRET", default=None)
 
 PREPEND_WWW = env("PREPEND_WWW", default=False)
 
+# Printing-aware card tagging consensus thresholds. See cardpicker.printing_consensus.
+PRINTING_TAG_MIN_VOTES = env.float("PRINTING_TAG_MIN_VOTES", default=2)
+PRINTING_TAG_MIN_SHARE = env.float("PRINTING_TAG_MIN_SHARE", default=0.6)
+PRINTING_TAG_ADMIN_WEIGHT = env.float("PRINTING_TAG_ADMIN_WEIGHT", default=5)
+PRINTING_TAG_AI_WEIGHT = env.float("PRINTING_TAG_AI_WEIGHT", default=0.5)
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/3.0/howto/deployment/checklist/
 

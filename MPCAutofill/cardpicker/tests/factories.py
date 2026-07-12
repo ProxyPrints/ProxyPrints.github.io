@@ -91,3 +91,31 @@ class CanonicalCardFactory(factory.django.DjangoModelFactory):
     image_hash = 0
     small_thumbnail_url = ""
     medium_thumbnail_url = ""
+
+
+class CanonicalPrintingMetadataFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.CanonicalPrintingMetadata
+
+    canonical_card = factory.SubFactory(CanonicalCardFactory)
+    full_art = False
+    border_color = "black"
+    frame = "2015"
+    frame_effects = factory.LazyFunction(list)
+    promo_types = factory.LazyFunction(list)
+    edhrec_rank = None
+    printings_count = 1
+    released_at = None
+    lang = "en"
+
+
+class CardPrintingTagFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.CardPrintingTag
+
+    card = factory.SubFactory(CardFactory)
+    printing = factory.SubFactory(CanonicalCardFactory)
+    is_no_match = False
+    session_key = factory.Sequence(lambda n: f"session_{n}")
+    source = models.CardPrintingTagSource.USER
+    confidence = None
