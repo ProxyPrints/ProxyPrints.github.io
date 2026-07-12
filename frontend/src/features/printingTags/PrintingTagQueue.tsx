@@ -58,14 +58,14 @@ const RevealWrapper = styled.div`
 
 // Same blue as ArtPlaceholder below (and the starburst itself) rather than a plain black
 // box, so the "mystery card" reveal reads as one consistent visual language with the
-// candidate grid's own "?" placeholders instead of a mismatched black flash. White text
-// checked against this blue: contrast ratio ~3.4:1, clears WCAG AA for large/bold text,
-// which this is (4rem, bold).
+// candidate grid's own "?" placeholders instead of a mismatched black flash. Black text
+// (matching the page-wide font colour) checked against this blue: contrast ratio ~6.2:1,
+// clearly better than the white it replaced (~3.4:1).
 const RevealOverlay = styled.div`
   position: absolute;
   inset: 0;
   background: ${STARBURST_OUTER_COLOR};
-  color: white;
+  color: black;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -255,7 +255,7 @@ const ArtPlaceholder = styled.div`
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255, 255, 255, 0.5);
+    color: rgba(0, 0, 0, 0.5);
     font-size: 3rem;
     font-weight: bold;
   }
@@ -277,11 +277,12 @@ const ArtPlaceholder = styled.div`
 // established elsewhere (ArtPlaceholder, RevealOverlay, the starburst itself), so "this is
 // the resolved consensus pick" is now a solid fill in that same blue instead - there's no
 // built-in Bootstrap variant in this exact shade, hence the custom class rather than
-// swapping to `variant="primary"`. White text checked against it: ~3.4:1 contrast, clears
-// WCAG AA for the bold expansion/collector line; the artist line below it is Bootstrap's
-// `.text-muted` grey, which nearly disappeared against this blue, so it's brightened to
-// translucent white specifically inside `.highlighted` (needs `!important` - Bootstrap's
-// own text-color utilities are declared `!important`, so nothing else can win against it).
+// swapping to `variant="primary"`. Black text (matching the page-wide font colour) checked
+// against it: ~6.2:1 contrast, clearly better than white's ~3.4:1; the artist line below it
+// is Bootstrap's `.text-muted` grey, which nearly disappeared against this blue, so it's
+// darkened to translucent black specifically inside `.highlighted` (needs `!important` -
+// Bootstrap's own text-color utilities are declared `!important`, so nothing else can win
+// against it).
 //
 // Bootstrap's own `.btn-outline-secondary:hover` background (a flat grey) was still
 // showing through around the card on hover, which read as a mismatched grey frame against
@@ -308,11 +309,11 @@ const CandidateButton = styled(Button)`
 
   &.highlighted {
     background-color: ${STARBURST_OUTER_COLOR};
-    color: #ffffff;
+    color: #000000;
   }
 
   &.highlighted .text-muted {
-    color: rgba(255, 255, 255, 0.75) !important;
+    color: rgba(0, 0, 0, 0.65) !important;
   }
 `;
 
@@ -329,7 +330,7 @@ const HoverBurst = styled.svg`
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 276%;
+  width: 331.2%;
   aspect-ratio: 1;
   transform: translate(-50%, -50%) scale(0.75);
   opacity: 0;

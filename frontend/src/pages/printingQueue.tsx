@@ -34,10 +34,16 @@ const StarburstBackground = styled.div`
      side effect. */
   clip-path: inset(0);
   background: ${STARBURST_BACKGROUND_COLOR};
-  color: white;
+  /* Black reads better here than the white this started as - checked contrast against both
+     the orange background (~6.2:1) and the starburst's own blue (~6.2:1), both clearly
+     better than white's ~3.4:1 against either. */
+  color: black;
   /* text-shadow is an inherited CSS property, so this covers every descendant - needed
-     since plain white text loses contrast wherever it crosses the burst below */
-  text-shadow: 0 0 6px rgba(0, 0, 0, 0.85), 0 0 2px rgba(0, 0, 0, 0.95);
+     since plain black text loses definition wherever it crosses the burst below (a light
+     halo behind dark text, mirroring the dark halo this used behind the white text it
+     replaced) */
+  text-shadow: 0 0 6px rgba(255, 255, 255, 0.85),
+    0 0 2px rgba(255, 255, 255, 0.95);
   width: 100vw;
   margin-left: calc(50% - 50vw);
   padding: 1.5rem 0;
