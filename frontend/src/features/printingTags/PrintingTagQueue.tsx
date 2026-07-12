@@ -11,6 +11,8 @@
  * indirection for both call sites rather than removing real duplication.
  */
 
+import { keyframes } from "@emotion/react";
+import styled from "@emotion/styled";
 import React, { useEffect, useState } from "react";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
@@ -31,6 +33,35 @@ import {
 } from "@/store/api";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
+
+// "Who's That Pokemon?" style reveal: the card starts as a black silhouette with a "?" in
+// the middle, holds for a beat, then fades to reveal the real art. The Scryfall candidate
+// list is deliberately not rendered until this finishes (see `revealed` state below) - the
+// whole point is to test recognition before handing over the answer options.
+const revealAnimation = keyframes`
+  0% { opacity: 1; }
+  55% { opacity: 1; }
+  100% { opacity: 0; }
+`;
+
+const RevealWrapper = styled.div`
+  position: relative;
+  overflow: hidden;
+`;
+
+const RevealOverlay = styled.div`
+  position: absolute;
+  inset: 0;
+  background: black;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 4rem;
+  font-weight: bold;
+  animation: ${revealAnimation} 1.8s ease-in forwards;
+  pointer-events: none;
+`;
 
 const FLAVOR_TEXT = [
   "Your spark ignites! On to the next mystery.",
@@ -67,6 +98,7 @@ export function PrintingTagQueue() {
   const [loadingCard, setLoadingCard] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [flavorText, setFlavorText] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<boolean>(false);
   // guards the fetch effect below against React 18 Strict Mode's dev-time double-invoke,
   // which would otherwise append the same page's cards twice
   const fetchedPagesRef = React.useRef<Set<number>>(new Set());
@@ -104,6 +136,11 @@ export function PrintingTagQueue() {
       .finally(() => setLoadingQueue(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, currentIndex, queueCards.length, page, pages]);
+
+  // reset the reveal animation for each new card
+  useEffect(() => {
+    setRevealed(false);
+  }, [currentCard?.identifier]);
 
   useEffect(() => {
     if (backendURL == null || currentCard == null) {
@@ -196,7 +233,7 @@ export function PrintingTagQueue() {
           {flavorText}
         </p>
       )}
-      {currentCard == null || loadingCard ? (
+      {currentCard == null ? (
         <div className="text-center py-4">
           <Spinner size={2} />
         </div>
@@ -204,90 +241,113 @@ export function PrintingTagQueue() {
         <div data-testid="planeswalker-queue-current-card">
           <Row className="g-4">
             <Col xs={12} md={4}>
-              <img
-                src={currentCard.mediumThumbnailUrl}
-                alt={currentCard.name}
-                style={{ width: "100%" }}
-              />
+              <RevealWrapper>
+                <img
+                  src={currentCard.mediumThumbnailUrl}
+                  alt={currentCard.name}
+                  style={{ width: "100%" }}
+                />
+                {!revealed && (
+                  <RevealOverlay
+                    data-testid="planeswalker-queue-reveal-overlay"
+                    onAnimationEnd={() => setRevealed(true)}
+                  >
+                    ?
+                  </RevealOverlay>
+                )}
+              </RevealWrapper>
               <div className="text-center mt-1">{currentCard.name}</div>
             </Col>
             <Col xs={12} md={8}>
-              <div className="mb-2" data-testid="planeswalker-queue-consensus">
-                {consensus?.resolvedPrinting != null && (
-                  <span>
-                    Current consensus:{" "}
-                    {consensus.resolvedPrinting.expansionCode.toUpperCase()}{" "}
-                    {consensus.resolvedPrinting.collectorNumber}
-                  </span>
-                )}
-                {consensus != null &&
-                  consensus.resolvedPrinting == null &&
-                  consensus.isNoMatch && (
-                    <span>Current consensus: no matching printing</span>
-                  )}
-                {consensus != null &&
-                  consensus.resolvedPrinting == null &&
-                  !consensus.isNoMatch && (
-                    <span>
-                      Not yet resolved
-                      {consensus.voteTally.length > 0 ? " - contested" : ""}
-                    </span>
-                  )}
-              </div>
-              <Row className="g-2" xs={3} md={4}>
-                <Col>
-                  <Button
-                    variant={
-                      consensus?.isNoMatch ? "success" : "outline-secondary"
-                    }
-                    className="w-100 p-1"
-                    disabled={submitting}
-                    onClick={() => submit(undefined, true)}
+              {!revealed || loadingCard ? (
+                <div className="text-center py-4">
+                  <Spinner size={2} />
+                </div>
+              ) : (
+                <>
+                  <div
+                    className="mb-2"
+                    data-testid="planeswalker-queue-consensus"
                   >
-                    <img
-                      src="/blank.png"
-                      alt="None of these match"
-                      style={{ width: "100%" }}
-                    />
-                    <div>No match</div>
-                  </Button>
-                </Col>
-                {candidates.map((candidate) => (
-                  <Col key={candidate.identifier}>
+                    {consensus?.resolvedPrinting != null && (
+                      <span>
+                        Current consensus:{" "}
+                        {consensus.resolvedPrinting.expansionCode.toUpperCase()}{" "}
+                        {consensus.resolvedPrinting.collectorNumber}
+                      </span>
+                    )}
+                    {consensus != null &&
+                      consensus.resolvedPrinting == null &&
+                      consensus.isNoMatch && (
+                        <span>Current consensus: no matching printing</span>
+                      )}
+                    {consensus != null &&
+                      consensus.resolvedPrinting == null &&
+                      !consensus.isNoMatch && (
+                        <span>
+                          Not yet resolved
+                          {consensus.voteTally.length > 0 ? " - contested" : ""}
+                        </span>
+                      )}
+                  </div>
+                  <Row className="g-2" xs={3} md={4}>
+                    <Col>
+                      <Button
+                        variant={
+                          consensus?.isNoMatch ? "success" : "outline-secondary"
+                        }
+                        className="w-100 p-1"
+                        disabled={submitting}
+                        onClick={() => submit(undefined, true)}
+                      >
+                        <img
+                          src="/blank.png"
+                          alt="None of these match"
+                          style={{ width: "100%" }}
+                        />
+                        <div>No match</div>
+                      </Button>
+                    </Col>
+                    {candidates.map((candidate) => (
+                      <Col key={candidate.identifier}>
+                        <Button
+                          variant={
+                            consensus?.resolvedPrinting?.identifier ===
+                            candidate.identifier
+                              ? "success"
+                              : "outline-secondary"
+                          }
+                          className="w-100 p-1"
+                          disabled={submitting}
+                          onClick={() => submit(candidate.identifier, false)}
+                        >
+                          <img
+                            src={candidate.mediumThumbnailUrl}
+                            alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                            style={{ width: "100%" }}
+                          />
+                          <div>
+                            {candidate.expansionCode.toUpperCase()}{" "}
+                            {candidate.collectorNumber}
+                          </div>
+                          <div className="text-muted small">
+                            {candidate.artist}
+                          </div>
+                        </Button>
+                      </Col>
+                    ))}
+                  </Row>
+                  <div className="mt-3 d-flex gap-2">
                     <Button
-                      variant={
-                        consensus?.resolvedPrinting?.identifier ===
-                        candidate.identifier
-                          ? "success"
-                          : "outline-secondary"
-                      }
-                      className="w-100 p-1"
+                      variant="outline-secondary"
                       disabled={submitting}
-                      onClick={() => submit(candidate.identifier, false)}
+                      onClick={skip}
                     >
-                      <img
-                        src={candidate.mediumThumbnailUrl}
-                        alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
-                        style={{ width: "100%" }}
-                      />
-                      <div>
-                        {candidate.expansionCode.toUpperCase()}{" "}
-                        {candidate.collectorNumber}
-                      </div>
-                      <div className="text-muted small">{candidate.artist}</div>
+                      Skip
                     </Button>
-                  </Col>
-                ))}
-              </Row>
-              <div className="mt-3 d-flex gap-2">
-                <Button
-                  variant="outline-secondary"
-                  disabled={submitting}
-                  onClick={skip}
-                >
-                  Skip
-                </Button>
-              </div>
+                  </div>
+                </>
+              )}
             </Col>
           </Row>
         </div>
