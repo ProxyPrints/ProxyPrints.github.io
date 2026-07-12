@@ -18,6 +18,7 @@ import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
+import { NavbarHeight } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import {
   PrintingCandidate,
@@ -25,6 +26,13 @@ import {
 } from "@/common/schema_types";
 import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
 import { Spinner } from "@/components/Spinner";
+import {
+  STARBURST_INNER_COLOR,
+  STARBURST_INNER_FRAMES,
+  STARBURST_OUTER_COLOR,
+  STARBURST_OUTER_FRAMES,
+  STARBURST_VIEWBOX,
+} from "@/features/printingTags/starburstShape";
 import {
   APIGetPrintingCandidates,
   APIGetPrintingConsensus,
@@ -63,6 +71,91 @@ const RevealOverlay = styled.div`
   pointer-events: none;
 `;
 
+// The card, and the starburst behind it, stay glued to the viewport as the page scrolls
+// (position: sticky) rather than scrolling away with the rest of the page - "top" is
+// relative to the app's scroll container (see ContentContainer in Layout.tsx), which
+// already starts right below the fixed navbar, so 0 needs no further navbar-height offset;
+// the small gap below is just breathing room.
+//
+// z-index: -1 here (not just on BurstSvg) is deliberate and easy to get backwards: a sticky
+// element always establishes its own stacking context, and *any* positioned descendant -
+// even at the default z-index: auto - paints in front of plain, non-positioned in-flow
+// siblings (the CSS spec's stacking order puts positioned content ahead of ordinary flow
+// content, independent of DOM order or z-index value). Left at the default, that meant the
+// whole panel - including the burst bleeding out of it - painted on top of the "Who's That
+// Planeswalker?" heading and the candidate grid's plain text/borders, hiding them. Pushing
+// CardPanel itself to a negative stack level is what actually fixes that (giving BurstSvg
+// alone a negative z-index only reorders it against its own siblings *inside* CardPanel,
+// it can't reach past the sticky boundary). The two columns never overlap horizontally at
+// any breakpoint this page uses (side-by-side on desktop, stacked full-width on mobile), so
+// this can't accidentally bury the actual card art behind the candidate grid - only the
+// burst's intentional bleed into that space is affected.
+const CardPanel = styled.div`
+  position: sticky;
+  top: ${NavbarHeight / 2}px;
+  z-index: -1;
+`;
+
+// Sized and centred purely with CSS (percentage width + aspect-ratio, both relative to
+// CardPanel's own box) rather than a JS measurement - it scales naturally with the card's
+// own responsive width at every breakpoint, and travels with CardPanel automatically under
+// sticky scrolling with no extra code.
+const BurstSvg = styled.svg`
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 340%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  z-index: -1;
+  pointer-events: none;
+`;
+
+const STARBURST_FRAME_INTERVAL_MS = 150;
+
+// Cycles through the precomputed jagged frames (see starburstShape.ts) to reproduce the
+// reference gif's flicker. Always starts at frame 0 and only starts advancing inside
+// useEffect (client-only, post-mount), so server-rendered and first-client-render markup
+// stay identical - no hydration mismatch. Skips animating entirely under
+// prefers-reduced-motion.
+function useStarburstFrame(frameCount: number): number {
+  const [frame, setFrame] = useState(0);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
+    const id = setInterval(() => {
+      setFrame((previous) => (previous + 1) % frameCount);
+    }, STARBURST_FRAME_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [frameCount]);
+
+  return frame;
+}
+
+// Zooms the thumbnail in on hover, rather than the whole button, so the border/label stay
+// put and only the artwork itself grows. Deliberately left uncropped (no overflow: hidden)
+// so the enlarged art is fully visible rather than cut off at the original box edge -
+// raised above its siblings on hover so it doesn't render underneath the neighbouring grid
+// cells it now overlaps.
+const ZoomableThumbnail = styled.div`
+  position: relative;
+  z-index: 0;
+
+  img {
+    transition: transform 0.15s ease-out;
+  }
+
+  &:hover {
+    z-index: 2;
+  }
+
+  &:hover img {
+    transform: scale(1.35);
+  }
+`;
+
 const FLAVOR_TEXT = [
   "Your spark ignites! On to the next mystery.",
   "A planeswalker's eye for detail - nicely done!",
@@ -80,22 +173,17 @@ function randomFlavorText(): string {
   return FLAVOR_TEXT[Math.floor(Math.random() * FLAVOR_TEXT.length)];
 }
 
-interface PrintingTagQueueProps {
-  // attached to the subject card's wrapper so the page-level starburst background (see
-  // printingQueue.tsx) can measure and stay centred on it
-  cardAnchorRef?: (el: HTMLDivElement | null) => void;
-}
-
 // Real Magic card ratio (63mm x 88mm), matching the print-ready `.ratio-7x5` convention
 // already used elsewhere (custom.css) - reserves each thumbnail's box up front via CSS
 // alone, so an image resolving its intrinsic size late over the network can't reflow the
-// page (the starburst background is centred on the card via a live measurement, so any
-// unreserved reflow here would visibly drag it out of registration).
+// page (the starburst is centred on the card's own box - see CardPanel - so any unreserved
+// reflow here would visibly resize the burst along with it).
 const CARD_ASPECT_RATIO = "63 / 88";
 
-export function PrintingTagQueue({ cardAnchorRef }: PrintingTagQueueProps) {
+export function PrintingTagQueue() {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
+  const starburstFrame = useStarburstFrame(STARBURST_OUTER_FRAMES.length);
 
   const [queueCards, setQueueCards] = useState<Array<CardDocument>>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
@@ -254,7 +342,17 @@ export function PrintingTagQueue({ cardAnchorRef }: PrintingTagQueueProps) {
         <div data-testid="planeswalker-queue-current-card">
           <Row className="g-4">
             <Col xs={12} md={4}>
-              <div ref={cardAnchorRef}>
+              <CardPanel>
+                <BurstSvg viewBox={STARBURST_VIEWBOX}>
+                  <polygon
+                    points={STARBURST_OUTER_FRAMES[starburstFrame]}
+                    fill={STARBURST_OUTER_COLOR}
+                  />
+                  <polygon
+                    points={STARBURST_INNER_FRAMES[starburstFrame]}
+                    fill={STARBURST_INNER_COLOR}
+                  />
+                </BurstSvg>
                 <RevealWrapper>
                   <img
                     src={currentCard.mediumThumbnailUrl}
@@ -271,7 +369,7 @@ export function PrintingTagQueue({ cardAnchorRef }: PrintingTagQueueProps) {
                   )}
                 </RevealWrapper>
                 <div className="text-center mt-1">{currentCard.name}</div>
-              </div>
+              </CardPanel>
             </Col>
             <Col xs={12} md={8}>
               {!revealed || loadingCard ? (
@@ -339,14 +437,16 @@ export function PrintingTagQueue({ cardAnchorRef }: PrintingTagQueueProps) {
                           disabled={submitting}
                           onClick={() => submit(candidate.identifier, false)}
                         >
-                          <img
-                            src={candidate.mediumThumbnailUrl}
-                            alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
-                            style={{
-                              width: "100%",
-                              aspectRatio: CARD_ASPECT_RATIO,
-                            }}
-                          />
+                          <ZoomableThumbnail>
+                            <img
+                              src={candidate.mediumThumbnailUrl}
+                              alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                              style={{
+                                width: "100%",
+                                aspectRatio: CARD_ASPECT_RATIO,
+                              }}
+                            />
+                          </ZoomableThumbnail>
                           <div>
                             {candidate.expansionCode.toUpperCase()}{" "}
                             {candidate.collectorNumber}

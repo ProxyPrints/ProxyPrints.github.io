@@ -73,14 +73,18 @@ function generateStarburstFrames(
   );
 }
 
+// Valley radii sit much closer to their tip radii than a "pure star" would use - the
+// reference gif's core is a full, round belly with jagged spikes only at the fringe, not a
+// thin spindly shape throughout (measured directly off the reference frame: the blue
+// layer's radial boundary averages ~70% of its own max, not ~30%).
 export const STARBURST_OUTER_FRAMES = generateStarburstFrames(1337, {
   spikes: 48,
-  tipRadiusRange: [300, 540],
-  valleyRadiusRange: [100, 165],
+  tipRadiusRange: [370, 540],
+  valleyRadiusRange: [220, 310],
 });
 
 export const STARBURST_INNER_FRAMES = generateStarburstFrames(4242, {
   spikes: 40,
-  tipRadiusRange: [165, 350],
-  valleyRadiusRange: [45, 90],
+  tipRadiusRange: [230, 400],
+  valleyRadiusRange: [130, 200],
 });
