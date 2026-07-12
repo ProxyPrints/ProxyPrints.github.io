@@ -282,7 +282,30 @@ const ArtPlaceholder = styled.div`
 // `.text-muted` grey, which nearly disappeared against this blue, so it's brightened to
 // translucent white specifically inside `.highlighted` (needs `!important` - Bootstrap's
 // own text-color utilities are declared `!important`, so nothing else can win against it).
+//
+// Bootstrap's own `.btn-outline-secondary:hover` background (a flat grey) was still
+// showing through around the card on hover, which read as a mismatched grey frame against
+// the page's blue theme. Per direct request, that hover highlight is now a scaled-down copy
+// of the page's own starburst (HoverBurst below) instead of a flat colour - `position:
+// relative` + `z-index: 0` here gives HoverBurst's `z-index: -1` a local stacking context
+// to sit behind ArtPlaceholder/the text without leaking out to sit behind this button's
+// *siblings* in the grid too (the same mechanism as CardPanel/BurstSvg on the page-level
+// starburst - see the comment there for the underlying CSS stacking rule).
 const CandidateButton = styled(Button)`
+  position: relative;
+  z-index: 0;
+  overflow: visible;
+
+  &:hover,
+  &:focus {
+    background-color: transparent !important;
+  }
+
+  &:hover .hover-burst {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
   &.highlighted {
     background-color: ${STARBURST_OUTER_COLOR};
     color: #ffffff;
@@ -291,6 +314,24 @@ const CandidateButton = styled(Button)`
   &.highlighted .text-muted {
     color: rgba(255, 255, 255, 0.75) !important;
   }
+`;
+
+// A smaller, static copy of the same starburst geometry (just its first frame - this is a
+// quick hover flourish, not worth animating a whole extra burst per grid cell) centred on
+// and scaled up from the button's own box, the same way the page-level burst is centred on
+// the subject card. Faded/scaled in via CSS on CandidateButton's `:hover` above rather than
+// JS state, so nothing needs to track which card is currently hovered.
+const HoverBurst = styled.svg`
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 230%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%) scale(0.75);
+  opacity: 0;
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+  pointer-events: none;
+  z-index: -1;
 `;
 
 export function PrintingTagQueue() {
@@ -532,6 +573,19 @@ export function PrintingTagQueue() {
                         disabled={submitting}
                         onClick={() => submit(undefined, true)}
                       >
+                        <HoverBurst
+                          className="hover-burst"
+                          viewBox={STARBURST_VIEWBOX}
+                        >
+                          <polygon
+                            points={STARBURST_OUTER_FRAMES[0]}
+                            fill={STARBURST_OUTER_COLOR}
+                          />
+                          <polygon
+                            points={STARBURST_INNER_FRAMES[0]}
+                            fill={STARBURST_INNER_COLOR}
+                          />
+                        </HoverBurst>
                         <ArtPlaceholder />
                         <div>No match</div>
                       </CandidateButton>
@@ -549,6 +603,19 @@ export function PrintingTagQueue() {
                           disabled={submitting}
                           onClick={() => submit(candidate.identifier, false)}
                         >
+                          <HoverBurst
+                            className="hover-burst"
+                            viewBox={STARBURST_VIEWBOX}
+                          >
+                            <polygon
+                              points={STARBURST_OUTER_FRAMES[0]}
+                              fill={STARBURST_OUTER_COLOR}
+                            />
+                            <polygon
+                              points={STARBURST_INNER_FRAMES[0]}
+                              fill={STARBURST_INNER_COLOR}
+                            />
+                          </HoverBurst>
                           <ArtPlaceholder>
                             <ZoomableThumbnail>
                               <img
