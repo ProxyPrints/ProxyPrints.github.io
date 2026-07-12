@@ -56,10 +56,15 @@ const RevealWrapper = styled.div`
   overflow: hidden;
 `;
 
+// Same blue as ArtPlaceholder below (and the starburst itself) rather than a plain black
+// box, so the "mystery card" reveal reads as one consistent visual language with the
+// candidate grid's own "?" placeholders instead of a mismatched black flash. White text
+// checked against this blue: contrast ratio ~3.4:1, clears WCAG AA for large/bold text,
+// which this is (4rem, bold).
 const RevealOverlay = styled.div`
   position: absolute;
   inset: 0;
-  background: black;
+  background: ${STARBURST_OUTER_COLOR};
   color: white;
   display: flex;
   align-items: center;
@@ -254,6 +259,30 @@ const ArtPlaceholder = styled.div`
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+`;
+
+// Bootstrap's `outline-secondary` border doesn't scale with the hover-zoomed thumbnail
+// inside it (see ZoomableThumbnail) - it stays put as a stationary frame while the art
+// visibly grows past it, breaking the effect - so it's dropped entirely (`border-0`,
+// applied at each call site below) and this component only needs to own the "highlighted"
+// look. Bootstrap's green `success` variant clashed with the page's blue "mystery" motif
+// established elsewhere (ArtPlaceholder, RevealOverlay, the starburst itself), so "this is
+// the resolved consensus pick" is now a solid fill in that same blue instead - there's no
+// built-in Bootstrap variant in this exact shade, hence the custom class rather than
+// swapping to `variant="primary"`. White text checked against it: ~3.4:1 contrast, clears
+// WCAG AA for the bold expansion/collector line; the artist line below it is Bootstrap's
+// `.text-muted` grey, which nearly disappeared against this blue, so it's brightened to
+// translucent white specifically inside `.highlighted` (needs `!important` - Bootstrap's
+// own text-color utilities are declared `!important`, so nothing else can win against it).
+const CandidateButton = styled(Button)`
+  &.highlighted {
+    background-color: ${STARBURST_OUTER_COLOR};
+    color: #ffffff;
+  }
+
+  &.highlighted .text-muted {
+    color: rgba(255, 255, 255, 0.75) !important;
   }
 `;
 
@@ -488,28 +517,28 @@ export function PrintingTagQueue() {
                   </div>
                   <Row className="g-2" xs={3} md={4}>
                     <Col>
-                      <Button
-                        variant={
-                          consensus?.isNoMatch ? "success" : "outline-secondary"
-                        }
-                        className="w-100 p-1"
+                      <CandidateButton
+                        variant="outline-secondary"
+                        className={`w-100 p-1 border-0${
+                          consensus?.isNoMatch ? " highlighted" : ""
+                        }`}
                         disabled={submitting}
                         onClick={() => submit(undefined, true)}
                       >
                         <ArtPlaceholder />
                         <div>No match</div>
-                      </Button>
+                      </CandidateButton>
                     </Col>
                     {candidates.map((candidate) => (
                       <Col key={candidate.identifier}>
-                        <Button
-                          variant={
+                        <CandidateButton
+                          variant="outline-secondary"
+                          className={`w-100 p-1 border-0${
                             consensus?.resolvedPrinting?.identifier ===
                             candidate.identifier
-                              ? "success"
-                              : "outline-secondary"
-                          }
-                          className="w-100 p-1"
+                              ? " highlighted"
+                              : ""
+                          }`}
                           disabled={submitting}
                           onClick={() => submit(candidate.identifier, false)}
                         >
@@ -528,7 +557,7 @@ export function PrintingTagQueue() {
                           <div className="text-muted small">
                             {candidate.artist}
                           </div>
-                        </Button>
+                        </CandidateButton>
                       </Col>
                     ))}
                   </Row>
