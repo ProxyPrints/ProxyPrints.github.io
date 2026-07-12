@@ -186,6 +186,7 @@ export function CardDetailedViewModal({
               </p>
               <PrintingTagPicker
                 cardIdentifier={cardDocument.identifier}
+                cardName={cardDocument.name}
                 onConsensusChange={setPrintingConsensus}
               />
               {printingConsensus != null &&

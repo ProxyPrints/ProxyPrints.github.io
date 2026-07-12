@@ -32,6 +32,30 @@ slot), the attributes are omitted entirely rather than emitted with an empty
 value. The same applies to `data-card-set-code`/`data-card-collector-number`
 specifically when the card has a resolved image but no printing match yet.
 
+## Printing-candidate buttons
+
+The printing-tag review queue ("Who's That Planeswalker?", the standalone
+queue page) and the printing-tag picker embedded in the card detail modal
+both render a grid of Scryfall printing candidates for the user to vote on.
+Each candidate's button element carries a subset of the same attributes:
+
+| Attribute                    | Source                                      |
+| ---------------------------- | ------------------------------------------- |
+| `data-card-name`             | the name of the card currently being tagged |
+| `data-card-identifier`       | this candidate printing's identifier        |
+| `data-card-set-code`         | this candidate printing's set code          |
+| `data-card-collector-number` | this candidate printing's collector number  |
+
+**This is a different kind of hit than a normal card slot.** `data-card-name`
+names the card being tagged, while `data-card-identifier`/
+`data-card-set-code`/`data-card-collector-number` describe one candidate
+printing being offered as a possible match — client tooling should not
+assume the candidate described by those three attributes actually depicts
+the card named in `data-card-name`; that's exactly the open question the
+user is being asked to resolve by voting. The "No match" button in either
+UI carries no candidate-derived attributes at all, since it isn't a
+printing candidate.
+
 ## `mpc:card-selected` event
 
 When the user confirms an art selection for a card slot (via the prev/next

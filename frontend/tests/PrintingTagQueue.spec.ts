@@ -1,6 +1,11 @@
 import { expect } from "@playwright/test";
 
-import { cardDocument1, cardDocument2 } from "@/common/test-constants";
+import {
+  cardDocument1,
+  cardDocument2,
+  printingCandidate1,
+  printingCandidate2,
+} from "@/common/test-constants";
 import {
   defaultHandlers,
   printingCandidatesTwoResults,
@@ -36,6 +41,51 @@ test.describe("PrintingTagQueue tests", () => {
     await expect(page.getByAltText(cardDocument1.name)).toBeVisible();
     await expect(page.getByAltText("abc 1")).toBeVisible();
     await expect(page.getByAltText("xyz 42")).toBeVisible();
+  });
+
+  test("candidate buttons carry the printing-candidate DOM data attributes", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      printingTagQueueOneResult,
+      printingCandidatesTwoResults,
+      printingConsensusUnresolved,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "printingQueue");
+
+    const candidateButton1 = page.locator(
+      `[data-card-identifier="${printingCandidate1.identifier}"]`
+    );
+    await expect(candidateButton1).toHaveAttribute(
+      "data-card-name",
+      cardDocument1.name
+    );
+    await expect(candidateButton1).toHaveAttribute(
+      "data-card-set-code",
+      printingCandidate1.expansionCode
+    );
+    await expect(candidateButton1).toHaveAttribute(
+      "data-card-collector-number",
+      printingCandidate1.collectorNumber
+    );
+
+    const candidateButton2 = page.locator(
+      `[data-card-identifier="${printingCandidate2.identifier}"]`
+    );
+    await expect(candidateButton2).toHaveAttribute(
+      "data-card-name",
+      cardDocument1.name
+    );
+    await expect(candidateButton2).toHaveAttribute(
+      "data-card-set-code",
+      printingCandidate2.expansionCode
+    );
+    await expect(candidateButton2).toHaveAttribute(
+      "data-card-collector-number",
+      printingCandidate2.collectorNumber
+    );
   });
 
   test("shows a caught-up message when the queue is empty", async ({

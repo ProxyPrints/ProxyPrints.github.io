@@ -19,6 +19,7 @@ import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Popover from "react-bootstrap/Popover";
 import Row from "react-bootstrap/Row";
 
+import { getPrintingCandidateDataAttributes } from "@/common/cardDom";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import {
   PrintingCandidate,
@@ -36,6 +37,8 @@ import { setNotification } from "@/store/slices/toastsSlice";
 interface PrintingTagPickerProps {
   /** The image identifier of the card being tagged. */
   cardIdentifier: string;
+  /** The name of the card being tagged. */
+  cardName: string;
   /**
    * Notified whenever this component's own consensus state changes (initial fetch and after
    * each vote submission) - lets a parent (e.g. CardDetailedViewModal) decide whether to show
@@ -46,6 +49,7 @@ interface PrintingTagPickerProps {
 
 export function PrintingTagPicker({
   cardIdentifier,
+  cardName,
   onConsensusChange,
 }: PrintingTagPickerProps) {
   const dispatch = useAppDispatch();
@@ -208,6 +212,7 @@ export function PrintingTagPicker({
                   className="w-100 p-1"
                   disabled={submitting}
                   onClick={() => submit(candidate.identifier, false)}
+                  {...getPrintingCandidateDataAttributes(cardName, candidate)}
                 >
                   <img
                     src={candidate.smallThumbnailUrl}

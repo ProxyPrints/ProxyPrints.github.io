@@ -4,6 +4,7 @@
  * See frontend/docs/dom-api.md for the documented contract.
  */
 
+import { PrintingCandidate } from "@/common/schema_types";
 import { CardDocument } from "@/common/types";
 
 export const CardSelectedEventName = "mpc:card-selected";
@@ -93,4 +94,24 @@ export function getCardSelectedEventDetail(
     detail.collectorNumber = cardDocument.canonicalCard.collectorNumber;
   }
   return detail;
+}
+
+/**
+ * Data attributes for a printing-candidate element (the printing-tag
+ * queue/picker), sourced from a `PrintingCandidate` plus the name of the
+ * card currently being tagged. Distinct from getCardDataAttributes: here
+ * data-card-name is the card being tagged, while data-card-set-code /
+ * data-card-collector-number / data-card-identifier describe this one
+ * candidate printing, which may or may not turn out to be a match.
+ */
+export function getPrintingCandidateDataAttributes(
+  cardName: string,
+  candidate: PrintingCandidate
+): Record<string, string> {
+  return {
+    "data-card-name": cardName,
+    "data-card-identifier": candidate.identifier,
+    "data-card-set-code": candidate.expansionCode,
+    "data-card-collector-number": candidate.collectorNumber,
+  };
 }
