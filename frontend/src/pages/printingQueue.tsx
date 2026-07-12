@@ -12,27 +12,50 @@ import {
   useRemoteBackendConfigured,
 } from "@/store/slices/backendSlice";
 
-// "Who's That Pokemon?" style alternating diagonal stripes behind the game itself - kept
-// off the Footer below, which should still look like the rest of the site's chrome.
-const StripedBackground = styled.div`
-  background: repeating-linear-gradient(
-    45deg,
-    #241b3a,
-    #241b3a 40px,
-    #3d2a63 40px,
-    #3d2a63 80px
-  );
+// "Who's That Pokemon?" style radiating starburst behind the game itself, matching the
+// real TV bumper's look (deep navy background, bright yellow sunburst rays radiating from
+// center) - a CSS repeating-conic-gradient rather than a static image, so it scales to any
+// container size with no asset to host/maintain. The ::before layer is oversized (250% of
+// the container, centered) so the rays fill the whole container edge-to-edge instead of
+// visibly terminating in a circle partway through it. Kept off the Footer below, which
+// should still look like the rest of the site's chrome.
+const StarburstBackground = styled.div`
+  position: relative;
+  overflow: hidden;
+  background: #12123a;
   color: white;
+  /* text-shadow is an inherited CSS property, so this covers every descendant - needed
+     since plain white text loses contrast wherever it crosses one of the bright yellow
+     rays below */
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.85), 0 0 2px rgba(0, 0, 0, 0.95);
   border-radius: 0.5rem;
   padding: 1.5rem;
   margin-bottom: 1rem;
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 250%;
+    height: 250%;
+    transform: translate(-50%, -50%);
+    background: repeating-conic-gradient(#ffd400 0deg 9deg, #12123a 9deg 18deg);
+    opacity: 0.9;
+    z-index: 0;
+  }
+
+  > * {
+    position: relative;
+    z-index: 1;
+  }
 `;
 
 function PrintingQueueOrDefault() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   return remoteBackendConfigured ? (
     <>
-      <StripedBackground>
+      <StarburstBackground>
         <h1>Who&apos;s That Planeswalker?</h1>
         <p>
           Test your Magic: the Gathering knowledge! One card at a time, help
@@ -40,7 +63,7 @@ function PrintingQueueOrDefault() {
           cards come first, since they need your eyes the most.
         </p>
         <PrintingTagQueue />
-      </StripedBackground>
+      </StarburstBackground>
       <Footer />
     </>
   ) : (
