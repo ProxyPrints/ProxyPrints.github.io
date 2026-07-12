@@ -69,6 +69,38 @@ test.describe("PrintingTagPicker tests", () => {
     ).toBeVisible();
     await expect(picker.getByAltText("None of these match")).toBeVisible();
     await expect(picker.getByText("No match")).toBeVisible();
+
+    const candidateButton1 = picker.locator(
+      `[data-card-identifier="${printingCandidate1.identifier}"]`
+    );
+    await expect(candidateButton1).toHaveAttribute(
+      "data-card-name",
+      cardDocument1.name
+    );
+    await expect(candidateButton1).toHaveAttribute(
+      "data-card-set-code",
+      printingCandidate1.expansionCode
+    );
+    await expect(candidateButton1).toHaveAttribute(
+      "data-card-collector-number",
+      printingCandidate1.collectorNumber
+    );
+
+    const candidateButton2 = picker.locator(
+      `[data-card-identifier="${printingCandidate2.identifier}"]`
+    );
+    await expect(candidateButton2).toHaveAttribute(
+      "data-card-name",
+      cardDocument1.name
+    );
+    await expect(candidateButton2).toHaveAttribute(
+      "data-card-set-code",
+      printingCandidate2.expansionCode
+    );
+    await expect(candidateButton2).toHaveAttribute(
+      "data-card-collector-number",
+      printingCandidate2.collectorNumber
+    );
   });
 
   test("submitting a vote for a printing updates the shown consensus", async ({

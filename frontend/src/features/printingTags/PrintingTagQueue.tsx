@@ -18,6 +18,7 @@ import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
+import { getPrintingCandidateDataAttributes } from "@/common/cardDom";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import {
   PrintingCandidate,
@@ -607,6 +608,10 @@ export function PrintingTagQueue() {
                           }`}
                           disabled={submitting}
                           onClick={() => submit(candidate.identifier, false)}
+                          {...getPrintingCandidateDataAttributes(
+                            currentCard.name,
+                            candidate
+                          )}
                         >
                           <HoverBurst
                             className="hover-burst"

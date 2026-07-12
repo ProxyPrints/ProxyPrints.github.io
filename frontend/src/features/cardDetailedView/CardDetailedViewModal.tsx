@@ -177,7 +177,10 @@ export function CardDetailedViewModal({
               <p className="text-muted small mb-2">
                 Help us figure out which real-world printing this card is!
               </p>
-              <PrintingTagPicker cardIdentifier={cardDocument.identifier} />
+              <PrintingTagPicker
+                cardIdentifier={cardDocument.identifier}
+                cardName={cardDocument.name}
+              />
             </div>
           </Row>
         </Modal.Body>
