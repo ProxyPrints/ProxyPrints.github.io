@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from src.constants import DPI_HEIGHT_RATIO, ImageResizeMethods
 
 if TYPE_CHECKING:
-    from PIL import Image
+    from PIL.Image import Image as PILImage
 
 
 @dataclass
@@ -15,10 +15,10 @@ class ImagePostProcessingConfig:
     # jpeg: bool
 
 
-def post_process_image(raw_image: bytes, config: ImagePostProcessingConfig) -> "Image":
+def post_process_image(raw_image: bytes, config: ImagePostProcessingConfig) -> "PILImage":
     from PIL import Image
 
-    img = Image.open(io.BytesIO(raw_image))
+    img: "PILImage" = Image.open(io.BytesIO(raw_image))
 
     # downscale the image to `max_dpi`
     img_dpi = 10 * round(int(img.height) * DPI_HEIGHT_RATIO / 10)

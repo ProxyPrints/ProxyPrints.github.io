@@ -489,7 +489,7 @@ class MTGIntegration(GameIntegration):
                         im = Image.open(
                             requests.get(
                                 row.image_uris.small, stream=True, headers=Scryfall.get_headers(), timeout=10
-                            ).raw
+                            ).raw  # type: ignore[arg-type]  # urllib3.HTTPResponse is read()-compatible but doesn't structurally satisfy IO[bytes]
                         )
                         image_hash = str(imagehash.phash(im))
                         image_hash_int = twos_complement(image_hash, 64)
