@@ -24,6 +24,7 @@ import {
   MemoizedCardProportionWrapper,
 } from "@/features/card/Card";
 import { useDoImageDownload } from "@/features/download/downloadImages";
+import { PrintingTagPicker } from "@/features/printingTags/PrintingTagPicker";
 import { useGetLanguagesQuery } from "@/store/api";
 import { setNotification } from "@/store/slices/toastsSlice";
 
@@ -171,6 +172,9 @@ export function CardDetailedViewModal({
               )}
               <AddCardToFavorites cardDocument={cardDocument} />
               <AddCardToProjectForm cardDocument={cardDocument} />
+              <hr />
+              <h5>Which printing is this?</h5>
+              <PrintingTagPicker cardIdentifier={cardDocument.identifier} />
             </div>
           </Row>
         </Modal.Body>

@@ -1,14 +1,24 @@
 import {
+  AnonymousIdKey,
   MaximumDPI,
   MaximumSize,
   MinimumDPI,
   SearchSettingsKey,
 } from "@/common/constants";
-import { getLocalStorageSearchSettings } from "@/common/cookies";
+import {
+  getLocalStorageSearchSettings,
+  getOrCreateAnonymousId,
+} from "@/common/cookies";
 import { defaultSettings, sourceDocuments } from "@/common/test-constants";
 
-beforeEach(() => window.localStorage.removeItem(SearchSettingsKey));
-afterEach(() => window.localStorage.removeItem(SearchSettingsKey));
+beforeEach(() => {
+  window.localStorage.removeItem(SearchSettingsKey);
+  window.localStorage.removeItem(AnonymousIdKey);
+});
+afterEach(() => {
+  window.localStorage.removeItem(SearchSettingsKey);
+  window.localStorage.removeItem(AnonymousIdKey);
+});
 
 //# region tests
 
@@ -168,6 +178,29 @@ test("cookies with incomplete source order plus invalid sources are correctly re
     [2, true],
     [3, true],
   ]);
+});
+
+test("getOrCreateAnonymousId generates and persists an id when none exists", () => {
+  expect(window.localStorage.getItem(AnonymousIdKey)).toBeNull();
+
+  const id = getOrCreateAnonymousId();
+
+  expect(id).toEqual(expect.any(String));
+  expect(id.length).toBeGreaterThan(0);
+  expect(window.localStorage.getItem(AnonymousIdKey)).toEqual(id);
+});
+
+test("getOrCreateAnonymousId returns the same id on repeated calls", () => {
+  const first = getOrCreateAnonymousId();
+  const second = getOrCreateAnonymousId();
+
+  expect(second).toEqual(first);
+});
+
+test("getOrCreateAnonymousId respects an id already in localStorage", () => {
+  window.localStorage.setItem(AnonymousIdKey, "existing-anonymous-id");
+
+  expect(getOrCreateAnonymousId()).toEqual("existing-anonymous-id");
 });
 
 //# endregion

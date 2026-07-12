@@ -61,6 +61,7 @@ export const CSRFKey = "csrftoken";
 export const SearchSettingsKey = "searchSettings";
 export const FavoritesKey = "favorites";
 export const BackendURLKey = "backendURL";
+export const AnonymousIdKey = "anonymousId";
 
 export const Brackets: Array<number> = [
   18, 36, 55, 72, 90, 108, 126, 144, 162, 180, 198, 216, 234, 396, 504, 612,

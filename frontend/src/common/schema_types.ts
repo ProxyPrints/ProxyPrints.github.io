@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, PrintingCandidate, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, VoteTallyEntry, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitPrintingTagRequest, TagsResponse } from "./file";
+//   import { Convert, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, PrintingCandidate, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, VoteTallyEntry, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitPrintingTagRequest, TagsResponse } from "./file";
 //
 //   const campaign = Convert.toCampaign(json);
 //   const canonicalArtist = Convert.toCanonicalArtist(json);
@@ -53,6 +53,7 @@
 //   const printingCandidatesResponse = Convert.toPrintingCandidatesResponse(json);
 //   const printingConsensusRequest = Convert.toPrintingConsensusRequest(json);
 //   const printingConsensusResponse = Convert.toPrintingConsensusResponse(json);
+//   const printingTagQueueResponse = Convert.toPrintingTagQueueResponse(json);
 //   const sampleCardsResponse = Convert.toSampleCardsResponse(json);
 //   const searchEngineHealthResponse = Convert.toSearchEngineHealthResponse(json);
 //   const sourcesResponse = Convert.toSourcesResponse(json);
@@ -398,6 +399,12 @@ export interface VoteTallyEntry {
   count: number;
   isNoMatch: boolean;
   printing?: PrintingCandidate;
+}
+
+export interface PrintingTagQueueResponse {
+  cards: Card[];
+  hits: number;
+  pages: number;
 }
 
 export interface SampleCardsResponse {
@@ -913,6 +920,22 @@ export class Convert {
   ): string {
     return JSON.stringify(
       uncast(value, r("PrintingConsensusResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toPrintingTagQueueResponse(
+    json: string
+  ): PrintingTagQueueResponse {
+    return cast(JSON.parse(json), r("PrintingTagQueueResponse"));
+  }
+
+  public static printingTagQueueResponseToJson(
+    value: PrintingTagQueueResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("PrintingTagQueueResponse")),
       null,
       2
     );
@@ -1529,6 +1552,14 @@ const typeMap: any = {
         js: "printing",
         typ: u(undefined, r("PrintingCandidate")),
       },
+    ],
+    false
+  ),
+  PrintingTagQueueResponse: o(
+    [
+      { json: "cards", js: "cards", typ: a(r("Card")) },
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "pages", js: "pages", typ: 0 },
     ],
     false
   ),

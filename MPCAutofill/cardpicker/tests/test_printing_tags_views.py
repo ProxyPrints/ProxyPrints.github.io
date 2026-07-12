@@ -344,3 +344,28 @@ class TestPostSubmitPrintingTag:
 
         assert first.status_code == 200
         assert second.status_code == 200
+
+
+class TestGetPrintingTagQueue:
+    def test_only_unresolved_cards_are_returned(self, client, django_settings):
+        unresolved = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CardFactory(printing_tag_status=PrintingTagStatus.RESOLVED)
+        CardFactory(printing_tag_status=PrintingTagStatus.NO_MATCH)
+
+        response = client.get(reverse(views.get_printing_tag_queue))
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["hits"] == 1
+        assert [card["identifier"] for card in body["cards"]] == [unresolved.identifier]
+
+    def test_invalid_page_is_a_bad_request(self, client, django_settings):
+        CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+
+        response = client.get(reverse(views.get_printing_tag_queue), {"page": "999"})
+
+        assert response.status_code == 400
+
+    def test_non_get_method_is_rejected(self, client, django_settings):
+        response = client.post(reverse(views.get_printing_tag_queue))
+        assert response.status_code == 400

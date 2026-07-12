@@ -1158,6 +1158,27 @@ class PrintingConsensusResponse(BaseModel):
         return result
 
 
+class PrintingTagQueueResponse(BaseModel):
+    cards: List[Card]
+    hits: int
+    pages: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "PrintingTagQueueResponse":
+        assert isinstance(obj, dict)
+        cards = from_list(Card.from_dict, obj.get("cards"))
+        hits = from_int(obj.get("hits"))
+        pages = from_int(obj.get("pages"))
+        return PrintingTagQueueResponse(cards, hits, pages)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["cards"] = from_list(lambda x: to_class(Card, x), self.cards)
+        result["hits"] = from_int(self.hits)
+        result["pages"] = from_int(self.pages)
+        return result
+
+
 class Cards(BaseModel):
     CARD: List[Card]
     CARDBACK: List[Card]
@@ -1712,6 +1733,14 @@ def PrintingConsensusResponsefromdict(s: Any) -> PrintingConsensusResponse:
 
 def PrintingConsensusResponsetodict(x: PrintingConsensusResponse) -> Any:
     return to_class(PrintingConsensusResponse, x)
+
+
+def PrintingTagQueueResponsefromdict(s: Any) -> PrintingTagQueueResponse:
+    return PrintingTagQueueResponse.from_dict(s)
+
+
+def PrintingTagQueueResponsetodict(x: PrintingTagQueueResponse) -> Any:
+    return to_class(PrintingTagQueueResponse, x)
 
 
 def SampleCardsResponsefromdict(s: Any) -> SampleCardsResponse:

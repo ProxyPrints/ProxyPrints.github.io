@@ -21,6 +21,8 @@ import {
   cardDocument10,
   cardDocument11,
   localBackend,
+  printingCandidate1,
+  printingCandidate2,
   sourceDocument1,
   sourceDocument2,
   sourceDocument3,
@@ -650,6 +652,57 @@ export const backendInfoServerError = http.get(buildRoute("2/info/"), () =>
 export const searchEngineHealthy = http.get(
   buildRoute("2/searchEngineHealth/"),
   () => HttpResponse.json({ online: true }, { status: 200 })
+);
+
+//# endregion
+
+//# region printing tags
+
+export const printingCandidatesTwoResults = http.post(
+  buildRoute("2/printingCandidates/"),
+  () =>
+    HttpResponse.json(
+      { results: [printingCandidate1, printingCandidate2] },
+      { status: 200 }
+    )
+);
+
+export const printingConsensusUnresolved = http.post(
+  buildRoute("2/printingConsensus/"),
+  () =>
+    HttpResponse.json(
+      { resolvedPrinting: null, isNoMatch: false, voteTally: [] },
+      { status: 200 }
+    )
+);
+
+export const submitPrintingTagResolvesToPrintingCandidate1 = http.post(
+  buildRoute("2/submitPrintingTag/"),
+  () =>
+    HttpResponse.json(
+      {
+        resolvedPrinting: printingCandidate1,
+        isNoMatch: false,
+        voteTally: [
+          { printing: printingCandidate1, isNoMatch: false, count: 1 },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
+export const printingTagQueueOneResult = http.get(
+  buildRoute("2/printingTagQueue/"),
+  () =>
+    HttpResponse.json(
+      { hits: 1, pages: 1, cards: [cardDocument1] },
+      { status: 200 }
+    )
+);
+
+export const printingTagQueueNoResults = http.get(
+  buildRoute("2/printingTagQueue/"),
+  () => HttpResponse.json({ hits: 0, pages: 1, cards: [] }, { status: 200 })
 );
 
 //# endregion

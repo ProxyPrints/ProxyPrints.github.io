@@ -5,6 +5,8 @@ import { cardDocument1 } from "@/common/test-constants";
 import {
   cardDocumentsOneResult,
   defaultHandlers,
+  printingCandidatesTwoResults,
+  printingConsensusUnresolved,
   searchResultsOneResult,
   sourceDocumentsOneResult,
 } from "@/mocks/handlers";
@@ -22,6 +24,8 @@ test.describe("CardDetailedViewModal visual tests", () => {
       cardDocumentsOneResult,
       sourceDocumentsOneResult,
       searchResultsOneResult,
+      printingCandidatesTwoResults,
+      printingConsensusUnresolved,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
@@ -35,6 +39,7 @@ test.describe("CardDetailedViewModal visual tests", () => {
     await page.getByAltText(cardDocument1.name).click();
     await expect(page.getByText("Card Details")).toBeVisible();
     await expect(page.getByText("English")).toBeVisible();
+    await expect(page.getByText("Not yet resolved")).toBeVisible();
 
     await expect(page.getByTestId("detailed-view")).toMatchAriaSnapshot(`
       - text: Card Details

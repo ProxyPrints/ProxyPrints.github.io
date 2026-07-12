@@ -5,6 +5,7 @@
 import Cookies from "js-cookie";
 
 import {
+  AnonymousIdKey,
   BackendURLKey,
   CSRFKey,
   FavoritesKey,
@@ -135,6 +136,27 @@ export function setLocalStorageBackendURL(url: string) {
 
 export function clearLocalStorageBackendURL(): void {
   localStorage.removeItem(BackendURLKey);
+}
+
+//# endregion
+
+//# region printing tags
+
+/**
+ * A persistent, anonymous, client-generated identifier - used to attribute printing-tag
+ * votes to "the same visitor" for rate-limiting and one-vote-per-visitor purposes. Not a
+ * real Django session: this frontend's fetch calls all use `credentials: "same-origin"`,
+ * and frontend/backend are cross-origin, so a session cookie would never round-trip here.
+ * Generated once and persisted in localStorage; a cleared/incognito browser just gets a new one.
+ */
+export function getOrCreateAnonymousId(): string {
+  const existing = localStorage.getItem(AnonymousIdKey);
+  if (existing != null) {
+    return existing;
+  }
+  const generated = crypto.randomUUID();
+  localStorage.setItem(AnonymousIdKey, generated);
+  return generated;
 }
 
 //# endregion

@@ -1,0 +1,15 @@
+{
+  "title": "Printing Tag Queue Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "hits": { "type": "integer" },
+    "pages": { "type": "integer" },
+    "cards": {
+      "type": "array",
+      "items": { "$ref": "../Card.json" }
+    }
+  },
+  "required": ["hits", "pages", "cards"],
+  "additionalProperties": false
+}

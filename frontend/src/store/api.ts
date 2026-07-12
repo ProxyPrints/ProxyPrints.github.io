@@ -40,6 +40,9 @@ import {
   OldEditorSearchResponse,
   Patreon,
   PatreonResponse,
+  PrintingCandidatesResponse,
+  PrintingConsensusResponse,
+  PrintingTagQueueResponse,
   SampleCardsResponse,
   SourcesResponse,
   Tag,
@@ -325,6 +328,98 @@ export async function APIGetCardbacks(
   return rawResponse.json().then((content) => {
     if (rawResponse.status === 200 && content.cardbacks != null) {
       return (content as CardbacksResponse).cardbacks;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APIGetPrintingCandidates(
+  backendURL: string,
+  identifier: string,
+  query?: string
+): Promise<PrintingCandidatesResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/printingCandidates/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ identifier, query }),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.results != null) {
+      return content as PrintingCandidatesResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APIGetPrintingConsensus(
+  backendURL: string,
+  identifier: string
+): Promise<PrintingConsensusResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/printingConsensus/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ identifier }),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.voteTally != null) {
+      return content as PrintingConsensusResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APISubmitPrintingTag(
+  backendURL: string,
+  identifier: string,
+  anonymousId: string,
+  printingIdentifier?: string,
+  isNoMatch = false
+): Promise<PrintingConsensusResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/submitPrintingTag/"),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        identifier,
+        anonymousId,
+        printingIdentifier,
+        isNoMatch,
+      }),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.voteTally != null) {
+      return content as PrintingConsensusResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APIGetPrintingTagQueue(
+  backendURL: string,
+  page: number
+): Promise<PrintingTagQueueResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, `/2/printingTagQueue/?page=${page}`),
+    {
+      method: "GET",
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.cards != null) {
+      return content as PrintingTagQueueResponse;
     }
     throw { name: content.name, message: content.message };
   });

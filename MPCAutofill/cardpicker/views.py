@@ -13,6 +13,7 @@ from elasticsearch_dsl.index import Index
 from pydantic import ValidationError
 
 from django.conf import settings
+from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Q
 from django.http import (
@@ -30,6 +31,7 @@ from cardpicker.constants import (
     EDITOR_SEARCH_MAX_QUERIES,
     EXPLORE_SEARCH_MAX_PAGE_SIZE,
     NSFW,
+    PRINTING_TAG_QUEUE_PAGE_SIZE,
 )
 from cardpicker.documents import CardSearch
 from cardpicker.integrations.integrations import get_configured_game_integration
@@ -41,6 +43,7 @@ from cardpicker.models import (
     CardPrintingTagSource,
     CardTypes,
     DFCPair,
+    PrintingTagStatus,
     Source,
     summarise_contributions,
 )
@@ -81,6 +84,7 @@ from cardpicker.schema_types import (
     PrintingCandidatesResponse,
     PrintingConsensusRequest,
     PrintingConsensusResponse,
+    PrintingTagQueueResponse,
     SampleCardsResponse,
     SearchEngineHealthResponse,
     SortBy,
@@ -632,6 +636,41 @@ def _get_card_or_400(identifier: str) -> Card:
         return Card.objects.get(identifier=identifier)
     except Card.DoesNotExist:
         raise BadRequestException(f"No card found with identifier {identifier!r}.")
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def get_printing_tag_queue(request: HttpRequest) -> HttpResponse:
+    """
+    A paginated list of cards that still need a human to tag their printing - i.e. haven't
+    reached consensus (contested or no votes yet). Filters on the indexed
+    `printing_tag_status` rather than recomputing consensus for every card, which is the
+    whole reason that field exists.
+    """
+
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+
+    cards = Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED).order_by("-date_created", "name")
+    paginator: Paginator[Card] = Paginator(cards, PRINTING_TAG_QUEUE_PAGE_SIZE)
+
+    page = request.GET.get("page", "1")
+    try:
+        page_int = int(page)
+        if not (paginator.num_pages >= page_int > 0):
+            raise BadRequestException(
+                f"Invalid page {page_int} specified - must be between 1 and {paginator.num_pages}."
+            )
+    except ValueError:
+        raise BadRequestException("Invalid page specified.")
+
+    return JsonResponse(
+        PrintingTagQueueResponse(
+            hits=paginator.count,
+            pages=paginator.num_pages,
+            cards=[card.serialise() for card in paginator.page(page_int).object_list],
+        ).model_dump()
+    )
 
 
 def _build_printing_consensus_response(

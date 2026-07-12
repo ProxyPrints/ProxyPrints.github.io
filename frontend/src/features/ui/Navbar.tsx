@@ -116,6 +116,16 @@ export default function ProjectNavbar() {
                   Contributions
                 </Nav.Link>
               )}
+              {remoteBackendConfigured && (
+                <Nav.Link
+                  as={Link}
+                  href="/printingQueue"
+                  active={router.route === "/printingQueue"}
+                  eventKey="/printingQueue"
+                >
+                  Tag Printings
+                </Nav.Link>
+              )}
               <Nav.Link
                 href="https://github.com/chilli-axe/mpc-autofill/releases/latest"
                 target="_blank"

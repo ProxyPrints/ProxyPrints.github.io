@@ -3,7 +3,11 @@
  */
 
 import { Card, MaximumDPI, MaximumSize, MinimumDPI } from "@/common/constants";
-import { CardType as CardTypeSchema, SourceType } from "@/common/schema_types";
+import {
+  CardType as CardTypeSchema,
+  PrintingCandidate,
+  SourceType,
+} from "@/common/schema_types";
 import {
   BackendState,
   CardDocument,
@@ -455,6 +459,34 @@ export const defaultSettings: SearchSettings = {
     includesTags: [],
     excludesTags: ["NSFW"],
   },
+};
+
+export const printingCandidate1: PrintingCandidate = {
+  identifier: "printing-candidate-1",
+  canonicalId: "canonical-1",
+  expansionCode: "abc",
+  expansionName: "A Big Cardset",
+  collectorNumber: "1",
+  artist: "Some Artist",
+  smallThumbnailUrl: "https://example.com/small1.png",
+  mediumThumbnailUrl: "https://example.com/medium1.png",
+  fullArt: false,
+  frame: "2015",
+  releasedAt: "2020-01-01",
+};
+
+export const printingCandidate2: PrintingCandidate = {
+  identifier: "printing-candidate-2",
+  canonicalId: "canonical-1",
+  expansionCode: "xyz",
+  expansionName: "Another Cardset",
+  collectorNumber: "42",
+  artist: "Another Artist",
+  smallThumbnailUrl: "https://example.com/small2.png",
+  mediumThumbnailUrl: "https://example.com/medium2.png",
+  fullArt: true,
+  frame: "2003",
+  releasedAt: "2010-06-15",
 };
 
 //# endregion
