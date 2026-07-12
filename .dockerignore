@@ -3,6 +3,10 @@
 # frontend/ (but runs `npm install` fresh inside the build stage, never frontend/node_modules from the
 # host). Everything below is unused by any of the three Dockerfiles, but was still being uploaded to
 # the Docker daemon on every single build - node_modules alone is well over a gigabyte.
+#
+# .claude/worktrees is the big one: each Claude Code worktree checked out under this repo carries its
+# own full frontend/node_modules, and none of that has anything to do with the backend image either.
+.claude
 .git
 frontend/node_modules
 frontend/.next
