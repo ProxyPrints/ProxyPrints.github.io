@@ -18,7 +18,6 @@ import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
-import { NavbarHeight } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import {
   PrintingCandidate,
@@ -72,10 +71,11 @@ const RevealOverlay = styled.div`
 `;
 
 // The card, and the starburst behind it, stay glued to the viewport as the page scrolls
-// (position: sticky) rather than scrolling away with the rest of the page - "top" is
-// relative to the app's scroll container (see ContentContainer in Layout.tsx), which
-// already starts right below the fixed navbar, so 0 needs no further navbar-height offset;
-// the small gap below is just breathing room.
+// (position: sticky) rather than scrolling away with the rest of the page. "top" is set via
+// inline style (see useStickyTop below) to wherever the panel naturally rendered when it
+// first mounted, rather than a fixed offset - so it pins at its own original location on
+// the page and never visibly jumps to a different spot once scrolling starts, it just stops
+// moving exactly where it already was.
 //
 // z-index: -1 here (not just on BurstSvg) is deliberate and easy to get backwards: a sticky
 // element always establishes its own stacking context, and *any* positioned descendant -
@@ -92,9 +92,51 @@ const RevealOverlay = styled.div`
 // burst's intentional bleed into that space is affected.
 const CardPanel = styled.div`
   position: sticky;
-  top: ${NavbarHeight / 2}px;
+  top: 0;
   z-index: -1;
 `;
+
+// Measures how far the panel naturally sits below the top of its scrolling ancestor (see
+// ContentContainer in Layout.tsx - the app's content area is a fixed-position, internally
+// scrolling box, not the normal document body) right after it mounts, and uses that as the
+// sticky "top" offset. Re-measures whenever the subject card changes (a new card can nudge
+// the layout by a few px - e.g. flavor text length), so each card pins at wherever it
+// actually rendered rather than an offset carried over from a previous card. Runs in a
+// plain useEffect, not useLayoutEffect - the measured value only matters once the user
+// scrolls far enough for sticky to engage, so there's nothing to flash before it settles,
+// and useLayoutEffect warns during Next's static export (no DOM on the server).
+function useStickyTop(deps: React.DependencyList): {
+  ref: React.RefObject<HTMLDivElement>;
+  top: number | null;
+} {
+  const ref = React.useRef<HTMLDivElement | null>(null);
+  const [top, setTop] = useState<number | null>(null);
+
+  useEffect(() => {
+    const panel = ref.current;
+    if (panel == null) {
+      return;
+    }
+    let scrollParent: HTMLElement | null = panel.parentElement;
+    while (
+      scrollParent != null &&
+      !["scroll", "auto"].includes(
+        window.getComputedStyle(scrollParent).overflowY
+      )
+    ) {
+      scrollParent = scrollParent.parentElement;
+    }
+    if (scrollParent == null) {
+      return;
+    }
+    const panelRect = panel.getBoundingClientRect();
+    const scrollRect = scrollParent.getBoundingClientRect();
+    setTop(panelRect.top - scrollRect.top + scrollParent.scrollTop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+
+  return { ref, top };
+}
 
 // Sized and centred purely with CSS (percentage width + aspect-ratio, both relative to
 // CardPanel's own box) rather than a JS measurement - it scales naturally with the card's
@@ -180,6 +222,41 @@ function randomFlavorText(): string {
 // reflow here would visibly resize the burst along with it).
 const CARD_ASPECT_RATIO = "63 / 88";
 
+// Shared "mystery card" backdrop for every Scryfall art box in the candidate grid - reuses
+// the starburst's own blue so it reads as one consistent visual language against the orange
+// background rather than a mismatched placeholder colour. Candidates render their real
+// artwork on top of this (so a slow-loading image transitions from a blue "?" card into the
+// real art instead of a blank flash), and it's also the entire visual for the "No match"
+// option, which has no real artwork to show at all - replacing the old black
+// "Card Not Found :(" placeholder image.
+const ArtPlaceholder = styled.div`
+  position: relative;
+  width: 100%;
+  aspect-ratio: ${CARD_ASPECT_RATIO};
+  background: ${STARBURST_OUTER_COLOR};
+  overflow: hidden;
+
+  &::before {
+    content: "?";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 3rem;
+    font-weight: bold;
+  }
+
+  img {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+`;
+
 export function PrintingTagQueue() {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
@@ -207,6 +284,9 @@ export function PrintingTagQueue() {
   const currentCard = queueCards[currentIndex] ?? null;
   const queueExhausted =
     !loadingQueue && currentIndex >= queueCards.length && page >= pages;
+  const { ref: cardPanelRef, top: stickyTop } = useStickyTop([
+    currentCard?.identifier,
+  ]);
 
   // fetch the next backend page once the locally-held batch runs out - never refetches
   // page 1, so a card the user already skipped/voted on this session won't reappear
@@ -342,7 +422,10 @@ export function PrintingTagQueue() {
         <div data-testid="planeswalker-queue-current-card">
           <Row className="g-4">
             <Col xs={12} md={4}>
-              <CardPanel>
+              <CardPanel
+                ref={cardPanelRef}
+                style={stickyTop != null ? { top: stickyTop } : undefined}
+              >
                 <BurstSvg viewBox={STARBURST_VIEWBOX}>
                   <polygon
                     points={STARBURST_OUTER_FRAMES[starburstFrame]}
@@ -413,14 +496,7 @@ export function PrintingTagQueue() {
                         disabled={submitting}
                         onClick={() => submit(undefined, true)}
                       >
-                        <img
-                          src="/blank.png"
-                          alt="None of these match"
-                          style={{
-                            width: "100%",
-                            aspectRatio: CARD_ASPECT_RATIO,
-                          }}
-                        />
+                        <ArtPlaceholder />
                         <div>No match</div>
                       </Button>
                     </Col>
@@ -437,16 +513,14 @@ export function PrintingTagQueue() {
                           disabled={submitting}
                           onClick={() => submit(candidate.identifier, false)}
                         >
-                          <ZoomableThumbnail>
-                            <img
-                              src={candidate.mediumThumbnailUrl}
-                              alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
-                              style={{
-                                width: "100%",
-                                aspectRatio: CARD_ASPECT_RATIO,
-                              }}
-                            />
-                          </ZoomableThumbnail>
+                          <ArtPlaceholder>
+                            <ZoomableThumbnail>
+                              <img
+                                src={candidate.mediumThumbnailUrl}
+                                alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                              />
+                            </ZoomableThumbnail>
+                          </ArtPlaceholder>
                           <div>
                             {candidate.expansionCode.toUpperCase()}{" "}
                             {candidate.collectorNumber}
