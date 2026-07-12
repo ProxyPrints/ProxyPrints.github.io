@@ -1,6 +1,7 @@
 import pytest
 
 from cardpicker.models import Tag, TagAliasSuggestion, TagSuggestionStatus
+from cardpicker.search.sanitisation import fix_whitespace
 from cardpicker.tags import Tags
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
@@ -71,7 +72,9 @@ class TestExtractFuzzyTagPromotion:
 
         name, tag_set, _, _, _ = tags.extract("Lightning Bolt [Fullart]")
 
-        assert name == "Lightning Bolt"
+        # extract() itself doesn't collapse whitespace left behind by a stripped tag -
+        # real callers (Image/Folder.unpack_name) apply fix_whitespace() on top, same as here
+        assert fix_whitespace(name) == "Lightning Bolt"
         assert tag_set == {"Full Art"}
         tag = Tag.objects.get(name="Full Art")
         assert "Fullart" in tag.aliases
@@ -88,7 +91,7 @@ class TestExtractFuzzyTagPromotion:
         tags_again = Tags()
         name, tag_set, _, _, _ = tags_again.extract("Lightning Strike [Fullart]")
 
-        assert name == "Lightning Strike"
+        assert fix_whitespace(name) == "Lightning Strike"
         assert tag_set == {"Full Art"}
         # occurrence_count was only ever incremented once - the promoted alias short-circuits
         # straight to the exact-match path for every subsequent occurrence, this run or later
@@ -158,7 +161,7 @@ class TestExtractExpansionHint:
 
         name, tag_set, canonical_card_pk, _, expansion_hint = tags.extract("Lightning Bolt [MH3]")
 
-        assert name == "Lightning Bolt"
+        assert fix_whitespace(name) == "Lightning Bolt"
         assert tag_set == set()
         assert canonical_card_pk is None
         assert expansion_hint == "mh3"

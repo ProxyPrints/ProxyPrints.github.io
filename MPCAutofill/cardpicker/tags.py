@@ -103,7 +103,7 @@ class Tags:
         best_tag: Optional[models.Tag] = None
         best_score = 0.0
         for tag in self.tags.values():
-            if tag.pk is None:
+            if tag.pk is None:  # type: ignore[unreachable]  # django-stubs types pk as non-Optional
                 # e.g. the synthetic NSFW pseudo-tag - never persisted, so it can't be
                 # promoted to a real alias or referenced by a suggestion's FK
                 continue
