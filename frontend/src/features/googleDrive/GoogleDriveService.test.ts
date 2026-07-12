@@ -196,3 +196,69 @@ describe("GoogleDriveService.executeCall", () => {
     });
   });
 });
+
+describe("GoogleDriveService.uploadFile", () => {
+  let service: GoogleDriveService;
+
+  beforeEach(() => {
+    service = new GoogleDriveService("test-token", () => Promise.resolve());
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test("successful upload: posts multipart body and returns the file id", async () => {
+    const fetchSpy = jest
+      .spyOn(global, "fetch")
+      .mockResolvedValue(makeResponse(200, { id: "abc123" }));
+
+    const result = await service.uploadFile({
+      name: "cards.pdf",
+      blob: new Blob(["%PDF-1.4"], { type: "application/pdf" }),
+      mimeType: "application/pdf",
+    });
+
+    expect(result).toEqual({ id: "abc123" });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
+      expect.objectContaining({
+        method: "POST",
+        headers: { Authorization: "Bearer test-token" },
+        body: expect.any(FormData),
+      })
+    );
+  });
+
+  test("includes the requested name and mimeType in the metadata part", async () => {
+    const fetchSpy = jest
+      .spyOn(global, "fetch")
+      .mockResolvedValue(makeResponse(200, { id: "abc123" }));
+
+    await service.uploadFile({
+      name: "cards.pdf",
+      blob: new Blob(["%PDF-1.4"], { type: "application/pdf" }),
+      mimeType: "application/pdf",
+    });
+
+    const body = fetchSpy.mock.calls[0][1]!.body as FormData;
+    const metadataPart = body.get("metadata") as Blob;
+    const metadataText = await metadataPart.text();
+    expect(JSON.parse(metadataText)).toEqual({
+      name: "cards.pdf",
+      mimeType: "application/pdf",
+    });
+  });
+
+  test("error response: throws with status and status text", async () => {
+    jest.spyOn(global, "fetch").mockResolvedValue(makeResponse(403, {}));
+
+    await expect(
+      service.uploadFile({
+        name: "cards.pdf",
+        blob: new Blob(["%PDF-1.4"], { type: "application/pdf" }),
+        mimeType: "application/pdf",
+      })
+    ).rejects.toThrow("Google Drive upload error: 403");
+  });
+});

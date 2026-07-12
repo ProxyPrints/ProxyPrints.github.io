@@ -8,6 +8,7 @@ import Offcanvas from "react-bootstrap/Offcanvas";
 import { LocalFolderBackendConfig } from "@/features/backend/LocalFolderBackendConfig";
 import { RemoteBackendConfig } from "@/features/backend/RemoteBackendConfig";
 import { getEnvURL } from "@/features/backend/useBackendSetter";
+import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 
 import { GoogleDriveBackendConfig } from "./GoogleDriveBackendConfig";
 
@@ -21,9 +22,6 @@ interface BackendConfigProps {
 
 export function BackendConfig({ show, handleClose }: BackendConfigProps) {
   const envURL = getEnvURL();
-  const isGoogleDriveAppConfigured =
-    (process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID ?? "") !== "" &&
-    (process.env.NEXT_PUBLIC_GOOGLE_DRIVE_APP_ID ?? "") !== "";
   return (
     <Offcanvas show={show} onHide={handleClose} data-testid="backend-offcanvas">
       <Offcanvas.Header closeButton>
@@ -36,7 +34,7 @@ export function BackendConfig({ show, handleClose }: BackendConfigProps) {
             <hr />
           </>
         )}
-        {isGoogleDriveAppConfigured && (
+        {isGoogleDriveAppConfigured() && (
           <>
             <GoogleDriveBackendConfig />
             <hr />

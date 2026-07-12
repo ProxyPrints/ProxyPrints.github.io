@@ -155,4 +155,41 @@ export class GoogleDriveService {
       })
     ) as Promise<GoogleDriveGetFileByIdResponse>;
   }
+
+  /**
+   * Uploads a file's contents to the root of the user's Drive via a
+   * multipart request. Requires a bearer token with a write scope (e.g.
+   * drive.file) - the read-only token used elsewhere in this class for
+   * browsing/indexing cannot be reused here.
+   */
+  async uploadFile(request: {
+    name: string;
+    blob: Blob;
+    mimeType: string;
+  }): Promise<Pick<GoogleDriveFile, "id">> {
+    const form = new FormData();
+    form.append(
+      "metadata",
+      new Blob(
+        [JSON.stringify({ name: request.name, mimeType: request.mimeType })],
+        { type: "application/json" }
+      )
+    );
+    form.append("file", request.blob, request.name);
+
+    const response = await fetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.bearerToken}` },
+        body: form,
+      }
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Google Drive upload error: ${response.status} ${response.statusText}`
+      );
+    }
+    return response.json();
+  }
 }

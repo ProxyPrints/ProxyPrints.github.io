@@ -18,6 +18,9 @@ import { OverflowCol } from "@/components/OverflowCol";
 import { Spinner } from "@/components/Spinner";
 import { ClientSearchService } from "@/features/clientSearch/clientSearchService";
 import { downloadFile, useDoFileDownload } from "@/features/download/download";
+import { requestGoogleDriveWriteToken } from "@/features/googleDrive/googleDriveAuth";
+import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
+import { GoogleDriveService } from "@/features/googleDrive/GoogleDriveService";
 import {
   CardSelectionMode,
   CutLinePlacement,
@@ -91,6 +94,71 @@ const useDownloadPDF = (
         )
       )
       .finally(() => setIsDownloading(false));
+};
+
+const saveToDrivePDF = async (
+  props: Omit<PDFProps, "fileHandles">,
+  clientSearchService: ClientSearchService,
+  dispatch: AppDispatch
+): Promise<boolean> => {
+  const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
+    props.cardDocumentsByIdentifier
+  );
+  dispatch(
+    setNotification([
+      Math.random().toString(),
+      {
+        name: "Saving to Google Drive",
+        message: "Generating your PDF...",
+        level: "info",
+      },
+    ])
+  );
+  const blob = await pdfRenderService.renderPDF({ ...props, fileHandles });
+  const token = await requestGoogleDriveWriteToken(
+    process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID as string
+  );
+  await new GoogleDriveService(token).uploadFile({
+    name: "cards.pdf",
+    blob,
+    mimeType: "application/pdf",
+  });
+  dispatch(
+    setNotification([
+      Math.random().toString(),
+      {
+        name: "Saved to Google Drive",
+        message: "cards.pdf was saved to your Google Drive.",
+        level: "info",
+      },
+    ])
+  );
+  return true;
+};
+
+const useSaveToDrivePDF = (
+  props: Omit<PDFProps, "fileHandles">,
+  clientSearchService: ClientSearchService,
+  dispatch: AppDispatch,
+  setIsSavingToDrive: (newState: boolean) => void
+) => {
+  return () =>
+    Promise.resolve(setIsSavingToDrive(true))
+      .then(() => saveToDrivePDF(props, clientSearchService, dispatch))
+      .catch((reason) =>
+        dispatch(
+          setNotification([
+            Math.random().toString(),
+            {
+              name: "Saving to Google Drive Failed",
+              message:
+                reason instanceof Error ? reason.message : String(reason),
+              level: "error",
+            },
+          ])
+        )
+      )
+      .finally(() => setIsSavingToDrive(false));
 };
 
 interface NumericFieldProps {
@@ -907,17 +975,27 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
   const showSpinner = debouncedState.isPending() || loading;
 
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
+  const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
+
+  const fullResolutionPDFProps = {
+    ...debouncedPDFProps,
+    imageQuality: "full-resolution" as const,
+    imageDPI: imageDPI,
+    jpgQuality: jpgQuality,
+  };
 
   const downloadPDF = useDownloadPDF(
-    {
-      ...debouncedPDFProps,
-      imageQuality: "full-resolution",
-      imageDPI: imageDPI,
-      jpgQuality: jpgQuality,
-    },
+    fullResolutionPDFProps,
     clientSearchService,
     dispatch,
     setIsDownloading
+  );
+
+  const saveToDrive = useSaveToDrivePDF(
+    fullResolutionPDFProps,
+    clientSearchService,
+    dispatch,
+    setIsSavingToDrive
   );
 
   return (
@@ -1064,6 +1142,21 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
               {isDownloading ? <Spinner size={1.5} /> : "Generate PDF"}
             </Button>
           </div>
+          {isGoogleDriveAppConfigured() && (
+            <div className="d-grid gap-0 mt-2">
+              <Button
+                variant="outline-primary"
+                onClick={saveToDrive}
+                disabled={isSavingToDrive}
+              >
+                {isSavingToDrive ? (
+                  <Spinner size={1.5} />
+                ) : (
+                  "Save PDF to Google Drive"
+                )}
+              </Button>
+            </div>
+          )}
         </OverflowCol>
         <Col lg={9} md={8} sm={7} xs={6} style={{ position: "relative" }}>
           {showSpinner && (
