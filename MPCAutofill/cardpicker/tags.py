@@ -103,10 +103,12 @@ class Tags:
         best_tag: Optional[models.Tag] = None
         best_score = 0.0
         for tag in self.tags.values():
-            if tag.pk is None:  # type: ignore[unreachable]  # django-stubs types pk as non-Optional
+            if tag.pk is None:
                 # e.g. the synthetic NSFW pseudo-tag - never persisted, so it can't be
-                # promoted to a real alias or referenced by a suggestion's FK
-                continue
+                # promoted to a real alias or referenced by a suggestion's FK.
+                # django-stubs types Tag.pk as non-Optional, so mypy considers this branch
+                # (and hence the statement below) statically unreachable - it isn't at runtime.
+                continue  # type: ignore[unreachable]
             for candidate in [tag.name, *tag.aliases]:
                 score = Levenshtein.ratio(normalised_raw_tag, to_searchable(candidate))
                 if score > best_score:
