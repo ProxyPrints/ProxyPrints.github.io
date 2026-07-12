@@ -67,7 +67,8 @@ test.describe("PrintingTagPicker tests", () => {
         }`
       )
     ).toBeVisible();
-    await expect(picker.getByText("None of these match")).toBeVisible();
+    await expect(picker.getByAltText("None of these match")).toBeVisible();
+    await expect(picker.getByText("No match")).toBeVisible();
   });
 
   test("submitting a vote for a printing updates the shown consensus", async ({

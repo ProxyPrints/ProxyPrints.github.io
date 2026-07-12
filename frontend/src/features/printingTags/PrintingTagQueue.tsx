@@ -235,6 +235,23 @@ export function PrintingTagQueue() {
                   )}
               </div>
               <Row className="g-2" xs={3} md={4}>
+                <Col>
+                  <Button
+                    variant={
+                      consensus?.isNoMatch ? "success" : "outline-secondary"
+                    }
+                    className="w-100 p-1"
+                    disabled={submitting}
+                    onClick={() => submit(undefined, true)}
+                  >
+                    <img
+                      src="/blank.png"
+                      alt="None of these match"
+                      style={{ width: "100%" }}
+                    />
+                    <div>No match</div>
+                  </Button>
+                </Col>
                 {candidates.map((candidate) => (
                   <Col key={candidate.identifier}>
                     <Button
@@ -263,13 +280,6 @@ export function PrintingTagQueue() {
                 ))}
               </Row>
               <div className="mt-3 d-flex gap-2">
-                <Button
-                  variant="outline-danger"
-                  disabled={submitting}
-                  onClick={() => submit(undefined, true)}
-                >
-                  None of these match
-                </Button>
                 <Button
                   variant="outline-secondary"
                   disabled={submitting}

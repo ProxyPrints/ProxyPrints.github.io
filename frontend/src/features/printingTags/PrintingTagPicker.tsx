@@ -149,6 +149,21 @@ export function PrintingTagPicker({ cardIdentifier }: PrintingTagPickerProps) {
         <div className="mt-2">Loading candidates...</div>
       ) : (
         <Row className="g-2 mt-1" xs={3} md={4}>
+          <Col>
+            <Button
+              variant={consensus?.isNoMatch ? "success" : "outline-secondary"}
+              className="w-100 p-1"
+              disabled={submitting}
+              onClick={() => submit(undefined, true)}
+            >
+              <img
+                src="/blank.png"
+                alt="None of these match"
+                style={{ width: "100%" }}
+              />
+              <div>No match</div>
+            </Button>
+          </Col>
           {candidates.map((candidate) => (
             <OverlayTrigger
               key={candidate.identifier}
@@ -196,14 +211,6 @@ export function PrintingTagPicker({ cardIdentifier }: PrintingTagPickerProps) {
           ))}
         </Row>
       )}
-      <Button
-        variant="outline-danger"
-        className="mt-2"
-        disabled={submitting}
-        onClick={() => submit(undefined, true)}
-      >
-        None of these match
-      </Button>
     </div>
   );
 }
