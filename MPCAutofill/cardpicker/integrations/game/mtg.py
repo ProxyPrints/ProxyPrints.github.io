@@ -284,6 +284,7 @@ class CardRow(BaseModel):
     id: uuid.UUID
     oracle_id: uuid.UUID | None = None
     name: str
+    lang: str = "en"
     set: str
     collector_number: str
     artist: str
@@ -407,6 +408,16 @@ class MTGIntegration(GameIntegration):
         }
         new_cards_by_identifier: dict[uuid.UUID, CanonicalCard] = {}
         existing_card_identifiers = set(CanonicalCard.objects.values_list("identifier", flat=True))
+        # Scryfall's default_cards bulk data can include more than one printing for the
+        # same (expansion, collector_number) slot - typically a language-exclusive variant
+        # alongside the English one - which the DB's uniqueness constraint on that pair
+        # doesn't allow. `existing_slot_owners` are slots already settled by a previous
+        # run (never displaced); `new_slot_owners` tracks claims made during this run so a
+        # later English printing can displace an earlier non-English one for the same slot.
+        existing_slot_owners: set[tuple[str, str]] = set(
+            CanonicalCard.objects.values_list("expansion__code", "collector_number")
+        )
+        new_slot_owners: dict[tuple[str, str], tuple[uuid.UUID, str]] = {}
 
         manager = enlighten.get_manager()
         default_cards_counter = manager.counter(desc="Default Cards", unit="ticks")
@@ -504,17 +515,17 @@ class MTGIntegration(GameIntegration):
         def process_row(
             row: CardRow,
             pool: concurrent.futures.ThreadPoolExecutor,
-            pending: list[tuple[uuid.UUID, "concurrent.futures.Future[CanonicalCard | None]"]],
+            pending: list[tuple[CardRow, "concurrent.futures.Future[CanonicalCard | None]"]],
             mark_existing_as_default: bool,
         ) -> None:
             if mark_existing_as_default and row.id in new_cards_by_identifier.keys():
                 new_cards_by_identifier[row.id].is_default = True
             elif row.id not in existing_card_identifiers:
-                pending.append((row.id, pool.submit(row_to_canonical_card, row)))
+                pending.append((row, pool.submit(row_to_canonical_card, row)))
 
         def process_file(path: Path, counter: enlighten.Counter, mark_existing_as_default: bool) -> None:
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-                pending: list[tuple[uuid.UUID, "concurrent.futures.Future[CanonicalCard | None]"]] = []
+                pending: list[tuple[CardRow, "concurrent.futures.Future[CanonicalCard | None]"]] = []
                 with open(path, "rb") as f:
                     for line in f:
                         line = line.rstrip(b"\n")
@@ -527,10 +538,36 @@ class MTGIntegration(GameIntegration):
                             counter.update()
                         except ValidationError:
                             print(f"failed to validate line: {decoded_line}")
-                for row_id, future in pending:
+                for row, future in pending:
                     card = future.result()
-                    if card:
-                        new_cards_by_identifier[row_id] = card
+                    if not card:
+                        continue
+                    slot = (row.set, row.collector_number)
+                    if slot in existing_slot_owners:
+                        logger.warning(
+                            "Skipping %r (%s): slot %r already settled by a previous import run",
+                            row.name,
+                            row.lang,
+                            slot,
+                        )
+                        continue
+                    current_owner = new_slot_owners.get(slot)
+                    if current_owner is not None:
+                        current_identifier, current_lang = current_owner
+                        if current_lang == "en" or row.lang != "en":
+                            logger.warning(
+                                "Skipping %r (%s): slot %r already claimed by %s (%s)",
+                                row.name,
+                                row.lang,
+                                slot,
+                                current_identifier,
+                                current_lang,
+                            )
+                            continue
+                        # this row is the English printing, displacing an earlier non-English claim
+                        del new_cards_by_identifier[current_identifier]
+                    new_slot_owners[slot] = (row.id, row.lang)
+                    new_cards_by_identifier[row.id] = card
 
         @section_timer(name="process default cards")
         def process_default_cards() -> None:

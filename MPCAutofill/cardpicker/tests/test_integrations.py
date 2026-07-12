@@ -154,6 +154,7 @@ class TestMTGIntegration:
         UUID_1 = uuid.UUID("a5750af9-5f0b-4662-baaf-55186f16e6cc")
         UUID_2 = uuid.UUID("ebf975f5-e439-4502-be21-8d0b7a6c79b7")
         UUID_3 = uuid.UUID("12345678-1234-1234-1234-123456789abc")
+        UUID_4 = uuid.UUID("2f6b9e0a-8b8b-4b8e-8b8e-8b8e8b8e8b8e")
 
     _IMAGE_URIS_EMPTY: dict[str, str] = {
         "small": "",
@@ -210,6 +211,12 @@ class TestMTGIntegration:
     }
     _FOREST_WITH_NEW_ARTIST_RECORD = {**_FOREST_RECORD, "artist": "new artist not in db"}
     _SWAMP_MISSING_EXPANSION_RECORD = {**_SWAMP_RECORD, "set": "xyz"}
+    _SWAMP_ITALIAN_RECORD = {
+        **_SWAMP_RECORD,
+        "id": str(TestUUIDs.UUID_4),
+        "name": "palude",
+        "lang": "it",
+    }
 
     def get_scryfall_data_file(self, records: list[dict[str, Any]]) -> str:
         return "[\n" + "\n".join(json.dumps(record) + "," for record in records) + "\n]"
@@ -352,6 +359,32 @@ class TestMTGIntegration:
                 None,
                 ["xyz"],
                 id="card with an expansion code not in db is skipped",
+            ),
+            pytest.param(
+                # existing DB state
+                [],
+                [],
+                # incoming data - english printing first, italian variant of the same slot second
+                [_SWAMP_RECORD, _SWAMP_ITALIAN_RECORD],
+                [],
+                # expected state - only the english printing is kept
+                [TestCard(TestUUIDs.UUID_1, "swamp", False, "john avon")],
+                None,
+                [],
+                id="duplicate language variant for same slot keeps the english printing (english first)",
+            ),
+            pytest.param(
+                # existing DB state
+                [],
+                [],
+                # incoming data - italian variant first, english printing of the same slot second
+                [_SWAMP_ITALIAN_RECORD, _SWAMP_RECORD],
+                [],
+                # expected state - the later english printing displaces the earlier italian claim
+                [TestCard(TestUUIDs.UUID_1, "swamp", False, "john avon")],
+                None,
+                [],
+                id="duplicate language variant for same slot keeps the english printing (italian first)",
             ),
         ],
     )
