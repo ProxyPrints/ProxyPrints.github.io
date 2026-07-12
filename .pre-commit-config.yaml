@@ -51,6 +51,7 @@ repos:
             "Levenshtein~=0.27.3",
             "oauth2client~=4.1",
             "Markdown~=3.4",
+            "Pillow~=12.3",
             "psycopg2-binary~=2.9.6",
             "pycountry~=22.3.0",
             "pydantic~=2.10.0",

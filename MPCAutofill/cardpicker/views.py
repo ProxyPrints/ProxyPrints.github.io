@@ -13,7 +13,13 @@ from pydantic import ValidationError
 
 from django.conf import settings
 from django.db.models import Q
-from django.http import FileResponse, HttpRequest, HttpResponse, HttpResponseBase, JsonResponse
+from django.http import (
+    FileResponse,
+    HttpRequest,
+    HttpResponse,
+    HttpResponseBase,
+    JsonResponse,
+)
 from django.views.decorators.csrf import csrf_exempt
 
 from cardpicker.constants import (
