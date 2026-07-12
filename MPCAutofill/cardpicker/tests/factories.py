@@ -116,6 +116,6 @@ class CardPrintingTagFactory(factory.django.DjangoModelFactory):
     card = factory.SubFactory(CardFactory)
     printing = factory.SubFactory(CanonicalCardFactory)
     is_no_match = False
-    session_key = factory.Sequence(lambda n: f"session_{n}")
+    anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
     source = models.CardPrintingTagSource.USER
     confidence = None

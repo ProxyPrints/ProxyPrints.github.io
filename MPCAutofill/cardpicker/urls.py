@@ -22,4 +22,7 @@ urlpatterns = [
     path("2/patreon/", views.get_patreon),
     path("2/searchEngineHealth/", views.get_search_engine_health),
     path("2/localFileImage/", views.get_local_file_image),
+    path("2/printingCandidates/", views.post_printing_candidates),
+    path("2/printingConsensus/", views.post_printing_consensus),
+    path("2/submitPrintingTag/", views.post_submit_printing_tag),
 ]

@@ -14,7 +14,7 @@ from cardpicker.constants import DATE_FORMAT
 from cardpicker.schema_types import CanonicalArtistClass as SerialisedCanonicalArtist
 from cardpicker.schema_types import CanonicalCardClass as SerialisedCanonicalCard
 from cardpicker.schema_types import Card as SerialisedCard
-from cardpicker.schema_types import CardType, ChildElement, Game
+from cardpicker.schema_types import CardType, ChildElement, Game, PrintingCandidate
 from cardpicker.schema_types import Source as SerialisedSource
 from cardpicker.schema_types import SourceContribution, SourceType
 from cardpicker.schema_types import Tag as SerialisedTag
@@ -103,6 +103,28 @@ class CanonicalCard(models.Model):
             identifier=str(self.identifier),
             smallThumbnailUrl=self.small_thumbnail_url,
             mediumThumbnailUrl=self.medium_thumbnail_url,
+        )
+
+    def serialise_as_printing_candidate(self) -> PrintingCandidate:
+        """
+        Richer serialisation than `serialise()`, for the printing-tag picker - includes the
+        artist name and the `CanonicalPrintingMetadata` sidecar fields that help a human
+        disambiguate between candidates (full art, frame, release date), none of which
+        `serialise()`'s embedded-in-a-resolved-Card shape needs.
+        """
+        metadata = getattr(self, "printing_metadata", None)
+        return PrintingCandidate(
+            identifier=str(self.identifier),
+            canonicalId=str(self.canonical_id),
+            expansionCode=self.expansion.code,
+            expansionName=self.expansion.name,
+            collectorNumber=self.collector_number,
+            artist=self.artist.name,
+            smallThumbnailUrl=self.small_thumbnail_url,
+            mediumThumbnailUrl=self.medium_thumbnail_url,
+            fullArt=metadata.full_art if metadata is not None else False,
+            frame=metadata.frame if metadata is not None else "",
+            releasedAt=metadata.released_at.isoformat() if metadata is not None and metadata.released_at else None,
         )
 
 
@@ -273,6 +295,19 @@ def summarise_contributions() -> tuple[list[SourceContribution], dict[str, int],
     return sources, card_count_by_type, total_database_size
 
 
+class PrintingTagStatus(models.TextChoices):
+    """
+    Denormalised cache of `cardpicker.printing_consensus.resolve_printing`'s outcome for a `Card`,
+    kept in lockstep with `Card.inferred_canonical_card` by `resolve_and_persist_printing` - purely so
+    that "which cards still need a human to tag" can be a plain indexed query instead of recomputing
+    consensus for every row.
+    """
+
+    UNRESOLVED = "unresolved", gettext_lazy("Unresolved")
+    RESOLVED = "resolved", gettext_lazy("Resolved")
+    NO_MATCH = "no_match", gettext_lazy("No Match")
+
+
 class Card(models.Model):
     card_type = models.CharField(max_length=20, choices=CardTypes.choices, default=CardTypes.CARD)
     identifier = models.CharField(max_length=200, unique=True)
@@ -295,6 +330,9 @@ class Card(models.Model):
     canonical_artist = models.ForeignKey(to=CanonicalArtist, on_delete=models.CASCADE, blank=True, null=True)
     inferred_canonical_card = models.ForeignKey(
         CanonicalCard, on_delete=models.SET_NULL, blank=True, null=True, related_name="inferred_canonical_card"
+    )
+    printing_tag_status = models.CharField(
+        max_length=10, choices=PrintingTagStatus.choices, default=PrintingTagStatus.UNRESOLVED, db_index=True
     )
     image_hash = models.BigIntegerField()
 
@@ -399,7 +437,9 @@ class CardPrintingTag(models.Model):
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="printing_tags")
     printing = models.ForeignKey(to=CanonicalCard, on_delete=models.CASCADE, null=True, blank=True, related_name="tags")
     is_no_match = models.BooleanField(default=False)
-    session_key = models.CharField(max_length=40)
+    # a client-generated identifier (see `frontend/src/common/anonymousId.ts`), not a real Django
+    # session key - cross-origin frontend/backend means a session cookie never round-trips here.
+    anonymous_id = models.CharField(max_length=40)
     source = models.CharField(max_length=10, choices=CardPrintingTagSource.choices, default=CardPrintingTagSource.USER)
     confidence = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -414,12 +454,12 @@ class CardPrintingTag(models.Model):
                 name="cardprintingtag_printing_xor_no_match",
             ),
             models.UniqueConstraint(
-                fields=["card", "printing", "session_key"],
+                fields=["card", "printing", "anonymous_id"],
                 condition=models.Q(is_no_match=False),
                 name="cardprintingtag_unique_printing_vote",
             ),
             models.UniqueConstraint(
-                fields=["card", "session_key"],
+                fields=["card", "anonymous_id"],
                 condition=models.Q(is_no_match=True),
                 name="cardprintingtag_unique_no_match_vote",
             ),

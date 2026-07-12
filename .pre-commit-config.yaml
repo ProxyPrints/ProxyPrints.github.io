@@ -47,6 +47,7 @@ repos:
             "django-bulk-sync~=3.3.0",
             "django-environ~=0.10.0",
             "django-q2~=1.8.0",
+            "django-ratelimit~=4.1.0",
             "google-api-python-client~=2.86",
             "Levenshtein~=0.27.3",
             "oauth2client~=4.1",

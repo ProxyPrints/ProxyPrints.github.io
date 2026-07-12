@@ -1,0 +1,13 @@
+{
+  "title": "Submit Printing Tag Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "identifier": { "type": "string" },
+    "printingIdentifier": { "type": ["string", "null"] },
+    "isNoMatch": { "type": "boolean" },
+    "anonymousId": { "type": "string" }
+  },
+  "required": ["identifier", "isNoMatch", "anonymousId"],
+  "additionalProperties": false
+}

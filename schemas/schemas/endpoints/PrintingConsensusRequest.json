@@ -1,0 +1,10 @@
+{
+  "title": "Printing Consensus Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "identifier": { "type": "string" }
+  },
+  "required": ["identifier"],
+  "additionalProperties": false
+}

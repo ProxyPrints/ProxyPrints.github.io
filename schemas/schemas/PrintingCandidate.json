@@ -1,0 +1,31 @@
+{
+  "title": "Printing Candidate",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "identifier": { "type": "string" },
+    "canonicalId": { "type": "string" },
+    "expansionCode": { "type": "string" },
+    "expansionName": { "type": "string" },
+    "collectorNumber": { "type": "string" },
+    "artist": { "type": "string" },
+    "smallThumbnailUrl": { "type": "string" },
+    "mediumThumbnailUrl": { "type": "string" },
+    "fullArt": { "type": "boolean" },
+    "frame": { "type": "string" },
+    "releasedAt": { "type": ["string", "null"] }
+  },
+  "required": [
+    "identifier",
+    "canonicalId",
+    "expansionCode",
+    "expansionName",
+    "collectorNumber",
+    "artist",
+    "smallThumbnailUrl",
+    "mediumThumbnailUrl",
+    "fullArt",
+    "frame"
+  ],
+  "additionalProperties": false
+}

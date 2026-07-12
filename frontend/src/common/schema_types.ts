@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, TagsResponse } from "./file";
+//   import { Convert, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, PrintingCandidate, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, VoteTallyEntry, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitPrintingTagRequest, TagsResponse } from "./file";
 //
 //   const campaign = Convert.toCampaign(json);
 //   const canonicalArtist = Convert.toCanonicalArtist(json);
@@ -14,6 +14,7 @@
 //   const importSite = Convert.toImportSite(json);
 //   const language = Convert.toLanguage(json);
 //   const newCardsFirstPage = Convert.toNewCardsFirstPage(json);
+//   const printingCandidate = Convert.toPrintingCandidate(json);
 //   const searchQuery = Convert.toSearchQuery(json);
 //   const searchSettings = Convert.toSearchSettings(json);
 //   const searchTypeSettings = Convert.toSearchTypeSettings(json);
@@ -26,6 +27,7 @@
 //   const supporter = Convert.toSupporter(json);
 //   const supporterTier = Convert.toSupporterTier(json);
 //   const tag = Convert.toTag(json);
+//   const voteTallyEntry = Convert.toVoteTallyEntry(json);
 //   const cardbacksRequest = Convert.toCardbacksRequest(json);
 //   const cardbacksResponse = Convert.toCardbacksResponse(json);
 //   const cardsRequest = Convert.toCardsRequest(json);
@@ -47,9 +49,14 @@
 //   const oldEditorSearchRequest = Convert.toOldEditorSearchRequest(json);
 //   const oldEditorSearchResponse = Convert.toOldEditorSearchResponse(json);
 //   const patreonResponse = Convert.toPatreonResponse(json);
+//   const printingCandidatesRequest = Convert.toPrintingCandidatesRequest(json);
+//   const printingCandidatesResponse = Convert.toPrintingCandidatesResponse(json);
+//   const printingConsensusRequest = Convert.toPrintingConsensusRequest(json);
+//   const printingConsensusResponse = Convert.toPrintingConsensusResponse(json);
 //   const sampleCardsResponse = Convert.toSampleCardsResponse(json);
 //   const searchEngineHealthResponse = Convert.toSearchEngineHealthResponse(json);
 //   const sourcesResponse = Convert.toSourcesResponse(json);
+//   const submitPrintingTagRequest = Convert.toSubmitPrintingTagRequest(json);
 //   const tagsResponse = Convert.toTagsResponse(json);
 //
 // These functions will throw an error if the JSON doesn't
@@ -354,6 +361,45 @@ export interface SupporterTier {
   usd: number;
 }
 
+export interface PrintingCandidatesRequest {
+  identifier: string;
+  query?: null | string;
+}
+
+export interface PrintingCandidatesResponse {
+  results: PrintingCandidate[];
+}
+
+export interface PrintingCandidate {
+  artist: string;
+  canonicalId: string;
+  collectorNumber: string;
+  expansionCode: string;
+  expansionName: string;
+  frame: string;
+  fullArt: boolean;
+  identifier: string;
+  mediumThumbnailUrl: string;
+  releasedAt?: null | string;
+  smallThumbnailUrl: string;
+}
+
+export interface PrintingConsensusRequest {
+  identifier: string;
+}
+
+export interface PrintingConsensusResponse {
+  isNoMatch: boolean;
+  resolvedPrinting?: PrintingCandidate;
+  voteTally: VoteTallyEntry[];
+}
+
+export interface VoteTallyEntry {
+  count: number;
+  isNoMatch: boolean;
+  printing?: PrintingCandidate;
+}
+
 export interface SampleCardsResponse {
   cards: Cards;
   [property: string]: any;
@@ -372,6 +418,13 @@ export interface SearchEngineHealthResponse {
 
 export interface SourcesResponse {
   results: { [key: string]: Source };
+}
+
+export interface SubmitPrintingTagRequest {
+  anonymousId: string;
+  identifier: string;
+  isNoMatch: boolean;
+  printingIdentifier?: null | string;
 }
 
 export interface TagsResponse {
@@ -481,6 +534,14 @@ export class Convert {
     return JSON.stringify(uncast(value, r("NewCardsFirstPage")), null, 2);
   }
 
+  public static toPrintingCandidate(json: string): PrintingCandidate {
+    return cast(JSON.parse(json), r("PrintingCandidate"));
+  }
+
+  public static printingCandidateToJson(value: PrintingCandidate): string {
+    return JSON.stringify(uncast(value, r("PrintingCandidate")), null, 2);
+  }
+
   public static toSearchQuery(json: string): SearchQuery {
     return cast(JSON.parse(json), r("SearchQuery"));
   }
@@ -575,6 +636,14 @@ export class Convert {
 
   public static tagToJson(value: Tag): string {
     return JSON.stringify(uncast(value, r("Tag")), null, 2);
+  }
+
+  public static toVoteTallyEntry(json: string): VoteTallyEntry {
+    return cast(JSON.parse(json), r("VoteTallyEntry"));
+  }
+
+  public static voteTallyEntryToJson(value: VoteTallyEntry): string {
+    return JSON.stringify(uncast(value, r("VoteTallyEntry")), null, 2);
   }
 
   public static toCardbacksRequest(json: string): CardbacksRequest {
@@ -785,6 +854,70 @@ export class Convert {
     return JSON.stringify(uncast(value, r("PatreonResponse")), null, 2);
   }
 
+  public static toPrintingCandidatesRequest(
+    json: string
+  ): PrintingCandidatesRequest {
+    return cast(JSON.parse(json), r("PrintingCandidatesRequest"));
+  }
+
+  public static printingCandidatesRequestToJson(
+    value: PrintingCandidatesRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("PrintingCandidatesRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toPrintingCandidatesResponse(
+    json: string
+  ): PrintingCandidatesResponse {
+    return cast(JSON.parse(json), r("PrintingCandidatesResponse"));
+  }
+
+  public static printingCandidatesResponseToJson(
+    value: PrintingCandidatesResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("PrintingCandidatesResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toPrintingConsensusRequest(
+    json: string
+  ): PrintingConsensusRequest {
+    return cast(JSON.parse(json), r("PrintingConsensusRequest"));
+  }
+
+  public static printingConsensusRequestToJson(
+    value: PrintingConsensusRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("PrintingConsensusRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toPrintingConsensusResponse(
+    json: string
+  ): PrintingConsensusResponse {
+    return cast(JSON.parse(json), r("PrintingConsensusResponse"));
+  }
+
+  public static printingConsensusResponseToJson(
+    value: PrintingConsensusResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("PrintingConsensusResponse")),
+      null,
+      2
+    );
+  }
+
   public static toSampleCardsResponse(json: string): SampleCardsResponse {
     return cast(JSON.parse(json), r("SampleCardsResponse"));
   }
@@ -815,6 +948,22 @@ export class Convert {
 
   public static sourcesResponseToJson(value: SourcesResponse): string {
     return JSON.stringify(uncast(value, r("SourcesResponse")), null, 2);
+  }
+
+  public static toSubmitPrintingTagRequest(
+    json: string
+  ): SubmitPrintingTagRequest {
+    return cast(JSON.parse(json), r("SubmitPrintingTagRequest"));
+  }
+
+  public static submitPrintingTagRequestToJson(
+    value: SubmitPrintingTagRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitPrintingTagRequest")),
+      null,
+      2
+    );
   }
 
   public static toTagsResponse(json: string): TagsResponse {
@@ -1328,6 +1477,61 @@ const typeMap: any = {
     ],
     false
   ),
+  PrintingCandidatesRequest: o(
+    [
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "query", js: "query", typ: u(undefined, u(null, "")) },
+    ],
+    false
+  ),
+  PrintingCandidatesResponse: o(
+    [{ json: "results", js: "results", typ: a(r("PrintingCandidate")) }],
+    false
+  ),
+  PrintingCandidate: o(
+    [
+      { json: "artist", js: "artist", typ: "" },
+      { json: "canonicalId", js: "canonicalId", typ: "" },
+      { json: "collectorNumber", js: "collectorNumber", typ: "" },
+      { json: "expansionCode", js: "expansionCode", typ: "" },
+      { json: "expansionName", js: "expansionName", typ: "" },
+      { json: "frame", js: "frame", typ: "" },
+      { json: "fullArt", js: "fullArt", typ: true },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
+      { json: "releasedAt", js: "releasedAt", typ: u(undefined, u(null, "")) },
+      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
+    ],
+    false
+  ),
+  PrintingConsensusRequest: o(
+    [{ json: "identifier", js: "identifier", typ: "" }],
+    false
+  ),
+  PrintingConsensusResponse: o(
+    [
+      { json: "isNoMatch", js: "isNoMatch", typ: true },
+      {
+        json: "resolvedPrinting",
+        js: "resolvedPrinting",
+        typ: u(undefined, r("PrintingCandidate")),
+      },
+      { json: "voteTally", js: "voteTally", typ: a(r("VoteTallyEntry")) },
+    ],
+    false
+  ),
+  VoteTallyEntry: o(
+    [
+      { json: "count", js: "count", typ: 0 },
+      { json: "isNoMatch", js: "isNoMatch", typ: true },
+      {
+        json: "printing",
+        js: "printing",
+        typ: u(undefined, r("PrintingCandidate")),
+      },
+    ],
+    false
+  ),
   SampleCardsResponse: o(
     [{ json: "cards", js: "cards", typ: r("Cards") }],
     "any"
@@ -1346,6 +1550,19 @@ const typeMap: any = {
   ),
   SourcesResponse: o(
     [{ json: "results", js: "results", typ: m(r("Source")) }],
+    false
+  ),
+  SubmitPrintingTagRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "isNoMatch", js: "isNoMatch", typ: true },
+      {
+        json: "printingIdentifier",
+        js: "printingIdentifier",
+        typ: u(undefined, u(null, "")),
+      },
+    ],
     false
   ),
   TagsResponse: o([{ json: "tags", js: "tags", typ: a(r("Tag")) }], false),

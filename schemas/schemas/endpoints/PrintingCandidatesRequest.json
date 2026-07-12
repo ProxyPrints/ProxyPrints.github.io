@@ -1,0 +1,11 @@
+{
+  "title": "Printing Candidates Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "identifier": { "type": "string" },
+    "query": { "type": ["string", "null"] }
+  },
+  "required": ["identifier"],
+  "additionalProperties": false
+}

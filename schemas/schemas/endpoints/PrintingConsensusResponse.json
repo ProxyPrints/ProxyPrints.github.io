@@ -1,0 +1,15 @@
+{
+  "title": "Printing Consensus Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "resolvedPrinting": { "$ref": "../PrintingCandidate.json" },
+    "isNoMatch": { "type": "boolean" },
+    "voteTally": {
+      "type": "array",
+      "items": { "$ref": "../VoteTallyEntry.json" }
+    }
+  },
+  "required": ["isNoMatch", "voteTally"],
+  "additionalProperties": false
+}

@@ -5,13 +5,15 @@ import mimetypes
 from collections import defaultdict
 from pathlib import Path
 from random import sample
-from typing import Any, Callable, TypeVar, Union, cast
+from typing import Any, Callable, Literal, TypeVar, Union, cast
 
 import pycountry
+from django_ratelimit.decorators import ratelimit
 from elasticsearch_dsl.index import Index
 from pydantic import ValidationError
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from django.http import (
     FileResponse,
@@ -32,7 +34,22 @@ from cardpicker.constants import (
 from cardpicker.documents import CardSearch
 from cardpicker.integrations.integrations import get_configured_game_integration
 from cardpicker.integrations.patreon import get_patreon_campaign_details, get_patrons
-from cardpicker.models import Card, CardTypes, DFCPair, Source, summarise_contributions
+from cardpicker.models import (
+    CanonicalCard,
+    Card,
+    CardPrintingTag,
+    CardPrintingTagSource,
+    CardTypes,
+    DFCPair,
+    Source,
+    summarise_contributions,
+)
+from cardpicker.printing_consensus import (
+    NO_MATCH,
+    get_vote_tally,
+    resolve_and_persist_printing,
+    resolve_printing,
+)
 from cardpicker.schema_types import CardbacksRequest, CardbacksResponse
 from cardpicker.schema_types import Cards as SampleCards
 from cardpicker.schema_types import (
@@ -60,11 +77,17 @@ from cardpicker.schema_types import (
     OldEditorSearchResponse,
     Patreon,
     PatreonResponse,
+    PrintingCandidatesRequest,
+    PrintingCandidatesResponse,
+    PrintingConsensusRequest,
+    PrintingConsensusResponse,
     SampleCardsResponse,
     SearchEngineHealthResponse,
     SortBy,
     SourcesResponse,
+    SubmitPrintingTagRequest,
     TagsResponse,
+    VoteTallyEntry,
 )
 from cardpicker.search.search_functions import (
     SearchExceptions,
@@ -602,3 +625,149 @@ def get_local_file_image(request: HttpRequest) -> HttpResponseBase:
     response = FileResponse(resolved_path.open("rb"), content_type=content_type or "application/octet-stream")
     response["Cache-Control"] = "public, max-age=3600"
     return response
+
+
+def _get_card_or_400(identifier: str) -> Card:
+    try:
+        return Card.objects.get(identifier=identifier)
+    except Card.DoesNotExist:
+        raise BadRequestException(f"No card found with identifier {identifier!r}.")
+
+
+def _build_printing_consensus_response(
+    card: Card, resolved: CanonicalCard | Literal["NO_MATCH"] | None
+) -> PrintingConsensusResponse:
+    return PrintingConsensusResponse(
+        resolvedPrinting=resolved.serialise_as_printing_candidate() if isinstance(resolved, CanonicalCard) else None,
+        isNoMatch=resolved == NO_MATCH,
+        voteTally=[
+            VoteTallyEntry(
+                printing=entry["printing"].serialise_as_printing_candidate() if entry["printing"] else None,
+                isNoMatch=entry["is_no_match"],
+                count=entry["count"],
+            )
+            for entry in get_vote_tally(card)
+        ],
+    )
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def post_printing_candidates(request: HttpRequest) -> HttpResponse:
+    """
+    Return candidate printings for a card to be tagged against: if the card already has a
+    linked/inferred printing, defaults to every printing of that same Magic card (same
+    `canonical_id`/oracle_id); otherwise (or if a search `query` is given) searches
+    `CanonicalCard` by name instead.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = PrintingCandidatesRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+
+    candidates_queryset = CanonicalCard.objects.select_related("expansion", "artist", "printing_metadata")
+    linked = card.canonical_card or card.inferred_canonical_card
+    if req.query:
+        candidates = candidates_queryset.filter(name__icontains=req.query)[:50]
+    elif linked is not None:
+        candidates = candidates_queryset.filter(canonical_id=linked.canonical_id)
+    else:
+        candidates = candidates_queryset.filter(name__icontains=card.name)[:50]
+
+    return JsonResponse(
+        PrintingCandidatesResponse(
+            results=[candidate.serialise_as_printing_candidate() for candidate in candidates]
+        ).model_dump()
+    )
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def post_printing_consensus(request: HttpRequest) -> HttpResponse:
+    """
+    Return the currently resolved printing-tag consensus for a card, plus a plain vote-count
+    breakdown, so a voter can see what's already been said before confirming or disputing it.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = PrintingConsensusRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    return JsonResponse(_build_printing_consensus_response(card, resolve_printing(card)).model_dump())
+
+
+def _printing_tag_rate_limit_key(group: str, request: HttpRequest) -> str:
+    # `anonymousId` lives in the request body (see SubmitPrintingTagRequest), not a header -
+    # `request.body` is safe to read here too; Django caches it, so the view re-reading it
+    # afterwards to build `SubmitPrintingTagRequest` doesn't re-consume a stream.
+    try:
+        anonymous_id = json.loads(request.body).get("anonymousId")
+    except (ValueError, AttributeError):
+        anonymous_id = None
+    return anonymous_id if anonymous_id else request.META.get("REMOTE_ADDR", "unknown")
+
+
+def _printing_tag_rate_limit_rate(group: str, request: HttpRequest) -> str:
+    # a plain string here would be bound once at import time, making the rate impossible to
+    # override in tests (or via runtime settings changes) - a callable is re-evaluated per request.
+    rate: str = settings.PRINTING_TAG_SUBMISSION_RATE
+    return rate
+
+
+@csrf_exempt
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_submit_printing_tag(request: HttpRequest) -> HttpResponse:
+    """
+    Submit a vote that a card depicts a specific printing (or definitively depicts none), from
+    the client-generated anonymous ID in the request body (see frontend/src/common/anonymousId.ts
+    - this is not a real Django session, which wouldn't round-trip cross-origin here anyway).
+    Replaces any existing vote from the same (card, anonymous ID) pair - a person changing their
+    mind updates their vote rather than erroring on the unique constraint - then immediately
+    recomputes and persists the consensus for this card.
+
+    Rate-limited per anonymous ID (IP as a fallback) via PRINTING_TAG_SUBMISSION_RATE. Note this
+    currently relies on Django's default (in-process) cache, which is only correctly global across
+    requests because this app is deployed as a single gunicorn worker process - revisit if that
+    ever changes, since a per-worker cache would silently multiply the effective rate limit.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many printing tag submissions - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    req = SubmitPrintingTagRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+
+    printing = None
+    if not req.isNoMatch:
+        if not req.printingIdentifier:
+            raise BadRequestException("printingIdentifier is required unless isNoMatch is set.")
+        try:
+            printing = CanonicalCard.objects.get(identifier=req.printingIdentifier)
+        except CanonicalCard.DoesNotExist:
+            raise BadRequestException(f"No printing found with identifier {req.printingIdentifier!r}.")
+
+    with transaction.atomic():
+        CardPrintingTag.objects.filter(card=card, anonymous_id=req.anonymousId).delete()
+        CardPrintingTag.objects.create(
+            card=card,
+            printing=printing,
+            is_no_match=req.isNoMatch,
+            anonymous_id=req.anonymousId,
+            source=CardPrintingTagSource.USER,
+        )
+        resolved = resolve_and_persist_printing(card)
+
+    return JsonResponse(_build_printing_consensus_response(card, resolved).model_dump())

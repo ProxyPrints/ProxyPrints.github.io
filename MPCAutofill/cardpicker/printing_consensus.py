@@ -3,7 +3,12 @@ from typing import Literal, TypedDict
 
 from django.conf import settings
 
-from cardpicker.models import CanonicalCard, Card, CardPrintingTagSource
+from cardpicker.models import (
+    CanonicalCard,
+    Card,
+    CardPrintingTagSource,
+    PrintingTagStatus,
+)
 
 NO_MATCH: Literal["NO_MATCH"] = "NO_MATCH"
 
@@ -67,3 +72,50 @@ def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
     ):
         return NO_MATCH if winning_key == NO_MATCH else winner["printing"]
     return None
+
+
+def resolve_and_persist_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
+    """
+    Runs `resolve_printing(card)` and writes the outcome onto `card.inferred_canonical_card`
+    and `card.printing_tag_status` together, so that `Card.serialise()` (which already reads
+    `inferred_canonical_card`) and the printing-tag review queue (which filters on the
+    indexed `printing_tag_status`, rather than recomputing consensus for every card) both
+    stay in sync with the latest votes. Intended to be called synchronously right after a
+    vote is submitted for `card` - cheap, since it only touches this one card's own votes.
+    Returns the same outcome `resolve_printing` returned, so callers don't need to
+    recompute it again immediately afterwards.
+    """
+    result = resolve_printing(card)
+    if result is None:
+        card.inferred_canonical_card = None
+        card.printing_tag_status = PrintingTagStatus.UNRESOLVED
+    elif result == NO_MATCH:
+        card.inferred_canonical_card = None
+        card.printing_tag_status = PrintingTagStatus.NO_MATCH
+    else:
+        card.inferred_canonical_card = result
+        card.printing_tag_status = PrintingTagStatus.RESOLVED
+    card.save(update_fields=["inferred_canonical_card", "printing_tag_status"])
+    return result
+
+
+class VoteTallyEntry(TypedDict):
+    printing: CanonicalCard | None
+    is_no_match: bool
+    count: int
+
+
+def get_vote_tally(card: Card) -> list[VoteTallyEntry]:
+    """
+    Returns a plain, unweighted per-outcome vote count for `card` - e.g. "3 votes for
+    Ravnica Allegiance #45, 1 for no match" - for showing a voter what's been said so far
+    before they confirm or dispute it. Deliberately doesn't weight by source the way
+    `resolve_printing` does: this is for display, not for deciding the outcome.
+    """
+    tally: dict[int | Literal["NO_MATCH"] | None, VoteTallyEntry] = {}
+    for vote in card.printing_tags.all():
+        key: int | Literal["NO_MATCH"] | None = NO_MATCH if vote.is_no_match else vote.printing_id
+        if key not in tally:
+            tally[key] = VoteTallyEntry(printing=vote.printing, is_no_match=vote.is_no_match, count=0)
+        tally[key]["count"] += 1
+    return sorted(tally.values(), key=lambda entry: entry["count"], reverse=True)

@@ -134,7 +134,7 @@ class ContestedCardFilter(admin.SimpleListFilter):
 
 @admin.register(CardPrintingTag)
 class AdminCardPrintingTag(admin.ModelAdmin[CardPrintingTag]):
-    list_display = ("card", "printing", "is_no_match", "source", "confidence", "session_key", "created_at")
+    list_display = ("card", "printing", "is_no_match", "source", "confidence", "anonymous_id", "created_at")
     list_filter = ("source", "is_no_match", ContestedCardFilter)
     search_fields = ("card__name",)
     raw_id_fields = ["card", "printing"]
