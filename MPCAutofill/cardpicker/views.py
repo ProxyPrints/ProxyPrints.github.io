@@ -47,6 +47,7 @@ from cardpicker.models import (
     Source,
     summarise_contributions,
 )
+from cardpicker.printing_candidates import get_ranked_printing_candidates
 from cardpicker.printing_consensus import (
     NO_MATCH,
     get_vote_tally,
@@ -694,10 +695,8 @@ def _build_printing_consensus_response(
 @ErrorWrappers.to_json
 def post_printing_candidates(request: HttpRequest) -> HttpResponse:
     """
-    Return candidate printings for a card to be tagged against: if the card already has a
-    linked/inferred printing, defaults to every printing of that same Magic card (same
-    `canonical_id`/oracle_id); otherwise (or if a search `query` is given) searches
-    `CanonicalCard` by name instead.
+    Return candidate printings for a card to be tagged against, ranked so the most likely
+    correct match comes first - see `get_ranked_printing_candidates` for the ranking rules.
     """
 
     if request.method != "POST":
@@ -705,15 +704,7 @@ def post_printing_candidates(request: HttpRequest) -> HttpResponse:
 
     req = PrintingCandidatesRequest.model_validate(json.loads(request.body))
     card = _get_card_or_400(req.identifier)
-
-    candidates_queryset = CanonicalCard.objects.select_related("expansion", "artist", "printing_metadata")
-    linked = card.canonical_card or card.inferred_canonical_card
-    if req.query:
-        candidates = candidates_queryset.filter(name__icontains=req.query)[:50]
-    elif linked is not None:
-        candidates = candidates_queryset.filter(canonical_id=linked.canonical_id)
-    else:
-        candidates = candidates_queryset.filter(name__icontains=card.name)[:50]
+    candidates = get_ranked_printing_candidates(card, req.query)
 
     return JsonResponse(
         PrintingCandidatesResponse(

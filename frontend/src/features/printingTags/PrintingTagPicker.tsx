@@ -15,6 +15,8 @@ import React, { useEffect, useState } from "react";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Form from "react-bootstrap/Form";
+import OverlayTrigger from "react-bootstrap/OverlayTrigger";
+import Popover from "react-bootstrap/Popover";
 import Row from "react-bootstrap/Row";
 
 import { getOrCreateAnonymousId } from "@/common/cookies";
@@ -148,30 +150,49 @@ export function PrintingTagPicker({ cardIdentifier }: PrintingTagPickerProps) {
       ) : (
         <Row className="g-2 mt-1" xs={3} md={4}>
           {candidates.map((candidate) => (
-            <Col key={candidate.identifier}>
-              <Button
-                variant={
-                  consensus?.resolvedPrinting?.identifier ===
-                  candidate.identifier
-                    ? "success"
-                    : "outline-secondary"
-                }
-                className="w-100 p-1"
-                disabled={submitting}
-                onClick={() => submit(candidate.identifier, false)}
-              >
-                <img
-                  src={candidate.smallThumbnailUrl}
-                  alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
-                  style={{ width: "100%" }}
-                />
-                <div>
-                  {candidate.expansionCode.toUpperCase()}{" "}
-                  {candidate.collectorNumber}
-                </div>
-                <div className="text-muted small">{candidate.artist}</div>
-              </Button>
-            </Col>
+            <OverlayTrigger
+              key={candidate.identifier}
+              placement="auto"
+              delay={{ show: 300, hide: 0 }}
+              overlay={
+                <Popover
+                  id={`printing-candidate-preview-${candidate.identifier}`}
+                >
+                  <Popover.Body className="p-1">
+                    <img
+                      src={candidate.mediumThumbnailUrl}
+                      alt={`${candidate.expansionCode} ${candidate.collectorNumber} preview`}
+                      style={{ maxWidth: "240px", display: "block" }}
+                    />
+                  </Popover.Body>
+                </Popover>
+              }
+            >
+              <Col>
+                <Button
+                  variant={
+                    consensus?.resolvedPrinting?.identifier ===
+                    candidate.identifier
+                      ? "success"
+                      : "outline-secondary"
+                  }
+                  className="w-100 p-1"
+                  disabled={submitting}
+                  onClick={() => submit(candidate.identifier, false)}
+                >
+                  <img
+                    src={candidate.smallThumbnailUrl}
+                    alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                    style={{ width: "100%" }}
+                  />
+                  <div>
+                    {candidate.expansionCode.toUpperCase()}{" "}
+                    {candidate.collectorNumber}
+                  </div>
+                  <div className="text-muted small">{candidate.artist}</div>
+                </Button>
+              </Col>
+            </OverlayTrigger>
           ))}
         </Row>
       )}
