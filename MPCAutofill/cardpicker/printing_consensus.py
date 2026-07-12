@@ -10,15 +10,13 @@ from cardpicker.models import (
     PrintingTagStatus,
     VoteSource,
 )
-from cardpicker.vote_consensus import VoteTuple, resolve_weighted_consensus
+from cardpicker.vote_consensus import (
+    _SOURCE_WEIGHTS,
+    VoteTuple,
+    resolve_weighted_consensus,
+)
 
 NO_MATCH: Literal["NO_MATCH"] = "NO_MATCH"
-
-_SOURCE_WEIGHTS: dict[str, float] = {
-    VoteSource.USER: 1.0,
-    VoteSource.ADMIN: settings.PRINTING_TAG_ADMIN_WEIGHT,
-    VoteSource.AI: settings.PRINTING_TAG_AI_WEIGHT,
-}
 
 
 def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
@@ -48,7 +46,11 @@ def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
             key = vote.printing_id
             printings_by_id[vote.printing_id] = vote.printing
         vote_tuples.append(
-            VoteTuple(outcome_key=key, weight=_SOURCE_WEIGHTS[vote.source], is_ai=vote.source == VoteSource.AI)
+            VoteTuple(
+                outcome_key=key,
+                weight=_SOURCE_WEIGHTS[vote.source],
+                is_human_backed=vote.source != VoteSource.AI,
+            )
         )
 
     winning_key = resolve_weighted_consensus(

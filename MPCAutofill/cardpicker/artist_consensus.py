@@ -3,17 +3,13 @@ from typing import Literal, TypedDict
 from django.conf import settings
 
 from cardpicker.models import ArtistVoteStatus, CanonicalArtist, Card, VoteSource
-from cardpicker.vote_consensus import VoteTuple, resolve_weighted_consensus
+from cardpicker.vote_consensus import (
+    _SOURCE_WEIGHTS,
+    VoteTuple,
+    resolve_weighted_consensus,
+)
 
 UNKNOWN: Literal["UNKNOWN"] = "UNKNOWN"
-
-# reuses the printing-tag weight/threshold settings rather than introducing a parallel set -
-# see the plan note in the models: per-vote-type overrides are YAGNI until a real need appears.
-_SOURCE_WEIGHTS: dict[str, float] = {
-    VoteSource.USER: 1.0,
-    VoteSource.ADMIN: settings.PRINTING_TAG_ADMIN_WEIGHT,
-    VoteSource.AI: settings.PRINTING_TAG_AI_WEIGHT,
-}
 
 
 def resolve_artist(card: Card) -> CanonicalArtist | Literal["UNKNOWN"] | None:
@@ -45,7 +41,11 @@ def resolve_artist(card: Card) -> CanonicalArtist | Literal["UNKNOWN"] | None:
             key = vote.artist_id
             artists_by_id[vote.artist_id] = vote.artist
         vote_tuples.append(
-            VoteTuple(outcome_key=key, weight=_SOURCE_WEIGHTS[vote.source], is_ai=vote.source == VoteSource.AI)
+            VoteTuple(
+                outcome_key=key,
+                weight=_SOURCE_WEIGHTS[vote.source],
+                is_human_backed=vote.source != VoteSource.AI,
+            )
         )
 
     winning_key = resolve_weighted_consensus(

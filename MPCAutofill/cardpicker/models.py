@@ -464,6 +464,7 @@ class VoteSource(models.TextChoices):
     USER = "user", gettext_lazy("User")
     ADMIN = "admin", gettext_lazy("Admin")
     AI = "ai", gettext_lazy("AI")
+    FEDERATED = "federated", gettext_lazy("Federated")
 
 
 class AbstractWeightedVote(models.Model):
@@ -482,6 +483,10 @@ class AbstractWeightedVote(models.Model):
     source = models.CharField(max_length=10, choices=VoteSource.choices, default=VoteSource.USER)
     confidence = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # federation-readiness stub (see docs/federation-v1.md) - no import path sets this yet.
+    peer = models.CharField(
+        max_length=64, null=True, blank=True, help_text="Federation peer name; set only when source='federated'"
+    )
 
     class Meta:
         abstract = True

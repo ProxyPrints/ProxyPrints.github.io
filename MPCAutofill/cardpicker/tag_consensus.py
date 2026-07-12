@@ -4,15 +4,11 @@ from typing import Iterable, TypedDict
 from django.conf import settings
 
 from cardpicker.models import Card, CardTagVote, Tag, VotePolarity, VoteSource
-from cardpicker.vote_consensus import VoteTuple, resolve_weighted_consensus
-
-# reuses the printing-tag weight/threshold settings rather than introducing a parallel set -
-# see the plan note in the models: per-vote-type overrides are YAGNI until a real need appears.
-_SOURCE_WEIGHTS: dict[str, float] = {
-    VoteSource.USER: 1.0,
-    VoteSource.ADMIN: settings.PRINTING_TAG_ADMIN_WEIGHT,
-    VoteSource.AI: settings.PRINTING_TAG_AI_WEIGHT,
-}
+from cardpicker.vote_consensus import (
+    _SOURCE_WEIGHTS,
+    VoteTuple,
+    resolve_weighted_consensus,
+)
 
 
 def resolve_tag(card: Card, tag: Tag) -> int | None:
@@ -27,7 +23,11 @@ def resolve_tag(card: Card, tag: Tag) -> int | None:
     if not votes:
         return None
     vote_tuples = [
-        VoteTuple(outcome_key=vote.polarity, weight=_SOURCE_WEIGHTS[vote.source], is_ai=vote.source == VoteSource.AI)
+        VoteTuple(
+            outcome_key=vote.polarity,
+            weight=_SOURCE_WEIGHTS[vote.source],
+            is_human_backed=vote.source != VoteSource.AI,
+        )
         for vote in votes
     ]
     resolved = resolve_weighted_consensus(
@@ -114,7 +114,7 @@ def get_resolved_tag_overlay(card_ids: Iterable[int]) -> dict[int, dict[str, int
             VoteTuple(
                 outcome_key=row["polarity"],
                 weight=_SOURCE_WEIGHTS[row["source"]],
-                is_ai=row["source"] == VoteSource.AI,
+                is_human_backed=row["source"] != VoteSource.AI,
             )
         )
 
