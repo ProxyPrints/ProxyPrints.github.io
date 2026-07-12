@@ -180,8 +180,10 @@ def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
             | (incoming[identifier].name != existing[identifier].name)
             # or if the canonical card this card is associated with has changed...
             | (incoming[identifier].canonical_card_id != existing[identifier].canonical_card_id)
-            # or if the canonical artist this card is associated with has changed.
+            # or if the canonical artist this card is associated with has changed...
             | (incoming[identifier].canonical_artist_id != existing[identifier].canonical_artist_id)
+            # or if the expansion hint has changed.
+            | (incoming[identifier].expansion_hint != existing[identifier].expansion_hint)
         ):
             # record an update for this card
             incoming[identifier].pk = existing[identifier].pk  # this must be explicitly set for bulk_update.
@@ -214,6 +216,7 @@ def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
                     "language",
                     "canonical_card",
                     "canonical_artist",
+                    "expansion_hint",
                 ],
                 batch_size=1000,
             )

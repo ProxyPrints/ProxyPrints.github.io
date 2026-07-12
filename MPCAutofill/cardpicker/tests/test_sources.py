@@ -465,6 +465,47 @@ class TestUpdateDatabase:
             for result in CardSearch().search().scan()
         } == set(incoming_cards)
 
+    @freezegun.freeze_time(DEFAULT_DATE)
+    def test_bulk_sync_objects_persists_expansion_hint_on_update(self, django_settings, elasticsearch):
+        """
+        Regression test for a real bug found via a live production re-scan:
+        `expansion_hint` was added to `Card` for Stage 3 (set-code ranking hints), but
+        `bulk_sync_objects`'s `bulk_update` field whitelist didn't include it, so a
+        freshly-computed `expansion_hint` was silently never persisted for any card that
+        already existed from a prior scan - only brand-new cards (via `bulk_create`, which
+        isn't field-limited) ever picked it up. This also needs `expansion_hint` in the
+        update-detection condition, since a card whose *only* change is its expansion_hint
+        must still be recognised as needing an update.
+        """
+        source = factories.SourceFactory()
+        factories.CardFactory(
+            identifier="existing",
+            searchq="mountain",
+            date_created=make_aware(DEFAULT_DATE),
+            date_modified=make_aware(DEFAULT_DATE),
+            source=source,
+            expansion_hint="",
+        )
+        management.call_command("search_index", "--rebuild", "-f")
+
+        bulk_sync_objects(
+            source=source,
+            cards=[
+                Card(
+                    identifier="existing",
+                    searchq="mountain",
+                    date_created=make_aware(DEFAULT_DATE),
+                    date_modified=make_aware(DEFAULT_DATE),
+                    source=source,
+                    expansion_hint="mh3",
+                    size=0,
+                    image_hash=0,
+                )
+            ],
+        )
+
+        assert Card.objects.get(identifier="existing").expansion_hint == "mh3"
+
     @pytest.mark.parametrize(
         "canonical_cards, new_card, expected_expansion, expected_collector_number",
         [
