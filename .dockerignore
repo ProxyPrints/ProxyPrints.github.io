@@ -1,0 +1,20 @@
+# The Docker build context for every service in docker-compose.prod.yml is the repo root
+# (`context: ..`). django/worker only ever COPY MPCAutofill/ and docker/; nginx additionally COPYs
+# frontend/ (but runs `npm install` fresh inside the build stage, never frontend/node_modules from the
+# host). Everything below is unused by any of the three Dockerfiles, but was still being uploaded to
+# the Docker daemon on every single build - node_modules alone is well over a gigabyte.
+.git
+frontend/node_modules
+frontend/.next
+frontend/out
+frontend/test-results
+frontend/playwright-report
+frontend/playwright/.auth
+image-cdn/node_modules
+desktop-tool
+github-release-reverse-proxy
+cloudflare-static-site
+schemas
+.mypy_cache
+.ruff_cache
+test-results
