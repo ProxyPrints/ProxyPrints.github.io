@@ -80,7 +80,20 @@ function randomFlavorText(): string {
   return FLAVOR_TEXT[Math.floor(Math.random() * FLAVOR_TEXT.length)];
 }
 
-export function PrintingTagQueue() {
+interface PrintingTagQueueProps {
+  // attached to the subject card's wrapper so the page-level starburst background (see
+  // printingQueue.tsx) can measure and stay centred on it
+  cardAnchorRef?: (el: HTMLDivElement | null) => void;
+}
+
+// Real Magic card ratio (63mm x 88mm), matching the print-ready `.ratio-7x5` convention
+// already used elsewhere (custom.css) - reserves each thumbnail's box up front via CSS
+// alone, so an image resolving its intrinsic size late over the network can't reflow the
+// page (the starburst background is centred on the card via a live measurement, so any
+// unreserved reflow here would visibly drag it out of registration).
+const CARD_ASPECT_RATIO = "63 / 88";
+
+export function PrintingTagQueue({ cardAnchorRef }: PrintingTagQueueProps) {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
 
@@ -241,22 +254,24 @@ export function PrintingTagQueue() {
         <div data-testid="planeswalker-queue-current-card">
           <Row className="g-4">
             <Col xs={12} md={4}>
-              <RevealWrapper>
-                <img
-                  src={currentCard.mediumThumbnailUrl}
-                  alt={currentCard.name}
-                  style={{ width: "100%" }}
-                />
-                {!revealed && (
-                  <RevealOverlay
-                    data-testid="planeswalker-queue-reveal-overlay"
-                    onAnimationEnd={() => setRevealed(true)}
-                  >
-                    ?
-                  </RevealOverlay>
-                )}
-              </RevealWrapper>
-              <div className="text-center mt-1">{currentCard.name}</div>
+              <div ref={cardAnchorRef}>
+                <RevealWrapper>
+                  <img
+                    src={currentCard.mediumThumbnailUrl}
+                    alt={currentCard.name}
+                    style={{ width: "100%", aspectRatio: CARD_ASPECT_RATIO }}
+                  />
+                  {!revealed && (
+                    <RevealOverlay
+                      data-testid="planeswalker-queue-reveal-overlay"
+                      onAnimationEnd={() => setRevealed(true)}
+                    >
+                      ?
+                    </RevealOverlay>
+                  )}
+                </RevealWrapper>
+                <div className="text-center mt-1">{currentCard.name}</div>
+              </div>
             </Col>
             <Col xs={12} md={8}>
               {!revealed || loadingCard ? (
@@ -303,7 +318,10 @@ export function PrintingTagQueue() {
                         <img
                           src="/blank.png"
                           alt="None of these match"
-                          style={{ width: "100%" }}
+                          style={{
+                            width: "100%",
+                            aspectRatio: CARD_ASPECT_RATIO,
+                          }}
                         />
                         <div>No match</div>
                       </Button>
@@ -324,7 +342,10 @@ export function PrintingTagQueue() {
                           <img
                             src={candidate.mediumThumbnailUrl}
                             alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
-                            style={{ width: "100%" }}
+                            style={{
+                              width: "100%",
+                              aspectRatio: CARD_ASPECT_RATIO,
+                            }}
                           />
                           <div>
                             {candidate.expansionCode.toUpperCase()}{" "}
