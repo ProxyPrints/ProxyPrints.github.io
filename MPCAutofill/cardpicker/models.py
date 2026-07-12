@@ -106,6 +106,31 @@ class CanonicalCard(models.Model):
         )
 
 
+class CanonicalPrintingMetadata(models.Model):
+    """
+    Additive sidecar holding Scryfall printing-level fields not already captured by
+    `CanonicalCard` (which already stores scryfall_id/oracle_id/set/collector_number/
+    artist/image data via its `identifier`/`canonical_id`/`expansion`/`collector_number`
+    fields). One row per `CanonicalCard`, populated by `import_scryfall_printing_metadata`.
+    """
+
+    canonical_card = models.OneToOneField(
+        to=CanonicalCard, on_delete=models.CASCADE, primary_key=True, related_name="printing_metadata"
+    )
+    full_art = models.BooleanField(default=False)
+    border_color = models.CharField(max_length=20, blank=True)
+    frame = models.CharField(max_length=10, blank=True)
+    frame_effects = models.JSONField(default=list, blank=True)
+    promo_types = models.JSONField(default=list, blank=True)
+    edhrec_rank = models.IntegerField(null=True, blank=True)
+    printings_count = models.IntegerField(default=0)
+    released_at = models.DateField(null=True, blank=True)
+    lang = models.CharField(max_length=5, default="en")
+
+    def __str__(self) -> str:
+        return f"Printing metadata for {self.canonical_card}"
+
+
 class Source(models.Model):
     key = models.CharField(max_length=50, unique=True)  # must be a valid HTML id
     user = models.ForeignKey(to=User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -355,6 +380,54 @@ class Card(models.Model):
 
     class Meta:
         ordering = ["-priority"]
+
+
+class CardPrintingTagSource(models.TextChoices):
+    USER = "user", gettext_lazy("User")
+    ADMIN = "admin", gettext_lazy("Admin")
+    AI = "ai", gettext_lazy("AI")
+
+
+class CardPrintingTag(models.Model):
+    """
+    A vote that a given `Card` (an image in this fork's catalogue) depicts a specific
+    Scryfall printing (`CanonicalCard`), or definitively depicts no known printing
+    (`is_no_match=True`). See `cardpicker.printing_consensus.resolve_printing` for how
+    these votes are reconciled into a single resolved printing per card.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="printing_tags")
+    printing = models.ForeignKey(to=CanonicalCard, on_delete=models.CASCADE, null=True, blank=True, related_name="tags")
+    is_no_match = models.BooleanField(default=False)
+    session_key = models.CharField(max_length=40)
+    source = models.CharField(max_length=10, choices=CardPrintingTagSource.choices, default=CardPrintingTagSource.USER)
+    confidence = models.FloatField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(printing__isnull=False, is_no_match=False)
+                    | models.Q(printing__isnull=True, is_no_match=True)
+                ),
+                name="cardprintingtag_printing_xor_no_match",
+            ),
+            models.UniqueConstraint(
+                fields=["card", "printing", "session_key"],
+                condition=models.Q(is_no_match=False),
+                name="cardprintingtag_unique_printing_vote",
+            ),
+            models.UniqueConstraint(
+                fields=["card", "session_key"],
+                condition=models.Q(is_no_match=True),
+                name="cardprintingtag_unique_no_match_vote",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        outcome = "NO MATCH" if self.is_no_match else str(self.printing)
+        return f"[{self.source}] {self.card.name} -> {outcome}"
 
 
 class Tag(models.Model):
