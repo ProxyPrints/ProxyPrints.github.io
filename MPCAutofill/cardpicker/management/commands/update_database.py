@@ -10,10 +10,12 @@ from cardpicker.utils import log_hours_minutes_seconds_elapsed
 
 
 class Command(BaseCommand):
-    help = "You may specify one of the following drives: " + ", ".join(Source.objects.values_list("key", flat=True))
+    help = "You may specify one of the following sources: " + ", ".join(Source.objects.values_list("key", flat=True))
 
     def add_arguments(self, parser) -> None:  # type: ignore
-        parser.add_argument("-d", "--drive", type=str, help="Only update a specific drive")
+        parser.add_argument(
+            "-d", "--drive", type=str, help="Only update a specific source (of any source type, not just drives)"
+        )
 
     def handle(self, *args: Any, **kwargs: str) -> None:
         if not ping_elasticsearch():

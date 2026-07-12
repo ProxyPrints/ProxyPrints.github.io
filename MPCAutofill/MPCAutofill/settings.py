@@ -40,6 +40,10 @@ DEBUG = env("DJANGO_DEBUG", default=False)
 # IP or Domain
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
+# This server's own public URL, used to build image URLs for LOCAL_FILE sources (the frontend can only
+# load images by URL, so images on disk are served back out through this server's own `get_local_file_image` view).
+LOCAL_FILE_SOURCE_BASE_URL = env("LOCAL_FILE_SOURCE_BASE_URL", default="http://localhost:8000")
+
 # Unique site information
 GTAG = env("GTAG", default="")  # Google Analytics
 SITE_NAME = env("SITE_NAME", default="MPC Autofill")
