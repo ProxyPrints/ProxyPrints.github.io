@@ -359,6 +359,23 @@ class TestGetPrintingTagQueue:
         assert body["hits"] == 1
         assert [card["identifier"] for card in body["cards"]] == [unresolved.identifier]
 
+    def test_contested_cards_are_returned_first(self, client, django_settings):
+        # `contested` is created *before* `uncontested`, so a plain "-date_created" ordering
+        # (with no regard for contested status) would put `uncontested` first - proving that
+        # the contested-first behaviour, not incidental recency, drives this ordering.
+        contested = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        printing_a = CanonicalCardFactory()
+        printing_b = CanonicalCardFactory()
+        CardPrintingTagFactory(card=contested, printing=printing_a)
+        CardPrintingTagFactory(card=contested, printing=printing_b)
+        uncontested = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+
+        response = client.get(reverse(views.get_printing_tag_queue))
+
+        assert response.status_code == 200
+        identifiers = [card["identifier"] for card in response.json()["cards"]]
+        assert identifiers == [contested.identifier, uncontested.identifier]
+
     def test_invalid_page_is_a_bad_request(self, client, django_settings):
         CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
 

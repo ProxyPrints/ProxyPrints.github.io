@@ -2,10 +2,12 @@ from collections import defaultdict
 from typing import Literal, TypedDict
 
 from django.conf import settings
+from django.db.models import Case, Count, IntegerField, Q, QuerySet, When
 
 from cardpicker.models import (
     CanonicalCard,
     Card,
+    CardPrintingTag,
     CardPrintingTagSource,
     PrintingTagStatus,
 )
@@ -103,6 +105,26 @@ class VoteTallyEntry(TypedDict):
     printing: CanonicalCard | None
     is_no_match: bool
     count: int
+
+
+def get_contested_card_ids() -> QuerySet:
+    """
+    IDs of cards with conflicting printing-tag votes on record: more than one distinct
+    printing voted for, or both a printing vote and a no-match vote. Coarser than
+    `resolve_printing` (a card can show as contested here yet still resolve if one side
+    dominates on weight), but avoids running the full consensus calculation per card for
+    a queue/triage ordering. Shared between the admin's contested-card filter and the
+    "Who's That Planeswalker?" queue, which defaults to surfacing contested cards first.
+    """
+    return (
+        CardPrintingTag.objects.values("card_id")
+        .annotate(
+            distinct_printings=Count("printing_id", distinct=True),
+            has_no_match=Count(Case(When(is_no_match=True, then=1), output_field=IntegerField())),
+        )
+        .filter(Q(distinct_printings__gt=1) | (Q(distinct_printings__gte=1) & Q(has_no_match__gt=0)))
+        .values_list("card_id", flat=True)
+    )
 
 
 def get_vote_tally(card: Card) -> list[VoteTallyEntry]:

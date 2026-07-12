@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from django.conf import settings
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Case, IntegerField, Q, When
 from django.http import (
     FileResponse,
     HttpRequest,
@@ -50,6 +50,7 @@ from cardpicker.models import (
 from cardpicker.printing_candidates import get_ranked_printing_candidates
 from cardpicker.printing_consensus import (
     NO_MATCH,
+    get_contested_card_ids,
     get_vote_tally,
     resolve_and_persist_printing,
     resolve_printing,
@@ -646,13 +647,21 @@ def get_printing_tag_queue(request: HttpRequest) -> HttpResponse:
     A paginated list of cards that still need a human to tag their printing - i.e. haven't
     reached consensus (contested or no votes yet). Filters on the indexed
     `printing_tag_status` rather than recomputing consensus for every card, which is the
-    whole reason that field exists.
+    whole reason that field exists. Contested cards (conflicting votes already cast) sort
+    first - they're the highest-value cards for a human to weigh in on, and this is also
+    what the "Who's That Planeswalker?" queue page relies on to default to contested cards.
     """
 
     if request.method != "GET":
         raise BadRequestException("Expected GET request.")
 
-    cards = Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED).order_by("-date_created", "name")
+    cards = (
+        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        .annotate(
+            is_contested=Case(When(pk__in=get_contested_card_ids(), then=1), default=0, output_field=IntegerField())
+        )
+        .order_by("-is_contested", "-date_created", "name")
+    )
     paginator: Paginator[Card] = Paginator(cards, PRINTING_TAG_QUEUE_PAGE_SIZE)
 
     page = request.GET.get("page", "1")

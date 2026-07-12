@@ -700,6 +700,15 @@ export const printingTagQueueOneResult = http.get(
     )
 );
 
+export const printingTagQueueTwoResults = http.get(
+  buildRoute("2/printingTagQueue/"),
+  () =>
+    HttpResponse.json(
+      { hits: 2, pages: 1, cards: [cardDocument1, cardDocument2] },
+      { status: 200 }
+    )
+);
+
 export const printingTagQueueNoResults = http.get(
   buildRoute("2/printingTagQueue/"),
   () => HttpResponse.json({ hits: 0, pages: 1, cards: [] }, { status: 200 })

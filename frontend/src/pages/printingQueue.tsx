@@ -17,8 +17,9 @@ function PrintingQueueOrDefault() {
     <>
       <h1>Who&apos;s That Planeswalker?</h1>
       <p>
-        Test your Magic: the Gathering knowledge! Help identify which real-world
-        printing each of these card images depicts.
+        Test your Magic: the Gathering knowledge! One card at a time, help
+        identify which real-world printing each card image depicts - contested
+        cards come first, since they need your eyes the most.
       </p>
       <PrintingTagQueue />
       <Footer />

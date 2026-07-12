@@ -1,5 +1,5 @@
 from django.contrib import admin
-from django.db.models import Case, Count, IntegerField, Q, QuerySet, When
+from django.db.models import QuerySet
 from django.http import HttpRequest
 
 from .models import (
@@ -17,6 +17,7 @@ from .models import (
     TagAliasSuggestion,
     TagSuggestionStatus,
 )
+from .printing_consensus import get_contested_card_ids
 from .sources.update_database import update_database
 
 
@@ -106,11 +107,8 @@ class AdminCanonicalPrintingMetadata(admin.ModelAdmin[CanonicalPrintingMetadata]
 
 class ContestedCardFilter(admin.SimpleListFilter):
     """
-    Cheap SQL-level proxy for "this card has conflicting printing votes on record" -
-    flags cards with more than one distinct printing voted for, or both a printing vote
-    and a no-match vote. This is coarser than cardpicker.printing_consensus.resolve_printing
-    (a card can show as contested here yet still resolve if one side dominates on weight)
-    but avoids running the full consensus calculation per row for an admin triage view.
+    Admin-triage wrapper around cardpicker.printing_consensus.get_contested_card_ids -
+    see that function's docstring for what "contested" means here.
     """
 
     title = "contested"
@@ -122,16 +120,7 @@ class ContestedCardFilter(admin.SimpleListFilter):
     def queryset(self, request: HttpRequest, queryset: QuerySet[CardPrintingTag]) -> QuerySet[CardPrintingTag]:
         if self.value() != "yes":
             return queryset
-        contested_card_ids = (
-            CardPrintingTag.objects.values("card_id")
-            .annotate(
-                distinct_printings=Count("printing_id", distinct=True),
-                has_no_match=Count(Case(When(is_no_match=True, then=1), output_field=IntegerField())),
-            )
-            .filter(Q(distinct_printings__gt=1) | (Q(distinct_printings__gte=1) & Q(has_no_match__gt=0)))
-            .values_list("card_id", flat=True)
-        )
-        return queryset.filter(card_id__in=contested_card_ids)
+        return queryset.filter(card_id__in=get_contested_card_ids())
 
 
 @admin.register(CardPrintingTag)
