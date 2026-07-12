@@ -47,7 +47,9 @@ test.describe("PrintingTagPicker tests", () => {
     );
     await openDetailedView(page, cardDocument1.name);
 
-    await expect(page.getByText("Who's That Planeswalker?")).toBeVisible();
+    await expect(
+      page.getByTestId("detailed-view").getByText("Who's That Planeswalker?")
+    ).toBeVisible();
     await expect(page.getByText("Not yet resolved")).toBeVisible();
 
     const picker = page.getByTestId("printing-tag-picker");
