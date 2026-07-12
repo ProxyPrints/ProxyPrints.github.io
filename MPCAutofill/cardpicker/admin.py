@@ -14,6 +14,8 @@ from .models import (
     ProjectMember,
     Source,
     Tag,
+    TagAliasSuggestion,
+    TagSuggestionStatus,
 )
 from .sources.update_database import update_database
 
@@ -138,3 +140,36 @@ class AdminCardPrintingTag(admin.ModelAdmin[CardPrintingTag]):
     list_filter = ("source", "is_no_match", ContestedCardFilter)
     search_fields = ("card__name",)
     raw_id_fields = ["card", "printing"]
+
+
+@admin.register(TagAliasSuggestion)
+class AdminTagAliasSuggestion(admin.ModelAdmin[TagAliasSuggestion]):
+    list_display = ("raw_text", "suggested_tag", "confidence", "occurrence_count", "status")
+    list_filter = ("status",)
+    search_fields = ("raw_text",)
+    ordering = ("-occurrence_count",)
+    actions = ["accept_suggestions", "reject_suggestions"]
+
+    @admin.action(description="Accept selected suggestions (adds raw text as a tag alias)")
+    def accept_suggestions(self, request: HttpRequest, queryset: QuerySet[TagAliasSuggestion]) -> None:
+        for suggestion in queryset.select_related("suggested_tag"):
+            tag = suggestion.suggested_tag
+            if tag is not None and suggestion.raw_text not in tag.aliases:
+                tag.aliases = [*tag.aliases, suggestion.raw_text]
+                tag.save(update_fields=["aliases"])
+            suggestion.status = TagSuggestionStatus.ACCEPTED
+            suggestion.save(update_fields=["status"])
+
+    @admin.action(description="Reject selected suggestions (undoes any auto-applied alias)")
+    def reject_suggestions(self, request: HttpRequest, queryset: QuerySet[TagAliasSuggestion]) -> None:
+        for suggestion in queryset.select_related("suggested_tag"):
+            tag = suggestion.suggested_tag
+            if tag is not None and suggestion.status in (
+                TagSuggestionStatus.AUTO_ACCEPTED,
+                TagSuggestionStatus.ACCEPTED,
+            ):
+                if suggestion.raw_text in tag.aliases:
+                    tag.aliases = [alias for alias in tag.aliases if alias != suggestion.raw_text]
+                    tag.save(update_fields=["aliases"])
+            suggestion.status = TagSuggestionStatus.REJECTED
+            suggestion.save(update_fields=["status"])

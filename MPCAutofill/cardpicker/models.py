@@ -334,6 +334,10 @@ class Card(models.Model):
     printing_tag_status = models.CharField(
         max_length=10, choices=PrintingTagStatus.choices, default=PrintingTagStatus.UNRESOLVED, db_index=True
     )
+    # a lowercase CanonicalExpansion.code guessed from a lone set-code bracket token in the
+    # source filename (e.g. "[MH3]") - not resolved to a specific printing (no collector
+    # number was present to pair with it), just a ranking hint for get_ranked_printing_candidates
+    expansion_hint = models.CharField(max_length=10, blank=True, db_index=True)
     image_hash = models.BigIntegerField()
 
     def __str__(self) -> str:
@@ -500,6 +504,34 @@ class Tag(models.Model):
     @classmethod
     def get_tags(cls) -> dict[str, list[str]]:
         return {tag.name: tag.aliases for tag in Tag.objects.all()}
+
+
+class TagSuggestionStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    AUTO_ACCEPTED = "auto_accepted", "Auto-accepted"
+    ACCEPTED = "accepted", "Accepted"
+    REJECTED = "rejected", "Rejected"
+
+
+class TagAliasSuggestion(models.Model):
+    """
+    A bracketed token found in source filenames (e.g. "Fullart") that fuzzily but not
+    exactly matched a known Tag's name/alias. Keyed on the raw text itself rather than
+    per-card, since the same token recurs across thousands of cards - reviewing (or
+    auto-accepting) it once promotes it to a real Tag alias, which every subsequent
+    reindex then picks up via the existing exact-match path.
+    """
+
+    raw_text = models.CharField(max_length=200, unique=True)
+    suggested_tag = models.ForeignKey(to=Tag, on_delete=models.SET_NULL, null=True, blank=True)
+    confidence = models.FloatField()
+    occurrence_count = models.IntegerField(default=1)
+    status = models.CharField(max_length=20, choices=TagSuggestionStatus.choices, default=TagSuggestionStatus.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"{self.raw_text!r} -> {self.suggested_tag} ({self.status}, {self.confidence:.2f})"
 
 
 class DFCPair(models.Model):

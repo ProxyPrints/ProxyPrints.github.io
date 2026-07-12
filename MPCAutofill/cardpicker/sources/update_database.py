@@ -57,7 +57,15 @@ def transform_image_into_object(source: Source, image: Image, tags: Tags) -> Car
         MAX_SIZE_MB * 1_000_000
     ), f"Image size is greater than {MAX_SIZE_MB} MB at **{int(image.size / 1_000_000)}** MB"
     # this can also raise AssertionError
-    language, name, extracted_tags, extension, canonical_card_pk, canonical_artist_pk = image.unpack_name(tags=tags)
+    (
+        language,
+        name,
+        extracted_tags,
+        extension,
+        canonical_card_pk,
+        canonical_artist_pk,
+        expansion_hint,
+    ) = image.unpack_name(tags=tags)
 
     searchable_name = to_searchable(name)
     dpi = 10 * round(int(image.height) * DPI_HEIGHT_RATIO / 10)
@@ -99,6 +107,7 @@ def transform_image_into_object(source: Source, image: Image, tags: Tags) -> Car
         language=(language or DEFAULT_LANGUAGE).alpha_2.upper(),
         canonical_card_id=canonical_card_pk,
         canonical_artist_id=canonical_artist_pk,
+        expansion_hint=expansion_hint or "",
         image_hash=0,
     )
 

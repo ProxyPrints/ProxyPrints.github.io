@@ -86,6 +86,18 @@ class TestGetRankedPrintingCandidates:
         results = get_ranked_printing_candidates(card, "forest")
         assert results == [forest]
 
+    def test_expansion_hint_moves_matching_expansion_candidates_first(self, db):
+        card = CardFactory(name="Mountain 4", searchq="mountain", expansion_hint="mh3")
+        hinted_expansion = CanonicalExpansionFactory(code="mh3")
+        other_expansion = CanonicalExpansionFactory(code="woe")
+        hinted = CanonicalCardFactory(name="Mountain", expansion=hinted_expansion)
+        other = CanonicalCardFactory(name="Mountain", expansion=other_expansion)
+
+        results = get_ranked_printing_candidates(card, None)
+
+        assert results[0] == hinted
+        assert set(results) == {hinted, other}
+
     def test_linked_card_lists_all_printings_of_same_oracle_card_by_recency(self, db):
         card = CardFactory()
         older = CanonicalCardFactory(canonical_id="11111111-1111-1111-1111-111111111111")

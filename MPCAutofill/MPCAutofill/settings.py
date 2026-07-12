@@ -64,6 +64,10 @@ PRINTING_TAG_AI_WEIGHT = env.float("PRINTING_TAG_AI_WEIGHT", default=0.5)
 # client-generated anonymous ID (IP as a fallback if that header is somehow missing).
 PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="20/h")
 
+# Fuzzy tag-matching confidence thresholds. See cardpicker.tags.Tags.match_tag_fuzzy.
+TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD = env.float("TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD", default=0.92)
+TAG_MATCH_LOW_CONFIDENCE_THRESHOLD = env.float("TAG_MATCH_LOW_CONFIDENCE_THRESHOLD", default=0.6)
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/3.0/howto/deployment/checklist/
 

@@ -5,8 +5,13 @@ Tags for cards.
 import re
 from typing import Optional
 
+import Levenshtein
+
+from django.conf import settings
+
 from cardpicker import models
 from cardpicker.constants import NSFW
+from cardpicker.search.sanitisation import to_searchable
 
 
 class Tags:
@@ -14,6 +19,8 @@ class Tags:
         self.tags = self.get_tags()
         self.canonical_cards = self.get_canonical_cards()
         self.canonical_artists = self.get_canonical_artists()
+        self.expansion_codes = self.get_expansion_codes()
+        self.tag_suggestions = self.get_tag_suggestions()
 
     @classmethod
     def get_tags(cls) -> dict[str, "models.Tag"]:
@@ -33,6 +40,14 @@ class Tags:
     @classmethod
     def get_canonical_artists(cls) -> dict[str, int]:
         return {name: pk for (name, pk) in models.CanonicalArtist.objects.values_list("name", "pk")}
+
+    @classmethod
+    def get_expansion_codes(cls) -> set[str]:
+        return {code.lower() for code in models.CanonicalExpansion.objects.values_list("code", flat=True)}
+
+    @classmethod
+    def get_tag_suggestions(cls) -> dict[str, "models.TagAliasSuggestion"]:
+        return {suggestion.raw_text: suggestion for suggestion in models.TagAliasSuggestion.objects.all()}
 
     @classmethod
     def extract_tag_parts(cls, name: str) -> set[str]:
@@ -74,6 +89,80 @@ class Tags:
         else:
             return None
 
+    def match_tag_fuzzy(self, raw_tag: str) -> Optional[tuple["models.Tag", float]]:
+        """
+        Best-effort Levenshtein match of `raw_tag` against every known Tag's name and
+        aliases (both sides normalised with the same `to_searchable` used for the main
+        card search, so punctuation/case differences don't affect the score). Returns
+        the best match if it clears `TAG_MATCH_LOW_CONFIDENCE_THRESHOLD`, else `None`.
+        """
+        normalised_raw_tag = to_searchable(raw_tag)
+        if not normalised_raw_tag:
+            return None
+
+        best_tag: Optional[models.Tag] = None
+        best_score = 0.0
+        for tag in self.tags.values():
+            if tag.pk is None:
+                # e.g. the synthetic NSFW pseudo-tag - never persisted, so it can't be
+                # promoted to a real alias or referenced by a suggestion's FK
+                continue
+            for candidate in [tag.name, *tag.aliases]:
+                score = Levenshtein.ratio(normalised_raw_tag, to_searchable(candidate))
+                if score > best_score:
+                    best_score = score
+                    best_tag = tag
+
+        if best_tag is not None and best_score >= settings.TAG_MATCH_LOW_CONFIDENCE_THRESHOLD:
+            return best_tag, best_score
+        return None
+
+    def _upsert_tag_suggestion(self, raw_tag: str, tag: "models.Tag", confidence: float, status: str) -> None:
+        existing = self.tag_suggestions.get(raw_tag)
+        if existing is not None:
+            existing.occurrence_count += 1
+            existing.confidence = confidence
+            existing.suggested_tag = tag
+            if (
+                existing.status == models.TagSuggestionStatus.PENDING
+                and status == models.TagSuggestionStatus.AUTO_ACCEPTED
+            ):
+                existing.status = status
+            existing.save()
+        else:
+            self.tag_suggestions[raw_tag] = models.TagAliasSuggestion.objects.create(
+                raw_text=raw_tag, suggested_tag=tag, confidence=confidence, occurrence_count=1, status=status
+            )
+
+    def resolve_fuzzy_tag(self, raw_tag: str) -> Optional["models.Tag"]:
+        """
+        For a bracketed token that didn't exactly match a known Tag name/alias, tries a
+        fuzzy match. A high-confidence match is auto-promoted to a real alias on the
+        matched Tag immediately, so this (and every future occurrence of the same raw
+        text, this run or any later one) hits the fast exact-match path instead; a
+        lower-confidence match is recorded as a pending suggestion for admin review
+        rather than being applied. A raw text a human has already rejected is never
+        resurrected.
+        """
+        existing = self.tag_suggestions.get(raw_tag)
+        if existing is not None and existing.status == models.TagSuggestionStatus.REJECTED:
+            return None
+
+        fuzzy_match = self.match_tag_fuzzy(raw_tag)
+        if fuzzy_match is None:
+            return None
+        candidate_tag, confidence = fuzzy_match
+
+        if confidence >= settings.TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD:
+            if raw_tag not in candidate_tag.aliases:
+                candidate_tag.aliases = [*candidate_tag.aliases, raw_tag]
+                candidate_tag.save(update_fields=["aliases"])
+            self._upsert_tag_suggestion(raw_tag, candidate_tag, confidence, models.TagSuggestionStatus.AUTO_ACCEPTED)
+            return candidate_tag
+
+        self._upsert_tag_suggestion(raw_tag, candidate_tag, confidence, models.TagSuggestionStatus.PENDING)
+        return None
+
     @classmethod
     def remove_tag_from_name(cls, name: str, tag: str) -> str:
         name_with_no_tags = name  # mutated below
@@ -91,16 +180,19 @@ class Tags:
                         name_with_no_tags = name_with_no_tags[0:start] + name_with_no_tags[end:]
         return name_with_no_tags
 
-    def extract(self, name: Optional[str]) -> tuple[str, set[str], int | None, int | None]:
+    def extract(self, name: Optional[str]) -> tuple[str, set[str], int | None, int | None, str | None]:
         """
         This function unpacks a folder or image name which contains a name component and some number of tags
-        into its constituents. Also returns the PKs of matched CanonicalCard and CanonicalArtist records (nullable).
+        into its constituents. Also returns the PKs of matched CanonicalCard and CanonicalArtist records
+        (nullable), and a lowercase CanonicalExpansion code "hint" (nullable) extracted from a lone set-code
+        bracket token with no accompanying collector number (i.e. one that didn't resolve a CanonicalCard
+        outright) - a soft signal for ranking printing-tag candidates, not a semantic tag.
         Tags are wrapped in either [square brackets] or (parentheses), and any combination of [] and () can be used
         within a single name.
         """
 
         if not name:
-            return "", set(), None, None
+            return "", set(), None, None, None
 
         tag_set: set[str] = set()
         # tags will be removed from this name below
@@ -120,6 +212,14 @@ class Tags:
                 canonical_artist_tag, canonical_artist_pk = canonical_artist_match
                 name_with_no_tags = self.remove_tag_from_name(name_with_no_tags, canonical_artist_tag)
 
+        expansion_hint: str | None = None
+        if canonical_card_pk is None:
+            for raw_tag in raw_tags:
+                if raw_tag.lower() in self.expansion_codes:
+                    expansion_hint = raw_tag.lower()
+                    name_with_no_tags = self.remove_tag_from_name(name_with_no_tags, raw_tag)
+                    break
+
         for raw_tag in raw_tags:
             lowercase_tag = raw_tag.lower()
 
@@ -132,6 +232,8 @@ class Tags:
                     if lowercase_tag in [alias.lower() for alias in tag.aliases]:
                         tag_object = tag
                         break
+            if tag_object is None:
+                tag_object = self.resolve_fuzzy_tag(raw_tag)
             if tag_object is None:
                 continue
             tag_set.add(tag_object.name)
@@ -157,7 +259,7 @@ class Tags:
         ]
         for artifact, replacement in artifacts:
             name_with_no_tags = name_with_no_tags.replace(artifact, replacement)
-        return name_with_no_tags, tag_set, canonical_card_pk, canonical_artist_pk
+        return name_with_no_tags, tag_set, canonical_card_pk, canonical_artist_pk, expansion_hint
 
 
 __all__ = ["Tags"]

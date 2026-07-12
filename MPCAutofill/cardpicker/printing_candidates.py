@@ -44,6 +44,18 @@ def rank_candidates_by_confidence(candidates: Iterable[CanonicalCard], query: st
     )
 
 
+def partition_by_expansion_hint(candidates: list[CanonicalCard], expansion_hint: str) -> list[CanonicalCard]:
+    """
+    Stable-partitions an already confidence-ranked candidate list so candidates from
+    the hinted expansion (`Card.expansion_hint`, extracted from a lone set-code bracket
+    token in the source filename, e.g. "[MH3]") come first, each sub-group keeping its
+    existing relative order.
+    """
+    matching = [candidate for candidate in candidates if candidate.expansion.code.lower() == expansion_hint]
+    other = [candidate for candidate in candidates if candidate.expansion.code.lower() != expansion_hint]
+    return matching + other
+
+
 def get_ranked_printing_candidates(card: Card, query: Optional[str]) -> list[CanonicalCard]:
     """
     Returns candidate printings for `card` to be tagged against, ranked so the most
@@ -54,8 +66,10 @@ def get_ranked_printing_candidates(card: Card, query: Optional[str]) -> list[Can
         every candidate is already known to be the same card - just a different
         printing - so these are ordered by most recent printing first instead;
       - otherwise, candidates are found by matching every word of the query (or, absent
-        an explicit query, the card's own `searchq`) against `CanonicalCard.name`, and
-        ranked by Levenshtein similarity to that query, highest confidence first.
+        an explicit query, the card's own `searchq`) against `CanonicalCard.name`, ranked
+        by Levenshtein similarity to that query, highest confidence first - then, if the
+        card has an `expansion_hint`, candidates from that expansion are moved to the
+        front of the list (still internally ranked by confidence).
     """
     linked = card.canonical_card or card.inferred_canonical_card
     if linked is not None and not query:
@@ -67,4 +81,7 @@ def get_ranked_printing_candidates(card: Card, query: Optional[str]) -> list[Can
 
     effective_query = query or card.searchq
     candidates = find_candidates_by_name(effective_query)[:CANDIDATE_QUERY_LIMIT]
-    return rank_candidates_by_confidence(candidates, effective_query)[:CANDIDATE_RESULT_LIMIT]
+    ranked = rank_candidates_by_confidence(candidates, effective_query)
+    if card.expansion_hint:
+        ranked = partition_by_expansion_hint(ranked, card.expansion_hint)
+    return ranked[:CANDIDATE_RESULT_LIMIT]

@@ -286,10 +286,10 @@ class TestAPI:
     def test_image_language(self, django_settings, image, expected_language):
         tags = Tags()
         if expected_language is None:
-            language, _, _, _, _, _ = image.unpack_name(tags=tags)
+            language, _, _, _, _, _, _ = image.unpack_name(tags=tags)
             assert language is None
         else:
-            language, _, _, _, _, _ = image.unpack_name(tags=tags)
+            language, _, _, _, _, _, _ = image.unpack_name(tags=tags)
             assert language.alpha_2.lower() == expected_language.lower()
 
     @pytest.mark.parametrize(
@@ -308,7 +308,7 @@ class TestAPI:
     )
     def test_image_tags(self, django_settings, grandchild_tag, extended_tag, full_art_tag, image, expected_tags):
         tags = Tags()
-        _, _, extracted_tags, _, _, _ = image.unpack_name(tags=tags)
+        _, _, extracted_tags, _, _, _, _ = image.unpack_name(tags=tags)
         assert extracted_tags == expected_tags
 
     @pytest.mark.parametrize(
@@ -341,7 +341,7 @@ class TestAPI:
         expected_extension,
     ):
         tags = Tags()
-        language, name, extracted_tags, extension, _, _ = image.unpack_name(tags=tags)
+        language, name, extracted_tags, extension, _, _, _ = image.unpack_name(tags=tags)
         if expected_language is None:
             assert language is None
         else:
@@ -558,7 +558,7 @@ class TestUpdateDatabase:
                 small_thumbnail_url="",
                 medium_thumbnail_url="",
             )
-        _, _, _, _, match, _ = Image(
+        _, _, _, _, match, _, _ = Image(
             id="",
             name=new_card,
             size=0,
@@ -661,7 +661,7 @@ class TestUpdateDatabase:
             )
         for artist_name in canonical_artists:
             CanonicalArtistFactory.create(name=artist_name)
-        _, _, _, _, canonical_card_id, canonical_artist_id = Image(
+        _, _, _, _, canonical_card_id, canonical_artist_id, _ = Image(
             id="",
             name=new_card,
             size=0,
