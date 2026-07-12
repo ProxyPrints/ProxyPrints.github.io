@@ -54,6 +54,6 @@ test.describe("PrintingTagQueue tests", () => {
     await page.getByAltText(cardDocument1.name).click();
 
     await expect(page.getByText("Card Details")).toBeVisible();
-    await expect(page.getByText("Which printing is this?")).toBeVisible();
+    await expect(page.getByText("Who's That Planeswalker?")).toBeVisible();
   });
 });

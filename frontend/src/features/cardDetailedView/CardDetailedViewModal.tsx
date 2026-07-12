@@ -173,7 +173,10 @@ export function CardDetailedViewModal({
               <AddCardToFavorites cardDocument={cardDocument} />
               <AddCardToProjectForm cardDocument={cardDocument} />
               <hr />
-              <h5>Which printing is this?</h5>
+              <h5>Who&apos;s That Planeswalker?</h5>
+              <p className="text-muted small mb-2">
+                Help us figure out which real-world printing this card is!
+              </p>
               <PrintingTagPicker cardIdentifier={cardDocument.identifier} />
             </div>
           </Row>

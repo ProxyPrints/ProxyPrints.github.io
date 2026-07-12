@@ -15,10 +15,10 @@ function PrintingQueueOrDefault() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   return remoteBackendConfigured ? (
     <>
-      <h1>Tag Printings</h1>
+      <h1>Who&apos;s That Planeswalker?</h1>
       <p>
-        Help identify which real-world Magic: the Gathering printing each of
-        these card images depicts.
+        Test your Magic: the Gathering knowledge! Help identify which real-world
+        printing each of these card images depicts.
       </p>
       <PrintingTagQueue />
       <Footer />
@@ -33,10 +33,10 @@ export default function PrintingQueue() {
   return (
     <ProjectContainer>
       <Head>
-        <title>{`${projectName} Tag Printings`}</title>
+        <title>{`${projectName} Who's That Planeswalker?`}</title>
         <meta
           name="description"
-          content={`Help tag which real-world printing each card image in ${ProjectName} depicts.`}
+          content={`Test your Magic: the Gathering knowledge and help tag which real-world printing each card image in ${ProjectName} depicts.`}
         />
       </Head>
       <PrintingQueueOrDefault />
