@@ -62,8 +62,11 @@ class TestFindCandidatesByName:
 
 class TestRankCandidatesByConfidence:
     def test_closer_match_ranks_first(self, db):
+        # deliberately not a bracketed/parenthetical difference (e.g. "(Extended Art)") -
+        # to_searchable() strips bracketed text entirely, so two names differing only in
+        # a parenthetical normalise to the exact same string and can't be told apart here
         close = CanonicalCardFactory(name="Lightning Bolt")
-        far = CanonicalCardFactory(name="Lightning Bolt (Extended Art Promo Foil)")
+        far = CanonicalCardFactory(name="Lightning Storm")
         ranked = rank_candidates_by_confidence([far, close], "Lightning Bolt")
         assert ranked == [close, far]
 
