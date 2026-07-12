@@ -422,7 +422,7 @@ class MTGIntegration(GameIntegration):
 
         @section_timer(name="get bulk data URLs")
         def get_bulk_data_urls() -> BulkDataURLs:
-            response = requests.get("https://api.scryfall.com/bulk-data", headers=Scryfall.get_headers())
+            response = requests.get("https://api.scryfall.com/bulk-data", headers=Scryfall.get_headers(), timeout=30)
             assert response.status_code == 200
             validated_response = BulkDataResponse.model_validate_json(response.text)
             default_cards = [entry for entry in validated_response.data if entry.type == "default_cards"].pop()
@@ -441,7 +441,7 @@ class MTGIntegration(GameIntegration):
                 return
             cache_dir.mkdir(parents=True, exist_ok=True)
             print(f"Downloading default cards from {url}")
-            with requests.get(url, stream=True, headers=Scryfall.get_headers()) as r:
+            with requests.get(url, stream=True, headers=Scryfall.get_headers(), timeout=60) as r:
                 with open(default_cards_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
@@ -453,7 +453,7 @@ class MTGIntegration(GameIntegration):
                 return
             cache_dir.mkdir(parents=True, exist_ok=True)
             print(f"Downloading oracle cards from {url}")
-            with requests.get(url, stream=True, headers=Scryfall.get_headers()) as r:
+            with requests.get(url, stream=True, headers=Scryfall.get_headers(), timeout=60) as r:
                 with open(oracle_cards_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
@@ -475,7 +475,9 @@ class MTGIntegration(GameIntegration):
                 if row.image_uris is not None:
                     try:
                         im = Image.open(
-                            requests.get(row.image_uris.small, stream=True, headers=Scryfall.get_headers()).raw
+                            requests.get(
+                                row.image_uris.small, stream=True, headers=Scryfall.get_headers(), timeout=10
+                            ).raw
                         )
                         image_hash = str(imagehash.phash(im))
                         image_hash_int = twos_complement(image_hash, 64)
@@ -500,18 +502,19 @@ class MTGIntegration(GameIntegration):
                 return None
 
         def process_row(
-            row: CardRow, pool: concurrent.futures.ThreadPoolExecutor, mark_existing_as_default: bool
+            row: CardRow,
+            pool: concurrent.futures.ThreadPoolExecutor,
+            pending: list[tuple[uuid.UUID, "concurrent.futures.Future[CanonicalCard | None]"]],
+            mark_existing_as_default: bool,
         ) -> None:
             if mark_existing_as_default and row.id in new_cards_by_identifier.keys():
                 new_cards_by_identifier[row.id].is_default = True
             elif row.id not in existing_card_identifiers:
-                future = pool.submit(row_to_canonical_card, row)
-                card = future.result()
-                if card:
-                    new_cards_by_identifier[row.id] = card
+                pending.append((row.id, pool.submit(row_to_canonical_card, row)))
 
         def process_file(path: Path, counter: enlighten.Counter, mark_existing_as_default: bool) -> None:
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+                pending: list[tuple[uuid.UUID, "concurrent.futures.Future[CanonicalCard | None]"]] = []
                 with open(path, "rb") as f:
                     for line in f:
                         line = line.rstrip(b"\n")
@@ -520,10 +523,14 @@ class MTGIntegration(GameIntegration):
                         decoded_line = line.decode("utf-8").rstrip(",")
                         try:
                             row = CardRow.model_validate_json(decoded_line)
-                            process_row(row, pool, mark_existing_as_default=mark_existing_as_default)
+                            process_row(row, pool, pending, mark_existing_as_default=mark_existing_as_default)
                             counter.update()
                         except ValidationError:
                             print(f"failed to validate line: {decoded_line}")
+                for row_id, future in pending:
+                    card = future.result()
+                    if card:
+                        new_cards_by_identifier[row_id] = card
 
         @section_timer(name="process default cards")
         def process_default_cards() -> None:
@@ -544,7 +551,7 @@ class MTGIntegration(GameIntegration):
 
     @classmethod
     def get_canonical_expansions(cls) -> list[CanonicalExpansion]:
-        response = requests.get("https://api.scryfall.com/sets", headers=Scryfall.get_headers())
+        response = requests.get("https://api.scryfall.com/sets", headers=Scryfall.get_headers(), timeout=30)
         assert response.status_code == 200
         parsed_response = ExpansionResponse.model_validate_json(response.text)
         expansions: list[CanonicalExpansion] = [
