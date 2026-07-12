@@ -239,7 +239,14 @@ const ArtPlaceholder = styled.div`
   width: 100%;
   aspect-ratio: ${CARD_ASPECT_RATIO};
   background: ${STARBURST_OUTER_COLOR};
-  overflow: hidden;
+  /* Deliberately no overflow: hidden here - object-fit: cover below already keeps the image
+     contained within this box on its own (it crops the underlying image content to fit,
+     it doesn't make the <img> element itself overflow), and clipping at this level was
+     silently re-breaking ZoomableThumbnail's hover-zoom (added in a previous round
+     specifically *without* overflow: hidden, so the enlarged art could pop out uncropped) -
+     since ArtPlaceholder wraps ZoomableThumbnail, its own overflow: hidden clipped the zoom
+     right back down to this box's edge, reading as a hard rectangular cut through the
+     enlarged artwork. */
 
   &::before {
     content: "?";
