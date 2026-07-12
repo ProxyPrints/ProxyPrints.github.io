@@ -1,5 +1,6 @@
 import itertools
 import json
+import logging
 from collections import defaultdict
 from random import sample
 from typing import Any, Callable, TypeVar, Union, cast
@@ -67,6 +68,8 @@ from cardpicker.search.search_functions import (
 )
 from cardpicker.tags import Tags
 
+logger = logging.getLogger(__name__)
+
 # https://mypy.readthedocs.io/en/stable/generics.html#declaring-decorators
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -101,7 +104,7 @@ class ErrorWrappers:
                 error = ErrorResponse(name="Bad request", message=bad_request_exception.args[0])
                 return JsonResponse(error.model_dump(), status=400)
             except Exception as e:
-                # sentry_sdk.capture_exception(e)
+                logger.exception("Unhandled exception in view")
                 error = ErrorResponse(name=f"Unhandled {e.__class__.__name__}", message=str(e.args[0]))
                 return JsonResponse(error.model_dump(), status=500)
 

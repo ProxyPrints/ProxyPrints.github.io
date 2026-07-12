@@ -1,3 +1,4 @@
+import logging
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -5,7 +6,6 @@ from typing import Any, Callable, Optional, Type
 from urllib.parse import urljoin, urlparse
 
 import requests
-import sentry_sdk
 from bulk_sync import bulk_sync
 
 from cardpicker.models import (
@@ -16,6 +16,8 @@ from cardpicker.models import (
 )
 from cardpicker.schema_types import Game
 from cardpicker.utils import section_timer
+
+logger = logging.getLogger(__name__)
 
 
 def default_is_response_valid(response: requests.Response) -> bool:
@@ -59,7 +61,7 @@ class ImportSite(ABC):
         url = urljoin(f"https://{netloc or cls.get_host_names()[0]}", path)
         response = requests.request(url=url, method=method, headers=headers)
         if not is_response_valid(response):
-            sentry_sdk.capture_message(response.text)
+            logger.error("Invalid response from %s: %s", url, response.text)
             raise cls.InvalidURLException(url)
         return response
 
