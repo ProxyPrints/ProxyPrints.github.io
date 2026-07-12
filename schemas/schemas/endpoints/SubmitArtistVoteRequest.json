@@ -1,0 +1,13 @@
+{
+  "title": "Submit Artist Vote Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "identifier": { "type": "string" },
+    "artistName": { "type": ["string", "null"] },
+    "isUnknown": { "type": "boolean" },
+    "anonymousId": { "type": "string" }
+  },
+  "required": ["identifier", "isUnknown", "anonymousId"],
+  "additionalProperties": false
+}

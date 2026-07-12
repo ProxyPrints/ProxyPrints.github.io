@@ -15,6 +15,8 @@ import {
   processQuery,
 } from "@/common/processing";
 import {
+  ArtistCandidatesResponse,
+  ArtistConsensusResponse,
   Card,
   CardbacksResponse,
   CardsRequest,
@@ -46,6 +48,7 @@ import {
   SampleCardsResponse,
   SourcesResponse,
   Tag,
+  TagConsensusResponse,
   TagsResponse,
 } from "@/common/schema_types";
 import {
@@ -400,6 +403,112 @@ export async function APISubmitPrintingTag(
   return rawResponse.json().then((content) => {
     if (rawResponse.status === 200 && content.voteTally != null) {
       return content as PrintingConsensusResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APIGetArtistCandidates(
+  backendURL: string,
+  identifier: string,
+  query?: string
+): Promise<ArtistCandidatesResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/artistCandidates/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ identifier, query }),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.results != null) {
+      return content as ArtistCandidatesResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APIGetArtistConsensus(
+  backendURL: string,
+  identifier: string
+): Promise<ArtistConsensusResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/artistConsensus/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ identifier }),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.voteTally != null) {
+      return content as ArtistConsensusResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APISubmitArtistVote(
+  backendURL: string,
+  identifier: string,
+  anonymousId: string,
+  artistName?: string,
+  isUnknown = false
+): Promise<ArtistConsensusResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/submitArtistVote/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ identifier, anonymousId, artistName, isUnknown }),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.voteTally != null) {
+      return content as ArtistConsensusResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APIGetTagConsensus(
+  backendURL: string,
+  identifier: string
+): Promise<TagConsensusResponse> {
+  const rawResponse = await fetch(formatURL(backendURL, "/2/tagConsensus/"), {
+    method: "POST",
+    body: JSON.stringify({ identifier }),
+    credentials: "same-origin",
+    headers: getCSRFHeader(),
+  });
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.tags != null) {
+      return content as TagConsensusResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APISubmitTagVote(
+  backendURL: string,
+  identifier: string,
+  anonymousId: string,
+  tagName: string,
+  polarity: number
+): Promise<TagConsensusResponse["tags"][number]> {
+  const rawResponse = await fetch(formatURL(backendURL, "/2/submitTagVote/"), {
+    method: "POST",
+    body: JSON.stringify({ identifier, anonymousId, tagName, polarity }),
+    credentials: "same-origin",
+    headers: getCSRFHeader(),
+  });
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.tally != null) {
+      return content as TagConsensusResponse["tags"][number];
     }
     throw { name: content.name, message: content.message };
   });

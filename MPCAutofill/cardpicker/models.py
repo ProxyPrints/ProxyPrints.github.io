@@ -308,6 +308,18 @@ class PrintingTagStatus(models.TextChoices):
     NO_MATCH = "no_match", gettext_lazy("No Match")
 
 
+class ArtistVoteStatus(models.TextChoices):
+    """
+    Denormalised cache of `cardpicker.artist_consensus.resolve_artist`'s outcome for a `Card`,
+    kept in lockstep with `Card.inferred_canonical_artist` by `resolve_and_persist_artist` - same
+    purpose as `PrintingTagStatus` above.
+    """
+
+    UNRESOLVED = "unresolved", gettext_lazy("Unresolved")
+    RESOLVED = "resolved", gettext_lazy("Resolved")
+    UNKNOWN = "unknown", gettext_lazy("Unknown")
+
+
 class Card(models.Model):
     card_type = models.CharField(max_length=20, choices=CardTypes.choices, default=CardTypes.CARD)
     identifier = models.CharField(max_length=200, unique=True)
@@ -333,6 +345,16 @@ class Card(models.Model):
     )
     printing_tag_status = models.CharField(
         max_length=10, choices=PrintingTagStatus.choices, default=PrintingTagStatus.UNRESOLVED, db_index=True
+    )
+    # artist-vote consensus outcome - only ever surfaced in `serialise()` when neither
+    # `canonical_card`/`canonical_artist` (confirmed indexing match) nor
+    # `inferred_canonical_card` (a resolved printing-tag vote, which carries its own artist)
+    # are set - see the fallback chain in `serialise()` below.
+    inferred_canonical_artist = models.ForeignKey(
+        to=CanonicalArtist, on_delete=models.SET_NULL, blank=True, null=True, related_name="+"
+    )
+    artist_vote_status = models.CharField(
+        max_length=10, choices=ArtistVoteStatus.choices, default=ArtistVoteStatus.UNRESOLVED, db_index=True
     )
     # a lowercase CanonicalExpansion.code guessed from a lone set-code bracket token in the
     # source filename (e.g. "[MH3]") - not resolved to a specific printing (no collector
@@ -382,7 +404,15 @@ class Card(models.Model):
             canonicalArtist=(
                 self.canonical_artist.serialise()
                 if self.canonical_artist
-                else (self.canonical_card.artist.serialise() if self.canonical_card else None)
+                else (
+                    self.canonical_card.artist.serialise()
+                    if self.canonical_card
+                    else (
+                        self.inferred_canonical_card.artist.serialise()
+                        if self.inferred_canonical_card
+                        else (self.inferred_canonical_artist.serialise() if self.inferred_canonical_artist else None)
+                    )
+                )
             ),
         )
 
@@ -424,13 +454,40 @@ class Card(models.Model):
         ordering = ["-priority"]
 
 
-class CardPrintingTagSource(models.TextChoices):
+class VoteSource(models.TextChoices):
+    """
+    Shared `source` enum for every `AbstractWeightedVote` subclass (`CardPrintingTag`,
+    `CardArtistVote`, `CardTagVote`) - not printing-tag-specific despite the historical name
+    this replaced (`CardPrintingTagSource`). The stored string values are unchanged.
+    """
+
     USER = "user", gettext_lazy("User")
     ADMIN = "admin", gettext_lazy("Admin")
     AI = "ai", gettext_lazy("AI")
 
 
-class CardPrintingTag(models.Model):
+class AbstractWeightedVote(models.Model):
+    """
+    Shared fields for every weighted-consensus vote model in this app (`CardPrintingTag`,
+    `CardArtistVote`, `CardTagVote`) - see `cardpicker.vote_consensus.resolve_weighted_consensus`
+    for how these are reconciled into a single resolved outcome per card. Purely a field
+    container (no DB table of its own - `abstract = True`), so adding a field here changes
+    the schema of every subclass's own table simultaneously; a comment here is the only thing
+    that makes that non-obvious fact visible from any single subclass's own definition.
+    """
+
+    # a client-generated identifier (see `frontend/src/common/anonymousId.ts`), not a real Django
+    # session key - cross-origin frontend/backend means a session cookie never round-trips here.
+    anonymous_id = models.CharField(max_length=40)
+    source = models.CharField(max_length=10, choices=VoteSource.choices, default=VoteSource.USER)
+    confidence = models.FloatField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        abstract = True
+
+
+class CardPrintingTag(AbstractWeightedVote):
     """
     A vote that a given `Card` (an image in this fork's catalogue) depicts a specific
     Scryfall printing (`CanonicalCard`), or definitively depicts no known printing
@@ -441,12 +498,6 @@ class CardPrintingTag(models.Model):
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="printing_tags")
     printing = models.ForeignKey(to=CanonicalCard, on_delete=models.CASCADE, null=True, blank=True, related_name="tags")
     is_no_match = models.BooleanField(default=False)
-    # a client-generated identifier (see `frontend/src/common/anonymousId.ts`), not a real Django
-    # session key - cross-origin frontend/backend means a session cookie never round-trips here.
-    anonymous_id = models.CharField(max_length=40)
-    source = models.CharField(max_length=10, choices=CardPrintingTagSource.choices, default=CardPrintingTagSource.USER)
-    confidence = models.FloatField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [
@@ -471,6 +522,50 @@ class CardPrintingTag(models.Model):
 
     def __str__(self) -> str:
         outcome = "NO MATCH" if self.is_no_match else str(self.printing)
+        return f"[{self.source}] {self.card.name} -> {outcome}"
+
+
+class CardArtistVote(AbstractWeightedVote):
+    """
+    A vote that a given `Card` was illustrated by a specific `CanonicalArtist`, or
+    definitively by an unknown/unlisted artist (`is_unknown=True`). Only meaningful once a
+    card's printing-tag consensus hasn't already resolved a printing - see
+    `cardpicker.artist_consensus` and the artist fallback chain in `Card.serialise()`, where a
+    resolved printing's own artist always takes precedence over this vote's outcome.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="artist_votes")
+    artist = models.ForeignKey(
+        to=CanonicalArtist, on_delete=models.CASCADE, null=True, blank=True, related_name="votes"
+    )
+    is_unknown = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(artist__isnull=False, is_unknown=False) | models.Q(artist__isnull=True, is_unknown=True)
+                ),
+                name="cardartistvote_artist_xor_unknown",
+            ),
+            # not the sole enforcement of "one active vote per (card, anonymous_id)" - the
+            # submit view deletes any existing vote for this (card, anonymous_id) before
+            # creating the new one (same pattern as CardPrintingTag). This constraint is a
+            # safety net against a double-submit race, not the primary mechanism.
+            models.UniqueConstraint(
+                fields=["card", "artist", "anonymous_id"],
+                condition=models.Q(is_unknown=False),
+                name="cardartistvote_unique_artist_vote",
+            ),
+            models.UniqueConstraint(
+                fields=["card", "anonymous_id"],
+                condition=models.Q(is_unknown=True),
+                name="cardartistvote_unique_unknown_vote",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        outcome = "UNKNOWN" if self.is_unknown else str(self.artist)
         return f"[{self.source}] {self.card.name} -> {outcome}"
 
 
@@ -504,6 +599,35 @@ class Tag(models.Model):
     @classmethod
     def get_tags(cls) -> dict[str, list[str]]:
         return {tag.name: tag.aliases for tag in Tag.objects.all()}
+
+
+class VotePolarity(models.IntegerChoices):
+    APPLY = 1, gettext_lazy("Apply")
+    NOT_APPLICABLE = -1, gettext_lazy("Not applicable")
+
+
+class CardTagVote(AbstractWeightedVote):
+    """
+    A vote on whether a given descriptor `Tag` applies to a `Card` (`polarity=APPLY`) or not
+    (`polarity=NOT_APPLICABLE`). Unlike `CardPrintingTag`/`CardArtistVote` (mutually exclusive
+    outcomes - a card has exactly one real printing/artist), a card can carry independent,
+    simultaneous votes across many different tags at once, so uniqueness here is scoped to
+    (card, tag, anonymous_id) rather than just (card, anonymous_id) - changing your mind about
+    one tag is an update to that one row (`update_or_create` in the submit view), not a
+    delete-and-recreate of every vote this person has cast on this card.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="tag_votes")
+    tag = models.ForeignKey(to=Tag, on_delete=models.CASCADE, related_name="votes")
+    polarity = models.SmallIntegerField(choices=VotePolarity.choices)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["card", "tag", "anonymous_id"], name="cardtagvote_unique_vote"),
+        ]
+
+    def __str__(self) -> str:
+        return f"[{self.source}] {self.card.name} -> {self.tag} ({VotePolarity(self.polarity).label})"
 
 
 class TagSuggestionStatus(models.TextChoices):

@@ -9,6 +9,8 @@ import {
   SupporterTier,
 } from "@/common/schema_types";
 import {
+  canonicalArtist1,
+  canonicalArtist2,
   cardDocument1,
   cardDocument2,
   cardDocument3,
@@ -712,6 +714,68 @@ export const printingTagQueueTwoResults = http.get(
 export const printingTagQueueNoResults = http.get(
   buildRoute("2/printingTagQueue/"),
   () => HttpResponse.json({ hits: 0, pages: 1, cards: [] }, { status: 200 })
+);
+
+//# endregion
+
+//# region attribute voting
+
+export const artistCandidatesTwoResults = http.post(
+  buildRoute("2/artistCandidates/"),
+  () =>
+    HttpResponse.json(
+      { results: [canonicalArtist1, canonicalArtist2] },
+      { status: 200 }
+    )
+);
+
+export const artistConsensusUnresolved = http.post(
+  buildRoute("2/artistConsensus/"),
+  () =>
+    HttpResponse.json(
+      { resolvedArtist: null, isUnknown: false, voteTally: [] },
+      { status: 200 }
+    )
+);
+
+export const submitArtistVoteResolvesToCanonicalArtist1 = http.post(
+  buildRoute("2/submitArtistVote/"),
+  () =>
+    HttpResponse.json(
+      {
+        resolvedArtist: canonicalArtist1,
+        isUnknown: false,
+        voteTally: [{ artist: canonicalArtist1, isUnknown: false, count: 1 }],
+      },
+      { status: 200 }
+    )
+);
+
+export const tagConsensusTwoUnresolvedTags = http.post(
+  buildRoute("2/tagConsensus/"),
+  () =>
+    HttpResponse.json(
+      {
+        tags: [
+          { tagName: "Borderless", resolvedPolarity: null, tally: [] },
+          { tagName: "Extended", resolvedPolarity: null, tally: [] },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
+export const submitTagVoteResolvesToApply = http.post(
+  buildRoute("2/submitTagVote/"),
+  () =>
+    HttpResponse.json(
+      {
+        tagName: "Borderless",
+        resolvedPolarity: 1,
+        tally: [{ polarity: 1, count: 1 }],
+      },
+      { status: 200 }
+    )
 );
 
 //# endregion

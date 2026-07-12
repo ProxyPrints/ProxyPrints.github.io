@@ -8,7 +8,9 @@ from .models import (
     CanonicalExpansion,
     CanonicalPrintingMetadata,
     Card,
+    CardArtistVote,
     CardPrintingTag,
+    CardTagVote,
     DFCPair,
     Project,
     ProjectMember,
@@ -129,6 +131,30 @@ class AdminCardPrintingTag(admin.ModelAdmin[CardPrintingTag]):
     list_filter = ("source", "is_no_match", ContestedCardFilter)
     search_fields = ("card__name",)
     raw_id_fields = ["card", "printing"]
+
+
+@admin.register(CardArtistVote)
+class AdminCardArtistVote(admin.ModelAdmin[CardArtistVote]):
+    """
+    Plain registration, no `ContestedCardFilter`-equivalent yet - generalizing the
+    contested-first review queue to artist/tag votes is a deferred follow-up, not part of
+    this stage (see `cardpicker.artist_consensus`/`cardpicker.tag_consensus`).
+    """
+
+    list_display = ("card", "artist", "is_unknown", "source", "confidence", "anonymous_id", "created_at")
+    list_filter = ("source", "is_unknown")
+    search_fields = ("card__name",)
+    raw_id_fields = ["card", "artist"]
+
+
+@admin.register(CardTagVote)
+class AdminCardTagVote(admin.ModelAdmin[CardTagVote]):
+    """Plain registration - see `AdminCardArtistVote`'s docstring for the deferred-filter note."""
+
+    list_display = ("card", "tag", "polarity", "source", "confidence", "anonymous_id", "created_at")
+    list_filter = ("source", "polarity")
+    search_fields = ("card__name", "tag__name")
+    raw_id_fields = ["card", "tag"]
 
 
 @admin.register(TagAliasSuggestion)

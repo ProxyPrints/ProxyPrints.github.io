@@ -1,0 +1,11 @@
+{
+  "title": "Tag Vote Tally Entry",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "polarity": { "type": "integer" },
+    "count": { "type": "integer" }
+  },
+  "required": ["polarity", "count"],
+  "additionalProperties": false
+}

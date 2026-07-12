@@ -7,7 +7,7 @@ from django.core import management
 from django.utils.timezone import make_aware, make_naive
 
 from cardpicker.documents import CardSearch
-from cardpicker.models import CanonicalArtist, CanonicalCard, Card
+from cardpicker.models import CanonicalArtist, CanonicalCard, Card, VotePolarity
 from cardpicker.sources.api import Folder, Image
 from cardpicker.sources.update_database import bulk_sync_objects, update_database
 from cardpicker.tags import Tags
@@ -505,6 +505,50 @@ class TestUpdateDatabase:
         )
 
         assert Card.objects.get(identifier="existing").expansion_hint == "mh3"
+
+    @freezegun.freeze_time(DEFAULT_DATE)
+    def test_bulk_sync_objects_does_not_revert_a_resolved_tag_vote_on_reindex(self, django_settings, elasticsearch):
+        """
+        Regression test for the tag-vote reindex-durability hazard identified when designing
+        artist/tag voting: `bulk_sync_objects` computes each incoming card's `tags` purely from
+        fresh filename extraction and writes it straight to Postgres + Elasticsearch. Without a
+        merge step, a scheduled re-scan would silently revert a consensus-resolved tag-vote
+        correction back to whatever the filename currently says. A resolved `CardTagVote` for a
+        tag the filename *doesn't* mention must survive a re-scan whose incoming tags are empty.
+        """
+        source = factories.SourceFactory()
+        card = factories.CardFactory(
+            identifier="existing",
+            searchq="mountain",
+            date_created=make_aware(DEFAULT_DATE),
+            date_modified=make_aware(DEFAULT_DATE),
+            source=source,
+            tags=[],
+        )
+        tag = factories.TagFactory(name="Borderless")
+        factories.CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source="admin")
+        management.call_command("search_index", "--rebuild", "-f")
+
+        # a re-scan whose freshly-extracted tags are empty (the filename mentions nothing) -
+        # date_modified is bumped so the pre-existing change-detection condition alone would
+        # otherwise recognise this as an update and blindly overwrite `tags` with `[]`.
+        bulk_sync_objects(
+            source=source,
+            cards=[
+                Card(
+                    identifier="existing",
+                    searchq="mountain",
+                    date_created=make_aware(DEFAULT_DATE),
+                    date_modified=make_aware(DEFAULT_DATE) + dt.timedelta(days=1),
+                    source=source,
+                    tags=[],
+                    size=0,
+                    image_hash=0,
+                )
+            ],
+        )
+
+        assert Card.objects.get(identifier="existing").tags == ["Borderless"]
 
     @pytest.mark.parametrize(
         "canonical_cards, new_card, expected_expansion, expected_collector_number",

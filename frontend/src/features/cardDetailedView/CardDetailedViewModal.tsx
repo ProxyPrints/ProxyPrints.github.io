@@ -4,19 +4,21 @@
  * some more information (e.g. size, dote uploaded, etc.), and a button to download the full res image.
  */
 
-import React, { memo } from "react";
+import React, { memo, useState } from "react";
 import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import Modal from "react-bootstrap/Modal";
 import Row from "react-bootstrap/Row";
 
 import { getCardDataAttributes } from "@/common/cardDom";
-import { CardDocument, useAppDispatch } from "@/common/types";
+import { PrintingConsensusResponse } from "@/common/schema_types";
+import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
 import { imageSizeToMBString, toTitleCase } from "@/common/utils";
 import { AutofillTable } from "@/components/AutofillTable";
 import { ClickToCopy } from "@/components/ClickToCopy";
 import DisableSSR from "@/components/DisableSSR";
 import { RightPaddedIcon } from "@/components/icon";
+import { AttributeVotingPanel } from "@/features/attributeVoting/AttributeVotingPanel";
 import { AddCardToFavorites } from "@/features/card/AddCardToFavorites";
 import { AddCardToProjectForm } from "@/features/card/AddCardToProjectForm";
 import {
@@ -26,6 +28,7 @@ import {
 import { useDoImageDownload } from "@/features/download/downloadImages";
 import { PrintingTagPicker } from "@/features/printingTags/PrintingTagPicker";
 import { useGetLanguagesQuery } from "@/store/api";
+import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 
 interface CardDetailedViewProps {
@@ -47,6 +50,10 @@ export function CardDetailedViewModal({
   const dispatch = useAppDispatch();
   const queueImageDownload = useDoImageDownload();
   const getLanguagesQuery = useGetLanguagesQuery();
+  const backendURL = useAppSelector(selectRemoteBackendURL);
+
+  const [printingConsensus, setPrintingConsensus] =
+    useState<PrintingConsensusResponse | null>(null);
 
   //# endregion
 
@@ -177,7 +184,21 @@ export function CardDetailedViewModal({
               <p className="text-muted small mb-2">
                 Help us figure out which real-world printing this card is!
               </p>
-              <PrintingTagPicker cardIdentifier={cardDocument.identifier} />
+              <PrintingTagPicker
+                cardIdentifier={cardDocument.identifier}
+                onConsensusChange={setPrintingConsensus}
+              />
+              {printingConsensus != null &&
+                printingConsensus.resolvedPrinting == null &&
+                backendURL != null && (
+                  <>
+                    <hr />
+                    <AttributeVotingPanel
+                      backendURL={backendURL}
+                      cardIdentifier={cardDocument.identifier}
+                    />
+                  </>
+                )}
             </div>
           </Row>
         </Modal.Body>

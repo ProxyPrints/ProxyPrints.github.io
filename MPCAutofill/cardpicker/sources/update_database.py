@@ -10,10 +10,11 @@ from django.db import transaction
 
 from cardpicker.constants import DEFAULT_LANGUAGE, MAX_SIZE_MB
 from cardpicker.documents import CardSearch
-from cardpicker.models import Card, CardTypes, Source
+from cardpicker.models import Card, CardTypes, Source, VotePolarity
 from cardpicker.search.sanitisation import to_searchable
 from cardpicker.sources.api import Folder, Image
 from cardpicker.sources.source_types import SourceType, SourceTypeChoices
+from cardpicker.tag_consensus import get_resolved_tag_overlay
 from cardpicker.tags import Tags
 from cardpicker.utils import TEXT_BOLD, TEXT_END
 
@@ -167,10 +168,29 @@ def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
     incoming_ids = set(incoming.keys())
     existing = {card.identifier: card for card in Card.objects.filter(source=source)}
     existing_ids = set(existing.keys())
+    common_ids = incoming_ids & existing_ids
+
+    # Merge any resolved tag-vote consensus into the freshly re-extracted tags *before* the
+    # change-detection check below runs, so a scheduled re-scan can never silently revert a
+    # community-resolved tag correction back to whatever the filename currently says (only
+    # `common_ids` can have prior votes at all - a vote's `card` FK requires an existing PK,
+    # so a brand-new card being `bulk_create`d can't yet have any).
+    tag_overlay = get_resolved_tag_overlay(existing[identifier].pk for identifier in common_ids)
+    for identifier in common_ids:
+        overlay = tag_overlay.get(existing[identifier].pk)
+        if not overlay:
+            continue
+        tags = set(incoming[identifier].tags)
+        for tag_name, polarity in overlay.items():
+            if polarity == VotePolarity.APPLY:
+                tags.add(tag_name)
+            else:
+                tags.discard(tag_name)
+        incoming[identifier].tags = sorted(tags)
 
     created = [incoming[identifier] for identifier in incoming_ids - existing_ids]
     updated: list[Card] = []
-    for identifier in incoming_ids & existing_ids:
+    for identifier in common_ids:
         if (
             # if an update has been recorded on the source's end...
             (incoming[identifier].date_modified > existing[identifier].date_modified)

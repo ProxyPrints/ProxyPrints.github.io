@@ -4,6 +4,7 @@
 
 import { Card, MaximumDPI, MaximumSize, MinimumDPI } from "@/common/constants";
 import {
+  CanonicalArtist,
   CardType as CardTypeSchema,
   PrintingCandidate,
   SourceType,
@@ -488,5 +489,8 @@ export const printingCandidate2: PrintingCandidate = {
   frame: "2003",
   releasedAt: "2010-06-15",
 };
+
+export const canonicalArtist1: CanonicalArtist = { name: "Some Artist" };
+export const canonicalArtist2: CanonicalArtist = { name: "Another Artist" };
 
 //# endregion

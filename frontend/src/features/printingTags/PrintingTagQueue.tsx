@@ -25,6 +25,7 @@ import {
 } from "@/common/schema_types";
 import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
 import { Spinner } from "@/components/Spinner";
+import { AttributeVotingPanel } from "@/features/attributeVoting/AttributeVotingPanel";
 import {
   APIGetPrintingCandidates,
   APIGetPrintingConsensus,
@@ -99,6 +100,10 @@ export function PrintingTagQueue() {
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [flavorText, setFlavorText] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<boolean>(false);
+  // whether the user has taken a printing-tag action (vote or no-match) on the *current*
+  // card this session - the attribute-voting follow-up panel is step 2 after that action,
+  // not shown alongside the initial printing picker on a card the user hasn't touched yet.
+  const [votedThisCard, setVotedThisCard] = useState<boolean>(false);
   // guards the fetch effect below against React 18 Strict Mode's dev-time double-invoke,
   // which would otherwise append the same page's cards twice
   const fetchedPagesRef = React.useRef<Set<number>>(new Set());
@@ -137,9 +142,10 @@ export function PrintingTagQueue() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, currentIndex, queueCards.length, page, pages]);
 
-  // reset the reveal animation for each new card
+  // reset the reveal animation and attribute-voting step for each new card
   useEffect(() => {
     setRevealed(false);
+    setVotedThisCard(false);
   }, [currentCard?.identifier]);
 
   useEffect(() => {
@@ -188,7 +194,15 @@ export function PrintingTagQueue() {
       printingIdentifier,
       isNoMatch
     )
-      .then(() => advance())
+      .then((response) => {
+        setConsensus(response);
+        setVotedThisCard(true);
+        // if this vote itself resolved the printing (e.g. it broke a tie), there's nothing
+        // left to ask about - advance immediately rather than showing the attribute panel.
+        if (response.resolvedPrinting != null) {
+          advance();
+        }
+      })
       .catch(() =>
         dispatch(
           setNotification([
@@ -337,6 +351,17 @@ export function PrintingTagQueue() {
                       </Col>
                     ))}
                   </Row>
+                  {votedThisCard &&
+                    consensus?.resolvedPrinting == null &&
+                    backendURL != null && (
+                      <div className="mt-3">
+                        <hr />
+                        <AttributeVotingPanel
+                          backendURL={backendURL}
+                          cardIdentifier={currentCard.identifier}
+                        />
+                      </div>
+                    )}
                   <div className="mt-3 d-flex gap-2">
                     <Button
                       variant="outline-secondary"
@@ -345,6 +370,11 @@ export function PrintingTagQueue() {
                     >
                       Skip
                     </Button>
+                    {votedThisCard && consensus?.resolvedPrinting == null && (
+                      <Button variant="primary" onClick={advance}>
+                        Continue
+                      </Button>
+                    )}
                   </div>
                 </>
               )}

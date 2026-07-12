@@ -36,9 +36,18 @@ import { setNotification } from "@/store/slices/toastsSlice";
 interface PrintingTagPickerProps {
   /** The image identifier of the card being tagged. */
   cardIdentifier: string;
+  /**
+   * Notified whenever this component's own consensus state changes (initial fetch and after
+   * each vote submission) - lets a parent (e.g. CardDetailedViewModal) decide whether to show
+   * the attribute-voting follow-up panel without this component needing to know about it.
+   */
+  onConsensusChange?: (consensus: PrintingConsensusResponse | null) => void;
 }
 
-export function PrintingTagPicker({ cardIdentifier }: PrintingTagPickerProps) {
+export function PrintingTagPicker({
+  cardIdentifier,
+  onConsensusChange,
+}: PrintingTagPickerProps) {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
 
@@ -55,8 +64,12 @@ export function PrintingTagPicker({ cardIdentifier }: PrintingTagPickerProps) {
       return;
     }
     APIGetPrintingConsensus(backendURL, cardIdentifier)
-      .then(setConsensus)
+      .then((response) => {
+        setConsensus(response);
+        onConsensusChange?.(response);
+      })
       .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, cardIdentifier]);
 
   useEffect(() => {
@@ -87,6 +100,7 @@ export function PrintingTagPicker({ cardIdentifier }: PrintingTagPickerProps) {
     )
       .then((response) => {
         setConsensus(response);
+        onConsensusChange?.(response);
         dispatch(
           setNotification([
             Math.random().toString(),

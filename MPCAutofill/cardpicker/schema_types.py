@@ -13,23 +13,13 @@ T = TypeVar("T")
 EnumT = TypeVar("EnumT", bound=Enum)
 
 
-def from_list(f: Callable[[Any], T], x: Any) -> List[T]:
-    assert isinstance(x, list)
-    return [f(y) for y in x]
-
-
 def from_str(x: Any) -> str:
     assert isinstance(x, str)
     return x
 
 
-def from_int(x: Any) -> int:
-    assert isinstance(x, int) and not isinstance(x, bool)
-    return x
-
-
-def from_bool(x: Any) -> bool:
-    assert isinstance(x, bool)
+def from_none(x: Any) -> Any:
+    assert x is None
     return x
 
 
@@ -42,13 +32,23 @@ def from_union(fs, x):
     assert False
 
 
+def from_list(f: Callable[[Any], T], x: Any) -> List[T]:
+    assert isinstance(x, list)
+    return [f(y) for y in x]
+
+
 def to_class(c: Type[T], x: Any) -> dict:
     assert isinstance(x, c)
     return cast(Any, x).to_dict()
 
 
-def from_none(x: Any) -> Any:
-    assert x is None
+def from_int(x: Any) -> int:
+    assert isinstance(x, int) and not isinstance(x, bool)
+    return x
+
+
+def from_bool(x: Any) -> bool:
+    assert isinstance(x, bool)
     return x
 
 
@@ -74,6 +74,118 @@ def to_float(x: Any) -> float:
 
 class Game(str, Enum):
     MTG = "MTG"
+
+
+class ArtistCandidatesRequest(BaseModel):
+    identifier: str
+    query: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistCandidatesRequest":
+        assert isinstance(obj, dict)
+        identifier = from_str(obj.get("identifier"))
+        query = from_union([from_none, from_str], obj.get("query"))
+        return ArtistCandidatesRequest(identifier, query)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["identifier"] = from_str(self.identifier)
+        if self.query is not None:
+            result["query"] = from_union([from_none, from_str], self.query)
+        return result
+
+
+class CanonicalArtistClass(BaseModel):
+    name: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CanonicalArtistClass":
+        assert isinstance(obj, dict)
+        name = from_str(obj.get("name"))
+        return CanonicalArtistClass(name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["name"] = from_str(self.name)
+        return result
+
+
+class ArtistCandidatesResponse(BaseModel):
+    results: List[Optional[CanonicalArtistClass]]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistCandidatesResponse":
+        assert isinstance(obj, dict)
+        results = from_list(lambda x: from_union([from_none, CanonicalArtistClass.from_dict], x), obj.get("results"))
+        return ArtistCandidatesResponse(results)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["results"] = from_list(
+            lambda x: from_union([from_none, lambda x: to_class(CanonicalArtistClass, x)], x), self.results
+        )
+        return result
+
+
+class ArtistConsensusRequest(BaseModel):
+    identifier: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistConsensusRequest":
+        assert isinstance(obj, dict)
+        identifier = from_str(obj.get("identifier"))
+        return ArtistConsensusRequest(identifier)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["identifier"] = from_str(self.identifier)
+        return result
+
+
+class ArtistVoteTallyEntry(BaseModel):
+    count: int
+    isUnknown: bool
+    artist: Optional[CanonicalArtistClass] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistVoteTallyEntry":
+        assert isinstance(obj, dict)
+        count = from_int(obj.get("count"))
+        isUnknown = from_bool(obj.get("isUnknown"))
+        artist = from_union([from_none, CanonicalArtistClass.from_dict], obj.get("artist"))
+        return ArtistVoteTallyEntry(count, isUnknown, artist)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["count"] = from_int(self.count)
+        result["isUnknown"] = from_bool(self.isUnknown)
+        if self.artist is not None:
+            result["artist"] = from_union([from_none, lambda x: to_class(CanonicalArtistClass, x)], self.artist)
+        return result
+
+
+class ArtistConsensusResponse(BaseModel):
+    isUnknown: bool
+    voteTally: List[ArtistVoteTallyEntry]
+    resolvedArtist: Optional[CanonicalArtistClass] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistConsensusResponse":
+        assert isinstance(obj, dict)
+        isUnknown = from_bool(obj.get("isUnknown"))
+        voteTally = from_list(ArtistVoteTallyEntry.from_dict, obj.get("voteTally"))
+        resolvedArtist = from_union([from_none, CanonicalArtistClass.from_dict], obj.get("resolvedArtist"))
+        return ArtistConsensusResponse(isUnknown, voteTally, resolvedArtist)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["isUnknown"] = from_bool(self.isUnknown)
+        result["voteTally"] = from_list(lambda x: to_class(ArtistVoteTallyEntry, x), self.voteTally)
+        if self.resolvedArtist is not None:
+            result["resolvedArtist"] = from_union(
+                [from_none, lambda x: to_class(CanonicalArtistClass, x)], self.resolvedArtist
+            )
+        return result
 
 
 class FilterSettings(BaseModel):
@@ -219,21 +331,6 @@ class CardsRequest(BaseModel):
     def to_dict(self) -> dict:
         result: dict = {}
         result["cardIdentifiers"] = from_list(from_str, self.cardIdentifiers)
-        return result
-
-
-class CanonicalArtistClass(BaseModel):
-    name: str
-
-    @staticmethod
-    def from_dict(obj: Any) -> "CanonicalArtistClass":
-        assert isinstance(obj, dict)
-        name = from_str(obj.get("name"))
-        return CanonicalArtistClass(name)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["name"] = from_str(self.name)
         return result
 
 
@@ -1245,6 +1342,31 @@ class SourcesResponse(BaseModel):
         return result
 
 
+class SubmitArtistVoteRequest(BaseModel):
+    anonymousId: str
+    identifier: str
+    isUnknown: bool
+    artistName: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitArtistVoteRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        isUnknown = from_bool(obj.get("isUnknown"))
+        artistName = from_union([from_none, from_str], obj.get("artistName"))
+        return SubmitArtistVoteRequest(anonymousId, identifier, isUnknown, artistName)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["isUnknown"] = from_bool(self.isUnknown)
+        if self.artistName is not None:
+            result["artistName"] = from_union([from_none, from_str], self.artistName)
+        return result
+
+
 class SubmitPrintingTagRequest(BaseModel):
     anonymousId: str
     identifier: str
@@ -1267,6 +1389,100 @@ class SubmitPrintingTagRequest(BaseModel):
         result["isNoMatch"] = from_bool(self.isNoMatch)
         if self.printingIdentifier is not None:
             result["printingIdentifier"] = from_union([from_none, from_str], self.printingIdentifier)
+        return result
+
+
+class SubmitTagVoteRequest(BaseModel):
+    anonymousId: str
+    identifier: str
+    polarity: int
+    tagName: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitTagVoteRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        polarity = from_int(obj.get("polarity"))
+        tagName = from_str(obj.get("tagName"))
+        return SubmitTagVoteRequest(anonymousId, identifier, polarity, tagName)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["polarity"] = from_int(self.polarity)
+        result["tagName"] = from_str(self.tagName)
+        return result
+
+
+class TagConsensusRequest(BaseModel):
+    identifier: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "TagConsensusRequest":
+        assert isinstance(obj, dict)
+        identifier = from_str(obj.get("identifier"))
+        return TagConsensusRequest(identifier)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["identifier"] = from_str(self.identifier)
+        return result
+
+
+class TagVoteTallyEntry(BaseModel):
+    count: int
+    polarity: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "TagVoteTallyEntry":
+        assert isinstance(obj, dict)
+        count = from_int(obj.get("count"))
+        polarity = from_int(obj.get("polarity"))
+        return TagVoteTallyEntry(count, polarity)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["count"] = from_int(self.count)
+        result["polarity"] = from_int(self.polarity)
+        return result
+
+
+class TagConsensusEntry(BaseModel):
+    tagName: str
+    tally: List[TagVoteTallyEntry]
+    resolvedPolarity: Optional[int] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "TagConsensusEntry":
+        assert isinstance(obj, dict)
+        tagName = from_str(obj.get("tagName"))
+        tally = from_list(TagVoteTallyEntry.from_dict, obj.get("tally"))
+        resolvedPolarity = from_union([from_none, from_int], obj.get("resolvedPolarity"))
+        return TagConsensusEntry(tagName, tally, resolvedPolarity)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["tagName"] = from_str(self.tagName)
+        result["tally"] = from_list(lambda x: to_class(TagVoteTallyEntry, x), self.tally)
+        if self.resolvedPolarity is not None:
+            result["resolvedPolarity"] = from_union([from_none, from_int], self.resolvedPolarity)
+        return result
+
+
+class TagConsensusResponse(BaseModel):
+    tags: List[TagConsensusEntry]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "TagConsensusResponse":
+        assert isinstance(obj, dict)
+        tags = from_list(TagConsensusEntry.from_dict, obj.get("tags"))
+        return TagConsensusResponse(tags)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["tags"] = from_list(lambda x: to_class(TagConsensusEntry, x), self.tags)
         return result
 
 
@@ -1341,6 +1557,14 @@ class TagsResponse(BaseModel):
         result: dict = {}
         result["tags"] = from_list(lambda x: to_class(Tag, x), self.tags)
         return result
+
+
+def ArtistVoteTallyEntryfromdict(s: Any) -> ArtistVoteTallyEntry:
+    return ArtistVoteTallyEntry.from_dict(s)
+
+
+def ArtistVoteTallyEntrytodict(x: ArtistVoteTallyEntry) -> Any:
+    return to_class(ArtistVoteTallyEntry, x)
 
 
 def Campaignfromdict(s: Any) -> Optional[CampaignClass]:
@@ -1527,12 +1751,60 @@ def Tagtodict(x: Tag) -> Any:
     return to_class(Tag, x)
 
 
+def TagConsensusEntryfromdict(s: Any) -> TagConsensusEntry:
+    return TagConsensusEntry.from_dict(s)
+
+
+def TagConsensusEntrytodict(x: TagConsensusEntry) -> Any:
+    return to_class(TagConsensusEntry, x)
+
+
+def TagVoteTallyEntryfromdict(s: Any) -> TagVoteTallyEntry:
+    return TagVoteTallyEntry.from_dict(s)
+
+
+def TagVoteTallyEntrytodict(x: TagVoteTallyEntry) -> Any:
+    return to_class(TagVoteTallyEntry, x)
+
+
 def VoteTallyEntryfromdict(s: Any) -> VoteTallyEntry:
     return VoteTallyEntry.from_dict(s)
 
 
 def VoteTallyEntrytodict(x: VoteTallyEntry) -> Any:
     return to_class(VoteTallyEntry, x)
+
+
+def ArtistCandidatesRequestfromdict(s: Any) -> ArtistCandidatesRequest:
+    return ArtistCandidatesRequest.from_dict(s)
+
+
+def ArtistCandidatesRequesttodict(x: ArtistCandidatesRequest) -> Any:
+    return to_class(ArtistCandidatesRequest, x)
+
+
+def ArtistCandidatesResponsefromdict(s: Any) -> ArtistCandidatesResponse:
+    return ArtistCandidatesResponse.from_dict(s)
+
+
+def ArtistCandidatesResponsetodict(x: ArtistCandidatesResponse) -> Any:
+    return to_class(ArtistCandidatesResponse, x)
+
+
+def ArtistConsensusRequestfromdict(s: Any) -> ArtistConsensusRequest:
+    return ArtistConsensusRequest.from_dict(s)
+
+
+def ArtistConsensusRequesttodict(x: ArtistConsensusRequest) -> Any:
+    return to_class(ArtistConsensusRequest, x)
+
+
+def ArtistConsensusResponsefromdict(s: Any) -> ArtistConsensusResponse:
+    return ArtistConsensusResponse.from_dict(s)
+
+
+def ArtistConsensusResponsetodict(x: ArtistConsensusResponse) -> Any:
+    return to_class(ArtistConsensusResponse, x)
 
 
 def CardbacksRequestfromdict(s: Any) -> CardbacksRequest:
@@ -1767,12 +2039,44 @@ def SourcesResponsetodict(x: SourcesResponse) -> Any:
     return to_class(SourcesResponse, x)
 
 
+def SubmitArtistVoteRequestfromdict(s: Any) -> SubmitArtistVoteRequest:
+    return SubmitArtistVoteRequest.from_dict(s)
+
+
+def SubmitArtistVoteRequesttodict(x: SubmitArtistVoteRequest) -> Any:
+    return to_class(SubmitArtistVoteRequest, x)
+
+
 def SubmitPrintingTagRequestfromdict(s: Any) -> SubmitPrintingTagRequest:
     return SubmitPrintingTagRequest.from_dict(s)
 
 
 def SubmitPrintingTagRequesttodict(x: SubmitPrintingTagRequest) -> Any:
     return to_class(SubmitPrintingTagRequest, x)
+
+
+def SubmitTagVoteRequestfromdict(s: Any) -> SubmitTagVoteRequest:
+    return SubmitTagVoteRequest.from_dict(s)
+
+
+def SubmitTagVoteRequesttodict(x: SubmitTagVoteRequest) -> Any:
+    return to_class(SubmitTagVoteRequest, x)
+
+
+def TagConsensusRequestfromdict(s: Any) -> TagConsensusRequest:
+    return TagConsensusRequest.from_dict(s)
+
+
+def TagConsensusRequesttodict(x: TagConsensusRequest) -> Any:
+    return to_class(TagConsensusRequest, x)
+
+
+def TagConsensusResponsefromdict(s: Any) -> TagConsensusResponse:
+    return TagConsensusResponse.from_dict(s)
+
+
+def TagConsensusResponsetodict(x: TagConsensusResponse) -> Any:
+    return to_class(TagConsensusResponse, x)
 
 
 def TagsResponsefromdict(s: Any) -> TagsResponse:

@@ -1,6 +1,6 @@
 import pytest
 
-from cardpicker.models import CardPrintingTagSource
+from cardpicker.models import VoteSource
 from cardpicker.printing_consensus import NO_MATCH, resolve_printing
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
@@ -43,8 +43,8 @@ class TestResolvePrinting:
         # two user votes agreeing on the same printing clears both thresholds outright
         card = CardFactory()
         printing = CanonicalCardFactory()
-        CardPrintingTagFactory(card=card, printing=printing, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=printing, source=CardPrintingTagSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
         assert resolve_printing(card) == printing
 
     def test_tie_returns_none(self, db):
@@ -53,10 +53,10 @@ class TestResolvePrinting:
         card = CardFactory()
         printing_a = CanonicalCardFactory()
         printing_b = CanonicalCardFactory()
-        CardPrintingTagFactory(card=card, printing=printing_a, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=printing_a, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=printing_b, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=printing_b, source=CardPrintingTagSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
         assert resolve_printing(card) is None
 
     def test_contested_returns_none(self, db):
@@ -66,19 +66,19 @@ class TestResolvePrinting:
         printing_a = CanonicalCardFactory()
         printing_b = CanonicalCardFactory()
         printing_c = CanonicalCardFactory()
-        CardPrintingTagFactory(card=card, printing=printing_a, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=printing_a, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=printing_b, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=printing_c, source=CardPrintingTagSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_c, source=VoteSource.USER)
         assert resolve_printing(card) is None
 
     def test_no_match_wins_consensus(self, db):
         # two no-match votes outweigh a single vote for a specific printing
         card = CardFactory()
         printing = CanonicalCardFactory()
-        CardPrintingTagFactory(card=card, printing=None, is_no_match=True, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=None, is_no_match=True, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=printing, source=CardPrintingTagSource.USER)
+        CardPrintingTagFactory(card=card, printing=None, is_no_match=True, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=None, is_no_match=True, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
         assert resolve_printing(card) == NO_MATCH
 
     def test_admin_override(self, db):
@@ -88,9 +88,9 @@ class TestResolvePrinting:
         card = CardFactory()
         printing_a = CanonicalCardFactory()
         printing_b = CanonicalCardFactory()
-        CardPrintingTagFactory(card=card, printing=printing_a, source=CardPrintingTagSource.ADMIN)
-        CardPrintingTagFactory(card=card, printing=printing_b, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=printing_b, source=CardPrintingTagSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.ADMIN)
+        CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
         assert resolve_printing(card) == printing_a
 
     def test_ai_only_insufficient(self, db):
@@ -99,5 +99,5 @@ class TestResolvePrinting:
         card = CardFactory()
         printing = CanonicalCardFactory()
         for _ in range(4):
-            CardPrintingTagFactory(card=card, printing=printing, source=CardPrintingTagSource.AI)
+            CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.AI)
         assert resolve_printing(card) is None
