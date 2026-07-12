@@ -10,6 +10,7 @@ import Button from "react-bootstrap/Button";
 import Modal from "react-bootstrap/Modal";
 import Row from "react-bootstrap/Row";
 
+import { getCardDataAttributes } from "@/common/cardDom";
 import { CardDocument, useAppDispatch } from "@/common/types";
 import { imageSizeToMBString, toTitleCase } from "@/common/utils";
 import { AutofillTable } from "@/components/AutofillTable";
@@ -63,6 +64,7 @@ export function CardDetailedViewModal({
         onHide={handleClose}
         size={"xl"}
         data-testid="detailed-view"
+        {...getCardDataAttributes(cardDocument)}
       >
         <Modal.Header closeButton>
           <Modal.Title>Card Details</Modal.Title>

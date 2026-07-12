@@ -20,6 +20,7 @@ import React, {
 import BSCard from "react-bootstrap/Card";
 import Col from "react-bootstrap/Col";
 
+import { getCardDataAttributes } from "@/common/cardDom";
 import {
   getBucketImageURL,
   getImageKey,
@@ -453,6 +454,7 @@ export function Card({
       className={`mpccard ${highlight ? "mpccard-highlight" : "mpccard-hover"}`}
       onClick={cardOnClick}
       style={{ contentVisibility: "auto" }}
+      {...getCardDataAttributes(maybeCardDocument)}
     >
       {!compressed && (
         <BSCard.Header

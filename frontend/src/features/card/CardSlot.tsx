@@ -7,9 +7,13 @@
  */
 
 import { useSortable } from "@dnd-kit/react/sortable";
-import React, { memo, useState } from "react";
+import React, { memo, useRef, useState } from "react";
 import Dropdown from "react-bootstrap/Dropdown";
 
+import {
+  CardSelectedEventName,
+  getCardSelectedEventDetail,
+} from "@/common/cardDom";
 import {
   areSearchQueriesEqual,
   doesSearchQueryFilterOnPrinting,
@@ -25,6 +29,7 @@ import { RightPaddedIcon } from "@/components/icon";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import { CardFooter } from "@/features/card/CardFooter";
 import { GridSelectorModal } from "@/features/gridSelector/GridSelectorModal";
+import { selectCardDocumentByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import { showChangeQueryModal } from "@/store/slices/modalsSlice";
 import {
   bulkAlignMemberSelection,
@@ -39,6 +44,7 @@ import {
   toggleMemberSelection,
 } from "@/store/slices/projectSlice";
 import { selectSearchResultsForQueryOrDefault } from "@/store/slices/searchResultsSlice";
+import store from "@/store/store";
 
 interface CardSlotProps {
   id: string;
@@ -148,6 +154,11 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
 
   const dispatch = useAppDispatch();
   const { ref, handleRef, isDragging } = useSortable({ id, index: slot });
+  const elementRef = useRef<Element | null>(null);
+  const setElementRef = (element: Element | null) => {
+    ref(element);
+    elementRef.current = element;
+  };
   const searchResultsForQueryOrDefault = useAppSelector((state) =>
     selectSearchResultsForQueryOrDefault(
       state,
@@ -226,6 +237,19 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
         deselect: true,
       })
     );
+    const selectedCardDocument = selectCardDocumentByIdentifier(
+      store.getState(),
+      selectedImage
+    );
+    if (elementRef.current != null && selectedCardDocument != null) {
+      elementRef.current.dispatchEvent(
+        new CustomEvent(CardSelectedEventName, {
+          bubbles: true,
+          composed: true,
+          detail: getCardSelectedEventDetail(selectedCardDocument),
+        })
+      );
+    }
   };
 
   //# endregion
@@ -288,7 +312,7 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
 
   return (
     <div
-      ref={ref}
+      ref={setElementRef}
       data-testid={`${face}-slot${slot}`}
       style={{ opacity: isDragging ? 0.7 : undefined }}
     >

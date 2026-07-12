@@ -5,6 +5,7 @@ import {
   cardDocument1,
   cardDocument2,
   cardDocument3,
+  sourceDocument1,
 } from "@/common/test-constants";
 import {
   cardbacksOneOtherResult,
@@ -125,6 +126,37 @@ test.describe("CardSlot", () => {
     );
     await expectCardGridSlotState(page, 1, "front", cardDocument2.name, 2, 3);
 
+    const slot = page.getByTestId("front-slot0");
+    const slotCard = slot.locator("[data-card-identifier]");
+    await expect(slotCard).toHaveAttribute(
+      "data-card-identifier",
+      cardDocument2.identifier
+    );
+    await expect(slotCard).toHaveAttribute(
+      "data-card-name",
+      cardDocument2.name
+    );
+    await expect(slotCard).toHaveAttribute(
+      "data-source-key",
+      sourceDocument1.key
+    );
+    await expect(slotCard).toHaveAttribute(
+      "data-card-dpi",
+      String(cardDocument2.dpi)
+    );
+    await expect(slotCard).toHaveAttribute("data-card-type", "card");
+
+    const cardSelectedEventDetailPromise = slot.evaluate(
+      (element) =>
+        new Promise((resolve) => {
+          element.addEventListener(
+            "mpc:card-selected",
+            (event) => resolve((event as CustomEvent).detail),
+            { once: true }
+          );
+        })
+    );
+
     await page.getByText("2 / 3").click();
     await expect(page.getByText("Select Version")).toBeVisible();
     await page.getByText("Compressed").click();
@@ -133,6 +165,18 @@ test.describe("CardSlot", () => {
     await page.getByText("Option 1").click();
 
     await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 3);
+    await expect(slotCard).toHaveAttribute(
+      "data-card-identifier",
+      cardDocument1.identifier
+    );
+
+    expect(await cardSelectedEventDetailPromise).toEqual({
+      name: cardDocument1.name,
+      identifier: cardDocument1.identifier,
+      sourceKey: sourceDocument1.key,
+      dpi: cardDocument1.dpi,
+      cardType: "card",
+    });
   });
 
   test("deleting a CardSlot", async ({ page, network }) => {
