@@ -14,6 +14,8 @@ export interface CardSelectedEventDetail {
   sourceKey?: string;
   dpi?: number;
   cardType?: string;
+  setCode?: string;
+  collectorNumber?: string;
 }
 
 const cardTypeAttributeValue = (
@@ -50,6 +52,13 @@ export function getCardDataAttributes(
   if (cardType != null) {
     attributes["data-card-type"] = cardType;
   }
+  if (cardDocument.canonicalCard?.expansionCode != null) {
+    attributes["data-card-set-code"] = cardDocument.canonicalCard.expansionCode;
+  }
+  if (cardDocument.canonicalCard?.collectorNumber != null) {
+    attributes["data-card-collector-number"] =
+      cardDocument.canonicalCard.collectorNumber;
+  }
   return attributes;
 }
 
@@ -76,6 +85,12 @@ export function getCardSelectedEventDetail(
   const cardType = cardTypeAttributeValue(cardDocument.cardType);
   if (cardType != null) {
     detail.cardType = cardType;
+  }
+  if (cardDocument.canonicalCard?.expansionCode != null) {
+    detail.setCode = cardDocument.canonicalCard.expansionCode;
+  }
+  if (cardDocument.canonicalCard?.collectorNumber != null) {
+    detail.collectorNumber = cardDocument.canonicalCard.collectorNumber;
   }
   return detail;
 }

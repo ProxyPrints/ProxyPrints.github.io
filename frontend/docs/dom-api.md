@@ -17,17 +17,20 @@ slots, the art-selection grid selector, and the card detail modal) carries
 the following `data-*` attributes on its root element, sourced from the same
 card data already available to the frontend:
 
-| Attribute              | Source                               | Notes                |
-| ---------------------- | ------------------------------------ | -------------------- |
-| `data-card-name`       | the card's name                      |                      |
-| `data-card-identifier` | the card's image identifier          | (the drive image id) |
-| `data-source-key`      | the card's source key                |                      |
-| `data-card-dpi`        | the card's DPI                       |                      |
-| `data-card-type`       | `"card"`, `"cardback"`, or `"token"` |                      |
+| Attribute                    | Source                                          | Notes                                    |
+| ---------------------------- | ----------------------------------------------- | ---------------------------------------- |
+| `data-card-name`             | the card's name                                 |                                          |
+| `data-card-identifier`       | the card's image identifier                     | (the drive image id)                     |
+| `data-source-key`            | the card's source key                           |                                          |
+| `data-card-dpi`              | the card's DPI                                  |                                          |
+| `data-card-type`             | `"card"`, `"cardback"`, or `"token"`            |                                          |
+| `data-card-set-code`         | the card's resolved printing's set code         | only present once a printing is resolved |
+| `data-card-collector-number` | the card's resolved printing's collector number | only present once a printing is resolved |
 
 If a card isn't yet resolved (e.g. still loading, or no card selected for a
 slot), the attributes are omitted entirely rather than emitted with an empty
-value.
+value. The same applies to `data-card-set-code`/`data-card-collector-number`
+specifically when the card has a resolved image but no printing match yet.
 
 ## `mpc:card-selected` event
 
@@ -38,18 +41,17 @@ bubbling, composed `CustomEvent` named `mpc:card-selected`:
 ```js
 document.addEventListener("mpc:card-selected", (event) => {
   console.log(event.detail);
-  // { name, identifier, sourceKey, dpi, cardType }
+  // { name, identifier, sourceKey, dpi, cardType, setCode, collectorNumber }
 });
 ```
 
 `event.detail` mirrors the same underlying fields as the data attributes
-above (camelCased): `name`, `identifier`, `sourceKey`, `dpi`, `cardType`.
-Any field that isn't available is omitted from `detail` rather than included
-with an empty value.
+above (camelCased): `name`, `identifier`, `sourceKey`, `dpi`, `cardType`,
+`setCode`, `collectorNumber`. Any field that isn't available is omitted from
+`detail` rather than included with an empty value.
 
 ## Forward compatibility
 
 This surface is additive-only: future changes may introduce further
-attributes (for example, the card's resolved printing set/collector number)
-or further fields on the event detail, but won't repurpose or remove the
-ones documented here without a deliberate, documented break.
+attributes or further fields on the event detail, but won't repurpose or
+remove the ones documented here without a deliberate, documented break.

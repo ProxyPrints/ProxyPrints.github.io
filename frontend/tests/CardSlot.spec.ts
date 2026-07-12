@@ -145,6 +145,9 @@ test.describe("CardSlot", () => {
       String(cardDocument2.dpi)
     );
     await expect(slotCard).toHaveAttribute("data-card-type", "card");
+    // neither fixture has a resolved canonicalCard, so these should be omitted entirely
+    await expect(slotCard).not.toHaveAttribute("data-card-set-code");
+    await expect(slotCard).not.toHaveAttribute("data-card-collector-number");
 
     const cardSelectedEventDetailPromise = slot.evaluate(
       (element) =>
@@ -169,7 +172,11 @@ test.describe("CardSlot", () => {
       "data-card-identifier",
       cardDocument1.identifier
     );
+    await expect(slotCard).not.toHaveAttribute("data-card-set-code");
+    await expect(slotCard).not.toHaveAttribute("data-card-collector-number");
 
+    // neither cardDocument1 nor cardDocument2 has a resolved canonicalCard, so setCode/collectorNumber
+    // are correctly absent from the event detail here too
     expect(await cardSelectedEventDetailPromise).toEqual({
       name: cardDocument1.name,
       identifier: cardDocument1.identifier,
