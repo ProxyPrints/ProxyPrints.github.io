@@ -2,7 +2,7 @@ from collections import defaultdict
 from typing import Literal, TypedDict
 
 from django.conf import settings
-from django.db.models import Case, Count, IntegerField, Q, QuerySet, When
+from django.db.models import Case, Count, IntegerField, Q, When
 
 from cardpicker.models import (
     CanonicalCard,
@@ -107,7 +107,7 @@ class VoteTallyEntry(TypedDict):
     count: int
 
 
-def get_contested_card_ids() -> QuerySet[CardPrintingTag, int]:
+def get_contested_card_ids() -> list[int]:
     """
     IDs of cards with conflicting printing-tag votes on record: more than one distinct
     printing voted for, or both a printing vote and a no-match vote. Coarser than
@@ -115,8 +115,11 @@ def get_contested_card_ids() -> QuerySet[CardPrintingTag, int]:
     dominates on weight), but avoids running the full consensus calculation per card for
     a queue/triage ordering. Shared between the admin's contested-card filter and the
     "Who's That Planeswalker?" queue, which defaults to surfacing contested cards first.
+    Materialized to a plain list (rather than returning the lazy QuerySet) since the set of
+    actually-contested cards is always a small fraction of the total - cheap to evaluate
+    eagerly, and sidesteps django-stubs' QuerySet generic entirely for callers.
     """
-    return (
+    return list(
         CardPrintingTag.objects.values("card_id")
         .annotate(
             distinct_printings=Count("printing_id", distinct=True),
