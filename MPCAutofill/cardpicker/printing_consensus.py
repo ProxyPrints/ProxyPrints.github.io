@@ -107,7 +107,7 @@ class VoteTallyEntry(TypedDict):
     count: int
 
 
-def get_contested_card_ids() -> QuerySet:
+def get_contested_card_ids() -> QuerySet[int]:
     """
     IDs of cards with conflicting printing-tag votes on record: more than one distinct
     printing voted for, or both a printing vote and a no-match vote. Coarser than
