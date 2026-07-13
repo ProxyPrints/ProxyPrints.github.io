@@ -1,5 +1,5 @@
 /**
- * "Who's That Planeswalker?" - a single-card-at-a-time queue for tagging which real-world
+ * "What's That Card?" - a single-card-at-a-time queue for tagging which real-world
  * Scryfall printing a card image depicts. Walks through cards returned by
  * `2/printingTagQueue/` (which defaults to surfacing contested cards - conflicting votes
  * already cast - first, since those are the highest-value cards for a human to weigh in
@@ -43,7 +43,7 @@ import {
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 
-// "Who's That Pokemon?" style reveal: the card starts as a black silhouette with a "?" in
+// Silhouette-reveal: the card starts as a black silhouette with a "?" in
 // the middle, holds for a beat, then fades to reveal the real art. The Scryfall candidate
 // list is deliberately not rendered until this finishes (see `revealed` state below) - the
 // whole point is to test recognition before handing over the answer options.
@@ -89,8 +89,8 @@ const RevealOverlay = styled.div`
 // even at the default z-index: auto - paints in front of plain, non-positioned in-flow
 // siblings (the CSS spec's stacking order puts positioned content ahead of ordinary flow
 // content, independent of DOM order or z-index value). Left at the default, that meant the
-// whole panel - including the burst bleeding out of it - painted on top of the "Who's That
-// Planeswalker?" heading and the candidate grid's plain text/borders, hiding them. Pushing
+// whole panel - including the burst bleeding out of it - painted on top of the "What's That
+// Card?" heading and the candidate grid's plain text/borders, hiding them. Pushing
 // CardPanel itself to a negative stack level is what actually fixes that (giving BurstSvg
 // alone a negative z-index only reorders it against its own siblings *inside* CardPanel,
 // it can't reach past the sticky boundary). The two columns never overlap horizontally at
@@ -207,14 +207,14 @@ const ZoomableThumbnail = styled.div`
 
 const FLAVOR_TEXT = [
   "Your spark ignites! On to the next mystery.",
-  "A planeswalker's eye for detail - nicely done!",
+  "A collector's eye for detail - nicely done!",
   "The multiverse is a little better catalogued because of you.",
   "Sharper than a Sphinx's riddle. Next card incoming!",
   "That's the stuff legends are made of. Keep going!",
-  "Another printing pinned down. Onward, planeswalker!",
+  "Another printing pinned down. Onward!",
   "You've got a good spark for this. Next!",
   "Precisely the kind of insight the Multiverse needs.",
-  "Well walked, planeswalker. Here comes another.",
+  "Well spotted. Here comes another.",
   "Your knowledge of the planes grows ever stronger.",
 ];
 
@@ -485,14 +485,14 @@ export function PrintingTagQueue() {
 
   if (queueExhausted) {
     return (
-      <div data-testid="planeswalker-queue-empty">
+      <div data-testid="printing-tag-queue-empty">
         <p className="text-primary">
           You&apos;re all caught up - no cards left to tag right now!
         </p>
         {flavorText != null && (
           <p
             className="text-muted"
-            data-testid="planeswalker-queue-flavor-text"
+            data-testid="printing-tag-queue-flavor-text"
           >
             {flavorText}
           </p>
@@ -502,12 +502,12 @@ export function PrintingTagQueue() {
   }
 
   return (
-    <div data-testid="planeswalker-queue">
+    <div data-testid="printing-tag-queue">
       <p className="text-primary">
         Still need a printing tagged: {hits} card{hits !== 1 && "s"}
       </p>
       {flavorText != null && (
-        <p className="text-muted" data-testid="planeswalker-queue-flavor-text">
+        <p className="text-muted" data-testid="printing-tag-queue-flavor-text">
           {flavorText}
         </p>
       )}
@@ -516,7 +516,7 @@ export function PrintingTagQueue() {
           <Spinner size={2} />
         </div>
       ) : (
-        <div data-testid="planeswalker-queue-current-card">
+        <div data-testid="printing-tag-queue-current-card">
           <Row className="g-4">
             <Col xs={12} md={4}>
               <CardPanel
@@ -541,7 +541,7 @@ export function PrintingTagQueue() {
                   />
                   {!revealed && (
                     <RevealOverlay
-                      data-testid="planeswalker-queue-reveal-overlay"
+                      data-testid="printing-tag-queue-reveal-overlay"
                       onAnimationEnd={() => setRevealed(true)}
                     >
                       ?
@@ -560,7 +560,7 @@ export function PrintingTagQueue() {
                 <>
                   <div
                     className="mb-2"
-                    data-testid="planeswalker-queue-consensus"
+                    data-testid="printing-tag-queue-consensus"
                   >
                     {consensus?.resolvedPrinting != null && (
                       <span>

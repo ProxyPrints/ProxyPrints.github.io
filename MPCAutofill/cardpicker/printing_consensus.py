@@ -102,7 +102,7 @@ def get_contested_card_ids() -> list[int]:
     `resolve_printing` (a card can show as contested here yet still resolve if one side
     dominates on weight), but avoids running the full consensus calculation per card for
     a queue/triage ordering. Shared between the admin's contested-card filter and the
-    "Who's That Planeswalker?" queue, which defaults to surfacing contested cards first.
+    "What's That Card?" queue, which defaults to surfacing contested cards first.
     Materialized to a plain list (rather than returning the lazy QuerySet) since the set of
     actually-contested cards is always a small fraction of the total - cheap to evaluate
     eagerly, and sidesteps django-stubs' QuerySet generic entirely for callers.

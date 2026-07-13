@@ -34,7 +34,7 @@ specifically when the card has a resolved image but no printing match yet.
 
 ## Printing-candidate buttons
 
-The printing-tag review queue ("Who's That Planeswalker?", the standalone
+The printing-tag review queue ("What's That Card?", the standalone
 queue page) and the printing-tag picker embedded in the card detail modal
 both render a grid of Scryfall printing candidates for the user to vote on.
 Each candidate's button element carries a subset of the same attributes:

@@ -48,7 +48,7 @@ test.describe("PrintingTagPicker tests", () => {
     await openDetailedView(page, cardDocument1.name);
 
     await expect(
-      page.getByTestId("detailed-view").getByText("Who's That Planeswalker?")
+      page.getByTestId("detailed-view").getByText("What's That Card?")
     ).toBeVisible();
     await expect(page.getByText("Not yet resolved")).toBeVisible();
 

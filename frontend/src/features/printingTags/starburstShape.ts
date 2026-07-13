@@ -1,6 +1,6 @@
 /**
  * Procedurally generates the jagged "explosion" starburst silhouette used behind the
- * Planeswalker queue (see printingQueue.tsx) - alternating spike-tip/valley vertices around
+ * Vote queue (see printingQueue.tsx) - alternating spike-tip/valley vertices around
  * a circle, with the tip radius heavily randomized per spike so the outline reads as an
  * irregular burst rather than a uniform star (matching the reference clip-art starburst
  * this was modeled on, e.g. https://i.sstatic.net/xpRS9.gif). Computed once at module load

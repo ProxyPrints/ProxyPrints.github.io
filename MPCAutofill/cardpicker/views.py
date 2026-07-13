@@ -694,7 +694,7 @@ def get_printing_tag_queue(request: HttpRequest) -> HttpResponse:
     `printing_tag_status` rather than recomputing consensus for every card, which is the
     whole reason that field exists. Contested cards (conflicting votes already cast) sort
     first - they're the highest-value cards for a human to weigh in on, and this is also
-    what the "Who's That Planeswalker?" queue page relies on to default to contested cards.
+    what the "What's That Card?" queue page relies on to default to contested cards.
     """
 
     if request.method != "GET":

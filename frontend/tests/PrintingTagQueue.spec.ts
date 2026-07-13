@@ -36,7 +36,7 @@ test.describe("PrintingTagQueue tests", () => {
       page.getByText("Still need a printing tagged: 1 card")
     ).toBeVisible();
     await expect(
-      page.getByTestId("planeswalker-queue-current-card")
+      page.getByTestId("printing-tag-queue-current-card")
     ).toBeVisible();
     await expect(page.getByAltText(cardDocument1.name)).toBeVisible();
     await expect(page.getByAltText("abc 1")).toBeVisible();
@@ -120,7 +120,7 @@ test.describe("PrintingTagQueue tests", () => {
       page.getByText("You're all caught up - no cards left to tag right now!")
     ).toBeVisible();
     await expect(
-      page.getByTestId("planeswalker-queue-flavor-text")
+      page.getByTestId("printing-tag-queue-flavor-text")
     ).toBeVisible();
   });
 
@@ -141,7 +141,7 @@ test.describe("PrintingTagQueue tests", () => {
 
     await expect(page.getByAltText(cardDocument2.name)).toBeVisible();
     await expect(
-      page.getByTestId("planeswalker-queue-flavor-text")
+      page.getByTestId("printing-tag-queue-flavor-text")
     ).toBeVisible();
   });
 });

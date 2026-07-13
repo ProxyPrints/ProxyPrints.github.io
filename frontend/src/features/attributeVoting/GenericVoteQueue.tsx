@@ -1,5 +1,5 @@
 /**
- * Shared queue shell for the artist and tag modes of the "Who's That Planeswalker?" vote
+ * Shared queue shell for the artist and tag modes of the "What's That Card?" vote
  * queue, driven by the generalized `2/voteQueue/` endpoint. Printing mode is deliberately NOT
  * folded into this - it keeps using PrintingTagQueue.tsx and `2/printingTagQueue/` completely
  * unchanged (its own data source/shape, and its exact existing behavior is a hard constraint),
@@ -23,14 +23,14 @@ import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 
 const FLAVOR_TEXT = [
   "Your spark ignites! On to the next mystery.",
-  "A planeswalker's eye for detail - nicely done!",
+  "A collector's eye for detail - nicely done!",
   "The multiverse is a little better catalogued because of you.",
   "Sharper than a Sphinx's riddle. Next card incoming!",
   "That's the stuff legends are made of. Keep going!",
-  "Another printing pinned down. Onward, planeswalker!",
+  "Another printing pinned down. Onward!",
   "You've got a good spark for this. Next!",
   "Precisely the kind of insight the Multiverse needs.",
-  "Well walked, planeswalker. Here comes another.",
+  "Well spotted. Here comes another.",
   "Your knowledge of the planes grows ever stronger.",
 ];
 

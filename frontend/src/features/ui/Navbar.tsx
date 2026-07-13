@@ -123,7 +123,7 @@ export default function ProjectNavbar() {
                   active={router.route === "/printingQueue"}
                   eventKey="/printingQueue"
                 >
-                  Who&apos;s That Planeswalker?
+                  What&apos;s That Card?
                 </Nav.Link>
               )}
               <Nav.Link

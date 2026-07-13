@@ -35,7 +35,7 @@ test.describe("Vote queue kind switcher", () => {
     await loadPageWithDefaultBackend(page, "printingQueue");
 
     // Printings tab is the default - unchanged existing behavior
-    await expect(page.getByTestId("planeswalker-queue")).toBeVisible();
+    await expect(page.getByTestId("printing-tag-queue")).toBeVisible();
     await expect(page.getByAltText(cardDocument1.name)).toBeVisible();
 
     // switch to Artists - cardDocument8 has a confidently-known canonicalArtist, so this

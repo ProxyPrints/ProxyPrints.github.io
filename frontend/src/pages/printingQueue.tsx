@@ -19,7 +19,7 @@ import {
 
 type VoteQueueTab = "printing" | "artist" | "tag";
 
-// "Who's That Pokemon?" style radiating starburst behind the game itself - a jagged
+// Radiating starburst behind the game itself - a jagged
 // "explosion" burst (see starburstShape.ts, rendered inside PrintingTagQueue.tsx alongside
 // the subject card so the two stay glued together under position: sticky as the page
 // scrolls) built from two overlapping SVG polygons rather than a static image, so it scales
@@ -75,7 +75,7 @@ function PrintingQueueOrDefault() {
     <>
       <StarburstBackground>
         <StarburstContent>
-          <h1>Who&apos;s That Planeswalker?</h1>
+          <h1>What&apos;s That Card?</h1>
           <p>
             Test your Magic: the Gathering knowledge! One card at a time, help
             identify which real-world printing, artist, or descriptor tag each
@@ -134,7 +134,7 @@ export default function PrintingQueue() {
   return (
     <ProjectContainer>
       <Head>
-        <title>{`${projectName} Who's That Planeswalker?`}</title>
+        <title>{`${projectName} What's That Card?`}</title>
         <meta
           name="description"
           content={`Test your Magic: the Gathering knowledge and help tag which real-world printing each card image in ${ProjectName} depicts.`}
