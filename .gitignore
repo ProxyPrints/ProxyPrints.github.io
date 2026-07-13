@@ -197,3 +197,4 @@ docker/django/env.txt
 /.claude/
 CLAUDE.md
 WORKERS.md
+journal/
