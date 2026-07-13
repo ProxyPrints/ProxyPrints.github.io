@@ -61,6 +61,21 @@ exist; `git show <sha> --stat` and `git merge-base --is-ancestor <sha> origin/ma
 `git show`/`git merge-base`/`git ls-remote` before acting on a relayed
 finding.
 
+## The frontend has its own hand-maintained copy of backend name-sanitisation logic
+
+`frontend/src/common/processing.ts`'s `toSearchable` duplicates (does not
+import) `MPCAutofill/cardpicker/search/sanitisation.py`'s `to_searchable`,
+for client-side search on the Local Folder/offline backend. They can and
+do silently drift: upstream PR #460 fixed a bug in the backend copy
+(`to_searchable` was wrongly stripping the word "the" from card names,
+e.g. "Huntmaster of the Fells" → "huntmaster of fells") but never touched
+the frontend copy — confirmed the same bug still exists in upstream's own
+current `frontend/src/common/processing.ts` too, so this isn't a fork
+gap, it's upstream's own unfixed duplication. Whenever a backend
+sanitisation/search-normalization PR lands (ours or upstream's), grep
+`frontend/src/common/processing.ts` for the same logic before assuming
+the fix is complete.
+
 ## Elasticsearch index mapping can drift from the schema declared in code
 
 `documents.py`'s declared field types (e.g. `KeywordField`) don't
