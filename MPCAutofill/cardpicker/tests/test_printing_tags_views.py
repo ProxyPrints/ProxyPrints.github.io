@@ -4,7 +4,7 @@ from django.core.cache import cache
 from django.urls import reverse
 
 from cardpicker import views
-from cardpicker.models import CardPrintingTag, CardPrintingTagSource, PrintingTagStatus
+from cardpicker.models import CardPrintingTag, PrintingTagStatus, VoteSource
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
@@ -171,8 +171,8 @@ class TestPostPrintingConsensus:
     def test_resolved_consensus_and_tally(self, client, django_settings):
         card = CardFactory()
         printing = CanonicalCardFactory()
-        CardPrintingTagFactory(card=card, printing=printing, source=CardPrintingTagSource.USER)
-        CardPrintingTagFactory(card=card, printing=printing, source=CardPrintingTagSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
 
         response = client.post(
             reverse(views.post_printing_consensus),

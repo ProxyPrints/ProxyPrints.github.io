@@ -9,6 +9,8 @@ import {
   SupporterTier,
 } from "@/common/schema_types";
 import {
+  canonicalArtist1,
+  canonicalArtist2,
   cardDocument1,
   cardDocument2,
   cardDocument3,
@@ -712,6 +714,102 @@ export const printingTagQueueTwoResults = http.get(
 export const printingTagQueueNoResults = http.get(
   buildRoute("2/printingTagQueue/"),
   () => HttpResponse.json({ hits: 0, pages: 1, cards: [] }, { status: 200 })
+);
+
+// 2/voteQueue/ is shared by all three kinds (kind is in the POST body, not the URL), so this
+// one handler branches on it rather than registering three separate handlers for the same route.
+export const voteQueueArtistOneTagOneResults = http.post(
+  buildRoute("2/voteQueue/"),
+  async ({ request }) => {
+    const body = (await request.json()) as { kind: string; page: number };
+    if (body.kind === "artist") {
+      return HttpResponse.json(
+        { hits: 1, pages: 1, items: [{ card: cardDocument8, tagName: null }] },
+        { status: 200 }
+      );
+    }
+    if (body.kind === "tag") {
+      return HttpResponse.json(
+        {
+          hits: 1,
+          pages: 1,
+          // deliberately a different card than the printing/artist mock fixtures use - the
+          // printing tab's mount is never torn down when switching away (matches its
+          // existing, unchanged behavior), so reusing the same card here would produce two
+          // simultaneous elements with the same alt text once the tag tab is active
+          items: [{ card: cardDocument9, tagName: "Borderless" }],
+        },
+        { status: 200 }
+      );
+    }
+    return HttpResponse.json({ hits: 0, pages: 1, items: [] }, { status: 200 });
+  }
+);
+
+export const voteQueueNoResults = http.post(buildRoute("2/voteQueue/"), () =>
+  HttpResponse.json({ hits: 0, pages: 1, items: [] }, { status: 200 })
+);
+
+//# endregion
+
+//# region attribute voting
+
+export const artistCandidatesTwoResults = http.post(
+  buildRoute("2/artistCandidates/"),
+  () =>
+    HttpResponse.json(
+      { results: [canonicalArtist1, canonicalArtist2] },
+      { status: 200 }
+    )
+);
+
+export const artistConsensusUnresolved = http.post(
+  buildRoute("2/artistConsensus/"),
+  () =>
+    HttpResponse.json(
+      { resolvedArtist: null, isUnknown: false, voteTally: [] },
+      { status: 200 }
+    )
+);
+
+export const submitArtistVoteResolvesToCanonicalArtist1 = http.post(
+  buildRoute("2/submitArtistVote/"),
+  () =>
+    HttpResponse.json(
+      {
+        resolvedArtist: canonicalArtist1,
+        isUnknown: false,
+        voteTally: [{ artist: canonicalArtist1, isUnknown: false, count: 1 }],
+      },
+      { status: 200 }
+    )
+);
+
+export const tagConsensusTwoUnresolvedTags = http.post(
+  buildRoute("2/tagConsensus/"),
+  () =>
+    HttpResponse.json(
+      {
+        tags: [
+          { tagName: "Borderless", resolvedPolarity: null, tally: [] },
+          { tagName: "Extended", resolvedPolarity: null, tally: [] },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
+export const submitTagVoteResolvesToApply = http.post(
+  buildRoute("2/submitTagVote/"),
+  () =>
+    HttpResponse.json(
+      {
+        tagName: "Borderless",
+        resolvedPolarity: 1,
+        tally: [{ polarity: 1, count: 1 }],
+      },
+      { status: 200 }
+    )
 );
 
 //# endregion

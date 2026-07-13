@@ -26,4 +26,10 @@ urlpatterns = [
     path("2/printingConsensus/", views.post_printing_consensus),
     path("2/submitPrintingTag/", views.post_submit_printing_tag),
     path("2/printingTagQueue/", views.get_printing_tag_queue),
+    path("2/artistCandidates/", views.post_artist_candidates),
+    path("2/artistConsensus/", views.post_artist_consensus),
+    path("2/submitArtistVote/", views.post_submit_artist_vote),
+    path("2/tagConsensus/", views.post_tag_consensus),
+    path("2/submitTagVote/", views.post_submit_tag_vote),
+    path("2/voteQueue/", views.post_vote_queue),
 ]

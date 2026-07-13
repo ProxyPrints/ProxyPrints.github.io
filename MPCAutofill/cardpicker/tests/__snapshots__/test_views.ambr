@@ -195,6 +195,8 @@
         'canonicalArtist': dict({
           'name': 'Artist 102',
         }),
+        'canonicalArtistIsFromVoteOnly': False,
+        'canonicalArtistSource': 'canonical_card',
         'canonicalCard': dict({
           'artist': None,
           'canonicalId': '36cd2364-d113-47d1-b2c4-b088d9eb88dd',
@@ -229,6 +231,8 @@
       }),
       'Island': dict({
         'canonicalArtist': None,
+        'canonicalArtistIsFromVoteOnly': False,
+        'canonicalArtistSource': None,
         'canonicalCard': None,
         'cardType': 'CARD',
         'dateCreated': '1st January, 2023',
@@ -254,6 +258,8 @@
       }),
       'Island (William Bradford)': dict({
         'canonicalArtist': None,
+        'canonicalArtistIsFromVoteOnly': False,
+        'canonicalArtistSource': None,
         'canonicalCard': None,
         'cardType': 'CARD',
         'dateCreated': '1st January, 2023',
@@ -279,6 +285,8 @@
       }),
       'Pást in Flames': dict({
         'canonicalArtist': None,
+        'canonicalArtistIsFromVoteOnly': False,
+        'canonicalArtistSource': None,
         'canonicalCard': None,
         'cardType': 'CARD',
         'dateCreated': '1st January, 2023',
@@ -309,6 +317,8 @@
     'TOKEN': dict({
       'Goblin': dict({
         'canonicalArtist': None,
+        'canonicalArtistIsFromVoteOnly': False,
+        'canonicalArtistSource': None,
         'canonicalCard': None,
         'cardType': 'TOKEN',
         'dateCreated': '1st January, 2023',
@@ -418,6 +428,8 @@
               'canonicalArtist': dict({
                 'name': 'Artist 107',
               }),
+              'canonicalArtistIsFromVoteOnly': False,
+              'canonicalArtistSource': 'canonical_card',
               'canonicalCard': dict({
                 'artist': None,
                 'canonicalId': '36cd2364-d113-47d1-b2c4-b088d9eb88dd',
@@ -452,6 +464,8 @@
             }),
             dict({
               'canonicalArtist': None,
+              'canonicalArtistIsFromVoteOnly': False,
+              'canonicalArtistSource': None,
               'canonicalCard': None,
               'cardType': 'CARD',
               'dateCreated': '1st January, 2023',
@@ -477,6 +491,8 @@
             }),
             dict({
               'canonicalArtist': None,
+              'canonicalArtistIsFromVoteOnly': False,
+              'canonicalArtistSource': None,
               'canonicalCard': None,
               'cardType': 'TOKEN',
               'dateCreated': '1st January, 2023',
@@ -502,6 +518,8 @@
             }),
             dict({
               'canonicalArtist': None,
+              'canonicalArtistIsFromVoteOnly': False,
+              'canonicalArtistSource': None,
               'canonicalCard': None,
               'cardType': 'CARD',
               'dateCreated': '1st January, 2023',
@@ -527,6 +545,8 @@
             }),
             dict({
               'canonicalArtist': None,
+              'canonicalArtistIsFromVoteOnly': False,
+              'canonicalArtistSource': None,
               'canonicalCard': None,
               'cardType': 'CARD',
               'dateCreated': '1st January, 2023',
@@ -552,6 +572,8 @@
             }),
             dict({
               'canonicalArtist': None,
+              'canonicalArtistIsFromVoteOnly': False,
+              'canonicalArtistSource': None,
               'canonicalCard': None,
               'cardType': 'CARD',
               'dateCreated': '1st January, 2023',
@@ -591,6 +613,8 @@
           'cards': list([
             dict({
               'canonicalArtist': None,
+              'canonicalArtistIsFromVoteOnly': False,
+              'canonicalArtistSource': None,
               'canonicalCard': None,
               'cardType': 'CARD',
               'dateCreated': '1st January, 2023',
@@ -618,6 +642,8 @@
             }),
             dict({
               'canonicalArtist': None,
+              'canonicalArtistIsFromVoteOnly': False,
+              'canonicalArtistSource': None,
               'canonicalCard': None,
               'cardType': 'CARDBACK',
               'dateCreated': '1st January, 2023',
@@ -704,6 +730,8 @@
           'canonicalArtist': dict({
             'name': 'Artist 109',
           }),
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': 'canonical_card',
           'canonicalCard': dict({
             'artist': None,
             'canonicalId': '36cd2364-d113-47d1-b2c4-b088d9eb88dd',
@@ -738,6 +766,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -763,6 +793,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'TOKEN',
           'dateCreated': '1st January, 2023',
@@ -788,6 +820,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -813,6 +847,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -838,6 +874,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -872,6 +910,8 @@
       'cards': list([
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -897,6 +937,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -922,6 +964,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -948,6 +992,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -973,6 +1019,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',
@@ -1009,6 +1057,8 @@
       'cards': list([
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -1036,6 +1086,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',
@@ -1412,6 +1464,8 @@
       'results': dict({
         '17fopRCNRge72U8Hac8pApHZtEalx5kHy': dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -1437,6 +1491,8 @@
         }),
         '1V5E0avDmNyEUuFfYwx3nA05aj-1HY0rA': dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'TOKEN',
           'dateCreated': '1st January, 2023',
@@ -1481,6 +1537,8 @@
       'results': dict({
         '1V5E0avDmNyEUuFfYwx3nA05aj-1HY0rA': dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'TOKEN',
           'dateCreated': '1st January, 2023',
@@ -1515,6 +1573,8 @@
       'results': dict({
         '17fopRCNRge72U8Hac8pApHZtEalx5kHy': dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -1540,6 +1600,8 @@
         }),
         '1991MWCur9NdAFi-tQQD5YbQj2oqV_WRy': dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -1565,6 +1627,8 @@
         }),
         '1V5E0avDmNyEUuFfYwx3nA05aj-1HY0rA': dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'TOKEN',
           'dateCreated': '1st January, 2023',
@@ -1609,6 +1673,8 @@
       'results': dict({
         '1V5E0avDmNyEUuFfYwx3nA05aj-1HY0rA': dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'TOKEN',
           'dateCreated': '1st January, 2023',
@@ -2311,6 +2377,8 @@
       'cards': list([
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'TOKEN',
           'dateCreated': '1st January, 2023',
@@ -2336,6 +2404,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',
@@ -2363,6 +2433,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',
@@ -2401,6 +2473,8 @@
           'canonicalArtist': dict({
             'name': 'Artist 67',
           }),
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': 'canonical_card',
           'canonicalCard': dict({
             'artist': None,
             'canonicalId': '36cd2364-d113-47d1-b2c4-b088d9eb88dd',
@@ -2435,6 +2509,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2460,6 +2536,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2485,6 +2563,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2510,6 +2590,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2535,6 +2617,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2560,6 +2644,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2585,6 +2671,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2612,6 +2700,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2638,6 +2728,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2675,6 +2767,8 @@
           'canonicalArtist': dict({
             'name': 'Artist 66',
           }),
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': 'canonical_card',
           'canonicalCard': dict({
             'artist': None,
             'canonicalId': '36cd2364-d113-47d1-b2c4-b088d9eb88dd',
@@ -2709,6 +2803,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2734,6 +2830,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'TOKEN',
           'dateCreated': '1st January, 2023',
@@ -2759,6 +2857,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2784,6 +2884,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2809,6 +2911,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2834,6 +2938,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2859,6 +2965,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2884,6 +2992,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2911,6 +3021,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2937,6 +3049,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARD',
           'dateCreated': '1st January, 2023',
@@ -2962,6 +3076,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',
@@ -2989,6 +3105,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',
@@ -3027,6 +3145,8 @@
           'canonicalArtist': dict({
             'name': 'Artist 68',
           }),
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': 'canonical_card',
           'canonicalCard': dict({
             'artist': None,
             'canonicalId': '36cd2364-d113-47d1-b2c4-b088d9eb88dd',
@@ -3071,6 +3191,8 @@
       'cards': list([
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',
@@ -3107,6 +3229,8 @@
       'cards': list([
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'TOKEN',
           'dateCreated': '1st January, 2023',
@@ -3142,6 +3266,8 @@
       'cards': list([
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',
@@ -3169,6 +3295,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',
@@ -3205,6 +3333,8 @@
       'cards': list([
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',
@@ -3231,6 +3361,8 @@
         }),
         dict({
           'canonicalArtist': None,
+          'canonicalArtistIsFromVoteOnly': False,
+          'canonicalArtistSource': None,
           'canonicalCard': None,
           'cardType': 'CARDBACK',
           'dateCreated': '1st January, 2023',

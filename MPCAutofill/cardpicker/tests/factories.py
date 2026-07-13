@@ -117,5 +117,29 @@ class CardPrintingTagFactory(factory.django.DjangoModelFactory):
     printing = factory.SubFactory(CanonicalCardFactory)
     is_no_match = False
     anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
-    source = models.CardPrintingTagSource.USER
+    source = models.VoteSource.USER
+    confidence = None
+
+
+class CardArtistVoteFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.CardArtistVote
+
+    card = factory.SubFactory(CardFactory)
+    artist = factory.SubFactory(CanonicalArtistFactory)
+    is_unknown = False
+    anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
+    source = models.VoteSource.USER
+    confidence = None
+
+
+class CardTagVoteFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.CardTagVote
+
+    card = factory.SubFactory(CardFactory)
+    tag = factory.SubFactory(TagFactory)
+    polarity = models.VotePolarity.APPLY
+    anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
+    source = models.VoteSource.USER
     confidence = None

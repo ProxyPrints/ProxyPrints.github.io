@@ -1,30 +1,22 @@
-from collections import defaultdict
 from typing import Literal, TypedDict
 
 from django.conf import settings
-from django.db.models import Case, Count, IntegerField, Q, When
 
 from cardpicker.models import (
     CanonicalCard,
     Card,
     CardPrintingTag,
-    CardPrintingTagSource,
     PrintingTagStatus,
+    VoteSource,
+)
+from cardpicker.vote_consensus import (
+    _SOURCE_WEIGHTS,
+    VoteTuple,
+    contested_queryset,
+    resolve_weighted_consensus,
 )
 
 NO_MATCH: Literal["NO_MATCH"] = "NO_MATCH"
-
-_SOURCE_WEIGHTS: dict[str, float] = {
-    CardPrintingTagSource.USER: 1.0,
-    CardPrintingTagSource.ADMIN: settings.PRINTING_TAG_ADMIN_WEIGHT,
-    CardPrintingTagSource.AI: settings.PRINTING_TAG_AI_WEIGHT,
-}
-
-
-class _VoteGroup(TypedDict):
-    weight: float
-    has_non_ai: bool
-    printing: CanonicalCard | None
 
 
 def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
@@ -32,48 +24,44 @@ def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
     Reconciles all `CardPrintingTag` votes cast against `card` into a single resolved
     outcome: a specific `CanonicalCard` printing, the `NO_MATCH` sentinel (consensus is
     that no printing matches), or `None` if there isn't yet enough signal to conclude
-    anything (no votes, a tie, or a genuinely contested set of votes).
-
-    Votes are weighted by their `source` (`PRINTING_TAG_ADMIN_WEIGHT`/`PRINTING_TAG_AI_WEIGHT`
-    settings; user votes always weigh 1). Votes are grouped by outcome, and the
-    highest-weighted group wins if, and only if, ALL of the following hold:
-      - its summed weight is >= `PRINTING_TAG_MIN_VOTES` (this is compared against the
-        summed weight, not a raw row count — a single admin vote, at the default weight
-        of 5, already clears the default threshold of 2 on its own, which is what
-        produces "admin override" behaviour from this one unified formula, with no
-        special-cased branch for admin votes);
-      - its share of the total weight across all groups is >= `PRINTING_TAG_MIN_SHARE`;
-      - it contains at least one non-AI vote (a hard gate, independent of the weight
-        math above, so that no volume of AI-only votes can ever resolve consensus on
-        their own).
+    anything. See `cardpicker.vote_consensus.resolve_weighted_consensus` for the shared
+    weighting/threshold rules (votes weighted by `source`, `PRINTING_TAG_MIN_VOTES`/
+    `MIN_SHARE` gates, non-AI gate) - this is a thin wrapper translating `CardPrintingTag`
+    rows into `VoteTuple`s and the winning outcome key back into a `CanonicalCard`.
     """
     votes = list(card.printing_tags.all())
     if not votes:
         return None
 
-    groups: dict[int | Literal["NO_MATCH"] | None, _VoteGroup] = defaultdict(
-        lambda: _VoteGroup(weight=0.0, has_non_ai=False, printing=None)
-    )
+    printings_by_id: dict[int, CanonicalCard] = {}
+    vote_tuples: list[VoteTuple] = []
     for vote in votes:
-        key: int | Literal["NO_MATCH"] | None = NO_MATCH if vote.is_no_match else vote.printing_id
-        group = groups[key]
-        group["weight"] += _SOURCE_WEIGHTS[vote.source]
-        if vote.source != CardPrintingTagSource.AI:
-            group["has_non_ai"] = True
-        if not vote.is_no_match:
-            group["printing"] = vote.printing
+        key: int | Literal["NO_MATCH"]
+        if vote.is_no_match:
+            key = NO_MATCH
+        else:
+            # guaranteed non-null here by the model's printing_xor_no_match CheckConstraint
+            assert vote.printing_id is not None
+            assert vote.printing is not None
+            key = vote.printing_id
+            printings_by_id[vote.printing_id] = vote.printing
+        vote_tuples.append(
+            VoteTuple(
+                outcome_key=key,
+                weight=_SOURCE_WEIGHTS[vote.source],
+                is_human_backed=vote.source != VoteSource.AI,
+            )
+        )
 
-    total_weight = sum(group["weight"] for group in groups.values())
-    winning_key, winner = max(groups.items(), key=lambda item: item[1]["weight"])
-    share = winner["weight"] / total_weight
-
-    if (
-        winner["weight"] >= settings.PRINTING_TAG_MIN_VOTES
-        and share >= settings.PRINTING_TAG_MIN_SHARE
-        and winner["has_non_ai"]
-    ):
-        return NO_MATCH if winning_key == NO_MATCH else winner["printing"]
-    return None
+    winning_key = resolve_weighted_consensus(
+        vote_tuples, min_weight=settings.PRINTING_TAG_MIN_VOTES, min_share=settings.PRINTING_TAG_MIN_SHARE
+    )
+    if winning_key is None:
+        return None
+    if winning_key == NO_MATCH:
+        return NO_MATCH
+    assert isinstance(winning_key, int)
+    return printings_by_id[winning_key]
 
 
 def resolve_and_persist_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
@@ -118,15 +106,13 @@ def get_contested_card_ids() -> list[int]:
     Materialized to a plain list (rather than returning the lazy QuerySet) since the set of
     actually-contested cards is always a small fraction of the total - cheap to evaluate
     eagerly, and sidesteps django-stubs' QuerySet generic entirely for callers.
+
+    Delegates to the shared `vote_consensus.contested_queryset` - this function's name,
+    signature, and behavior are unchanged; it's the reference point that function's own
+    docstring calls "behavior-preserving".
     """
-    return list(
-        CardPrintingTag.objects.values("card_id")
-        .annotate(
-            distinct_printings=Count("printing_id", distinct=True),
-            has_no_match=Count(Case(When(is_no_match=True, then=1), output_field=IntegerField())),
-        )
-        .filter(Q(distinct_printings__gt=1) | (Q(distinct_printings__gte=1) & Q(has_no_match__gt=0)))
-        .values_list("card_id", flat=True)
+    return contested_queryset(
+        CardPrintingTag.objects.all(), group_by="card_id", outcome_field="printing_id", sentinel_field="is_no_match"
     )
 
 

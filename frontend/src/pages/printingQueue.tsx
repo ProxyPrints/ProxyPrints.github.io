@@ -1,9 +1,13 @@
 import styled from "@emotion/styled";
 import Head from "next/head";
-import React from "react";
+import React, { useState } from "react";
+import Nav from "react-bootstrap/Nav";
+import Tab from "react-bootstrap/Tab";
 
 import { ContentMaxWidth, ProjectName } from "@/common/constants";
+import { Kind } from "@/common/schema_types";
 import { NoBackendDefault } from "@/components/NoBackendDefault";
+import { GenericVoteQueue } from "@/features/attributeVoting/GenericVoteQueue";
 import { PrintingTagQueue } from "@/features/printingTags/PrintingTagQueue";
 import { STARBURST_BACKGROUND_COLOR } from "@/features/printingTags/starburstShape";
 import Footer from "@/features/ui/Footer";
@@ -12,6 +16,8 @@ import {
   useProjectName,
   useRemoteBackendConfigured,
 } from "@/store/slices/backendSlice";
+
+type VoteQueueTab = "printing" | "artist" | "tag";
 
 // "Who's That Pokemon?" style radiating starburst behind the game itself - a jagged
 // "explosion" burst (see starburstShape.ts, rendered inside PrintingTagQueue.tsx alongside
@@ -63,6 +69,7 @@ const StarburstContent = styled.div`
 
 function PrintingQueueOrDefault() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
+  const [activeTab, setActiveTab] = useState<VoteQueueTab>("printing");
 
   return remoteBackendConfigured ? (
     <>
@@ -71,10 +78,48 @@ function PrintingQueueOrDefault() {
           <h1>Who&apos;s That Planeswalker?</h1>
           <p>
             Test your Magic: the Gathering knowledge! One card at a time, help
-            identify which real-world printing each card image depicts -
-            contested cards come first, since they need your eyes the most.
+            identify which real-world printing, artist, or descriptor tag each
+            card image depicts - contested cards come first, since they need
+            your eyes the most.
           </p>
-          <PrintingTagQueue />
+          <Tab.Container
+            activeKey={activeTab}
+            onSelect={(key) => {
+              if (key) setActiveTab(key as VoteQueueTab);
+            }}
+          >
+            <Nav variant="pills" className="mb-3">
+              <Nav.Item>
+                <Nav.Link eventKey="printing">Printings</Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link eventKey="artist">Artists</Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link eventKey="tag">Tags</Nav.Link>
+              </Nav.Item>
+            </Nav>
+            <Tab.Content>
+              {/* mountOnEnter: each mode's queue does its own fetching/pagination on mount -
+                  no need to pay that cost for tabs the user hasn't visited yet. Printing
+                  mode's own component/behavior is completely unchanged from before this tab
+                  switcher existed. unmountOnExit on the two new tabs (not printing, to avoid
+                  touching its existing behavior at all): without it, react-bootstrap keeps an
+                  already-visited pane's DOM mounted (just hidden) rather than removing it,
+                  which both leaves an inactive tab's queue silently polling for more pages in
+                  the background and produces duplicate data-testid="vote-queue" elements in
+                  the DOM at once. */}
+              <Tab.Pane eventKey="printing" mountOnEnter>
+                <PrintingTagQueue />
+              </Tab.Pane>
+              <Tab.Pane eventKey="artist" mountOnEnter unmountOnExit>
+                <GenericVoteQueue kind={Kind.Artist} label="an artist tagged" />
+              </Tab.Pane>
+              <Tab.Pane eventKey="tag" mountOnEnter unmountOnExit>
+                <GenericVoteQueue kind={Kind.Tag} label="a tag reviewed" />
+              </Tab.Pane>
+            </Tab.Content>
+          </Tab.Container>
         </StarburstContent>
       </StarburstBackground>
       <Footer />

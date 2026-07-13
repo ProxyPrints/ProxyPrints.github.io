@@ -7,6 +7,7 @@ from pathlib import Path
 from random import sample
 from typing import Any, Callable, Literal, TypeVar, Union, cast
 
+import Levenshtein
 import pycountry
 from django_ratelimit.decorators import ratelimit
 from elasticsearch_dsl.index import Index
@@ -25,6 +26,13 @@ from django.http import (
 )
 from django.views.decorators.csrf import csrf_exempt
 
+from cardpicker.artist_consensus import UNKNOWN as ARTIST_UNKNOWN
+from cardpicker.artist_consensus import (
+    get_artist_vote_tally,
+    get_contested_artist_card_ids,
+    resolve_and_persist_artist,
+    resolve_artist,
+)
 from cardpicker.constants import (
     CARDS_PAGE_SIZE,
     DEFAULT_LANGUAGE,
@@ -37,17 +45,27 @@ from cardpicker.documents import CardSearch
 from cardpicker.integrations.integrations import get_configured_game_integration
 from cardpicker.integrations.patreon import get_patreon_campaign_details, get_patrons
 from cardpicker.models import (
+    ArtistVoteStatus,
+    CanonicalArtist,
     CanonicalCard,
     Card,
+    CardArtistVote,
     CardPrintingTag,
-    CardPrintingTagSource,
+    CardTagVote,
     CardTypes,
     DFCPair,
     PrintingTagStatus,
     Source,
+    Tag,
+    VotePolarity,
+    VoteSource,
     summarise_contributions,
 )
-from cardpicker.printing_candidates import get_ranked_printing_candidates
+from cardpicker.printing_candidates import (
+    CANDIDATE_QUERY_LIMIT,
+    CANDIDATE_RESULT_LIMIT,
+    get_ranked_printing_candidates,
+)
 from cardpicker.printing_consensus import (
     NO_MATCH,
     get_contested_card_ids,
@@ -55,7 +73,15 @@ from cardpicker.printing_consensus import (
     resolve_and_persist_printing,
     resolve_printing,
 )
-from cardpicker.schema_types import CardbacksRequest, CardbacksResponse
+from cardpicker.schema_types import (
+    ArtistCandidatesRequest,
+    ArtistCandidatesResponse,
+    ArtistConsensusRequest,
+    ArtistConsensusResponse,
+    ArtistVoteTallyEntry,
+    CardbacksRequest,
+    CardbacksResponse,
+)
 from cardpicker.schema_types import Cards as SampleCards
 from cardpicker.schema_types import (
     CardsRequest,
@@ -73,6 +99,9 @@ from cardpicker.schema_types import (
     ImportSitesResponse,
     Info,
     InfoResponse,
+)
+from cardpicker.schema_types import Kind as VoteQueueKind
+from cardpicker.schema_types import (
     Language,
     LanguagesResponse,
     NewCardsFirstPage,
@@ -91,10 +120,20 @@ from cardpicker.schema_types import (
     SearchEngineHealthResponse,
     SortBy,
     SourcesResponse,
+    SubmitArtistVoteRequest,
     SubmitPrintingTagRequest,
+    SubmitTagVoteRequest,
+    TagConsensusEntry,
+    TagConsensusRequest,
+    TagConsensusResponse,
     TagsResponse,
+    TagVoteTallyEntry,
+    VoteQueueItem,
+    VoteQueueRequest,
+    VoteQueueResponse,
     VoteTallyEntry,
 )
+from cardpicker.search.sanitisation import to_searchable
 from cardpicker.search.search_functions import (
     SearchExceptions,
     get_new_cards_paginator,
@@ -105,6 +144,12 @@ from cardpicker.search.search_functions import (
 )
 from cardpicker.sources.api import PathTraversalError, resolve_within_root
 from cardpicker.sources.source_types import SourceTypeChoices
+from cardpicker.tag_consensus import (
+    get_tag_review_queue_pairs,
+    get_tag_vote_tally,
+    resolve_and_persist_tag_votes,
+    resolve_tag,
+)
 from cardpicker.tags import Tags
 
 logger = logging.getLogger(__name__)
@@ -805,8 +850,264 @@ def post_submit_printing_tag(request: HttpRequest) -> HttpResponse:
             printing=printing,
             is_no_match=req.isNoMatch,
             anonymous_id=req.anonymousId,
-            source=CardPrintingTagSource.USER,
+            source=VoteSource.USER,
         )
         resolved = resolve_and_persist_printing(card)
 
     return JsonResponse(_build_printing_consensus_response(card, resolved).model_dump())
+
+
+def _build_artist_consensus_response(
+    card: Card, resolved: CanonicalArtist | Literal["UNKNOWN"] | None
+) -> ArtistConsensusResponse:
+    return ArtistConsensusResponse(
+        resolvedArtist=resolved.serialise() if isinstance(resolved, CanonicalArtist) else None,
+        isUnknown=resolved == ARTIST_UNKNOWN,
+        voteTally=[
+            ArtistVoteTallyEntry(
+                artist=entry["artist"].serialise() if entry["artist"] else None,
+                isUnknown=entry["is_unknown"],
+                count=entry["count"],
+            )
+            for entry in get_artist_vote_tally(card)
+        ],
+    )
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def post_artist_candidates(request: HttpRequest) -> HttpResponse:
+    """
+    Return candidate artists for a card to be tagged against. Two modes: by default, ranks by
+    deduplicating the artists of `get_ranked_printing_candidates`'s own results (free ranking
+    signal, no separate query needed, since those printings are already ranked by relevance to
+    this card); if `query` is given, switches to a typeahead search over `CanonicalArtist.name`
+    for when the right artist isn't among those candidates.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ArtistCandidatesRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+
+    if req.query:
+        words = to_searchable(req.query).split()
+        artists_qs = CanonicalArtist.objects.all()
+        for word in words:
+            artists_qs = artists_qs.filter(name__icontains=word)
+        normalised_query = to_searchable(req.query)
+        artists = sorted(
+            artists_qs[:CANDIDATE_QUERY_LIMIT],
+            key=lambda artist: Levenshtein.ratio(normalised_query, to_searchable(artist.name)),
+            reverse=True,
+        )[:CANDIDATE_RESULT_LIMIT]
+    else:
+        seen_artist_ids: set[int] = set()
+        artists = []
+        for printing in get_ranked_printing_candidates(card, None):
+            if printing.artist_id not in seen_artist_ids:
+                seen_artist_ids.add(printing.artist_id)
+                artists.append(printing.artist)
+
+    return JsonResponse(ArtistCandidatesResponse(results=[artist.serialise() for artist in artists]).model_dump())
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def post_artist_consensus(request: HttpRequest) -> HttpResponse:
+    """
+    Return the currently resolved artist-vote consensus for a card, plus a plain vote-count
+    breakdown - mirrors `post_printing_consensus`.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ArtistConsensusRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    return JsonResponse(_build_artist_consensus_response(card, resolve_artist(card)).model_dump())
+
+
+@csrf_exempt
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_submit_artist_vote(request: HttpRequest) -> HttpResponse:
+    """
+    Submit a vote that a card was illustrated by a specific artist (or definitively by an
+    unlisted/unknown artist). Same delete-then-create-then-recompute pattern as
+    `post_submit_printing_tag` - one artist opinion per (card, anonymous ID) pair at a time,
+    reusing the same rate-limit plumbing (it already reads `anonymousId` from the request body
+    generically, nothing printing-specific about it despite the name).
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many artist vote submissions - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    req = SubmitArtistVoteRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+
+    artist = None
+    if not req.isUnknown:
+        if not req.artistName:
+            raise BadRequestException("artistName is required unless isUnknown is set.")
+        try:
+            artist = CanonicalArtist.objects.get(name=req.artistName)
+        except CanonicalArtist.DoesNotExist:
+            raise BadRequestException(f"No artist found with name {req.artistName!r}.")
+
+    with transaction.atomic():
+        CardArtistVote.objects.filter(card=card, anonymous_id=req.anonymousId).delete()
+        CardArtistVote.objects.create(
+            card=card,
+            artist=artist,
+            is_unknown=req.isUnknown,
+            anonymous_id=req.anonymousId,
+            source=VoteSource.USER,
+        )
+        resolved = resolve_and_persist_artist(card)
+
+    return JsonResponse(_build_artist_consensus_response(card, resolved).model_dump())
+
+
+def _build_tag_consensus_entry(card: Card, tag: Tag) -> TagConsensusEntry:
+    return TagConsensusEntry(
+        tagName=tag.name,
+        resolvedPolarity=resolve_tag(card, tag),
+        tally=[
+            TagVoteTallyEntry(polarity=entry["polarity"], count=entry["count"])
+            for entry in get_tag_vote_tally(card, tag)
+        ],
+    )
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def post_tag_consensus(request: HttpRequest) -> HttpResponse:
+    """
+    Return the currently resolved tag-vote consensus for every seeded tag against a card, so a
+    voter can see and toggle every tag's state in one call rather than fetching per-tag.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = TagConsensusRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    tags = Tag.objects.order_by("name")
+    return JsonResponse(TagConsensusResponse(tags=[_build_tag_consensus_entry(card, tag) for tag in tags]).model_dump())
+
+
+@csrf_exempt
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
+    """
+    Submit a vote on whether a specific tag applies to a card. Unlike printing/artist votes,
+    this is `update_or_create` rather than delete-then-create: a card can carry independent,
+    simultaneous votes across many different tags at once, so submitting a vote on one tag
+    must not clear votes this same person has already cast on any other tag for this card.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many tag vote submissions - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    req = SubmitTagVoteRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    try:
+        tag = Tag.objects.get(name=req.tagName)
+    except Tag.DoesNotExist:
+        raise BadRequestException(f"No tag found with name {req.tagName!r}.")
+    if req.polarity not in (VotePolarity.APPLY, VotePolarity.NOT_APPLICABLE):
+        raise BadRequestException(f"Invalid polarity {req.polarity!r} - must be 1 (apply) or -1 (not applicable).")
+
+    with transaction.atomic():
+        CardTagVote.objects.update_or_create(
+            card=card,
+            tag=tag,
+            anonymous_id=req.anonymousId,
+            defaults={"polarity": req.polarity, "source": VoteSource.USER},
+        )
+        resolve_and_persist_tag_votes(card)
+
+    return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
+
+
+def _paginate(items: Any, page: int) -> Any:
+    """Shared page-index validation for the vote queue, mirroring `get_printing_tag_queue`'s
+    own inline validation (not reused directly - that view's validation lives inline, not as
+    a separate helper, and duplicating six lines here is simpler than refactoring it out from
+    under a view this task doesn't otherwise touch)."""
+    paginator: Paginator[Any] = Paginator(items, PRINTING_TAG_QUEUE_PAGE_SIZE)
+    if not (paginator.num_pages >= page > 0):
+        raise BadRequestException(f"Invalid page {page} specified - must be between 1 and {paginator.num_pages}.")
+    return paginator
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def post_vote_queue(request: HttpRequest) -> HttpResponse:
+    """
+    Generalizes the review queue across all three vote kinds via a `kind` request field - a
+    new sibling endpoint (POST, unlike `2/printingTagQueue/`'s GET) rather than a mutation of
+    that one, which stays completely untouched/reachable for anything still calling it.
+
+    One queue item per card for `kind=printing`/`artist` (`tagName` always null, exactly
+    `2/printingTagQueue/`'s existing shape plus that field) - printing mode's candidate
+    set/ordering is byte-for-byte what `get_printing_tag_queue` already does (unresolved,
+    contested-first). Artist mode is the same shape, generalized to also include `CONTESTED`
+    (a status `PrintingTagStatus` has no equivalent for - printing's own contested cards are
+    already tagged `UNRESOLVED`, distinguished only by the ordering annotation).
+
+    For `kind=tag`, one item per (card, tag) pair - see `get_tag_review_queue_pairs` for the
+    persisted-state candidate filter and the net-polarity-weight/card-interleave ordering.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = VoteQueueRequest.model_validate(json.loads(request.body))
+
+    if req.kind == VoteQueueKind.tag:
+        pairs = get_tag_review_queue_pairs()
+        paginator = _paginate(pairs, req.page)
+        page_pairs = paginator.page(req.page).object_list
+        cards_by_id = {card.pk: card for card in Card.objects.filter(pk__in=[card_id for card_id, _ in page_pairs])}
+        items = [
+            VoteQueueItem(card=cards_by_id[card_id].serialise(), tagName=tag_name) for card_id, tag_name in page_pairs
+        ]
+    else:
+        if req.kind == VoteQueueKind.printing:
+            cards = Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED).annotate(
+                is_contested=Case(When(pk__in=get_contested_card_ids(), then=1), default=0, output_field=IntegerField())
+            )
+        else:
+            cards = Card.objects.filter(
+                artist_vote_status__in=[ArtistVoteStatus.UNRESOLVED, ArtistVoteStatus.CONTESTED]
+            ).annotate(
+                is_contested=Case(
+                    When(pk__in=get_contested_artist_card_ids(), then=1), default=0, output_field=IntegerField()
+                )
+            )
+        cards = cards.order_by("-is_contested", "-date_created", "name")
+        paginator = _paginate(cards, req.page)
+        items = [VoteQueueItem(card=card.serialise(), tagName=None) for card in paginator.page(req.page).object_list]
+
+    return JsonResponse(VoteQueueResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump())

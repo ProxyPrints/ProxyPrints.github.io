@@ -1,0 +1,12 @@
+{
+  "title": "Artist Vote Tally Entry",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "artist": { "$ref": "./CanonicalArtist.json" },
+    "isUnknown": { "type": "boolean" },
+    "count": { "type": "integer" }
+  },
+  "required": ["isUnknown", "count"],
+  "additionalProperties": false
+}

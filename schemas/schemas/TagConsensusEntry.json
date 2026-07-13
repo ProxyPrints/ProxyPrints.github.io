@@ -1,0 +1,15 @@
+{
+  "title": "Tag Consensus Entry",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "tagName": { "type": "string" },
+    "resolvedPolarity": { "type": ["integer", "null"] },
+    "tally": {
+      "type": "array",
+      "items": { "$ref": "./TagVoteTallyEntry.json" }
+    }
+  },
+  "required": ["tagName", "tally"],
+  "additionalProperties": false
+}

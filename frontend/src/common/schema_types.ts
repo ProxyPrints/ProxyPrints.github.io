@@ -2,8 +2,9 @@
 
 // To parse this data:
 //
-//   import { Convert, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, PrintingCandidate, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, VoteTallyEntry, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitPrintingTagRequest, TagsResponse } from "./file";
+//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, PrintingCandidate, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse } from "./file";
 //
+//   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
 //   const canonicalArtist = Convert.toCanonicalArtist(json);
 //   const canonicalCard = Convert.toCanonicalCard(json);
@@ -27,7 +28,14 @@
 //   const supporter = Convert.toSupporter(json);
 //   const supporterTier = Convert.toSupporterTier(json);
 //   const tag = Convert.toTag(json);
+//   const tagConsensusEntry = Convert.toTagConsensusEntry(json);
+//   const tagVoteTallyEntry = Convert.toTagVoteTallyEntry(json);
+//   const voteQueueItem = Convert.toVoteQueueItem(json);
 //   const voteTallyEntry = Convert.toVoteTallyEntry(json);
+//   const artistCandidatesRequest = Convert.toArtistCandidatesRequest(json);
+//   const artistCandidatesResponse = Convert.toArtistCandidatesResponse(json);
+//   const artistConsensusRequest = Convert.toArtistConsensusRequest(json);
+//   const artistConsensusResponse = Convert.toArtistConsensusResponse(json);
 //   const cardbacksRequest = Convert.toCardbacksRequest(json);
 //   const cardbacksResponse = Convert.toCardbacksResponse(json);
 //   const cardsRequest = Convert.toCardsRequest(json);
@@ -57,14 +65,49 @@
 //   const sampleCardsResponse = Convert.toSampleCardsResponse(json);
 //   const searchEngineHealthResponse = Convert.toSearchEngineHealthResponse(json);
 //   const sourcesResponse = Convert.toSourcesResponse(json);
+//   const submitArtistVoteRequest = Convert.toSubmitArtistVoteRequest(json);
 //   const submitPrintingTagRequest = Convert.toSubmitPrintingTagRequest(json);
+//   const submitTagVoteRequest = Convert.toSubmitTagVoteRequest(json);
+//   const tagConsensusRequest = Convert.toTagConsensusRequest(json);
+//   const tagConsensusResponse = Convert.toTagConsensusResponse(json);
 //   const tagsResponse = Convert.toTagsResponse(json);
+//   const voteQueueRequest = Convert.toVoteQueueRequest(json);
+//   const voteQueueResponse = Convert.toVoteQueueResponse(json);
 //
 // These functions will throw an error if the JSON doesn't
 // match the expected interface, even if the JSON is valid.
 
 export enum Game {
   Mtg = "MTG",
+}
+
+export interface ArtistCandidatesRequest {
+  identifier: string;
+  query?: null | string;
+}
+
+export interface ArtistCandidatesResponse {
+  results: Array<CanonicalArtist | null>;
+}
+
+export interface CanonicalArtist {
+  name: string;
+}
+
+export interface ArtistConsensusRequest {
+  identifier: string;
+}
+
+export interface ArtistConsensusResponse {
+  isUnknown: boolean;
+  resolvedArtist?: CanonicalArtist | null;
+  voteTally: ArtistVoteTallyEntry[];
+}
+
+export interface ArtistVoteTallyEntry {
+  artist?: CanonicalArtist | null;
+  count: number;
+  isUnknown: boolean;
 }
 
 export interface CardbacksRequest {
@@ -136,6 +179,18 @@ export interface CardsResponse {
 
 export interface Card {
   canonicalArtist?: CanonicalArtist | null;
+  /**
+   * True only when canonicalArtist was supplied by artist-vote consensus alone, with no
+   * confirmed indexing match or resolved printing backing it - lets the frontend distinguish
+   * a confidently-known artist from a vote-derived one (e.g. for the ArtistVotePicker
+   * 'wrong?' affordance) without needing to know serialise()'s fallback chain itself.
+   */
+  canonicalArtistIsFromVoteOnly?: boolean;
+  /**
+   * Which rung of the artist fallback chain actually supplied canonicalArtist -
+   * debug/introspection field, not load-bearing for any current frontend logic.
+   */
+  canonicalArtistSource?: null | string;
   canonicalCard?: CanonicalCard | null;
   cardType: CardType;
   /**
@@ -163,10 +218,6 @@ export interface Card {
   sourceType?: SourceType;
   sourceVerbose: string;
   tags: string[];
-}
-
-export interface CanonicalArtist {
-  name: string;
 }
 
 export interface CanonicalCard {
@@ -427,11 +478,44 @@ export interface SourcesResponse {
   results: { [key: string]: Source };
 }
 
+export interface SubmitArtistVoteRequest {
+  anonymousId: string;
+  artistName?: null | string;
+  identifier: string;
+  isUnknown: boolean;
+}
+
 export interface SubmitPrintingTagRequest {
   anonymousId: string;
   identifier: string;
   isNoMatch: boolean;
   printingIdentifier?: null | string;
+}
+
+export interface SubmitTagVoteRequest {
+  anonymousId: string;
+  identifier: string;
+  polarity: number;
+  tagName: string;
+}
+
+export interface TagConsensusRequest {
+  identifier: string;
+}
+
+export interface TagConsensusResponse {
+  tags: TagConsensusEntry[];
+}
+
+export interface TagConsensusEntry {
+  resolvedPolarity?: number | null;
+  tagName: string;
+  tally: TagVoteTallyEntry[];
+}
+
+export interface TagVoteTallyEntry {
+  count: number;
+  polarity: number;
 }
 
 export interface TagsResponse {
@@ -454,9 +538,41 @@ export interface ChildElement {
   parent: null | string;
 }
 
+export interface VoteQueueRequest {
+  kind: Kind;
+  page: number;
+}
+
+export enum Kind {
+  Artist = "artist",
+  Printing = "printing",
+  Tag = "tag",
+}
+
+export interface VoteQueueResponse {
+  hits: number;
+  items: VoteQueueItem[];
+  pages: number;
+}
+
+export interface VoteQueueItem {
+  card: Card;
+  tagName?: null | string;
+}
+
 // Converts JSON strings to/from your types
 // and asserts the results of JSON.parse at runtime
 export class Convert {
+  public static toArtistVoteTallyEntry(json: string): ArtistVoteTallyEntry {
+    return cast(JSON.parse(json), r("ArtistVoteTallyEntry"));
+  }
+
+  public static artistVoteTallyEntryToJson(
+    value: ArtistVoteTallyEntry
+  ): string {
+    return JSON.stringify(uncast(value, r("ArtistVoteTallyEntry")), null, 2);
+  }
+
   public static toCampaign(json: string): Campaign | null {
     return cast(JSON.parse(json), u(r("Campaign"), null));
   }
@@ -645,12 +761,86 @@ export class Convert {
     return JSON.stringify(uncast(value, r("Tag")), null, 2);
   }
 
+  public static toTagConsensusEntry(json: string): TagConsensusEntry {
+    return cast(JSON.parse(json), r("TagConsensusEntry"));
+  }
+
+  public static tagConsensusEntryToJson(value: TagConsensusEntry): string {
+    return JSON.stringify(uncast(value, r("TagConsensusEntry")), null, 2);
+  }
+
+  public static toTagVoteTallyEntry(json: string): TagVoteTallyEntry {
+    return cast(JSON.parse(json), r("TagVoteTallyEntry"));
+  }
+
+  public static tagVoteTallyEntryToJson(value: TagVoteTallyEntry): string {
+    return JSON.stringify(uncast(value, r("TagVoteTallyEntry")), null, 2);
+  }
+
+  public static toVoteQueueItem(json: string): VoteQueueItem {
+    return cast(JSON.parse(json), r("VoteQueueItem"));
+  }
+
+  public static voteQueueItemToJson(value: VoteQueueItem): string {
+    return JSON.stringify(uncast(value, r("VoteQueueItem")), null, 2);
+  }
+
   public static toVoteTallyEntry(json: string): VoteTallyEntry {
     return cast(JSON.parse(json), r("VoteTallyEntry"));
   }
 
   public static voteTallyEntryToJson(value: VoteTallyEntry): string {
     return JSON.stringify(uncast(value, r("VoteTallyEntry")), null, 2);
+  }
+
+  public static toArtistCandidatesRequest(
+    json: string
+  ): ArtistCandidatesRequest {
+    return cast(JSON.parse(json), r("ArtistCandidatesRequest"));
+  }
+
+  public static artistCandidatesRequestToJson(
+    value: ArtistCandidatesRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("ArtistCandidatesRequest")), null, 2);
+  }
+
+  public static toArtistCandidatesResponse(
+    json: string
+  ): ArtistCandidatesResponse {
+    return cast(JSON.parse(json), r("ArtistCandidatesResponse"));
+  }
+
+  public static artistCandidatesResponseToJson(
+    value: ArtistCandidatesResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ArtistCandidatesResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toArtistConsensusRequest(json: string): ArtistConsensusRequest {
+    return cast(JSON.parse(json), r("ArtistConsensusRequest"));
+  }
+
+  public static artistConsensusRequestToJson(
+    value: ArtistConsensusRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("ArtistConsensusRequest")), null, 2);
+  }
+
+  public static toArtistConsensusResponse(
+    json: string
+  ): ArtistConsensusResponse {
+    return cast(JSON.parse(json), r("ArtistConsensusResponse"));
+  }
+
+  public static artistConsensusResponseToJson(
+    value: ArtistConsensusResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("ArtistConsensusResponse")), null, 2);
   }
 
   public static toCardbacksRequest(json: string): CardbacksRequest {
@@ -973,6 +1163,18 @@ export class Convert {
     return JSON.stringify(uncast(value, r("SourcesResponse")), null, 2);
   }
 
+  public static toSubmitArtistVoteRequest(
+    json: string
+  ): SubmitArtistVoteRequest {
+    return cast(JSON.parse(json), r("SubmitArtistVoteRequest"));
+  }
+
+  public static submitArtistVoteRequestToJson(
+    value: SubmitArtistVoteRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("SubmitArtistVoteRequest")), null, 2);
+  }
+
   public static toSubmitPrintingTagRequest(
     json: string
   ): SubmitPrintingTagRequest {
@@ -989,12 +1191,56 @@ export class Convert {
     );
   }
 
+  public static toSubmitTagVoteRequest(json: string): SubmitTagVoteRequest {
+    return cast(JSON.parse(json), r("SubmitTagVoteRequest"));
+  }
+
+  public static submitTagVoteRequestToJson(
+    value: SubmitTagVoteRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("SubmitTagVoteRequest")), null, 2);
+  }
+
+  public static toTagConsensusRequest(json: string): TagConsensusRequest {
+    return cast(JSON.parse(json), r("TagConsensusRequest"));
+  }
+
+  public static tagConsensusRequestToJson(value: TagConsensusRequest): string {
+    return JSON.stringify(uncast(value, r("TagConsensusRequest")), null, 2);
+  }
+
+  public static toTagConsensusResponse(json: string): TagConsensusResponse {
+    return cast(JSON.parse(json), r("TagConsensusResponse"));
+  }
+
+  public static tagConsensusResponseToJson(
+    value: TagConsensusResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("TagConsensusResponse")), null, 2);
+  }
+
   public static toTagsResponse(json: string): TagsResponse {
     return cast(JSON.parse(json), r("TagsResponse"));
   }
 
   public static tagsResponseToJson(value: TagsResponse): string {
     return JSON.stringify(uncast(value, r("TagsResponse")), null, 2);
+  }
+
+  public static toVoteQueueRequest(json: string): VoteQueueRequest {
+    return cast(JSON.parse(json), r("VoteQueueRequest"));
+  }
+
+  public static voteQueueRequestToJson(value: VoteQueueRequest): string {
+    return JSON.stringify(uncast(value, r("VoteQueueRequest")), null, 2);
+  }
+
+  public static toVoteQueueResponse(json: string): VoteQueueResponse {
+    return cast(JSON.parse(json), r("VoteQueueResponse"));
+  }
+
+  public static voteQueueResponseToJson(value: VoteQueueResponse): string {
+    return JSON.stringify(uncast(value, r("VoteQueueResponse")), null, 2);
   }
 }
 
@@ -1181,6 +1427,46 @@ function r(name: string) {
 }
 
 const typeMap: any = {
+  ArtistCandidatesRequest: o(
+    [
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "query", js: "query", typ: u(undefined, u(null, "")) },
+    ],
+    false
+  ),
+  ArtistCandidatesResponse: o(
+    [{ json: "results", js: "results", typ: a(u(r("CanonicalArtist"), null)) }],
+    false
+  ),
+  CanonicalArtist: o([{ json: "name", js: "name", typ: "" }], false),
+  ArtistConsensusRequest: o(
+    [{ json: "identifier", js: "identifier", typ: "" }],
+    false
+  ),
+  ArtistConsensusResponse: o(
+    [
+      { json: "isUnknown", js: "isUnknown", typ: true },
+      {
+        json: "resolvedArtist",
+        js: "resolvedArtist",
+        typ: u(undefined, u(r("CanonicalArtist"), null)),
+      },
+      { json: "voteTally", js: "voteTally", typ: a(r("ArtistVoteTallyEntry")) },
+    ],
+    false
+  ),
+  ArtistVoteTallyEntry: o(
+    [
+      {
+        json: "artist",
+        js: "artist",
+        typ: u(undefined, u(r("CanonicalArtist"), null)),
+      },
+      { json: "count", js: "count", typ: 0 },
+      { json: "isUnknown", js: "isUnknown", typ: true },
+    ],
+    false
+  ),
   CardbacksRequest: o(
     [
       {
@@ -1253,6 +1539,16 @@ const typeMap: any = {
         typ: u(undefined, u(r("CanonicalArtist"), null)),
       },
       {
+        json: "canonicalArtistIsFromVoteOnly",
+        js: "canonicalArtistIsFromVoteOnly",
+        typ: u(undefined, true),
+      },
+      {
+        json: "canonicalArtistSource",
+        js: "canonicalArtistSource",
+        typ: u(undefined, u(null, "")),
+      },
+      {
         json: "canonicalCard",
         js: "canonicalCard",
         typ: u(undefined, u(r("CanonicalCard"), null)),
@@ -1288,7 +1584,6 @@ const typeMap: any = {
     ],
     false
   ),
-  CanonicalArtist: o([{ json: "name", js: "name", typ: "" }], false),
   CanonicalCard: o(
     [
       { json: "artist", js: "artist", typ: u(undefined, "") },
@@ -1583,6 +1878,15 @@ const typeMap: any = {
     [{ json: "results", js: "results", typ: m(r("Source")) }],
     false
   ),
+  SubmitArtistVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "artistName", js: "artistName", typ: u(undefined, u(null, "")) },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "isUnknown", js: "isUnknown", typ: true },
+    ],
+    false
+  ),
   SubmitPrintingTagRequest: o(
     [
       { json: "anonymousId", js: "anonymousId", typ: "" },
@@ -1593,6 +1897,42 @@ const typeMap: any = {
         js: "printingIdentifier",
         typ: u(undefined, u(null, "")),
       },
+    ],
+    false
+  ),
+  SubmitTagVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "polarity", js: "polarity", typ: 0 },
+      { json: "tagName", js: "tagName", typ: "" },
+    ],
+    false
+  ),
+  TagConsensusRequest: o(
+    [{ json: "identifier", js: "identifier", typ: "" }],
+    false
+  ),
+  TagConsensusResponse: o(
+    [{ json: "tags", js: "tags", typ: a(r("TagConsensusEntry")) }],
+    false
+  ),
+  TagConsensusEntry: o(
+    [
+      {
+        json: "resolvedPolarity",
+        js: "resolvedPolarity",
+        typ: u(undefined, u(0, null)),
+      },
+      { json: "tagName", js: "tagName", typ: "" },
+      { json: "tally", js: "tally", typ: a(r("TagVoteTallyEntry")) },
+    ],
+    false
+  ),
+  TagVoteTallyEntry: o(
+    [
+      { json: "count", js: "count", typ: 0 },
+      { json: "polarity", js: "polarity", typ: 0 },
     ],
     false
   ),
@@ -1625,6 +1965,28 @@ const typeMap: any = {
     ],
     false
   ),
+  VoteQueueRequest: o(
+    [
+      { json: "kind", js: "kind", typ: r("Kind") },
+      { json: "page", js: "page", typ: 0 },
+    ],
+    false
+  ),
+  VoteQueueResponse: o(
+    [
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "items", js: "items", typ: a(r("VoteQueueItem")) },
+      { json: "pages", js: "pages", typ: 0 },
+    ],
+    false
+  ),
+  VoteQueueItem: o(
+    [
+      { json: "card", js: "card", typ: r("Card") },
+      { json: "tagName", js: "tagName", typ: u(undefined, u(null, "")) },
+    ],
+    false
+  ),
   Game: ["MTG"],
   CardType: ["CARD", "CARDBACK", "TOKEN"],
   SourceType: ["AWS S3", "Google Drive", "Local File"],
@@ -1636,4 +1998,5 @@ const typeMap: any = {
     "nameAscending",
     "nameDescending",
   ],
+  Kind: ["artist", "printing", "tag"],
 };

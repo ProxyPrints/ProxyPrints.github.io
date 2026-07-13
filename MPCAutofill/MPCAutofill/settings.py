@@ -60,6 +60,10 @@ PRINTING_TAG_MIN_VOTES = env.float("PRINTING_TAG_MIN_VOTES", default=2)
 PRINTING_TAG_MIN_SHARE = env.float("PRINTING_TAG_MIN_SHARE", default=0.6)
 PRINTING_TAG_ADMIN_WEIGHT = env.float("PRINTING_TAG_ADMIN_WEIGHT", default=5)
 PRINTING_TAG_AI_WEIGHT = env.float("PRINTING_TAG_AI_WEIGHT", default=0.5)
+# federation-readiness stub (see docs/federation-v1.md) - no import path creates federated
+# votes yet, so this setting is currently inert, but it's wired into vote_consensus._SOURCE_WEIGHTS
+# alongside the weights above.
+VOTE_FEDERATED_WEIGHT = env.float("VOTE_FEDERATED_WEIGHT", default=1.0)
 # django-ratelimit rate string (see cardpicker.views.post_submit_printing_tag), keyed by the
 # client-generated anonymous ID (IP as a fallback if that header is somehow missing).
 PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="20/h")

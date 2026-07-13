@@ -39,11 +39,18 @@ interface PrintingTagPickerProps {
   cardIdentifier: string;
   /** The name of the card being tagged. */
   cardName: string;
+  /**
+   * Notified whenever this component's own consensus state changes (initial fetch and after
+   * each vote submission) - lets a parent (e.g. CardDetailedViewModal) decide whether to show
+   * the attribute-voting follow-up panel without this component needing to know about it.
+   */
+  onConsensusChange?: (consensus: PrintingConsensusResponse | null) => void;
 }
 
 export function PrintingTagPicker({
   cardIdentifier,
   cardName,
+  onConsensusChange,
 }: PrintingTagPickerProps) {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
@@ -61,8 +68,12 @@ export function PrintingTagPicker({
       return;
     }
     APIGetPrintingConsensus(backendURL, cardIdentifier)
-      .then(setConsensus)
+      .then((response) => {
+        setConsensus(response);
+        onConsensusChange?.(response);
+      })
       .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, cardIdentifier]);
 
   useEffect(() => {
@@ -93,6 +104,7 @@ export function PrintingTagPicker({
     )
       .then((response) => {
         setConsensus(response);
+        onConsensusChange?.(response);
         dispatch(
           setNotification([
             Math.random().toString(),
