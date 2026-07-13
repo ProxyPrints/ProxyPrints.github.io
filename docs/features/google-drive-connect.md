@@ -4,6 +4,7 @@ Two separate "connect a source" features live under `Configure Sources`
 (`BackendConfig.tsx`), both client-side, end-user-facing (distinct from the
 backend `LOCAL_FILE` source type — see [[local-file-source.md]], which is a
 catalog-admin feature):
+
 - **Google Drive** (`GoogleDriveBackendConfig.tsx`) — OAuth via
   `@googleworkspace/drive-picker-react`, client-side search over your own
   Drive.
@@ -11,6 +12,7 @@ catalog-admin feature):
   Access API, client-side search over a folder on disk.
 
 ## Google Drive picker — render-gate bug, fixed
+
 `isGoogleDriveAppConfigured` in `BackendConfig.tsx` gates the whole section
 on `NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID`/`NEXT_PUBLIC_GOOGLE_DRIVE_APP_ID`
 being non-empty at build time. `build-frontend.yml`/`web-ci.yml` passed
@@ -47,6 +49,7 @@ click and popup — but real Firefox tolerated that gap fine). Don't
 re-chase that theory without new evidence.
 
 ## Local Folder — working as designed, Chrome-only
+
 Firefox has never implemented `showDirectoryPicker` (File System Access
 API) — a browser-vendor gap, not fixable in this codebase. The existing
 try/catch already handles this correctly: a clear "Your browser doesn't
@@ -63,10 +66,12 @@ worker's memory for the current tab session, so a page reload always
 requires re-choosing the folder even in Chrome; that's expected.
 
 ## Save PDF directly to Google Drive
+
 A `drive.file` write-scope upload feature on the PDF tab, built after the
 user added that scope to the OAuth consent screen (the existing Drive
 picker token is `drive.metadata.readonly` and cannot upload — a
 proposal to reuse it was wrong on that premise).
+
 - `frontend/src/features/googleDrive/googleDriveAuth.ts` —
   `requestGoogleDriveWriteToken(clientId)`, a minimal standalone token
   requester using Google Identity Services
@@ -95,6 +100,7 @@ against a real Drive account**: no real `drive.file` OAuth completion, no
 real upload, no confirmation a file actually lands in Drive.
 
 ## Key files
+
 - `frontend/src/components/GoogleDriveBackendConfig.tsx`,
   `LocalFolderBackendConfig.tsx`, `BackendConfig.tsx`
 - `frontend/src/features/googleDrive/` (`googleDriveAuth.ts`,
@@ -102,6 +108,7 @@ real upload, no confirmation a file actually lands in Drive.
 - `frontend/src/features/pdf/PDFGenerator.tsx`
 
 ## Known gaps
+
 - Google Drive picker: real OAuth login completion untested.
 - Save-to-Drive: real upload against a live account untested.
 - Local Folder: permanently Chrome-only by design, not a bug to fix.

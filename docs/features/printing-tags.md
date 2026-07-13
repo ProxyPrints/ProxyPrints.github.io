@@ -8,6 +8,7 @@ artist/tag-taxonomy layer and a federation-readiness stub have since
 merged on top (PR #7).
 
 ## Backend design
+
 **Key recon finding that shaped the design**: `CanonicalCard`
 (`cardpicker/models.py`) already IS a per-printing model —
 `identifier` = Scryfall's printing UUID, `canonical_id` = Scryfall's
@@ -42,10 +43,12 @@ rather than doing its own lang/paper filtering (that boundary already lives
 in `MTGIntegration`).
 
 ## CanonicalCard population fix (data pipeline)
+
 `CanonicalCard` had 0 rows despite `CanonicalExpansion` having 1000+,
 because `import_canonical_card_data` was silently hanging for its full
 12-hour django-q timeout. Root-caused and fixed in
 `cardpicker/integrations/game/mtg.py`:
+
 - No `requests.get(...)` call had a `timeout=`, so one stalled Scryfall
   connection could hang a worker thread forever.
 - The `ThreadPoolExecutor` was submitted-and-immediately-`.result()`'d one
@@ -70,11 +73,13 @@ because `import_canonical_card_data` was silently hanging for its full
   `CanonicalPrintingMetadata` rows against that real data.
 
 ## Frontend: vote-queue UI ("What's That Card?")
+
 `PrintingTagQueue.tsx` (standalone queue page) and `PrintingTagPicker.tsx`
 (embedded picker in `CardDetailedViewModal.tsx`) present candidate
 printings for a card with a themed starburst background, animated flicker,
 and hover-zoomed candidate thumbnails. Current state (after several rounds
 of visual iteration):
+
 - `starburstShape.ts` — a seeded PRNG (mulberry32) generates alternating
   spike-tip/valley polygon vertices per layer, precomputing 5 frames per
   layer (deterministic) so the shape flickers rather than holding static.
@@ -95,16 +100,18 @@ of visual iteration):
   building this.
 
 ## Printing-candidate DOM wiring
+
 Candidate buttons in both `PrintingTagQueue.tsx` and `PrintingTagPicker.tsx`
 carry the card DOM API's data attributes — see [[card-dom-api.md]].
 
 ## Genericized theming identifiers
+
 Every identifier/comment/copy referencing a specific third-party media
 franchise (the original visual inspiration for the starburst/quiz-show
 theming) was renamed to neutral terms — zero such references anywhere in
 code, comments, copy, or docs. Page title/headers: **"What's That Card?"**.
 `GenericVoteQueue.tsx` (artist/tag vote modes) already used
-`data-testid="vote-queue"`; `PrintingTagQueue.tsx` needed a *different*
+`data-testid="vote-queue"`; `PrintingTagQueue.tsx` needed a _different_
 testid (`printing-tag-queue*`) rather than reusing that string, because its
 `Tab.Pane` stays mounted (hidden, no `unmountOnExit`) after switching tabs —
 reusing the same testid would produce two simultaneously-mounted elements
@@ -112,6 +119,7 @@ sharing it. Caught via review before shipping — see
 [[../lessons.md]] (testid collision check).
 
 ## Multi-worker coordination fallout
+
 A cross-session push conflict on this page's file (two sessions pushed to
 `master` unaware of each other, landing overlapping edits within a few
 lines of each other in `PrintingTagQueue.tsx`) is what motivated adding
@@ -119,6 +127,7 @@ lines of each other in `PrintingTagQueue.tsx`) is what motivated adding
 `WORKERS.md` itself for the protocol this produced.
 
 ## Upstream extraction status
+
 `docs/upstreaming/vote-system.md` is a companion document: a commit-by-
 commit cherry-pick classification for the whole vote system (Stage 1
 through the federation stub and contested-review generalization, PR #7),
@@ -128,6 +137,7 @@ with the fork-only starburst theming across many commits and should not be
 cherry-picked commit-by-commit as a result.
 
 ## Key files
+
 - Backend: `cardpicker/printing_consensus.py`,
   `cardpicker/printing_metadata_import.py`,
   `cardpicker/integrations/game/mtg.py`, `cardpicker/models.py` (migration
@@ -137,6 +147,7 @@ cherry-picked commit-by-commit as a result.
 - `docs/upstreaming/vote-system.md`
 
 ## Known gaps
+
 - `CanonicalCard.image_hash` is bootstrapped to `0` for every row
   (`--skip-image-hash`); real perceptual-hash-based matching isn't
   implemented yet.

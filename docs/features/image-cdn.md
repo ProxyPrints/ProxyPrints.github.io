@@ -4,6 +4,7 @@ Our own Cloudflare Worker serving card thumbnails, replacing what would
 otherwise be direct Google Drive image URLs.
 
 ## What it does / how it works
+
 - Cloudflare Worker at a `*.workers.dev` subdomain, with a custom-domain
   route added later (see below). R2 bucket `thumbnails` backs the
   small/large size tiers.
@@ -28,11 +29,13 @@ otherwise be direct Google Drive image URLs.
   upstream (`getBucketImageURL` throws for `"full"`).
 
 ## Key files
+
 - `image-cdn/src/index.ts` (Worker), `image-cdn/wrangler.toml`
 - `frontend/src/common/image.ts`, `frontend/src/components/Card.tsx`
 - `frontend/src/features/pdf/pdfImage.ts`
 
 ## Status / verification
+
 - Verified end-to-end: fetched a real cached thumbnail through both the
   worker and the bucket domain directly, confirmed byte-identical content
   (md5sum match) and that the bucket's CORS header only appears on
@@ -55,6 +58,7 @@ otherwise be direct Google Drive image URLs.
   works fine without real values; only the daily refresh job no-ops.
 
 ## Known gaps
+
 - Every deploy's "Publish image CDN" job in `cloudflare-workers-ci.yml`
   shows as failed, because wrangler can't attach the Workflows cron
   trigger for the thumbnail-refresh job (a Cloudflare API error). The

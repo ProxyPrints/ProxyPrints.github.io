@@ -7,11 +7,12 @@ server's disk, as a `Source` type alongside Google Drive. `LocalFile` in
 `Source.identifier`'s own field comment already anticipating it.
 
 ## How it works
+
 - `Source.identifier` is a root directory path on disk. Folders/images are
   discovered by walking the filesystem (`os.scandir`) instead of an API
   call; image dimensions (needed for the DPI calculation Drive gets for
   free from `imageMediaMetadata.height`) are read locally via Pillow.
-  Symlinked files *and* directories are never followed/traversed during
+  Symlinked files _and_ directories are never followed/traversed during
   indexing — deliberately, to avoid both symlink cycles and a symlink
   escaping the source's root directory.
 - Since the frontend only loads images by URL, a `get_local_file_image`
@@ -19,8 +20,8 @@ server's disk, as a `Source` type alongside Google Drive. `LocalFile` in
   bytes back out. Treated as a real security surface: the `identifier`
   query param is untrusted input, so the view (a) looks up a real `Card`
   row scoped to `source__source_type == LOCAL_FILE`, then (b) independently
-  re-resolves and validates the path stays inside that source's *currently
-  configured* root via `resolve_within_root` (`cardpicker/sources/api.py`)
+  re-resolves and validates the path stays inside that source's _currently
+  configured_ root via `resolve_within_root` (`cardpicker/sources/api.py`)
   — covering `../` traversal and symlink escapes, and re-checked at serve
   time (not just trusted from indexing) in case a source's root was
   reconfigured after its images were catalogued.
@@ -36,12 +37,14 @@ server's disk, as a `Source` type alongside Google Drive. `LocalFile` in
   say so) or a new `rescan_sources` admin action on `Source`.
 
 ## Key files
+
 - `cardpicker/sources/source_types.py` (`LocalFile`)
 - `cardpicker/sources/api.py` (`resolve_within_root`)
 - `cardpicker/views.py` (`get_local_file_image`)
 - `cardpicker/tests/test_local_file_source.py`
 
 ## Status
+
 17 new tests, fully self-contained against real `tmp_path` directories/
 files — no network or credentials needed, unlike `GoogleDrive`'s own tests
 (which hit a real external Drive folder and are part of the documented
