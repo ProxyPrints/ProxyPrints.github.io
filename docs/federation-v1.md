@@ -37,6 +37,7 @@ export only locally-resolved consensus — never re-broadcast federated votes
     }
 
 ## Interchange keys & stability contract
+
 - Images join across instances by `drive_id` (Google Drive file id).
   `content_hash` is the planned upgrade path for surviving re-uploads.
 - Artists travel by canonical name; tags by `Tag.name`. **Tag names are
@@ -44,6 +45,7 @@ export only locally-resolved consensus — never re-broadcast federated votes
   migration, not an edit.**
 
 ## Import rules (normative for future implementation)
+
 - Verify signature against a pinned per-peer public key (out-of-band
   exchange; no open enrollment).
 - One voice per peer per (image, kind[, tag]): re-import replaces that
