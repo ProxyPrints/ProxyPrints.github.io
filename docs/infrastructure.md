@@ -5,27 +5,25 @@ the short, standing rules; this file has the reasoning and history behind
 them.
 
 ## Docker / backend deploy
-- `docker/` is built with `sudo docker compose -f docker-compose.prod.yml
-  ...` (v2, space). docker-compose v1 (hyphen) is installed on the host but
+
+- `docker/` is built with `sudo docker compose -f docker-compose.prod.yml ...` (v2, space). docker-compose v1 (hyphen) is installed on the host but
   has a fatal `ContainerConfig` recreate bug — never use it.
 - `MPCAutofill/drives.csv` is baked into the django image at build time.
   Editing the host file requires `up --build -d`. After that, import to the
-  DB via `manage.py import_sources`, then index via `manage.py
-  update_database`. The file is gitignored and untracked (matches upstream,
+  DB via `manage.py import_sources`, then index via `manage.py update_database`. The file is gitignored and untracked (matches upstream,
   which also tracks no drives.csv content) — see "History rewrite" below for
   why this matters. If this machine is ever rebuilt, the real file must be
-  placed at `MPCAutofill/drives.csv` manually before `docker compose up
-  --build`; it does not come from git.
+  placed at `MPCAutofill/drives.csv` manually before `docker compose up --build`; it does not come from git.
 - `docker-compose.prod.yml` builds all three services (`django`, `worker`,
   `nginx`) with the repo root as build context (`context: ..`). There was no
   `.dockerignore` at all until it was added — every rebuild was uploading
   the entire repo (`frontend/node_modules`, `image-cdn/node_modules`, etc.)
   regardless of which service changed. Added a denylist-style
-  `.dockerignore` (frontend build artifacts, image-cdn node_modules,
+  `.dockerignore` (frontend build artifacts, image-cdn `node_modules`,
   desktop-tool, github-release-reverse-proxy, cloudflare-static-site,
   schemas, mypy/ruff caches, test-results, `.git`, and **`.claude`** — the
   last one is the one that actually mattered: `.claude/worktrees/` is a
-  *hidden* top-level directory, invisible to a plain `du -sh repo/*` sanity
+  **hidden** top-level directory, invisible to a plain `du -sh repo/*` sanity
   check, and was carrying a full `frontend/node_modules` per worktree
   (~1GB each). See [[lessons.md]] for the general `du` gotcha. Net effect: a
   rebuild that previously spent 25+ minutes uploading a ~2GB context now
@@ -34,6 +32,7 @@ them.
   internet-exposed at one point.
 
 ## Secrets and credentials
+
 Never commit: `docker/.env` (holds `DJANGO_SECRET_KEY`, referenced as
 `${DJANGO_SECRET_KEY}` in compose), `docker/nginx/certs/`,
 `docker/django/env.txt`, `MPCAutofill/drives.csv`. GitHub Actions repo
@@ -57,15 +56,14 @@ secrets, not local `wrangler`, so keep any local Cloudflare token in a
 gitignored `.env` loaded on demand, never in shell profiles.
 
 `gh` needs the PAT passed as `GH_TOKEN` (read via
-`grep -oP 'https://[^:]*:\K[^@]*|https://\K[^@]*'
-~/.git-credentials-proxyprints`). It needs "Pull requests: Read and write"
-for `gh pr create`/`merge`, and "Actions: Read and write" for `gh workflow
-run`. `gh secret list` 403s — the PAT has no `secrets: read` permission, so
+`grep -oP 'https://[^:]*:\K[^@]*|https://\K[^@]*' ~/.git-credentials-proxyprints`). It needs "Pull requests: Read and write"
+for `gh pr create`/`merge`, and "Actions: Read and write" for `gh workflow run`. `gh secret list` 403s — the PAT has no `secrets: read` permission, so
 whether a given repo secret is actually set can only be inferred
 circumstantially (e.g. a gated UI section not rendering), not confirmed
 directly.
 
 ## Telemetry: fully removed, don't add back
+
 - **Sentry** — fully removed, frontend and backend, as a privacy decision.
   Backend removal: the `sentry-sdk` import/init in `settings.py`, the active
   `capture_message` call in `integrations/game/base.py` (replaced with
@@ -95,6 +93,7 @@ directly.
   any kind.
 
 ## CI/CD state
+
 - `deploy-frontend.yml` is the real, working GitHub Pages deployer
   (confirmed green repeatedly). `web-ci.yml`'s own `publish-*` jobs were
   removed since they targeted upstream's external repo/secrets this fork
@@ -121,6 +120,7 @@ directly.
   check the base-repo dropdown, when the PR is meant to land on this repo.
 
 ## CI investigation: mypy errors that looked "pre-existing" weren't actually being checked
+
 Several sessions in a row treated 4 mypy errors (`desktop-tool/processing.py`,
 `desktop-tool/io.py`, `mtg.py`) as a known, unchanged baseline, safe to
 ignore — confirmed stable across many local runs. This was wrong: checking
@@ -144,15 +144,14 @@ a `TYPE_CHECKING` import of the module `PIL.Image` used as a return-type
 annotation instead of the class `PIL.Image.Image` (plus two cascading
 errors from the same mistake), and one `Image.open(requests.get(...).raw)`
 call that doesn't nominally satisfy `IO[bytes]` per `types-requests`'
-stubs despite being `read()`-compatible at runtime (scoped `# type:
-ignore[arg-type]`, matching this file's existing convention for
+stubs despite being `read()`-compatible at runtime (scoped `# type: ignore[arg-type]`, matching this file's existing convention for
 third-party stub gaps). See [[lessons.md]] for the generalized lesson.
 
 ## Push policy
+
 **Standing convention: commit and push straight to `master` for solo work
 on this repo — no PR needed.** PRs (with the user's explicit approval
-before merge) are reserved for the upstreaming workflow below. `gh pr
-merge` is blocked by an auto-mode permission classifier unless there's an
+before merge) are reserved for the upstreaming workflow below. `gh pr merge` is blocked by an auto-mode permission classifier unless there's an
 unambiguous human review/approval, or the user explicitly acknowledges
 bypassing review in chat — don't retry or work around it; offer the choice
 and let the user merge themselves if they don't want to confirm a bypass.
@@ -167,6 +166,7 @@ work happens in per-session branches/worktrees, never directly on
 small, well-understood changes may still push `master` directly.
 
 ## Upstreaming to chilli-axe/mpc-autofill
+
 `upstream` remote = `https://github.com/chilli-axe/mpc-autofill.git`. Cut
 upstream-bound branches from `upstream/master` in a separate `git worktree`
 (`git worktree add <path> upstream/master -b <branch>`), not a plain
@@ -176,13 +176,27 @@ fork-specific commits (branding, feature work, telemetry removal, this
 fork's own CI) that must never leak into an upstream PR. Diff the resulting
 branch against `upstream/master` before pushing to confirm scope.
 
-Four PRs were opened this way (#463–466), all reviewed same-day by the
+Five PRs were opened this way (#463–467), all reviewed same-day by the
 upstream maintainer (ndepaola): #463 (lazy-load PDFGenerator) and #465
 (image-CDN CORS fix) are open; #464 (pdf.js canvas preview) and #466
 (bucket/worker thumbnail routing) were closed after the maintainer
-explained the existing behavior was deliberate design, not a bug. All four
-reviews asked for hand-written PR descriptions going forward, not
-AI-generated ones.
+explained the existing behavior was deliberate design, not a bug; #467
+(frontend toSearchable "the"-stripping fix, completing backend PR #460)
+was opened 2026-07-13. All reviews so far have asked for hand-written PR
+descriptions going forward, not AI-generated ones — none of #463/#465/#467's
+PR bodies contain an AI-disclosure paragraph; the actual AI-assistance
+signal in this workflow is the Co-Authored-By trailer on the commit
+itself, not PR body text.
+
+#467 is also a variant on the cherry-pick convention above: our own fork
+had already fixed the identical bug in its own processing.ts (commit
+206a0266, mirroring backend PR #460), but that fork commit was not
+cherry-picked upstream — its message/context was fork-specific
+(references "our fork", "our master"). Instead the same two-line logical
+fix was hand-reapplied directly against upstream/master's own current
+tree. Cherry-pick remains the right default when a fix commit's content
+and narrative both port cleanly; hand-reapply when the original commit's
+framing doesn't.
 
 Notes if #463/#465 are revisited: #463's description incorrectly claimed a
 `{show && <PDFGenerator/>}` gate in `PDFGeneratorModal.tsx` was pre-existing
@@ -204,6 +218,7 @@ commit-by-commit cherry-pick classification for whoever eventually cuts
 that upstream branch. See [[features/printing-tags.md]].
 
 ## History rewrite: drives.csv scrubbed from git
+
 `MPCAutofill/drives.csv` was force-committed with real production data (54
 sources, including other people's names and personal Google Drive IDs) in 3
 commits despite being gitignored. This was later scrubbed from history via
@@ -234,6 +249,7 @@ is also why force-push is banned as a routine action (see Push policy
 above).
 
 ## Testing infrastructure fixes
+
 - `tests/global-setup.ts` used to click a cookie-consent toast's "Opt out"
   button to seed a reusable storage state — broke every Playwright test
   with a 30s timeout once that toast was removed (see Telemetry above).
@@ -241,8 +257,7 @@ above).
 - `tests/visual/SearchSettings.visual.spec.ts`'s aria snapshot expected
   stale DPI-filter copy that had been reworded in `FilterSettings.tsx`
   without updating the test. Re-baselined via `--update-snapshots`.
-- A flaky `CardSlot.spec.ts` test (`route.continue: Route is already
-  handled!`) is a known upstream bug in `@msw/playwright` 0.4.5
+- A flaky `CardSlot.spec.ts` test (`route.continue: Route is already handled!`) is a known upstream bug in `@msw/playwright` 0.4.5
   (mswjs/playwright#35 — Playwright can terminate an in-flight route
   handler on navigation, and 0.4.5's route methods throw when that
   happens). Fixed upstream only via a breaking 0.6.0 rewrite, too large a
