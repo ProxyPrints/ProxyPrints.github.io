@@ -1,0 +1,11 @@
+{
+  "title": "Question Feed Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "item": { "$ref": "./QuestionFeedItem.json" },
+    "remainingEstimate": { "type": "integer" }
+  },
+  "required": ["remainingEstimate"],
+  "additionalProperties": false
+}

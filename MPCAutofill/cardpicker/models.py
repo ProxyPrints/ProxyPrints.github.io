@@ -114,6 +114,7 @@ class CanonicalCard(models.Model):
         `serialise()`'s embedded-in-a-resolved-Card shape needs.
         """
         metadata = getattr(self, "printing_metadata", None)
+        frame_effects = metadata.frame_effects if metadata is not None else []
         return PrintingCandidate(
             identifier=str(self.identifier),
             canonicalId=str(self.canonical_id),
@@ -126,6 +127,13 @@ class CanonicalCard(models.Model):
             fullArt=metadata.full_art if metadata is not None else False,
             isBorderless=metadata.border_color == "borderless" if metadata is not None else False,
             frame=metadata.frame if metadata is not None else "",
+            borderColor=metadata.border_color if metadata is not None else "",
+            # curated subset of the `frame_effects` list with a dedicated attribute chip - see
+            # cardpicker.attribute_tags / docs/features/printing-tags.md's questionFeed section
+            # for why these three and not the (more numerous) rest of the field's values.
+            isShowcase="showcase" in frame_effects,
+            isExtendedArt="extendedart" in frame_effects,
+            isEtched="etched" in frame_effects,
             releasedAt=metadata.released_at.isoformat() if metadata is not None and metadata.released_at else None,
         )
 

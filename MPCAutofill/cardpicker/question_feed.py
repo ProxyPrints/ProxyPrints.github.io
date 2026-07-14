@@ -1,0 +1,228 @@
+"""
+Backs `GET 2/questionFeed/` - the unified single-question feed that replaces the three
+printing/artist/tag tabs (see docs/features/printing-tags.md's questionFeed section and
+journal/2026-07-14-queue-question-feed-design.md for the full design writeup this
+implements). Deliberately a "dumb ranked union" per spec: four fixed-order tiers, first
+non-empty match wins, no cross-tier scoring/ML.
+
+Tier 1 (confirm_suggestion) is large relative to the others at current volume (28,112 cards
+- the full AI deductive-vote backfill, confirmed via a live query during design) - a voter
+working only this feed will not reach tiers 2-4 until tier 1 is exhausted. Flagged as a known
+v1 property, not silently accepted - see the design doc's "Starvation risk" section for the
+concrete consequence and the planned v2 fix (interleaved/weighted union, out of scope here).
+"""
+
+from typing import Optional
+
+from cardpicker.artist_consensus import get_contested_artist_card_ids
+from cardpicker.attribute_tags import ATTRIBUTE_CHIP_TAG_NAMES
+from cardpicker.models import (
+    ArtistVoteStatus,
+    Card,
+    CardTagVote,
+    PrintingTagStatus,
+    Tag,
+    TagVoteStatus,
+    VoteSource,
+)
+from cardpicker.moderation import is_moderator
+from cardpicker.printing_candidates import get_ranked_printing_candidates
+from cardpicker.printing_consensus import get_contested_card_ids
+from cardpicker.schema_types import QuestionFeedItem, TypeEnum
+from cardpicker.tag_consensus import (
+    get_pending_approval_queue_pairs,
+    get_tag_net_polarity,
+    get_tag_review_queue_pairs,
+)
+
+
+def _tag_confidence(card: Card) -> dict[str, float]:
+    """netPolarity for every attribute-chip tag against `card`, for the chip fill overlay -
+    always the full fixed set (not just tags with votes), so an unvoted chip predictably reads
+    as 0.0 (neutral) rather than being absent from the payload."""
+    tags_by_name = {tag.name: tag for tag in Tag.objects.filter(name__in=ATTRIBUTE_CHIP_TAG_NAMES)}
+    return {name: get_tag_net_polarity(card, tag) for name, tag in tags_by_name.items()}
+
+
+def _confirm_suggestion_item(card: Card) -> Optional[QuestionFeedItem]:
+    ai_vote = (
+        card.printing_tags.filter(source=VoteSource.AI, is_no_match=False)
+        .select_related("printing__expansion", "printing__printing_metadata", "printing__artist")
+        .first()
+    )
+    if ai_vote is None or ai_vote.printing is None:
+        return None
+    candidates = get_ranked_printing_candidates(card, card.name)
+    return QuestionFeedItem(
+        type=TypeEnum.confirmsuggestion,
+        card=card.serialise(),
+        suggestedPrinting=ai_vote.printing.serialise_as_printing_candidate(),
+        candidates=[candidate.serialise_as_printing_candidate() for candidate in candidates],
+        tagConfidence=_tag_confidence(card),
+    )
+
+
+def _identify_printing_item(card: Card) -> QuestionFeedItem:
+    candidates = get_ranked_printing_candidates(card, card.name)
+    return QuestionFeedItem(
+        type=TypeEnum.identifyprinting,
+        card=card.serialise(),
+        candidates=[candidate.serialise_as_printing_candidate() for candidate in candidates],
+        tagConfidence=_tag_confidence(card),
+    )
+
+
+def _artist_item(card: Card) -> QuestionFeedItem:
+    serialised = card.serialise()
+    confidently_known_artist_name = (
+        serialised.canonicalArtist.name
+        if serialised.canonicalArtist is not None and not serialised.canonicalArtistIsFromVoteOnly
+        else None
+    )
+    return QuestionFeedItem(
+        type=TypeEnum.artist, card=serialised, confidentlyKnownArtistName=confidently_known_artist_name
+    )
+
+
+def _tag_item(card: Card, tag_name: str) -> QuestionFeedItem:
+    return QuestionFeedItem(type=TypeEnum.tag, card=card.serialise(), tagName=tag_name)
+
+
+def _moderation_item(card: Card, tag_name: str, report_count: int, excerpts: list[str]) -> QuestionFeedItem:
+    return QuestionFeedItem(
+        type=TypeEnum.moderation,
+        card=card.serialise(),
+        tagName=tag_name,
+        reportCount=report_count,
+        reportExcerpts=excerpts,
+    )
+
+
+def _tier_1_confirm_suggestion(anonymous_id: str) -> Optional[QuestionFeedItem]:
+    cards = (
+        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, printing_tags__source=VoteSource.AI)
+        .exclude(printing_tags__source__in=[VoteSource.USER, VoteSource.ADMIN, VoteSource.FEDERATED])
+        .exclude(printing_tags__anonymous_id=anonymous_id)
+        .distinct()
+        .order_by("date_created")
+    )
+    for card in cards.iterator():
+        item = _confirm_suggestion_item(card)
+        if item is not None:
+            return item
+    return None
+
+
+def _tier_2_contested(anonymous_id: str) -> Optional[QuestionFeedItem]:
+    printing_card = (
+        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, pk__in=get_contested_card_ids())
+        .exclude(printing_tags__anonymous_id=anonymous_id)
+        .order_by("-date_created")
+        .first()
+    )
+    if printing_card is not None:
+        return _identify_printing_item(printing_card)
+
+    artist_card = (
+        Card.objects.filter(artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=get_contested_artist_card_ids())
+        .exclude(artist_votes__anonymous_id=anonymous_id)
+        .order_by("-date_created")
+        .first()
+    )
+    if artist_card is not None:
+        return _artist_item(artist_card)
+
+    for card_id, tag_name in get_tag_review_queue_pairs():
+        # scoped to (card, tag, anonymous_id), not just (card, anonymous_id) - a voter who
+        # already answered a *different* tag on this card (there are ~11 attribute-chip tags
+        # per card) must still see this tag if they haven't answered it yet. A card-level
+        # exclude here would silently hide every other still-open tag on a card the moment
+        # this voter touches any one tag on it.
+        if CardTagVote.objects.filter(card_id=card_id, tag__name=tag_name, anonymous_id=anonymous_id).exists():
+            continue
+        card = Card.objects.get(pk=card_id)
+        status = card.tag_vote_statuses.get(tag_name)
+        if status == TagVoteStatus.CONTESTED:
+            return _tag_item(card, tag_name)
+    return None
+
+
+def _tier_3_moderation(user: object) -> Optional[QuestionFeedItem]:
+    """Same (card, tag) selection, report-count, and excerpt logic as `post_moderation_queue`
+    (views.py), narrowed to just the single highest-priority pair - see that view for why
+    reasons are matched via `REPORT_REASON_TO_TAG_NAME` and excerpts are capped at 3."""
+    if not is_moderator(user):  # type: ignore[arg-type]  # is_moderator accepts AbstractUser | AnonymousUser
+        return None
+    from cardpicker.models import CardReport
+    from cardpicker.sensitive_tags import REPORT_REASON_TO_TAG_NAME
+
+    pairs = get_pending_approval_queue_pairs()
+    if not pairs:
+        return None
+    card_id, tag_name = pairs[0]
+    card = Card.objects.get(pk=card_id)
+    reasons = [reason for reason, name in REPORT_REASON_TO_TAG_NAME.items() if name == tag_name]
+    reports = CardReport.objects.filter(card_id=card_id, reason__in=reasons)
+    excerpts = [row["text"] for row in reports.exclude(text="").order_by("-created_at").values("text")[:3]]
+    return _moderation_item(card, tag_name, report_count=reports.count(), excerpts=excerpts)
+
+
+def _tier_4_fresh(anonymous_id: str) -> Optional[QuestionFeedItem]:
+    printing_card = (
+        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        .exclude(pk__in=get_contested_card_ids())
+        .exclude(printing_tags__anonymous_id=anonymous_id)
+        .order_by("-date_created")
+        .first()
+    )
+    if printing_card is not None:
+        return _identify_printing_item(printing_card)
+
+    artist_card = (
+        Card.objects.filter(artist_vote_status=ArtistVoteStatus.UNRESOLVED)
+        .exclude(artist_votes__anonymous_id=anonymous_id)
+        .order_by("-date_created")
+        .first()
+    )
+    if artist_card is not None:
+        return _artist_item(artist_card)
+
+    for card_id, tag_name in get_tag_review_queue_pairs():
+        # see tier 2's identical comment above - scoped to (card, tag, anonymous_id)
+        if CardTagVote.objects.filter(card_id=card_id, tag__name=tag_name, anonymous_id=anonymous_id).exists():
+            continue
+        card = Card.objects.get(pk=card_id)
+        status = card.tag_vote_statuses.get(tag_name)
+        if status == TagVoteStatus.UNRESOLVED:
+            return _tag_item(card, tag_name)
+    return None
+
+
+def get_next_question_feed_item(anonymous_id: str, user: object) -> Optional[QuestionFeedItem]:
+    """The dumb ranked union itself - first non-None tier wins, in priority order."""
+    return (
+        _tier_1_confirm_suggestion(anonymous_id)
+        or _tier_2_contested(anonymous_id)
+        or _tier_3_moderation(user)
+        or _tier_4_fresh(anonymous_id)
+    )
+
+
+def get_remaining_estimate(user: object) -> int:
+    """
+    Best-effort total across tiers, for "Still need N cards" messaging - NOT per-voter (doesn't
+    account for own-vote exclusion, which is comparatively cheap to skip here since this is
+    advisory copy, not a candidate set). Moderator-only tier only counted for moderators, same
+    visibility rule as the feed itself.
+    """
+    estimate = (
+        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED).count()
+        + Card.objects.filter(artist_vote_status__in=[ArtistVoteStatus.UNRESOLVED, ArtistVoteStatus.CONTESTED]).count()
+        + len(get_tag_review_queue_pairs())
+    )
+    if is_moderator(user):  # type: ignore[arg-type]
+        estimate += len(get_pending_approval_queue_pairs())
+    return estimate
+
+
+__all__ = ["get_next_question_feed_item", "get_remaining_estimate"]

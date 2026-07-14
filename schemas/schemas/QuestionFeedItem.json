@@ -1,0 +1,36 @@
+{
+  "title": "Question Feed Item",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "confirm_suggestion",
+        "identify_printing",
+        "artist",
+        "tag",
+        "moderation"
+      ]
+    },
+    "card": { "$ref": "./Card.json" },
+    "suggestedPrinting": { "$ref": "./PrintingCandidate.json" },
+    "candidates": {
+      "type": "array",
+      "items": { "$ref": "./PrintingCandidate.json" }
+    },
+    "tagConfidence": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "confidentlyKnownArtistName": { "type": ["string", "null"] },
+    "tagName": { "type": "string" },
+    "reportCount": { "type": "integer" },
+    "reportExcerpts": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["type", "card"],
+  "additionalProperties": false
+}
