@@ -100,7 +100,7 @@ test.describe("PrintingTagQueue tests", () => {
     ).toBeVisible();
   });
 
-  test("submitting a vote shows flavor text and advances the queue", async ({
+  test("submitting a resolving vote shows the confirm strip, then advances on continue", async ({
     page,
     network,
   }) => {
@@ -115,7 +115,15 @@ test.describe("PrintingTagQueue tests", () => {
 
     await page.getByAltText("abc 1").click();
 
-    // that was the only card in the queue - submitting advances past the end of it
+    // a resolving vote no longer advances immediately - the confirm strip gets a beat first
+    await expect(page.getByTestId("printing-confirm-strip")).toBeVisible();
+    await expect(
+      page.getByText("You're all caught up - no cards left to tag right now!")
+    ).not.toBeVisible();
+
+    await page.getByTestId("printing-confirm-continue").click();
+
+    // that was the only card in the queue - continuing advances past the end of it
     await expect(
       page.getByText("You're all caught up - no cards left to tag right now!")
     ).toBeVisible();
