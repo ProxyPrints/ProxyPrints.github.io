@@ -248,6 +248,90 @@ field (`inferred_canonical_artist`/`artist_vote_status` only,
 serialise-time-only) — confirmed against `documents.py`'s field list, no
 hook needed.
 
+## Stage 4: no-match reason tags + post-vote follow-up strips
+
+A resolved printing vote and an explicit "No match" vote both used to
+advance the queue with zero follow-up (or, for no-match, the general
+`AttributeVotingPanel`) — no fast way to capture _why_ a card had no
+match, and no prompt to confirm full-art/borderless while the card was
+still on screen. Two new, narrowly-scoped strips render in
+`PrintingTagQueue.tsx` between a vote submitting and the queue
+auto-advancing, both a brief, skippable dwell that never blocks
+advancing:
+
+- `PrintingConfirmStrip` (after a vote resolves a printing) — two chips,
+  "Full art"/"Borderless", pre-filled (highlighted) from the resolved
+  candidate's own `fullArt`/`isBorderless` flags. A tap casts one
+  `CardTagVote` for the existing `Full Art`/`Borderless` tags (seeded by
+  `cardpicker.default_tags`, not new) with polarity matching the
+  preview. No new tags, no new endpoint.
+- `NoMatchReasonStrip` (after an explicit "No match" vote) — six chips
+  for a new reason-code taxonomy (below). One tap casts one positive
+  `CardTagVote` and advances. Replaces `AttributeVotingPanel` only in
+  this specific branch — a card that's still contested from a candidate
+  pick (not an explicit no-match) keeps showing `AttributeVotingPanel`
+  unchanged.
+
+Both strips reuse the existing `CardTagVote`/`submitTagVote` machinery
+end to end — no new backend endpoints or vote types, just narrower UI
+over what Stage "attribute voting" already shipped.
+
+**`isBorderless` added to `PrintingCandidate`**: the schema had
+`fullArt` but no border-color-derived field, so `PrintingConfirmStrip`
+couldn't pre-fill a borderless preview from data "already in the
+payload" as originally assumed — it wasn't. Added via the quicktype
+regeneration step (`schemas/schemas/PrintingCandidate.json` →
+`cd schemas && npm run build`), wired in
+`CanonicalCard.serialise_as_printing_candidate()` as
+`metadata.border_color == "borderless"`. Verified against live data
+first (read-only `CanonicalPrintingMetadata.objects.values("border_color").annotate(...)`
+query) rather than assumed from general Scryfall knowledge: the stored
+values are exactly `black`/`borderless`/`white`/`gold`/`silver`/`yellow`.
+
+**Reason-code taxonomy — six new `Tag` rows, seeded by a management
+command, not a migration**: `custom-art`, `altered-frame`, `upscaled`,
+`ai-art`, `no-collector-line`, `non-english`
+(`cardpicker/reason_tags.py`, `manage.py seed_no_match_reason_tags`,
+mirroring the existing `cardpicker/default_tags.py`/
+`seed_default_tags` pattern exactly). **These names are a federation
+interchange contract** — other instances consuming our vote export
+expect these exact strings; renaming any of them is a breaking change,
+not a refactor.
+
+A first pass seeded these via a data migration instead, per the
+original task spec. That broke 5 unrelated tests
+(`test_views.py::TestGetTags::*`, `test_tag_votes.py:: TestPostTagConsensus::test_returns_an_entry_for_every_seeded_tag`) —
+they assert the _complete_ set of `Tag` rows, and document that a fresh
+DB has zero real `Tag` rows besides the synthetic, never-persisted
+`"NSFW"` pseudo-tag (`cardpicker/tags.py`). `seed_default_tags` is
+deliberately **not** wired into any migration for the same reason: a
+migration runs unconditionally at DB-setup time (including the test
+DB), permanently seeding rows nothing asked for. Switched to a command
+to match that established convention; suite back to the known 4-failure
+baseline (2 unrelated `moxfield` network tests, 2 unrelated
+`test_sources.py` path issues) afterward.
+
+**Deliberately a separate taxonomy from `DEFAULT_TAGS`**, not a reuse:
+`upscaled`/`custom-art`/`ai-art` cover near-identical concepts to the
+existing `Upscaled`/`Custom`/`AI-Generated` (which parse filename
+bracket content at _upload_ time), but these are cast by a _human_ as
+the reason they picked "no match" in the queue — kept as distinct rows
+(exact-string-distinct, case included) so the two vote populations
+don't silently merge into one consensus.
+
+`Tag` has no `description` field — the descriptions given in the task
+spec live as documentation only (`reason_tags.py`'s module comment,
+mirrored as frontend display copy in `NoMatchReasonStrip.tsx`), not a
+new DB column or serializer field.
+
+**Activation note**: `manage.py seed_no_match_reason_tags` must be run
+once after this deploys, or `NoMatchReasonStrip` votes 400
+(`post_submit_tag_vote` does `Tag.objects.get(name=...)`, not
+`get_or_create` — a miss raises `BadRequestException`, not a silent
+no-op). Confirmed live: `Full Art`/`Borderless` (used by
+`PrintingConfirmStrip`) already exist in production — `seed_default_tags`
+has been run there before — so that strip needs no activation step.
+
 ## Key files
 
 - Backend: `cardpicker/printing_consensus.py`,
@@ -256,11 +340,14 @@ hook needed.
   `0050_canonicalprintingmetadata_cardprintingtag_and_more.py`),
   `cardpicker/search/search_functions.py` (Stage 3 re-rank/filter),
   `cardpicker/documents.py` (Stage 3 widened indexing; Stage 3.5
-  `reindex_card_safely`), `cardpicker/tag_consensus.py` (Stage 3.5)
+  `reindex_card_safely`), `cardpicker/tag_consensus.py` (Stage 3.5),
+  `cardpicker/reason_tags.py`, `cardpicker/management/commands/ seed_no_match_reason_tags.py` (Stage 4)
 - Frontend: `frontend/src/features/printingTags/` (`PrintingTagQueue.tsx`,
   `PrintingTagPicker.tsx`, `starburstShape.ts`, `useStickyTop`),
   `frontend/src/features/filters/ResolvedAttributeFilter.tsx` (Stage 3),
-  `frontend/src/common/processing.ts::getPrintingMatchLabel` (Stage 3)
+  `frontend/src/common/processing.ts::getPrintingMatchLabel` (Stage 3),
+  `frontend/src/features/attributeVoting/` (`ChipCard.tsx`,
+  `NoMatchReasonStrip.tsx`, `PrintingConfirmStrip.tsx` — Stage 4)
 - `docs/upstreaming/vote-system.md`
 
 ## Known gaps
@@ -271,3 +358,7 @@ hook needed.
 - Client-side (Orama) search has no Stage 3 parity — see above.
 - Upstreaming this feature is deprioritized — see
   [[../infrastructure.md]]'s Upstreaming section.
+- Stage numbering here may need reconciling if PR #11 (deductive
+  printing-tag backfill, also labelled "Stage 4" on its own branch)
+  lands separately from this one — whichever merges second should
+  renumber to avoid two unrelated "Stage 4"s.

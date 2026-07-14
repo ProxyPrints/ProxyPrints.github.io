@@ -1187,6 +1187,7 @@ class PrintingCandidate(BaseModel):
     frame: str
     fullArt: bool
     identifier: str
+    isBorderless: bool
     mediumThumbnailUrl: str
     smallThumbnailUrl: str
     releasedAt: Optional[str] = None
@@ -1202,6 +1203,7 @@ class PrintingCandidate(BaseModel):
         frame = from_str(obj.get("frame"))
         fullArt = from_bool(obj.get("fullArt"))
         identifier = from_str(obj.get("identifier"))
+        isBorderless = from_bool(obj.get("isBorderless"))
         mediumThumbnailUrl = from_str(obj.get("mediumThumbnailUrl"))
         smallThumbnailUrl = from_str(obj.get("smallThumbnailUrl"))
         releasedAt = from_union([from_none, from_str], obj.get("releasedAt"))
@@ -1214,6 +1216,7 @@ class PrintingCandidate(BaseModel):
             frame,
             fullArt,
             identifier,
+            isBorderless,
             mediumThumbnailUrl,
             smallThumbnailUrl,
             releasedAt,
@@ -1229,6 +1232,7 @@ class PrintingCandidate(BaseModel):
         result["frame"] = from_str(self.frame)
         result["fullArt"] = from_bool(self.fullArt)
         result["identifier"] = from_str(self.identifier)
+        result["isBorderless"] = from_bool(self.isBorderless)
         result["mediumThumbnailUrl"] = from_str(self.mediumThumbnailUrl)
         result["smallThumbnailUrl"] = from_str(self.smallThumbnailUrl)
         if self.releasedAt is not None:

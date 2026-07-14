@@ -184,3 +184,24 @@ artifact in a real browser (Chromium at
 `executablePath: /opt/pw-browsers/chromium`; default Playwright download is
 absent). State clearly in the report that live behavior itself was not
 observed.
+
+## Seeding `Tag` rows via a data migration breaks tests that assert on the whole table — use a management command instead
+
+Tried seeding six new `Tag` rows via a Django data migration (RunPython).
+Broke 5 unrelated tests (`test_views.py::TestGetTags::*`,
+`test_tag_votes.py::TestPostTagConsensus::test_returns_an_entry_for_every_seeded_tag`)
+because they assert the _complete_ `Tag` table is empty in a fresh DB
+(besides the synthetic, never-persisted `"NSFW"` pseudo-tag from
+`cardpicker/tags.py`) — a migration runs unconditionally at DB-setup time,
+including the test database, so any migration-seeded row becomes
+permanent baseline state for every test in the suite, not just the ones
+that care about it. The repo's existing 13-tag `DEFAULT_TAGS` taxonomy
+(`cardpicker/default_tags.py`) is deliberately _not_ wired into any
+migration for exactly this reason — it's a manual, idempotent
+`seed_default_tags` management command only. Any future tag/taxonomy
+seeding should follow that same pattern (a `..._tags.py` module +
+`get_or_create` + a thin management-command wrapper), never a migration,
+regardless of how the request is phrased ("data migration" in a task spec
+should be read as "a repeatable seeding step," not literally
+`migrations.RunPython`, when the target table has DB-wide list-all
+consumers).

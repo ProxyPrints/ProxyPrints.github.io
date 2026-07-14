@@ -463,6 +463,7 @@ export interface PrintingCandidate {
   frame: string;
   fullArt: boolean;
   identifier: string;
+  isBorderless: boolean;
   mediumThumbnailUrl: string;
   releasedAt?: null | string;
   smallThumbnailUrl: string;
@@ -1863,6 +1864,7 @@ const typeMap: any = {
       { json: "frame", js: "frame", typ: "" },
       { json: "fullArt", js: "fullArt", typ: true },
       { json: "identifier", js: "identifier", typ: "" },
+      { json: "isBorderless", js: "isBorderless", typ: true },
       { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
       { json: "releasedAt", js: "releasedAt", typ: u(undefined, u(null, "")) },
       { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },

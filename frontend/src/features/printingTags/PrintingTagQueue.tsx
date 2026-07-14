@@ -27,6 +27,8 @@ import {
 import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
 import { Spinner } from "@/components/Spinner";
 import { AttributeVotingPanel } from "@/features/attributeVoting/AttributeVotingPanel";
+import { NoMatchReasonStrip } from "@/features/attributeVoting/NoMatchReasonStrip";
+import { PrintingConfirmStrip } from "@/features/attributeVoting/PrintingConfirmStrip";
 import {
   STARBURST_INNER_COLOR,
   STARBURST_INNER_FRAMES,
@@ -365,6 +367,11 @@ export function PrintingTagQueue() {
   // card this session - the attribute-voting follow-up panel is step 2 after that action,
   // not shown alongside the initial printing picker on a card the user hasn't touched yet.
   const [votedThisCard, setVotedThisCard] = useState<boolean>(false);
+  // which follow-up to show below the candidate grid once votedThisCard is true - tracks
+  // the *submitted* vote's own isNoMatch flag directly (not consensus.isNoMatch, which
+  // reflects the aggregate resolved outcome and can lag a single vote), so a no-match tap
+  // always gets the reason strip even before/without flipping the card's consensus.
+  const [lastVoteWasNoMatch, setLastVoteWasNoMatch] = useState<boolean>(false);
   // guards the fetch effect below against React 18 Strict Mode's dev-time double-invoke,
   // which would otherwise append the same page's cards twice
   const fetchedPagesRef = React.useRef<Set<number>>(new Set());
@@ -410,6 +417,7 @@ export function PrintingTagQueue() {
   useEffect(() => {
     setRevealed(false);
     setVotedThisCard(false);
+    setLastVoteWasNoMatch(false);
   }, [currentCard?.identifier]);
 
   useEffect(() => {
@@ -461,11 +469,10 @@ export function PrintingTagQueue() {
       .then((response) => {
         setConsensus(response);
         setVotedThisCard(true);
-        // if this vote itself resolved the printing (e.g. it broke a tie), there's nothing
-        // left to ask about - advance immediately rather than showing the attribute panel.
-        if (response.resolvedPrinting != null) {
-          advance();
-        }
+        setLastVoteWasNoMatch(isNoMatch);
+        // No immediate advance here even if this vote resolved the printing (e.g. it broke
+        // a tie) - PrintingConfirmStrip gets a brief, skippable dwell below to confirm
+        // full-art/borderless before the queue moves on.
       })
       .catch(() =>
         dispatch(
@@ -660,7 +667,34 @@ export function PrintingTagQueue() {
                     ))}
                   </Row>
                   {votedThisCard &&
+                    consensus?.resolvedPrinting != null &&
+                    backendURL != null && (
+                      <div className="mt-3">
+                        <hr />
+                        <PrintingConfirmStrip
+                          backendURL={backendURL}
+                          cardIdentifier={currentCard.identifier}
+                          candidate={consensus.resolvedPrinting}
+                          onDone={advance}
+                        />
+                      </div>
+                    )}
+                  {votedThisCard &&
                     consensus?.resolvedPrinting == null &&
+                    lastVoteWasNoMatch &&
+                    backendURL != null && (
+                      <div className="mt-3">
+                        <hr />
+                        <NoMatchReasonStrip
+                          backendURL={backendURL}
+                          cardIdentifier={currentCard.identifier}
+                          onDone={advance}
+                        />
+                      </div>
+                    )}
+                  {votedThisCard &&
+                    consensus?.resolvedPrinting == null &&
+                    !lastVoteWasNoMatch &&
                     backendURL != null && (
                       <div className="mt-3">
                         <hr />
@@ -678,11 +712,13 @@ export function PrintingTagQueue() {
                     >
                       Skip
                     </Button>
-                    {votedThisCard && consensus?.resolvedPrinting == null && (
-                      <Button variant="primary" onClick={advance}>
-                        Continue
-                      </Button>
-                    )}
+                    {votedThisCard &&
+                      consensus?.resolvedPrinting == null &&
+                      !lastVoteWasNoMatch && (
+                        <Button variant="primary" onClick={advance}>
+                          Continue
+                        </Button>
+                      )}
                   </div>
                 </>
               )}
