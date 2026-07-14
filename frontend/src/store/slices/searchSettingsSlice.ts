@@ -1,6 +1,11 @@
 import { createSelector } from "@reduxjs/toolkit";
 
-import { MaximumDPI, MaximumSize, MinimumDPI } from "@/common/constants";
+import {
+  MaximumDPI,
+  MaximumSize,
+  MinimumDPI,
+  NSFW_TAG_NAME,
+} from "@/common/constants";
 import {
   createAppSlice,
   SearchSettings,
@@ -38,7 +43,7 @@ export function getDefaultSearchSettings(
       maximumSize: MaximumSize,
       languages: [],
       includesTags: [],
-      excludesTags: ["NSFW"],
+      excludesTags: [NSFW_TAG_NAME],
       fullArtOnly: false,
       borderlessOnly: false,
     },
