@@ -42,7 +42,8 @@ export only locally-resolved consensus — never re-broadcast federated votes
   `content_hash` is the planned upgrade path for surviving re-uploads.
 - Artists travel by canonical name; tags by `Tag.name`. **Tag names are
   therefore a cross-instance contract: renaming a Tag is a breaking data
-  migration, not an edit.**
+  migration, not an edit.** `Tag.name` is the immutable interchange key;
+  `Tag.display_name` is local presentation only and never federates.
 
 ## Import rules (normative for future implementation)
 

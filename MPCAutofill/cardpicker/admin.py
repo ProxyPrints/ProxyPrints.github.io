@@ -31,8 +31,8 @@ from .tag_consensus import get_contested_tag_pairs
 # Register your models here.
 @admin.register(Tag)
 class AdminTag(admin.ModelAdmin[Tag]):
-    list_display = ("name",)
-    search_fields = ("name",)
+    list_display = ("name", "display_name")
+    search_fields = ("name", "display_name")
 
 
 @admin.register(Card)

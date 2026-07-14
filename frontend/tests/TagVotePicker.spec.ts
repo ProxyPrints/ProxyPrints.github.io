@@ -14,6 +14,7 @@ import {
   sourceDocumentsOneResult,
   submitTagVoteResolvesToApply,
   tagConsensusTwoUnresolvedTags,
+  tagsBorderlessWithDisplayName,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
@@ -51,6 +52,41 @@ test.describe("TagVotePicker tests", () => {
 
     const tagPicker = page.getByTestId("tag-vote-picker");
     await expect(tagPicker.getByText("Borderless")).toBeVisible();
+    await expect(tagPicker.getByText("Extended")).toBeVisible();
+  });
+
+  test("shows a tag's displayName when set, falling back to its name when not", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsOneResult,
+      cardbacksTwoOtherResults,
+      sourceDocumentsOneResult,
+      searchResultsOneResult,
+      printingCandidatesTwoResults,
+      printingConsensusUnresolved,
+      artistCandidatesTwoResults,
+      artistConsensusUnresolved,
+      tagConsensusTwoUnresolvedTags,
+      tagsBorderlessWithDisplayName, // only "Borderless" has a displayName; "Extended" doesn't exist in this list at all
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+
+    await importText(
+      page,
+      `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
+    );
+    await openDetailedView(page, cardDocument1.name);
+
+    const tagPicker = page.getByTestId("tag-vote-picker");
+    // "Borderless" has displayName "Frameless Border" set - shown instead of the raw name
+    await expect(tagPicker.getByText("Frameless Border")).toBeVisible();
+    await expect(
+      tagPicker.getByText("Borderless", { exact: true })
+    ).not.toBeVisible();
+    // "Extended" has no displayName - falls back to its raw name
     await expect(tagPicker.getByText("Extended")).toBeVisible();
   });
 

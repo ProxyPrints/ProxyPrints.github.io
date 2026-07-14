@@ -1551,6 +1551,7 @@ class ChildElement(BaseModel):
     children: List["ChildElement"]
     name: str
     aliases: Optional[List[str]] = None
+    displayName: Optional[str] = None
     isEnabledByDefault: Optional[bool] = None
     parent: Optional[str] = None
 
@@ -1560,9 +1561,10 @@ class ChildElement(BaseModel):
         children = from_list(ChildElement.from_dict, obj.get("children"))
         name = from_str(obj.get("name"))
         aliases = from_union([lambda x: from_list(from_str, x), from_none], obj.get("aliases"))
+        displayName = from_union([from_none, from_str], obj.get("displayName"))
         isEnabledByDefault = from_union([from_bool, from_none], obj.get("isEnabledByDefault"))
         parent = from_union([from_none, from_str], obj.get("parent"))
-        return ChildElement(children, name, aliases, isEnabledByDefault, parent)
+        return ChildElement(children, name, aliases, displayName, isEnabledByDefault, parent)
 
     def to_dict(self) -> dict:
         result: dict = {}
@@ -1570,6 +1572,8 @@ class ChildElement(BaseModel):
         result["name"] = from_str(self.name)
         if self.aliases is not None:
             result["aliases"] = from_union([lambda x: from_list(from_str, x), from_none], self.aliases)
+        if self.displayName is not None:
+            result["displayName"] = from_union([from_none, from_str], self.displayName)
         if self.isEnabledByDefault is not None:
             result["isEnabledByDefault"] = from_union([from_bool, from_none], self.isEnabledByDefault)
         result["parent"] = from_union([from_none, from_str], self.parent)
@@ -1580,6 +1584,7 @@ class Tag(BaseModel):
     children: List[ChildElement]
     name: str
     aliases: Optional[List[str]] = None
+    displayName: Optional[str] = None
     isEnabledByDefault: Optional[bool] = None
     parent: Optional[str] = None
 
@@ -1589,9 +1594,10 @@ class Tag(BaseModel):
         children = from_list(ChildElement.from_dict, obj.get("children"))
         name = from_str(obj.get("name"))
         aliases = from_union([lambda x: from_list(from_str, x), from_none], obj.get("aliases"))
+        displayName = from_union([from_none, from_str], obj.get("displayName"))
         isEnabledByDefault = from_union([from_bool, from_none], obj.get("isEnabledByDefault"))
         parent = from_union([from_none, from_str], obj.get("parent"))
-        return Tag(children, name, aliases, isEnabledByDefault, parent)
+        return Tag(children, name, aliases, displayName, isEnabledByDefault, parent)
 
     def to_dict(self) -> dict:
         result: dict = {}
@@ -1599,6 +1605,8 @@ class Tag(BaseModel):
         result["name"] = from_str(self.name)
         if self.aliases is not None:
             result["aliases"] = from_union([lambda x: from_list(from_str, x), from_none], self.aliases)
+        if self.displayName is not None:
+            result["displayName"] = from_union([from_none, from_str], self.displayName)
         if self.isEnabledByDefault is not None:
             result["isEnabledByDefault"] = from_union([from_bool, from_none], self.isEnabledByDefault)
         result["parent"] = from_union([from_none, from_str], self.parent)
