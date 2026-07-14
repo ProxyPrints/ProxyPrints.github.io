@@ -114,14 +114,28 @@ and need nothing.
 ## Sensitive taxonomy
 
 `Tag.moderation_class` (`standard` | `sensitive`, default standard).
-`manage.py seed_sensitive_tags` seeds three (command, not data migration —
+`manage.py seed_sensitive_tags` seeds four (command, not data migration —
 same rationale as the other taxonomies, see [[printing-tags.md]]):
 
-| name             | display name        | report reason |
-| ---------------- | ------------------- | ------------- |
-| `NSFW`           | NSFW                | `nsfw`        |
-| `low-res`        | Low quality         | `low_quality` |
-| `incorrect-info` | Incorrect card info | `wrong_card`  |
+| name                | display name        | report reason |
+| ------------------- | ------------------- | ------------- |
+| `NSFW`              | NSFW                | `nsfw`        |
+| `low-res`           | Low quality         | `low_quality` |
+| `incorrect-info`    | Incorrect card info | `wrong_card`  |
+| `appropriate-bleed` | Appropriate Bleed   | — (no chip)   |
+
+`appropriate-bleed` is deliberately the **positive** framing ("verified to
+include the full bleed margin required for printing") rather than a negative
+"missing-bleed": upstream drives require appropriate bleed on every card, so
+the state worth verifying is the positive one — an untagged card reads as
+"not yet verified", and a definitive "lacks bleed" verdict is still
+expressible as the tag resolving REJECT through the same vote mechanics.
+It's sensitive because that verification is exactly a moderator co-sign: the
+crowd votes it via the card modal's tag picker, consensus parks as
+`pending_approval`, and a moderator confirms it in the queue. No report-button
+chip (it's a verification workflow, not a complaint) and no search consequence;
+drive-level checks can select verified cards via the existing `includesTags`
+filter.
 
 `NSFW` deliberately reuses the pre-existing `cardpicker.constants.NSFW` name:
 filename-bracket tagging (`[NSFW]`) and the frontend's default

@@ -4,12 +4,13 @@ from cardpicker.sensitive_tags import SENSITIVE_TAGS, seed_sensitive_tags
 
 
 class TestSeedSensitiveTags:
-    def test_creates_all_three_sensitive_tags(self, db):
+    def test_creates_all_sensitive_tags(self, db):
         stats = seed_sensitive_tags()
         assert stats["created"] == len(SENSITIVE_TAGS)
 
         expected_names = {name for name, _description, _display_name in SENSITIVE_TAGS}
         assert NSFW in expected_names  # the taxonomy reuses the pre-existing constant, not a lowercase twin
+        assert "appropriate-bleed" in expected_names  # positive framing - see sensitive_tags.py
         names = set(Tag.objects.filter(name__in=expected_names).values_list("name", flat=True))
         assert names == expected_names
 

@@ -30,6 +30,12 @@ SENSITIVE_TAGS: list[tuple[str, str, str]] = [
     (NSFW, "Mature/adult content - excluded from search by default", "NSFW"),
     ("low-res", "Image quality too poor to print", "Low quality"),
     ("incorrect-info", "Card text/details do not match the real card", "Incorrect card info"),
+    # Deliberately the POSITIVE framing ("has appropriate bleed"), not a negative
+    # "missing-bleed": upstream drives REQUIRE appropriate bleed on every card, so the useful
+    # verified state is the positive one - absence just means "not yet verified", and a
+    # definitive "lacks bleed" verdict is still expressible as this tag resolving REJECT.
+    # Sensitive because that verification is exactly a moderator's co-sign.
+    ("appropriate-bleed", "Verified to include the full bleed margin required for printing", "Appropriate Bleed"),
 ]
 
 
