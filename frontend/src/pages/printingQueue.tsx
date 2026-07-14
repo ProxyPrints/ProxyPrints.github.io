@@ -8,16 +8,19 @@ import { ContentMaxWidth, ProjectName } from "@/common/constants";
 import { Kind } from "@/common/schema_types";
 import { NoBackendDefault } from "@/components/NoBackendDefault";
 import { GenericVoteQueue } from "@/features/attributeVoting/GenericVoteQueue";
+import { AuthWidget } from "@/features/moderation/AuthWidget";
+import { ModerationQueue } from "@/features/moderation/ModerationQueue";
 import { PrintingTagQueue } from "@/features/printingTags/PrintingTagQueue";
 import { STARBURST_BACKGROUND_COLOR } from "@/features/printingTags/starburstShape";
 import Footer from "@/features/ui/Footer";
 import { ProjectContainer } from "@/features/ui/Layout";
+import { useGetWhoamiQuery } from "@/store/api";
 import {
   useProjectName,
   useRemoteBackendConfigured,
 } from "@/store/slices/backendSlice";
 
-type VoteQueueTab = "printing" | "artist" | "tag";
+type VoteQueueTab = "printing" | "artist" | "tag" | "moderation";
 
 // Radiating starburst behind the game itself - a jagged
 // "explosion" burst (see starburstShape.ts, rendered inside PrintingTagQueue.tsx alongside
@@ -70,6 +73,9 @@ const StarburstContent = styled.div`
 function PrintingQueueOrDefault() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   const [activeTab, setActiveTab] = useState<VoteQueueTab>("printing");
+  // gating the tab is presentation only - the backend 403s non-moderators regardless
+  const whoami = useGetWhoamiQuery();
+  const isModerator = whoami.data?.moderator === true;
 
   return remoteBackendConfigured ? (
     <>
@@ -82,6 +88,7 @@ function PrintingQueueOrDefault() {
             card image depicts - contested cards come first, since they need
             your eyes the most.
           </p>
+          <AuthWidget />
           <Tab.Container
             activeKey={activeTab}
             onSelect={(key) => {
@@ -98,6 +105,11 @@ function PrintingQueueOrDefault() {
               <Nav.Item>
                 <Nav.Link eventKey="tag">Tags</Nav.Link>
               </Nav.Item>
+              {isModerator && (
+                <Nav.Item>
+                  <Nav.Link eventKey="moderation">Moderation</Nav.Link>
+                </Nav.Item>
+              )}
             </Nav>
             <Tab.Content>
               {/* mountOnEnter: each mode's queue does its own fetching/pagination on mount -
@@ -118,6 +130,11 @@ function PrintingQueueOrDefault() {
               <Tab.Pane eventKey="tag" mountOnEnter unmountOnExit>
                 <GenericVoteQueue kind={Kind.Tag} label="a tag reviewed" />
               </Tab.Pane>
+              {isModerator && (
+                <Tab.Pane eventKey="moderation" mountOnEnter unmountOnExit>
+                  <ModerationQueue />
+                </Tab.Pane>
+              )}
             </Tab.Content>
           </Tab.Container>
         </StarburstContent>
