@@ -106,6 +106,19 @@ def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
     return printings_by_id[winning_key]
 
 
+def _effective_indexed_printing_id(status: str, printing_id: int | None) -> int | None:
+    """
+    The printing id that actually reaches Elasticsearch for a card in `status`: `Card.
+    get_expansion_code`/`get_collector_number` (the fields `documents.py` indexes) only fall
+    back to `inferred_canonical_card` while `printing_tag_status == RESOLVED` - a card that's
+    UNRESOLVED or NO_MATCH is indexed as if `inferred_canonical_card` were `None`, regardless
+    of what's actually stored there. Comparing this derived value (not the raw fields) before
+    and after a consensus run is what lets a status flip with no printing change, or a
+    printing change with no status flip, both correctly count as "the index needs updating."
+    """
+    return printing_id if status == PrintingTagStatus.RESOLVED else None
+
+
 def resolve_and_persist_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
     """
     Runs `resolve_printing(card)` and writes the outcome onto `card.inferred_canonical_card`
@@ -116,7 +129,20 @@ def resolve_and_persist_printing(card: Card) -> CanonicalCard | Literal["NO_MATC
     vote is submitted for `card` - cheap, since it only touches this one card's own votes.
     Returns the same outcome `resolve_printing` returned, so callers don't need to
     recompute it again immediately afterwards.
+
+    Also pushes `card` into Elasticsearch, but only when the outcome actually changes what's
+    indexed (see `_effective_indexed_printing_id`) - entering RESOLVED, leaving RESOLVED
+    (contested/unresolved again after new votes), or the resolved printing itself changing
+    while remaining RESOLVED. A re-resolve that lands on the same outcome as before (the
+    common case whenever this runs against a card that already has a settled consensus) does
+    not touch the index. The push itself is failure-isolated (`reindex_card_safely`) - an ES
+    hiccup is logged, never raised; this function's own DB write has already committed by
+    that point regardless.
     """
+    prior_status = card.printing_tag_status
+    prior_printing_id = card.inferred_canonical_card_id
+    prior_effective = _effective_indexed_printing_id(prior_status, prior_printing_id)
+
     result = resolve_printing(card)
     if result is None:
         card.inferred_canonical_card = None
@@ -128,6 +154,15 @@ def resolve_and_persist_printing(card: Card) -> CanonicalCard | Literal["NO_MATC
         card.inferred_canonical_card = result
         card.printing_tag_status = PrintingTagStatus.RESOLVED
     card.save(update_fields=["inferred_canonical_card", "printing_tag_status"])
+
+    new_effective = _effective_indexed_printing_id(card.printing_tag_status, card.inferred_canonical_card_id)
+    if new_effective != prior_effective:
+        from cardpicker.documents import (
+            reindex_card_safely,  # local import - avoids a top-level ES dependency in this module
+        )
+
+        reindex_card_safely(card)
+
     return result
 
 

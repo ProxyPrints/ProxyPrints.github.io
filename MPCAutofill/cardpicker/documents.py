@@ -1,3 +1,5 @@
+import logging
+
 from django_elasticsearch_dsl import Document, fields
 from django_elasticsearch_dsl.registries import registry
 from elasticsearch_dsl import analyzer
@@ -5,6 +7,8 @@ from elasticsearch_dsl import analyzer
 from django.db.models import QuerySet
 
 from cardpicker.models import Card
+
+logger = logging.getLogger(__name__)
 
 # custom elasticsearch analysers are configured here to add the `asciifolding` filter, which handles accents:
 # https://www.elastic.co/guide/en/elasticsearch/reference/7.17/analysis-asciifolding-tokenfilter.html
@@ -52,3 +56,19 @@ class CardSearch(Document):
                 "inferred_canonical_card__expansion",
             )
         )
+
+
+def reindex_card_safely(card: Card) -> None:
+    """
+    Pushes `card`'s current state into the Elasticsearch index, catching and logging any
+    failure rather than raising. Postgres is the source of truth for vote/consensus state -
+    by the time this runs, that write has already committed - so a search-index hiccup (ES
+    down, a transient connection error, etc.) must never break vote submission or roll back
+    a DB write that already succeeded. Shared by every vote-consensus module that needs to
+    push a single card's change into the index immediately, rather than waiting for the next
+    scheduled `update_database` re-scan or a manual `search_index --rebuild`.
+    """
+    try:
+        CardSearch().update([card], action="index")
+    except Exception:
+        logger.exception("Failed to reindex card %s into Elasticsearch after a vote-consensus update", card.identifier)
