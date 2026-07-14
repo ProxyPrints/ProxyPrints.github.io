@@ -58,7 +58,8 @@ only) for deployment, hosting, and domain specifics.
 - [`docs/lessons.md`](docs/lessons.md) — terse, reusable cross-session
   lessons (CI vs. local venv trust, worktree port collisions, debug-color
   verification, cyclic-animation sampling, verifying cross-session claims,
-  ES mapping drift, test-factory isolation, sticky/overflow CSS gotchas).
+  ES mapping drift, test-factory isolation, sticky/overflow CSS gotchas,
+  migration-vs-command tag seeding).
 - [`docs/features/image-cdn.md`](docs/features/image-cdn.md) — the Worker +
   R2 bucket image CDN.
 - [`docs/features/pdf-generator.md`](docs/features/pdf-generator.md) — PDF
