@@ -500,6 +500,37 @@ dependencies), `is_no_match` votes, fuzzy/lower-confidence signals beyond
 D1/D2, a "suggested" badge in the queue UI, and artist/tag deduction
 (printing only).
 
+**Status: live** (merged as PR #11, 2026-07-14; real production run same
+day). `manage.py deductive_backfill_printing_tags --tier all` executed
+against production: **D1 = 26,931, D2 = 1,181, total = 28,112** votes
+written (a `bulk_create` of `CardPrintingTag` rows directly - never routed
+through `resolve_and_persist_printing`, so this write path cannot trigger
+`reindex_card_safely`; ES reindex firings from this run are zero by
+construction, not merely by observed log silence). Slightly below the
+same-day census (D1 26,962 / D2 1,202 / total 28,164, taken hours
+earlier) - the ~52-vote gap matches cards resolved or voted on for other
+reasons in the interim, consistent with real production traffic between
+the census and the run; the command's own `--dry-run` immediately
+beforehand reproduced the identical 28,112 figure deterministically.
+Post-write live gate check (`verify_zero_resolutions`, the pure
+`resolve_printing` path, never persisting): **0/28,112 affected cards
+resolved** - the human-backed gate held at scale exactly as designed, no
+AI-only vote pushed a card into `RESOLVED` on its own.
+
+5-card spot check (random sample) confirmed every vote as
+`source=ai`, `anonymous_id=deductive-backfill-v1`, `confidence` 0.95/0.90
+matching its tier, `is_no_match=False`, printing name matching the card
+name, and the card's `printing_tag_status` still `unresolved`.
+**Confirmed via code path, not just this sample: the queue's candidate
+grid highlight is keyed strictly on
+`consensus?.resolvedPrinting?.identifier === candidate.identifier`**
+(`PrintingTagQueue.tsx`), which only ever populates for a truly
+`RESOLVED` card - so the "suggested" printing from a deductive-backfill
+vote does **not** surface as a pre-filled highlight in the queue today.
+This is the documented, deliberate scope decision above (no "suggested"
+badge this stage), not a bug; a UX follow-up to surface AI-only
+suggestions visually is a separate, future proposal.
+
 ## Key files
 
 - Backend: `cardpicker/printing_consensus.py`,
