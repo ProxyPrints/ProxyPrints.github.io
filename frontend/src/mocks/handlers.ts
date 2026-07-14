@@ -729,6 +729,36 @@ export const submitPrintingTagResolvesToPrintingCandidate1 = http.post(
     )
 );
 
+// printingCandidate2 (unlike printingCandidate1) has fullArt/isBorderless both true - used to
+// exercise PrintingConfirmStrip's pre-fill-from-candidate-metadata behaviour in both states.
+export const submitPrintingTagResolvesToPrintingCandidate2 = http.post(
+  buildRoute("2/submitPrintingTag/"),
+  () =>
+    HttpResponse.json(
+      {
+        resolvedPrinting: printingCandidate2,
+        isNoMatch: false,
+        voteTally: [
+          { printing: printingCandidate2, isNoMatch: false, count: 1 },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
+export const submitPrintingTagNoMatch = http.post(
+  buildRoute("2/submitPrintingTag/"),
+  () =>
+    HttpResponse.json(
+      {
+        resolvedPrinting: null,
+        isNoMatch: true,
+        voteTally: [{ isNoMatch: true, count: 1 }],
+      },
+      { status: 200 }
+    )
+);
+
 export const printingTagQueueOneResult = http.get(
   buildRoute("2/printingTagQueue/"),
   () =>

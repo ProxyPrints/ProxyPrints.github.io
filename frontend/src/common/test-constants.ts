@@ -520,6 +520,7 @@ export const printingCandidate1: PrintingCandidate = {
   smallThumbnailUrl: "https://example.com/small1.png",
   mediumThumbnailUrl: "https://example.com/medium1.png",
   fullArt: false,
+  isBorderless: false,
   frame: "2015",
   releasedAt: "2020-01-01",
 };
@@ -534,6 +535,7 @@ export const printingCandidate2: PrintingCandidate = {
   smallThumbnailUrl: "https://example.com/small2.png",
   mediumThumbnailUrl: "https://example.com/medium2.png",
   fullArt: true,
+  isBorderless: true,
   frame: "2003",
   releasedAt: "2010-06-15",
 };

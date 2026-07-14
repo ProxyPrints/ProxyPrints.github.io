@@ -124,6 +124,7 @@ class CanonicalCard(models.Model):
             smallThumbnailUrl=self.small_thumbnail_url,
             mediumThumbnailUrl=self.medium_thumbnail_url,
             fullArt=metadata.full_art if metadata is not None else False,
+            isBorderless=metadata.border_color == "borderless" if metadata is not None else False,
             frame=metadata.frame if metadata is not None else "",
             releasedAt=metadata.released_at.isoformat() if metadata is not None and metadata.released_at else None,
         )
