@@ -531,6 +531,12 @@ class AbstractWeightedVote(models.Model):
     # a client-generated identifier (see `frontend/src/common/anonymousId.ts`), not a real Django
     # session key - cross-origin frontend/backend means a session cookie never round-trips here.
     anonymous_id = models.CharField(max_length=40)
+    # set (in addition to anonymous_id, never instead of it) when the submitting request
+    # carried an authenticated session - today that means a Discord-authenticated moderator
+    # (see cardpicker.moderation / docs/features/moderation.md). Whether the vote counts as
+    # privileged is decided at *resolution* time from current group membership, not stored
+    # here, so revoking a moderator retroactively de-privileges their votes.
+    user = models.ForeignKey(to=User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     source = models.CharField(max_length=10, choices=VoteSource.choices, default=VoteSource.USER)
     confidence = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

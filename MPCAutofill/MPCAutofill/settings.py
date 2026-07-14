@@ -60,6 +60,10 @@ PRINTING_TAG_MIN_VOTES = env.float("PRINTING_TAG_MIN_VOTES", default=2)
 PRINTING_TAG_MIN_SHARE = env.float("PRINTING_TAG_MIN_SHARE", default=0.6)
 PRINTING_TAG_ADMIN_WEIGHT = env.float("PRINTING_TAG_ADMIN_WEIGHT", default=5)
 PRINTING_TAG_AI_WEIGHT = env.float("PRINTING_TAG_AI_WEIGHT", default=0.5)
+# weight of a vote cast by a privileged user (a Moderators-group member - see
+# cardpicker.moderation.privileged_weight). Defaults to the admin weight: a lone moderator
+# clears the consensus threshold the same way a lone admin does.
+VOTE_PRIVILEGED_WEIGHT = env.float("VOTE_PRIVILEGED_WEIGHT", default=PRINTING_TAG_ADMIN_WEIGHT)
 # federation-readiness stub (see docs/federation-v1.md) - no import path creates federated
 # votes yet, so this setting is currently inert, but it's wired into vote_consensus._SOURCE_WEIGHTS
 # alongside the weights above.

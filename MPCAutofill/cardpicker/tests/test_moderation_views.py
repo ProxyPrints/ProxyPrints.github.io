@@ -9,6 +9,8 @@ import pytest
 from django.urls import reverse
 
 from cardpicker import views
+from cardpicker.models import CardTagVote
+from cardpicker.tests.factories import CardFactory, TagFactory
 
 
 class TestGetWhoami:
@@ -68,3 +70,49 @@ class TestGetWhoami:
     def test_post_is_rejected(self, client):
         response = client.post(reverse(views.get_whoami))
         assert response.status_code == 400
+
+
+class TestVoteUserRecording:
+    """
+    The nullable `AbstractWeightedVote.user` FK: set alongside anonymous_id when the
+    submitting request carries an authenticated session, None otherwise.
+    """
+
+    @pytest.fixture(autouse=True)
+    def autouse_django_settings(self, django_settings):
+        pass
+
+    @staticmethod
+    def submit_tag_vote(client, card, tag_name: str, anonymous_id: str = "anon-1"):
+        return client.post(
+            reverse(views.post_submit_tag_vote),
+            {"identifier": card.identifier, "anonymousId": anonymous_id, "tagName": tag_name, "polarity": 1},
+            content_type="application/json",
+        )
+
+    def test_anonymous_vote_records_no_user(self, client):
+        card, tag = CardFactory(), TagFactory()
+        response = self.submit_tag_vote(client, card, tag.name)
+        assert response.status_code == 200
+        vote = CardTagVote.objects.get()
+        assert vote.user is None
+        assert vote.anonymous_id == "anon-1"
+
+    def test_authenticated_vote_records_user_and_anonymous_id(self, client, plain_user):
+        card, tag = CardFactory(), TagFactory()
+        client.force_login(plain_user)
+        response = self.submit_tag_vote(client, card, tag.name)
+        assert response.status_code == 200
+        vote = CardTagVote.objects.get()
+        assert vote.user == plain_user
+        assert vote.anonymous_id == "anon-1"
+
+    def test_unauthenticated_revote_clears_user(self, client, plain_user):
+        # the row reflects the latest submission for this (card, tag, anonymous_id)
+        card, tag = CardFactory(), TagFactory()
+        client.force_login(plain_user)
+        self.submit_tag_vote(client, card, tag.name)
+        client.logout()
+        self.submit_tag_vote(client, card, tag.name)
+        vote = CardTagVote.objects.get()
+        assert vote.user is None

@@ -5,7 +5,7 @@ import mimetypes
 from collections import defaultdict
 from pathlib import Path
 from random import sample
-from typing import Any, Callable, Literal, TypeVar, Union, cast
+from typing import Any, Callable, Literal, Optional, TypeVar, Union, cast
 
 import Levenshtein
 import pycountry
@@ -14,6 +14,7 @@ from elasticsearch_dsl.index import Index
 from pydantic import ValidationError
 
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Case, IntegerField, Q, When
@@ -687,6 +688,15 @@ def _get_card_or_400(identifier: str) -> Card:
         raise BadRequestException(f"No card found with identifier {identifier!r}.")
 
 
+def _requesting_user(request: HttpRequest) -> Optional[User]:
+    """
+    The authenticated user behind a vote/report submission, or None for the (typical)
+    anonymous case - recorded on the row *in addition to* the client-generated anonymous_id,
+    never instead of it. See AbstractWeightedVote.user.
+    """
+    return request.user if isinstance(request.user, User) else None
+
+
 @csrf_exempt
 @ErrorWrappers.to_json
 def get_printing_tag_queue(request: HttpRequest) -> HttpResponse:
@@ -853,6 +863,7 @@ def post_submit_printing_tag(request: HttpRequest) -> HttpResponse:
             is_no_match=req.isNoMatch,
             anonymous_id=req.anonymousId,
             source=VoteSource.USER,
+            user=_requesting_user(request),
         )
         resolved = resolve_and_persist_printing(card)
 
@@ -975,6 +986,7 @@ def post_submit_artist_vote(request: HttpRequest) -> HttpResponse:
             is_unknown=req.isUnknown,
             anonymous_id=req.anonymousId,
             source=VoteSource.USER,
+            user=_requesting_user(request),
         )
         resolved = resolve_and_persist_artist(card)
 
@@ -1042,11 +1054,13 @@ def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
         raise BadRequestException(f"Invalid polarity {req.polarity!r} - must be 1 (apply) or -1 (not applicable).")
 
     with transaction.atomic():
+        # `user` sits in defaults deliberately: the row reflects the *latest* submission from
+        # this (card, tag, anonymous_id), so a later unauthenticated re-vote clears it.
         CardTagVote.objects.update_or_create(
             card=card,
             tag=tag,
             anonymous_id=req.anonymousId,
-            defaults={"polarity": req.polarity, "source": VoteSource.USER},
+            defaults={"polarity": req.polarity, "source": VoteSource.USER, "user": _requesting_user(request)},
         )
         resolve_and_persist_tag_votes(card)
 

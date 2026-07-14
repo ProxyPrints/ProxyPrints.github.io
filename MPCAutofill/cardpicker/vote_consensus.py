@@ -33,6 +33,12 @@ class VoteTuple(NamedTuple):
     outcome_key: Hashable
     weight: float
     is_human_backed: bool
+    # True when the vote carries elevated moderation authority: cast by a Moderators-group
+    # member (see cardpicker.moderation.is_privileged_vote) or by an admin (source==ADMIN).
+    # Only consulted when `resolve_weighted_consensus` is called with `require_privileged=True`
+    # (sensitive tags - see docs/features/moderation.md); defaulted so the many existing
+    # call sites that predate the moderation layer construct VoteTuples unchanged.
+    is_privileged: bool = False
 
 
 class _VoteGroup(TypedDict):
