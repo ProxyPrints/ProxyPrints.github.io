@@ -30,6 +30,16 @@ them.
   uploads single-digit megabytes and finishes in ~5 minutes.
 - Postgres/ES ports are bound to `127.0.0.1` deliberately — they were
   internet-exposed at one point.
+- **After `docker compose up -d django worker` (or any command that
+  recreates the `django` container), also restart `nginx`.** `nginx`'s
+  `upstream django-api { server django:8000; }` resolves the `django`
+  service name to a Docker-internal IP once at nginx's own startup/reload,
+  not per-request — recreating the django container assigns it a _new_
+  internal IP, which nginx keeps proxying to as if nothing changed, so
+  every request 502s (`connect() failed (111: Connection refused) ... upstream: "http://<stale-ip>:8000/..."` in nginx's logs) until nginx
+  itself is restarted (`sudo docker compose -f docker-compose.prod.yml restart nginx`). Found live during the tag-taxonomy-followup PR's
+  activation sequence — api.proxyprints.ca was fully down for a few
+  minutes as a result before this was diagnosed and fixed.
 
 ## Secrets and credentials
 
