@@ -26,6 +26,7 @@ import {
   PrintingConsensusResponse,
 } from "@/common/schema_types";
 import { useAppDispatch, useAppSelector } from "@/common/types";
+import { SetIcon } from "@/components/SetIcon";
 import {
   APIGetPrintingCandidates,
   APIGetPrintingConsensus,
@@ -139,6 +140,7 @@ export function PrintingTagPicker({
         {consensus != null && consensus.resolvedPrinting != null && (
           <span>
             Current consensus:{" "}
+            <SetIcon expansionCode={consensus.resolvedPrinting.expansionCode} />{" "}
             {consensus.resolvedPrinting.expansionCode.toUpperCase()}{" "}
             {consensus.resolvedPrinting.collectorNumber}
           </span>
@@ -220,6 +222,7 @@ export function PrintingTagPicker({
                     style={{ width: "100%" }}
                   />
                   <div>
+                    <SetIcon expansionCode={candidate.expansionCode} />{" "}
                     {candidate.expansionCode.toUpperCase()}{" "}
                     {candidate.collectorNumber}
                   </div>
