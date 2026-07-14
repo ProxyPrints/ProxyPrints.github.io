@@ -425,6 +425,81 @@ what a future _rename_ of `name` (not what this stage does) would break
   (it's a snapshot array, not a live FK). `display_name` exists precisely
   so that presentation changes never need to risk this at all.
 
+## Stage 6: deductive backfill (AI-weight votes for logically-entailed printings)
+
+Casts `source=ai` `CardPrintingTag` votes (`cardpicker/deductive_backfill.py`,
+management command `deductive_backfill_printing_tags`) for cards whose
+printing is entailed by data already in the catalog, rather than waiting
+for a human to vote from scratch on every one of the ~207k untagged
+cards. **PRINCIPLE**: a deduction is only valid conditional on the image
+actually being an authentic depiction of the named card - this catalog
+allows custom art - so a deduction is always a _vote_
+(`PRINTING_TAG_AI_WEIGHT`, default 0.5), never a direct
+`printing_tag_status`/`inferred_canonical_card` write. The hard
+"at least one human-backed vote" gate in
+`vote_consensus.resolve_weighted_consensus` means an AI-only vote can
+never resolve a card by itself, at any volume - a human still confirms.
+
+**Two confidence tiers**, both keyed on `to_searchable`-normalized name
+(the same normalizer `printing_candidates.py`'s queue lookup uses,
+post-#460 - no mid-string "the" stripping):
+
+- **D1** (confidence 0.95): the name matches exactly one `CanonicalCard`
+  row. Cross-verified against Scryfall's own `printings_count`
+  (`CanonicalPrintingMetadata`, not derived from our import) so "exactly
+  one row in our table" can't be mistaken for "Scryfall says this card
+  only has one printing" when the two disagree - a card is only D1 if
+  both agree. A `CanonicalCard` with no `CanonicalPrintingMetadata`
+  sidecar at all is treated as unverifiable, never as count-1.
+- **D2** (confidence 0.90): the name matches more than one `CanonicalCard`
+  row, but `Card.expansion_hint` (already parsed at upload time from a
+  lone set-code bracket token in the source filename -
+  `cardpicker/tags.py::Tags.extract()`, no new parsing built for this)
+  narrows `(name, expansion)` to exactly one row.
+
+**Eligibility, beyond the two tiers above**: `printing_tag_status == UNRESOLVED`, no `canonical_card` (a confirmed ingestion-time match already
+settles it), **no existing vote of any kind** - not just no prior
+deductive vote. A card with a pre-existing human vote is exactly the
+scenario where adding a same-outcome AI vote could push an _already_
+human-backed group's weight over the resolution threshold; excluding
+these outright removes the scenario rather than relying on the live gate
+check below to catch it. Also excludes a card with the `"Custom"` tag
+already resolved (`Card.tags` - the PRINCIPLE's precondition is already
+known false) and a non-English card (`Card.language` - name-matching
+compares against Scryfall's English oracle name, so a coincidental match
+against a foreign-language name isn't trustworthy).
+
+**Idempotent / resumable**: the "no existing vote" exclusion above is
+also the checkpoint mechanism - an interrupted run leaves whatever it
+already committed, and simply re-invoking the command later picks up
+exactly where it left off with no separate checkpoint file. `--limit`
+caps a single invocation; `--dry-run` selects and counts without writing.
+
+**Live gate check**: after writing (unless `--dry-run`), every affected
+card is re-fetched fresh and run through the _pure_ `resolve_printing`
+(never `resolve_and_persist_printing` - the check itself must never be
+able to cause a write) to confirm none of them actually resolved. Should
+be structurally impossible per the paragraph above; verified live against
+the real data anyway rather than only trusted in theory. Any violation
+raises `CommandError` and stops rather than continuing past it.
+
+**Census** (2026-07-14, `printing_tag_status=UNRESOLVED`,
+`canonical_card` null pool of 207,123 / 218,128 total cards): D1 =
+26,962, D2 = 1,202 after the Custom-tag/non-English exclusions (27,424 /
+1,204 before them). Every D1 candidate's Scryfall `printings_count`
+cross-check passed (0 false positives out of 27,424). D2's `(name, expansion)` narrowing occasionally collides across distinct oracle
+objects sharing a display name (generic tokens - Treasure, Zombie, Beast,
+etc. - and one real card, Llanowar Elves, colliding with an unrelated
+same-named token in a token-only set); doesn't affect any individual
+vote's correctness since each vote's own `(name, expansion_hint)` pair is
+independently verified to narrow to one row.
+
+**Out of scope for this stage**: vision/AI image classification calls
+(this is pure logical deduction from existing structured data, zero new
+dependencies), `is_no_match` votes, fuzzy/lower-confidence signals beyond
+D1/D2, a "suggested" badge in the queue UI, and artist/tag deduction
+(printing only).
+
 ## Key files
 
 - Backend: `cardpicker/printing_consensus.py`,
@@ -437,7 +512,9 @@ what a future _rename_ of `name` (not what this stage does) would break
   `reindex_card_safely`), `cardpicker/tag_consensus.py` (Stage 3.5),
   `cardpicker/reason_tags.py`, `cardpicker/default_tags.py`,
   `cardpicker/management/commands/seed_no_match_reason_tags.py` (Stage 4,
-  display_name seeding Stage 5)
+  display_name seeding Stage 5),
+  `cardpicker/deductive_backfill.py` + management command
+  `deductive_backfill_printing_tags` (Stage 6)
 - Frontend: `frontend/src/features/printingTags/` (`PrintingTagQueue.tsx`,
   `PrintingTagPicker.tsx`, `starburstShape.ts`, `useStickyTop`),
   `frontend/src/features/filters/ResolvedAttributeFilter.tsx` (Stage 3),
@@ -456,9 +533,9 @@ what a future _rename_ of `name` (not what this stage does) would break
 - Client-side (Orama) search has no Stage 3 parity — see above.
 - Upstreaming this feature is deprioritized — see
   [[../infrastructure.md]]'s Upstreaming section.
-- Stage numbering here may need reconciling if PR #11 (deductive
-  printing-tag backfill, also labelled "Stage 4" on its own branch)
-  lands separately from this one — whichever merges second should
-  renumber to avoid two unrelated "Stage 4"s (this document currently
-  reserves "Stage 5" for tag display_name decoupling, landed after
-  Stage 4's no-match reason tags on this same document's timeline).
+- Stage numbering: Stage 4 (no-match reason tags, merged as PR #12),
+  Stage 5 (tag identity/presentation decoupling via `Tag.display_name`,
+  merged as PR #14), and Stage 6 (this document's current stage —
+  deductive printing-tag backfill) reflect three concurrently-developed
+  branches sharing this one doc file, numbered in landing order to avoid
+  collisions.
