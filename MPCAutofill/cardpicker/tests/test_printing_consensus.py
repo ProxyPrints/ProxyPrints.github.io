@@ -1,9 +1,12 @@
+from unittest.mock import patch
+
 import pytest
 
 from cardpicker.models import PrintingTagStatus, VoteSource
 from cardpicker.printing_consensus import (
     NO_MATCH,
     get_resolved_printings,
+    resolve_and_persist_printing,
     resolve_printing,
 )
 from cardpicker.tests.factories import (
@@ -106,6 +109,88 @@ class TestResolvePrinting:
         for _ in range(4):
             CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.AI)
         assert resolve_printing(card) is None
+
+
+class TestResolveAndPersistPrintingReindex:
+    """
+    `resolve_and_persist_printing`'s ES side effect: reindex exactly when the outcome changes
+    what `documents.py` actually indexes (see `_effective_indexed_printing_id`), and never let
+    an ES failure take down the vote-submission DB write it rides in on.
+    """
+
+    def test_unresolved_to_resolved_fires_one_reindex_call(self, db):
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+
+        with patch("cardpicker.documents.reindex_card_safely") as mock_reindex:
+            result = resolve_and_persist_printing(card)
+
+        assert result == printing
+        assert card.printing_tag_status == PrintingTagStatus.RESOLVED
+        mock_reindex.assert_called_once_with(card)
+
+    def test_re_resolve_to_same_outcome_fires_zero_calls(self, db):
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+
+        with patch("cardpicker.documents.reindex_card_safely"):
+            resolve_and_persist_printing(card)  # first call: UNRESOLVED -> RESOLVED, establishes the baseline
+
+        with patch("cardpicker.documents.reindex_card_safely") as mock_reindex:
+            result = resolve_and_persist_printing(card)  # same votes, same outcome, re-resolved
+
+        assert result == printing
+        assert card.printing_tag_status == PrintingTagStatus.RESOLVED
+        mock_reindex.assert_not_called()
+
+    def test_resolved_to_contested_fires_a_call_and_indexed_fields_clear(self, db):
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+
+        with patch("cardpicker.documents.reindex_card_safely"):
+            resolve_and_persist_printing(card)
+        assert card.printing_tag_status == PrintingTagStatus.RESOLVED
+
+        # an equal-weight conflicting printing splits consensus (2 vs 2: share is exactly
+        # 0.5, below PRINTING_TAG_MIN_SHARE of 0.6 - same tie shape as test_tie_returns_none)
+        printing_b = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
+
+        with patch("cardpicker.documents.reindex_card_safely") as mock_reindex:
+            result = resolve_and_persist_printing(card)
+
+        assert result is None
+        assert card.printing_tag_status == PrintingTagStatus.UNRESOLVED
+        mock_reindex.assert_called_once_with(card)
+        # `card.canonical_card` is unset (no confirmed indexing match), so once RESOLVED is
+        # lost, the fields `documents.py` actually indexes fall all the way back to None -
+        # exactly what "the index needs updating" was gated on.
+        assert card.get_expansion_code() is None
+        assert card.get_collector_number() is None
+
+    def test_es_failure_inside_reindex_does_not_block_the_db_write(self, db, caplog):
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+
+        with patch("cardpicker.documents.CardSearch") as mock_card_search:
+            mock_card_search.return_value.update.side_effect = Exception("ES is down")
+            result = resolve_and_persist_printing(card)  # must not raise
+
+        assert result == printing
+        assert "Failed to reindex card" in caplog.text
+
+        card.refresh_from_db()
+        assert card.printing_tag_status == PrintingTagStatus.RESOLVED
+        assert card.inferred_canonical_card_id == printing.pk
 
 
 class TestGetResolvedPrintings:

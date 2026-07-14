@@ -54,9 +54,12 @@ def resolve_and_persist_tag_votes(card: Card) -> None:
     rather than a single outcome), and merges the result directly into `card.tags`: a resolved
     APPLY adds the tag name if not already present; a resolved NOT_APPLICABLE removes it if
     present. Saves `card.tags` and pushes the change into Elasticsearch immediately - unlike
-    printing/artist consensus (whose denormalised fields aren't ES-indexed), `tags` *is* an
-    ES-indexed field (`documents.py`'s `KeywordField`), so a vote-triggered change has to reach
-    the search index directly rather than waiting for the next scheduled re-scan.
+    artist consensus (whose denormalised fields aren't ES-indexed), `tags` *is* an ES-indexed
+    field (`documents.py`'s `KeywordField`), so a vote-triggered change has to reach the
+    search index directly rather than waiting for the next scheduled re-scan. Only fires when
+    `tags_changed` is actually true, and the push itself is failure-isolated
+    (`reindex_card_safely`) - same rationale and mechanism as
+    `printing_consensus.resolve_and_persist_printing`'s equivalent hook.
 
     Also writes `card.tag_vote_statuses` (a JSONField, not ES-indexed, so no re-index needed
     for this part alone): for every voted tag, one of RESOLVED_APPLY/RESOLVED_REJECT/CONTESTED/
@@ -65,7 +68,7 @@ def resolve_and_persist_tag_votes(card: Card) -> None:
     unresolved means only one side has voted so far, or thresholds simply aren't cleared yet.
     """
     from cardpicker.documents import (
-        CardSearch,  # local import - avoids a top-level ES dependency in this module
+        reindex_card_safely,  # local import - avoids a top-level ES dependency in this module
     )
 
     votes_by_tag_id: dict[int, set[int]] = defaultdict(set)
@@ -107,7 +110,7 @@ def resolve_and_persist_tag_votes(card: Card) -> None:
     if update_fields:
         card.save(update_fields=update_fields)
         if tags_changed:
-            CardSearch().update([card], action="index")
+            reindex_card_safely(card)
 
 
 class TagVoteTallyEntry(TypedDict):

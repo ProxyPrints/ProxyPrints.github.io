@@ -214,6 +214,40 @@ Orama-indexed) search gets no re-rank/filter/indicator parity — that path
 has no ES/DB access to consult `printing_tag_status`. Flagged explicitly,
 not silently built.
 
+## Stage 3.5: immediate reindex on vote transition
+
+Stage 3's re-rank/filters read `printing_tag_status` and the indexed
+`expansion_code`/`collector_number` (see the fallback widening above) —
+but nothing pushed a changed card into ES until the next scheduled
+`update_database` re-scan. A vote that just resolved (or un-resolved) a
+printing was invisible to search until that next scan ran.
+
+`cardpicker/documents.py::reindex_card_safely(card)` — the shared,
+failure-isolated push (`CardSearch().update([card], action="index")`,
+exception caught and logged, never raised: Postgres is truth, ES is a
+projection, so an ES hiccup must never break vote submission or roll back
+a write that already committed).
+
+`printing_consensus.py::resolve_and_persist_printing` calls it, but only
+when the _effective indexed_ printing id actually changes
+(`_effective_indexed_printing_id` — the same RESOLVED-gated fallback
+`get_expansion_code`/`get_collector_number` use). Covers both directions:
+entering RESOLVED, leaving RESOLVED (contested/unresolved again), and the
+resolved printing itself changing while staying RESOLVED. A re-resolve
+landing on the same outcome (the common case for an already-settled card)
+touches the DB but not the index.
+
+`tag_consensus.py::resolve_and_persist_tag_votes` already had an
+ES push for `tags` (an ES-indexed field, unlike the printing/artist
+denormalised columns) gated on its own `tags_changed` flag — switched to
+`reindex_card_safely` for the same failure isolation, no change to when
+it fires.
+
+Artist resolution (`artist_consensus.py`) never touches an ES-indexed
+field (`inferred_canonical_artist`/`artist_vote_status` only,
+serialise-time-only) — confirmed against `documents.py`'s field list, no
+hook needed.
+
 ## Key files
 
 - Backend: `cardpicker/printing_consensus.py`,
@@ -221,7 +255,8 @@ not silently built.
   `cardpicker/integrations/game/mtg.py`, `cardpicker/models.py` (migration
   `0050_canonicalprintingmetadata_cardprintingtag_and_more.py`),
   `cardpicker/search/search_functions.py` (Stage 3 re-rank/filter),
-  `cardpicker/documents.py` (Stage 3 widened indexing)
+  `cardpicker/documents.py` (Stage 3 widened indexing; Stage 3.5
+  `reindex_card_safely`), `cardpicker/tag_consensus.py` (Stage 3.5)
 - Frontend: `frontend/src/features/printingTags/` (`PrintingTagQueue.tsx`,
   `PrintingTagPicker.tsx`, `starburstShape.ts`, `useStickyTop`),
   `frontend/src/features/filters/ResolvedAttributeFilter.tsx` (Stage 3),
