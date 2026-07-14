@@ -332,6 +332,34 @@ no-op). Confirmed live: `Full Art`/`Borderless` (used by
 `PrintingConfirmStrip`) already exist in production — `seed_default_tags`
 has been run there before — so that strip needs no activation step.
 
+**Graceful degradation for the un-activated case**: `NoMatchReasonStrip`
+filters its six chips against `useGetTagsQuery` (the existing, already-
+cached `2/tags/` query — no new endpoint/fetch) and hides any chip whose
+tag doesn't exist yet, rather than rendering a chip that will only ever 400. While that query is still loading it shows all six optimistically.
+
+**Status: live** (merged as PR #12, 2026-07-14). Activation sequence
+completed: django/worker rebuilt and restarted,
+`seed_no_match_reason_tags` run (created all 6, none pre-existing — no
+prior partial-seed to reconcile), both follow-up strips proven end to
+end against the real production API (`api.proxyprints.ca`, not a local
+mock): a real no-match vote + `custom-art` reason chip landed as
+expected `CardPrintingTag`/`CardTagVote` rows on "Llanowar Elves [FDN]",
+and a real resolving printing vote + `Borderless` confirm chip (correctly
+polarity `NOT_APPLICABLE`, matching that printing's real
+`isBorderless: false`) landed as expected on "Loki, Lord of Misrule
+[MSC]". Both cards' test votes were then deleted and the cards
+re-resolved to restore their real prior state (the same "cast, verify,
+reverse" discipline as Stage 3.5's live proof) — confirmed one genuine
+pre-existing `Borderless` vote on the Loki card survived the cleanup
+untouched, proving the deletion was scoped correctly to only the test
+rows.
+
+**Operational gotcha hit during this activation**: recreating the
+`django` container left `nginx` proxying to a stale internal IP (full
+502 on every API request) until `nginx` itself was restarted — see
+[[../infrastructure.md]]'s Docker/backend deploy section for the
+mechanism and the now-standard extra restart step.
+
 ## Key files
 
 - Backend: `cardpicker/printing_consensus.py`,
