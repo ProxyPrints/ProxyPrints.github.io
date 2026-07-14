@@ -36,8 +36,8 @@ export function MatureContentFilter({
     <Container className="px-1">
       <h5>Mature Content</h5>
       Cards the community has confirmed as NSFW are hidden from search by
-      default. This switch drives the <b>NSFW</b> entry in the tag filter
-      above &mdash; they&apos;re the same setting.
+      default. This switch drives the <b>NSFW</b> entry in the tag filter above
+      &mdash; they&apos;re the same setting.
       <br />
       <br />
       <Toggle

@@ -655,7 +655,7 @@ export class Convert {
   }
 
   public static artistVoteTallyEntryToJson(
-    value: ArtistVoteTallyEntry,
+    value: ArtistVoteTallyEntry
   ): string {
     return JSON.stringify(uncast(value, r("ArtistVoteTallyEntry")), null, 2);
   }
@@ -676,7 +676,7 @@ export class Convert {
     return JSON.stringify(
       uncast(value, u(r("CanonicalArtist"), null)),
       null,
-      2,
+      2
     );
   }
 
@@ -897,30 +897,30 @@ export class Convert {
   }
 
   public static toArtistCandidatesRequest(
-    json: string,
+    json: string
   ): ArtistCandidatesRequest {
     return cast(JSON.parse(json), r("ArtistCandidatesRequest"));
   }
 
   public static artistCandidatesRequestToJson(
-    value: ArtistCandidatesRequest,
+    value: ArtistCandidatesRequest
   ): string {
     return JSON.stringify(uncast(value, r("ArtistCandidatesRequest")), null, 2);
   }
 
   public static toArtistCandidatesResponse(
-    json: string,
+    json: string
   ): ArtistCandidatesResponse {
     return cast(JSON.parse(json), r("ArtistCandidatesResponse"));
   }
 
   public static artistCandidatesResponseToJson(
-    value: ArtistCandidatesResponse,
+    value: ArtistCandidatesResponse
   ): string {
     return JSON.stringify(
       uncast(value, r("ArtistCandidatesResponse")),
       null,
-      2,
+      2
     );
   }
 
@@ -929,19 +929,19 @@ export class Convert {
   }
 
   public static artistConsensusRequestToJson(
-    value: ArtistConsensusRequest,
+    value: ArtistConsensusRequest
   ): string {
     return JSON.stringify(uncast(value, r("ArtistConsensusRequest")), null, 2);
   }
 
   public static toArtistConsensusResponse(
-    json: string,
+    json: string
   ): ArtistConsensusResponse {
     return cast(JSON.parse(json), r("ArtistConsensusResponse"));
   }
 
   public static artistConsensusResponseToJson(
-    value: ArtistConsensusResponse,
+    value: ArtistConsensusResponse
   ): string {
     return JSON.stringify(uncast(value, r("ArtistConsensusResponse")), null, 2);
   }
@@ -983,7 +983,7 @@ export class Convert {
   }
 
   public static contributionsResponseToJson(
-    value: ContributionsResponse,
+    value: ContributionsResponse
   ): string {
     return JSON.stringify(uncast(value, r("ContributionsResponse")), null, 2);
   }
@@ -1009,7 +1009,7 @@ export class Convert {
   }
 
   public static editorSearchResponseToJson(
-    value: EditorSearchResponse,
+    value: EditorSearchResponse
   ): string {
     return JSON.stringify(uncast(value, r("EditorSearchResponse")), null, 2);
   }
@@ -1027,7 +1027,7 @@ export class Convert {
   }
 
   public static exploreSearchRequestToJson(
-    value: ExploreSearchRequest,
+    value: ExploreSearchRequest
   ): string {
     return JSON.stringify(uncast(value, r("ExploreSearchRequest")), null, 2);
   }
@@ -1037,40 +1037,40 @@ export class Convert {
   }
 
   public static exploreSearchResponseToJson(
-    value: ExploreSearchResponse,
+    value: ExploreSearchResponse
   ): string {
     return JSON.stringify(uncast(value, r("ExploreSearchResponse")), null, 2);
   }
 
   public static toImportSiteDecklistRequest(
-    json: string,
+    json: string
   ): ImportSiteDecklistRequest {
     return cast(JSON.parse(json), r("ImportSiteDecklistRequest"));
   }
 
   public static importSiteDecklistRequestToJson(
-    value: ImportSiteDecklistRequest,
+    value: ImportSiteDecklistRequest
   ): string {
     return JSON.stringify(
       uncast(value, r("ImportSiteDecklistRequest")),
       null,
-      2,
+      2
     );
   }
 
   public static toImportSiteDecklistResponse(
-    json: string,
+    json: string
   ): ImportSiteDecklistResponse {
     return cast(JSON.parse(json), r("ImportSiteDecklistResponse"));
   }
 
   public static importSiteDecklistResponseToJson(
-    value: ImportSiteDecklistResponse,
+    value: ImportSiteDecklistResponse
   ): string {
     return JSON.stringify(
       uncast(value, r("ImportSiteDecklistResponse")),
       null,
-      2,
+      2
     );
   }
 
@@ -1103,36 +1103,36 @@ export class Convert {
   }
 
   public static moderationQueueRequestToJson(
-    value: ModerationQueueRequest,
+    value: ModerationQueueRequest
   ): string {
     return JSON.stringify(uncast(value, r("ModerationQueueRequest")), null, 2);
   }
 
   public static toModerationQueueResponse(
-    json: string,
+    json: string
   ): ModerationQueueResponse {
     return cast(JSON.parse(json), r("ModerationQueueResponse"));
   }
 
   public static moderationQueueResponseToJson(
-    value: ModerationQueueResponse,
+    value: ModerationQueueResponse
   ): string {
     return JSON.stringify(uncast(value, r("ModerationQueueResponse")), null, 2);
   }
 
   public static toNewCardsFirstPagesResponse(
-    json: string,
+    json: string
   ): NewCardsFirstPagesResponse {
     return cast(JSON.parse(json), r("NewCardsFirstPagesResponse"));
   }
 
   public static newCardsFirstPagesResponseToJson(
-    value: NewCardsFirstPagesResponse,
+    value: NewCardsFirstPagesResponse
   ): string {
     return JSON.stringify(
       uncast(value, r("NewCardsFirstPagesResponse")),
       null,
-      2,
+      2
     );
   }
 
@@ -1141,7 +1141,7 @@ export class Convert {
   }
 
   public static newCardsPageResponseToJson(
-    value: NewCardsPageResponse,
+    value: NewCardsPageResponse
   ): string {
     return JSON.stringify(uncast(value, r("NewCardsPageResponse")), null, 2);
   }
@@ -1151,19 +1151,19 @@ export class Convert {
   }
 
   public static oldEditorSearchRequestToJson(
-    value: OldEditorSearchRequest,
+    value: OldEditorSearchRequest
   ): string {
     return JSON.stringify(uncast(value, r("OldEditorSearchRequest")), null, 2);
   }
 
   public static toOldEditorSearchResponse(
-    json: string,
+    json: string
   ): OldEditorSearchResponse {
     return cast(JSON.parse(json), r("OldEditorSearchResponse"));
   }
 
   public static oldEditorSearchResponseToJson(
-    value: OldEditorSearchResponse,
+    value: OldEditorSearchResponse
   ): string {
     return JSON.stringify(uncast(value, r("OldEditorSearchResponse")), null, 2);
   }
@@ -1177,82 +1177,82 @@ export class Convert {
   }
 
   public static toPrintingCandidatesRequest(
-    json: string,
+    json: string
   ): PrintingCandidatesRequest {
     return cast(JSON.parse(json), r("PrintingCandidatesRequest"));
   }
 
   public static printingCandidatesRequestToJson(
-    value: PrintingCandidatesRequest,
+    value: PrintingCandidatesRequest
   ): string {
     return JSON.stringify(
       uncast(value, r("PrintingCandidatesRequest")),
       null,
-      2,
+      2
     );
   }
 
   public static toPrintingCandidatesResponse(
-    json: string,
+    json: string
   ): PrintingCandidatesResponse {
     return cast(JSON.parse(json), r("PrintingCandidatesResponse"));
   }
 
   public static printingCandidatesResponseToJson(
-    value: PrintingCandidatesResponse,
+    value: PrintingCandidatesResponse
   ): string {
     return JSON.stringify(
       uncast(value, r("PrintingCandidatesResponse")),
       null,
-      2,
+      2
     );
   }
 
   public static toPrintingConsensusRequest(
-    json: string,
+    json: string
   ): PrintingConsensusRequest {
     return cast(JSON.parse(json), r("PrintingConsensusRequest"));
   }
 
   public static printingConsensusRequestToJson(
-    value: PrintingConsensusRequest,
+    value: PrintingConsensusRequest
   ): string {
     return JSON.stringify(
       uncast(value, r("PrintingConsensusRequest")),
       null,
-      2,
+      2
     );
   }
 
   public static toPrintingConsensusResponse(
-    json: string,
+    json: string
   ): PrintingConsensusResponse {
     return cast(JSON.parse(json), r("PrintingConsensusResponse"));
   }
 
   public static printingConsensusResponseToJson(
-    value: PrintingConsensusResponse,
+    value: PrintingConsensusResponse
   ): string {
     return JSON.stringify(
       uncast(value, r("PrintingConsensusResponse")),
       null,
-      2,
+      2
     );
   }
 
   public static toPrintingTagQueueResponse(
-    json: string,
+    json: string
   ): PrintingTagQueueResponse {
     return cast(JSON.parse(json), r("PrintingTagQueueResponse"));
   }
 
   public static printingTagQueueResponseToJson(
-    value: PrintingTagQueueResponse,
+    value: PrintingTagQueueResponse
   ): string {
     return JSON.stringify(
       uncast(value, r("PrintingTagQueueResponse")),
       null,
-      2,
+      2
     );
   }
 
@@ -1281,18 +1281,18 @@ export class Convert {
   }
 
   public static toSearchEngineHealthResponse(
-    json: string,
+    json: string
   ): SearchEngineHealthResponse {
     return cast(JSON.parse(json), r("SearchEngineHealthResponse"));
   }
 
   public static searchEngineHealthResponseToJson(
-    value: SearchEngineHealthResponse,
+    value: SearchEngineHealthResponse
   ): string {
     return JSON.stringify(
       uncast(value, r("SearchEngineHealthResponse")),
       null,
-      2,
+      2
     );
   }
 
@@ -1305,30 +1305,30 @@ export class Convert {
   }
 
   public static toSubmitArtistVoteRequest(
-    json: string,
+    json: string
   ): SubmitArtistVoteRequest {
     return cast(JSON.parse(json), r("SubmitArtistVoteRequest"));
   }
 
   public static submitArtistVoteRequestToJson(
-    value: SubmitArtistVoteRequest,
+    value: SubmitArtistVoteRequest
   ): string {
     return JSON.stringify(uncast(value, r("SubmitArtistVoteRequest")), null, 2);
   }
 
   public static toSubmitPrintingTagRequest(
-    json: string,
+    json: string
   ): SubmitPrintingTagRequest {
     return cast(JSON.parse(json), r("SubmitPrintingTagRequest"));
   }
 
   public static submitPrintingTagRequestToJson(
-    value: SubmitPrintingTagRequest,
+    value: SubmitPrintingTagRequest
   ): string {
     return JSON.stringify(
       uncast(value, r("SubmitPrintingTagRequest")),
       null,
-      2,
+      2
     );
   }
 
@@ -1337,7 +1337,7 @@ export class Convert {
   }
 
   public static submitTagVoteRequestToJson(
-    value: SubmitTagVoteRequest,
+    value: SubmitTagVoteRequest
   ): string {
     return JSON.stringify(uncast(value, r("SubmitTagVoteRequest")), null, 2);
   }
@@ -1355,7 +1355,7 @@ export class Convert {
   }
 
   public static tagConsensusResponseToJson(
-    value: TagConsensusResponse,
+    value: TagConsensusResponse
   ): string {
     return JSON.stringify(uncast(value, r("TagConsensusResponse")), null, 2);
   }
@@ -1398,7 +1398,9 @@ function invalidValue(typ: any, val: any, key: any, parent: any = ""): never {
   const parentText = parent ? ` on ${parent}` : "";
   const keyText = key ? ` for key "${key}"` : "";
   throw Error(
-    `Invalid value${keyText}${parentText}. Expected ${prettyTyp} but got ${JSON.stringify(val)}`,
+    `Invalid value${keyText}${parentText}. Expected ${prettyTyp} but got ${JSON.stringify(
+      val
+    )}`
   );
 }
 
@@ -1443,7 +1445,7 @@ function transform(
   typ: any,
   getProps: any,
   key: any = "",
-  parent: any = "",
+  parent: any = ""
 ): any {
   function transformPrimitive(typ: string, val: any): any {
     if (typeof typ === typeof val) return val;
@@ -1470,7 +1472,7 @@ function transform(
       }),
       val,
       key,
-      parent,
+      parent
     );
   }
 
@@ -1494,7 +1496,7 @@ function transform(
   function transformObject(
     props: { [k: string]: any },
     additional: any,
-    val: any,
+    val: any
   ): any {
     if (val === null || typeof val !== "object" || Array.isArray(val)) {
       return invalidValue(l(ref || "object"), val, key, parent);
@@ -1531,10 +1533,10 @@ function transform(
     return typ.hasOwnProperty("unionMembers")
       ? transformUnion(typ.unionMembers, val)
       : typ.hasOwnProperty("arrayItems")
-        ? transformArray(typ.arrayItems, val)
-        : typ.hasOwnProperty("props")
-          ? transformObject(getProps(typ), typ.additional, val)
-          : invalidValue(typ, val, key, parent);
+      ? transformArray(typ.arrayItems, val)
+      : typ.hasOwnProperty("props")
+      ? transformObject(getProps(typ), typ.additional, val)
+      : invalidValue(typ, val, key, parent);
   }
   // Numbers can be parsed by Date but shouldn't be.
   if (typ === Date && typeof val !== "number") return transformDate(val);
@@ -1579,16 +1581,16 @@ const typeMap: any = {
       { json: "identifier", js: "identifier", typ: "" },
       { json: "query", js: "query", typ: u(undefined, u(null, "")) },
     ],
-    false,
+    false
   ),
   ArtistCandidatesResponse: o(
     [{ json: "results", js: "results", typ: a(u(r("CanonicalArtist"), null)) }],
-    false,
+    false
   ),
   CanonicalArtist: o([{ json: "name", js: "name", typ: "" }], false),
   ArtistConsensusRequest: o(
     [{ json: "identifier", js: "identifier", typ: "" }],
-    false,
+    false
   ),
   ArtistConsensusResponse: o(
     [
@@ -1600,7 +1602,7 @@ const typeMap: any = {
       },
       { json: "voteTally", js: "voteTally", typ: a(r("ArtistVoteTallyEntry")) },
     ],
-    false,
+    false
   ),
   ArtistVoteTallyEntry: o(
     [
@@ -1612,7 +1614,7 @@ const typeMap: any = {
       { json: "count", js: "count", typ: 0 },
       { json: "isUnknown", js: "isUnknown", typ: true },
     ],
-    false,
+    false
   ),
   CardbacksRequest: o(
     [
@@ -1622,7 +1624,7 @@ const typeMap: any = {
         typ: r("SearchSettings"),
       },
     ],
-    false,
+    false
   ),
   SearchSettings: o(
     [
@@ -1642,7 +1644,7 @@ const typeMap: any = {
         typ: r("SourceSettings"),
       },
     ],
-    false,
+    false
   ),
   FilterSettings: o(
     [
@@ -1655,30 +1657,30 @@ const typeMap: any = {
       { json: "maximumSize", js: "maximumSize", typ: 0 },
       { json: "minimumDPI", js: "minimumDPI", typ: 0 },
     ],
-    false,
+    false
   ),
   SearchTypeSettings: o(
     [
       { json: "filterCardbacks", js: "filterCardbacks", typ: true },
       { json: "fuzzySearch", js: "fuzzySearch", typ: true },
     ],
-    false,
+    false
   ),
   SourceSettings: o(
     [{ json: "sources", js: "sources", typ: a(a(u(true, 0))) }],
-    false,
+    false
   ),
   CardbacksResponse: o(
     [{ json: "cardbacks", js: "cardbacks", typ: a("") }],
-    false,
+    false
   ),
   CardsRequest: o(
     [{ json: "cardIdentifiers", js: "cardIdentifiers", typ: a("") }],
-    false,
+    false
   ),
   CardsResponse: o(
     [{ json: "results", js: "results", typ: m(r("Card")) }],
-    false,
+    false
   ),
   Card: o(
     [
@@ -1736,7 +1738,7 @@ const typeMap: any = {
       { json: "sourceVerbose", js: "sourceVerbose", typ: "" },
       { json: "tags", js: "tags", typ: a("") },
     ],
-    false,
+    false
   ),
   CanonicalCard: o(
     [
@@ -1749,7 +1751,7 @@ const typeMap: any = {
       { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
       { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
     ],
-    false,
+    false
   ),
   ContributionsResponse: o(
     [
@@ -1757,7 +1759,7 @@ const typeMap: any = {
       { json: "sources", js: "sources", typ: a(r("SourceContribution")) },
       { json: "totalDatabaseSize", js: "totalDatabaseSize", typ: 0 },
     ],
-    false,
+    false
   ),
   SourceContribution: o(
     [
@@ -1771,11 +1773,11 @@ const typeMap: any = {
       { json: "size", js: "size", typ: "" },
       { json: "sourceType", js: "sourceType", typ: r("SourceType") },
     ],
-    false,
+    false
   ),
   DFCPairsResponse: o(
     [{ json: "dfcPairs", js: "dfcPairs", typ: m("") }],
-    false,
+    false
   ),
   EditorSearchRequest: o(
     [
@@ -1786,7 +1788,7 @@ const typeMap: any = {
         typ: r("SearchSettings"),
       },
     ],
-    false,
+    false
   ),
   SearchQuery: o(
     [
@@ -1795,11 +1797,11 @@ const typeMap: any = {
       { json: "expansionCode", js: "expansionCode", typ: u(undefined, "") },
       { json: "query", js: "query", typ: u(null, "") },
     ],
-    false,
+    false
   ),
   EditorSearchResponse: o(
     [{ json: "results", js: "results", typ: m(a("")) }],
-    false,
+    false
   ),
   ErrorResponse: o(
     [
@@ -1807,7 +1809,7 @@ const typeMap: any = {
       { json: "message", js: "message", typ: u(undefined, "") },
       { json: "name", js: "name", typ: "" },
     ],
-    false,
+    false
   ),
   ExploreSearchRequest: o(
     [
@@ -1822,30 +1824,30 @@ const typeMap: any = {
       },
       { json: "sortBy", js: "sortBy", typ: r("SortBy") },
     ],
-    false,
+    false
   ),
   ExploreSearchResponse: o(
     [
       { json: "cards", js: "cards", typ: a(r("Card")) },
       { json: "count", js: "count", typ: 0 },
     ],
-    false,
+    false
   ),
   ImportSiteDecklistRequest: o([{ json: "url", js: "url", typ: "" }], false),
   ImportSiteDecklistResponse: o(
     [{ json: "cards", js: "cards", typ: "" }],
-    false,
+    false
   ),
   ImportSitesResponse: o(
     [{ json: "importSites", js: "importSites", typ: a(r("ImportSite")) }],
-    false,
+    false
   ),
   ImportSite: o(
     [
       { json: "name", js: "name", typ: "" },
       { json: "url", js: "url", typ: "" },
     ],
-    false,
+    false
   ),
   InfoResponse: o([{ json: "info", js: "info", typ: r("Info") }], false),
   Info: o(
@@ -1856,18 +1858,18 @@ const typeMap: any = {
       { json: "name", js: "name", typ: u(null, "") },
       { json: "reddit", js: "reddit", typ: u(null, "") },
     ],
-    false,
+    false
   ),
   LanguagesResponse: o(
     [{ json: "languages", js: "languages", typ: a(r("Language")) }],
-    false,
+    false
   ),
   Language: o(
     [
       { json: "code", js: "code", typ: "" },
       { json: "name", js: "name", typ: "" },
     ],
-    false,
+    false
   ),
   ModerationQueueRequest: o([{ json: "page", js: "page", typ: 0 }], false),
   ModerationQueueResponse: o(
@@ -1876,7 +1878,7 @@ const typeMap: any = {
       { json: "items", js: "items", typ: a(r("ModerationQueueItem")) },
       { json: "pages", js: "pages", typ: 0 },
     ],
-    false,
+    false
   ),
   ModerationQueueItem: o(
     [
@@ -1885,11 +1887,11 @@ const typeMap: any = {
       { json: "reportExcerpts", js: "reportExcerpts", typ: a("") },
       { json: "tagName", js: "tagName", typ: "" },
     ],
-    false,
+    false
   ),
   NewCardsFirstPagesResponse: o(
     [{ json: "results", js: "results", typ: m(r("NewCardsFirstPage")) }],
-    false,
+    false
   ),
   NewCardsFirstPage: o(
     [
@@ -1898,7 +1900,7 @@ const typeMap: any = {
       { json: "pages", js: "pages", typ: 0 },
       { json: "source", js: "source", typ: r("Source") },
     ],
-    false,
+    false
   ),
   Source: o(
     [
@@ -1909,11 +1911,11 @@ const typeMap: any = {
       { json: "pk", js: "pk", typ: 0 },
       { json: "sourceType", js: "sourceType", typ: r("SourceType") },
     ],
-    false,
+    false
   ),
   NewCardsPageResponse: o(
     [{ json: "cards", js: "cards", typ: a(r("Card")) }],
-    false,
+    false
   ),
   OldEditorSearchRequest: o(
     [
@@ -1924,15 +1926,15 @@ const typeMap: any = {
         typ: r("SearchSettings"),
       },
     ],
-    false,
+    false
   ),
   OldEditorSearchResponse: o(
     [{ json: "results", js: "results", typ: m(m(a(""))) }],
-    false,
+    false
   ),
   PatreonResponse: o(
     [{ json: "patreon", js: "patreon", typ: r("Patreon") }],
-    false,
+    false
   ),
   Patreon: o(
     [
@@ -1941,14 +1943,14 @@ const typeMap: any = {
       { json: "tiers", js: "tiers", typ: u(m(r("SupporterTier")), null) },
       { json: "url", js: "url", typ: u(null, "") },
     ],
-    false,
+    false
   ),
   Campaign: o(
     [
       { json: "about", js: "about", typ: "" },
       { json: "id", js: "id", typ: "" },
     ],
-    false,
+    false
   ),
   Supporter: o(
     [
@@ -1957,7 +1959,7 @@ const typeMap: any = {
       { json: "tier", js: "tier", typ: "" },
       { json: "usd", js: "usd", typ: 3.14 },
     ],
-    false,
+    false
   ),
   SupporterTier: o(
     [
@@ -1965,18 +1967,18 @@ const typeMap: any = {
       { json: "title", js: "title", typ: "" },
       { json: "usd", js: "usd", typ: 3.14 },
     ],
-    false,
+    false
   ),
   PrintingCandidatesRequest: o(
     [
       { json: "identifier", js: "identifier", typ: "" },
       { json: "query", js: "query", typ: u(undefined, u(null, "")) },
     ],
-    false,
+    false
   ),
   PrintingCandidatesResponse: o(
     [{ json: "results", js: "results", typ: a(r("PrintingCandidate")) }],
-    false,
+    false
   ),
   PrintingCandidate: o(
     [
@@ -1993,11 +1995,11 @@ const typeMap: any = {
       { json: "releasedAt", js: "releasedAt", typ: u(undefined, u(null, "")) },
       { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
     ],
-    false,
+    false
   ),
   PrintingConsensusRequest: o(
     [{ json: "identifier", js: "identifier", typ: "" }],
-    false,
+    false
   ),
   PrintingConsensusResponse: o(
     [
@@ -2009,7 +2011,7 @@ const typeMap: any = {
       },
       { json: "voteTally", js: "voteTally", typ: a(r("VoteTallyEntry")) },
     ],
-    false,
+    false
   ),
   VoteTallyEntry: o(
     [
@@ -2021,7 +2023,7 @@ const typeMap: any = {
         typ: u(undefined, r("PrintingCandidate")),
       },
     ],
-    false,
+    false
   ),
   PrintingTagQueueResponse: o(
     [
@@ -2029,7 +2031,7 @@ const typeMap: any = {
       { json: "hits", js: "hits", typ: 0 },
       { json: "pages", js: "pages", typ: 0 },
     ],
-    false,
+    false
   ),
   ReportCardRequest: o(
     [
@@ -2038,18 +2040,18 @@ const typeMap: any = {
       { json: "reason", js: "reason", typ: r("Reason") },
       { json: "text", js: "text", typ: u(undefined, "") },
     ],
-    false,
+    false
   ),
   ReportCardResponse: o(
     [
       { json: "reported", js: "reported", typ: true },
       { json: "voteCast", js: "voteCast", typ: true },
     ],
-    false,
+    false
   ),
   SampleCardsResponse: o(
     [{ json: "cards", js: "cards", typ: r("Cards") }],
-    "any",
+    "any"
   ),
   Cards: o(
     [
@@ -2057,15 +2059,15 @@ const typeMap: any = {
       { json: "CARDBACK", js: "CARDBACK", typ: a(r("Card")) },
       { json: "TOKEN", js: "TOKEN", typ: a(r("Card")) },
     ],
-    "any",
+    "any"
   ),
   SearchEngineHealthResponse: o(
     [{ json: "online", js: "online", typ: true }],
-    false,
+    false
   ),
   SourcesResponse: o(
     [{ json: "results", js: "results", typ: m(r("Source")) }],
-    false,
+    false
   ),
   SubmitArtistVoteRequest: o(
     [
@@ -2074,7 +2076,7 @@ const typeMap: any = {
       { json: "identifier", js: "identifier", typ: "" },
       { json: "isUnknown", js: "isUnknown", typ: true },
     ],
-    false,
+    false
   ),
   SubmitPrintingTagRequest: o(
     [
@@ -2087,7 +2089,7 @@ const typeMap: any = {
         typ: u(undefined, u(null, "")),
       },
     ],
-    false,
+    false
   ),
   SubmitTagVoteRequest: o(
     [
@@ -2096,15 +2098,15 @@ const typeMap: any = {
       { json: "polarity", js: "polarity", typ: 0 },
       { json: "tagName", js: "tagName", typ: "" },
     ],
-    false,
+    false
   ),
   TagConsensusRequest: o(
     [{ json: "identifier", js: "identifier", typ: "" }],
-    false,
+    false
   ),
   TagConsensusResponse: o(
     [{ json: "tags", js: "tags", typ: a(r("TagConsensusEntry")) }],
-    false,
+    false
   ),
   TagConsensusEntry: o(
     [
@@ -2116,14 +2118,14 @@ const typeMap: any = {
       { json: "tagName", js: "tagName", typ: "" },
       { json: "tally", js: "tally", typ: a(r("TagVoteTallyEntry")) },
     ],
-    false,
+    false
   ),
   TagVoteTallyEntry: o(
     [
       { json: "count", js: "count", typ: 0 },
       { json: "polarity", js: "polarity", typ: 0 },
     ],
-    false,
+    false
   ),
   TagsResponse: o([{ json: "tags", js: "tags", typ: a(r("Tag")) }], false),
   Tag: o(
@@ -2143,7 +2145,7 @@ const typeMap: any = {
       { json: "name", js: "name", typ: "" },
       { json: "parent", js: "parent", typ: u(null, "") },
     ],
-    false,
+    false
   ),
   ChildElement: o(
     [
@@ -2162,14 +2164,14 @@ const typeMap: any = {
       { json: "name", js: "name", typ: "" },
       { json: "parent", js: "parent", typ: u(null, "") },
     ],
-    false,
+    false
   ),
   VoteQueueRequest: o(
     [
       { json: "kind", js: "kind", typ: r("Kind") },
       { json: "page", js: "page", typ: 0 },
     ],
-    false,
+    false
   ),
   VoteQueueResponse: o(
     [
@@ -2177,14 +2179,14 @@ const typeMap: any = {
       { json: "items", js: "items", typ: a(r("VoteQueueItem")) },
       { json: "pages", js: "pages", typ: 0 },
     ],
-    false,
+    false
   ),
   VoteQueueItem: o(
     [
       { json: "card", js: "card", typ: r("Card") },
       { json: "tagName", js: "tagName", typ: u(undefined, u(null, "")) },
     ],
-    false,
+    false
   ),
   WhoamiResponse: o(
     [
@@ -2195,7 +2197,7 @@ const typeMap: any = {
       { json: "moderator", js: "moderator", typ: true },
       { json: "username", js: "username", typ: u(null, "") },
     ],
-    false,
+    false
   ),
   Game: ["MTG"],
   CardType: ["CARD", "CARDBACK", "TOKEN"],

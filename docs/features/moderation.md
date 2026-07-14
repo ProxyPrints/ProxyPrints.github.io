@@ -1,0 +1,229 @@
+# Moderation layer (stage 1)
+
+Sensitive-content moderation built ON the shipped vote-consensus system
+([[printing-tags.md]]) — extended, not forked. Four pieces: Discord-authenticated
+moderators, a sensitive-tag class whose resolution requires a privileged
+co-sign, a card report button feeding an audit trail, and a moderator-only
+approval queue. One deliberately small consequence: cards resolved as NSFW
+stay out of search by default, with a visible opt-in toggle.
+
+## The mental model
+
+Ordinary voting is untouched. Anyone can still vote on any tag, anonymously,
+exactly as before — including the sensitive ones. What changes is what a
+crowd's consensus is allowed to _do_: for a tag marked sensitive, a consensus
+that clears every normal threshold parks as **`pending_approval`** instead of
+resolving, until a privileged vote (a moderator's or an admin's) backs the
+winning side. Approval isn't a special action — it's an ordinary vote that
+happens to be privileged, so the pending → resolved transition runs through
+the exact same consensus pass, `Card.tags` merge, and Elasticsearch reindex
+as any other resolution.
+
+## Who is a moderator
+
+Membership of the **`MODERATORS_GROUP_NAME`** Django auth group (default
+`"Moderators"`) — that's the entire definition, checked at _resolution_ time
+(`cardpicker/moderation.py`), so revoking a moderator retroactively
+de-privileges every vote they ever cast. Logging in with Discord grants
+nothing by itself.
+
+The grant mechanism is deliberately pluggable — everything consumes the group
+through `is_moderator` / `get_moderator_user_ids`. The sketched follow-up for
+a federation-wide moderator roster: add the `guilds.members.read` OAuth scope
+and sync group membership from a role (e.g. `@Moderator`) in the project's
+Discord server at login, so every instance independently verifies the same
+authority and granting/revoking is one Discord role assignment. The portable
+identity is the Discord user id, which allauth already stores in
+`SocialAccount.uid` — no schema work needed when that lands. Note the
+complementary path: cross-instance moderation _effects_ travel via federated
+verdict exchange ([[../federation-v1.md]], v1.1), which needs no cross-instance
+logins at all.
+
+## Auth (django-allauth + Discord)
+
+- Configured entirely from env: `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET`.
+  Absent (e.g. dev) = the provider app isn't installed, `/accounts/discord/login/`
+  404s, whoami reports `discordEnabled: false`, nothing crashes. App-in-settings
+  credentials (`SOCIALACCOUNT_PROVIDERS`) — no `SocialApp` DB row, no
+  `django.contrib.sites`.
+- `GET 2/whoami/` → `{authenticated, username, moderator, discordEnabled, loginUrl, logoutUrl}`. Frontend gating is presentation only; the moderation
+  endpoint enforces the group server-side.
+- Login/logout links carry `?next=<frontend URL>` and round-trip back;
+  `accounts/adapter.py::FrontendRedirectAccountAdapter` validates `next`
+  against the hosts in `CORS_ALLOWED_ORIGINS`, so the redirect allowlist can
+  never drift from the CORS one. `ACCOUNT_LOGOUT_ON_GET=True` is a deliberate
+  tradeoff: logout works as a plain link (needed for the round-trip), and the
+  worst a hostile page can do is force a logout — a nuisance, not an
+  escalation.
+- Cross-origin session: the cookie must ride from the frontend origin to
+  `api.proxyprints.ca`, so production needs `SESSION_COOKIE_SAMESITE=None`,
+  `SESSION_COOKIE_SECURE=True`, `CORS_ALLOW_CREDENTIALS=True` (defaults suit
+  same-site localhost dev). Only fetches that opt into `credentials:'include'`
+  are affected — whoami, reportCard, moderationQueue, and the moderation
+  queue's approve/reject votes; every anonymous surface is byte-identical.
+
+## CSRF: why csrf_exempt stays, and what replaces it
+
+Every API endpoint here is `@csrf_exempt` because the primary clients are
+anonymous cross-origin browsers with no Django CSRF cookie to round-trip —
+votes are keyed by a client-generated `anonymous_id`, not a session. That was
+safe while nothing read `request.user`. The moderator session changes that:
+a `SameSite=None` cookie plus `csrf_exempt` POSTs would let any website forge
+privileged votes from a logged-in moderator's browser.
+
+`cardpicker/security.py::reject_untrusted_origin` closes exactly that hole:
+browsers unconditionally attach an `Origin` header to cross-origin POSTs and
+a page cannot forge it, so POSTs whose Origin is present but not in
+`CORS_ALLOWED_ORIGINS` (∪ the backend's own origin) are rejected with 403.
+Applied to every session-consuming POST (the three vote submit views,
+`reportCard`, `moderationQueue`). Non-browser clients send no Origin at all
+and keep exactly today's trust level; GET endpoints (whoami) change no state
+and need nothing.
+
+## The gate (vote plumbing)
+
+- `AbstractWeightedVote.user` — nullable FK set (alongside `anonymous_id`,
+  never instead of it) when the submitting request carried an authenticated
+  session. One additive migration covers all three vote tables.
+- `VoteTuple.is_privileged` mirrors the `is_human_backed` pattern: computed by
+  the tag-consensus wrappers as "source==admin OR vote.user currently in the
+  moderators group". Privileged votes weigh `VOTE_PRIVILEGED_WEIGHT`
+  (default = the admin weight, 5) via max() with their source weight — a lone
+  moderator clears the threshold like a lone admin.
+- `resolve_weighted_consensus(..., require_privileged=True)`: a winner that
+  clears weight/share/human-backed but has no privileged vote **in the winning
+  group** returns the `PENDING_PRIVILEGED` sentinel instead of the key.
+  In-group, not merely present-among-the-votes: a moderator voting _against_
+  the crowd must not count as the co-sign that lets the crowd's outcome
+  through (their heavier vote usually flips or contests the result through
+  the normal math anyway). Persisted as `pending_approval` in
+  `Card.tag_vote_statuses`; `Card.tags` untouched, so pending has zero search
+  consequences.
+- Wired only for `Tag.moderation_class == "sensitive"` and through **both**
+  resolution paths: the interactive one (`resolve_tag` /
+  `resolve_and_persist_tag_votes`) and the batched re-scan overlay
+  (`get_resolved_tag_overlay`) — skipping the second would let a scheduled
+  `update_database` re-scan apply the very change the interactive path held
+  for approval. Standard tags are byte-identical (the gate parameter defaults
+  off; no pre-existing test file was modified — the untouched consensus suites
+  are the regression proof).
+- Privileged _weight_ is wired for tag consensus only this stage; printing and
+  artist votes record `user` (the field lives on the shared abstract base) but
+  their weight math is untouched. Extending them later needs no migration.
+
+## Sensitive taxonomy
+
+`Tag.moderation_class` (`standard` | `sensitive`, default standard).
+`manage.py seed_sensitive_tags` seeds three (command, not data migration —
+same rationale as the other taxonomies, see [[printing-tags.md]]):
+
+| name             | display name        | report reason |
+| ---------------- | ------------------- | ------------- |
+| `NSFW`           | NSFW                | `nsfw`        |
+| `low-res`        | Low quality         | `low_quality` |
+| `incorrect-info` | Incorrect card info | `wrong_card`  |
+
+`NSFW` deliberately reuses the pre-existing `cardpicker.constants.NSFW` name:
+filename-bracket tagging (`[NSFW]`) and the frontend's default
+`excludesTags: ["NSFW"]` already speak that exact string, and a lowercase twin
+would split mature-content state across two names. Once seeded, the real row
+replaces the synthetic pseudo-tag in the tag matcher (real rows win the
+lowercased key). Seeding upgrades a pre-existing standard row to sensitive but
+never clobbers a manually edited `display_name`. Names are immutable
+federation contracts.
+
+Two knock-ons worth knowing: the seeded tags become visible/votable in the
+card modal's tag grid for everyone (intended — votes accumulate as pending),
+and filename-bracket `[NSFW]` tagging at scan time remains ungated (the gate
+governs vote-driven changes; the overlay exclusion means a crowd can't
+_remove_ a filename NSFW without a moderator either).
+
+## Report button
+
+Flag button on the card detail modal → chips: NSFW / Low quality / Wrong card
+info / Broken image / Other (+free text ≤280 chars). `POST 2/reportCard/`
+always writes a **`CardReport`** audit row (card, anonymous_id, nullable user,
+reason, text, created_at — ModelAdmin filterable by reason/date, searchable by
+card); the three tag-mapped reasons also cast a positive `CardTagVote` through
+the same write path as `2/submitTagVote/` (extracted helper — the two entry
+points cannot drift), in one transaction. Unseeded tag = report still lands,
+vote skipped. Broken image / Other are report-row-only. Rate limit:
+`CARD_REPORT_RATE` (default `10/d`) per anonymous_id, polite 429 in the UI.
+
+## Moderation queue
+
+The vote-queue page grows a **Moderation** tab, rendered only when whoami says
+moderator (presentation; `POST 2/moderationQueue/` 403s non-moderators via
+`require_moderator`). Serves `pending_approval` pairs most-reported first
+(count of matching-reason CardReports; oldest first report breaks ties;
+organically-pending pairs last), each item: card image + tag + report count +
+up to three newest free-text excerpts + **Approve / Reject / Skip**. Approve
+and Reject are ordinary `2/submitTagVote/` calls (polarity +1/−1) sent with
+credentials, so the vote records the moderator's user and the pair resolves —
+or not — through the normal pass. Pending pairs are excluded from the public
+tag queue.
+
+## Consequence: NSFW hidden from search by default
+
+Already true mechanically (default `excludesTags: ["NSFW"]`); this stage makes
+it visible: a **Show Mature Content** toggle in search filter settings that
+adds/removes the NSFW entry in `excludesTags` — the same state the tag filter
+edits, one source of truth. No other consequences this stage (nothing hides
+for low-res / incorrect-info yet).
+
+## Server deployment checklist (one-time, in order)
+
+1. Discord developer portal: create an application, add redirect URI
+   `https://api.proxyprints.ca/accounts/discord/login/callback/`.
+2. Env (`docker/.env` / django env): `DISCORD_CLIENT_ID`,
+   `DISCORD_CLIENT_SECRET`, `SESSION_COOKIE_SAMESITE=None`,
+   `SESSION_COOKIE_SECURE=True`, `CORS_ALLOW_CREDENTIALS=True`. Optional:
+   `VOTE_PRIVILEGED_WEIGHT`, `CARD_REPORT_RATE`, `MODERATORS_GROUP_NAME`.
+3. `pip install -r requirements.txt` (adds `django-allauth[socialaccount]`),
+   rebuild/restart django + worker containers (and nginx — see the
+   stale-upstream gotcha in [[../infrastructure.md]]).
+4. `manage.py migrate` — cardpicker 0057–0059 (all additive) plus allauth's
+   own `account`/`socialaccount` migrations. (If Django's checks ever demand
+   the sites framework, add `django.contrib.sites` + `SITE_ID = 1` — not
+   needed with allauth 65.x app-in-settings config.)
+5. `manage.py seed_sensitive_tags` (idempotent; without it, reports still land
+   but cast no votes and nothing can go pending).
+6. Django admin: create the `Moderators` group
+   (`/admin/auth/group/add/`). After each moderator's first Discord login, add
+   their auto-created user to the group.
+7. Live OAuth round-trip test: from proxyprints.ca, click "Moderator login
+   (Discord)" on the What's That Card? page → authorize → land back on the
+   page → whoami shows `moderator: true` → the Moderation tab appears → cast
+   one Approve on a test pending pair and verify the card's tags + ES search
+   update; reverse the test votes afterwards (the cast-verify-reverse
+   discipline from [[printing-tags.md]]).
+
+## Key files
+
+- Backend: `cardpicker/vote_consensus.py` (the gate),
+  `cardpicker/tag_consensus.py`, `cardpicker/moderation.py`,
+  `cardpicker/security.py`, `cardpicker/sensitive_tags.py` (+ management
+  command), `cardpicker/models.py` (user FK, `TagModerationClass`,
+  `CardReport`, `TagVoteStatus.PENDING_APPROVAL`), `cardpicker/views.py`
+  (whoami / reportCard / moderationQueue), `accounts/adapter.py`,
+  `MPCAutofill/settings.py`.
+- Frontend: `features/reporting/ReportCardPanel.tsx`,
+  `features/moderation/AuthWidget.tsx` + `ModerationQueue.tsx`,
+  `features/filters/MatureContentFilter.tsx`, `pages/printingQueue.tsx`,
+  `store/api.ts` (whoami query + credentialed fetches).
+- Tests: `cardpicker/tests/test_moderation_gate.py`,
+  `test_moderation_views.py`, `test_sensitive_tags.py`;
+  `frontend/src/features/reporting/ReportCardPanel.test.tsx`;
+  `frontend/tests/{ReportCard,ModerationQueue,MatureContentToggle}.spec.ts`.
+
+## Known gaps / follow-ups
+
+- Live OAuth round-trip is untested until the server checklist runs (this
+  branch was built in a cloud session against mocks by design).
+- Discord guild-role sync for a federation-wide moderator roster (see "Who is
+  a moderator").
+- Federation export/import of moderation verdicts is v1.1
+  ([[../federation-v1.md]]) — explicitly out of scope here.
+- No consequences yet for resolved `low-res` / `incorrect-info`.
+- The rate limiter shares the existing single-gunicorn-worker in-process-cache
+  caveat ([[printing-tags.md]]).

@@ -204,7 +204,11 @@ export const api = createApi({
       // Third-party backends without CORS_ALLOW_CREDENTIALS reject credentialed requests
       // outright, so consumers must treat an error result as "anonymous, feature disabled"
       // rather than surfacing it (see AuthWidget).
-      query: () => ({ url: `2/whoami/`, method: "GET", credentials: "include" }),
+      query: () => ({
+        url: `2/whoami/`,
+        method: "GET",
+        credentials: "include",
+      }),
       providesTags: [QueryTags.BackendSpecific],
     }),
   }),

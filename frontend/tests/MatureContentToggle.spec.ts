@@ -44,7 +44,9 @@ test.describe("show mature content toggle", () => {
     await loadPageWithOneCard(page);
 
     const settingsModal = await openSearchSettingsModal(page);
-    await expect(settingsModal.getByText("Hiding Mature Content")).toBeVisible();
+    await expect(
+      settingsModal.getByText("Hiding Mature Content")
+    ).toBeVisible();
 
     await settingsModal.getByText("Hiding Mature Content").click();
     await expect(

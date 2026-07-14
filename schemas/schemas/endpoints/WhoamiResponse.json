@@ -10,6 +10,13 @@
     "loginUrl": { "type": ["string", "null"] },
     "logoutUrl": { "type": ["string", "null"] }
   },
-  "required": ["authenticated", "username", "moderator", "discordEnabled", "loginUrl", "logoutUrl"],
+  "required": [
+    "authenticated",
+    "username",
+    "moderator",
+    "discordEnabled",
+    "loginUrl",
+    "logoutUrl"
+  ],
   "additionalProperties": false
 }

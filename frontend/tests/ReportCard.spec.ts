@@ -55,10 +55,7 @@ test.describe("report card flow", () => {
     await expect(page.getByTestId("report-card-thanks")).toBeVisible();
   });
 
-  test("Other requires free text and submits it", async ({
-    page,
-    network,
-  }) => {
+  test("Other requires free text and submits it", async ({ page, network }) => {
     network.use(
       cardDocumentsOneResult,
       cardbacksTwoOtherResults,
@@ -72,9 +69,7 @@ test.describe("report card flow", () => {
     await page.getByTestId("report-card-button").click();
     await page.getByTestId("report-chip-other").click();
     await expect(page.getByTestId("report-submit-other")).toBeDisabled();
-    await page
-      .getByTestId("report-other-text")
-      .fill("the corners are cut off");
+    await page.getByTestId("report-other-text").fill("the corners are cut off");
     await page.getByTestId("report-submit-other").click();
     await expect(page.getByTestId("report-card-thanks")).toBeVisible();
   });

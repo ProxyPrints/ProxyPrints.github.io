@@ -3,10 +3,7 @@ import React from "react";
 import { Provider } from "react-redux";
 
 import { cardDocument1, localBackend } from "@/common/test-constants";
-import {
-  reportCardRateLimited,
-  reportCardSuccess,
-} from "@/mocks/handlers";
+import { reportCardRateLimited, reportCardSuccess } from "@/mocks/handlers";
 import { server } from "@/mocks/server";
 import { setupStore } from "@/store/store";
 
@@ -71,7 +68,9 @@ describe("ReportCardPanel", () => {
     fireEvent.click(screen.getByTestId("report-card-button"));
     fireEvent.click(screen.getByTestId("report-chip-nsfw"));
     await waitFor(() => {
-      const notifications = Object.values(store.getState().toasts.notifications);
+      const notifications = Object.values(
+        store.getState().toasts.notifications
+      );
       expect(notifications).toHaveLength(1);
       expect(notifications[0].level).toBe("warning");
       expect(notifications[0].name).toBe("Report limit reached");

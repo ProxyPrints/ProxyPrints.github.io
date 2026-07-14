@@ -425,6 +425,14 @@ what a future _rename_ of `name` (not what this stage does) would break
   (it's a snapshot array, not a live FK). `display_name` exists precisely
   so that presentation changes never need to risk this at all.
 
+## Moderation layer (stage 1)
+
+The sensitive-tag moderation layer ([[moderation.md]]) builds directly on
+this system: a third seeded taxonomy (`seed_sensitive_tags` — NSFW/low-res/
+incorrect-info, same command-not-migration convention as the two above), a
+privileged-approval gate in `resolve_weighted_consensus`, and a
+moderator-only queue tab beside the ones described here.
+
 ## Key files
 
 - Backend: `cardpicker/printing_consensus.py`,
