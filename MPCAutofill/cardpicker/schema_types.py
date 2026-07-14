@@ -935,6 +935,66 @@ class LanguagesResponse(BaseModel):
         return result
 
 
+class ModerationQueueRequest(BaseModel):
+    page: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationQueueRequest":
+        assert isinstance(obj, dict)
+        page = from_int(obj.get("page"))
+        return ModerationQueueRequest(page)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["page"] = from_int(self.page)
+        return result
+
+
+class ModerationQueueItem(BaseModel):
+    card: Card
+    reportCount: int
+    reportExcerpts: List[str]
+    tagName: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationQueueItem":
+        assert isinstance(obj, dict)
+        card = Card.from_dict(obj.get("card"))
+        reportCount = from_int(obj.get("reportCount"))
+        reportExcerpts = from_list(from_str, obj.get("reportExcerpts"))
+        tagName = from_str(obj.get("tagName"))
+        return ModerationQueueItem(card, reportCount, reportExcerpts, tagName)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["card"] = to_class(Card, self.card)
+        result["reportCount"] = from_int(self.reportCount)
+        result["reportExcerpts"] = from_list(from_str, self.reportExcerpts)
+        result["tagName"] = from_str(self.tagName)
+        return result
+
+
+class ModerationQueueResponse(BaseModel):
+    hits: int
+    items: List[ModerationQueueItem]
+    pages: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationQueueResponse":
+        assert isinstance(obj, dict)
+        hits = from_int(obj.get("hits"))
+        items = from_list(ModerationQueueItem.from_dict, obj.get("items"))
+        pages = from_int(obj.get("pages"))
+        return ModerationQueueResponse(hits, items, pages)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["hits"] = from_int(self.hits)
+        result["items"] = from_list(lambda x: to_class(ModerationQueueItem, x), self.items)
+        result["pages"] = from_int(self.pages)
+        return result
+
+
 class Source(BaseModel):
     description: str
     key: str
@@ -1337,6 +1397,57 @@ class PrintingTagQueueResponse(BaseModel):
         return result
 
 
+class Reason(str, Enum):
+    brokenimage = "broken_image"
+    lowquality = "low_quality"
+    nsfw = "nsfw"
+    other = "other"
+    wrongcard = "wrong_card"
+
+
+class ReportCardRequest(BaseModel):
+    anonymousId: str
+    identifier: str
+    reason: Reason
+    text: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ReportCardRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        reason = Reason(obj.get("reason"))
+        text = from_union([from_str, from_none], obj.get("text"))
+        return ReportCardRequest(anonymousId, identifier, reason, text)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["reason"] = to_enum(Reason, self.reason)
+        if self.text is not None:
+            result["text"] = from_union([from_str, from_none], self.text)
+        return result
+
+
+class ReportCardResponse(BaseModel):
+    reported: bool
+    voteCast: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ReportCardResponse":
+        assert isinstance(obj, dict)
+        reported = from_bool(obj.get("reported"))
+        voteCast = from_bool(obj.get("voteCast"))
+        return ReportCardResponse(reported, voteCast)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["reported"] = from_bool(self.reported)
+        result["voteCast"] = from_bool(self.voteCast)
+        return result
+
+
 class Cards(BaseModel):
     CARD: List[Card]
     CARDBACK: List[Card]
@@ -1692,6 +1803,36 @@ class VoteQueueResponse(BaseModel):
         return result
 
 
+class WhoamiResponse(BaseModel):
+    authenticated: bool
+    discordEnabled: bool
+    moderator: bool
+    loginUrl: Optional[str] = None
+    logoutUrl: Optional[str] = None
+    username: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "WhoamiResponse":
+        assert isinstance(obj, dict)
+        authenticated = from_bool(obj.get("authenticated"))
+        discordEnabled = from_bool(obj.get("discordEnabled"))
+        moderator = from_bool(obj.get("moderator"))
+        loginUrl = from_union([from_none, from_str], obj.get("loginUrl"))
+        logoutUrl = from_union([from_none, from_str], obj.get("logoutUrl"))
+        username = from_union([from_none, from_str], obj.get("username"))
+        return WhoamiResponse(authenticated, discordEnabled, moderator, loginUrl, logoutUrl, username)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["authenticated"] = from_bool(self.authenticated)
+        result["discordEnabled"] = from_bool(self.discordEnabled)
+        result["moderator"] = from_bool(self.moderator)
+        result["loginUrl"] = from_union([from_none, from_str], self.loginUrl)
+        result["logoutUrl"] = from_union([from_none, from_str], self.logoutUrl)
+        result["username"] = from_union([from_none, from_str], self.username)
+        return result
+
+
 def ArtistVoteTallyEntryfromdict(s: Any) -> ArtistVoteTallyEntry:
     return ArtistVoteTallyEntry.from_dict(s)
 
@@ -1770,6 +1911,14 @@ def Languagefromdict(s: Any) -> Language:
 
 def Languagetodict(x: Language) -> Any:
     return to_class(Language, x)
+
+
+def ModerationQueueItemfromdict(s: Any) -> ModerationQueueItem:
+    return ModerationQueueItem.from_dict(s)
+
+
+def ModerationQueueItemtodict(x: ModerationQueueItem) -> Any:
+    return to_class(ModerationQueueItem, x)
 
 
 def NewCardsFirstPagefromdict(s: Any) -> NewCardsFirstPage:
@@ -2084,6 +2233,22 @@ def LanguagesResponsetodict(x: LanguagesResponse) -> Any:
     return to_class(LanguagesResponse, x)
 
 
+def ModerationQueueRequestfromdict(s: Any) -> ModerationQueueRequest:
+    return ModerationQueueRequest.from_dict(s)
+
+
+def ModerationQueueRequesttodict(x: ModerationQueueRequest) -> Any:
+    return to_class(ModerationQueueRequest, x)
+
+
+def ModerationQueueResponsefromdict(s: Any) -> ModerationQueueResponse:
+    return ModerationQueueResponse.from_dict(s)
+
+
+def ModerationQueueResponsetodict(x: ModerationQueueResponse) -> Any:
+    return to_class(ModerationQueueResponse, x)
+
+
 def NewCardsFirstPagesResponsefromdict(s: Any) -> NewCardsFirstPagesResponse:
     return NewCardsFirstPagesResponse.from_dict(s)
 
@@ -2162,6 +2327,22 @@ def PrintingTagQueueResponsefromdict(s: Any) -> PrintingTagQueueResponse:
 
 def PrintingTagQueueResponsetodict(x: PrintingTagQueueResponse) -> Any:
     return to_class(PrintingTagQueueResponse, x)
+
+
+def ReportCardRequestfromdict(s: Any) -> ReportCardRequest:
+    return ReportCardRequest.from_dict(s)
+
+
+def ReportCardRequesttodict(x: ReportCardRequest) -> Any:
+    return to_class(ReportCardRequest, x)
+
+
+def ReportCardResponsefromdict(s: Any) -> ReportCardResponse:
+    return ReportCardResponse.from_dict(s)
+
+
+def ReportCardResponsetodict(x: ReportCardResponse) -> Any:
+    return to_class(ReportCardResponse, x)
 
 
 def SampleCardsResponsefromdict(s: Any) -> SampleCardsResponse:
@@ -2250,3 +2431,11 @@ def VoteQueueResponsefromdict(s: Any) -> VoteQueueResponse:
 
 def VoteQueueResponsetodict(x: VoteQueueResponse) -> Any:
     return to_class(VoteQueueResponse, x)
+
+
+def WhoamiResponsefromdict(s: Any) -> WhoamiResponse:
+    return WhoamiResponse.from_dict(s)
+
+
+def WhoamiResponsetodict(x: WhoamiResponse) -> Any:
+    return to_class(WhoamiResponse, x)

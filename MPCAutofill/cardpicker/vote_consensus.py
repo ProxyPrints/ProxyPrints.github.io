@@ -33,14 +33,43 @@ class VoteTuple(NamedTuple):
     outcome_key: Hashable
     weight: float
     is_human_backed: bool
+    # True when the vote carries elevated moderation authority: cast by a Moderators-group
+    # member (see cardpicker.moderation.is_privileged_vote) or by an admin (source==ADMIN).
+    # Only consulted when `resolve_weighted_consensus` is called with `require_privileged=True`
+    # (sensitive tags - see docs/features/moderation.md); defaulted so the many existing
+    # call sites that predate the moderation layer construct VoteTuples unchanged.
+    is_privileged: bool = False
+
+
+class _PendingPrivileged:
+    """
+    Singleton sentinel (see PENDING_PRIVILEGED below) returned by `resolve_weighted_consensus`
+    instead of the winning key when `require_privileged=True` and the crowd's consensus lacks
+    a privileged co-sign. Deliberately distinct from `None`: `None` means "not enough signal
+    to conclude anything", while this means "a conclusion exists and is merely awaiting
+    privileged approval" - callers persist the latter as `pending_approval` (see
+    cardpicker.tag_consensus.resolve_and_persist_tag_votes). Hashable, so the declared return
+    type of `resolve_weighted_consensus` is unchanged. Compare with `is`.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "PENDING_PRIVILEGED"
+
+
+PENDING_PRIVILEGED = _PendingPrivileged()
 
 
 class _VoteGroup(TypedDict):
     weight: float
     has_human_backed: bool
+    has_privileged: bool
 
 
-def resolve_weighted_consensus(votes: Iterable[VoteTuple], min_weight: float, min_share: float) -> Hashable | None:
+def resolve_weighted_consensus(
+    votes: Iterable[VoteTuple], min_weight: float, min_share: float, require_privileged: bool = False
+) -> Hashable | None:
     """
     Reconciles a set of weighted votes into a single resolved outcome key, or `None` if there
     isn't yet enough signal to conclude anything (no votes, a tie, or a genuinely contested
@@ -58,23 +87,38 @@ def resolve_weighted_consensus(votes: Iterable[VoteTuple], min_weight: float, mi
       - it contains at least one human-backed vote (a hard gate, independent of the weight math
         above, so that no volume of non-human-backed votes - e.g. AI-only - can ever resolve
         consensus on their own).
+
+    With `require_privileged=True` (sensitive tags - see docs/features/moderation.md), a winner
+    that clears all three gates above additionally needs a privileged vote *in the winning
+    group* before it resolves; otherwise `PENDING_PRIVILEGED` is returned instead of the key,
+    which callers persist as a pending-approval state rather than a resolution. In-group
+    (mirroring `has_human_backed`'s aggregation) rather than merely present-among-the-votes,
+    because a moderator voting *against* the crowd must not count as the co-sign that lets the
+    crowd's outcome through - their vote argues for a different outcome entirely (and at
+    privileged weight it usually flips or contests the result through the normal math anyway).
     """
     votes = list(votes)
     if not votes:
         return None
 
-    groups: dict[Hashable, _VoteGroup] = defaultdict(lambda: _VoteGroup(weight=0.0, has_human_backed=False))
+    groups: dict[Hashable, _VoteGroup] = defaultdict(
+        lambda: _VoteGroup(weight=0.0, has_human_backed=False, has_privileged=False)
+    )
     for vote in votes:
         group = groups[vote.outcome_key]
         group["weight"] += vote.weight
         if vote.is_human_backed:
             group["has_human_backed"] = True
+        if vote.is_privileged:
+            group["has_privileged"] = True
 
     total_weight = sum(group["weight"] for group in groups.values())
     winning_key, winner = max(groups.items(), key=lambda item: item[1]["weight"])
     share = winner["weight"] / total_weight
 
     if winner["weight"] >= min_weight and share >= min_share and winner["has_human_backed"]:
+        if require_privileged and not winner["has_privileged"]:
+            return PENDING_PRIVILEGED
         return winning_key
     return None
 
@@ -115,4 +159,4 @@ def contested_queryset(
     return list(grouped.values_list(*group_fields))
 
 
-__all__ = ["VoteTuple", "resolve_weighted_consensus", "_SOURCE_WEIGHTS", "contested_queryset"]
+__all__ = ["VoteTuple", "resolve_weighted_consensus", "PENDING_PRIVILEGED", "_SOURCE_WEIGHTS", "contested_queryset"]

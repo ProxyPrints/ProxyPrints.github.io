@@ -25,6 +25,10 @@ urlpatterns = [
     path("favicon.ico", RedirectView.as_view(url=static("cardpicker/favicon.ico"))),
     path("admin/", admin.site.urls),
     path("", include("cardpicker.urls")),
+    # django-allauth (Discord moderator auth - see docs/features/moderation.md). With no
+    # Discord credentials configured this mounts only allauth's generic account views;
+    # the provider login route exists solely when DISCORD_AUTH_ENABLED.
+    path("accounts/", include("allauth.urls")),
     # path("accounts/", include("accounts.urls")),
     # path("accounts/", include("django.contrib.auth.urls")),
 ]

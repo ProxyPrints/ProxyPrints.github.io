@@ -951,6 +951,93 @@ export const submitTagVoteResolvesToApply = http.post(
     )
 );
 
+export const reportCardSuccess = http.post(buildRoute("2/reportCard/"), () =>
+  HttpResponse.json({ reported: true, voteCast: true }, { status: 200 })
+);
+
+export const reportCardRateLimited = http.post(
+  buildRoute("2/reportCard/"),
+  () => HttpResponse.json(createError("Report limit reached"), { status: 429 })
+);
+
+const whoami = (body: {
+  authenticated: boolean;
+  username: string | null;
+  moderator: boolean;
+  discordEnabled: boolean;
+  loginUrl: string | null;
+  logoutUrl: string | null;
+}) =>
+  http.get(buildRoute("2/whoami/"), () =>
+    HttpResponse.json(body, { status: 200 })
+  );
+
+// in defaultHandlers below: the vote-queue page always fires the whoami query now, and the
+// pre-moderation behavior (no login link, no Moderation tab) is the anonymous+disabled case
+export const whoamiAnonymous = whoami({
+  authenticated: false,
+  username: null,
+  moderator: false,
+  discordEnabled: false,
+  loginUrl: null,
+  logoutUrl: null,
+});
+
+export const whoamiAnonymousDiscordEnabled = whoami({
+  authenticated: false,
+  username: null,
+  moderator: false,
+  discordEnabled: true,
+  loginUrl: "/accounts/discord/login/",
+  logoutUrl: null,
+});
+
+export const whoamiSignedInNotModerator = whoami({
+  authenticated: true,
+  username: "somebody",
+  moderator: false,
+  discordEnabled: true,
+  loginUrl: "/accounts/discord/login/",
+  logoutUrl: "/accounts/logout/",
+});
+
+export const whoamiModerator = whoami({
+  authenticated: true,
+  username: "mod",
+  moderator: true,
+  discordEnabled: true,
+  loginUrl: "/accounts/discord/login/",
+  logoutUrl: "/accounts/logout/",
+});
+
+export const moderationQueueOneResult = http.post(
+  buildRoute("2/moderationQueue/"),
+  () =>
+    HttpResponse.json(
+      {
+        hits: 1,
+        pages: 1,
+        items: [
+          {
+            card: cardDocument1,
+            tagName: "NSFW",
+            reportCount: 3,
+            reportExcerpts: ["way too spicy", "really not ok"],
+          },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
+export const moderationQueueForbidden = http.post(
+  buildRoute("2/moderationQueue/"),
+  () =>
+    HttpResponse.json(createError("Moderator access required"), {
+      status: 403,
+    })
+);
+
 //# endregion
 
 //# region presets
@@ -969,6 +1056,7 @@ export const defaultHandlers = [
   backendInfo,
   patreon,
   searchEngineHealthy,
+  whoamiAnonymous,
 ];
 
 //# endregion

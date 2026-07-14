@@ -531,6 +531,14 @@ This is the documented, deliberate scope decision above (no "suggested"
 badge this stage), not a bug; a UX follow-up to surface AI-only
 suggestions visually is a separate, future proposal.
 
+## Moderation layer (stage 1)
+
+The sensitive-tag moderation layer ([[moderation.md]]) builds directly on
+this system: a third seeded taxonomy (`seed_sensitive_tags` — NSFW/low-res/
+incorrect-info/appropriate-bleed, same command-not-migration convention as
+the two above), a privileged-approval gate in `resolve_weighted_consensus`,
+and a moderator-only queue tab beside the ones described here.
+
 ## Key files
 
 - Backend: `cardpicker/printing_consensus.py`,

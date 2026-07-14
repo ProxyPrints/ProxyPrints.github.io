@@ -29,6 +29,7 @@ import {
 } from "@/features/card/Card";
 import { useDoImageDownload } from "@/features/download/downloadImages";
 import { PrintingTagPicker } from "@/features/printingTags/PrintingTagPicker";
+import { ReportCardPanel } from "@/features/reporting/ReportCardPanel";
 import { useGetLanguagesQuery } from "@/store/api";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
@@ -190,6 +191,7 @@ export function CardDetailedViewModal({
               )}
               <AddCardToFavorites cardDocument={cardDocument} />
               <AddCardToProjectForm cardDocument={cardDocument} />
+              <ReportCardPanel cardDocument={cardDocument} />
               <hr />
               <h5>What&apos;s That Card?</h5>
               <p className="text-muted small mb-2">

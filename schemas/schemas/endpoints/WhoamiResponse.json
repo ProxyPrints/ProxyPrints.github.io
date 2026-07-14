@@ -1,0 +1,22 @@
+{
+  "title": "Whoami Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "authenticated": { "type": "boolean" },
+    "username": { "type": ["string", "null"] },
+    "moderator": { "type": "boolean" },
+    "discordEnabled": { "type": "boolean" },
+    "loginUrl": { "type": ["string", "null"] },
+    "logoutUrl": { "type": ["string", "null"] }
+  },
+  "required": [
+    "authenticated",
+    "username",
+    "moderator",
+    "discordEnabled",
+    "loginUrl",
+    "logoutUrl"
+  ],
+  "additionalProperties": false
+}

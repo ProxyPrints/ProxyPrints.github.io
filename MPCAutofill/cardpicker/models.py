@@ -335,6 +335,10 @@ class TagVoteStatus(models.TextChoices):
     RESOLVED_REJECT = "resolved_reject", gettext_lazy("Resolved (reject)")
     CONTESTED = "contested", gettext_lazy("Contested")
     UNRESOLVED = "unresolved", gettext_lazy("Unresolved")
+    # sensitive tags only (Tag.moderation_class == SENSITIVE): the crowd's consensus clears
+    # every normal threshold but awaits a privileged (moderator/admin) co-sign - served by the
+    # moderation queue, excluded from the public tag queue. See docs/features/moderation.md.
+    PENDING_APPROVAL = "pending_approval", gettext_lazy("Pending approval")
 
 
 class Card(models.Model):
@@ -374,7 +378,8 @@ class Card(models.Model):
         max_length=10, choices=ArtistVoteStatus.choices, default=ArtistVoteStatus.UNRESOLVED, db_index=True
     )
     # Per-tag vote status, written by cardpicker.tag_consensus.resolve_and_persist_tag_votes:
-    # {tag.name: "resolved_apply" | "resolved_reject" | "contested" | "unresolved"}. An absent
+    # {tag.name: "resolved_apply" | "resolved_reject" | "contested" | "unresolved" |
+    # "pending_approval" (sensitive tags awaiting a privileged co-sign)}. An absent
     # key means no votes at all for that tag on this card - entries are never written for a
     # tag with zero votes. Bookkeeping alongside the existing `tags` array/overlay-merge logic
     # above, not a replacement for it. INVARIANT: keys are `Tag.name` values, which must stay
@@ -531,6 +536,12 @@ class AbstractWeightedVote(models.Model):
     # a client-generated identifier (see `frontend/src/common/anonymousId.ts`), not a real Django
     # session key - cross-origin frontend/backend means a session cookie never round-trips here.
     anonymous_id = models.CharField(max_length=40)
+    # set (in addition to anonymous_id, never instead of it) when the submitting request
+    # carried an authenticated session - today that means a Discord-authenticated moderator
+    # (see cardpicker.moderation / docs/features/moderation.md). Whether the vote counts as
+    # privileged is decided at *resolution* time from current group membership, not stored
+    # here, so revoking a moderator retroactively de-privileges their votes.
+    user = models.ForeignKey(to=User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     source = models.CharField(max_length=10, choices=VoteSource.choices, default=VoteSource.USER)
     confidence = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -625,8 +636,23 @@ class CardArtistVote(AbstractWeightedVote):
         return f"[{self.source}] {self.card.name} -> {outcome}"
 
 
+class TagModerationClass(models.TextChoices):
+    """
+    Whether consensus on this tag resolves like any other (STANDARD) or requires a privileged
+    co-sign before it can resolve (SENSITIVE) - see cardpicker.tag_consensus and
+    docs/features/moderation.md. Sensitive tags carry consequences (e.g. NSFW excludes a card
+    from default search), so a crowd alone can only ever move them to `pending_approval`.
+    """
+
+    STANDARD = "standard", gettext_lazy("Standard")
+    SENSITIVE = "sensitive", gettext_lazy("Sensitive")
+
+
 class Tag(models.Model):
     name = models.CharField(unique=True)
+    moderation_class = models.CharField(
+        max_length=10, choices=TagModerationClass.choices, default=TagModerationClass.STANDARD
+    )
     display_name = models.CharField(
         max_length=200,
         null=True,
@@ -693,6 +719,41 @@ class CardTagVote(AbstractWeightedVote):
 
     def __str__(self) -> str:
         return f"[{self.source}] {self.card.name} -> {self.tag} ({VotePolarity(self.polarity).label})"
+
+
+class CardReportReason(models.TextChoices):
+    """
+    Why a user reported a card (the report button on the card detail modal - see
+    docs/features/moderation.md). The first three map onto sensitive tags (see
+    cardpicker.sensitive_tags.REPORT_REASON_TO_TAG_NAME) and cast a CardTagVote alongside the
+    report; BROKEN_IMAGE and OTHER are report-row-only.
+    """
+
+    NSFW = "nsfw", gettext_lazy("NSFW")
+    LOW_QUALITY = "low_quality", gettext_lazy("Low quality")
+    WRONG_CARD = "wrong_card", gettext_lazy("Wrong card info")
+    BROKEN_IMAGE = "broken_image", gettext_lazy("Broken image")
+    OTHER = "other", gettext_lazy("Other")
+
+
+class CardReport(models.Model):
+    """
+    The audit trail behind the report button: one row per report, regardless of whether the
+    reason also cast a tag vote. Deliberately append-only from the API (no update/delete
+    path) - moderators review these via the moderation queue's excerpts and the admin panel.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="reports")
+    # same client-generated identifier the vote tables use - see AbstractWeightedVote
+    anonymous_id = models.CharField(max_length=40)
+    user = models.ForeignKey(to=User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    reason = models.CharField(max_length=20, choices=CardReportReason.choices, db_index=True)
+    # free text from the "Other" chip (bounded at the schema layer too); blank for most reasons
+    text = models.CharField(max_length=280, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"{self.card.name} -> {self.reason} ({self.anonymous_id})"
 
 
 class TagSuggestionStatus(models.TextChoices):

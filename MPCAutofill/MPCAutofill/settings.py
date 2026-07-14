@@ -60,6 +60,10 @@ PRINTING_TAG_MIN_VOTES = env.float("PRINTING_TAG_MIN_VOTES", default=2)
 PRINTING_TAG_MIN_SHARE = env.float("PRINTING_TAG_MIN_SHARE", default=0.6)
 PRINTING_TAG_ADMIN_WEIGHT = env.float("PRINTING_TAG_ADMIN_WEIGHT", default=5)
 PRINTING_TAG_AI_WEIGHT = env.float("PRINTING_TAG_AI_WEIGHT", default=0.5)
+# weight of a vote cast by a privileged user (a Moderators-group member - see
+# cardpicker.moderation.privileged_weight). Defaults to the admin weight: a lone moderator
+# clears the consensus threshold the same way a lone admin does.
+VOTE_PRIVILEGED_WEIGHT = env.float("VOTE_PRIVILEGED_WEIGHT", default=PRINTING_TAG_ADMIN_WEIGHT)
 # federation-readiness stub (see docs/federation-v1.md) - no import path creates federated
 # votes yet, so this setting is currently inert, but it's wired into vote_consensus._SOURCE_WEIGHTS
 # alongside the weights above.
@@ -67,6 +71,8 @@ VOTE_FEDERATED_WEIGHT = env.float("VOTE_FEDERATED_WEIGHT", default=1.0)
 # django-ratelimit rate string (see cardpicker.views.post_submit_printing_tag), keyed by the
 # client-generated anonymous ID (IP as a fallback if that header is somehow missing).
 PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="20/h")
+# same mechanism for the card report button (see cardpicker.views.post_report_card).
+CARD_REPORT_RATE = env("CARD_REPORT_RATE", default="10/d")
 
 # Fuzzy tag-matching confidence thresholds. See cardpicker.tags.Tags.match_tag_fuzzy.
 TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD = env.float("TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD", default=0.92)
@@ -102,6 +108,13 @@ INSTALLED_APPS = [
     "django.contrib.postgres",
     "django_elasticsearch_dsl",
     "corsheaders",
+    # Discord moderator auth - see the "Discord moderator auth" settings block below. The
+    # provider app itself ("allauth.socialaccount.providers.discord") is appended there only
+    # when credentials are configured, so an instance without them runs with allauth installed
+    # but no way to log in through it.
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
 ]
 
 MIDDLEWARE = [
@@ -115,6 +128,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "allauth.account.middleware.AccountMiddleware",  # mandatory for django-allauth >= 0.56
 ]
 
 CORS_ALLOWED_ORIGINS = env.list(
@@ -129,6 +143,49 @@ CORS_ALLOWED_ORIGINS = env.list(
         "https://proxyprints.github.io",
     ],
 )
+
+# Discord moderator auth (django-allauth). Only moderators ever log in - ordinary voters stay
+# on the client-generated anonymous_id scheme, untouched. Logging in grants nothing by itself:
+# a user becomes a moderator only when an admin adds them to the MODERATORS_GROUP_NAME group
+# (see docs/features/moderation.md for the one-time setup). With no credentials configured
+# (e.g. dev), the provider app is simply not installed: /accounts/discord/login/ 404s, the
+# whoami endpoint reports discordEnabled=false, and nothing crashes.
+DISCORD_CLIENT_ID = env("DISCORD_CLIENT_ID", default="")
+DISCORD_CLIENT_SECRET = env("DISCORD_CLIENT_SECRET", default="")
+DISCORD_AUTH_ENABLED = bool(DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET)
+if DISCORD_AUTH_ENABLED:
+    INSTALLED_APPS.append("allauth.socialaccount.providers.discord")
+    # App-in-settings configuration - no SocialApp DB row (and no django.contrib.sites) needed.
+    SOCIALACCOUNT_PROVIDERS = {"discord": {"APPS": [{"client_id": DISCORD_CLIENT_ID, "secret": DISCORD_CLIENT_SECRET}]}}
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",  # Django admin login, unchanged
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
+ACCOUNT_EMAIL_VERIFICATION = "none"  # Discord is the identity authority; no verification emails
+SOCIALACCOUNT_AUTO_SIGNUP = True  # first Discord login auto-creates the Django user
+# Keep allauth's confirmation interstitial on the login link (default-secure; costs one click).
+SOCIALACCOUNT_LOGIN_ON_GET = False
+# Logout via a plain link so it can round-trip back to the frontend with ?next=. The tradeoff
+# (a hostile page could force-logout a moderator - a nuisance, not an escalation) is documented
+# in docs/features/moderation.md.
+ACCOUNT_LOGOUT_ON_GET = True
+# Allows ?next= redirects back to the frontend origin - see accounts.adapter.
+ACCOUNT_ADAPTER = "accounts.adapter.FrontendRedirectAccountAdapter"
+# The Django auth group whose members count as moderators (see cardpicker.moderation). A
+# setting rather than a hardcoded string so a future grant mechanism (e.g. syncing membership
+# from a Discord guild role) only has to manage this one group.
+MODERATORS_GROUP_NAME = env("MODERATORS_GROUP_NAME", default="Moderators")
+
+# The moderator session cookie must round-trip from the cross-site frontend origin
+# (github.io <-> api.proxyprints.ca), which requires SameSite=None + Secure in production -
+# set via env there. Defaults suit local dev: localhost:3000 -> localhost:8000 is same-site,
+# so Lax cookies flow over plain http.
+SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", default="Lax")
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=False)
+# Lets browsers attach credentials (the session cookie) to CORS requests from the explicit
+# allowlist above. Only fetches that opt in with credentials:'include' are affected;
+# anonymous traffic is byte-identical.
+CORS_ALLOW_CREDENTIALS = env.bool("CORS_ALLOW_CREDENTIALS", default=True)
 
 ROOT_URLCONF = "MPCAutofill.urls"
 

@@ -11,6 +11,7 @@ import { FilterSettings as FilterSettingsType } from "@/common/types";
 
 import { DPIFilter } from "../filters/DPIFilter";
 import { LanguageFilter } from "../filters/LanguageFilter";
+import { MatureContentFilter } from "../filters/MatureContentFilter";
 import { ResolvedAttributeFilter } from "../filters/ResolvedAttributeFilter";
 import { SizeFilter } from "../filters/SizeFilter";
 import { TagFilter } from "../filters/TagFilter";
@@ -71,6 +72,11 @@ export function FilterSettings({
         allowedLanguages={allowedLanguages}
       />
       <TagFilter
+        filterSettings={filterSettings}
+        setFilterSettings={setFilterSettings}
+      />
+      <br />
+      <MatureContentFilter
         filterSettings={filterSettings}
         setFilterSettings={setFilterSettings}
       />

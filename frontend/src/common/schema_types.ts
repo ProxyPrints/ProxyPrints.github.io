@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse } from "./file";
+//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, ModerationQueueRequest, ModerationQueueResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
@@ -14,6 +14,7 @@
 //   const game = Convert.toGame(json);
 //   const importSite = Convert.toImportSite(json);
 //   const language = Convert.toLanguage(json);
+//   const moderationQueueItem = Convert.toModerationQueueItem(json);
 //   const newCardsFirstPage = Convert.toNewCardsFirstPage(json);
 //   const printingCandidate = Convert.toPrintingCandidate(json);
 //   const printingTagStatus = Convert.toPrintingTagStatus(json);
@@ -53,6 +54,8 @@
 //   const importSitesResponse = Convert.toImportSitesResponse(json);
 //   const infoResponse = Convert.toInfoResponse(json);
 //   const languagesResponse = Convert.toLanguagesResponse(json);
+//   const moderationQueueRequest = Convert.toModerationQueueRequest(json);
+//   const moderationQueueResponse = Convert.toModerationQueueResponse(json);
 //   const newCardsFirstPagesResponse = Convert.toNewCardsFirstPagesResponse(json);
 //   const newCardsPageResponse = Convert.toNewCardsPageResponse(json);
 //   const oldEditorSearchRequest = Convert.toOldEditorSearchRequest(json);
@@ -63,6 +66,8 @@
 //   const printingConsensusRequest = Convert.toPrintingConsensusRequest(json);
 //   const printingConsensusResponse = Convert.toPrintingConsensusResponse(json);
 //   const printingTagQueueResponse = Convert.toPrintingTagQueueResponse(json);
+//   const reportCardRequest = Convert.toReportCardRequest(json);
+//   const reportCardResponse = Convert.toReportCardResponse(json);
 //   const sampleCardsResponse = Convert.toSampleCardsResponse(json);
 //   const searchEngineHealthResponse = Convert.toSearchEngineHealthResponse(json);
 //   const sourcesResponse = Convert.toSourcesResponse(json);
@@ -74,6 +79,7 @@
 //   const tagsResponse = Convert.toTagsResponse(json);
 //   const voteQueueRequest = Convert.toVoteQueueRequest(json);
 //   const voteQueueResponse = Convert.toVoteQueueResponse(json);
+//   const whoamiResponse = Convert.toWhoamiResponse(json);
 //
 // These functions will throw an error if the JSON doesn't
 // match the expected interface, even if the JSON is valid.
@@ -380,6 +386,23 @@ export interface Language {
   name: string;
 }
 
+export interface ModerationQueueRequest {
+  page: number;
+}
+
+export interface ModerationQueueResponse {
+  hits: number;
+  items: ModerationQueueItem[];
+  pages: number;
+}
+
+export interface ModerationQueueItem {
+  card: Card;
+  reportCount: number;
+  reportExcerpts: string[];
+  tagName: string;
+}
+
 export interface NewCardsFirstPagesResponse {
   results: { [key: string]: NewCardsFirstPage };
 }
@@ -491,6 +514,26 @@ export interface PrintingTagQueueResponse {
   pages: number;
 }
 
+export interface ReportCardRequest {
+  anonymousId: string;
+  identifier: string;
+  reason: Reason;
+  text?: string;
+}
+
+export enum Reason {
+  BrokenImage = "broken_image",
+  LowQuality = "low_quality",
+  Nsfw = "nsfw",
+  Other = "other",
+  WrongCard = "wrong_card",
+}
+
+export interface ReportCardResponse {
+  reported: boolean;
+  voteCast: boolean;
+}
+
 export interface SampleCardsResponse {
   cards: Cards;
   [property: string]: any;
@@ -595,6 +638,15 @@ export interface VoteQueueItem {
   tagName?: null | string;
 }
 
+export interface WhoamiResponse {
+  authenticated: boolean;
+  discordEnabled: boolean;
+  loginUrl: null | string;
+  logoutUrl: null | string;
+  moderator: boolean;
+  username: null | string;
+}
+
 // Converts JSON strings to/from your types
 // and asserts the results of JSON.parse at runtime
 export class Convert {
@@ -682,6 +734,14 @@ export class Convert {
 
   public static languageToJson(value: Language): string {
     return JSON.stringify(uncast(value, r("Language")), null, 2);
+  }
+
+  public static toModerationQueueItem(json: string): ModerationQueueItem {
+    return cast(JSON.parse(json), r("ModerationQueueItem"));
+  }
+
+  public static moderationQueueItemToJson(value: ModerationQueueItem): string {
+    return JSON.stringify(uncast(value, r("ModerationQueueItem")), null, 2);
   }
 
   public static toNewCardsFirstPage(json: string): NewCardsFirstPage {
@@ -1038,6 +1098,28 @@ export class Convert {
     return JSON.stringify(uncast(value, r("LanguagesResponse")), null, 2);
   }
 
+  public static toModerationQueueRequest(json: string): ModerationQueueRequest {
+    return cast(JSON.parse(json), r("ModerationQueueRequest"));
+  }
+
+  public static moderationQueueRequestToJson(
+    value: ModerationQueueRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("ModerationQueueRequest")), null, 2);
+  }
+
+  public static toModerationQueueResponse(
+    json: string
+  ): ModerationQueueResponse {
+    return cast(JSON.parse(json), r("ModerationQueueResponse"));
+  }
+
+  public static moderationQueueResponseToJson(
+    value: ModerationQueueResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("ModerationQueueResponse")), null, 2);
+  }
+
   public static toNewCardsFirstPagesResponse(
     json: string
   ): NewCardsFirstPagesResponse {
@@ -1174,6 +1256,22 @@ export class Convert {
     );
   }
 
+  public static toReportCardRequest(json: string): ReportCardRequest {
+    return cast(JSON.parse(json), r("ReportCardRequest"));
+  }
+
+  public static reportCardRequestToJson(value: ReportCardRequest): string {
+    return JSON.stringify(uncast(value, r("ReportCardRequest")), null, 2);
+  }
+
+  public static toReportCardResponse(json: string): ReportCardResponse {
+    return cast(JSON.parse(json), r("ReportCardResponse"));
+  }
+
+  public static reportCardResponseToJson(value: ReportCardResponse): string {
+    return JSON.stringify(uncast(value, r("ReportCardResponse")), null, 2);
+  }
+
   public static toSampleCardsResponse(json: string): SampleCardsResponse {
     return cast(JSON.parse(json), r("SampleCardsResponse"));
   }
@@ -1284,6 +1382,14 @@ export class Convert {
 
   public static voteQueueResponseToJson(value: VoteQueueResponse): string {
     return JSON.stringify(uncast(value, r("VoteQueueResponse")), null, 2);
+  }
+
+  public static toWhoamiResponse(json: string): WhoamiResponse {
+    return cast(JSON.parse(json), r("WhoamiResponse"));
+  }
+
+  public static whoamiResponseToJson(value: WhoamiResponse): string {
+    return JSON.stringify(uncast(value, r("WhoamiResponse")), null, 2);
   }
 }
 
@@ -1765,6 +1871,24 @@ const typeMap: any = {
     ],
     false
   ),
+  ModerationQueueRequest: o([{ json: "page", js: "page", typ: 0 }], false),
+  ModerationQueueResponse: o(
+    [
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "items", js: "items", typ: a(r("ModerationQueueItem")) },
+      { json: "pages", js: "pages", typ: 0 },
+    ],
+    false
+  ),
+  ModerationQueueItem: o(
+    [
+      { json: "card", js: "card", typ: r("Card") },
+      { json: "reportCount", js: "reportCount", typ: 0 },
+      { json: "reportExcerpts", js: "reportExcerpts", typ: a("") },
+      { json: "tagName", js: "tagName", typ: "" },
+    ],
+    false
+  ),
   NewCardsFirstPagesResponse: o(
     [{ json: "results", js: "results", typ: m(r("NewCardsFirstPage")) }],
     false
@@ -1909,6 +2033,22 @@ const typeMap: any = {
     ],
     false
   ),
+  ReportCardRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "reason", js: "reason", typ: r("Reason") },
+      { json: "text", js: "text", typ: u(undefined, "") },
+    ],
+    false
+  ),
+  ReportCardResponse: o(
+    [
+      { json: "reported", js: "reported", typ: true },
+      { json: "voteCast", js: "voteCast", typ: true },
+    ],
+    false
+  ),
   SampleCardsResponse: o(
     [{ json: "cards", js: "cards", typ: r("Cards") }],
     "any"
@@ -2048,6 +2188,17 @@ const typeMap: any = {
     ],
     false
   ),
+  WhoamiResponse: o(
+    [
+      { json: "authenticated", js: "authenticated", typ: true },
+      { json: "discordEnabled", js: "discordEnabled", typ: true },
+      { json: "loginUrl", js: "loginUrl", typ: u(null, "") },
+      { json: "logoutUrl", js: "logoutUrl", typ: u(null, "") },
+      { json: "moderator", js: "moderator", typ: true },
+      { json: "username", js: "username", typ: u(null, "") },
+    ],
+    false
+  ),
   Game: ["MTG"],
   CardType: ["CARD", "CARDBACK", "TOKEN"],
   PrintingTagStatus: ["no_match", "resolved", "unresolved"],
@@ -2060,5 +2211,6 @@ const typeMap: any = {
     "nameAscending",
     "nameDescending",
   ],
+  Reason: ["broken_image", "low_quality", "nsfw", "other", "wrong_card"],
   Kind: ["artist", "printing", "tag"],
 };

@@ -43,6 +43,10 @@ export const Back: Faces = "back";
 export const NavPillButtonHeight = 40; // pixels
 export const NavUnderlineButtonHeight = 42; // pixels
 export const ToggleButtonHeight = 38; // pixels
+// The tag name behind the default mature-content exclusion. Must match the backend's
+// cardpicker/constants.py NSFW constant - it's the same string filename-bracket tagging
+// writes into Card.tags and the seeded sensitive tag uses (docs/features/moderation.md).
+export const NSFW_TAG_NAME = "NSFW";
 export const NavbarHeight = 50; // pixels - aligns with the natural height of the navbar
 export const RibbonHeight = 54; // pixels
 export const NavbarLogoHeight = 40; // pixels

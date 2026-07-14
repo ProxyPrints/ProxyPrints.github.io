@@ -5,7 +5,7 @@ import mimetypes
 from collections import defaultdict
 from pathlib import Path
 from random import sample
-from typing import Any, Callable, Literal, TypeVar, Union, cast
+from typing import Any, Callable, Literal, Optional, TypeVar, Union, cast
 
 import Levenshtein
 import pycountry
@@ -14,9 +14,10 @@ from elasticsearch_dsl.index import Index
 from pydantic import ValidationError
 
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Case, IntegerField, Q, When
+from django.db.models import Case, Count, IntegerField, Q, When
 from django.http import (
     FileResponse,
     HttpRequest,
@@ -51,6 +52,7 @@ from cardpicker.models import (
     Card,
     CardArtistVote,
     CardPrintingTag,
+    CardReport,
     CardTagVote,
     CardTypes,
     DFCPair,
@@ -61,6 +63,7 @@ from cardpicker.models import (
     VoteSource,
     summarise_contributions,
 )
+from cardpicker.moderation import is_moderator
 from cardpicker.printing_candidates import (
     CANDIDATE_QUERY_LIMIT,
     CANDIDATE_RESULT_LIMIT,
@@ -104,6 +107,9 @@ from cardpicker.schema_types import Kind as VoteQueueKind
 from cardpicker.schema_types import (
     Language,
     LanguagesResponse,
+    ModerationQueueItem,
+    ModerationQueueRequest,
+    ModerationQueueResponse,
     NewCardsFirstPage,
     NewCardsFirstPagesResponse,
     NewCardsPageResponse,
@@ -116,6 +122,8 @@ from cardpicker.schema_types import (
     PrintingConsensusRequest,
     PrintingConsensusResponse,
     PrintingTagQueueResponse,
+    ReportCardRequest,
+    ReportCardResponse,
     SampleCardsResponse,
     SearchEngineHealthResponse,
     SortBy,
@@ -132,6 +140,7 @@ from cardpicker.schema_types import (
     VoteQueueRequest,
     VoteQueueResponse,
     VoteTallyEntry,
+    WhoamiResponse,
 )
 from cardpicker.search.sanitisation import to_searchable
 from cardpicker.search.search_functions import (
@@ -142,15 +151,19 @@ from cardpicker.search.search_functions import (
     retrieve_card_identifiers,
     retrieve_cardback_identifiers,
 )
+from cardpicker.security import reject_untrusted_origin, require_moderator
+from cardpicker.sensitive_tags import REPORT_REASON_TO_TAG_NAME
 from cardpicker.sources.api import PathTraversalError, resolve_within_root
 from cardpicker.sources.source_types import SourceTypeChoices
 from cardpicker.tag_consensus import (
+    get_pending_approval_queue_pairs,
     get_tag_review_queue_pairs,
     get_tag_vote_tally,
     resolve_and_persist_tag_votes,
     resolve_tag,
 )
 from cardpicker.tags import Tags
+from cardpicker.vote_consensus import _PendingPrivileged
 
 logger = logging.getLogger(__name__)
 
@@ -685,6 +698,15 @@ def _get_card_or_400(identifier: str) -> Card:
         raise BadRequestException(f"No card found with identifier {identifier!r}.")
 
 
+def _requesting_user(request: HttpRequest) -> Optional[User]:
+    """
+    The authenticated user behind a vote/report submission, or None for the (typical)
+    anonymous case - recorded on the row *in addition to* the client-generated anonymous_id,
+    never instead of it. See AbstractWeightedVote.user.
+    """
+    return request.user if isinstance(request.user, User) else None
+
+
 @csrf_exempt
 @ErrorWrappers.to_json
 def get_printing_tag_queue(request: HttpRequest) -> HttpResponse:
@@ -802,6 +824,7 @@ def _printing_tag_rate_limit_rate(group: str, request: HttpRequest) -> str:
 
 
 @csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
 @ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
     key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
 )
@@ -851,6 +874,7 @@ def post_submit_printing_tag(request: HttpRequest) -> HttpResponse:
             is_no_match=req.isNoMatch,
             anonymous_id=req.anonymousId,
             source=VoteSource.USER,
+            user=_requesting_user(request),
         )
         resolved = resolve_and_persist_printing(card)
 
@@ -930,6 +954,7 @@ def post_artist_consensus(request: HttpRequest) -> HttpResponse:
 
 
 @csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
 @ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
     key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
 )
@@ -973,6 +998,7 @@ def post_submit_artist_vote(request: HttpRequest) -> HttpResponse:
             is_unknown=req.isUnknown,
             anonymous_id=req.anonymousId,
             source=VoteSource.USER,
+            user=_requesting_user(request),
         )
         resolved = resolve_and_persist_artist(card)
 
@@ -980,9 +1006,12 @@ def post_submit_artist_vote(request: HttpRequest) -> HttpResponse:
 
 
 def _build_tag_consensus_entry(card: Card, tag: Tag) -> TagConsensusEntry:
+    resolved = resolve_tag(card, tag)
     return TagConsensusEntry(
         tagName=tag.name,
-        resolvedPolarity=resolve_tag(card, tag),
+        # a sensitive tag awaiting privileged approval reads as unresolved to the public
+        # consensus surface - the pending state is a moderation-queue concern, not a voter one
+        resolvedPolarity=None if isinstance(resolved, _PendingPrivileged) else resolved,
         tally=[
             TagVoteTallyEntry(polarity=entry["polarity"], count=entry["count"])
             for entry in get_tag_vote_tally(card, tag)
@@ -1008,6 +1037,7 @@ def post_tag_consensus(request: HttpRequest) -> HttpResponse:
 
 
 @csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
 @ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
     key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
 )
@@ -1039,16 +1069,91 @@ def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
     if req.polarity not in (VotePolarity.APPLY, VotePolarity.NOT_APPLICABLE):
         raise BadRequestException(f"Invalid polarity {req.polarity!r} - must be 1 (apply) or -1 (not applicable).")
 
+    _cast_tag_vote_and_resolve(
+        card=card, tag=tag, anonymous_id=req.anonymousId, polarity=req.polarity, user=_requesting_user(request)
+    )
+    return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
+
+
+def _cast_tag_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str, polarity: int, user: Optional[User]) -> None:
+    """
+    The one write path for a tag vote - shared verbatim between `post_submit_tag_vote` and
+    `post_report_card` (a report on a tag-mapped reason IS a tag vote plus an audit row), so
+    the two entry points can never drift on how a vote lands or when consensus recomputes.
+    """
     with transaction.atomic():
+        # `user` sits in defaults deliberately: the row reflects the *latest* submission from
+        # this (card, tag, anonymous_id), so a later unauthenticated re-vote clears it.
         CardTagVote.objects.update_or_create(
             card=card,
             tag=tag,
-            anonymous_id=req.anonymousId,
-            defaults={"polarity": req.polarity, "source": VoteSource.USER},
+            anonymous_id=anonymous_id,
+            defaults={"polarity": polarity, "source": VoteSource.USER, "user": user},
         )
         resolve_and_persist_tag_votes(card)
 
-    return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
+
+def _card_report_rate_limit_rate(group: str, request: HttpRequest) -> str:
+    # callable for the same reason as _printing_tag_rate_limit_rate: a plain string would be
+    # bound at import time and impossible to override in tests
+    rate: str = settings.CARD_REPORT_RATE
+    return rate
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_card_report_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_report_card(request: HttpRequest) -> HttpResponse:
+    """
+    Report a card (the flag button on the card detail modal - see docs/features/moderation.md).
+    Always writes a CardReport audit row; for reasons that map onto a sensitive tag
+    (nsfw/low_quality/wrong_card - see sensitive_tags.REPORT_REASON_TO_TAG_NAME) it also casts
+    a positive CardTagVote through the exact same write path as 2/submitTagVote/, inside one
+    transaction. If the mapped tag hasn't been seeded yet (`seed_sensitive_tags` not run), the
+    report still lands and the vote is skipped - same graceful degradation as the no-match
+    reason strips. broken_image/other write the report row only.
+
+    Rate limited per anonymous ID (IP fallback) via CARD_REPORT_RATE (default 10/day) - the
+    vote only happens inside this view, so the one limit covers both effects. Same
+    single-worker in-process-cache caveat as post_submit_printing_tag.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Report limit reached",
+                message="You've sent quite a few reports today - please try again tomorrow.",
+            ).model_dump(),
+            status=429,
+        )
+
+    req = ReportCardRequest.model_validate(json.loads(request.body))
+    # the schema declares maxLength 280 but quicktype's generated pydantic model doesn't carry
+    # constraints - enforce here so an oversized body 400s instead of erroring at the DB column
+    if req.text is not None and len(req.text) > 280:
+        raise BadRequestException("Report text must be at most 280 characters.")
+    card = _get_card_or_400(req.identifier)
+    user = _requesting_user(request)
+
+    vote_cast = False
+    with transaction.atomic():
+        CardReport.objects.create(
+            card=card, anonymous_id=req.anonymousId, user=user, reason=req.reason.value, text=req.text or ""
+        )
+        tag_name = REPORT_REASON_TO_TAG_NAME.get(req.reason.value)
+        if tag_name is not None:
+            tag = Tag.objects.filter(name=tag_name).first()
+            if tag is not None:
+                _cast_tag_vote_and_resolve(
+                    card=card, tag=tag, anonymous_id=req.anonymousId, polarity=VotePolarity.APPLY, user=user
+                )
+                vote_cast = True
+    return JsonResponse(ReportCardResponse(reported=True, voteCast=vote_cast).model_dump())
 
 
 def _paginate(items: Any, page: int) -> Any:
@@ -1111,3 +1216,97 @@ def post_vote_queue(request: HttpRequest) -> HttpResponse:
         items = [VoteQueueItem(card=card.serialise(), tagName=None) for card in paginator.page(req.page).object_list]
 
     return JsonResponse(VoteQueueResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump())
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_moderation_queue(request: HttpRequest) -> HttpResponse:
+    """
+    The moderator-only review queue (docs/features/moderation.md): (card, sensitive-tag)
+    pairs whose status is pending_approval, most-reported first, each with its report count
+    and up to three newest free-text excerpts from matching reports. Approve/Reject in the
+    frontend cast the moderator's ordinary tag vote through 2/submitTagVote/ - this endpoint
+    only serves the queue. 403 for anyone outside the Moderators group (the frontend hides
+    the tab too, but hidden is not secured - this is the enforcement).
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ModerationQueueRequest.model_validate(json.loads(request.body))
+    pairs = get_pending_approval_queue_pairs()
+    paginator = _paginate(pairs, req.page)
+    page_pairs = paginator.page(req.page).object_list
+
+    page_card_ids = [card_id for card_id, _ in page_pairs]
+    cards_by_id = {card.pk: card for card in Card.objects.filter(pk__in=page_card_ids)}
+    tag_name_by_reason = REPORT_REASON_TO_TAG_NAME
+
+    report_counts: dict[tuple[int, str], int] = {}
+    for row in (
+        CardReport.objects.filter(card_id__in=page_card_ids, reason__in=tag_name_by_reason)
+        .values("card_id", "reason")
+        .annotate(n=Count("id"))
+    ):
+        report_counts[(row["card_id"], tag_name_by_reason[row["reason"]])] = row["n"]
+
+    excerpts: dict[tuple[int, str], list[str]] = defaultdict(list)
+    excerpt_rows = (
+        CardReport.objects.filter(card_id__in=page_card_ids, reason__in=tag_name_by_reason)
+        .exclude(text="")
+        .order_by("-created_at")
+        .values("card_id", "reason", "text")
+    )
+    for excerpt_row in excerpt_rows:
+        key = (excerpt_row["card_id"], tag_name_by_reason[excerpt_row["reason"]])
+        if len(excerpts[key]) < 3:
+            excerpts[key].append(excerpt_row["text"])
+
+    items = [
+        ModerationQueueItem(
+            card=cards_by_id[card_id].serialise(),
+            tagName=tag_name,
+            reportCount=report_counts.get((card_id, tag_name), 0),
+            reportExcerpts=excerpts.get((card_id, tag_name), []),
+        )
+        for card_id, tag_name in page_pairs
+    ]
+    return JsonResponse(
+        ModerationQueueResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump()
+    )
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def get_whoami(request: HttpRequest) -> HttpResponse:
+    """
+    Report the requesting session's authentication state and roles, for the frontend's
+    moderation UI gating (which is presentation only - the moderation endpoints enforce the
+    Moderators group server-side regardless of what this reports). Anonymous voters never call
+    this with a session, so for them it just reports the feature flags.
+
+    Cross-origin callers must fetch with credentials:'include' or the session cookie is never
+    attached and this always reports anonymous. Read-only (GET, no state change), so unlike the
+    session-consuming POST views this needs no Origin check - the worst a cross-site caller
+    could learn is their own login state, which CORS already restricts to allowlisted origins.
+
+    `loginUrl`/`logoutUrl` are relative to this backend's root; the frontend prefixes its
+    configured backend URL and appends `?next=<frontend URL>` to round-trip back (see
+    accounts.adapter.FrontendRedirectAccountAdapter for what makes that redirect safe).
+    """
+
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+    authenticated = request.user.is_authenticated
+    return JsonResponse(
+        WhoamiResponse(
+            authenticated=authenticated,
+            username=request.user.get_username() if authenticated else None,
+            moderator=is_moderator(request.user),
+            discordEnabled=settings.DISCORD_AUTH_ENABLED,
+            loginUrl="/accounts/discord/login/" if settings.DISCORD_AUTH_ENABLED else None,
+            logoutUrl="/accounts/logout/" if authenticated else None,
+        ).model_dump()
+    )

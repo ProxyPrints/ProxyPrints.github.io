@@ -143,3 +143,13 @@ class CardTagVoteFactory(factory.django.DjangoModelFactory):
     anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
     source = models.VoteSource.USER
     confidence = None
+
+
+class CardReportFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.CardReport
+
+    card = factory.SubFactory(CardFactory)
+    anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
+    reason = models.CardReportReason.NSFW
+    text = ""
