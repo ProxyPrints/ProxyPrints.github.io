@@ -631,8 +631,23 @@ class CardArtistVote(AbstractWeightedVote):
         return f"[{self.source}] {self.card.name} -> {outcome}"
 
 
+class TagModerationClass(models.TextChoices):
+    """
+    Whether consensus on this tag resolves like any other (STANDARD) or requires a privileged
+    co-sign before it can resolve (SENSITIVE) - see cardpicker.tag_consensus and
+    docs/features/moderation.md. Sensitive tags carry consequences (e.g. NSFW excludes a card
+    from default search), so a crowd alone can only ever move them to `pending_approval`.
+    """
+
+    STANDARD = "standard", gettext_lazy("Standard")
+    SENSITIVE = "sensitive", gettext_lazy("Sensitive")
+
+
 class Tag(models.Model):
     name = models.CharField(unique=True)
+    moderation_class = models.CharField(
+        max_length=10, choices=TagModerationClass.choices, default=TagModerationClass.STANDARD
+    )
     display_name = models.CharField(
         max_length=200,
         null=True,
