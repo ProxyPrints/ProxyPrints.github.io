@@ -7,6 +7,7 @@ tasks, not a one-off narrative (those belong in `journal/` or a feature doc
 under `docs/features/`).
 
 ## Trust CI history, not a matching local venv, once a change touches Django's model-import chain
+
 A local mypy run can pass identically across many sessions and still not be
 what CI actually checks, if your venv has dependencies CI's isolated
 pre-commit hooks don't (e.g. `mypy_django_plugin` genuinely imports, not just
@@ -20,12 +21,11 @@ not just a local re-run — especially for anything on the models.py import
 chain.
 
 ## Concurrent worktree dev servers collide on port 3000
-Multiple Claude Code sessions/worktrees on this box can and do run `next
-dev` at the same time; Playwright's `webServer.reuseExistingServer: true`
+
+Multiple Claude Code sessions/worktrees on this box can and do run `next dev` at the same time; Playwright's `webServer.reuseExistingServer: true`
 will happily attach to whatever's already listening on 3000, which may
 belong to a different worktree entirely — producing screenshots of stale
-code with no error. Before trusting a suspicious screenshot, check `ps aux
-| grep "next dev"` for a PID under a different `.claude/worktrees/*` path.
+code with no error. Before trusting a suspicious screenshot, check `ps aux | grep "next dev"` for a PID under a different `.claude/worktrees/*` path.
 Point your own run at a different port instead of killing another
 session's process, unless the user directly confirms it's abandoned — then
 verify the PID's cwd via `readlink -f /proc/<pid>/cwd` before killing.
@@ -34,6 +34,7 @@ it's a landmine for the next concurrent session, not something to leave
 running because it "seems harmless."
 
 ## Swap in a debug color to disambiguate same-colored overlapping elements
+
 A pixel/computed-color check at one sample point can be genuinely ambiguous
 when two adjacent elements intentionally share a color (e.g. a themed
 overlay bleeding onto a neighboring placeholder using the same palette).
@@ -43,6 +44,7 @@ element to an unmistakable color never used elsewhere on the page (e.g.
 the real palette.
 
 ## Sample cyclic/periodic animations repeatedly, not once
+
 A single before/after comparison of a value driven by a short repeating
 cycle (e.g. a 150ms x 5-frame animation loop) can coincidentally land on
 the same frame twice and falsely read as "static." Sample several times
@@ -50,16 +52,17 @@ across at least one full cycle and count distinct values instead of
 trusting one pair.
 
 ## Verify cross-session "investigation reports" against git, don't take them as ground truth
+
 A report relayed from a different Claude Code session (even one working on
 a related codebase) is a claim, not a fact — treat it exactly like any
 other unverified input. One such report claimed a fix commit was "still
 unmerged on a branch" and described unrelated file changes that didn't
-exist; `git show <sha> --stat` and `git merge-base --is-ancestor <sha>
-origin/master` disproved both claims in under a minute. Always check
+exist; `git show <sha> --stat` and `git merge-base --is-ancestor <sha> origin/master` disproved both claims in under a minute. Always check
 `git show`/`git merge-base`/`git ls-remote` before acting on a relayed
 finding.
 
 ## Elasticsearch index mapping can drift from the schema declared in code
+
 `documents.py`'s declared field types (e.g. `KeywordField`) don't
 automatically stay in sync with the live index's actual `_mapping` — a
 field can silently end up `text`-analyzed instead, breaking exact-match
@@ -70,10 +73,10 @@ bug. Fix: `manage.py search_index --rebuild -f` inside the django
 container.
 
 ## `factory.Sequence` counters are process-global for the whole test run
+
 Shared factories (`cardpicker/tests/factories.py`) increment a single
 sequence counter across every test file in a pytest session, and some
-snapshot assertions hardcode exact sequence-derived values (e.g. `"Artist
-0"`) that depend on total call count up to that point — so a brand-new,
+snapshot assertions hardcode exact sequence-derived values (e.g. `"Artist 0"`) that depend on total call count up to that point — so a brand-new,
 otherwise-unrelated test file can silently break unrelated snapshots just
 by sorting earlier in collection order and using the same factory. Fix
 pattern: an autouse fixture local to the new test file(s) only that
@@ -83,12 +86,13 @@ own increment) and again in teardown, leaving zero net drift. Don't touch
 `conftest.py` or existing test files to fix this.
 
 ## Use `du -sh path/.[!.]* path/*`, not a bare `path/*` glob, when sizing what's actually large
+
 A plain shell glob silently skips dotfiles/dot-directories, which can dwarf
 everything else being measured (a hidden worktrees directory carrying
-several full `node_modules` copies was 4.7GB and invisible to a `du -sh
-repo/*` sanity check before excluding things from a Docker build context).
+several full `node_modules` copies was 4.7GB and invisible to a `du -sh repo/*` sanity check before excluding things from a Docker build context).
 
 ## `position: sticky` and `overflow` interact in two non-obvious, easy-to-get-backwards ways
+
 (1) A sticky element always paints in front of ordinary in-flow siblings
 regardless of DOM order or a descendant's own z-index — `position: sticky`
 unconditionally establishes a stacking context, so anything positioned
@@ -105,6 +109,7 @@ measuring `getBoundingClientRect()` at multiple offsets — a static
 screenshot at one scroll position won't reveal a broken sticky context.
 
 ## A new wrapper placed around an existing effect can silently fight that effect's own CSS
+
 When component B is later wrapped around component A, check whether B's own
 CSS (especially `overflow`) contradicts something A was deliberately built
 without. A hover-zoom effect was built with no `overflow: hidden` on its own
@@ -114,9 +119,9 @@ component added two rounds later wrapped around it out of habit with
 already contained its image), silently re-clipping the hover-zoom it wrapped.
 
 ## Verify a deploy against real evidence before assuming the code is wrong
+
 A user report of "none of these changes seem to have taken effect" should
-first be checked against the deploy itself — `gh run list`/`gh run view
---log` for the right commit SHA, the live bundle content via `curl`, and
+first be checked against the deploy itself — `gh run list`/`gh run view --log` for the right commit SHA, the live bundle content via `curl`, and
 response headers (`Last-Modified` matching the deploy timestamp,
 `cf-cache-status` not edge-cached) — before assuming the code is broken.
 One such report turned out to be a real deploy that genuinely shipped the
@@ -125,8 +130,29 @@ visible once a live Playwright pass (not just curl) was used to drive the
 page.
 
 ## Check for existing `data-testid` collisions before reusing a naming convention
+
 Before giving a new component a testid that follows an existing naming
 pattern (e.g. `<feature>-queue`), grep for whether a sibling component
 already uses that exact string — especially one that stays mounted (hidden)
 after its tab loses focus, which can produce two simultaneously-mounted
 elements sharing one testid the instant a user switches tabs.
+
+## prettier@2.7.1's markdown formatter can silently corrupt text on a second pass
+
+Running prettier on an already-prettier-formatted `.md` file is not
+guaranteed to be a no-op: a real non-idempotency bug turns bare
+`node_modules`-style intraword-underscore text into `node*modules`, and
+`_italic_` emphasis into a broken `\_italic*`, with no error — it just
+writes wrong content. Reproduced deterministically (not flaky) by adding
+new prose to `docs/infrastructure.md` and running `pre-commit run prettier`/`npx prettier --write` twice in a row. Fix was to reword the two
+trip points (wrap the bare `node_modules` mention in backticks, swap
+`_hidden_` for `**hidden**`) rather than fight the formatter, then verify
+by running the hook an extra time and confirming zero further diff before
+trusting it as a stable fixed point. Most `docs/*.md` files in this repo
+still have pre-existing prettier drift (predates this bug, out of scope to
+mass-fix) — the pre-commit hook is now actually installed on this machine
+(`pip install --user pre-commit && pre-commit install`, written into the
+shared `.git/hooks/pre-commit` so it applies across every worktree of this
+repo), so the next session that touches one of those drifted files should
+diff prettier's output for corruption like this rather than committing it
+blindly.

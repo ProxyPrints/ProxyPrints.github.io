@@ -4,6 +4,7 @@
 project gets sent off to be physically printed.
 
 ## What it does
+
 - A NotMPC ordering tab mirroring the MakePlayingCards tab's 3-step
   structure. NotMPC.com flow steps have a TODO for manual verification —
   sourced from an automated site read, not a manual walkthrough.
@@ -15,6 +16,7 @@ project gets sent off to be physically printed.
   licensed) in `frontend/public/`.
 
 ## Why not emoji flags
+
 Deliberately not raw unicode emoji flags (🇨🇦🇨🇳🇺🇸): Windows' default emoji
 font (Segoe UI Emoji) has no flag glyphs at all, so Windows browsers would
 render plain letter pairs ("CA"/"CN"/"US") instead of a flag. The flags
@@ -26,11 +28,13 @@ Windows-emoji reasoning was already satisfied by "not emoji" rather than
 requiring hand-rolled SVG specifically.
 
 ## Key files
+
 - `frontend/src/components/FinishedMyProject.tsx`
 - `frontend/src/components/flags.tsx`
 - `frontend/public/*.svg` (vendored flag icons)
 
 ## Status
+
 Confirmed live. Verified end-to-end via a temporary Playwright test reusing
 this repo's MSW mock infra (`tests/test-utils.ts` + `src/mocks/handlers.ts`)
 reaching the Print! tab and screenshotting the tab bar — all 3 flags
@@ -38,5 +42,6 @@ rendered correctly; test file removed after verification (not a permanent
 addition).
 
 ## Known gaps
+
 - The NotMPC flow steps still carry a TODO for manual verification against
   the real site (currently based on an automated read only).

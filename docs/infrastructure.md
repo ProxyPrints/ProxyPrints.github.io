@@ -19,11 +19,11 @@ them.
   `.dockerignore` at all until it was added — every rebuild was uploading
   the entire repo (`frontend/node_modules`, `image-cdn/node_modules`, etc.)
   regardless of which service changed. Added a denylist-style
-  `.dockerignore` (frontend build artifacts, image-cdn node*modules,
+  `.dockerignore` (frontend build artifacts, image-cdn `node_modules`,
   desktop-tool, github-release-reverse-proxy, cloudflare-static-site,
   schemas, mypy/ruff caches, test-results, `.git`, and **`.claude`** — the
   last one is the one that actually mattered: `.claude/worktrees/` is a
-  \_hidden* top-level directory, invisible to a plain `du -sh repo/*` sanity
+  **hidden** top-level directory, invisible to a plain `du -sh repo/*` sanity
   check, and was carrying a full `frontend/node_modules` per worktree
   (~1GB each). See [[lessons.md]] for the general `du` gotcha. Net effect: a
   rebuild that previously spent 25+ minutes uploading a ~2GB context now
@@ -187,13 +187,27 @@ fork-specific commits (branding, feature work, telemetry removal, this
 fork's own CI) that must never leak into an upstream PR. Diff the resulting
 branch against `upstream/master` before pushing to confirm scope.
 
-Four PRs were opened this way (#463–466), all reviewed same-day by the
+Five PRs were opened this way (#463–467), all reviewed same-day by the
 upstream maintainer (ndepaola): #463 (lazy-load PDFGenerator) and #465
 (image-CDN CORS fix) are open; #464 (pdf.js canvas preview) and #466
 (bucket/worker thumbnail routing) were closed after the maintainer
-explained the existing behavior was deliberate design, not a bug. All four
-reviews asked for hand-written PR descriptions going forward, not
-AI-generated ones.
+explained the existing behavior was deliberate design, not a bug; #467
+(frontend toSearchable "the"-stripping fix, completing backend PR #460)
+was opened 2026-07-13. All reviews so far have asked for hand-written PR
+descriptions going forward, not AI-generated ones — none of #463/#465/#467's
+PR bodies contain an AI-disclosure paragraph; the actual AI-assistance
+signal in this workflow is the Co-Authored-By trailer on the commit
+itself, not PR body text.
+
+#467 is also a variant on the cherry-pick convention above: our own fork
+had already fixed the identical bug in its own processing.ts (commit
+206a0266, mirroring backend PR #460), but that fork commit was not
+cherry-picked upstream — its message/context was fork-specific
+(references "our fork", "our master"). Instead the same two-line logical
+fix was hand-reapplied directly against upstream/master's own current
+tree. Cherry-pick remains the right default when a fix commit's content
+and narrative both port cleanly; hand-reapply when the original commit's
+framing doesn't.
 
 Notes if #463/#465 are revisited: #463's description incorrectly claimed a
 `{show && <PDFGenerator/>}` gate in `PDFGeneratorModal.tsx` was pre-existing

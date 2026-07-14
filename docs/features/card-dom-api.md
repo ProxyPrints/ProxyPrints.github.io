@@ -4,6 +4,7 @@ Additive, generic DOM hooks for external tooling/testing/accessibility.
 Deliberately has no reference to any specific external tool by name.
 
 ## What it does
+
 `frontend/src/common/cardDom.ts` exports `getCardDataAttributes`/
 `getCardSelectedEventDetail`, both sourced from the `CardDocument` object
 the frontend already holds (no new fetches). Spread onto `Card.tsx`'s
@@ -22,6 +23,7 @@ confirmed (prev/next arrows or grid selector), with the same fields
 (camelCased: `setCode`/`collectorNumber`) in `event.detail`.
 
 ### Printing-candidate extension
+
 The printing-tag candidate grids (`PrintingTagQueue.tsx`'s standalone
 queue and `PrintingTagPicker.tsx`'s embedded picker in
 `CardDetailedViewModal.tsx`) carry a sibling helper,
@@ -36,6 +38,7 @@ same printing — resolving that question is the entire point of the UI.
 The "No match" button intentionally carries none of these attributes.
 
 ## Key files
+
 - `frontend/src/common/cardDom.ts`
 - `frontend/src/components/Card.tsx`, `CardSlot.tsx`,
   `CardDetailedViewModal.tsx`
@@ -45,6 +48,7 @@ The "No match" button intentionally carries none of these attributes.
   additive-only)
 
 ## Status
+
 Documented in `frontend/docs/dom-api.md`. Test coverage in
 `CardSlot.spec.ts`, `PrintingTagQueue.spec.ts`, `PrintingTagPicker.spec.ts`
 — real Playwright runs against the mocked backend, not just typecheck.

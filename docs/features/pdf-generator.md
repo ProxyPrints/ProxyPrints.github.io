@@ -5,9 +5,10 @@ and fixed here, verified deployed and working end-to-end (Playwright, real
 headed Chromium + Firefox, real backend + image-cdn).
 
 ## Bugs found and fixed
+
 1. **Phantom PDF download on opening the editor**, before ever touching the
    PDF tab. `@react-pdf/renderer` eagerly instantiates a Yoga WASM binary at
-   *import* time, not render time, and `PDFGenerator` was statically
+   _import_ time, not render time, and `PDFGenerator` was statically
    imported. Fixed via `next/dynamic({ssr: false})` + `mountOnEnter` on the
    `Tab.Pane`s that mount it (`PDFGeneratorModal.tsx`,
    `FinishedMyProject.tsx`, `ProjectEditor.tsx`).
@@ -28,12 +29,14 @@ headed Chromium + Firefox, real backend + image-cdn).
    was configured for this fork at all. See [[image-cdn.md]].
 
 ## Thumbnail routing (bucket → worker fallback)
+
 See [[image-cdn.md]]'s "What it does" section — `pdfImage.ts` tries the R2
 bucket first via HEAD request for small/large tiers, falls back to the
 Worker on a miss. Full-resolution always goes through the Worker, matching
 upstream.
 
 ## "HEAD request fails" console noise — investigated, not a bug
+
 A cross-session report flagged failed `HEAD` requests to
 `img.proxyprints.ca/<id>-small-google_drive` when opening the PDF tab live.
 Reproduced directly (headed Chromium Playwright, live site): confirmed
@@ -47,6 +50,7 @@ and the card renders correctly. Cosmetic console noise only — don't spend
 time "fixing" it.
 
 ## Key files
+
 - `frontend/src/features/pdf/PDFGenerator.tsx`,
   `frontend/src/features/pdf/pdfImage.ts`
 - `frontend/src/features/pdf/PDFCanvasPreview.tsx`
@@ -55,6 +59,7 @@ time "fixing" it.
   `FinishedMyProject.tsx`, `ProjectEditor.tsx`
 
 ## Status
+
 All three original bugs verified fixed and deployed. Upstream PR #463 (lazy
 WASM load fix) is open; #464 (canvas preview) and #466 (thumbnail routing)
 were closed after the maintainer said the existing upstream behavior is

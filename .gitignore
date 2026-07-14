@@ -195,6 +195,6 @@ docker/nginx/certs/
 docker/django/env.txt
 *.bak
 /.claude/
-CLAUDE.md
+CLAUDE.local.md
 WORKERS.md
 journal/
