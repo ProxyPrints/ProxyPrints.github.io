@@ -335,6 +335,10 @@ class TagVoteStatus(models.TextChoices):
     RESOLVED_REJECT = "resolved_reject", gettext_lazy("Resolved (reject)")
     CONTESTED = "contested", gettext_lazy("Contested")
     UNRESOLVED = "unresolved", gettext_lazy("Unresolved")
+    # sensitive tags only (Tag.moderation_class == SENSITIVE): the crowd's consensus clears
+    # every normal threshold but awaits a privileged (moderator/admin) co-sign - served by the
+    # moderation queue, excluded from the public tag queue. See docs/features/moderation.md.
+    PENDING_APPROVAL = "pending_approval", gettext_lazy("Pending approval")
 
 
 class Card(models.Model):
@@ -374,7 +378,8 @@ class Card(models.Model):
         max_length=10, choices=ArtistVoteStatus.choices, default=ArtistVoteStatus.UNRESOLVED, db_index=True
     )
     # Per-tag vote status, written by cardpicker.tag_consensus.resolve_and_persist_tag_votes:
-    # {tag.name: "resolved_apply" | "resolved_reject" | "contested" | "unresolved"}. An absent
+    # {tag.name: "resolved_apply" | "resolved_reject" | "contested" | "unresolved" |
+    # "pending_approval" (sensitive tags awaiting a privileged co-sign)}. An absent
     # key means no votes at all for that tag on this card - entries are never written for a
     # tag with zero votes. Bookkeeping alongside the existing `tags` array/overlay-merge logic
     # above, not a replacement for it. INVARIANT: keys are `Tag.name` values, which must stay

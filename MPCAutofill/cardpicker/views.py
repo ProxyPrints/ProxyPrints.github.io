@@ -154,6 +154,7 @@ from cardpicker.tag_consensus import (
     resolve_tag,
 )
 from cardpicker.tags import Tags
+from cardpicker.vote_consensus import _PendingPrivileged
 
 logger = logging.getLogger(__name__)
 
@@ -994,9 +995,12 @@ def post_submit_artist_vote(request: HttpRequest) -> HttpResponse:
 
 
 def _build_tag_consensus_entry(card: Card, tag: Tag) -> TagConsensusEntry:
+    resolved = resolve_tag(card, tag)
     return TagConsensusEntry(
         tagName=tag.name,
-        resolvedPolarity=resolve_tag(card, tag),
+        # a sensitive tag awaiting privileged approval reads as unresolved to the public
+        # consensus surface - the pending state is a moderation-queue concern, not a voter one
+        resolvedPolarity=None if isinstance(resolved, _PendingPrivileged) else resolved,
         tally=[
             TagVoteTallyEntry(polarity=entry["polarity"], count=entry["count"])
             for entry in get_tag_vote_tally(card, tag)

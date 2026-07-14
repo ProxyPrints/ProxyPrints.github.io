@@ -7,42 +7,67 @@ from cardpicker.models import (
     Card,
     CardTagVote,
     Tag,
+    TagModerationClass,
     TagVoteStatus,
     VotePolarity,
     VoteSource,
 )
+from cardpicker.moderation import (
+    get_moderator_user_ids,
+    is_privileged_vote,
+    privileged_weight,
+)
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
+    PENDING_PRIVILEGED,
     VoteTuple,
+    _PendingPrivileged,
     contested_queryset,
     resolve_weighted_consensus,
 )
 
 
-def resolve_tag(card: Card, tag: Tag) -> int | None:
+def resolve_tag(card: Card, tag: Tag, moderator_ids: set[int] | None = None) -> int | None | _PendingPrivileged:
     """
     Reconciles all `CardTagVote` votes cast for (card, tag) into a single resolved polarity
     (`VotePolarity.APPLY` or `VotePolarity.NOT_APPLICABLE`), or `None` if unresolved. Built on
     the same shared `resolve_weighted_consensus` core as printing/artist consensus - the only
     difference is the outcome space is the two `VotePolarity` values rather than a printing or
     artist id.
+
+    Sensitive tags (`tag.moderation_class == SENSITIVE`) resolve through the privileged gate:
+    a crowd consensus without a privileged (moderator/admin) vote backing the winning polarity
+    returns `PENDING_PRIVILEGED` instead of resolving - see `resolve_weighted_consensus` and
+    docs/features/moderation.md. Standard tags never see the gate (`require_privileged=False`,
+    the core's default) and behave exactly as before this layer existed.
+
+    `moderator_ids` lets a caller resolving many tags share one group-membership query
+    (`get_moderator_user_ids()`); fetched here when not supplied.
     """
     votes = list(card.tag_votes.filter(tag=tag))
     if not votes:
         return None
-    vote_tuples = [
-        VoteTuple(
-            outcome_key=vote.polarity,
-            weight=_SOURCE_WEIGHTS[vote.source],
-            is_human_backed=vote.source != VoteSource.AI,
+    if moderator_ids is None:
+        moderator_ids = get_moderator_user_ids()
+    vote_tuples = []
+    for vote in votes:
+        privileged = is_privileged_vote(vote.source, vote.user_id, moderator_ids)
+        vote_tuples.append(
+            VoteTuple(
+                outcome_key=vote.polarity,
+                weight=privileged_weight(vote.source, privileged),
+                is_human_backed=vote.source != VoteSource.AI,
+                is_privileged=privileged,
+            )
         )
-        for vote in votes
-    ]
     resolved = resolve_weighted_consensus(
-        vote_tuples, min_weight=settings.PRINTING_TAG_MIN_VOTES, min_share=settings.PRINTING_TAG_MIN_SHARE
+        vote_tuples,
+        min_weight=settings.PRINTING_TAG_MIN_VOTES,
+        min_share=settings.PRINTING_TAG_MIN_SHARE,
+        require_privileged=tag.moderation_class == TagModerationClass.SENSITIVE,
     )
-    if resolved is None:
-        return None
+    if resolved is None or resolved is PENDING_PRIVILEGED:
+        return resolved  # type: ignore[return-value]  # narrowed to None | _PendingPrivileged here
     assert isinstance(resolved, int)
     return resolved
 
@@ -63,9 +88,17 @@ def resolve_and_persist_tag_votes(card: Card) -> None:
 
     Also writes `card.tag_vote_statuses` (a JSONField, not ES-indexed, so no re-index needed
     for this part alone): for every voted tag, one of RESOLVED_APPLY/RESOLVED_REJECT/CONTESTED/
-    UNRESOLVED. CONTESTED vs. UNRESOLVED is distinguished locally from the polarities already
-    fetched below (no extra query) - contested means both polarities are present with votes;
-    unresolved means only one side has voted so far, or thresholds simply aren't cleared yet.
+    UNRESOLVED/PENDING_APPROVAL. CONTESTED vs. UNRESOLVED is distinguished locally from the
+    polarities already fetched below (no extra query) - contested means both polarities are
+    present with votes; unresolved means only one side has voted so far, or thresholds simply
+    aren't cleared yet.
+
+    PENDING_APPROVAL (sensitive tags only) records that the crowd's consensus is awaiting a
+    privileged co-sign - `card.tags` is deliberately NOT touched for it, so a pending tag has
+    zero search consequences. The pending -> resolved transition needs no special handling
+    here: a privileged vote arriving later re-enters this same function, `resolve_tag` then
+    returns a real polarity, and the ordinary APPLY/REJECT branches below merge `card.tags`
+    and push to Elasticsearch exactly as for any resolution.
     """
     from cardpicker.documents import (
         reindex_card_safely,  # local import - avoids a top-level ES dependency in this module
@@ -82,9 +115,12 @@ def resolve_and_persist_tag_votes(card: Card) -> None:
     statuses = dict(card.tag_vote_statuses)
     tags_changed = False
     statuses_changed = False
+    moderator_ids = get_moderator_user_ids()  # one query, shared across every tag resolved below
     for tag_id, tag in tags_by_id.items():
-        resolved = resolve_tag(card, tag)
-        if resolved == VotePolarity.APPLY:
+        resolved = resolve_tag(card, tag, moderator_ids=moderator_ids)
+        if resolved is PENDING_PRIVILEGED:
+            new_status = TagVoteStatus.PENDING_APPROVAL
+        elif resolved == VotePolarity.APPLY:
             new_status = TagVoteStatus.RESOLVED_APPLY
             if tag.name not in current_tags:
                 current_tags.add(tag.name)
@@ -139,28 +175,42 @@ def get_resolved_tag_overlay(card_ids: Iterable[int]) -> dict[int, dict[str, int
     corrections into freshly re-scanned `Card.tags` before they're written, so a scheduled
     re-scan can never silently revert a resolved tag-vote correction back to whatever the
     filename currently says.
+
+    Applies the same privileged gate as `resolve_tag`: a sensitive tag whose crowd consensus
+    is still awaiting a privileged co-sign (PENDING_PRIVILEGED) is simply absent from the
+    overlay, exactly like an unresolved one - this is the second resolution path into
+    `Card.tags`, and skipping the gate here would let a scheduled re-scan apply an unapproved
+    sensitive change that the interactive path correctly held as pending.
     """
     rows = CardTagVote.objects.filter(card_id__in=card_ids).values(
-        "card_id", "tag_id", "tag__name", "source", "polarity"
+        "card_id", "tag_id", "tag__name", "tag__moderation_class", "source", "polarity", "user_id"
     )
+    moderator_ids = get_moderator_user_ids()
     grouped: dict[tuple[int, int], list[VoteTuple]] = defaultdict(list)
     tag_names: dict[int, str] = {}
+    tag_requires_privileged: dict[int, bool] = {}
     for row in rows:
         tag_names[row["tag_id"]] = row["tag__name"]
+        tag_requires_privileged[row["tag_id"]] = row["tag__moderation_class"] == TagModerationClass.SENSITIVE
+        privileged = is_privileged_vote(row["source"], row["user_id"], moderator_ids)
         grouped[(row["card_id"], row["tag_id"])].append(
             VoteTuple(
                 outcome_key=row["polarity"],
-                weight=_SOURCE_WEIGHTS[row["source"]],
+                weight=privileged_weight(row["source"], privileged),
                 is_human_backed=row["source"] != VoteSource.AI,
+                is_privileged=privileged,
             )
         )
 
     overlay: dict[int, dict[str, int]] = defaultdict(dict)
     for (card_id, tag_id), vote_tuples in grouped.items():
         resolved = resolve_weighted_consensus(
-            vote_tuples, min_weight=settings.PRINTING_TAG_MIN_VOTES, min_share=settings.PRINTING_TAG_MIN_SHARE
+            vote_tuples,
+            min_weight=settings.PRINTING_TAG_MIN_VOTES,
+            min_share=settings.PRINTING_TAG_MIN_SHARE,
+            require_privileged=tag_requires_privileged[tag_id],
         )
-        if resolved is not None:
+        if resolved is not None and resolved is not PENDING_PRIVILEGED:
             assert isinstance(resolved, int)
             overlay[card_id][tag_names[tag_id]] = resolved
     return dict(overlay)
@@ -184,7 +234,9 @@ def get_tag_review_queue_pairs() -> list[tuple[int, str]]:
     Candidate set is the *persisted* `Card.tag_vote_statuses` state (CONTESTED/UNRESOLVED
     entries), not raw `CardTagVote` existence - so a pair that's already resolved
     (RESOLVED_APPLY/RESOLVED_REJECT) stays out of the queue even as unrelated new votes trickle
-    in on the same card afterwards. `tag_vote_statuses` is a small per-card JSON dict with no
+    in on the same card afterwards. PENDING_APPROVAL pairs are deliberately absent from this
+    status filter too: they belong to the moderator-only queue
+    (`get_pending_approval_queue_pairs`), not the public one. `tag_vote_statuses` is a small per-card JSON dict with no
     native per-key DB filter for "any key has value X", so this materializes candidates eagerly
     in Python - same rationale as `vote_consensus.contested_queryset`: the candidate set is
     always a small fraction of the catalogue.
