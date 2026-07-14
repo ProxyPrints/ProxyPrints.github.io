@@ -14,11 +14,18 @@ from cardpicker.models import (
     CardReport,
     CardReportReason,
     CardTagVote,
+    TagModerationClass,
     TagVoteStatus,
     VotePolarity,
 )
 from cardpicker.sensitive_tags import seed_sensitive_tags
-from cardpicker.tests.factories import CardFactory, TagFactory
+from cardpicker.tag_consensus import resolve_and_persist_tag_votes
+from cardpicker.tests.factories import (
+    CardFactory,
+    CardReportFactory,
+    CardTagVoteFactory,
+    TagFactory,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -281,3 +288,108 @@ class TestRejectUntrustedOrigin:
         )
         assert response.status_code == 403
         assert CardTagVote.objects.count() == 0
+
+
+def make_pending_pair(tag_name: str = "sensitive-tag", vote_count: int = 2) -> tuple:
+    """A (card, tag) pair parked in pending_approval by anonymous crowd votes."""
+    card = CardFactory(tags=[])
+    tag = TagFactory(name=tag_name, moderation_class=TagModerationClass.SENSITIVE)
+    for index in range(vote_count):
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, anonymous_id=f"crowd-{tag_name}-{index}")
+    resolve_and_persist_tag_votes(card)
+    card.refresh_from_db()
+    assert card.tag_vote_statuses[tag.name] == TagVoteStatus.PENDING_APPROVAL
+    return card, tag
+
+
+class TestPostModerationQueue:
+    @pytest.fixture(autouse=True)
+    def autouse_django_settings(self, django_settings):
+        pass
+
+    @staticmethod
+    def fetch(client, page: int = 1):
+        return client.post(reverse(views.post_moderation_queue), {"page": page}, content_type="application/json")
+
+    def test_anonymous_is_403(self, client):
+        response = self.fetch(client)
+        assert response.status_code == 403
+        assert response.json()["name"] == "Moderator access required"
+
+    def test_authenticated_non_moderator_is_403(self, client, plain_user):
+        client.force_login(plain_user)
+        assert self.fetch(client).status_code == 403
+
+    def test_moderator_sees_pending_pairs_with_report_counts_and_excerpts(self, client, moderator_user):
+        card, tag = make_pending_pair(tag_name="NSFW")
+        CardReportFactory(card=card, reason=CardReportReason.NSFW, text="way too spicy")
+        CardReportFactory(card=card, reason=CardReportReason.NSFW, text="")
+        CardReportFactory(card=card, reason=CardReportReason.NSFW, text="really not ok")
+
+        client.force_login(moderator_user)
+        response = self.fetch(client)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["hits"] == 1
+        (item,) = body["items"]
+        assert item["card"]["identifier"] == card.identifier
+        assert item["tagName"] == "NSFW"
+        assert item["reportCount"] == 3
+        # newest-first, empty text excluded
+        assert item["reportExcerpts"] == ["really not ok", "way too spicy"]
+
+    def test_only_pending_pairs_are_served(self, client, moderator_user):
+        make_pending_pair(tag_name="pending-tag")
+        # a resolved standard pair and a contested sensitive pair must not appear
+        standard_card = CardFactory(tags=[])
+        standard_tag = TagFactory(name="standard-tag")
+        CardTagVoteFactory(card=standard_card, tag=standard_tag, polarity=VotePolarity.APPLY, anonymous_id="a-1")
+        CardTagVoteFactory(card=standard_card, tag=standard_tag, polarity=VotePolarity.APPLY, anonymous_id="a-2")
+        resolve_and_persist_tag_votes(standard_card)
+
+        client.force_login(moderator_user)
+        body = self.fetch(client).json()
+        assert [item["tagName"] for item in body["items"]] == ["pending-tag"]
+
+    def test_most_reported_first_zero_report_pairs_last(self, client, moderator_user):
+        barely_reported, _ = make_pending_pair(tag_name="low-res")
+        organic, _ = make_pending_pair(tag_name="sensitive-b")
+        heavily_reported, _ = make_pending_pair(tag_name="incorrect-info")
+        CardReportFactory(card=barely_reported, reason=CardReportReason.LOW_QUALITY)
+        for _ in range(3):
+            CardReportFactory(card=heavily_reported, reason=CardReportReason.WRONG_CARD)
+
+        client.force_login(moderator_user)
+        body = self.fetch(client).json()
+        assert [item["tagName"] for item in body["items"]] == ["incorrect-info", "low-res", "sensitive-b"]
+
+    def test_moderator_approval_via_submit_tag_vote_resolves_and_clears_the_queue(self, client, moderator_user):
+        # the end-to-end transition: Approve in the UI is an ordinary submitTagVote POST from
+        # the moderator's session - the pair resolves through the normal pass and leaves the
+        # queue, and the card's tags gain the sensitive tag
+        card, tag = make_pending_pair(tag_name="NSFW")
+        client.force_login(moderator_user)
+        vote = client.post(
+            reverse(views.post_submit_tag_vote),
+            {"identifier": card.identifier, "anonymousId": "mod-anon", "tagName": tag.name, "polarity": 1},
+            content_type="application/json",
+        )
+        assert vote.status_code == 200
+
+        card.refresh_from_db()
+        assert card.tag_vote_statuses[tag.name] == TagVoteStatus.RESOLVED_APPLY
+        assert card.tags == [tag.name]
+        assert self.fetch(client).json()["hits"] == 0
+
+    def test_moderator_reject_also_clears_the_queue(self, client, moderator_user):
+        card, tag = make_pending_pair(tag_name="NSFW")
+        client.force_login(moderator_user)
+        client.post(
+            reverse(views.post_submit_tag_vote),
+            {"identifier": card.identifier, "anonymousId": "mod-anon", "tagName": tag.name, "polarity": -1},
+            content_type="application/json",
+        )
+        card.refresh_from_db()
+        assert card.tag_vote_statuses[tag.name] == TagVoteStatus.RESOLVED_REJECT
+        assert card.tags == []
+        assert self.fetch(client).json()["hits"] == 0

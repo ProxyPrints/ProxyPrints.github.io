@@ -23,6 +23,7 @@ from typing import Any, Callable, TypeVar, cast
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse, JsonResponse
 
+from cardpicker.moderation import is_moderator
 from cardpicker.schema_types import ErrorResponse
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -48,4 +49,22 @@ def reject_untrusted_origin(view: F) -> F:
     return cast(F, wrapper)
 
 
-__all__ = ["reject_untrusted_origin"]
+def require_moderator(view: F) -> F:
+    """
+    403 unless the requesting session belongs to a member of the moderators group (see
+    cardpicker.moderation.is_moderator). This is the actual enforcement behind the frontend's
+    moderation tab - hiding the tab is presentation, this is security. Deliberately 403 (not
+    a redirect): the API is consumed cross-origin by fetch, never navigated to.
+    """
+
+    @wraps(view)
+    def wrapper(request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponse:
+        if not is_moderator(request.user):
+            error = ErrorResponse(name="Moderator access required", message="This endpoint is for moderators only.")
+            return JsonResponse(error.model_dump(), status=403)
+        return view(request, *args, **kwargs)
+
+    return cast(F, wrapper)
+
+
+__all__ = ["reject_untrusted_origin", "require_moderator"]

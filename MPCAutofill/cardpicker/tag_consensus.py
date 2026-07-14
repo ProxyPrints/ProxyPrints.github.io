@@ -1,10 +1,13 @@
+import datetime as dt
 from collections import defaultdict, deque
 from typing import Iterable, TypedDict
 
 from django.conf import settings
+from django.db.models import Count, Min
 
 from cardpicker.models import (
     Card,
+    CardReport,
     CardTagVote,
     Tag,
     TagModerationClass,
@@ -17,6 +20,7 @@ from cardpicker.moderation import (
     is_privileged_vote,
     privileged_weight,
 )
+from cardpicker.sensitive_tags import REPORT_REASON_TO_TAG_NAME
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
     PENDING_PRIVILEGED,
@@ -280,6 +284,52 @@ def get_tag_review_queue_pairs() -> list[tuple[int, str]]:
     return interleaved
 
 
+def get_pending_approval_queue_pairs() -> list[tuple[int, str]]:
+    """
+    (card_id, tag_name) pairs whose persisted status is PENDING_APPROVAL - the candidate set
+    for the moderator-only queue (`POST 2/moderationQueue/`), disjoint by construction from
+    `get_tag_review_queue_pairs`'s public candidate set. Same eager-materialization rationale
+    as that function.
+
+    Ordering: most-reported first (report counts from `CardReport` rows whose reason maps onto
+    the pair's tag - see sensitive_tags.REPORT_REASON_TO_TAG_NAME), then oldest first report
+    first among equals (longest-waiting), with organically-pending pairs (votes but zero
+    reports) last, by card_id for determinism.
+    """
+    candidates = [
+        (card_id, tag_name)
+        for card_id, statuses in Card.objects.exclude(tag_vote_statuses={}).values_list("id", "tag_vote_statuses")
+        for tag_name, status in statuses.items()
+        if status == TagVoteStatus.PENDING_APPROVAL
+    ]
+    if not candidates:
+        return []
+
+    tag_name_by_reason = REPORT_REASON_TO_TAG_NAME
+    rows = (
+        CardReport.objects.filter(card_id__in={card_id for card_id, _ in candidates}, reason__in=tag_name_by_reason)
+        .values("card_id", "reason")
+        .annotate(report_count=Count("id"), first_reported_at=Min("created_at"))
+    )
+    stats: dict[tuple[int, str], tuple[int, dt.datetime | None]] = {
+        (row["card_id"], tag_name_by_reason[row["reason"]]): (row["report_count"], row["first_reported_at"])
+        for row in rows
+    }
+
+    def sort_key(pair: tuple[int, str]) -> tuple[int, bool, dt.datetime, int]:
+        report_count, first_reported_at = stats.get(pair, (0, None))
+        # the boolean flag keeps aware datetimes from ever being compared against the naive
+        # placeholder used for never-reported pairs
+        return (
+            -report_count,
+            first_reported_at is None,
+            first_reported_at or dt.datetime.min,
+            pair[0],
+        )
+
+    return sorted(candidates, key=sort_key)
+
+
 __all__ = [
     "resolve_tag",
     "resolve_and_persist_tag_votes",
@@ -287,5 +337,6 @@ __all__ = [
     "get_resolved_tag_overlay",
     "get_contested_tag_pairs",
     "get_tag_review_queue_pairs",
+    "get_pending_approval_queue_pairs",
     "TagVoteTallyEntry",
 ]

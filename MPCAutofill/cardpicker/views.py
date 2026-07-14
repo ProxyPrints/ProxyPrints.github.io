@@ -17,7 +17,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Case, IntegerField, Q, When
+from django.db.models import Case, Count, IntegerField, Q, When
 from django.http import (
     FileResponse,
     HttpRequest,
@@ -107,6 +107,9 @@ from cardpicker.schema_types import Kind as VoteQueueKind
 from cardpicker.schema_types import (
     Language,
     LanguagesResponse,
+    ModerationQueueItem,
+    ModerationQueueRequest,
+    ModerationQueueResponse,
     NewCardsFirstPage,
     NewCardsFirstPagesResponse,
     NewCardsPageResponse,
@@ -148,11 +151,12 @@ from cardpicker.search.search_functions import (
     retrieve_card_identifiers,
     retrieve_cardback_identifiers,
 )
-from cardpicker.security import reject_untrusted_origin
+from cardpicker.security import reject_untrusted_origin, require_moderator
 from cardpicker.sensitive_tags import REPORT_REASON_TO_TAG_NAME
 from cardpicker.sources.api import PathTraversalError, resolve_within_root
 from cardpicker.sources.source_types import SourceTypeChoices
 from cardpicker.tag_consensus import (
+    get_pending_approval_queue_pairs,
     get_tag_review_queue_pairs,
     get_tag_vote_tally,
     resolve_and_persist_tag_votes,
@@ -1212,6 +1216,66 @@ def post_vote_queue(request: HttpRequest) -> HttpResponse:
         items = [VoteQueueItem(card=card.serialise(), tagName=None) for card in paginator.page(req.page).object_list]
 
     return JsonResponse(VoteQueueResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump())
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_moderation_queue(request: HttpRequest) -> HttpResponse:
+    """
+    The moderator-only review queue (docs/features/moderation.md): (card, sensitive-tag)
+    pairs whose status is pending_approval, most-reported first, each with its report count
+    and up to three newest free-text excerpts from matching reports. Approve/Reject in the
+    frontend cast the moderator's ordinary tag vote through 2/submitTagVote/ - this endpoint
+    only serves the queue. 403 for anyone outside the Moderators group (the frontend hides
+    the tab too, but hidden is not secured - this is the enforcement).
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ModerationQueueRequest.model_validate(json.loads(request.body))
+    pairs = get_pending_approval_queue_pairs()
+    paginator = _paginate(pairs, req.page)
+    page_pairs = paginator.page(req.page).object_list
+
+    page_card_ids = [card_id for card_id, _ in page_pairs]
+    cards_by_id = {card.pk: card for card in Card.objects.filter(pk__in=page_card_ids)}
+    tag_name_by_reason = REPORT_REASON_TO_TAG_NAME
+
+    report_counts: dict[tuple[int, str], int] = {}
+    for row in (
+        CardReport.objects.filter(card_id__in=page_card_ids, reason__in=tag_name_by_reason)
+        .values("card_id", "reason")
+        .annotate(n=Count("id"))
+    ):
+        report_counts[(row["card_id"], tag_name_by_reason[row["reason"]])] = row["n"]
+
+    excerpts: dict[tuple[int, str], list[str]] = defaultdict(list)
+    excerpt_rows = (
+        CardReport.objects.filter(card_id__in=page_card_ids, reason__in=tag_name_by_reason)
+        .exclude(text="")
+        .order_by("-created_at")
+        .values("card_id", "reason", "text")
+    )
+    for excerpt_row in excerpt_rows:
+        key = (excerpt_row["card_id"], tag_name_by_reason[excerpt_row["reason"]])
+        if len(excerpts[key]) < 3:
+            excerpts[key].append(excerpt_row["text"])
+
+    items = [
+        ModerationQueueItem(
+            card=cards_by_id[card_id].serialise(),
+            tagName=tag_name,
+            reportCount=report_counts.get((card_id, tag_name), 0),
+            reportExcerpts=excerpts.get((card_id, tag_name), []),
+        )
+        for card_id, tag_name in page_pairs
+    ]
+    return JsonResponse(
+        ModerationQueueResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump()
+    )
 
 
 @csrf_exempt
