@@ -12,6 +12,15 @@
  * header comment for why) - and see the same file for why these are a separate taxonomy
  * from cardpicker.default_tags.DEFAULT_TAGS and why renaming any of them is a breaking
  * change.
+ *
+ * Graceful degradation for an instance where that command hasn't been run yet: filters the
+ * six chips down to whichever tags `useGetTagsQuery` (the existing, already-cached `2/tags/`
+ * query used elsewhere for the search-filter tag tree - no new endpoint/fetch introduced
+ * here) actually reports. While that query is still loading, shows all six optimistically
+ * rather than flashing an empty strip - a stale-positive chip just fails the same way an
+ * unseeded one always would (a caught, toasted "Vote failed"), it's not a worse outcome than
+ * today's baseline. Once loaded, unseeded chips are hidden entirely rather than shown
+ * disabled, since there's nothing useful for a voter to do with one that will only ever 400.
  */
 
 import React, { useState } from "react";
@@ -22,7 +31,7 @@ import Row from "react-bootstrap/Row";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { useAppDispatch } from "@/common/types";
 import { ChipCard } from "@/features/attributeVoting/ChipCard";
-import { APISubmitTagVote } from "@/store/api";
+import { APISubmitTagVote, useGetTagsQuery } from "@/store/api";
 import { setNotification } from "@/store/slices/toastsSlice";
 
 const APPLY = 1;
@@ -51,6 +60,12 @@ export function NoMatchReasonStrip({
   const dispatch = useAppDispatch();
   const [submittingTagName, setSubmittingTagName] = useState<string | null>(
     null
+  );
+  const { data: existingTags } = useGetTagsQuery();
+  const existingTagNames =
+    existingTags != null ? new Set(existingTags.map((tag) => tag.name)) : null;
+  const visibleReasons = NO_MATCH_REASONS.filter(
+    (reason) => existingTagNames == null || existingTagNames.has(reason.tagName)
   );
 
   const choose = (tagName: string) => {
@@ -83,7 +98,7 @@ export function NoMatchReasonStrip({
     <div data-testid="no-match-reason-strip">
       <h6>Why no match?</h6>
       <Row className="g-2" xs={2} md={3}>
-        {NO_MATCH_REASONS.map((reason) => (
+        {visibleReasons.map((reason) => (
           <Col key={reason.tagName}>
             <ChipCard
               label={reason.label}

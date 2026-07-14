@@ -7,6 +7,8 @@ import {
   printingTagQueueOneResult,
   submitPrintingTagNoMatch,
   submitTagVoteResolvesToApply,
+  tagsAllNoMatchReasonTags,
+  tagsSomeNoMatchReasonTags,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
@@ -22,6 +24,7 @@ test.describe("NoMatchReasonStrip tests", () => {
       printingCandidatesTwoResults,
       printingConsensusUnresolved,
       submitPrintingTagNoMatch,
+      tagsAllNoMatchReasonTags,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page, "printingQueue");
@@ -39,6 +42,32 @@ test.describe("NoMatchReasonStrip tests", () => {
     await expect(page.getByTestId("attribute-voting-panel")).not.toBeVisible();
   });
 
+  test("hides chips for reason tags that don't exist server-side yet", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      printingTagQueueOneResult,
+      printingCandidatesTwoResults,
+      printingConsensusUnresolved,
+      submitPrintingTagNoMatch,
+      tagsSomeNoMatchReasonTags, // only custom-art and ai-art exist
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "printingQueue");
+
+    await page.getByText("No match").click();
+
+    const strip = page.getByTestId("no-match-reason-strip");
+    await expect(strip).toBeVisible();
+    await expect(strip.getByText("Custom art")).toBeVisible();
+    await expect(strip.getByText("AI art")).toBeVisible();
+    await expect(strip.getByText("Altered frame")).not.toBeVisible();
+    await expect(strip.getByText("Upscaled")).not.toBeVisible();
+    await expect(strip.getByText("No collector line")).not.toBeVisible();
+    await expect(strip.getByText("Non-English")).not.toBeVisible();
+  });
+
   test("tapping a reason chip submits a positive tag vote and advances the queue", async ({
     page,
     network,
@@ -50,6 +79,7 @@ test.describe("NoMatchReasonStrip tests", () => {
       printingConsensusUnresolved,
       submitPrintingTagNoMatch,
       submitTagVoteResolvesToApply,
+      tagsAllNoMatchReasonTags,
       ...defaultHandlers
     );
     page.on("request", async (request) => {
@@ -79,6 +109,7 @@ test.describe("NoMatchReasonStrip tests", () => {
       printingCandidatesTwoResults,
       printingConsensusUnresolved,
       submitPrintingTagNoMatch,
+      tagsAllNoMatchReasonTags,
       ...defaultHandlers
     );
     page.on("request", (request) => {

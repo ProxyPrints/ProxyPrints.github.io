@@ -545,6 +545,40 @@ export const tagsTwoResults = http.get(buildRoute("2/tags/"), () =>
   HttpResponse.json({ tags: ["Tag 1", "Tag 2"] }, { status: 200 })
 );
 
+const serialisedTag = (name: string) => ({
+  name,
+  aliases: [],
+  isEnabledByDefault: true,
+  parent: null,
+  children: [],
+});
+
+// all six no-match reason tags exist server-side - NoMatchReasonStrip shows every chip
+export const tagsAllNoMatchReasonTags = http.get(buildRoute("2/tags/"), () =>
+  HttpResponse.json(
+    {
+      tags: [
+        "custom-art",
+        "altered-frame",
+        "upscaled",
+        "ai-art",
+        "no-collector-line",
+        "non-english",
+      ].map(serialisedTag),
+    },
+    { status: 200 }
+  )
+);
+
+// only two of the six reason tags exist server-side (seed_no_match_reason_tags hasn't fully
+// run, or ran on an older version of the taxonomy) - NoMatchReasonStrip should hide the rest
+export const tagsSomeNoMatchReasonTags = http.get(buildRoute("2/tags/"), () =>
+  HttpResponse.json(
+    { tags: ["custom-art", "ai-art"].map(serialisedTag) },
+    { status: 200 }
+  )
+);
+
 //# endregion
 
 //# region sample cards
