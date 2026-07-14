@@ -36,6 +36,7 @@ import {
   Kind as VoteQueueKind,
   Language,
   LanguagesResponse,
+  ModerationQueueResponse,
   NewCardsFirstPage,
   NewCardsFirstPagesResponse,
   NewCardsPageResponse,
@@ -46,12 +47,15 @@ import {
   PrintingCandidatesResponse,
   PrintingConsensusResponse,
   PrintingTagQueueResponse,
+  Reason as ReportReason,
+  ReportCardResponse,
   SampleCardsResponse,
   SourcesResponse,
   Tag,
   TagConsensusResponse,
   TagsResponse,
   VoteQueueResponse,
+  WhoamiResponse,
 } from "@/common/schema_types";
 import {
   CardDocument,
@@ -194,6 +198,15 @@ export const api = createApi({
       providesTags: [QueryTags.BackendSpecific],
       keepUnusedDataFor: 0.0, // never cache results
     }),
+    getWhoami: builder.query<WhoamiResponse, void>({
+      // credentials: "include" so the moderator session cookie rides along cross-origin -
+      // the ONLY read this changes; anonymous users just get authenticated: false back.
+      // Third-party backends without CORS_ALLOW_CREDENTIALS reject credentialed requests
+      // outright, so consumers must treat an error result as "anonymous, feature disabled"
+      // rather than surfacing it (see AuthWidget).
+      query: () => ({ url: `2/whoami/`, method: "GET", credentials: "include" }),
+      providesTags: [QueryTags.BackendSpecific],
+    }),
   }),
 });
 
@@ -215,7 +228,15 @@ const {
   useGetNewCardsFirstPageQuery: useRawGetNewCardsFirstPageQuery,
   useGetNewCardsPageQuery: useRawGetNewCardsPageQuery,
   usePostExploreSearchQuery: useRawPostExploreSearchQuery,
+  useGetWhoamiQuery: useRawGetWhoamiQuery,
 } = api;
+
+export function useGetWhoamiQuery() {
+  const remoteBackendConfigured = useRemoteBackendConfigured();
+  return useRawGetWhoamiQuery(undefined, {
+    skip: !remoteBackendConfigured,
+  });
+}
 
 export function useGetImportSitesQuery() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
@@ -500,12 +521,17 @@ export async function APISubmitTagVote(
   identifier: string,
   anonymousId: string,
   tagName: string,
-  polarity: number
+  polarity: number,
+  // "include" attaches the moderator session cookie so the backend records the vote's user
+  // (making it privileged at resolution time). Deliberately opt-in per call: third-party
+  // backends without CORS_ALLOW_CREDENTIALS reject credentialed requests outright, so the
+  // default must stay "same-origin" for every pre-existing anonymous voting surface.
+  credentials: RequestCredentials = "same-origin"
 ): Promise<TagConsensusResponse["tags"][number]> {
   const rawResponse = await fetch(formatURL(backendURL, "/2/submitTagVote/"), {
     method: "POST",
     body: JSON.stringify({ identifier, anonymousId, tagName, polarity }),
-    credentials: "same-origin",
+    credentials,
     headers: getCSRFHeader(),
   });
   return rawResponse.json().then((content) => {
@@ -513,6 +539,57 @@ export async function APISubmitTagVote(
       return content as TagConsensusResponse["tags"][number];
     }
     throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APIReportCard(
+  backendURL: string,
+  identifier: string,
+  anonymousId: string,
+  reason: ReportReason,
+  text?: string
+): Promise<ReportCardResponse> {
+  const rawResponse = await fetch(formatURL(backendURL, "/2/reportCard/"), {
+    method: "POST",
+    body: JSON.stringify({ identifier, anonymousId, reason, text }),
+    credentials: "include",
+    headers: getCSRFHeader(),
+  });
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.reported != null) {
+      return content as ReportCardResponse;
+    }
+    // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+export async function APIGetModerationQueue(
+  backendURL: string,
+  page: number
+): Promise<ModerationQueueResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/moderationQueue/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ page }),
+      credentials: "include", // the backend 403s without a moderator session
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.items != null) {
+      return content as ModerationQueueResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
   });
 }
 
