@@ -38,6 +38,14 @@
         "type": "string"
       },
       "description": "The tags which the cards must *not* have to be included in search results"
+    },
+    "fullArtOnly": {
+      "type": "boolean",
+      "description": "Opt-in filter. When true, excludes cards whose community-resolved printing (printingTagStatus == RESOLVED) is confirmed not full-art. Cards without a resolved printing are never excluded by this filter - they're unknowns, not mismatches."
+    },
+    "borderlessOnly": {
+      "type": "boolean",
+      "description": "Opt-in filter. When true, excludes cards whose community-resolved printing (printingTagStatus == RESOLVED) is confirmed not borderless. Cards without a resolved printing are never excluded by this filter - they're unknowns, not mismatches."
     }
   },
   "required": [
@@ -46,7 +54,9 @@
     "maximumSize",
     "languages",
     "includesTags",
-    "excludesTags"
+    "excludesTags",
+    "fullArtOnly",
+    "borderlessOnly"
   ],
   "additionalProperties": false
 }

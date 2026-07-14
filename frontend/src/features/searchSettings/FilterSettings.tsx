@@ -11,6 +11,7 @@ import { FilterSettings as FilterSettingsType } from "@/common/types";
 
 import { DPIFilter } from "../filters/DPIFilter";
 import { LanguageFilter } from "../filters/LanguageFilter";
+import { ResolvedAttributeFilter } from "../filters/ResolvedAttributeFilter";
 import { SizeFilter } from "../filters/SizeFilter";
 import { TagFilter } from "../filters/TagFilter";
 
@@ -70,6 +71,11 @@ export function FilterSettings({
         allowedLanguages={allowedLanguages}
       />
       <TagFilter
+        filterSettings={filterSettings}
+        setFilterSettings={setFilterSettings}
+      />
+      <br />
+      <ResolvedAttributeFilter
         filterSettings={filterSettings}
         setFilterSettings={setFilterSettings}
       />

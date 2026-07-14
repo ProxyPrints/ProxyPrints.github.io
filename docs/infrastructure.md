@@ -165,6 +165,17 @@ work happens in per-session branches/worktrees, never directly on
 `master`, and the user sequences merges one at a time. Solo sessions doing
 small, well-understood changes may still push `master` directly.
 
+**When a PR is actually opened** (multi-worker branch, or upstreaming),
+use `.github/pull_request_template.md`'s exact structure — `# Description`
+then `# Checklist` — rather than a free-form summary. The checklist items
+(pre-commit hooks installed, tests updated, manual testing steps, docs
+updated) should be filled in with real specifics, not left as placeholder
+checkboxes. `gh pr create --body` and `gh pr edit --body` both accept this
+directly; if `gh pr edit` fails with a GraphQL "Projects (classic)"
+deprecation error (a known `gh` CLI bug unrelated to the edit itself), fall
+back to `gh api repos/<owner>/<repo>/pulls/<n> -X PATCH -f body="..."`,
+which hits the REST API directly and isn't affected.
+
 ## Upstreaming to chilli-axe/mpc-autofill
 
 `upstream` remote = `https://github.com/chilli-axe/mpc-autofill.git`. Cut

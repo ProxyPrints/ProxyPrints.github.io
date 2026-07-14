@@ -180,6 +180,40 @@ test("non-dfc line is processed correctly", () => {
   ]);
 });
 
+test("line with set code and collector number is processed correctly", () => {
+  expect(processLine("1 Lightning Bolt (2ED) 162", dfcPairs, false)).toEqual([
+    1,
+    {
+      query: {
+        cardType: Card,
+        query: "lightning bolt",
+        expansionCode: "2ED",
+        collectorNumber: "162",
+      },
+      selectedImage: undefined,
+      selected: false,
+    },
+    null,
+  ]);
+});
+
+test("line with set code only (no collector number) is processed correctly", () => {
+  expect(processLine("1 Lightning Bolt (2ED)", dfcPairs, false)).toEqual([
+    1,
+    {
+      query: {
+        cardType: Card,
+        query: "lightning bolt",
+        expansionCode: "2ED",
+        collectorNumber: undefined,
+      },
+      selectedImage: undefined,
+      selected: false,
+    },
+    null,
+  ]);
+});
+
 test("non-dfc cardback line is processed correctly", () => {
   expect(processLine("3x b:Black Lotus", dfcPairs, false)).toEqual([
     3,

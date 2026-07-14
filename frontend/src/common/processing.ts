@@ -28,7 +28,7 @@ import {
   SlotProjectMembers,
 } from "@/common/types";
 
-import { CardType } from "./schema_types";
+import { CanonicalCard, CardType, PrintingTagStatus } from "./schema_types";
 
 /**
  * Clean any instances of doubled-up whitespace from `text`.
@@ -461,3 +461,40 @@ export const areSearchQueriesEqual = (
 export const doesSearchQueryFilterOnPrinting = (
   searchQuery: SearchQuery | undefined | null
 ) => searchQuery?.expansionCode || searchQuery?.collectorNumber;
+
+/**
+ * Whether the given `canonicalCard`/`printingTagStatus` (as carried by a `CardDocument`)
+ * represents a community-vote-resolved printing that matches the set(/collector number)
+ * carried by `searchQuery` (as parsed from a decklist import line) - and if so, the label to
+ * show in the match indicator (item 4 of the vote-consumption feature). Returns `null` when
+ * there's nothing to show: no set data in the query, no resolved printing on the card, or a
+ * resolved printing that simply doesn't match - callers must render no indicator in all of
+ * these cases, not an error state.
+ */
+export const getPrintingMatchLabel = (
+  searchQuery: SearchQuery | null | undefined,
+  canonicalCard: CanonicalCard | null | undefined,
+  printingTagStatus: PrintingTagStatus | null | undefined
+): string | null => {
+  if (
+    searchQuery?.expansionCode == null ||
+    canonicalCard == null ||
+    printingTagStatus !== PrintingTagStatus.Resolved
+  ) {
+    return null;
+  }
+  if (
+    canonicalCard.expansionCode.toUpperCase() !==
+    searchQuery.expansionCode.toUpperCase()
+  ) {
+    return null;
+  }
+  const expansionCode = canonicalCard.expansionCode.toUpperCase();
+  if (
+    searchQuery.collectorNumber != null &&
+    canonicalCard.collectorNumber === searchQuery.collectorNumber
+  ) {
+    return `matched to ${expansionCode} #${canonicalCard.collectorNumber} by community tags`;
+  }
+  return `matched to ${expansionCode} by community tags`;
+};

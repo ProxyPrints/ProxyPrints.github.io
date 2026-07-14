@@ -15,6 +15,7 @@ from cardpicker.schema_types import CanonicalArtistClass as SerialisedCanonicalA
 from cardpicker.schema_types import CanonicalCardClass as SerialisedCanonicalCard
 from cardpicker.schema_types import Card as SerialisedCard
 from cardpicker.schema_types import CardType, ChildElement, Game, PrintingCandidate
+from cardpicker.schema_types import PrintingTagStatus as SerialisedPrintingTagStatus
 from cardpicker.schema_types import Source as SerialisedSource
 from cardpicker.schema_types import SourceContribution, SourceType
 from cardpicker.schema_types import Tag as SerialisedTag
@@ -448,6 +449,7 @@ class Card(models.Model):
             canonicalArtist=resolved_artist.serialise() if resolved_artist is not None else None,
             canonicalArtistIsFromVoteOnly=artist_source == "inferred_canonical_artist",
             canonicalArtistSource=artist_source,
+            printingTagStatus=SerialisedPrintingTagStatus(self.printing_tag_status),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -479,10 +481,24 @@ class Card(models.Model):
         )
 
     def get_expansion_code(self) -> str | None:
-        return self.canonical_card.expansion.code.upper() if self.canonical_card else None
+        # `canonical_card` (a confirmed indexing match, set at ingestion time from source-file
+        # tags) takes priority; falling back to `inferred_canonical_card` only when the printing
+        # tag vote system has actually resolved consensus means this fallback (and therefore
+        # this indexed field, which `get_search`'s expansion_code/collector_number term filter
+        # reads) never fires for UNRESOLVED/NO_MATCH cards - mirrors the same fallback chain
+        # `Card.serialise()` already uses for the display-facing `canonicalCard` field.
+        if self.canonical_card is not None:
+            return self.canonical_card.expansion.code.upper()
+        if self.printing_tag_status == PrintingTagStatus.RESOLVED and self.inferred_canonical_card is not None:
+            return self.inferred_canonical_card.expansion.code.upper()
+        return None
 
     def get_collector_number(self) -> str | None:
-        return self.canonical_card.collector_number if self.canonical_card else None
+        if self.canonical_card is not None:
+            return self.canonical_card.collector_number
+        if self.printing_tag_status == PrintingTagStatus.RESOLVED and self.inferred_canonical_card is not None:
+            return self.inferred_canonical_card.collector_number
+        return None
 
     class Meta:
         ordering = ["-priority"]

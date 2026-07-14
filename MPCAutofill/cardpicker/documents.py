@@ -39,4 +39,16 @@ class CardSearch(Document):
 
     def get_queryset(self) -> QuerySet[Card]:
         # https://django-elasticsearch-dsl.readthedocs.io/en/latest/fields.html#handle-relationship-with-nestedfield-objectfield
-        return super().get_queryset().select_related("canonical_card", "canonical_card__expansion")
+        # `inferred_canonical_card` is eager-loaded alongside `canonical_card` because
+        # `get_expansion_code`/`get_collector_number` (below) now fall back to it for
+        # RESOLVED cards - without this, reindexing would N+1 query per RESOLVED card.
+        return (
+            super()
+            .get_queryset()
+            .select_related(
+                "canonical_card",
+                "canonical_card__expansion",
+                "inferred_canonical_card",
+                "inferred_canonical_card__expansion",
+            )
+        )

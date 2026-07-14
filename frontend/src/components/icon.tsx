@@ -17,9 +17,15 @@ export const RightPaddedIcon = ({
 export const Icon = ({
   bootstrapIconName,
   className,
+  ...rest
 }: {
   bootstrapIconName: string;
   className?: string;
-}) => {
-  return <i className={classnames(className, `bi bi-${bootstrapIconName}`)} />;
+} & React.ComponentPropsWithoutRef<"i">) => {
+  return (
+    <i
+      className={classnames(className, `bi bi-${bootstrapIconName}`)}
+      {...rest}
+    />
+  );
 };

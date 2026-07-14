@@ -46,7 +46,11 @@ export const compareFilterSettings = (
     : 0) +
   (filterSettings.maximumDPI !== defaultFilterSettings.maximumDPI ? 1 : 0) +
   (filterSettings.maximumSize !== defaultFilterSettings.maximumSize ? 1 : 0) +
-  (filterSettings.minimumDPI !== defaultFilterSettings.minimumDPI ? 1 : 0);
+  (filterSettings.minimumDPI !== defaultFilterSettings.minimumDPI ? 1 : 0) +
+  (filterSettings.fullArtOnly !== defaultFilterSettings.fullArtOnly ? 1 : 0) +
+  (filterSettings.borderlessOnly !== defaultFilterSettings.borderlessOnly
+    ? 1
+    : 0);
 export const compareSearchTypeSettings = (
   searchTypeSettings: SearchTypeSettings,
   defaultSearchTypeSettings: SearchTypeSettings

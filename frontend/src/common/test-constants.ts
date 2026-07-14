@@ -7,6 +7,7 @@ import {
   CanonicalArtist,
   CardType as CardTypeSchema,
   PrintingCandidate,
+  PrintingTagStatus,
   SourceType,
 } from "@/common/schema_types";
 import {
@@ -96,6 +97,7 @@ export const cardDocument1: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
 };
 
 export const cardDocument2: CardDocument = {
@@ -119,6 +121,7 @@ export const cardDocument2: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
 };
 
 export const cardDocument3: CardDocument = {
@@ -142,6 +145,7 @@ export const cardDocument3: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
 };
 
 export const cardDocument4: CardDocument = {
@@ -165,6 +169,7 @@ export const cardDocument4: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
 };
 
 export const cardDocument5: CardDocument = {
@@ -188,6 +193,7 @@ export const cardDocument5: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
 };
 
 export const cardDocument6: CardDocument = {
@@ -211,6 +217,7 @@ export const cardDocument6: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
 };
 
 // Card from source2 (for multi-source grid selector tests)
@@ -235,6 +242,7 @@ export const cardDocument7: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
 };
 
 // Cards with canonicalCard data (for CanonicalCardFilter tests)
@@ -259,6 +267,7 @@ export const cardDocument8: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
   canonicalCard: {
     expansionCode: "xyz",
     expansionName: "XYZ Set",
@@ -293,6 +302,7 @@ export const cardDocument9: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
   canonicalCard: {
     expansionCode: "xyz",
     expansionName: "XYZ Set",
@@ -327,6 +337,7 @@ export const cardDocument10: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
   canonicalCard: {
     expansionCode: "abc",
     expansionName: "ABC Set",
@@ -362,7 +373,42 @@ export const cardDocument11: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
   canonicalCard: null,
+};
+
+// Community-vote-resolved printing match (2ED #162) - for decklist set/collector-number
+// re-rank + match indicator tests (Playwright: ImportText.spec.ts)
+export const cardDocument12: CardDocument = {
+  identifier: "1fF2gG3hH4iI5jJ6kK7lL8mM9nN0oO",
+  cardType: CardTypeSchema.Card,
+  name: "Lightning Bolt",
+  priority: 0,
+  source: sourceDocument1.key,
+  sourceName: sourceDocument1.name,
+  sourceId: sourceDocument1.pk,
+  sourceVerbose: sourceDocument1.name,
+  sourceType: SourceType.GoogleDrive,
+  sourceExternalLink: undefined,
+  dpi: 1200,
+  searchq: "lightning bolt",
+  extension: "png",
+  dateCreated: "1st January, 2000",
+  dateModified: "1st January, 2000",
+  size: 10_000_000,
+  smallThumbnailUrl: "",
+  mediumThumbnailUrl: "",
+  language: "EN",
+  tags: [],
+  printingTagStatus: PrintingTagStatus.Resolved,
+  canonicalCard: {
+    expansionCode: "2ED",
+    expansionName: "Unlimited Edition",
+    collectorNumber: "162",
+    identifier: "2ed-162",
+    smallThumbnailUrl: "",
+    mediumThumbnailUrl: "",
+  },
 };
 
 //# endregion
@@ -459,6 +505,8 @@ export const defaultSettings: SearchSettings = {
     languages: [],
     includesTags: [],
     excludesTags: ["NSFW"],
+    fullArtOnly: false,
+    borderlessOnly: false,
   },
 };
 

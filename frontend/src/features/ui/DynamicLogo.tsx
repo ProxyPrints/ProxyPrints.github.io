@@ -6,7 +6,7 @@ import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
 import { QueryTags } from "@/common/constants";
-import { CardType } from "@/common/schema_types";
+import { CardType, PrintingTagStatus } from "@/common/schema_types";
 import { CardDocument, useAppDispatch } from "@/common/types";
 import { Spinner } from "@/components/Spinner";
 import {
@@ -228,6 +228,7 @@ const SampleCardDocument: CardDocument = {
   mediumThumbnailUrl: "",
   language: "EN",
   tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
 };
 
 export function DynamicLogo() {
