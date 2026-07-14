@@ -25,6 +25,7 @@ import {
   PrintingConsensusResponse,
 } from "@/common/schema_types";
 import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
+import { SetIcon } from "@/components/SetIcon";
 import { Spinner } from "@/components/Spinner";
 import { AttributeVotingPanel } from "@/features/attributeVoting/AttributeVotingPanel";
 import { NoMatchReasonStrip } from "@/features/attributeVoting/NoMatchReasonStrip";
@@ -572,6 +573,11 @@ export function PrintingTagQueue() {
                     {consensus?.resolvedPrinting != null && (
                       <span>
                         Current consensus:{" "}
+                        <SetIcon
+                          expansionCode={
+                            consensus.resolvedPrinting.expansionCode
+                          }
+                        />{" "}
                         {consensus.resolvedPrinting.expansionCode.toUpperCase()}{" "}
                         {consensus.resolvedPrinting.collectorNumber}
                       </span>
@@ -656,6 +662,7 @@ export function PrintingTagQueue() {
                             </ZoomableThumbnail>
                           </ArtPlaceholder>
                           <div>
+                            <SetIcon expansionCode={candidate.expansionCode} />{" "}
                             {candidate.expansionCode.toUpperCase()}{" "}
                             {candidate.collectorNumber}
                           </div>
