@@ -156,3 +156,31 @@ shared `.git/hooks/pre-commit` so it applies across every worktree of this
 repo), so the next session that touches one of those drifted files should
 diff prettier's output for corruption like this rather than committing it
 blindly.
+
+## "Icons not rendering" can be a data gate, not a rendering bug — check the API payload before the font pipeline
+
+The Keyrune set-symbol icons live inside `CanonicalCardFilter`, which
+renders nothing at all unless at least one card document from `/2/cards/`
+has non-null `canonicalCard` — a Postgres-side field set only by
+`import_canonical_card_data` followed by an `update_database` re-ingestion
+(confirmed match) or by a resolved printing-tag vote. A prod DB where those
+never ran shows no filter section anywhere, which presents exactly like a
+frontend asset/font failure. Diagnose from the data end first: one look at
+a `/2/cards/` response (`"canonicalCard": null` everywhere?) beats auditing
+the entire font pipeline. The asset chain itself was verified good
+end-to-end (postinstall vendoring → Pages artifact → glyph render), and
+`getKeyruneChar` already lowercases codes, so case mismatch is a dead end
+here.
+
+## Cloud sandboxes can't reach the live site — deploy-run logs are the next-best ground truth
+
+Claude Code web sessions' egress allowlist blocks proxyprints.ca (and
+nearly everything else), so "check the live site" is impossible there.
+Two substitutes proved decisive: the `deploy-frontend.yml` run log prints
+the full tar listing of the exact artifact GitHub Pages serves (proves
+whether a file shipped), and an `npm ci && npm run build` replica of the
+workflow plus Playwright against `localhost` (allowed) exercises that same
+artifact in a real browser (Chromium at
+`executablePath: /opt/pw-browsers/chromium`; default Playwright download is
+absent). State clearly in the report that live behavior itself was not
+observed.
