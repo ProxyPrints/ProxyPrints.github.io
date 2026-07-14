@@ -3,6 +3,7 @@ chardet~=5.1.0
 click==8.0.4
 defusedxml~=0.7.1
 Django~=4.2.3
+django-allauth[socialaccount]~=65.4
 django-cors-headers~=3.14.0
 django-elasticsearch-dsl~=7.3.0
 django-bulk-sync~=3.3.0

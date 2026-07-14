@@ -1,0 +1,16 @@
+{
+  "title": "Report Card Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "identifier": { "type": "string" },
+    "anonymousId": { "type": "string" },
+    "reason": {
+      "type": "string",
+      "enum": ["nsfw", "low_quality", "wrong_card", "broken_image", "other"]
+    },
+    "text": { "type": "string", "maxLength": 280 }
+  },
+  "required": ["identifier", "anonymousId", "reason"],
+  "additionalProperties": false
+}

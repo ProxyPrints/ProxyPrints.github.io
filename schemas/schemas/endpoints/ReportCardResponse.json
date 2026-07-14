@@ -1,0 +1,11 @@
+{
+  "title": "Report Card Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "reported": { "type": "boolean" },
+    "voteCast": { "type": "boolean" }
+  },
+  "required": ["reported", "voteCast"],
+  "additionalProperties": false
+}

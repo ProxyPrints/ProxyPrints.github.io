@@ -1,0 +1,16 @@
+{
+  "title": "Moderation Queue Item",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "card": { "$ref": "./Card.json" },
+    "tagName": { "type": "string" },
+    "reportCount": { "type": "integer" },
+    "reportExcerpts": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["card", "tagName", "reportCount", "reportExcerpts"],
+  "additionalProperties": false
+}

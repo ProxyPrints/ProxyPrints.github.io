@@ -61,6 +61,7 @@ from cardpicker.models import (
     VoteSource,
     summarise_contributions,
 )
+from cardpicker.moderation import is_moderator
 from cardpicker.printing_candidates import (
     CANDIDATE_QUERY_LIMIT,
     CANDIDATE_RESULT_LIMIT,
@@ -132,6 +133,7 @@ from cardpicker.schema_types import (
     VoteQueueRequest,
     VoteQueueResponse,
     VoteTallyEntry,
+    WhoamiResponse,
 )
 from cardpicker.search.sanitisation import to_searchable
 from cardpicker.search.search_functions import (
@@ -1111,3 +1113,37 @@ def post_vote_queue(request: HttpRequest) -> HttpResponse:
         items = [VoteQueueItem(card=card.serialise(), tagName=None) for card in paginator.page(req.page).object_list]
 
     return JsonResponse(VoteQueueResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump())
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def get_whoami(request: HttpRequest) -> HttpResponse:
+    """
+    Report the requesting session's authentication state and roles, for the frontend's
+    moderation UI gating (which is presentation only - the moderation endpoints enforce the
+    Moderators group server-side regardless of what this reports). Anonymous voters never call
+    this with a session, so for them it just reports the feature flags.
+
+    Cross-origin callers must fetch with credentials:'include' or the session cookie is never
+    attached and this always reports anonymous. Read-only (GET, no state change), so unlike the
+    session-consuming POST views this needs no Origin check - the worst a cross-site caller
+    could learn is their own login state, which CORS already restricts to allowlisted origins.
+
+    `loginUrl`/`logoutUrl` are relative to this backend's root; the frontend prefixes its
+    configured backend URL and appends `?next=<frontend URL>` to round-trip back (see
+    accounts.adapter.FrontendRedirectAccountAdapter for what makes that redirect safe).
+    """
+
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+    authenticated = request.user.is_authenticated
+    return JsonResponse(
+        WhoamiResponse(
+            authenticated=authenticated,
+            username=request.user.get_username() if authenticated else None,
+            moderator=is_moderator(request.user),
+            discordEnabled=settings.DISCORD_AUTH_ENABLED,
+            loginUrl="/accounts/discord/login/" if settings.DISCORD_AUTH_ENABLED else None,
+            logoutUrl="/accounts/logout/" if authenticated else None,
+        ).model_dump()
+    )

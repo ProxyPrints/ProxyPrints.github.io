@@ -8,6 +8,7 @@ from testcontainers.elasticsearch import ElasticSearchContainer
 from testcontainers.postgres import PostgresContainer
 
 from django.conf import settings as conf_settings
+from django.contrib.auth.models import Group, User
 from django.core.management import call_command
 
 from cardpicker.integrations.game.base import GameIntegration
@@ -414,6 +415,28 @@ def grandchild_tag(db, child_tag) -> Tag:
 @pytest.fixture()
 def another_tag_in_data(db) -> Tag:
     return TagFactory(name="Another Tag in Data")
+
+
+# endregion
+
+# region auth/moderation fixtures
+
+
+@pytest.fixture()
+def moderators_group(db) -> Group:
+    return Group.objects.create(name=conf_settings.MODERATORS_GROUP_NAME)
+
+
+@pytest.fixture()
+def moderator_user(db, moderators_group) -> User:
+    user = User.objects.create_user(username="mod", password="password")
+    user.groups.add(moderators_group)
+    return user
+
+
+@pytest.fixture()
+def plain_user(db) -> User:
+    return User.objects.create_user(username="pleb", password="password")
 
 
 # endregion
