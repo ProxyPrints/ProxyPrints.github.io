@@ -951,6 +951,15 @@ export const submitTagVoteResolvesToApply = http.post(
     )
 );
 
+export const reportCardSuccess = http.post(buildRoute("2/reportCard/"), () =>
+  HttpResponse.json({ reported: true, voteCast: true }, { status: 200 })
+);
+
+export const reportCardRateLimited = http.post(
+  buildRoute("2/reportCard/"),
+  () => HttpResponse.json(createError("Report limit reached"), { status: 429 })
+);
+
 //# endregion
 
 //# region presets
