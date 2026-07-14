@@ -19,6 +19,12 @@ from cardpicker.tags import Tags
 from cardpicker.utils import TEXT_BOLD, TEXT_END
 
 MAX_WORKERS = 5
+# Bounds concurrent *sources* being scanned at once (each of which internally opens its own
+# MAX_WORKERS-sized pool above for its own folder tree) - not to be confused with MAX_WORKERS.
+# At MAX_SOURCE_WORKERS=8 x MAX_WORKERS=5, peak concurrent Drive API threads is ~40, well under
+# the 200 req/s quota ceiling (see execute_google_drive_api_call) given today's multi-second
+# per-call latencies - this is latency-bound, not quota-bound.
+MAX_SOURCE_WORKERS = 8
 DPI_HEIGHT_RATIO = 300 / 1110  # 300 DPI for image of vertical resolution 1110 pixels
 
 
@@ -260,6 +266,22 @@ def update_database_for_source(source: Source, source_type: Type[SourceType], ro
     bulk_sync_objects(source=source, cards=cards)
 
 
+def _update_database_for_source_isolated(
+    source: Source, source_type: Type[SourceType], root_folder: Folder, tags: Tags
+) -> None:
+    """
+    One source's failure (e.g. a stray duplicate-key race against a concurrent scan of the
+    same source, or a since-deleted file) must never abort every other source's scan - each
+    `Card.objects.filter(source=source)` in `bulk_sync_objects` only ever touches that one
+    source's own rows, so sources are already fully independent units of work; this just makes
+    sure an exception in one doesn't propagate past its own future.
+    """
+    try:
+        update_database_for_source(source=source, source_type=source_type, root_folder=root_folder, tags=tags)
+    except Exception as e:
+        print(f"Failed to update source {TEXT_BOLD}{source.name}{TEXT_END}: **{e}**")
+
+
 def update_database(source_key: Optional[str] = None) -> None:
     """
     Update the contents of the database against the configured sources.
@@ -294,11 +316,25 @@ def update_database(source_key: Optional[str] = None) -> None:
                 f"{TEXT_BOLD}{SourceTypeChoices[source_type_name].label}{TEXT_END}: "
                 f"{', '.join([f'{TEXT_BOLD}{x.name}{TEXT_END}' for x in grouped_sources])}\n"
             )
-            for grouped_source in grouped_sources:
-                if (root_folder := folders[grouped_source.key]) is not None:
-                    update_database_for_source(
-                        source=grouped_source, source_type=source_type, root_folder=root_folder, tags=tags
+            # Sources are scanned concurrently (bounded by MAX_SOURCE_WORKERS) - each is an
+            # independent unit of work (its own Drive folder tree, its own `Card` rows), so
+            # this only shortens wall-clock time; it doesn't change what gets written. Submitted
+            # up front and gathered at the end (rather than one-in-one-out) so a slow source
+            # never blocks the pool from picking up the next one.
+            with ThreadPoolExecutor(max_workers=MAX_SOURCE_WORKERS) as pool:
+                futures = [
+                    pool.submit(
+                        _update_database_for_source_isolated,
+                        source=grouped_source,
+                        source_type=source_type,
+                        root_folder=root_folder,
+                        tags=tags,
                     )
+                    for grouped_source in grouped_sources
+                    if (root_folder := folders[grouped_source.key]) is not None
+                ]
+                for future in futures:
+                    future.result()
                     print("")
 
 

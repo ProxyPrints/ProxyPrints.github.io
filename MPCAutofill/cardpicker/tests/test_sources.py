@@ -9,6 +9,7 @@ from django.utils.timezone import make_aware, make_naive
 from cardpicker.documents import CardSearch
 from cardpicker.models import CanonicalArtist, CanonicalCard, Card, VotePolarity
 from cardpicker.sources.api import Folder, Image
+from cardpicker.sources.source_types import SourceTypeChoices
 from cardpicker.sources.update_database import bulk_sync_objects, update_database
 from cardpicker.tags import Tags
 from cardpicker.tests import factories
@@ -367,6 +368,57 @@ class TestUpdateDatabase:
         update_database()
         pk_to_identifier_2 = {x.pk: x.identifier for x in Card.objects.all()}
         assert pk_to_identifier_1 == pk_to_identifier_2
+
+    def test_all_sources_scanned_concurrently_local_file(
+        self, transactional_db, settings, elasticsearch, tmp_path_factory
+    ):
+        # Local-file sources (no network) exercise the same all-sources outer loop the Google
+        # Drive-backed fixtures above do, but deterministically and without depending on the
+        # real test drives being reachable - see MAX_SOURCE_WORKERS in update_database.py.
+        # `transactional_db` (real commits, TRUNCATE-based cleanup) rather than the default
+        # rollback-wrapped `db` fixture - update_database() now spawns worker threads, each on
+        # its own DB connection, and writes from those connections aren't visible to (or from)
+        # a connection sitting inside `db`'s uncommitted wrapping transaction.
+        settings.TIME_ZONE = "UTC"
+        from cardpicker.tests.test_local_file_source import _make_png
+
+        roots = [tmp_path_factory.mktemp(f"source_{i}") for i in range(4)]
+        for i, root in enumerate(roots):
+            _make_png(root / f"Card {i}.png", height=1110)
+            factories.SourceFactory(source_type=SourceTypeChoices.LOCAL_FILE, identifier=str(root))
+
+        update_database()
+
+        names = set(Card.objects.values_list("name", flat=True))
+        assert names == {f"Card {i}" for i in range(len(roots))}
+
+    def test_one_source_failure_does_not_abort_the_others(
+        self, transactional_db, settings, elasticsearch, tmp_path_factory, monkeypatch
+    ):
+        settings.TIME_ZONE = "UTC"
+        from cardpicker.sources import update_database as update_database_module
+        from cardpicker.tests.test_local_file_source import _make_png
+
+        roots = [tmp_path_factory.mktemp(f"source_{i}") for i in range(3)]
+        sources = []
+        for i, root in enumerate(roots):
+            _make_png(root / f"Card {i}.png", height=1110)
+            sources.append(factories.SourceFactory(source_type=SourceTypeChoices.LOCAL_FILE, identifier=str(root)))
+        failing_source_key = sources[1].key
+
+        real_transform = update_database_module.transform_images_into_objects
+
+        def flaky_transform(source, images, tags):
+            if source.key == failing_source_key:
+                raise RuntimeError("simulated failure for one source")
+            return real_transform(source=source, images=images, tags=tags)
+
+        monkeypatch.setattr(update_database_module, "transform_images_into_objects", flaky_transform)
+
+        update_database()  # must not raise, despite one source failing
+
+        names = set(Card.objects.values_list("name", flat=True))
+        assert names == {"Card 0", "Card 2"}  # source 1's card was never written; 0 and 2 still were
 
     @pytest.mark.parametrize(
         "existing_cards, incoming_cards",

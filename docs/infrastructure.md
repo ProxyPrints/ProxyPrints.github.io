@@ -9,11 +9,80 @@ them.
 - `docker/` is built with `sudo docker compose -f docker-compose.prod.yml ...` (v2, space). docker-compose v1 (hyphen) is installed on the host but
   has a fatal `ContainerConfig` recreate bug — never use it.
 - `MPCAutofill/drives.csv` is baked into the django image at build time.
-  Editing the host file requires `up --build -d`. After that, import to the
-  DB via `manage.py import_sources`, then index via `manage.py update_database`. The file is gitignored and untracked (matches upstream,
-  which also tracks no drives.csv content) — see "History rewrite" below for
-  why this matters. If this machine is ever rebuilt, the real file must be
-  placed at `MPCAutofill/drives.csv` manually before `docker compose up --build`; it does not come from git.
+  Editing the host file requires `up --build -d`, which runs
+  `manage.py import_sources` automatically on every boot (cheap, local CSV
+  read, no network calls) to pick up the change. The file is gitignored and
+  untracked (matches upstream, which also tracks no drives.csv content) —
+  see "History rewrite" below for why this matters. If this machine is
+  ever rebuilt, the real file must be placed at `MPCAutofill/drives.csv`
+  manually before `docker compose up --build`; it does not come from git.
+  Indexing catalog content (`manage.py update_database`) no longer needs a
+  manual invocation after a rebuild — see "Startup vs. scheduled catalog
+  sync" below; run it manually only if you want synchronous confirmation
+  the catalog is populated before considering a rebuild done.
+
+### Startup vs. scheduled catalog sync
+
+`update_database` (rescans every configured source against its real
+backend — Google Drive, local filesystem, etc.) and `update_dfcs` used to
+run synchronously inside `docker/django/entrypoint.sh`, gated behind
+`migrate --check` ("did any migration just apply"). That's the wrong
+proxy for "does catalog content need rescanning" — a purely schema-only
+migration (e.g. adding one nullable column) would trigger the same full
+rescan as a migration that actually changes how cards are parsed.
+
+**Incident, 2026-07-14**: merging three PRs — one adding
+`Tag.display_name`, additive, unrelated to catalog content — triggered
+this gate on restart. Worker's container completed the full 254-source
+rescan cleanly in 22m8s (measured: 75% of that is Drive API listing
+calls, 25% is everything else — migrate/import_sources/diff-and-sync/
+update_dfcs). django's own copy of the same rescan crashed ~9 minutes in
+on an unhandled `IntegrityError` (re-inserting a `Card` row that already
+existed from an earlier scan) and stayed down until manually restarted —
+there's no `restart:` policy on these containers, and a stopped
+container's `docker compose logs` output looks identical to a slow one on
+casual inspection, which delayed catching it.
+
+**Fix**: the entrypoint now only ever runs `migrate` (always, fast,
+genuinely schema-blocking) and `import_sources` (always, cheap) before
+binding gunicorn — content scanning never blocks the API from coming up,
+regardless of how long it takes or whether it fails. Coverage for actual
+content sync:
+
+- **Steady state**: a daily `update_database` schedule and weekly
+  `update_dfcs`/`import_canonical_card_data` schedules already exist,
+  seeded via data migrations (`0043_auto_20250529_0233.py`,
+  `0048_auto_20260426_2140.py`) and run by the `worker` container's
+  `manage.py qcluster` process — confirmed via `django_q.models.Task`
+  history showing a full week of consecutive successful daily runs. This
+  was already working the entire time; the entrypoint's old boot-time
+  block was a redundant duplicate of it for every restart, not a
+  necessary fallback.
+- **Fresh bootstrap** (disaster recovery / a genuinely new instance):
+  django-q's `Schedule.next_run` defaults to `timezone.now()` at row
+  creation, so the very first `migrate` on a new instance schedules an
+  almost-immediate async first scan with zero entrypoint involvement.
+  `import_sources` additionally checks, after syncing `Source` rows, for
+  "sources exist but zero `Card` rows exist yet" and — only in that exact
+  case — enqueues one extra immediate async `update_database` run as a
+  safety net against the (unlikely) case where the daily schedule's first
+  firing loses the race against `import_sources` (which would otherwise
+  mean waiting a full 24h for the next scheduled attempt).
+- A per-source failure (like the crash above) is now isolated — one
+  source's exception is caught, logged, and skipped rather than aborting
+  the other ~250 sources' scans, whether run sequentially or (see below)
+  concurrently.
+- The previously fully-sequential per-source loop is now bounded-parallel
+  (`MAX_SOURCE_WORKERS` concurrent sources, each already internally using
+  its own small worker pool for its own folder tree) — the Drive API's
+  20,000 calls/100s quota has enough headroom that this is latency-bound,
+  not quota-bound, so this is expected to cut a full rescan's wall-clock
+  time substantially without new quota risk.
+
+None of this changes what data ends up in the catalog or when the daily
+scan runs — only when a _boot-time_ rescan can happen, and whether it can
+ever block the API.
+
 - `docker-compose.prod.yml` builds all three services (`django`, `worker`,
   `nginx`) with the repo root as build context (`context: ..`). There was no
   `.dockerignore` at all until it was added — every rebuild was uploading
