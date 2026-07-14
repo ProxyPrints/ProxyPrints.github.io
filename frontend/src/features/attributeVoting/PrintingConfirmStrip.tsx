@@ -8,7 +8,8 @@
  * with polarity matching the previewed state; Skip/Continue moves on without voting.
  * Deliberately reuses the existing Full Art/Borderless taxonomy rather than minting new
  * tags - this strip is just a fast, pre-filled way to cast the same votes TagVotePicker
- * already supports.
+ * already supports. Chip labels are the seeded `display_name` for each tag (useTagDisplayName),
+ * not hardcoded text.
  */
 
 import React, { useState } from "react";
@@ -18,6 +19,7 @@ import Row from "react-bootstrap/Row";
 
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { PrintingCandidate } from "@/common/schema_types";
+import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch } from "@/common/types";
 import { ChipCard } from "@/features/attributeVoting/ChipCard";
 import { APISubmitTagVote } from "@/store/api";
@@ -28,7 +30,6 @@ const NOT_APPLICABLE = -1;
 
 interface ConfirmToggle {
   tagName: string;
-  label: string;
   previewValue: boolean;
 }
 
@@ -47,6 +48,7 @@ export function PrintingConfirmStrip({
   onDone,
 }: PrintingConfirmStripProps) {
   const dispatch = useAppDispatch();
+  const getTagDisplayName = useTagDisplayName();
   const [confirmedTagNames, setConfirmedTagNames] = useState<Set<string>>(
     new Set()
   );
@@ -55,12 +57,8 @@ export function PrintingConfirmStrip({
   );
 
   const toggles: ConfirmToggle[] = [
-    { tagName: "Full Art", label: "Full art", previewValue: candidate.fullArt },
-    {
-      tagName: "Borderless",
-      label: "Borderless",
-      previewValue: candidate.isBorderless,
-    },
+    { tagName: "Full Art", previewValue: candidate.fullArt },
+    { tagName: "Borderless", previewValue: candidate.isBorderless },
   ];
 
   const confirm = (toggle: ConfirmToggle) => {
@@ -100,7 +98,7 @@ export function PrintingConfirmStrip({
         {toggles.map((toggle) => (
           <Col key={toggle.tagName}>
             <ChipCard
-              label={toggle.label}
+              label={getTagDisplayName(toggle.tagName)}
               sublabel={
                 confirmedTagNames.has(toggle.tagName) ? "Confirmed" : undefined
               }

@@ -11,7 +11,9 @@
  * `seed_no_match_reason_tags` management command, not a migration - see that module's
  * header comment for why) - and see the same file for why these are a separate taxonomy
  * from cardpicker.default_tags.DEFAULT_TAGS and why renaming any of them is a breaking
- * change.
+ * change. Chip labels are NOT hardcoded here - they're the seeded `display_name` for each
+ * tag, looked up dynamically (useTagDisplayName), so editing a display_name in admin changes
+ * what's shown here without a frontend deploy.
  *
  * Graceful degradation for an instance where that command hasn't been run yet: filters the
  * six chips down to whichever tags `useGetTagsQuery` (the existing, already-cached `2/tags/`
@@ -29,6 +31,7 @@ import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
 import { getOrCreateAnonymousId } from "@/common/cookies";
+import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch } from "@/common/types";
 import { ChipCard } from "@/features/attributeVoting/ChipCard";
 import { APISubmitTagVote, useGetTagsQuery } from "@/store/api";
@@ -36,13 +39,13 @@ import { setNotification } from "@/store/slices/toastsSlice";
 
 const APPLY = 1;
 
-const NO_MATCH_REASONS: Array<{ tagName: string; label: string }> = [
-  { tagName: "custom-art", label: "Custom art" },
-  { tagName: "altered-frame", label: "Altered frame" },
-  { tagName: "upscaled", label: "Upscaled" },
-  { tagName: "ai-art", label: "AI art" },
-  { tagName: "no-collector-line", label: "No collector line" },
-  { tagName: "non-english", label: "Non-English" },
+const NO_MATCH_REASON_TAG_NAMES: Array<string> = [
+  "custom-art",
+  "altered-frame",
+  "upscaled",
+  "ai-art",
+  "no-collector-line",
+  "non-english",
 ];
 
 interface NoMatchReasonStripProps {
@@ -58,14 +61,15 @@ export function NoMatchReasonStrip({
   onDone,
 }: NoMatchReasonStripProps) {
   const dispatch = useAppDispatch();
+  const getTagDisplayName = useTagDisplayName();
   const [submittingTagName, setSubmittingTagName] = useState<string | null>(
     null
   );
   const { data: existingTags } = useGetTagsQuery();
   const existingTagNames =
     existingTags != null ? new Set(existingTags.map((tag) => tag.name)) : null;
-  const visibleReasons = NO_MATCH_REASONS.filter(
-    (reason) => existingTagNames == null || existingTagNames.has(reason.tagName)
+  const visibleReasonTagNames = NO_MATCH_REASON_TAG_NAMES.filter(
+    (tagName) => existingTagNames == null || existingTagNames.has(tagName)
   );
 
   const choose = (tagName: string) => {
@@ -98,13 +102,13 @@ export function NoMatchReasonStrip({
     <div data-testid="no-match-reason-strip">
       <h6>Why no match?</h6>
       <Row className="g-2" xs={2} md={3}>
-        {visibleReasons.map((reason) => (
-          <Col key={reason.tagName}>
+        {visibleReasonTagNames.map((tagName) => (
+          <Col key={tagName}>
             <ChipCard
-              label={reason.label}
+              label={getTagDisplayName(tagName)}
               disabled={submittingTagName != null}
-              onClick={() => choose(reason.tagName)}
-              data-testid={`no-match-reason-${reason.tagName}`}
+              onClick={() => choose(tagName)}
+              data-testid={`no-match-reason-${tagName}`}
             />
           </Col>
         ))}

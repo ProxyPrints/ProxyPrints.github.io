@@ -10,6 +10,7 @@ import React, { useState } from "react";
 import Button from "react-bootstrap/Button";
 
 import { getOrCreateAnonymousId } from "@/common/cookies";
+import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch } from "@/common/types";
 import { APISubmitTagVote } from "@/store/api";
 import { setNotification } from "@/store/slices/toastsSlice";
@@ -32,6 +33,7 @@ export function QueueTagQuestion({
   onAnswered,
 }: QueueTagQuestionProps) {
   const dispatch = useAppDispatch();
+  const getTagDisplayName = useTagDisplayName();
   const [submitting, setSubmitting] = useState<boolean>(false);
 
   const submit = (polarity: number) => {
@@ -63,7 +65,7 @@ export function QueueTagQuestion({
   return (
     <div data-testid="queue-tag-question">
       <h6>
-        Does <strong>{tagName}</strong> apply?
+        Does <strong>{getTagDisplayName(tagName)}</strong> apply?
       </h6>
       <div className="d-flex gap-2 mt-2">
         <Button

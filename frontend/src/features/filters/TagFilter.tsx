@@ -52,7 +52,7 @@ export const TagFilter = ({
     (checkedTags: Array<string>): Array<TreeNode> => {
       const processTag = (tag: Tag): TreeNode => {
         return {
-          label: tag.name,
+          label: tag.displayName ?? tag.name,
           value: tag.name,
           checked: checkedTags.includes(tag.name),
           expanded: expandedNodes.includes(tag.name),

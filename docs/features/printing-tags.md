@@ -360,6 +360,71 @@ rows.
 [[../infrastructure.md]]'s Docker/backend deploy section for the
 mechanism and the now-standard extra restart step.
 
+## Stage 5: decouple tag identity (`name`) from presentation (`display_name`)
+
+`Tag.name` is both the machine key (votes, `Card.tags`, filename-bracket
+matching, federation — see `docs/federation-v1.md`) and, until now, the
+only text ever shown to a human. That coupling meant a purely cosmetic
+relabel (fixing a typo, adding nicer casing) was indistinguishable from
+a breaking rename — both touched the same field. `Tag.display_name`
+(nullable `CharField`, additive migration) splits them: `name` stays
+forever immutable post-creation, `display_name` is freely editable
+presentation text, admin-editable via the already-registered `Tag`
+admin (now also in `list_display`/`search_fields`).
+
+**Serialization**: `Tag.serialise()` includes `displayName`;
+`schemas/schemas/Tag.json` gained the field (quicktype-regenerated, not
+hand-edited — see the note above). Nullable/optional, so it doesn't
+disturb any response that doesn't set it.
+
+**Frontend**: one shared lookup, `frontend/src/common/tagDisplayNames.ts`'s
+`useTagDisplayName()` — built off the same already-cached
+`useGetTagsQuery()` other consumers (e.g. `TagFilter`) already use, so
+adding a lookup call site never triggers a new fetch. Flattens the tag
+tree (children included) into a `name -> displayName` map and returns a
+`(name) => displayName ?? name` function. Wired into every render site
+that showed a raw tag name: `TagFilter.tsx` (filter dropdown labels),
+`CardDetailedViewModal.tsx` (a card's resolved tag badges),
+`TagVotePicker.tsx`, `QueueTagQuestion.tsx`, `NoMatchReasonStrip.tsx`,
+`PrintingConfirmStrip.tsx`. API submissions/filters (`includesTags`,
+`excludesTags`, `APISubmitTagVote`'s `tagName`, ...) are untouched —
+they always send `name`.
+
+`NoMatchReasonStrip`/`PrintingConfirmStrip` previously hardcoded their
+own chip label strings, duplicating what `display_name` now owns -
+refactored both to look the label up dynamically instead, so editing a
+`display_name` in admin changes what's shown without a frontend deploy.
+One visible, intentional side effect: `PrintingConfirmStrip`'s "Full
+art" chip (a hand-picked lowercase label) now reads "Full Art" (the
+seeded `display_name`, matching `Tag.name`'s own casing exactly).
+
+**Seeding**: `seed_no_match_reason_tags` sets `display_name` for its six
+tags at creation, and backfills it on an already-existing tag only when
+still null (never clobbers a manual admin edit). `seed_default_tags`
+gained the identical idempotent pattern, but only for `Full Art`/
+`Borderless` — `display_name = name` verbatim for those two (not
+renamed, just given an explicit row so no actively-displayed tag
+silently relies on fallback); the other eleven `DEFAULT_TAGS` entries
+are left with no `display_name` (already nice Title Case `name`s, the
+`displayName ?? name` fallback covers them for free).
+
+**Filename tag-extraction pipeline is unaffected, and here's why that
+matters**: `cardpicker/tags.py`'s `Tags.get_tags()` builds its raw-token
+lookup as `{tag.name.lower(): tag for tag in [...]}`, matched against
+`Tag.name`/`aliases` only (`match_tag_fuzzy`, `extract()`) — never reads
+`display_name`. `Card.tags` (the persisted, denormalised ArrayField)
+stores `tag_object.name`, again never `display_name`. So adding
+`display_name` changes nothing about indexing today. The reverse case -
+what a future _rename_ of `name` (not what this stage does) would break
+
+- is exactly why `name` needed protecting in the first place: an exact
+  `.lower()` match against old filenames would silently stop firing
+  unless the old name were preserved as an alias, and every already-
+  persisted `Card.tags` array containing the old string would go stale
+  relative to the renamed row, with no migration path to reconcile them
+  (it's a snapshot array, not a live FK). `display_name` exists precisely
+  so that presentation changes never need to risk this at all.
+
 ## Stage 6: deductive backfill (AI-weight votes for logically-entailed printings)
 
 Casts `source=ai` `CardPrintingTag` votes (`cardpicker/deductive_backfill.py`,
@@ -440,11 +505,14 @@ D1/D2, a "suggested" badge in the queue UI, and artist/tag deduction
 - Backend: `cardpicker/printing_consensus.py`,
   `cardpicker/printing_metadata_import.py`,
   `cardpicker/integrations/game/mtg.py`, `cardpicker/models.py` (migration
-  `0050_canonicalprintingmetadata_cardprintingtag_and_more.py`),
+  `0050_canonicalprintingmetadata_cardprintingtag_and_more.py`;
+  `display_name` — migration `0056_tag_display_name.py`, Stage 5),
   `cardpicker/search/search_functions.py` (Stage 3 re-rank/filter),
   `cardpicker/documents.py` (Stage 3 widened indexing; Stage 3.5
   `reindex_card_safely`), `cardpicker/tag_consensus.py` (Stage 3.5),
-  `cardpicker/reason_tags.py`, `cardpicker/management/commands/ seed_no_match_reason_tags.py` (Stage 4),
+  `cardpicker/reason_tags.py`, `cardpicker/default_tags.py`,
+  `cardpicker/management/commands/seed_no_match_reason_tags.py` (Stage 4,
+  display_name seeding Stage 5),
   `cardpicker/deductive_backfill.py` + management command
   `deductive_backfill_printing_tags` (Stage 6)
 - Frontend: `frontend/src/features/printingTags/` (`PrintingTagQueue.tsx`,
@@ -452,8 +520,10 @@ D1/D2, a "suggested" badge in the queue UI, and artist/tag deduction
   `frontend/src/features/filters/ResolvedAttributeFilter.tsx` (Stage 3),
   `frontend/src/common/processing.ts::getPrintingMatchLabel` (Stage 3),
   `frontend/src/features/attributeVoting/` (`ChipCard.tsx`,
-  `NoMatchReasonStrip.tsx`, `PrintingConfirmStrip.tsx` — Stage 4)
-- `docs/upstreaming/vote-system.md`
+  `NoMatchReasonStrip.tsx`, `PrintingConfirmStrip.tsx` — Stage 4),
+  `frontend/src/common/tagDisplayNames.ts` (Stage 5)
+- `docs/upstreaming/vote-system.md`, `docs/federation-v1.md` (`name` vs.
+  `display_name` interchange-key note, Stage 5)
 
 ## Known gaps
 
@@ -464,9 +534,8 @@ D1/D2, a "suggested" badge in the queue UI, and artist/tag deduction
 - Upstreaming this feature is deprioritized — see
   [[../infrastructure.md]]'s Upstreaming section.
 - Stage numbering: Stage 4 (no-match reason tags, merged as PR #12),
-  Stage 5 (reserved for PR #14 — decoupling `Tag.name` from
-  `Tag.display_name`), and Stage 6 (this branch — deductive printing-tag
-  backfill) are three concurrently-developed branches sharing this one
-  doc file; numbered in landing order to avoid collisions. If merge
-  order ends up different from 4 → 5 → 6, whichever lands out of order
-  should renumber against whatever's already on `master` at that point.
+  Stage 5 (tag identity/presentation decoupling via `Tag.display_name`,
+  merged as PR #14), and Stage 6 (this document's current stage —
+  deductive printing-tag backfill) reflect three concurrently-developed
+  branches sharing this one doc file, numbered in landing order to avoid
+  collisions.
