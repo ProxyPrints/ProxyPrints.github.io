@@ -52,6 +52,7 @@ from cardpicker.models import (
     Card,
     CardArtistVote,
     CardPrintingTag,
+    CardReport,
     CardTagVote,
     CardTypes,
     DFCPair,
@@ -118,6 +119,8 @@ from cardpicker.schema_types import (
     PrintingConsensusRequest,
     PrintingConsensusResponse,
     PrintingTagQueueResponse,
+    ReportCardRequest,
+    ReportCardResponse,
     SampleCardsResponse,
     SearchEngineHealthResponse,
     SortBy,
@@ -145,6 +148,8 @@ from cardpicker.search.search_functions import (
     retrieve_card_identifiers,
     retrieve_cardback_identifiers,
 )
+from cardpicker.security import reject_untrusted_origin
+from cardpicker.sensitive_tags import REPORT_REASON_TO_TAG_NAME
 from cardpicker.sources.api import PathTraversalError, resolve_within_root
 from cardpicker.sources.source_types import SourceTypeChoices
 from cardpicker.tag_consensus import (
@@ -815,6 +820,7 @@ def _printing_tag_rate_limit_rate(group: str, request: HttpRequest) -> str:
 
 
 @csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
 @ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
     key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
 )
@@ -944,6 +950,7 @@ def post_artist_consensus(request: HttpRequest) -> HttpResponse:
 
 
 @csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
 @ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
     key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
 )
@@ -1026,6 +1033,7 @@ def post_tag_consensus(request: HttpRequest) -> HttpResponse:
 
 
 @csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
 @ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
     key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
 )
@@ -1057,18 +1065,91 @@ def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
     if req.polarity not in (VotePolarity.APPLY, VotePolarity.NOT_APPLICABLE):
         raise BadRequestException(f"Invalid polarity {req.polarity!r} - must be 1 (apply) or -1 (not applicable).")
 
+    _cast_tag_vote_and_resolve(
+        card=card, tag=tag, anonymous_id=req.anonymousId, polarity=req.polarity, user=_requesting_user(request)
+    )
+    return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
+
+
+def _cast_tag_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str, polarity: int, user: Optional[User]) -> None:
+    """
+    The one write path for a tag vote - shared verbatim between `post_submit_tag_vote` and
+    `post_report_card` (a report on a tag-mapped reason IS a tag vote plus an audit row), so
+    the two entry points can never drift on how a vote lands or when consensus recomputes.
+    """
     with transaction.atomic():
         # `user` sits in defaults deliberately: the row reflects the *latest* submission from
         # this (card, tag, anonymous_id), so a later unauthenticated re-vote clears it.
         CardTagVote.objects.update_or_create(
             card=card,
             tag=tag,
-            anonymous_id=req.anonymousId,
-            defaults={"polarity": req.polarity, "source": VoteSource.USER, "user": _requesting_user(request)},
+            anonymous_id=anonymous_id,
+            defaults={"polarity": polarity, "source": VoteSource.USER, "user": user},
         )
         resolve_and_persist_tag_votes(card)
 
-    return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
+
+def _card_report_rate_limit_rate(group: str, request: HttpRequest) -> str:
+    # callable for the same reason as _printing_tag_rate_limit_rate: a plain string would be
+    # bound at import time and impossible to override in tests
+    rate: str = settings.CARD_REPORT_RATE
+    return rate
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_card_report_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_report_card(request: HttpRequest) -> HttpResponse:
+    """
+    Report a card (the flag button on the card detail modal - see docs/features/moderation.md).
+    Always writes a CardReport audit row; for reasons that map onto a sensitive tag
+    (nsfw/low_quality/wrong_card - see sensitive_tags.REPORT_REASON_TO_TAG_NAME) it also casts
+    a positive CardTagVote through the exact same write path as 2/submitTagVote/, inside one
+    transaction. If the mapped tag hasn't been seeded yet (`seed_sensitive_tags` not run), the
+    report still lands and the vote is skipped - same graceful degradation as the no-match
+    reason strips. broken_image/other write the report row only.
+
+    Rate limited per anonymous ID (IP fallback) via CARD_REPORT_RATE (default 10/day) - the
+    vote only happens inside this view, so the one limit covers both effects. Same
+    single-worker in-process-cache caveat as post_submit_printing_tag.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Report limit reached",
+                message="You've sent quite a few reports today - please try again tomorrow.",
+            ).model_dump(),
+            status=429,
+        )
+
+    req = ReportCardRequest.model_validate(json.loads(request.body))
+    # the schema declares maxLength 280 but quicktype's generated pydantic model doesn't carry
+    # constraints - enforce here so an oversized body 400s instead of erroring at the DB column
+    if req.text is not None and len(req.text) > 280:
+        raise BadRequestException("Report text must be at most 280 characters.")
+    card = _get_card_or_400(req.identifier)
+    user = _requesting_user(request)
+
+    vote_cast = False
+    with transaction.atomic():
+        CardReport.objects.create(
+            card=card, anonymous_id=req.anonymousId, user=user, reason=req.reason.value, text=req.text or ""
+        )
+        tag_name = REPORT_REASON_TO_TAG_NAME.get(req.reason.value)
+        if tag_name is not None:
+            tag = Tag.objects.filter(name=tag_name).first()
+            if tag is not None:
+                _cast_tag_vote_and_resolve(
+                    card=card, tag=tag, anonymous_id=req.anonymousId, polarity=VotePolarity.APPLY, user=user
+                )
+                vote_cast = True
+    return JsonResponse(ReportCardResponse(reported=True, voteCast=vote_cast).model_dump())
 
 
 def _paginate(items: Any, page: int) -> Any:

@@ -32,5 +32,6 @@ urlpatterns = [
     path("2/tagConsensus/", views.post_tag_consensus),
     path("2/submitTagVote/", views.post_submit_tag_vote),
     path("2/voteQueue/", views.post_vote_queue),
+    path("2/reportCard/", views.post_report_card),
     path("2/whoami/", views.get_whoami),
 ]

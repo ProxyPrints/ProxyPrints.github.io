@@ -721,6 +721,41 @@ class CardTagVote(AbstractWeightedVote):
         return f"[{self.source}] {self.card.name} -> {self.tag} ({VotePolarity(self.polarity).label})"
 
 
+class CardReportReason(models.TextChoices):
+    """
+    Why a user reported a card (the report button on the card detail modal - see
+    docs/features/moderation.md). The first three map onto sensitive tags (see
+    cardpicker.sensitive_tags.REPORT_REASON_TO_TAG_NAME) and cast a CardTagVote alongside the
+    report; BROKEN_IMAGE and OTHER are report-row-only.
+    """
+
+    NSFW = "nsfw", gettext_lazy("NSFW")
+    LOW_QUALITY = "low_quality", gettext_lazy("Low quality")
+    WRONG_CARD = "wrong_card", gettext_lazy("Wrong card info")
+    BROKEN_IMAGE = "broken_image", gettext_lazy("Broken image")
+    OTHER = "other", gettext_lazy("Other")
+
+
+class CardReport(models.Model):
+    """
+    The audit trail behind the report button: one row per report, regardless of whether the
+    reason also cast a tag vote. Deliberately append-only from the API (no update/delete
+    path) - moderators review these via the moderation queue's excerpts and the admin panel.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="reports")
+    # same client-generated identifier the vote tables use - see AbstractWeightedVote
+    anonymous_id = models.CharField(max_length=40)
+    user = models.ForeignKey(to=User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    reason = models.CharField(max_length=20, choices=CardReportReason.choices, db_index=True)
+    # free text from the "Other" chip (bounded at the schema layer too); blank for most reasons
+    text = models.CharField(max_length=280, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"{self.card.name} -> {self.reason} ({self.anonymous_id})"
+
+
 class TagSuggestionStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     AUTO_ACCEPTED = "auto_accepted", "Auto-accepted"

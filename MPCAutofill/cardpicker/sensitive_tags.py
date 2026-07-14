@@ -21,7 +21,7 @@ lowercased key - see Tags.get_tags).
 """
 
 from cardpicker.constants import NSFW
-from cardpicker.models import Tag, TagModerationClass
+from cardpicker.models import CardReportReason, Tag, TagModerationClass
 
 # (name, description, display_name) - same shape as reason_tags.NO_MATCH_REASON_TAGS.
 # `description` is documentation only; `display_name` is seeded presentation text the
@@ -31,6 +31,18 @@ SENSITIVE_TAGS: list[tuple[str, str, str]] = [
     ("low-res", "Image quality too poor to print", "Low quality"),
     ("incorrect-info", "Card text/details do not match the real card", "Incorrect card info"),
 ]
+
+
+# Which sensitive tag each report reason argues for: reporting is "a positive CardTagVote on
+# the matching sensitive tag, plus the CardReport audit row" (see views.post_report_card).
+# BROKEN_IMAGE and OTHER are deliberately absent - they describe problems no tag models, so
+# they write the report row only. Lives here (not models.py) because this module owns the
+# sensitive tag names.
+REPORT_REASON_TO_TAG_NAME: dict[str, str] = {
+    CardReportReason.NSFW: NSFW,
+    CardReportReason.LOW_QUALITY: "low-res",
+    CardReportReason.WRONG_CARD: "incorrect-info",
+}
 
 
 def seed_sensitive_tags() -> dict[str, int]:

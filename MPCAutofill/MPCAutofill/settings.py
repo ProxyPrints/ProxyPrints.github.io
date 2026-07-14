@@ -71,6 +71,8 @@ VOTE_FEDERATED_WEIGHT = env.float("VOTE_FEDERATED_WEIGHT", default=1.0)
 # django-ratelimit rate string (see cardpicker.views.post_submit_printing_tag), keyed by the
 # client-generated anonymous ID (IP as a fallback if that header is somehow missing).
 PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="20/h")
+# same mechanism for the card report button (see cardpicker.views.post_report_card).
+CARD_REPORT_RATE = env("CARD_REPORT_RATE", default="10/d")
 
 # Fuzzy tag-matching confidence thresholds. See cardpicker.tags.Tags.match_tag_fuzzy.
 TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD = env.float("TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD", default=0.92)

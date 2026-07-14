@@ -6,11 +6,27 @@ See docs/features/moderation.md.
 
 import pytest
 
+from django.core.cache import cache
 from django.urls import reverse
 
 from cardpicker import views
-from cardpicker.models import CardTagVote
+from cardpicker.models import (
+    CardReport,
+    CardReportReason,
+    CardTagVote,
+    TagVoteStatus,
+    VotePolarity,
+)
+from cardpicker.sensitive_tags import seed_sensitive_tags
 from cardpicker.tests.factories import CardFactory, TagFactory
+
+
+@pytest.fixture(autouse=True)
+def _clear_rate_limit_cache():
+    # same isolation as test_tag_votes.py: django-ratelimit counts live in the default cache
+    cache.clear()
+    yield
+    cache.clear()
 
 
 class TestGetWhoami:
@@ -116,3 +132,152 @@ class TestVoteUserRecording:
         self.submit_tag_vote(client, card, tag.name)
         vote = CardTagVote.objects.get()
         assert vote.user is None
+
+
+class TestPostReportCard:
+    @pytest.fixture(autouse=True)
+    def autouse_django_settings(self, django_settings):
+        pass
+
+    @staticmethod
+    def report(client, card, reason: str, text: str | None = None, anonymous_id: str = "anon-1"):
+        body: dict = {"identifier": card.identifier, "anonymousId": anonymous_id, "reason": reason}
+        if text is not None:
+            body["text"] = text
+        return client.post(reverse(views.post_report_card), body, content_type="application/json")
+
+    def test_report_writes_audit_row(self, client):
+        card = CardFactory()
+        response = self.report(client, card, "broken_image")
+        assert response.status_code == 200
+        assert response.json() == {"reported": True, "voteCast": False}
+        report = CardReport.objects.get()
+        assert report.card == card
+        assert report.reason == CardReportReason.BROKEN_IMAGE
+        assert report.anonymous_id == "anon-1"
+        assert report.user is None
+        assert report.text == ""
+
+    def test_tag_mapped_reason_casts_positive_vote_on_seeded_sensitive_tag(self, client):
+        seed_sensitive_tags()
+        card = CardFactory(tags=[])
+        response = self.report(client, card, "nsfw")
+        assert response.status_code == 200
+        assert response.json() == {"reported": True, "voteCast": True}
+        vote = CardTagVote.objects.get()
+        assert vote.tag.name == "NSFW"
+        assert vote.polarity == VotePolarity.APPLY
+        assert vote.anonymous_id == "anon-1"
+        # one anonymous report can never resolve a sensitive tag - it parks as pending at most
+        card.refresh_from_db()
+        assert card.tags == []
+        assert card.tag_vote_statuses.get("NSFW") in (None, TagVoteStatus.UNRESOLVED)
+
+    def test_broken_image_and_other_cast_no_vote(self, client):
+        seed_sensitive_tags()
+        card = CardFactory()
+        self.report(client, card, "broken_image")
+        self.report(client, card, "other", text="something else is wrong", anonymous_id="anon-2")
+        assert CardTagVote.objects.count() == 0
+        assert CardReport.objects.count() == 2
+        assert CardReport.objects.get(reason=CardReportReason.OTHER).text == "something else is wrong"
+
+    def test_unseeded_tag_degrades_to_report_only(self, client):
+        # seed_sensitive_tags not run: the report must still land, the vote silently skipped
+        card = CardFactory()
+        response = self.report(client, card, "nsfw")
+        assert response.status_code == 200
+        assert response.json() == {"reported": True, "voteCast": False}
+        assert CardReport.objects.count() == 1
+        assert CardTagVote.objects.count() == 0
+
+    def test_text_over_280_chars_is_rejected(self, client):
+        card = CardFactory()
+        response = self.report(client, card, "other", text="x" * 281)
+        assert response.status_code == 400
+        assert CardReport.objects.count() == 0
+
+    def test_unknown_reason_is_rejected(self, client):
+        card = CardFactory()
+        response = self.report(client, card, "i-just-dont-like-it")
+        assert response.status_code == 400
+
+    def test_unknown_card_is_a_bad_request(self, client):
+        response = client.post(
+            reverse(views.post_report_card),
+            {"identifier": "does-not-exist", "anonymousId": "anon-1", "reason": "nsfw"},
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+
+    def test_authenticated_report_records_user_on_report_and_vote(self, client, plain_user):
+        seed_sensitive_tags()
+        card = CardFactory()
+        client.force_login(plain_user)
+        self.report(client, card, "nsfw")
+        assert CardReport.objects.get().user == plain_user
+        assert CardTagVote.objects.get().user == plain_user
+
+    def test_rate_limited_after_exceeding_the_configured_rate(self, client, settings):
+        settings.CARD_REPORT_RATE = "2/d"
+        card = CardFactory()
+        first = self.report(client, card, "broken_image", anonymous_id="anon-rate")
+        second = self.report(client, card, "other", text="still broken", anonymous_id="anon-rate")
+        third = self.report(client, card, "nsfw", anonymous_id="anon-rate")
+        assert (first.status_code, second.status_code, third.status_code) == (200, 200, 429)
+        assert "reports today" in third.json()["message"]
+        assert CardReport.objects.count() == 2
+
+    def test_rate_limit_is_per_anonymous_id(self, client, settings):
+        settings.CARD_REPORT_RATE = "1/d"
+        card = CardFactory()
+        assert self.report(client, card, "broken_image", anonymous_id="anon-a").status_code == 200
+        assert self.report(client, card, "broken_image", anonymous_id="anon-b").status_code == 200
+
+
+class TestRejectUntrustedOrigin:
+    @pytest.fixture(autouse=True)
+    def autouse_django_settings(self, django_settings):
+        pass
+
+    def test_untrusted_origin_is_rejected_with_403(self, client):
+        card = CardFactory()
+        response = client.post(
+            reverse(views.post_report_card),
+            {"identifier": card.identifier, "anonymousId": "anon-1", "reason": "broken_image"},
+            content_type="application/json",
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert response.status_code == 403
+        assert CardReport.objects.count() == 0
+
+    def test_allowlisted_origin_is_accepted(self, client, settings):
+        card = CardFactory()
+        response = client.post(
+            reverse(views.post_report_card),
+            {"identifier": card.identifier, "anonymousId": "anon-1", "reason": "broken_image"},
+            content_type="application/json",
+            headers={"Origin": settings.CORS_ALLOWED_ORIGINS[0]},
+        )
+        assert response.status_code == 200
+
+    def test_absent_origin_keeps_todays_trust_level(self, client):
+        # non-browser clients (curl, scripts, the desktop tool) send no Origin header at all
+        card = CardFactory()
+        response = client.post(
+            reverse(views.post_report_card),
+            {"identifier": card.identifier, "anonymousId": "anon-1", "reason": "broken_image"},
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+
+    def test_guard_also_covers_tag_vote_submission(self, client):
+        card, tag = CardFactory(), TagFactory()
+        response = client.post(
+            reverse(views.post_submit_tag_vote),
+            {"identifier": card.identifier, "anonymousId": "anon-1", "tagName": tag.name, "polarity": 1},
+            content_type="application/json",
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert response.status_code == 403
+        assert CardTagVote.objects.count() == 0

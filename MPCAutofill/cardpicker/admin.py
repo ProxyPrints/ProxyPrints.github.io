@@ -14,6 +14,7 @@ from .models import (
     Card,
     CardArtistVote,
     CardPrintingTag,
+    CardReport,
     CardTagVote,
     DFCPair,
     Project,
@@ -198,6 +199,14 @@ class AdminCardTagVote(admin.ModelAdmin[CardTagVote]):
     list_filter = ("source", "polarity", "peer", ContestedTagFilter)
     search_fields = ("card__name", "tag__name")
     raw_id_fields = ["card", "tag"]
+
+
+@admin.register(CardReport)
+class AdminCardReport(admin.ModelAdmin[CardReport]):
+    list_display = ("card", "reason", "text", "anonymous_id", "user", "created_at")
+    list_filter = ("reason", ("created_at", admin.DateFieldListFilter))
+    search_fields = ("card__name", "card__identifier", "text")
+    raw_id_fields = ["card"]
 
 
 @admin.register(TagAliasSuggestion)
