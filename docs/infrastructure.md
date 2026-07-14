@@ -83,6 +83,35 @@ None of this changes what data ends up in the catalog or when the daily
 scan runs — only when a _boot-time_ rescan can happen, and whether it can
 ever block the API.
 
+**Measured, deployed 2026-07-14** (PR #18, merged alongside #16/#17):
+
+- **Time-to-bind**: ~29s from container start to `api.proxyprints.ca`
+  returning 200 on `2/sources/` — down from the ~22m8s the pre-fix
+  gated rescan held gunicorn's bind hostage for. Entrypoint log confirmed
+  `migrate` → `import_sources` → `gunicorn` with no `update_database` at
+  boot; the bootstrap guard correctly stayed silent (both `Source` and
+  `Card` rows already present).
+- **Schedule liveness**: `django_q.models.Success` shows five consecutive
+  daily runs at 18:49 UTC (2026-07-10 through 2026-07-14) — the schedule
+  survived the deploy unchanged, as expected (it's a DB row, not
+  entrypoint state).
+- **First post-deploy parallel scan** (manually triggered to observe the
+  new `MAX_SOURCE_WORKERS=8` behavior directly rather than waiting for
+  the next 18:49 UTC firing): 252 sources, **6m9s** wall-clock — versus
+  the ~22m8s sequential baseline from the incident, roughly a 3.6x
+  speedup. Zero Drive 429s, zero per-source failures (the
+  `_update_database_for_source_isolated` catch-and-log path never fired —
+  clean run, so isolation is proven by the earlier unit tests rather than
+  this particular scan). Totals: 13 created, 21 updated, 0 deleted.
+- **Where totals surface today**: `manage.py update_database`'s own
+  stdout (captured in worker/entrypoint logs for a live run; not
+  persisted anywhere queryable). `django_q.models.Success.result` is
+  always `None` for these runs — `call_command` doesn't return a value,
+  so the scheduler's own task history can't answer "how much changed on
+  the last scan" without a code change to have the command return/log a
+  structured summary. Flagged here as a monitoring gap, not fixed as part
+  of this change.
+
 - `docker-compose.prod.yml` builds all three services (`django`, `worker`,
   `nginx`) with the repo root as build context (`context: ..`). There was no
   `.dockerignore` at all until it was added — every rebuild was uploading
