@@ -22,6 +22,7 @@ import {
   cardDocument9,
   cardDocument10,
   cardDocument11,
+  cardDocument12,
   localBackend,
   printingCandidate1,
   printingCandidate2,
@@ -206,6 +207,20 @@ export const cardDocumentsServerError = http.post(buildRoute("2/cards/"), () =>
   HttpResponse.json(createError("2/cards"), { status: 500 })
 );
 
+// Community-vote-resolved printing match, for decklist set/collector-number import tests
+export const cardDocumentsWithResolvedPrintingMatch = http.post(
+  buildRoute("2/cards/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [cardDocument12.identifier]: cardDocument12,
+        },
+      },
+      { status: 200 }
+    )
+);
+
 //# endregion
 
 //# region cardback
@@ -356,6 +371,27 @@ export const searchResultsWithCanonicalCards = http.post(
             cardDocument10.identifier,
             cardDocument11.identifier,
           ],
+        },
+      },
+      { status: 200 }
+    )
+);
+
+// Community-vote-resolved printing match, for decklist set/collector-number import tests -
+// simulates the backend's re-rank already having placed the matched printing first (and, in
+// this case, only) result for a query carrying expansionCode/collectorNumber.
+export const searchResultsResolvedPrintingMatch = http.post(
+  buildRoute("3/editorSearch/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [computeSearchQueryHashKey({
+            query: "lightning bolt",
+            cardType: CardType.Card,
+            expansionCode: "2ED",
+            collectorNumber: "162",
+          })]: [cardDocument12.identifier],
         },
       },
       { status: 200 }

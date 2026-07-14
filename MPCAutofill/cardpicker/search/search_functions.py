@@ -15,6 +15,7 @@ from django.utils import timezone
 from cardpicker.constants import NEW_CARDS_DAYS, NEW_CARDS_PAGE_SIZE
 from cardpicker.documents import CardSearch
 from cardpicker.models import Card, CardTypes, Source
+from cardpicker.printing_consensus import ResolvedPrinting, get_resolved_printings
 from cardpicker.schema_types import CardType, SearchSettings
 from cardpicker.search.sanitisation import to_searchable
 
@@ -154,6 +155,49 @@ def get_search(
     return s
 
 
+def _passes_resolved_attribute_filters(
+    resolved: dict[str, ResolvedPrinting], search_settings: SearchSettings, identifier: str
+) -> bool:
+    """
+    Cards absent from `resolved` (i.e. not printing_tag_status == RESOLVED) are never excluded
+    here - they're unknowns, not mismatches, and the opt-in "Full art"/"Borderless" filters
+    must only ever exclude a card whose community-resolved printing actively fails the check.
+    """
+    printing = resolved.get(identifier)
+    if printing is None:
+        return True
+    if search_settings.filterSettings.fullArtOnly and not printing.full_art:
+        return False
+    if search_settings.filterSettings.borderlessOnly and printing.border_color != "borderless":
+        return False
+    return True
+
+
+def _resolved_printing_match_tier(
+    resolved: dict[str, ResolvedPrinting],
+    expansion_code: str | None,
+    collector_number: str | None,
+    identifier: str,
+) -> int:
+    """
+    Stable-sort key used to prefer, within an already-fetched result set, cards whose
+    community-resolved printing (printing_tag_status == RESOLVED) matches the set/collector
+    number carried by the decklist line being searched: exact set+collector match (0) > set-
+    only match (1) > everything else, including all UNRESOLVED/NO_MATCH cards (2, i.e.
+    unaffected - today's order, unchanged). This only re-orders cards that already survived
+    `get_search`'s own (pre-existing, unrelated) expansion_code/collector_number term filter -
+    it can never resurface a card that filter already excluded.
+    """
+    printing = resolved.get(identifier)
+    if printing is None:
+        return 2
+    if expansion_code and printing.expansion_code == expansion_code.upper():
+        if collector_number and printing.collector_number == collector_number:
+            return 0
+        return 1
+    return 2
+
+
 @elastic_connection
 def retrieve_card_identifiers(
     search_settings: SearchSettings,
@@ -175,7 +219,32 @@ def retrieve_card_identifiers(
         .scan()
     )
     source_order = get_source_order(search_settings=search_settings)
-    return [result.identifier for result in sorted(hits_iterable, key=lambda result: source_order[result.source_pk])]
+    identifiers = [
+        result.identifier for result in sorted(hits_iterable, key=lambda result: source_order[result.source_pk])
+    ]
+
+    filters_active = search_settings.filterSettings.fullArtOnly or search_settings.filterSettings.borderlessOnly
+    rerank_active = bool(expansion_code or collector_number)
+    if filters_active or rerank_active:
+        # single shared lookup - re-rank and filter must not each fetch their own copy
+        resolved = get_resolved_printings(identifiers)
+
+        if filters_active:
+            identifiers = [
+                identifier
+                for identifier in identifiers
+                if _passes_resolved_attribute_filters(resolved, search_settings, identifier)
+            ]
+
+        if rerank_active:
+            identifiers = sorted(
+                identifiers,
+                key=lambda identifier: _resolved_printing_match_tier(
+                    resolved, expansion_code, collector_number, identifier
+                ),
+            )
+
+    return identifiers
 
 
 def retrieve_cardback_identifiers(search_settings: SearchSettings) -> list[str]:

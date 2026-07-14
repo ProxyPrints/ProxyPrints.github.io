@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, PrintingCandidate, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse } from "./file";
+//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse } from "./file";
 //
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
@@ -16,6 +16,7 @@
 //   const language = Convert.toLanguage(json);
 //   const newCardsFirstPage = Convert.toNewCardsFirstPage(json);
 //   const printingCandidate = Convert.toPrintingCandidate(json);
+//   const printingTagStatus = Convert.toPrintingTagStatus(json);
 //   const searchQuery = Convert.toSearchQuery(json);
 //   const searchSettings = Convert.toSearchSettings(json);
 //   const searchTypeSettings = Convert.toSearchTypeSettings(json);
@@ -122,9 +123,21 @@ export interface SearchSettings {
 
 export interface FilterSettings {
   /**
+   * Opt-in filter. When true, excludes cards whose community-resolved printing
+   * (printingTagStatus == RESOLVED) is confirmed not borderless. Cards without a resolved
+   * printing are never excluded by this filter - they're unknowns, not mismatches.
+   */
+  borderlessOnly: boolean;
+  /**
    * The tags which the cards must *not* have to be included in search results
    */
   excludesTags: string[];
+  /**
+   * Opt-in filter. When true, excludes cards whose community-resolved printing
+   * (printingTagStatus == RESOLVED) is confirmed not full-art. Cards without a resolved
+   * printing are never excluded by this filter - they're unknowns, not mismatches.
+   */
+  fullArtOnly: boolean;
   /**
    * The tags which the cards must have to be included in search results
    */
@@ -207,6 +220,13 @@ export interface Card {
   language: string;
   mediumThumbnailUrl: string;
   name: string;
+  /**
+   * Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
+   * community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
+   * the frontend to show a 'matched by community tags' indicator and is otherwise
+   * informational.
+   */
+  printingTagStatus: PrintingTagStatus;
   priority: number;
   searchq: string;
   size: number;
@@ -235,6 +255,18 @@ export enum CardType {
   Card = "CARD",
   Cardback = "CARDBACK",
   Token = "TOKEN",
+}
+
+/**
+ * Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
+ * community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
+ * the frontend to show a 'matched by community tags' indicator and is otherwise
+ * informational.
+ */
+export enum PrintingTagStatus {
+  NoMatch = "no_match",
+  Resolved = "resolved",
+  Unresolved = "unresolved",
 }
 
 export enum SourceType {
@@ -663,6 +695,14 @@ export class Convert {
 
   public static printingCandidateToJson(value: PrintingCandidate): string {
     return JSON.stringify(uncast(value, r("PrintingCandidate")), null, 2);
+  }
+
+  public static toPrintingTagStatus(json: string): PrintingTagStatus {
+    return cast(JSON.parse(json), r("PrintingTagStatus"));
+  }
+
+  public static printingTagStatusToJson(value: PrintingTagStatus): string {
+    return JSON.stringify(uncast(value, r("PrintingTagStatus")), null, 2);
   }
 
   public static toSearchQuery(json: string): SearchQuery {
@@ -1499,7 +1539,9 @@ const typeMap: any = {
   ),
   FilterSettings: o(
     [
+      { json: "borderlessOnly", js: "borderlessOnly", typ: true },
       { json: "excludesTags", js: "excludesTags", typ: a("") },
+      { json: "fullArtOnly", js: "fullArtOnly", typ: true },
       { json: "includesTags", js: "includesTags", typ: a("") },
       { json: "languages", js: "languages", typ: a("") },
       { json: "maximumDPI", js: "maximumDPI", typ: 0 },
@@ -1562,6 +1604,11 @@ const typeMap: any = {
       { json: "language", js: "language", typ: "" },
       { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
       { json: "name", js: "name", typ: "" },
+      {
+        json: "printingTagStatus",
+        js: "printingTagStatus",
+        typ: r("PrintingTagStatus"),
+      },
       { json: "priority", js: "priority", typ: 0 },
       { json: "searchq", js: "searchq", typ: "" },
       { json: "size", js: "size", typ: 0 },
@@ -1989,6 +2036,7 @@ const typeMap: any = {
   ),
   Game: ["MTG"],
   CardType: ["CARD", "CARDBACK", "TOKEN"],
+  PrintingTagStatus: ["no_match", "resolved", "unresolved"],
   SourceType: ["AWS S3", "Google Drive", "Local File"],
   SortBy: [
     "dateCreatedAscending",

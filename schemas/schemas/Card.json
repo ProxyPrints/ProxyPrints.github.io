@@ -71,6 +71,10 @@
     "canonicalCard": {
       "$ref": "./CanonicalCard.json"
     },
+    "printingTagStatus": {
+      "description": "Community printing-tag vote consensus status for this card. Only RESOLVED cards have a community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by the frontend to show a 'matched by community tags' indicator and is otherwise informational.",
+      "$ref": "./PrintingTagStatus.json"
+    },
     "canonicalArtist": {
       "$ref": "./CanonicalArtist.json"
     },
@@ -101,7 +105,8 @@
     "smallThumbnailUrl",
     "mediumThumbnailUrl",
     "language",
-    "tags"
+    "tags",
+    "printingTagStatus"
   ],
   "additionalProperties": false
 }

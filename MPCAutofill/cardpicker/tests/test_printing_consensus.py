@@ -1,11 +1,16 @@
 import pytest
 
-from cardpicker.models import VoteSource
-from cardpicker.printing_consensus import NO_MATCH, resolve_printing
+from cardpicker.models import PrintingTagStatus, VoteSource
+from cardpicker.printing_consensus import (
+    NO_MATCH,
+    get_resolved_printings,
+    resolve_printing,
+)
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
+    CanonicalPrintingMetadataFactory,
     CardFactory,
     CardPrintingTagFactory,
     SourceFactory,
@@ -101,3 +106,69 @@ class TestResolvePrinting:
         for _ in range(4):
             CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.AI)
         assert resolve_printing(card) is None
+
+
+class TestGetResolvedPrintings:
+    """
+    `get_resolved_printings` is the shared hard-gate helper consumed by both the search
+    re-rank and attribute-filter logic in `search_functions.retrieve_card_identifiers` - these
+    tests exist independently of that consumer so the gate itself (RESOLVED in, everything
+    else out) is verified without needing ES/HTTP machinery.
+    """
+
+    def test_resolved_card_is_present_with_correct_data(self, db):
+        expansion = CanonicalExpansionFactory(code="ice")
+        printing = CanonicalCardFactory(expansion=expansion, collector_number="61")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, full_art=True, border_color="borderless")
+        card = CardFactory(
+            identifier="resolved-card",
+            printing_tag_status=PrintingTagStatus.RESOLVED,
+            inferred_canonical_card=printing,
+        )
+        result = get_resolved_printings([card.identifier])
+        assert card.identifier in result
+        resolved = result[card.identifier]
+        assert resolved.expansion_code == "ICE"
+        assert resolved.collector_number == "61"
+        assert resolved.full_art is True
+        assert resolved.border_color == "borderless"
+
+    def test_resolved_card_without_metadata_defaults_attributes(self, db):
+        # a `CanonicalCard` with no `CanonicalPrintingMetadata` sidecar row (e.g. metadata
+        # import hasn't run for it yet) must not crash the lookup - full_art/border_color
+        # fall back to their "unknown" defaults rather than raising.
+        printing = CanonicalCardFactory()
+        card = CardFactory(
+            identifier="resolved-no-metadata",
+            printing_tag_status=PrintingTagStatus.RESOLVED,
+            inferred_canonical_card=printing,
+        )
+        result = get_resolved_printings([card.identifier])
+        resolved = result[card.identifier]
+        assert resolved.full_art is False
+        assert resolved.border_color == ""
+
+    def test_unresolved_card_is_absent(self, db):
+        card = CardFactory(identifier="unresolved-card", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        assert get_resolved_printings([card.identifier]) == {}
+
+    def test_no_match_card_is_absent(self, db):
+        card = CardFactory(identifier="no-match-card", printing_tag_status=PrintingTagStatus.NO_MATCH)
+        assert get_resolved_printings([card.identifier]) == {}
+
+    def test_mixed_statuses_only_resolved_present(self, db):
+        printing = CanonicalCardFactory()
+        resolved_card = CardFactory(
+            identifier="mixed-resolved",
+            printing_tag_status=PrintingTagStatus.RESOLVED,
+            inferred_canonical_card=printing,
+        )
+        unresolved_card = CardFactory(identifier="mixed-unresolved", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        no_match_card = CardFactory(identifier="mixed-no-match", printing_tag_status=PrintingTagStatus.NO_MATCH)
+        result = get_resolved_printings(
+            [resolved_card.identifier, unresolved_card.identifier, no_match_card.identifier]
+        )
+        assert set(result.keys()) == {resolved_card.identifier}
+
+    def test_identifier_not_in_database_is_absent(self, db):
+        assert get_resolved_printings(["does-not-exist"]) == {}

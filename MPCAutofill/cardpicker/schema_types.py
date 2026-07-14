@@ -189,9 +189,19 @@ class ArtistConsensusResponse(BaseModel):
 
 
 class FilterSettings(BaseModel):
+    borderlessOnly: bool
+    """Opt-in filter. When true, excludes cards whose community-resolved printing
+    (printingTagStatus == RESOLVED) is confirmed not borderless. Cards without a resolved
+    printing are never excluded by this filter - they're unknowns, not mismatches.
+    """
     excludesTags: List[str]
     """The tags which the cards must *not* have to be included in search results"""
 
+    fullArtOnly: bool
+    """Opt-in filter. When true, excludes cards whose community-resolved printing
+    (printingTagStatus == RESOLVED) is confirmed not full-art. Cards without a resolved
+    printing are never excluded by this filter - they're unknowns, not mismatches.
+    """
     includesTags: List[str]
     """The tags which the cards must have to be included in search results"""
 
@@ -210,17 +220,23 @@ class FilterSettings(BaseModel):
     @staticmethod
     def from_dict(obj: Any) -> "FilterSettings":
         assert isinstance(obj, dict)
+        borderlessOnly = from_bool(obj.get("borderlessOnly"))
         excludesTags = from_list(from_str, obj.get("excludesTags"))
+        fullArtOnly = from_bool(obj.get("fullArtOnly"))
         includesTags = from_list(from_str, obj.get("includesTags"))
         languages = from_list(from_str, obj.get("languages"))
         maximumDPI = from_int(obj.get("maximumDPI"))
         maximumSize = from_int(obj.get("maximumSize"))
         minimumDPI = from_int(obj.get("minimumDPI"))
-        return FilterSettings(excludesTags, includesTags, languages, maximumDPI, maximumSize, minimumDPI)
+        return FilterSettings(
+            borderlessOnly, excludesTags, fullArtOnly, includesTags, languages, maximumDPI, maximumSize, minimumDPI
+        )
 
     def to_dict(self) -> dict:
         result: dict = {}
+        result["borderlessOnly"] = from_bool(self.borderlessOnly)
         result["excludesTags"] = from_list(from_str, self.excludesTags)
+        result["fullArtOnly"] = from_bool(self.fullArtOnly)
         result["includesTags"] = from_list(from_str, self.includesTags)
         result["languages"] = from_list(from_str, self.languages)
         result["maximumDPI"] = from_int(self.maximumDPI)
@@ -387,6 +403,18 @@ class CardType(str, Enum):
     TOKEN = "TOKEN"
 
 
+class PrintingTagStatus(str, Enum):
+    """Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
+    community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
+    the frontend to show a 'matched by community tags' indicator and is otherwise
+    informational.
+    """
+
+    nomatch = "no_match"
+    resolved = "resolved"
+    unresolved = "unresolved"
+
+
 class SourceType(str, Enum):
     AWSS3 = "AWS S3"
     GoogleDrive = "Google Drive"
@@ -407,6 +435,12 @@ class Card(BaseModel):
     language: str
     mediumThumbnailUrl: str
     name: str
+    printingTagStatus: PrintingTagStatus
+    """Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
+    community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
+    the frontend to show a 'matched by community tags' indicator and is otherwise
+    informational.
+    """
     priority: int
     searchq: str
     size: int
@@ -443,6 +477,7 @@ class Card(BaseModel):
         language = from_str(obj.get("language"))
         mediumThumbnailUrl = from_str(obj.get("mediumThumbnailUrl"))
         name = from_str(obj.get("name"))
+        printingTagStatus = PrintingTagStatus(obj.get("printingTagStatus"))
         priority = from_int(obj.get("priority"))
         searchq = from_str(obj.get("searchq"))
         size = from_int(obj.get("size"))
@@ -468,6 +503,7 @@ class Card(BaseModel):
             language,
             mediumThumbnailUrl,
             name,
+            printingTagStatus,
             priority,
             searchq,
             size,
@@ -496,6 +532,7 @@ class Card(BaseModel):
         result["language"] = from_str(self.language)
         result["mediumThumbnailUrl"] = from_str(self.mediumThumbnailUrl)
         result["name"] = from_str(self.name)
+        result["printingTagStatus"] = to_enum(PrintingTagStatus, self.printingTagStatus)
         result["priority"] = from_int(self.priority)
         result["searchq"] = from_str(self.searchq)
         result["size"] = from_int(self.size)
@@ -1737,6 +1774,14 @@ def PrintingCandidatefromdict(s: Any) -> PrintingCandidate:
 
 def PrintingCandidatetodict(x: PrintingCandidate) -> Any:
     return to_class(PrintingCandidate, x)
+
+
+def PrintingTagStatusfromdict(s: Any) -> PrintingTagStatus:
+    return PrintingTagStatus(s)
+
+
+def PrintingTagStatustodict(x: PrintingTagStatus) -> Any:
+    return to_enum(PrintingTagStatus, x)
 
 
 def SearchQueryfromdict(s: Any) -> SearchQuery:

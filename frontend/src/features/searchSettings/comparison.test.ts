@@ -102,6 +102,8 @@ describe("compareFilterSettings", () => {
     maximumDPI: 1200,
     maximumSize: 100,
     minimumDPI: 300,
+    fullArtOnly: false,
+    borderlessOnly: false,
   };
 
   test("returns 0 when settings are identical", () => {
@@ -112,6 +114,8 @@ describe("compareFilterSettings", () => {
       maximumDPI: 1200,
       maximumSize: 100,
       minimumDPI: 300,
+      fullArtOnly: false,
+      borderlessOnly: false,
     };
     expect(compareFilterSettings(filterSettings, defaultFilterSettings)).toBe(
       0
@@ -125,6 +129,8 @@ describe("compareFilterSettings", () => {
     ["maximumDPI", { maximumDPI: 1500 }],
     ["maximumSize", { maximumSize: 200 }],
     ["minimumDPI", { minimumDPI: 600 }],
+    ["fullArtOnly", { fullArtOnly: true }],
+    ["borderlessOnly", { borderlessOnly: true }],
   ])("returns 1 when only %s differs", (fieldName, override) => {
     const filterSettings: FilterSettings = {
       ...defaultFilterSettings,
@@ -147,7 +153,7 @@ describe("compareFilterSettings", () => {
     );
   });
 
-  test("returns 6 when all settings differ", () => {
+  test("returns 8 when all settings differ", () => {
     const filterSettings: FilterSettings = {
       excludesTags: ["tag1"],
       includesTags: ["tag2"],
@@ -155,9 +161,11 @@ describe("compareFilterSettings", () => {
       maximumDPI: 1500,
       maximumSize: 200,
       minimumDPI: 600,
+      fullArtOnly: true,
+      borderlessOnly: true,
     };
     expect(compareFilterSettings(filterSettings, defaultFilterSettings)).toBe(
-      6
+      8
     );
   });
 

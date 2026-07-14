@@ -8,17 +8,20 @@ import {
   cardDocument4,
   cardDocument5,
   cardDocument6,
+  cardDocument12,
 } from "@/common/test-constants";
 import {
   cardbacksTwoOtherResults,
   cardDocumentsFourResults,
   cardDocumentsSixResults,
   cardDocumentsThreeResults,
+  cardDocumentsWithResolvedPrintingMatch,
   defaultHandlers,
   dfcPairsMatchingCards1And4,
   sampleCards,
   searchResultsForDFCMatchedCards1And4,
   searchResultsOneResult,
+  searchResultsResolvedPrintingMatch,
   searchResultsSixResults,
   sourceDocumentsOneResult,
   sourceDocumentsThreeResults,
@@ -27,6 +30,7 @@ import {
 import { test } from "../playwright.setup";
 import {
   expectCardbackSlotState,
+  expectCardGridSlotState,
   expectCardGridSlotStates,
   expectCardSlotToExist,
   expectCardSlotToNotExist,
@@ -550,5 +554,24 @@ test.describe("ImportText", () => {
       ]
     );
     await expectCardbackSlotState(page, cardDocument2.name, 1, 2); // should not have changed
+  });
+
+  test("importing a decklist line with a set code selects the community-resolved printing match and shows the indicator", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsWithResolvedPrintingMatch,
+      cardbacksTwoOtherResults,
+      sourceDocumentsOneResult,
+      searchResultsResolvedPrintingMatch,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "1 Lightning Bolt (2ED) 162");
+    await expectCardGridSlotState(page, 1, "front", cardDocument12.name, 1, 1);
+    await expect(
+      page.getByTestId("front-slot0").getByTestId("printing-match-indicator")
+    ).toBeVisible();
   });
 });

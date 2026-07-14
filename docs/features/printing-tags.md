@@ -8,6 +8,7 @@ artist/tag-taxonomy layer and a federation-readiness stub have since
 merged on top (PR #7).
 
 ## Backend design
+
 **Key recon finding that shaped the design**: `CanonicalCard`
 (`cardpicker/models.py`) already IS a per-printing model —
 `identifier` = Scryfall's printing UUID, `canonical_id` = Scryfall's
@@ -42,10 +43,12 @@ rather than doing its own lang/paper filtering (that boundary already lives
 in `MTGIntegration`).
 
 ## CanonicalCard population fix (data pipeline)
+
 `CanonicalCard` had 0 rows despite `CanonicalExpansion` having 1000+,
 because `import_canonical_card_data` was silently hanging for its full
 12-hour django-q timeout. Root-caused and fixed in
 `cardpicker/integrations/game/mtg.py`:
+
 - No `requests.get(...)` call had a `timeout=`, so one stalled Scryfall
   connection could hang a worker thread forever.
 - The `ThreadPoolExecutor` was submitted-and-immediately-`.result()`'d one
@@ -70,11 +73,13 @@ because `import_canonical_card_data` was silently hanging for its full
   `CanonicalPrintingMetadata` rows against that real data.
 
 ## Frontend: vote-queue UI ("What's That Card?")
+
 `PrintingTagQueue.tsx` (standalone queue page) and `PrintingTagPicker.tsx`
 (embedded picker in `CardDetailedViewModal.tsx`) present candidate
 printings for a card with a themed starburst background, animated flicker,
 and hover-zoomed candidate thumbnails. Current state (after several rounds
 of visual iteration):
+
 - `starburstShape.ts` — a seeded PRNG (mulberry32) generates alternating
   spike-tip/valley polygon vertices per layer, precomputing 5 frames per
   layer (deterministic) so the shape flickers rather than holding static.
@@ -95,16 +100,18 @@ of visual iteration):
   building this.
 
 ## Printing-candidate DOM wiring
+
 Candidate buttons in both `PrintingTagQueue.tsx` and `PrintingTagPicker.tsx`
 carry the card DOM API's data attributes — see [[card-dom-api.md]].
 
 ## Genericized theming identifiers
+
 Every identifier/comment/copy referencing a specific third-party media
 franchise (the original visual inspiration for the starburst/quiz-show
 theming) was renamed to neutral terms — zero such references anywhere in
 code, comments, copy, or docs. Page title/headers: **"What's That Card?"**.
 `GenericVoteQueue.tsx` (artist/tag vote modes) already used
-`data-testid="vote-queue"`; `PrintingTagQueue.tsx` needed a *different*
+`data-testid="vote-queue"`; `PrintingTagQueue.tsx` needed a _different_
 testid (`printing-tag-queue*`) rather than reusing that string, because its
 `Tab.Pane` stays mounted (hidden, no `unmountOnExit`) after switching tabs —
 reusing the same testid would produce two simultaneously-mounted elements
@@ -112,6 +119,7 @@ sharing it. Caught via review before shipping — see
 [[../lessons.md]] (testid collision check).
 
 ## Multi-worker coordination fallout
+
 A cross-session push conflict on this page's file (two sessions pushed to
 `master` unaware of each other, landing overlapping edits within a few
 lines of each other in `PrintingTagQueue.tsx`) is what motivated adding
@@ -119,6 +127,7 @@ lines of each other in `PrintingTagQueue.tsx`) is what motivated adding
 `WORKERS.md` itself for the protocol this produced.
 
 ## Upstream extraction status
+
 `docs/upstreaming/vote-system.md` is a companion document: a commit-by-
 commit cherry-pick classification for the whole vote system (Stage 1
 through the federation stub and contested-review generalization, PR #7),
@@ -127,18 +136,103 @@ for whoever eventually cuts an upstream extraction branch. It flags that
 with the fork-only starburst theming across many commits and should not be
 cherry-picked commit-by-commit as a result.
 
+## Stage 3: consumption (search re-rank, attribute filters, match indicator)
+
+Resolved printing-tag consensus previously did nothing outside the vote
+queue itself. Stage 3 makes `printing_tag_status == RESOLVED` actually
+affect search — gated so unresolved/no-match cards behave exactly as
+before.
+
+**Shared hard-gate helper**: `cardpicker/printing_consensus.py::get_resolved_printings(identifiers)`
+— batch DB lookup returning `ResolvedPrinting` (expansion_code,
+collector_number, full_art, border_color) only for identifiers with
+`printing_tag_status == RESOLVED`. Both the re-rank and the attribute
+filters call this one function, so they can't drift on what counts as
+"resolved."
+
+**Search re-rank** (`cardpicker/search/search_functions.py::retrieve_card_identifiers`):
+a narrow post-fetch stable-sort boost, applied _after_ the pre-existing
+(unrelated, untouched) ES hard filter on `expansion_code`/
+`collector_number` — never a new query path. Tiers: exact set+collector
+match > set-only match > everything else (today's order, unchanged).
+**Real gap found and closed along the way**: that pre-existing hard filter
+is fed by `Card.get_expansion_code`/`get_collector_number`
+(models.py:481-497), which historically only read `canonical_card` — a
+field set at _ingestion time_ from source-file tags (`cardpicker/tags.py`),
+entirely unrelated to voting. Verified empirically (grepped for every
+`canonical_card` assignment in application code) that cards which actually
+need community printing-tag votes almost always have `canonical_card = None` — meaning the re-rank boost would have been nearly inert for its
+own target population, since those cards would never survive the hard
+filter to reach the boost step at all. Fixed by widening
+`get_expansion_code`/`get_collector_number` to fall back to
+`inferred_canonical_card` when `printing_tag_status == RESOLVED` (mirrors
+the same fallback chain `Card.serialise()` already uses for
+`canonicalCard`), plus widening `documents.py`'s `select_related` to eager-
+load it. Same hard match-or-exclude semantics as before — only the data
+the filter can see got wider, not the exclude logic itself.
+
+**Attribute filters** (Full art / Borderless, opt-in, default off):
+`FilterSettings.fullArtOnly`/`borderlessOnly` (new JSON-schema fields,
+regenerated via `schemas/` quicktype build — see below). Applied as a
+post-fetch filter in the same function, same `get_resolved_printings`
+call reused for both re-rank and filter when both are active (not two
+separate lookups). Hard requirement: a card absent from
+`get_resolved_printings` (UNRESOLVED/NO_MATCH) always passes the filter —
+unresolved cards are unknowns, not mismatches. UI:
+`frontend/src/features/filters/ResolvedAttributeFilter.tsx`, states the
+"unresolved cards still show" semantic explicitly in the toggle copy.
+
+**Match indicator**: `Card.printingTagStatus` (new field, `Card.serialise()`
+
+- regenerated schema) lets the frontend know a slot's selected card is
+  community-resolved. `frontend/src/common/processing.ts::getPrintingMatchLabel`
+  (pure function) compares the slot's originating `SearchQuery` (parsed from
+  the decklist line) against the selected `CardDocument`'s `canonicalCard`,
+  returning a tooltip string or `null`. Rendered in
+  `frontend/src/features/card/Card.tsx`'s `CardImage`, reusing the existing
+  small-overlay-icon mechanism (`isFavorite`'s `CardIcon`) via a new sibling
+  `MatchIndicatorIcon` in the opposite corner (so favorite + match indicator
+  never overlap on the same card).
+
+**Bug caught only by the Playwright test, not unit tests**: the shared
+`Icon` component (`frontend/src/components/icon.tsx`) didn't forward
+`data-testid`/other rest props to the underlying `<i>` element — the
+indicator rendered correctly in the DOM but was unfindable by any
+testid-based selector. Fixed by spreading `...rest` onto the `<i>`; this
+also benefits any other future consumer of `Icon` needing a testid/
+aria-label.
+
+**Schema changes require the quicktype regeneration step**, not hand-
+editing `schema_types.py`/`schema_types.ts` (both say "Generated by
+quicktype. Do not manually modify this file." at the top): edit the
+source JSON Schema files in `schemas/schemas/`, then `cd schemas && npm run build`. The raw quicktype output isn't black/isort/prettier-
+formatted — run those afterward, or the diff is mostly reformatting noise
+unrelated to the actual schema change.
+
+**Known deferred gap**: client-side (local-folder/Google Drive,
+Orama-indexed) search gets no re-rank/filter/indicator parity — that path
+has no ES/DB access to consult `printing_tag_status`. Flagged explicitly,
+not silently built.
+
 ## Key files
+
 - Backend: `cardpicker/printing_consensus.py`,
   `cardpicker/printing_metadata_import.py`,
   `cardpicker/integrations/game/mtg.py`, `cardpicker/models.py` (migration
-  `0050_canonicalprintingmetadata_cardprintingtag_and_more.py`)
+  `0050_canonicalprintingmetadata_cardprintingtag_and_more.py`),
+  `cardpicker/search/search_functions.py` (Stage 3 re-rank/filter),
+  `cardpicker/documents.py` (Stage 3 widened indexing)
 - Frontend: `frontend/src/features/printingTags/` (`PrintingTagQueue.tsx`,
-  `PrintingTagPicker.tsx`, `starburstShape.ts`, `useStickyTop`)
+  `PrintingTagPicker.tsx`, `starburstShape.ts`, `useStickyTop`),
+  `frontend/src/features/filters/ResolvedAttributeFilter.tsx` (Stage 3),
+  `frontend/src/common/processing.ts::getPrintingMatchLabel` (Stage 3)
 - `docs/upstreaming/vote-system.md`
 
 ## Known gaps
+
 - `CanonicalCard.image_hash` is bootstrapped to `0` for every row
   (`--skip-image-hash`); real perceptual-hash-based matching isn't
   implemented yet.
+- Client-side (Orama) search has no Stage 3 parity — see above.
 - Upstreaming this feature is deprioritized — see
   [[../infrastructure.md]]'s Upstreaming section.

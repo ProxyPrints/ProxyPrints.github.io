@@ -5,6 +5,7 @@ import { Printing, Unknown } from "@/common/constants";
 import { computeSearchQueryHashKey, toSearchable } from "@/common/processing";
 import {
   CardType as CardTypeSchema,
+  PrintingTagStatus,
   SearchQuery,
   SearchSettings,
   SortBy,
@@ -533,6 +534,11 @@ export class ClientSearchService {
       mediumThumbnailUrl: undefined,
       language: "EN", // TODO
       tags: oramaCardDocument.tags,
+      // local-file/Google Drive sources aren't indexed with printing-tag vote data yet - the
+      // consumption features (search re-rank/filters/match indicator) only apply server-side
+      // for now, so these cards are always treated as unaffected. See docs/features/ for the
+      // deferred client-side parity gap.
+      printingTagStatus: PrintingTagStatus.Unresolved,
     };
   }
 

@@ -39,6 +39,8 @@ export function getDefaultSearchSettings(
       languages: [],
       includesTags: [],
       excludesTags: ["NSFW"],
+      fullArtOnly: false,
+      borderlessOnly: false,
     },
   };
 }

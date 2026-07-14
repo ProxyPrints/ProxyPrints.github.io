@@ -31,6 +31,8 @@ BASE_SEARCH_SETTINGS = {
         "languages": [],
         "includesTags": [],
         "excludesTags": [],
+        "fullArtOnly": False,
+        "borderlessOnly": False,
     },
 }
 

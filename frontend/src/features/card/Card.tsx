@@ -19,6 +19,8 @@ import React, {
 } from "react";
 import BSCard from "react-bootstrap/Card";
 import Col from "react-bootstrap/Col";
+import OverlayTrigger from "react-bootstrap/OverlayTrigger";
+import Tooltip from "react-bootstrap/Tooltip";
 
 import { getCardDataAttributes } from "@/common/cardDom";
 import {
@@ -26,6 +28,7 @@ import {
   getImageKey,
   getWorkerImageURL,
 } from "@/common/image";
+import { getPrintingMatchLabel } from "@/common/processing";
 import { SourceType } from "@/common/schema_types";
 import { SearchQuery, useAppDispatch, useAppSelector } from "@/common/types";
 import { CardDocument } from "@/common/types";
@@ -73,6 +76,18 @@ const CardIcon = styled(Icon)`
   left: unset;
   bottom: 8px;
   right: 8px;
+  z-index: 2;
+  -webkit-text-stroke: 2px black;
+`;
+
+// separate corner from CardIcon (favorite heart) so the two never overlap when both apply
+const MatchIndicatorIcon = styled(Icon)`
+  width: auto;
+  height: auto;
+  top: unset;
+  right: unset;
+  bottom: 8px;
+  left: 8px;
   z-index: 2;
   -webkit-text-stroke: 2px black;
 `;
@@ -220,6 +235,9 @@ interface CardImageProps {
   hidden: boolean;
   small: boolean;
   showDetailedViewOnClick: boolean;
+  /** The `SearchQuery` specified when searching for this card - used to detect whether
+   * `cardDocument` was matched to a specific printing via community tags. */
+  searchQuery?: SearchQuery | undefined;
 }
 
 function CardImage({
@@ -227,6 +245,7 @@ function CardImage({
   hidden,
   small,
   showDetailedViewOnClick,
+  searchQuery,
 }: CardImageProps) {
   const dispatch = useAppDispatch();
   const handleShowDetailedView = () => {
@@ -257,6 +276,12 @@ function CardImage({
       cardDocument?.searchq ?? "",
       cardDocument?.identifier ?? ""
     )
+  );
+
+  const printingMatchLabel = getPrintingMatchLabel(
+    searchQuery,
+    cardDocument.canonicalCard,
+    cardDocument.printingTagStatus
   );
 
   //# endregion
@@ -291,6 +316,21 @@ function CardImage({
               <>
                 {isFavorite && small && (
                   <CardIcon bootstrapIconName="heart-fill" />
+                )}
+                {printingMatchLabel != null && small && (
+                  <OverlayTrigger
+                    placement="top"
+                    overlay={
+                      <Tooltip id={`printing-match-${cardDocument.identifier}`}>
+                        {printingMatchLabel}
+                      </Tooltip>
+                    }
+                  >
+                    <MatchIndicatorIcon
+                      data-testid="printing-match-indicator"
+                      bootstrapIconName="patch-check-fill"
+                    />
+                  </OverlayTrigger>
                 )}
                 <VisibleImage
                   ref={imageRef}
@@ -426,6 +466,7 @@ export function Card({
                   cardDocument?.identifier === maybeCardDocument.identifier &&
                   cardOnClick == null
                 }
+                searchQuery={searchQuery}
               />
             )
         )}
