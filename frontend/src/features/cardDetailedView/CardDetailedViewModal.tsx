@@ -19,6 +19,7 @@ import { AutofillTable } from "@/components/AutofillTable";
 import { ClickToCopy } from "@/components/ClickToCopy";
 import DisableSSR from "@/components/DisableSSR";
 import { RightPaddedIcon } from "@/components/icon";
+import { SetIcon } from "@/components/SetIcon";
 import { AttributeVotingPanel } from "@/features/attributeVoting/AttributeVotingPanel";
 import { AddCardToFavorites } from "@/features/card/AddCardToFavorites";
 import { AddCardToProjectForm } from "@/features/card/AddCardToProjectForm";
@@ -140,11 +141,19 @@ export function CardDetailedViewModal({
                   ["File Size", imageSizeToMBString(cardDocument.size, 2)],
                   [
                     "Canonical Card",
-                    cardDocument.canonicalCard
-                      ? `${cardDocument.canonicalCard.expansionCode.toUpperCase()} ${
-                          cardDocument.canonicalCard.collectorNumber
-                        }`
-                      : "Unknown",
+                    cardDocument.canonicalCard ? (
+                      <>
+                        <SetIcon
+                          expansionCode={
+                            cardDocument.canonicalCard.expansionCode
+                          }
+                        />{" "}
+                        {cardDocument.canonicalCard.expansionCode.toUpperCase()}{" "}
+                        {cardDocument.canonicalCard.collectorNumber}
+                      </>
+                    ) : (
+                      "Unknown"
+                    ),
                   ],
                   [
                     "Canonical Aritst",
