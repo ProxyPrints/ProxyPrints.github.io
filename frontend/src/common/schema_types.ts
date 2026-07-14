@@ -558,6 +558,7 @@ export interface TagsResponse {
 export interface Tag {
   aliases?: string[];
   children: ChildElement[];
+  displayName?: null | string;
   isEnabledByDefault?: boolean;
   name: string;
   parent: null | string;
@@ -566,6 +567,7 @@ export interface Tag {
 export interface ChildElement {
   aliases?: string[];
   children: ChildElement[];
+  displayName?: null | string;
   isEnabledByDefault?: boolean;
   name: string;
   parent: null | string;
@@ -1991,6 +1993,11 @@ const typeMap: any = {
       { json: "aliases", js: "aliases", typ: u(undefined, a("")) },
       { json: "children", js: "children", typ: a(r("ChildElement")) },
       {
+        json: "displayName",
+        js: "displayName",
+        typ: u(undefined, u(null, "")),
+      },
+      {
         json: "isEnabledByDefault",
         js: "isEnabledByDefault",
         typ: u(undefined, true),
@@ -2004,6 +2011,11 @@ const typeMap: any = {
     [
       { json: "aliases", js: "aliases", typ: u(undefined, a("")) },
       { json: "children", js: "children", typ: a(r("ChildElement")) },
+      {
+        json: "displayName",
+        js: "displayName",
+        typ: u(undefined, u(null, "")),
+      },
       {
         json: "isEnabledByDefault",
         js: "isEnabledByDefault",

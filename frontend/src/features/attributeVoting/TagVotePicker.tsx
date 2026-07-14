@@ -12,6 +12,7 @@ import Badge from "react-bootstrap/Badge";
 
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { TagConsensusResponse } from "@/common/schema_types";
+import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch } from "@/common/types";
 import { APIGetTagConsensus, APISubmitTagVote } from "@/store/api";
 import { setNotification } from "@/store/slices/toastsSlice";
@@ -29,6 +30,7 @@ export function TagVotePicker({
   cardIdentifier,
 }: TagVotePickerProps) {
   const dispatch = useAppDispatch();
+  const getTagDisplayName = useTagDisplayName();
 
   const [entries, setEntries] = useState<TagConsensusResponse["tags"]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -104,7 +106,7 @@ export function TagVotePicker({
           }}
           onClick={() => submit(entry.tagName, entry.resolvedPolarity)}
         >
-          {entry.tagName}
+          {getTagDisplayName(entry.tagName)}
         </Badge>
       ))}
     </div>

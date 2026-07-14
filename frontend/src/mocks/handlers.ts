@@ -545,26 +545,34 @@ export const tagsTwoResults = http.get(buildRoute("2/tags/"), () =>
   HttpResponse.json({ tags: ["Tag 1", "Tag 2"] }, { status: 200 })
 );
 
-const serialisedTag = (name: string) => ({
+const serialisedTag = (name: string, displayName: string | null = null) => ({
   name,
+  displayName,
   aliases: [],
   isEnabledByDefault: true,
   parent: null,
   children: [],
 });
 
+// keep in sync with cardpicker/reason_tags.py's NO_MATCH_REASON_TAGS - real seeded
+// (name, displayName) pairs, mirrored here so mocked tests exercise the same
+// displayName-lookup path a real seeded backend would.
+const NO_MATCH_REASON_TAG_DISPLAY_NAMES: Array<[string, string]> = [
+  ["custom-art", "Custom art"],
+  ["altered-frame", "Altered frame"],
+  ["upscaled", "Upscaled"],
+  ["ai-art", "AI art"],
+  ["no-collector-line", "No collector line"],
+  ["non-english", "Non-English"],
+];
+
 // all six no-match reason tags exist server-side - NoMatchReasonStrip shows every chip
 export const tagsAllNoMatchReasonTags = http.get(buildRoute("2/tags/"), () =>
   HttpResponse.json(
     {
-      tags: [
-        "custom-art",
-        "altered-frame",
-        "upscaled",
-        "ai-art",
-        "no-collector-line",
-        "non-english",
-      ].map(serialisedTag),
+      tags: NO_MATCH_REASON_TAG_DISPLAY_NAMES.map(([name, displayName]) =>
+        serialisedTag(name, displayName)
+      ),
     },
     { status: 200 }
   )
@@ -574,9 +582,40 @@ export const tagsAllNoMatchReasonTags = http.get(buildRoute("2/tags/"), () =>
 // run, or ran on an older version of the taxonomy) - NoMatchReasonStrip should hide the rest
 export const tagsSomeNoMatchReasonTags = http.get(buildRoute("2/tags/"), () =>
   HttpResponse.json(
-    { tags: ["custom-art", "ai-art"].map(serialisedTag) },
+    {
+      tags: NO_MATCH_REASON_TAG_DISPLAY_NAMES.filter(([name]) =>
+        ["custom-art", "ai-art"].includes(name)
+      ).map(([name, displayName]) => serialisedTag(name, displayName)),
+    },
     { status: 200 }
   )
+);
+
+// one tag with no displayName set (falls back to raw name) alongside one with a real
+// displayName - for asserting the fallback-vs-lookup behaviour directly.
+export const tagsOneWithDisplayNameOneWithout = http.get(
+  buildRoute("2/tags/"),
+  () =>
+    HttpResponse.json(
+      {
+        tags: [
+          serialisedTag("custom-art", "Custom art"),
+          serialisedTag("altered-frame", null),
+        ],
+      },
+      { status: 200 }
+    )
+);
+
+// "Borderless" has a displayName deliberately different from its name, so a test asserting
+// the mapped label is visible (and the raw name isn't) can't pass by coincidence.
+export const tagsBorderlessWithDisplayName = http.get(
+  buildRoute("2/tags/"),
+  () =>
+    HttpResponse.json(
+      { tags: [serialisedTag("Borderless", "Frameless Border")] },
+      { status: 200 }
+    )
 );
 
 //# endregion

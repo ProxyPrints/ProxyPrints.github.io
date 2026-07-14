@@ -11,7 +11,7 @@ from django.urls import reverse
 
 from cardpicker import views
 from cardpicker.tests.constants import Cards, DummyImportSite, Sources
-from cardpicker.tests.factories import SourceFactory
+from cardpicker.tests.factories import SourceFactory, TagFactory
 
 
 def snapshot_response(response: Response, snapshot: SnapshotAssertion):
@@ -875,15 +875,30 @@ class TestGetTags:
     def test_get_no_data_tags(self, client, django_settings):
         response = client.get(reverse(views.get_tags))
         assert response.json()["tags"] == [
-            {"name": "NSFW", "parent": None, "aliases": [], "children": [], "isEnabledByDefault": True},
+            {
+                "name": "NSFW",
+                "displayName": None,
+                "parent": None,
+                "aliases": [],
+                "children": [],
+                "isEnabledByDefault": True,
+            },
         ]
 
     def test_get_one_data_tag(self, client, django_settings, tag_in_data):
         response = client.get(reverse(views.get_tags))
         assert response.json()["tags"] == [
-            {"name": "NSFW", "parent": None, "aliases": [], "children": [], "isEnabledByDefault": True},
+            {
+                "name": "NSFW",
+                "displayName": None,
+                "parent": None,
+                "aliases": [],
+                "children": [],
+                "isEnabledByDefault": True,
+            },
             {
                 "name": "Tag in Data",
+                "displayName": None,
                 "parent": None,
                 "aliases": ["TaginData"],
                 "children": [],
@@ -896,14 +911,23 @@ class TestGetTags:
         assert response.json()["tags"] == [
             {
                 "name": "Another Tag in Data",
+                "displayName": None,
                 "parent": None,
                 "aliases": ["AnotherTaginData"],
                 "children": [],
                 "isEnabledByDefault": True,
             },
-            {"name": "NSFW", "parent": None, "aliases": [], "children": [], "isEnabledByDefault": True},
+            {
+                "name": "NSFW",
+                "displayName": None,
+                "parent": None,
+                "aliases": [],
+                "children": [],
+                "isEnabledByDefault": True,
+            },
             {
                 "name": "Tag in Data",
+                "displayName": None,
                 "parent": None,
                 "aliases": ["TaginData"],
                 "children": [],
@@ -914,21 +938,31 @@ class TestGetTags:
     def test_get_hierarchical_tags(self, client, django_settings, grandchild_tag):
         response = client.get(reverse(views.get_tags))
         assert response.json()["tags"] == [
-            {"name": "NSFW", "parent": None, "aliases": [], "isEnabledByDefault": True, "children": []},
+            {
+                "name": "NSFW",
+                "displayName": None,
+                "parent": None,
+                "aliases": [],
+                "isEnabledByDefault": True,
+                "children": [],
+            },
             {
                 "name": "Tag in Data",
+                "displayName": None,
                 "parent": None,
                 "aliases": ["TaginData"],
                 "isEnabledByDefault": True,
                 "children": [
                     {
                         "name": "Child Tag",
+                        "displayName": None,
                         "parent": "Tag in Data",
                         "aliases": ["ChildTag"],
                         "isEnabledByDefault": True,
                         "children": [
                             {
                                 "name": "Grandchild Tag",
+                                "displayName": None,
                                 "parent": "Child Tag",
                                 "aliases": ["GrandchildTag"],
                                 "isEnabledByDefault": True,
@@ -939,6 +973,12 @@ class TestGetTags:
                 ],
             },
         ]
+
+    def test_get_tag_with_display_name(self, client, django_settings, db):
+        TagFactory(name="custom-art", display_name="Custom art")
+        response = client.get(reverse(views.get_tags))
+        [custom_art_tag] = [tag for tag in response.json()["tags"] if tag["name"] == "custom-art"]
+        assert custom_art_tag["displayName"] == "Custom art"
 
     def test_post_request(self, client, django_settings, snapshot):
         response = client.post(reverse(views.get_tags))

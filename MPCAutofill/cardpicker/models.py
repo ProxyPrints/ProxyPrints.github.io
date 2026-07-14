@@ -627,6 +627,14 @@ class CardArtistVote(AbstractWeightedVote):
 
 class Tag(models.Model):
     name = models.CharField(unique=True)
+    display_name = models.CharField(
+        max_length=200,
+        null=True,
+        blank=True,
+        help_text="Presentation only — freely editable. `name` is the immutable machine key "
+        "used by votes, tag_vote_statuses, Card.tags, and federation; NEVER rename a Tag "
+        "after creation.",
+    )
     # null=True is just for admin panel
     aliases = ArrayField(models.CharField(max_length=200), default=list, blank=True)
     is_enabled_by_default = models.BooleanField(default=True)
@@ -638,6 +646,7 @@ class Tag(models.Model):
     def serialise(self) -> SerialisedTag:
         return SerialisedTag(
             name=self.name,
+            displayName=self.display_name,
             aliases=self.aliases,
             isEnabledByDefault=self.is_enabled_by_default,
             parent=(self.parent.name if self.parent else None),

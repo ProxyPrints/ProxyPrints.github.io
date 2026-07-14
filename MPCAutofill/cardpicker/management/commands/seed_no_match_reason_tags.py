@@ -10,4 +10,4 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         stats = seed_no_match_reason_tags()
-        print(f"No-match reason tags: {stats['created']} created.")
+        print(f"No-match reason tags: {stats['created']} created, {stats['updated']} display_name backfilled.")

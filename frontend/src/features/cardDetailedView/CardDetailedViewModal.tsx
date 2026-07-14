@@ -12,6 +12,7 @@ import Row from "react-bootstrap/Row";
 
 import { getCardDataAttributes } from "@/common/cardDom";
 import { PrintingConsensusResponse } from "@/common/schema_types";
+import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
 import { imageSizeToMBString, toTitleCase } from "@/common/utils";
 import { AutofillTable } from "@/components/AutofillTable";
@@ -51,6 +52,7 @@ export function CardDetailedViewModal({
   const queueImageDownload = useDoImageDownload();
   const getLanguagesQuery = useGetLanguagesQuery();
   const backendURL = useAppSelector(selectRemoteBackendURL);
+  const getTagDisplayName = useTagDisplayName();
 
   const [printingConsensus, setPrintingConsensus] =
     useState<PrintingConsensusResponse | null>(null);
@@ -124,7 +126,7 @@ export function CardDetailedViewModal({
                       <>
                         {cardDocument.tags.map((tag) => (
                           <Badge key={tag} pill>
-                            {tag}
+                            {getTagDisplayName(tag)}
                           </Badge>
                         ))}
                       </>
