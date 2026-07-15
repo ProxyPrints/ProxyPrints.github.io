@@ -18,6 +18,7 @@ import imagehash
 import requests
 from PIL import Image
 
+from cardpicker.local_fallback import normalize_crop_box
 from cardpicker.models import CanonicalCard
 from cardpicker.utils import twos_complement
 
@@ -104,9 +105,12 @@ def get_or_compute_canonical_hash(canonical: CanonicalCard) -> Optional[int]:
     return computed
 
 
-def compute_card_art_hash(card_image: "Image.Image") -> int:
+def compute_card_art_hash(card_image: "Image.Image", bleed_class: Optional[str] = None) -> int:
+    """`bleed_class` (from local_fallback.classify_bleed_edge, run once per card ahead of
+    everything else - see run_pilot) remaps ART_CROP_BOX via local_fallback.normalize_crop_box
+    for a trimmed image; a no-op otherwise."""
     width, height = card_image.size
-    left, top, right, bottom = ART_CROP_BOX
+    left, top, right, bottom = normalize_crop_box(ART_CROP_BOX, bleed_class)
     art_region = card_image.crop((int(left * width), int(top * height), int(right * width), int(bottom * height)))
     return _hash_to_int(imagehash.phash(art_region))
 

@@ -1160,6 +1160,126 @@ explicitly NOT built this pass:
   detector in this pilot got) before casting anything real, and this
   item's own scope was report-only.
 
+### Bleed-first crop normalization (2026-07-15, owner-directed, folded into item 3d)
+
+**Owner's question mid-item-8**: since bleed classification is cheap and
+purely geometric, should it run FIRST, ahead of everything else, so its
+result can normalize every OTHER fixed-fraction crop box in the pipeline?
+Investigated rather than assumed: `local_ocr.DEFAULT_CROP_BOX`,
+`local_phash.ART_CROP_BOX`, `local_fallback.ARTIST_CROP_BOX`,
+`local_fallback.SYMBOL_STRIP_BOX`, and `local_fallback._BORDER_SAMPLE_BANDS`
+are all fixed-fraction boxes empirically tuned against real fetched images -
+which are ~97.5% bleed-inclusive (the 40-source bleed sample above). That
+means they're already correctly calibrated for the bleed-inclusive
+majority; the ~2.5% TRIMMED minority is the one case where a box tuned
+against a bleed-inclusive image lands in the wrong place, since removing
+the bleed margin shifts where the same physical card position falls as a
+fraction of the (now smaller) full image.
+
+**`local_fallback.normalize_crop_box(box, bleed_class)`**: a no-op for
+`'bleed'` or `None` (abstain); for `'trimmed'`, rescales each fraction by
+the same margin-fraction math derived from the bleed-edge section's own
+reference geometry (`_WIDTH_MARGIN_FRACTION = 3.175 / 69.35 ≈ 4.58%`,
+`_HEIGHT_MARGIN_FRACTION = 3.175 / 94.35 ≈ 3.37%` per edge). Threaded
+through all five crop sites via a new `bleed_class` parameter on
+`classify_border_color`, `detect_illus_anchor`, `find_symbol_matches`,
+`run_ocr_for_card`, and `local_phash.compute_card_art_hash`.
+
+**The border-sample bands got a real empirical check, not just the
+derivation, before being included** - their sample position sits close to
+where the bleed margin lives (0.03-0.05 fraction from each edge, inside
+the ~3.4-4.6% margin), which could in principle mean the EXISTING
+(unmodified) bands were already misreading bleed-inclusive images, not
+just needing a trimmed-image fix. Sampled 15 real bleed-classified cards
+with and without the remap applied: solid-color borders (the common case,
+most sources) read IDENTICAL RGB regardless of exact sample position -
+border color extends uniformly through the bleed margin in real print
+prep. Confirms the existing bands are correct for the majority as-is, and
+normalizing is safe to apply unconditionally (a no-op there anyway, since
+it only activates for `'trimmed'`).
+
+`run_pilot`'s per-card processing now classifies bleed FIRST (before
+OCR/phash/border/frame/symbol/artist), immediately after image fetch -
+see `_compute_card`'s docstring.
+
+### Pipeline concurrency (2026-07-15, pre-scale program item 3d)
+
+**Measured the real constraint before designing anything**: this box has
+2 CPU cores total, shared with 5 live production containers (Django,
+worker, nginx, Postgres, Elasticsearch) - not an abstract "how many
+threads" question, a genuine resource-contention one. Also found (while
+setting up the measurement) that `mpcautofill_django` doesn't have
+tesseract installed at all - confirms the real pilot run's host-venv
+execution path is the ONLY one that currently works, not just how it
+happened to be run (relevant to item 4's install-path decision).
+
+**Live-contention test, not a synthetic benchmark**: 10 real candidate
+cards, dry, fetch+OCR+phash only, run against the live production DB
+while a separate probe hit the live API's `2/languages/` endpoint
+locally (bypassing Cloudflare) every ~0.3s, comparing latency across
+three conditions:
+
+| condition                     | mean latency | p95 latency | wall clock (10 cards) |
+| ----------------------------- | -----------: | ----------: | --------------------: |
+| idle (no pilot load)          |       79.8ms |      94.7ms |                     - |
+| sequential (today's behavior) |       88.7ms |     126.1ms |                13.42s |
+| 2-worker concurrent           |       93.9ms |     135.7ms |                 6.34s |
+
+Only ~5ms extra mean latency for 2 workers over the ALREADY-EXISTING
+single-threaded impact, for a near-ideal ~2.1x wall-clock speedup
+matching the core count exactly - tesseract's subprocess-based OCR
+genuinely parallelizes here (the GIL releases during the subprocess
+wait). `DEFAULT_WORKERS = 2` adopted as the new default.
+
+**Design: split compute from writes, not a full concurrent rewrite.**
+`_compute_card` (new) does the parallelizable half - fetch, bleed
+classification (first), OCR, phash, border/frame classification, pass-2
+fallback - as a pure function with no DB writes and no shared/nonlocal
+state, safe to run via `ThreadPoolExecutor.map()` (which preserves
+submission order in its results regardless of completion order).
+`run_pilot`'s own loop - votes_batch/tag_votes_batch staging,
+disagreement bookkeeping, the ground-truth-preferred attribute override,
+the frame-mismatch consistency check, flush/gate-check - stays
+single-threaded and in selection order, completely UNCHANGED from
+before this split; only where its input comes from changed. Chunked at
+`batch_size` granularity (reusing checkpointing's existing boundary,
+item 2) rather than a second batching concept - each chunk's compute
+pool completes before that chunk's writes are staged and flushed.
+
+`OMP_THREAD_LIMIT=1` set (via `os.environ.setdefault`, respects an
+operator's own override) whenever `workers > 1` - without it, N
+concurrent tesseract subprocesses could each ALSO try to multi-thread
+themselves internally, oversubscribing this box's 2 real cores well
+beyond `workers`.
+
+**Fetch budget is now checked between chunks, not per-card** - a chunk
+already in flight always completes once started, so the real bound on
+an overshoot is one chunk's worth of fetches (`<= batch_size`), not
+zero. Consistent with the belt-and-suspenders framing already
+established for `--fetch-budget` (item 3b) - the real enforcement is the
+Worker's own `IMAGE_FULL_TIER_RATE_LIMITER`, not this counter.
+
+**A real threading bug found and fixed while writing the tests, not
+just a design risk avoided in the abstract**: `run_fallback_for_card`'s
+own `CanonicalCard.objects.filter(...)` query, executed from a worker
+thread, silently returned empty under pytest-django's default
+(non-transactional) `db` fixture - a worker thread opens its own DB
+connection, which can't see an uncommitted test transaction only the
+original connection is inside. Exact same root cause and fix
+(`transactional_db`, real commits, TRUNCATE-based cleanup) as
+`test_sources.py`'s pre-existing `test_all_sources_scanned_concurrently_local_file`
+for `update_database()`'s own worker threads - this is a known, already-
+established pattern in this codebase, not a new problem. Not a
+production concern (committed data is visible across connections/threads
+fine); a test-fixture-only issue, but a real one - the failing assertion
+caught it, not a code review guess. New `TestConcurrency` test class
+(`transactional_db`-based) validates workers>1 finds a real cross-thread
+DB match, workers=1 and workers=4 agree on the same input, and
+`OMP_THREAD_LIMIT` is set/unset correctly.
+
+`--workers` CLI flag added (default `DEFAULT_WORKERS = 2`, `--workers=1`
+disables concurrency entirely).
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run

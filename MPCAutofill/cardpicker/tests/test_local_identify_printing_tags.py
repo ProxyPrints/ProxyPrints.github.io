@@ -8,6 +8,7 @@ docs/features/printing-tags.md's Stage 8 environment section - CI's django image
 it, only the host venv used for the real pilot run does).
 """
 
+import os
 import shutil
 
 import pytest
@@ -417,12 +418,12 @@ class TestRunPilotAgreementAndDisagreement:
 
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box):
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             )
 
-        def fake_phash(selected, image, threshold, margin, max_candidates):
+        def fake_phash(selected, image, threshold, margin, max_candidates, bleed_class=None):
             return module.EngineVote(engine="phash", printing_pk=printing.pk, confidence=0.8, detail="d=0"), ""
 
         monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
@@ -446,12 +447,12 @@ class TestRunPilotAgreementAndDisagreement:
 
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box):
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing_a.pk, confidence=0.85, detail="raw")
             )
 
-        def fake_phash(selected, image, threshold, margin, max_candidates):
+        def fake_phash(selected, image, threshold, margin, max_candidates, bleed_class=None):
             return module.EngineVote(engine="phash", printing_pk=printing_b.pk, confidence=0.8, detail="d=0"), ""
 
         monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
@@ -474,7 +475,7 @@ class TestRunPilotAgreementAndDisagreement:
 
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box):
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             )
@@ -505,7 +506,7 @@ class TestRunPilotSourceExclusion:
 
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box):
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             )
@@ -537,7 +538,7 @@ class TestCheckpointing:
     def _wire_fake_ocr(monkeypatch, printing_pk):
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box):
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing_pk, confidence=0.85, detail="raw")
             )
@@ -661,7 +662,15 @@ class TestFetchBudget:
         cards = [CardFactory(name="Forest") for _ in range(5)]
         TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
 
-        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, fetch_budget=3)
+        # batch_size=3 matches fetch_budget=3 deliberately (pre-scale program item 3d): the
+        # budget is now checked BETWEEN chunks, not per-card - a chunk already in flight always
+        # completes (see run_pilot's own comment on this), so the real bound on overshoot is one
+        # chunk's worth. Aligning the two here keeps this test's exact-count assertions valid;
+        # a batch_size that DIDN'T divide evenly would still stop correctly, just with the
+        # (already-documented, already-accepted) chunk-sized overshoot instead of an exact cut.
+        results, _attributes = run_pilot(
+            engine="ocr", limit=10, dry_run=False, nice=False, fetch_budget=3, batch_size=3, workers=1
+        )
 
         assert results["ocr"].votes_written == 3
         assert results["ocr"].fetch_budget_exhausted is True
@@ -701,7 +710,7 @@ class TestIdempotence:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box: module.OcrCardResult(
+            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             ),
         )
@@ -733,10 +742,18 @@ class TestVerifyZeroResolutions:
 
 
 def _black_bordered_image_with_artist_text(artist_name: str) -> Image:
-    img = Image.new("RGB", (750, 1050), (5, 5, 5))
+    # 750x1020 (ratio ~0.7353) is deliberately a clean "bleed" shape (BLEED_ASPECT_RATIO
+    # ~0.7350, distance 0.0003) rather than the original 750x1050 (ratio 0.7143), which landed
+    # just inside classify_bleed_edge's "trimmed" bucket by accident - that silently triggered
+    # local_fallback.normalize_crop_box's trimmed-image remap on ARTIST_CROP_BOX/
+    # _BORDER_SAMPLE_BANDS, shifting them away from where this synthetic image actually draws
+    # its content. This test is about fallback wiring, not bleed-remap correctness (that's
+    # covered separately in test_local_fallback.py) - matching the real-world majority shape
+    # keeps normalize_crop_box a no-op here, same as it is for ~97.5% of real images.
+    img = Image.new("RGB", (750, 1020), (5, 5, 5))
     draw = ImageDraw.Draw(img)
-    draw.rectangle([60, 60, 690, 990], fill=(120, 80, 200))
-    draw.text((150, 990), f"Illus. {artist_name}", fill=(255, 255, 255))
+    draw.rectangle([60, 60, 690, 960], fill=(120, 80, 200))
+    draw.text((150, 960), f"Illus. {artist_name}", fill=(255, 255, 255))
     return img
 
 
@@ -767,17 +784,26 @@ class TestPass2Wiring:
         # on it, but the crop/OCR fallback inside detect_illus_anchor() must not depend on the
         # real binary reading it accurately; this mirrors what it would extract.
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "Illus. Marie Magny")
-        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
+        monkeypatch.setattr(
+            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+        )
         monkeypatch.setattr(
             module,
             "run_phash_for_card",
-            lambda selected, image, threshold, margin, max_candidates: (None, "no-clear-winner"),
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (None, "no-clear-winner"),
         )
         monkeypatch.setattr(
             module, "fetch_card_image", lambda card, dpi=None: _black_bordered_image_with_artist_text("Marie Magny")
         )
 
-        results, attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False)
+        # workers=1: this test exercises REAL (unmocked) run_fallback_for_card, which queries
+        # CanonicalCard/CanonicalPrintingMetadata/CanonicalArtist - under workers>1 those queries
+        # run on a worker thread's own DB connection, which can't see this test's fixture data
+        # under pytest-django's default (non-transactional) `db` fixture (only the original
+        # connection sees an uncommitted test transaction). Concurrency correctness itself is
+        # covered separately (TestConcurrency, using transactional_db) - this test is about
+        # fallback wiring, not concurrency, so it stays on the simple single-threaded path.
+        results, attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
 
         assert results["fallback"].votes_written == 1
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID, printing=printing).exists()
@@ -802,7 +828,7 @@ class TestPass2Wiring:
         # detect_illus_anchor() call must not depend on the real binary being present to do so.
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
-        def fake_ocr(selected, image, crop_box):
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(
                     engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="158/281 R MOM EN"
@@ -836,11 +862,13 @@ class TestPass2Wiring:
             raise AssertionError("run_fallback_for_card must not run again for an already-covered card")
 
         monkeypatch.setattr(module.local_fallback, "run_fallback_for_card", fail_if_called)
-        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
+        monkeypatch.setattr(
+            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+        )
         monkeypatch.setattr(
             module,
             "run_phash_for_card",
-            lambda selected, image, threshold, margin, max_candidates: (None, "no-clear-winner"),
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (None, "no-clear-winner"),
         )
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
 
@@ -869,7 +897,7 @@ class TestGroundTruthAttributeVotes:
         # real read would find anyway; see the identical note on TestPass2Wiring above.
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
-        def fake_ocr(selected, image, crop_box):
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(
                     engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="158/281 R MOM EN"
@@ -909,11 +937,13 @@ class TestGroundTruthAttributeVotes:
         # no real tesseract binary in CI - see the identical note on the sibling test above
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
-        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
+        monkeypatch.setattr(
+            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+        )
         monkeypatch.setattr(
             module,
             "run_phash_for_card",
-            lambda selected, image, threshold, margin, max_candidates: (None, "no-clear-winner"),
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (None, "no-clear-winner"),
         )
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
 
@@ -937,7 +967,7 @@ class TestGroundTruthAttributeVotes:
         # no real tesseract binary in CI - see the identical note on the sibling test above
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
-        def fake_ocr(selected, image, crop_box):
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(
                     engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="158/281 R MOM EN"
@@ -969,11 +999,13 @@ class TestBleedEdgeVotesEndToEnd:
         import cardpicker.local_ocr as local_ocr_module
 
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
-        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
+        monkeypatch.setattr(
+            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+        )
         monkeypatch.setattr(
             module,
             "run_phash_for_card",
-            lambda selected, image, threshold, margin, max_candidates: (None, "too-many-candidates"),
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (None, "too-many-candidates"),
         )
         # 735/1000 ~= BLEED_ASPECT_RATIO
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (735, 1000), (5, 5, 5)))
@@ -993,11 +1025,13 @@ class TestBleedEdgeVotesEndToEnd:
         import cardpicker.local_ocr as local_ocr_module
 
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
-        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
+        monkeypatch.setattr(
+            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+        )
         monkeypatch.setattr(
             module,
             "run_phash_for_card",
-            lambda selected, image, threshold, margin, max_candidates: (None, "too-many-candidates"),
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (None, "too-many-candidates"),
         )
         # 716/1000 ~= TRIM_ASPECT_RATIO
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (716, 1000), (5, 5, 5)))
@@ -1017,11 +1051,13 @@ class TestBleedEdgeVotesEndToEnd:
         import cardpicker.local_ocr as local_ocr_module
 
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
-        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
+        monkeypatch.setattr(
+            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+        )
         monkeypatch.setattr(
             module,
             "run_phash_for_card",
-            lambda selected, image, threshold, margin, max_candidates: (None, "too-many-candidates"),
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (None, "too-many-candidates"),
         )
         monkeypatch.setattr(
             module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (1000, 1000), (5, 5, 5))
@@ -1032,3 +1068,77 @@ class TestBleedEdgeVotesEndToEnd:
         assert attributes.bleed_votes_by_class == {}
         assert attributes.bleed_abstain_count == 1
         assert not CardTagVote.objects.filter(card=card, tag__name="appropriate-bleed").exists()
+
+
+class TestConcurrency:
+    """Pre-scale program item 3d (2026-07-15): the per-card fetch+OCR+phash+fallback compute
+    work now runs across `workers` concurrent threads, feeding the same single-threaded
+    DB-write loop as before. `transactional_db` (real commits, TRUNCATE-based cleanup), not the
+    default rollback-wrapped `db` fixture - a real regression was caught writing these tests:
+    `run_phash_for_card`'s own `CanonicalCard.objects.filter(...)` query, running on a worker
+    thread's own DB connection, silently found nothing under `db` because that connection can't
+    see `db`'s uncommitted wrapping transaction - exact same rationale as
+    test_sources.py's `test_all_sources_scanned_concurrently_local_file` for
+    `update_database()`'s own worker threads."""
+
+    def test_workers_greater_than_one_still_finds_a_real_phash_match(self, transactional_db, monkeypatch):
+        # deliberately does NOT mock run_phash_for_card itself - the whole point is exercising
+        # its real CanonicalCard query from inside a worker thread. Only the network-dependent
+        # half (Scryfall art_crop fetch/hash) is mocked, pinned to exactly what the real
+        # compute_card_art_hash(card_image) will produce, guaranteeing a distance=0 match.
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_phash as phash_module
+
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card = CardFactory(name="Forest")
+
+        card_image = Image.new("RGB", (750, 1050), (5, 5, 5))
+        pinned_hash = phash_module.compute_card_art_hash(card_image)
+
+        monkeypatch.setattr(phash_module, "get_or_compute_canonical_hash", lambda canonical: pinned_hash)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: card_image)
+
+        results, _attributes = run_pilot(engine="phash", limit=10, dry_run=False, nice=False, workers=2)
+
+        assert results["phash"].votes_written == 1
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id=PHASH_ANONYMOUS_ID, printing=printing).exists()
+
+    def test_workers_one_and_workers_two_agree_on_the_same_real_input(self, transactional_db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_phash as phash_module
+
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        cards = [CardFactory(name="Forest") for _ in range(6)]
+
+        card_image = Image.new("RGB", (750, 1050), (5, 5, 5))
+        pinned_hash = phash_module.compute_card_art_hash(card_image)
+        monkeypatch.setattr(phash_module, "get_or_compute_canonical_hash", lambda canonical: pinned_hash)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: card_image)
+
+        results_seq, _ = run_pilot(engine="phash", limit=10, dry_run=True, nice=False, workers=1)
+
+        for c in cards:
+            c.refresh_from_db()
+        results_conc, _ = run_pilot(engine="phash", limit=10, dry_run=True, nice=False, workers=4, batch_size=2)
+
+        assert results_seq["phash"].votes_written == results_conc["phash"].votes_written == 6
+
+    def test_omp_thread_limit_is_set_when_running_concurrently(self, db, monkeypatch):
+        monkeypatch.delenv("OMP_THREAD_LIMIT", raising=False)
+        import cardpicker.local_identify_printing_tags as module
+
+        monkeypatch.setattr(module, "select_candidates", lambda *args, **kwargs: [])
+
+        run_pilot(engine="ocr", limit=10, dry_run=True, nice=False, workers=3)
+
+        assert os.environ.get("OMP_THREAD_LIMIT") == "1"
+
+    def test_workers_one_does_not_set_omp_thread_limit(self, db, monkeypatch):
+        monkeypatch.delenv("OMP_THREAD_LIMIT", raising=False)
+        import cardpicker.local_identify_printing_tags as module
+
+        monkeypatch.setattr(module, "select_candidates", lambda *args, **kwargs: [])
+
+        run_pilot(engine="ocr", limit=10, dry_run=True, nice=False, workers=1)
+
+        assert "OMP_THREAD_LIMIT" not in os.environ
