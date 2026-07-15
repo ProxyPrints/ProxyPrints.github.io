@@ -119,9 +119,9 @@ export default function ProjectNavbar() {
               {remoteBackendConfigured && (
                 <Nav.Link
                   as={Link}
-                  href="/printingQueue"
-                  active={router.route === "/printingQueue"}
-                  eventKey="/printingQueue"
+                  href="/whatsthat"
+                  active={router.route === "/whatsthat"}
+                  eventKey="/whatsthat"
                 >
                   What&apos;s That Card?
                 </Nav.Link>

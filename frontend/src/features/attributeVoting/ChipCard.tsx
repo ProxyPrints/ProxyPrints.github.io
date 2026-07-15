@@ -1,11 +1,11 @@
 /**
  * Small tap-target "card" chip, styled with the same blue (#4d8ddf) used for the "resolved
- * consensus" highlight and the "No match" placeholder over in PrintingTagQueue.tsx's
- * candidate grid (see CandidateButton/ArtPlaceholder there) - reused here so the post-vote
- * follow-up strips (NoMatchReasonStrip, PrintingConfirmStrip) read as the same visual
- * language as the picker a user just interacted with, rather than introducing a second
- * unrelated chip style. Deliberately lighter than CandidateButton: no starburst/hover-zoom,
- * since these chips are small and numerous rather than one large focal candidate.
+ * consensus" highlight and the "No match" placeholder over in cardPanel.tsx's shared
+ * candidate grid mechanics (see CandidateButton/ArtPlaceholder there) - reused here so the
+ * post-vote follow-up strip (NoMatchReasonStrip) reads as the same visual language as the
+ * picker a user just interacted with, rather than introducing a second unrelated chip style.
+ * Deliberately lighter than CandidateButton: no starburst/hover-zoom, since these chips are
+ * small and numerous rather than one large focal candidate.
  */
 
 import styled from "@emotion/styled";

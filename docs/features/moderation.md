@@ -223,7 +223,7 @@ for low-res / incorrect-info yet).
   `MPCAutofill/settings.py`.
 - Frontend: `features/reporting/ReportCardPanel.tsx`,
   `features/moderation/AuthWidget.tsx` + `ModerationQueue.tsx`,
-  `features/filters/MatureContentFilter.tsx`, `pages/printingQueue.tsx`,
+  `features/filters/MatureContentFilter.tsx`, `pages/whatsthat.tsx`,
   `store/api.ts` (whoami query + credentialed fetches).
 - Tests: `cardpicker/tests/test_moderation_gate.py`,
   `test_moderation_views.py`, `test_sensitive_tags.py`;

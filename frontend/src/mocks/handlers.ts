@@ -802,8 +802,9 @@ export const submitPrintingTagResolvesToPrintingCandidate1 = http.post(
     )
 );
 
-// printingCandidate2 (unlike printingCandidate1) has fullArt/isBorderless both true - used to
-// exercise PrintingConfirmStrip's pre-fill-from-candidate-metadata behaviour in both states.
+// printingCandidate2 (unlike printingCandidate1) has fullArt/isBorderless/isShowcase all true
+// - used to exercise QuestionFeed's auto-tag-on-selection behaviour (see attributeChips.ts's
+// STANDALONE_CHIPS) across both states.
 export const submitPrintingTagResolvesToPrintingCandidate2 = http.post(
   buildRoute("2/submitPrintingTag/"),
   () =>
@@ -891,6 +892,115 @@ export const voteQueueNoResults = http.post(buildRoute("2/voteQueue/"), () =>
 
 //# endregion
 
+//# region question feed
+
+export const questionFeedConfirmSuggestion = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "confirm_suggestion",
+          card: cardDocument1,
+          suggestedPrinting: printingCandidate1,
+          candidates: [printingCandidate1, printingCandidate2],
+          tagConfidence: { "Full Art": 0, Borderless: 0 },
+        },
+        remainingEstimate: 5,
+      },
+      { status: 200 }
+    )
+);
+
+export const questionFeedIdentifyPrinting = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "identify_printing",
+          card: cardDocument1,
+          candidates: [printingCandidate1, printingCandidate2],
+          tagConfidence: { "Full Art": 0, Borderless: 0.6 },
+        },
+        remainingEstimate: 3,
+      },
+      { status: 200 }
+    )
+);
+
+export const questionFeedArtist = http.get(buildRoute("2/questionFeed/"), () =>
+  HttpResponse.json(
+    {
+      item: {
+        type: "artist",
+        card: cardDocument8,
+        confidentlyKnownArtistName: null,
+      },
+      remainingEstimate: 2,
+    },
+    { status: 200 }
+  )
+);
+
+// cardDocument8 has a confidently-known canonicalArtist (Alpha Artist) - this mock exercises
+// ArtistVotePicker's collapsed pre-filled state (see its own "wrong?" affordance) via real
+// questionFeed-shaped data, distinct from questionFeedArtist's plain-picker (unresolved) case.
+export const questionFeedArtistConfidentlyKnown = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "artist",
+          card: cardDocument8,
+          confidentlyKnownArtistName: "Alpha Artist",
+        },
+        remainingEstimate: 2,
+      },
+      { status: 200 }
+    )
+);
+
+export const questionFeedTag = http.get(buildRoute("2/questionFeed/"), () =>
+  HttpResponse.json(
+    {
+      item: {
+        type: "tag",
+        card: cardDocument9,
+        tagName: "Borderless",
+      },
+      remainingEstimate: 1,
+    },
+    { status: 200 }
+  )
+);
+
+export const questionFeedModeration = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "moderation",
+          card: cardDocument9,
+          tagName: "NSFW",
+          reportCount: 2,
+          reportExcerpts: ["too spicy"],
+        },
+        remainingEstimate: 1,
+      },
+      { status: 200 }
+    )
+);
+
+export const questionFeedCaughtUp = http.get(
+  buildRoute("2/questionFeed/"),
+  () => HttpResponse.json({ remainingEstimate: 0 }, { status: 200 })
+);
+
+//# endregion
+
 //# region attribute voting
 
 export const artistCandidatesTwoResults = http.post(
@@ -930,8 +1040,18 @@ export const tagConsensusTwoUnresolvedTags = http.post(
     HttpResponse.json(
       {
         tags: [
-          { tagName: "Borderless", resolvedPolarity: null, tally: [] },
-          { tagName: "Extended", resolvedPolarity: null, tally: [] },
+          {
+            tagName: "Borderless",
+            resolvedPolarity: null,
+            netPolarity: 0,
+            tally: [],
+          },
+          {
+            tagName: "Extended",
+            resolvedPolarity: null,
+            netPolarity: 0,
+            tally: [],
+          },
         ],
       },
       { status: 200 }
@@ -945,6 +1065,7 @@ export const submitTagVoteResolvesToApply = http.post(
       {
         tagName: "Borderless",
         resolvedPolarity: 1,
+        netPolarity: 1,
         tally: [{ polarity: 1, count: 1 }],
       },
       { status: 200 }
