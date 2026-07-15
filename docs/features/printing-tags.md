@@ -699,6 +699,10 @@ Old/Modern Border, Future Frame) 400 on tap; `Full Art`/`Borderless`/
 
 ## Known gaps
 
+- The Stage 7 layout (starburst/card/chip-ring composition) was hand-tuned
+  via iterative screenshot review, not built against a real design system -
+  owner has flagged that this needs a proper pass with the `/dataviz` skill
+  in the future rather than further ad hoc CSS tuning.
 - `CanonicalCard.image_hash` is bootstrapped to `0` for every row
   (`--skip-image-hash`); real perceptual-hash-based matching isn't
   implemented yet.
