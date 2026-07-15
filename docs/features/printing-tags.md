@@ -1359,6 +1359,126 @@ final; the write-path code itself is unchanged by any of this session's
 work, so reusing the old measurement is a reasonable but not yet
 re-confirmed assumption.
 
+### Phash yield investigation (2026-07-15, pre-scale program item 4)
+
+**A wrong hypothesis, tested and rejected before it reached this doc.**
+The item 3e dry-run showed phash yield collapse to 0/300 (0%), down from
+the baseline run's 13/300 (4.3%) - and the skip-count redistribution
+looked suspiciously exact (13 fewer votes, +8 `no-clear-winner`,
++5 `too-many-candidates`, exactly 13). The obvious suspect: `--fetch-dpi =250` was only ever validated against OCR yield (item 6/3c's sweep
+explicitly used "the production OCR pipeline" at each dpi) - never
+against phash, which hashes the SAME fetched image. **Tested directly
+rather than trusted the correlation**: computed phash match outcomes at
+native vs. `dpi=250` resolution for 12 real current-pool multi-candidate
+cards - **zero difference in outcome on any of them**. The dpi
+hypothesis is rejected.
+
+More likely explanation: the candidate POOL itself shifted between the
+two runs - the baseline run wrote 94 real votes (including 13 phash
+matches), which are now excluded from selection (idempotence), so the
+"next 300" cards by the selection ordering are a genuinely different
+set than the original 300. Phash's yield is small enough (4.3% at best)
+that which specific 300 cards happen to be sampled plausibly explains
+more of the swing than any code change does. Not fully resolved - flagged
+honestly as unexplained sample volatility, not asserted as a solved
+mystery.
+
+**Verdict: keep phash as-is, no further tuning.** Real but small
+contribution (13/300 in the one sample with a nonzero count), zero
+false-positive risk (the distance+margin gate is strict - a wrong-but-
+confident vote has never been observed), and negligible cost (item 3a:
+0.011s/card, 0.2% of total time) - there's no strong case for either
+investing more tuning effort or dropping it. Its abstention rate is
+simply the honest floor for this signal at pilot scale.
+
+### Scaling proposal + install path (2026-07-15, pre-scale program item 4)
+
+**The real constraint driving this decision**: item 3e's ~7.0-day
+(2 workers) / ~8.9-day (single-threaded) full-catalog projection is a
+multi-day-to-week continuous workload on a box that also serves live
+production traffic. Two scheduling shapes were compared, not assumed -
+checked against what actually exists in this codebase before proposing
+anything new.
+
+**A real, load-bearing tension found while checking, not assumed away**:
+django-q2 infrastructure already exists here (`Q_CLUSTER` in
+`settings.py`, an already-running `mpcautofill_worker` container whose
+entire job is `python3 manage.py qcluster`, an existing daily
+`update_database` schedule seeded via migrations `0043`/`0048`). Its
+`Q_CLUSTER` config sets `cpu_affinity: 1` - a deliberate reservation
+(alongside `timeout: 12 hours, "extreme upper limit"`) that reads as
+intentionally protecting this box's OTHER core for live traffic, not an
+arbitrary default. **That directly conflicts with item 3d's validated
+`--workers=2` default** - scheduling the pilot through the EXISTING
+cluster would effectively cap it at 1 core, meaning the real achievable
+rate under that path is the ~8.9-day single-threaded projection, not the
+~7.0-day one, unless a second, dedicated cluster/queue with different
+affinity is stood up specifically for this workload (more infrastructure
+complexity, not evaluated further here - the addendum's own scope is
+"a decision," not a second scheduler).
+
+**Option A - screen'd host process, `--workers=2` (recommended)**:
+
+- Works TODAY with zero infrastructure changes - tesseract is already
+  installed on the host (`/usr/bin/tesseract`, confirmed while measuring
+  item 3d), and the host venv used for every real run in this session
+  already proves the path works against the live DB.
+- Gets the full validated ~7.0-day projection - the only option that
+  does, since it isn't constrained by the existing cluster's
+  `cpu_affinity=1`.
+- No new Dockerfile/image rebuild, no new `Schedule`/queue
+  infrastructure to build and validate.
+- **Real gap, not glossed over**: the live-latency-contention
+  measurement (item 3d) that justified `--workers=2` as safe was a
+  10-card, ~20-second burst test - it validates "briefly safe," not
+  "safe sustained for a full week." A longer soak measurement (a few
+  hours, not 20 seconds) against live traffic latency is a reasonable
+  ask before actually launching a multi-day run, and is flagged here as
+  a residual open item for the HOLD #2 package, not resolved by this
+  proposal.
+- Lifecycle is manual (`screen`, not django-q's built-in retry/crash
+  handling) - partially mitigated by item 2's checkpointing (a kill
+  loses at most one `--batch-size` worth of unflushed work and resumes
+  cleanly on restart), but still needs a human or a `cron` re-invocation
+  after a real crash, not automatic retry.
+
+**Option B - chunked django-q nightly slices, existing cluster**:
+
+- Reuses established, already-working infrastructure - the exact
+  `Schedule.objects.create(func="django.core.management.call_command", args="'local_identify_printing_tags', '--limit', 'N', ...", schedule_type="D")` pattern already seeds `update_database`/
+  `import_canonical_card_data` today (migrations `0043`/`0048`) - a new
+  migration doing the same for this command is a small, low-risk,
+  precedented change.
+- Gets django-q's existing retry/crash-recovery machinery for free.
+- **Requires a Dockerfile change**: `mpcautofill_worker` builds from the
+  same `docker/django/Dockerfile` `builder` stage as `mpcautofill_django`
+  (confirmed by reading it) - neither has tesseract; adding
+  `tesseract-ocr` to that stage's `apt-get install` line and rebuilding
+  both images is a real, concrete requirement, not a formality.
+- Bound by `cpu_affinity=1` unless a second cluster is built (see
+  above) - realistically the ~8.9-day single-threaded rate, spread
+  across many nights at whatever `--limit` fits comfortably inside a
+  night's window (well under the cluster's 12-hour task timeout, to
+  leave real margin - a nightly `--limit` sized for ~2-4 hours, not 12,
+  is the safer target).
+
+**Recommendation: Option A for the eventual full-catalog run** - it's
+faster, needs no new infrastructure, and the pilot's own checkpointing
+already covers most of what django-q's retry machinery would otherwise
+buy. Revisit Option B only if the longer soak-test flagged above turns
+up a real sustained-load problem Option A can't tolerate.
+
+**Host-venv disposition - a real, currently-open gap**: every real run
+in this session used
+`/home/ubuntu/.claude/jobs/4495614d/tmp/venv` - a job-scoped path that
+is cleaned up when this Claude Code job ends. Whichever option is
+eventually chosen, a permanent venv needs to live somewhere stable and
+documented (`docs/infrastructure.md`) before an unattended host-process
+run is launched for real - this doesn't block anything in this pre-scale
+program itself (every measurement in this doc was already real, run
+against the live DB), but it's a genuine loose end for whoever actually
+launches the full-catalog run.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run
