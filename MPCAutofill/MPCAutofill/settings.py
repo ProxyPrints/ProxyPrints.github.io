@@ -37,6 +37,12 @@ DEBUG = env("DJANGO_DEBUG", default=False)
 # IP or Domain
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
+# nginx terminates TLS and proxies to this container over plain HTTP (see docker/nginx/nginx.conf,
+# which forwards X-Forwarded-Proto) - without this, request.is_secure() always reads False here,
+# so anything building an absolute URL from the request (django-allauth's OAuth redirect_uri,
+# notably) constructs an http:// URL even though the real, public-facing request was https://.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 # This server's own public URL, used to build image URLs for LOCAL_FILE sources (the frontend can only
 # load images by URL, so images on disk are served back out through this server's own `get_local_file_image` view).
 LOCAL_FILE_SOURCE_BASE_URL = env("LOCAL_FILE_SOURCE_BASE_URL", default="http://localhost:8000")
