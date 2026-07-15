@@ -20,6 +20,7 @@ from cardpicker.local_identify_printing_tags import (
     PHASH_ANONYMOUS_ID,
     CandidateNameIndex,
     CandidatePrinting,
+    get_worker_image_url,
     run_pilot,
     select_candidates,
     verify_zero_resolutions,
@@ -182,6 +183,20 @@ class TestManagementCommandExclusionDefaults:
         printed = capsys.readouterr().out
         assert "--exclude-sources-ocr=[]" in printed
         assert "--exclude-sources-phash=[2, 3]" in printed
+
+    def test_bare_invocation_defaults_fetch_dpi_to_250(self, db, capsys):
+        from django.core.management import call_command
+
+        call_command("local_identify_printing_tags", "--dry-run", "--limit", "0")
+        printed = capsys.readouterr().out
+        assert "--fetch-dpi=250" in printed
+
+    def test_fetch_dpi_zero_means_native_resolution(self, db, capsys):
+        from django.core.management import call_command
+
+        call_command("local_identify_printing_tags", "--dry-run", "--limit", "0", "--fetch-dpi", "0")
+        printed = capsys.readouterr().out
+        assert "--fetch-dpi=None" in printed
 
 
 class TestCandidateNameIndex:
@@ -378,12 +393,13 @@ class TestOcrLiveTesseractIntegration:
 
     @pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract-ocr binary not installed")
     def test_crop_preprocess_and_ocr_a_synthetic_collector_line(self):
-        # positioned within DEFAULT_CROP_BOX's bottom 90-100% band (945-1050px of a 1050px-tall
-        # image) - tuned against a real production card image, see DEFAULT_CROP_BOX's comment
+        # positioned within DEFAULT_CROP_BOX's band (left 45-262px, top 945-1013px of a
+        # 750x1050 image) - tuned against real production card images, see DEFAULT_CROP_BOX's
+        # comment
         img = Image.new("RGB", (750, 1050), "white")
         draw = ImageDraw.Draw(img)
-        draw.rectangle([0, 945, 262, 1050], fill="black")
-        draw.text((10, 975), "158/287 R MOM EN", fill="white")
+        draw.rectangle([45, 945, 262, 1013], fill="black")
+        draw.text((50, 970), "158/287 R MOM EN", fill="white")
 
         cropped = crop_collector_line(img)
         variants = preprocess_variants(cropped)
@@ -410,7 +426,7 @@ class TestRunPilotAgreementAndDisagreement:
 
         monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
         monkeypatch.setattr(module, "run_phash_for_card", fake_phash)
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: None)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
         results, _attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False)
 
@@ -439,7 +455,7 @@ class TestRunPilotAgreementAndDisagreement:
 
         monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
         monkeypatch.setattr(module, "run_phash_for_card", fake_phash)
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: None)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
         results, _attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False)
 
@@ -463,7 +479,7 @@ class TestRunPilotAgreementAndDisagreement:
             )
 
         monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: None)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
         results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=True, nice=False)
 
@@ -494,7 +510,7 @@ class TestRunPilotSourceExclusion:
             )
 
         monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: None)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
         results, _attributes = run_pilot(
             engine="ocr",
@@ -526,7 +542,7 @@ class TestCheckpointing:
             )
 
         monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: None)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
     def test_flushes_periodically_not_just_once_at_the_end(self, db, monkeypatch):
         printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
@@ -610,6 +626,29 @@ class TestCheckpointing:
         assert {v.card_id for v in final_votes} == {c.pk for c in cards}
 
 
+class TestFetchDpi:
+    """Item 6/3c's empirically-validated resolution floor - see local_identify_printing_tags'
+    DEFAULT_FETCH_DPI comment for the measured yield numbers behind the default."""
+
+    def test_default_dpi_is_included_in_the_url(self, db):
+        card = CardFactory()
+        url = get_worker_image_url(card)
+        assert url is not None
+        assert "dpi=250" in url
+
+    def test_explicit_dpi_overrides_the_default(self, db):
+        card = CardFactory()
+        url = get_worker_image_url(card, dpi=200)
+        assert url is not None
+        assert "dpi=200" in url
+
+    def test_none_dpi_omits_the_param_for_native_resolution(self, db):
+        card = CardFactory()
+        url = get_worker_image_url(card, dpi=None)
+        assert url is not None
+        assert "dpi=" not in url
+
+
 class TestFetchBudget:
     """Stage 8 pre-scale program item 3b: every image fetch is one request against the shared
     image CDN Worker quota - an unattended run must be boundable. Cards past the budget must be
@@ -665,7 +704,7 @@ class TestIdempotence:
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             ),
         )
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: None)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
         run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
 
         # re-running the exact same selection now excludes this card - it already has a vote
@@ -734,7 +773,7 @@ class TestPass2Wiring:
             lambda selected, image, threshold, margin, max_candidates: (None, "no-clear-winner"),
         )
         monkeypatch.setattr(
-            module, "fetch_card_image", lambda card: _black_bordered_image_with_artist_text("Marie Magny")
+            module, "fetch_card_image", lambda card, dpi=None: _black_bordered_image_with_artist_text("Marie Magny")
         )
 
         results, attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False)
@@ -771,7 +810,7 @@ class TestPass2Wiring:
             )
 
         monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: Image.new("RGB", (750, 1050), (5, 5, 5)))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
 
         results, attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
 
@@ -802,7 +841,7 @@ class TestPass2Wiring:
             "run_phash_for_card",
             lambda selected, image, threshold, margin, max_candidates: (None, "no-clear-winner"),
         )
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: Image.new("RGB", (750, 1050), (5, 5, 5)))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
 
         # if the assertion inside fail_if_called had fired, this call itself would raise
         run_pilot(engine="both", limit=10, dry_run=False, nice=False)
@@ -840,7 +879,7 @@ class TestGroundTruthAttributeVotes:
         monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
         # a uniform near-black image - the pixel-sample heuristic would read "black" here, but
         # the matched printing's own metadata says "white" and must win instead.
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: Image.new("RGB", (750, 1050), (5, 5, 5)))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
 
         results, attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
 
@@ -875,7 +914,7 @@ class TestGroundTruthAttributeVotes:
             "run_phash_for_card",
             lambda selected, image, threshold, margin, max_candidates: (None, "no-clear-winner"),
         )
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: Image.new("RGB", (750, 1050), (5, 5, 5)))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
 
         results, attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False)
 
@@ -906,7 +945,7 @@ class TestGroundTruthAttributeVotes:
             )
 
         monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
-        monkeypatch.setattr(module, "fetch_card_image", lambda card: Image.new("RGB", (750, 1050), (5, 5, 5)))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
 
         results, attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
 

@@ -21,11 +21,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# left 0-35% width, bottom 90-100% height - tuned against real production images (2026-07-15):
+# left 6-35% width, bottom 90-96.5% height - tuned against real production images (2026-07-15):
 # the original 85% top boundary caught a full trailing line of rules text above the collector
 # line on several real cards, which confused tesseract's line segmentation into garbage output
 # even with PSM 6. (left, top, right, bottom), each a fraction of the full image.
-DEFAULT_CROP_BOX: tuple[float, float, float, float] = (0.0, 0.90, 0.35, 1.0)
+#
+# Tightened from an original (0.0, 0.90, 0.35, 1.0) via pre-scale program item 3c/addendum item
+# 6b (2026-07-15): tesseract's TSV bbox output, sampled across 30 real production cards, showed
+# every observed collector-number-shaped text line landing within the top 41.2% / right-hand
+# 74.4% of that original crop's own area - the bottom ~59% and left ~26% were dead space. New
+# boundaries applied a safety margin over the observed range rather than cutting exactly to it
+# (~1.5x on the trimmed bottom, ~0.7x on the trimmed left), specifically BECAUSE physical bleed
+# margin varies by card/source and a tight cut against one sample's exact observed range risks
+# clipping a card with more bleed than this sample happened to show. The right edge was left
+# UNCHANGED despite being a plausible-looking trim target - text was observed touching that
+# boundary already (right_frac max = 1.000), meaning trimming it would be a real clipping risk,
+# not a safe optimization. Validated (not just derived) against the same 30-card sample: OCR
+# match count and the exact set of matched cards were IDENTICAL between the old and new box (8/30
+# both ways, same 8 card pks) - zero yield regression on this sample. 30 cards is a real but
+# modest validation bar (matching the addendum's own ask); watch for regression during the actual
+# scaled run rather than treating this as proven at full-catalog scale.
+DEFAULT_CROP_BOX: tuple[float, float, float, float] = (0.06, 0.90, 0.35, 0.965)
 
 # tesseract page-segmentation mode 6 = "assume a single uniform block of text" - the real
 # collector "line" is usually two lines (rarity+number, then set+lang+artist), which PSM 7

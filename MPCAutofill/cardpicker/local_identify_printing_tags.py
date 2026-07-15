@@ -172,21 +172,38 @@ def select_candidates(
     return multi + single
 
 
-def get_worker_image_url(card: Card) -> Optional[str]:
+# The empirically-validated OCR resolution floor (pre-scale program item 6/3c, 2026-07-15):
+# a real 6-way dpi sweep (100/150/200/250/300/native) against the same 30-card sample used to
+# validate the tightened crop box (see local_ocr.DEFAULT_CROP_BOX's comment) showed dpi<=150
+# genuinely degrades OCR yield (3/30, 7/30 vs. an 8/30 native-resolution baseline), while
+# dpi>=200 matches or EXCEEDS the native baseline (12/30, 10/30, 9/30) despite a 2-4x smaller
+# payload - smaller re-encoded JPEGs plausibly render small text more cleanly than a full-res
+# original in some cases, though 30 cards is too small a sample to fully explain that. 250 is a
+# safety margin above the empirically-best 200, not the raw optimum - hedges against small-
+# sample noise while still keeping most of the bandwidth win (mean 728KB vs. 1.84MB native, a
+# 2.5x reduction). PILOT-ONLY: this constant is local_identify_printing_tags' own default, not
+# shared with frontend/src/features/pdf/ or .../download/, which need full print resolution by
+# design and are untouched by this change.
+DEFAULT_FETCH_DPI: Optional[int] = 250
+
+
+def get_worker_image_url(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Optional[str]:
     """
-    The card's own highest-resolution available image, via the image CDN Worker's "full" tier
-    (image-cdn/, docs/features/image-cdn.md) - the same source the PDF export path uses for
-    print-quality output. Google Drive sources only, matching that Worker's current scope
-    (frontend/src/common/image.ts's getWorkerImageURL has the identical restriction) - any
-    other source type returns None, counted by the caller as an "unsupported-source-type" skip.
+    The card's image via the image CDN Worker's "full" tier (image-cdn/, docs/features/image-cdn.md)
+    - the same route the PDF export path uses, but at a resolution capped via `dpi` (see
+    DEFAULT_FETCH_DPI) rather than the print-quality original PDF export needs. Google Drive
+    sources only, matching that Worker's current scope (frontend/src/common/image.ts's
+    getWorkerImageURL has the identical restriction) - any other source type returns None,
+    counted by the caller as an "unsupported-source-type" skip.
     """
     if card.get_source_type_choices() != SourceTypeChoices.GOOGLE_DRIVE:
         return None
-    return f"{settings.IMAGE_WORKER_URL}/images/google_drive/full/{card.identifier}.jpg?jpgQuality=100"
+    dpi_param = f"&dpi={dpi}" if dpi is not None else ""
+    return f"{settings.IMAGE_WORKER_URL}/images/google_drive/full/{card.identifier}.jpg?jpgQuality=100{dpi_param}"
 
 
-def fetch_card_image(card: Card) -> Optional["Image.Image"]:
-    url = get_worker_image_url(card)
+def fetch_card_image(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Optional["Image.Image"]:
+    url = get_worker_image_url(card, dpi)
     if url is None:
         return None
     try:
@@ -341,6 +358,7 @@ def run_pilot(
     batch_size: int = DEFAULT_BATCH_SIZE,
     progress_every: int = 50,
     fetch_budget: Optional[int] = None,
+    fetch_dpi: Optional[int] = DEFAULT_FETCH_DPI,
 ) -> tuple[dict[str, PilotResult], AttributeReport]:
     if nice:
         try:
@@ -430,9 +448,9 @@ def run_pilot(
         cards_attempted += 1
 
         outcome = CardOutcome(card_id=card_id)
-        if get_worker_image_url(selected.card) is not None:
+        if get_worker_image_url(selected.card, fetch_dpi) is not None:
             fetches_made += 1
-        image = fetch_card_image(selected.card)  # shared across every engine that runs on this card
+        image = fetch_card_image(selected.card, fetch_dpi)  # shared across every engine that runs on this card
         ocr_raw_texts: list[str] = []
 
         if card_id in ocr_selected_ids:

@@ -944,6 +944,89 @@ per-invocation cap (a specific number is a scaling-proposal decision, not
 fixed here) leaves headroom for live traffic regardless of how
 aggressively a given slice is scheduled.
 
+**Amendment (same day, owner review): the "shared Worker request quota"
+framing above was the wrong quota.** The real question is whether
+`lh4.googleusercontent.com` itself (the domain the `full` tier's
+passthrough actually fetches from - the Worker's own 100k/day request
+quota was never the binding constraint) can take sustained pilot-scale
+load without degrading for live traffic. That domain is genuinely shared
+
+- `frontend/src/features/pdf/pdfImage.ts` (PDF export) and
+  `frontend/src/features/download/downloadImages.ts` (bulk image download)
+  both request the `full` tier already - but had **no rate limiting of any
+  kind**, unlike the real Drive API (`GoogleDriveService.executeCall`,
+  guarded by the existing `GOOGLE_DRIVE_RATE_LIMITER` binding - a
+  DIFFERENT Google domain the `full`-tier image fetch never touches).
+  Fixed with a real enforced limiter (`image-cdn`, separate PR ahead of
+  this one): a new `IMAGE_FULL_TIER_RATE_LIMITER` Cloudflare rate-limiting
+  binding (3 req/s sustained, `wrangler.toml`), wired into `image.ts`'s
+  `full`-tier handler via a new `fetchWithRateLimit` helper
+  (`src/utils.ts`) that mirrors `GoogleDriveService.executeCall`'s
+  check-then-backoff-then-retry pattern - checked-in-limit, delay-and-retry
+  on denial, plus a defensive retry on an upstream 429. This is now the
+  **primary** protection, shared by all three callers (pilot, PDF export,
+  bulk download); `--fetch-budget` is defense-in-depth on the pilot's own
+  pacing, not the main safeguard the earlier paragraphs implied. Lands and
+  deploys independently of this pilot's own branch, ahead of any
+  full-catalog run.
+
+### Resolution floor + payload reduction (2026-07-15, same review)
+
+**`lh4.googleusercontent.com`'s size-suffix parameter genuinely
+re-encodes a smaller image - verified directly, not assumed**: fetched
+one real card at `=h200`/`=h400`/`=h800`/native and confirmed real,
+progressively smaller dimensions and byte counts each time (native
+1146x1600 @ 3.29MB → `=h800` 573x800 @ 892KB → `=h400` 287x400 @ 218KB).
+The image CDN Worker already exposes this via the `full` tier's existing
+`dpi` query param (`height = dpi * 1110 / 300`, `image-cdn/src/url.ts`)
+
+- the pilot just never passed one, so every fetch requested the
+  uncapped native original.
+
+**Empirical resolution floor**, a real 6-way sweep (dpi 100/150/200/250/
+300/native) against the same 30-card sample used to validate the
+tightened crop box, applying that same tightened box and the production
+OCR pipeline at each size:
+
+| dpi           | matched/30 | mean payload |
+| ------------- | ---------: | -----------: |
+| 100           |          3 |        144KB |
+| 150           |          7 |        298KB |
+| 200           |         12 |        495KB |
+| 250           |         10 |        728KB |
+| 300           |          9 |        997KB |
+| native (none) |          8 |       1.84MB |
+
+dpi≤150 clearly degrades yield below the native baseline; dpi≥200
+matches or **exceeds** it despite a 2-4x smaller payload (plausibly a
+smaller re-encoded JPEG rendering small text more cleanly than a full-res
+original in some cases - 30 cards is too small a sample to fully explain
+the exact ranking, but the floor itself - "150 is unsafe, 200+ is safe" -
+is a clear, robust signal). Adopted `DEFAULT_FETCH_DPI = 250` in
+`local_identify_printing_tags.py` (a `--fetch-dpi` CLI flag, `0` for
+uncapped) - a margin above the empirically-best 200, hedging against
+small-sample noise while keeping most of the win (728KB vs. 1.84MB
+native, 2.5x smaller). **Pilot-only**: `pdfImage.ts`/`downloadImages.ts`
+are untouched and still request full print-quality resolution by design.
+
+### Crop tightening (2026-07-15, pre-scale program item 3c / addendum item 6b)
+
+Tesseract's TSV bbox output, sampled across the same 30-card sample
+(both preprocessing polarities), showed every observed collector-number-
+shaped text line landing within the top 41.2% / right-hand 74.4% of the
+existing crop's own area - meaning the bottom ~59% and left ~26% were
+dead space. Tightened `local_ocr.DEFAULT_CROP_BOX` from
+`(0.0, 0.90, 0.35, 1.0)` to `(0.06, 0.90, 0.35, 0.965)`, applying a
+safety margin over the observed range (not cutting exactly to it, per
+the addendum's explicit bleed-variance caution) and leaving the right
+edge untouched (text was observed touching that boundary already -
+trimming it would risk clipping, not save anything). **Validated, not
+just derived**: re-ran OCR with both the old and new box against the
+same 30 cards - identical match count (8/30 both) AND identical card-
+level match set (same 8 card pks matched both ways) - zero yield
+regression on this sample. See `local_ocr.py`'s `DEFAULT_CROP_BOX`
+comment for the full derivation.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run

@@ -1,5 +1,5 @@
 import argparse
-from typing import Any
+from typing import Any, Optional
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -105,10 +105,24 @@ class Command(BaseCommand):
             type=int,
             default=None,
             help="Cap the number of image CDN Worker requests this invocation will make (every "
-            "fetched card costs one - the Worker's daily request quota is SHARED with live site "
-            "traffic, docs/features/image-cdn.md). On exhaustion the run stops cleanly: whatever "
-            "was already flushed stays committed, and untouched cards are picked up fresh by the "
-            "next invocation - no special resume handling needed. Default: no limit.",
+            "fetched card costs one). Belt-and-suspenders alongside the Worker's own "
+            "IMAGE_FULL_TIER_RATE_LIMITER (image-cdn/wrangler.toml) - the enforced protection for "
+            "lh4.googleusercontent.com, shared with live PDF export/bulk download traffic - not "
+            "the primary safeguard. On exhaustion the run stops cleanly: whatever was already "
+            "flushed stays committed, and untouched cards are picked up fresh by the next "
+            "invocation - no special resume handling needed. Default: no limit.",
+        )
+        parser.add_argument(
+            "--fetch-dpi",
+            type=int,
+            default=local_identify_printing_tags.DEFAULT_FETCH_DPI,
+            help="Request images from the CDN Worker capped at this dpi (maps to a smaller "
+            "re-encoded JPEG height, image-cdn/src/url.ts) instead of full print-quality "
+            "original - OCR only needs to read a small corner crop. Empirically validated floor "
+            "(pre-scale program item 6/3c): dpi<=150 degrades yield, dpi>=200 matches or exceeds "
+            "native-resolution yield with a 2-4x smaller payload. Default: "
+            f"{local_identify_printing_tags.DEFAULT_FETCH_DPI} (margin above the empirically-best "
+            "200). Pass --fetch-dpi=0 for uncapped native resolution.",
         )
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
@@ -121,6 +135,9 @@ class Command(BaseCommand):
         phash_max_candidates = kwargs["phash_max_candidates"]
         batch_size = kwargs["batch_size"]
         fetch_budget = kwargs["fetch_budget"]
+        fetch_dpi: Optional[int] = kwargs["fetch_dpi"]
+        if fetch_dpi == 0:
+            fetch_dpi = None
 
         def _parse_source_pks(raw: str) -> list[int]:
             return [int(p) for p in raw.split(",") if p.strip()]
@@ -152,7 +169,7 @@ class Command(BaseCommand):
         print(
             f"[{mode}] local_identify_printing_tags --engine={engine} --limit={limit} "
             f"--nice={nice} --crop-box={crop_box} --batch-size={batch_size} "
-            f"--fetch-budget={fetch_budget} "
+            f"--fetch-budget={fetch_budget} --fetch-dpi={fetch_dpi} "
             f"--exclude-sources-ocr={exclude_source_pks_by_engine['ocr']} "
             f"--exclude-sources-phash={exclude_source_pks_by_engine['phash']}"
         )
@@ -169,6 +186,7 @@ class Command(BaseCommand):
             exclude_source_pks_by_engine=exclude_source_pks_by_engine,
             batch_size=batch_size,
             fetch_budget=fetch_budget,
+            fetch_dpi=fetch_dpi,
         )
 
         gate_violations: list[int] = []
