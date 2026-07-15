@@ -871,6 +871,79 @@ optimization target flagged for a future pass, not fixed here - the
 addendum ledger closed on ideas beyond items 1-8, and this wasn't one of
 them.
 
+### CDN fetching + Worker quota (2026-07-15, pre-scale program item 3b)
+
+**The premise "CDN-first fetching" was built on turned out to be wrong,
+checked against the actual Worker source (`image-cdn/src/handler/image.ts`,
+`R2Service.ts`) before implementing anything.** The pilot's
+`get_worker_image_url` requests the `full` tier (matching the PDF export
+path, for print-quality output) - and the `full` tier is a **pure
+passthrough**: `fetch(url)` straight to Google Drive, every single
+request, with zero R2 involvement. Only the `small`/`large` tiers go
+through `R2Service.getThumbnail`'s cache-check-then-populate-on-miss
+logic. There is no bucket to be "first" about in the pilot's current flow
+
+- it was never touching one.
+
+**Checked whether switching tiers would help anyway - real measurement,
+not assumption.** If the pilot switched to the `large` tier (800px,
+R2-cacheable), would it benefit from a warm cache? Fetched 20 real
+pilot-candidate images through both `full` and `large` Worker endpoints:
+**0/20 `large`-tier requests showed a cache hit** (`cf-cache-status: DYNAMIC` on every one; `large` mean 0.881s vs. `full` mean 0.983s -
+within noise, both dominated by Google Drive origin latency, not R2 read
+time). This isn't surprising in hindsight: the pilot's candidate pool is
+specifically the tail of the catalog needing backfill - by definition
+these are exactly the cards NOT recently popular enough to have been
+browsed (and thus cached) by real users. **Verdict: switching tiers would
+not reduce fetch latency or add caching benefit for this workload - stay
+on `full` tier, already in use, gives the best-quality image for OCR.**
+This also makes addendum item 6's original framing ("OCR resolution floor
+re-measured at the CDN's delivered pixel size") moot - the delivered
+pixel size doesn't change, since no tier switch is happening.
+
+**Checked a real cache-key gap while in the Worker source, cleared it -
+not applicable today.** `R2Service.getImageKey` doesn't include
+`jpgQuality` in the cache key (`${imageIdentifier}-${imageSize}-${imageType}`)
+
+- whichever quality first populated an entry is what every later request
+  gets, silently. Checked every call site across `frontend/src/` that
+  requests `small`/`large`: all either omit `jpgQuality` (defaulting to
+
+100. or pass 100 explicitly - no call site requests a different quality
+     today, so this can't currently produce a mismatched-quality cache hit.
+     Worth remembering if a quality-tunable thumbnail path is ever added, but
+     not an active risk to the pilot (or anything else) as the code stands.
+
+**What the real constraint actually is, and what got built for it**: every
+image fetch is one request against the Worker's daily request quota,
+which is **shared with live site traffic** regardless of which tier is
+requested (a cache hit still counts as a Worker request, just a cheaper
+one to serve) - this part of the original concern was correct, just not
+for the "bucket-first" reason originally assumed. Implemented
+`--fetch-budget` (`run_pilot(fetch_budget=...)`): caps the number of
+image fetches a single invocation will make; on exhaustion the run stops
+cleanly mid-selection, whatever was already flushed stays committed, and
+every card not yet reached is left completely untouched (no vote, no
+skip-reason recorded) so the next invocation's ordinary idempotent
+selection just picks them up - no special resume handling needed, same
+mechanism `--resume`/checkpointing already relies on. Verified in tests
+(`TestFetchBudget`): stops exactly at the budget, and a follow-up
+invocation with no budget completes the untouched remainder with no
+duplicates.
+
+**Quota math**: ~171,800 eligible cards remain, each fetched at most once
+(idempotent selection - no repeat fetches across invocations). Spread
+across the ~13-day naive full-catalog projection (see wall-clock section
+below), that's roughly 13,000/day if evenly sliced - well under the
+Worker's 100,000/day shared limit on its own. The real risk isn't the
+pilot in isolation, it's concentration: heavy parallelization (item 3d)
+compressing the same total fetch count into fewer, busier days, stacked
+on top of live traffic's own share of the same quota on those days.
+`--fetch-budget` is the safety valve for that scenario - a conservative
+per-invocation cap (a specific number is a scaling-proposal decision, not
+fixed here) leaves headroom for live traffic regardless of how
+aggressively a given slice is scheduled.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run

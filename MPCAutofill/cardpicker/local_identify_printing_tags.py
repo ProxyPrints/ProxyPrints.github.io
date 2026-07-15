@@ -307,6 +307,8 @@ class PilotResult:
     disagreements: list[dict[str, object]] = field(default_factory=list)
     audit: list[dict[str, object]] = field(default_factory=list)  # per-card checkpoint detail
     gate_violations: list[int] = field(default_factory=list)
+    fetch_budget_exhausted: bool = False
+    cards_not_attempted_this_invocation: int = 0
 
 
 @dataclass
@@ -338,6 +340,7 @@ def run_pilot(
     exclude_source_pks_by_engine: Optional[dict[Engine, list[int]]] = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     progress_every: int = 50,
+    fetch_budget: Optional[int] = None,
 ) -> tuple[dict[str, PilotResult], AttributeReport]:
     if nice:
         try:
@@ -407,8 +410,28 @@ def run_pilot(
             all_gate_violations.extend(verify_zero_resolutions(batch_written_card_ids))
         votes_batch, tag_votes_batch, batch_written_card_ids = [], [], []
 
+    # Fetch budget (pre-scale program item 3b): every image fetch is one request against the
+    # image CDN Worker, which shares its daily request quota with live site traffic
+    # (docs/features/image-cdn.md) - an unattended multi-hour pilot slice must not be able to
+    # consume an unbounded share of that shared budget. Counts only requests actually sent
+    # (get_worker_image_url returning None - an unsupported source type - never reaches the
+    # network at all, so it doesn't count). On exhaustion, the run stops cleanly: whatever's
+    # already been flushed stays committed, and every card not yet reached is left completely
+    # untouched (no vote, no outcome recorded) so the next invocation's selection query picks
+    # them up fresh with no special resume handling needed.
+    fetches_made = 0
+    budget_exhausted = False
+    cards_attempted = 0
+
     for i, (card_id, selected) in enumerate(all_selected_by_card_id.items()):
+        if fetch_budget is not None and fetches_made >= fetch_budget:
+            budget_exhausted = True
+            break
+        cards_attempted += 1
+
         outcome = CardOutcome(card_id=card_id)
+        if get_worker_image_url(selected.card) is not None:
+            fetches_made += 1
         image = fetch_card_image(selected.card)  # shared across every engine that runs on this card
         ocr_raw_texts: list[str] = []
 
@@ -636,9 +659,12 @@ def run_pilot(
 
     flush()
 
-    if not dry_run:
-        for result in results.values():
+    cards_not_attempted = len(all_selected_by_card_id) - cards_attempted
+    for result in results.values():
+        if not dry_run:
             result.gate_violations = all_gate_violations
+        result.fetch_budget_exhausted = budget_exhausted
+        result.cards_not_attempted_this_invocation = cards_not_attempted
 
     return results, attributes
 

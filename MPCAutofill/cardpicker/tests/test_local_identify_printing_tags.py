@@ -610,6 +610,47 @@ class TestCheckpointing:
         assert {v.card_id for v in final_votes} == {c.pk for c in cards}
 
 
+class TestFetchBudget:
+    """Stage 8 pre-scale program item 3b: every image fetch is one request against the shared
+    image CDN Worker quota - an unattended run must be boundable. Cards past the budget must be
+    left completely untouched (no vote/outcome), not skipped-and-recorded, so the next
+    invocation's ordinary idempotent selection just picks them up."""
+
+    def test_stops_after_the_budget_and_leaves_the_rest_untouched(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        cards = [CardFactory(name="Forest") for _ in range(5)]
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+
+        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, fetch_budget=3)
+
+        assert results["ocr"].votes_written == 3
+        assert results["ocr"].fetch_budget_exhausted is True
+        assert results["ocr"].cards_not_attempted_this_invocation == 2
+
+        # the 2 untouched cards have no vote at all - a follow-up invocation with no budget
+        # limit picks them up via the ordinary idempotent selection, no special handling needed
+        remaining = select_candidates("ocr")
+        assert len(remaining) == 2
+        results_2, _ = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+        assert results_2["ocr"].votes_written == 2
+        assert CardPrintingTag.objects.filter(anonymous_id=OCR_ANONYMOUS_ID).count() == 5
+        assert {c.pk for c in cards} == {
+            t.card_id for t in CardPrintingTag.objects.filter(anonymous_id=OCR_ANONYMOUS_ID)
+        }
+
+    def test_no_budget_means_no_limit(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        for _ in range(4):
+            CardFactory(name="Forest")
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+
+        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, fetch_budget=None)
+
+        assert results["ocr"].votes_written == 4
+        assert results["ocr"].fetch_budget_exhausted is False
+        assert results["ocr"].cards_not_attempted_this_invocation == 0
+
+
 class TestIdempotence:
     def test_a_card_voted_on_is_excluded_from_the_next_selection(self, db, monkeypatch):
         printing = CanonicalCardFactory(name="Forest")

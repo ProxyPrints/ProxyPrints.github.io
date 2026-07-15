@@ -100,6 +100,16 @@ class Command(BaseCommand):
             "same idempotence mechanism as --resume). Default: "
             f"{local_identify_printing_tags.DEFAULT_BATCH_SIZE}.",
         )
+        parser.add_argument(
+            "--fetch-budget",
+            type=int,
+            default=None,
+            help="Cap the number of image CDN Worker requests this invocation will make (every "
+            "fetched card costs one - the Worker's daily request quota is SHARED with live site "
+            "traffic, docs/features/image-cdn.md). On exhaustion the run stops cleanly: whatever "
+            "was already flushed stays committed, and untouched cards are picked up fresh by the "
+            "next invocation - no special resume handling needed. Default: no limit.",
+        )
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         engine = kwargs["engine"]
@@ -110,6 +120,7 @@ class Command(BaseCommand):
         crop_box_arg = kwargs["crop_box"]
         phash_max_candidates = kwargs["phash_max_candidates"]
         batch_size = kwargs["batch_size"]
+        fetch_budget = kwargs["fetch_budget"]
 
         def _parse_source_pks(raw: str) -> list[int]:
             return [int(p) for p in raw.split(",") if p.strip()]
@@ -141,6 +152,7 @@ class Command(BaseCommand):
         print(
             f"[{mode}] local_identify_printing_tags --engine={engine} --limit={limit} "
             f"--nice={nice} --crop-box={crop_box} --batch-size={batch_size} "
+            f"--fetch-budget={fetch_budget} "
             f"--exclude-sources-ocr={exclude_source_pks_by_engine['ocr']} "
             f"--exclude-sources-phash={exclude_source_pks_by_engine['phash']}"
         )
@@ -156,6 +168,7 @@ class Command(BaseCommand):
             phash_max_candidates=phash_max_candidates,
             exclude_source_pks_by_engine=exclude_source_pks_by_engine,
             batch_size=batch_size,
+            fetch_budget=fetch_budget,
         )
 
         gate_violations: list[int] = []
@@ -165,6 +178,14 @@ class Command(BaseCommand):
             for reason, count in sorted(result.skip_counts.items()):
                 print(f"  skipped ({reason}): {count}")
             gate_violations = result.gate_violations
+
+        any_result = next(iter(results.values()), None)
+        if any_result is not None and any_result.fetch_budget_exhausted:
+            print(
+                f"[FETCH BUDGET EXHAUSTED] stopped after --fetch-budget={fetch_budget} requests - "
+                f"{any_result.cards_not_attempted_this_invocation} card(s) not attempted this "
+                "invocation, untouched (no vote/outcome recorded) - re-run to pick them up."
+            )
 
         print("--- attributes ---")
         print(
