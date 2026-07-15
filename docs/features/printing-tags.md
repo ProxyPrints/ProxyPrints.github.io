@@ -546,8 +546,13 @@ The sensitive-tag moderation layer ([[moderation.md]]) builds directly on
 this system: a third seeded taxonomy (`seed_sensitive_tags` — NSFW/low-res/
 incorrect-info/appropriate-bleed, same command-not-migration convention as
 the two above), a privileged-approval gate in `resolve_weighted_consensus`,
-and a moderator-only review surface (originally its own tab; folded into
-the unified question feed's `moderation` question type by Stage 7 below).
+and a moderator-only review surface. Briefly folded into the unified
+question feed's `moderation` question type when Stage 7 shipped (below),
+then split back out into its own Moderation tab (Reports + Drives sub-tabs
+— see [[moderation.md]]) once live use showed that made any pending report
+displace a moderator's ordinary tagging work for as long as it stayed
+pending - `question_feed.py` never serves a pending-approval pair now, for
+any role.
 
 ## Stage 7: unified question feed (queue redesign)
 
@@ -665,6 +670,62 @@ the six non-default-taxonomy chips (Etched, Black/White/Silver Border,
 Old/Modern Border, Future Frame) 400 on tap; `Full Art`/`Borderless`/
 `Showcase`/`Extended` already work since they're seeded by the existing
 `seed_default_tags`.
+
+## Stage 8: local (zero-API-cost) printing-identification backfill pilot
+
+**Status: environment proposal delivered, not yet built** (2026-07-15,
+`worktree-local-printing-id-pilot`) - this section records the plan shape,
+not a shipped feature; see `journal/2026-07-15-local-printing-id-pilot.md`
+(machine-local, not committed) for the full investigation.
+
+Sibling to Stage 6's deductive backfill, same non-negotiable principle
+(a deduction is always a vote, never a direct resolve - the human-backed
+gate in `vote_consensus.resolve_weighted_consensus` still applies), but
+sourced from actually looking at the card image instead of pure logical
+deduction from existing structured data - two independent local (no paid
+API calls) engines:
+
+- **L1, OCR**: Tesseract on a cropped, preprocessed collector-line region
+  (bottom-left corner, grayscale/upscaled/thresholded). Parses candidate
+  (set code, collector number) pairs from the raw text and only casts a
+  vote when the parse matches **exactly one** of the card's own
+  name-candidates - weak OCR is made safe by this validation rail, not by
+  trusting the OCR output itself. Never writes `is_no_match`.
+- **L2, perceptual hash**: art-region phash comparison against each
+  name-candidate's Scryfall art crop, voting only when there's a clear
+  single best match (distance threshold + margin over the second-best).
+  `CanonicalCard.image_hash` (`models.py`) already exists as a
+  `BigIntegerField` for exactly this - added when `import_canonical_card_ data` first shipped ("CanonicalCard population fix" above) but never
+  computed in production (`--skip-image-hash` was used for the real
+  import; confirmed live, 113,224/113,224 rows still at the placeholder
+  `0`) - so this pilot is the first thing to actually populate it, lazily,
+  only for candidates it needs.
+- Both engines vote under their own `anonymous_id`
+  (`local-ocr-v1`/`local-phash-v1`), same weight/gate treatment as any
+  other AI-sourced vote - when both vote on the same card and agree, both
+  votes stand as independent evidence; on disagreement, **neither** is
+  written (logged instead - the disagreement set is the interesting
+  output of a pilot like this, not noise to discard).
+
+**Environment**: the OCR engine needs the `tesseract-ocr` system binary
+(not pip-installable - `pytesseract` is a thin subprocess wrapper around
+it), which the django container's image doesn't currently have. Two
+options, no Dockerfile change made without explicit sign-off given this is
+pilot-only tooling: bake `tesseract-ocr` into `docker/django/Dockerfile`'s
+existing apt-get line (matches how every other `manage.py` command in this
+repo is invoked, at the cost of a production image rebuild/restart and a
+permanent size increase for a one-off tool), or run from a host-side venv
+pointed at the already-`127.0.0.1`-exposed Postgres/Elasticsearch ports
+(zero image/container change, trivially reversible, matches this
+project's precedent of running one-off scripts against the live DB from
+outside Docker). Command itself (`manage.py local_identify_printing_tags`)
+is unaffected either way - only the invocation environment differs.
+
+**Pilot discipline**: `--limit 300` default, explicit hold before any
+full-catalog run: this is genuinely new signal (visual inspection, not
+pure logical deduction) and needs a human spot-check of yield/accuracy
+before scaling up, unlike Stage 6's deduction which was provably exact by
+construction.
 
 ## Key files
 
