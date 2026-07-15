@@ -27,3 +27,17 @@ enabled = true
 name = "GOOGLE_DRIVE_RATE_LIMITER"
 namespace_id = "1001"
 simple = { limit = 12000, period = 10 }
+
+# Protects lh4.googleusercontent.com (the "full" tier's image-serving fetch, image.ts) - a
+# DIFFERENT Google domain/endpoint than GOOGLE_DRIVE_RATE_LIMITER above (the real Drive API),
+# with no published quota to size this against (unlike the Drive API's documented ~200 req/s -
+# see cardpicker/sources/update_database.py's comment on that machine). Deliberately
+# conservative (3 req/s sustained) since we're guessing at Google's real ceiling here: this is
+# shared with live PDF export and bulk image download traffic (frontend/src/features/pdf/,
+# frontend/src/features/download/), not just the local OCR/phash pilot that motivated adding it
+# - a burst of "tens of cards" from either live feature clears in well under a second at this
+# rate, while a sustained high-volume caller gets backed off instead of hammering the endpoint.
+[[ratelimits]]
+name = "IMAGE_FULL_TIER_RATE_LIMITER"
+namespace_id = "1002"
+simple = { limit = 30, period = 10 }
