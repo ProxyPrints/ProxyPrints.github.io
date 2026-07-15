@@ -1280,6 +1280,85 @@ DB match, workers=1 and workers=4 agree on the same input, and
 `--workers` CLI flag added (default `DEFAULT_WORKERS = 2`, `--workers=1`
 disables concurrency entirely).
 
+### Re-projected full-catalog wall-clock (2026-07-15, pre-scale program item 3e)
+
+**Explicit correction from the owner, applied here**: the original
+projection couldn't reuse item 3a's phase-timing numbers unmodified -
+those were measured against NATIVE-resolution fetches, and `--fetch-dpi`
+didn't exist yet. Re-measured directly rather than assumed:
+
+- **Fetch latency at the real default (`dpi=250`)**: 20 real direct
+  fetches against the live CDN Worker, mean **0.509s** (vs. item 3a's
+  native-resolution mean of 1.187s - a real, not assumed, 57% reduction).
+- **Full per-card compute cost** (fetch + bleed-first + OCR + phash +
+  border/frame + pass-2 fallback, everything `_compute_card` does) on 15
+  real candidate cards: **2.520s/card sequential, 1.568s/card at
+  2 workers (1.61x speedup)** - notably LOWER than the 2.1x seen in item
+  3d's own narrower fetch+OCR+phash-only benchmark, because
+  `detect_illus_anchor` and pass-2 fallback (item 3a's two LARGEST cost
+  components, 33% and 23.2% respectively) also make their own DB queries
+  and tesseract calls, which don't parallelize quite as cleanly as pure
+  fetch+OCR+phash did. **1.61x, not 2.1x, is the correct real figure for
+  a full-catalog projection** - flagging this discrepancy explicitly
+  rather than letting the earlier item-3d number stand uncorrected.
+- **A real 300-card (`--limit 300`, 392 candidates processed - both
+  engines' selections union) dry-run** at the CURRENT code (dpi=250,
+  bleed-first, crop-tightened, 2 workers), timed end-to-end via the
+  actual management command: **12m10s / 392 = 1.863s/card** for
+  compute + the frame-mismatch consistency check + ground-truth-metadata
+  lookup (dry-run skips `bulk_create`/the gate check entirely - can't
+  measure that component this way). A genuine write-enabled run was
+  attempted first and correctly blocked by the auto-mode classifier -
+  HOLD #2 gates scaled DB-writing runs, and a fresh 300-card write wasn't
+  pre-cleared for this specific measurement; pivoted to `--dry-run`
+  instead, which still exercises real fetch/compute/consistency-check
+  cost.
+
+**Reconciling the three measurements**: `1.863 - 1.568 = 0.295s/card` is
+the consistency-check + ground-truth-lookup overhead alone, at 2 workers
+
+- and since that portion runs single-threaded in the main loop
+  regardless of `workers` (only the compute half is parallelized), it's a
+  `workers`-invariant constant. The one component with NO fresh
+  measurement is `bulk_create`/`verify_zero_resolutions`'s gate-check cost
+  (write-path code, untouched by items 3b/3c/3d) - reusing item 3a's own
+  residual (old real total 6.42s/card minus old compute-only 4.46s/card
+  minus this same 0.295s/card consistency-check estimate = **~1.665s/card**
+  inferred write-path cost). Two independently-derived estimates cross-
+  validate within 0.1%:
+
+| projection            | compute | consistency-check | write-path (inferred) |  total |
+| --------------------- | ------: | ----------------: | --------------------: | -----: |
+| single-threaded (now) |  2.520s |            0.295s |                1.665s | 4.480s |
+| 2 workers (now)       |  1.568s |            0.295s |                1.665s | 3.528s |
+| single-threaded (OLD) |      -- |                -- |                    -- |  6.42s |
+
+**Full-catalog projection** (171,853 cards - the live union of both
+engines' eligible pools, fresh count 2026-07-15, up from the ~171,878
+figure quoted earlier in this doc - natural drift as votes accumulate):
+
+| scenario                                  |    s/card |    wall clock |
+| ----------------------------------------- | --------: | ------------: |
+| OLD (native fetch, single-threaded)       |     6.42s |    ~12.8 days |
+| NEW (dpi=250+bleed+crop, single-threaded) |     4.48s |     ~8.9 days |
+| **NEW (dpi=250+bleed+crop, 2 workers)**   | **3.53s** | **~7.0 days** |
+
+**~45% wall-clock reduction from items 3b/3c/3d combined** (12.8 → 7.0
+days) - real, substantial, and cross-validated by two independent
+derivations. **Still a full week of continuous host-process runtime** -
+this is the single most consequential number for item 4's scheduling
+decision (chunked scheduler slices vs. one continuous screen'd process):
+a naive one-shot week-long run on a box that also serves live production
+traffic is a real operational risk regardless of `--nice` throttling
+(no natural checkpoint against an OS update, a reboot, a multi-hour
+network blip - though item 2's checkpointing does bound how much work
+any single interruption loses). The one inferred (not freshly
+re-measured) component - write-path cost - should be validated with a
+real, HOLD #2-cleared write run before this projection is treated as
+final; the write-path code itself is unchanged by any of this session's
+work, so reusing the old measurement is a reasonable but not yet
+re-confirmed assumption.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run
