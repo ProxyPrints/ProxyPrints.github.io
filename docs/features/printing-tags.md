@@ -688,17 +688,22 @@ Old/Modern Border, Future Frame) 400 on tap; `Full Art`/`Borderless`/
 
 ## Stage 8: local (zero-API-cost) printing-identification backfill pilot
 
-**Status: environment proposal delivered, not yet built** (2026-07-15,
-`worktree-local-printing-id-pilot`) - this section records the plan shape,
-not a shipped feature; see `journal/2026-07-15-local-printing-id-pilot.md`
-(machine-local, not committed) for the full investigation.
+**Status: built and pilot-run against live production** (2026-07-15,
+`worktree-local-printing-id-pilot`, PR #22). Code + tests merged; a real
+`--limit 300 --engine both --nice` invocation ran against the live DB and
+its full results are summarized below. **Full-catalog run explicitly NOT
+executed** - see "Real pilot run results" below for why (a ~13-day
+single-process projection). See
+`journal/2026-07-15-local-printing-id-pilot.md` (machine-local, not
+committed) for the complete data dump this summary is drawn from.
 
 Sibling to Stage 6's deductive backfill, same non-negotiable principle
-(a deduction is always a vote, never a direct resolve - the human-backed
+(a vote is always just a vote, never a direct resolve - the human-backed
 gate in `vote_consensus.resolve_weighted_consensus` still applies), but
 sourced from actually looking at the card image instead of pure logical
 deduction from existing structured data - two independent local (no paid
-API calls) engines:
+API calls) pass-1 engines, plus a pass-2 fallback for cards pass 1 can't
+reach at all:
 
 - **L1, OCR**: Tesseract on a cropped, preprocessed collector-line region
   (bottom-left corner, grayscale/upscaled/thresholded). Parses candidate
@@ -708,39 +713,101 @@ API calls) engines:
   trusting the OCR output itself. Never writes `is_no_match`.
 - **L2, perceptual hash**: art-region phash comparison against each
   name-candidate's Scryfall art crop, voting only when there's a clear
-  single best match (distance threshold + margin over the second-best).
-  `CanonicalCard.image_hash` (`models.py`) already exists as a
-  `BigIntegerField` for exactly this - added when `import_canonical_card_ data` first shipped ("CanonicalCard population fix" above) but never
-  computed in production (`--skip-image-hash` was used for the real
-  import; confirmed live, 113,224/113,224 rows still at the placeholder
-  `0`) - so this pilot is the first thing to actually populate it, lazily,
-  only for candidates it needs.
-- Both engines vote under their own `anonymous_id`
-  (`local-ocr-v1`/`local-phash-v1`), same weight/gate treatment as any
-  other AI-sourced vote - when both vote on the same card and agree, both
-  votes stand as independent evidence; on disagreement, **neither** is
-  written (logged instead - the disagreement set is the interesting
-  output of a pilot like this, not noise to discard).
+  single best match (distance threshold + margin over the second-best,
+  recalibrated from real production data - see the journal for the
+  calibration history). `CanonicalCard.image_hash` (`models.py`) already
+  exists as a `BigIntegerField` for exactly this - added when
+  `import_canonical_card_data` first shipped ("CanonicalCard population
+  fix" above) but never computed in production (`--skip-image-hash` was
+  used for the real import) - so this pilot is the first thing to
+  actually populate it, lazily, only for candidates it needs. Capped at
+  12 candidates per name (basic lands/staples can have hundreds - see
+  "Real pilot run results" for how often this cap fires).
+- **Pass 2, fallback** (`local_fallback.py`, `local-fallback-v1`): fires
+  only when pass 1 (either engine) produced no accepted vote for a card -
+  the old-border-frame case (no collector line printed on the card face
+  at all, just an "Illus. `<artist>`" credit). Evidence-combination model
+  across border-color sample, artist-name OCR fuzzy match, and set-symbol
+  phash (found unreliable in practice, kept but effectively disabled via
+  a strict threshold - see `local_fallback.py`'s module docstring for the
+  full negative finding): a vote is cast only when the intersection of
+  every sub-check that produced a reading narrows to exactly one
+  candidate.
+- Border-color sampling and frame-style classification (OCR-collector-
+  line-present vs. Illus.-anchor-present) run for **every** processed
+  card regardless of printing-vote success, casting standalone
+  attribute-chip votes (Black/White/Silver Border, Borderless, Old/Modern
+  Border) - and, when a printing vote **is** confirmed for that card this
+  run, preferring ground truth from that printing's own
+  `CanonicalPrintingMetadata` (Scryfall `border_color`/`frame`) over the
+  heuristic estimate. The same heuristic reading also feeds a
+  **consistency check**: if a card's observed frame class contradicts its
+  matched printing's real frame value, the printing vote itself is
+  withheld (kept as a frame-vote-only outcome) rather than trusting an
+  art/OCR match that likely landed on the wrong printing.
+- All engines vote under `VoteSource.OCR` (the 2026-07-15 split of the
+  old single `VoteSource.AI` value into `DEDUCTION`/`OCR` - see
+  `models.py`'s `VoteSource` docstring; same weight/gate treatment as
+  before, individual technique still distinguishable via `anonymous_id`)
+  - when OCR and phash both vote on the same card and agree, both votes
+    stand as independent evidence; on disagreement, **neither** is written
+    (logged instead - see the journal's disagreement examples).
 
-**Environment**: the OCR engine needs the `tesseract-ocr` system binary
-(not pip-installable - `pytesseract` is a thin subprocess wrapper around
-it), which the django container's image doesn't currently have. Two
-options, no Dockerfile change made without explicit sign-off given this is
-pilot-only tooling: bake `tesseract-ocr` into `docker/django/Dockerfile`'s
-existing apt-get line (matches how every other `manage.py` command in this
-repo is invoked, at the cost of a production image rebuild/restart and a
-permanent size increase for a one-off tool), or run from a host-side venv
-pointed at the already-`127.0.0.1`-exposed Postgres/Elasticsearch ports
-(zero image/container change, trivially reversible, matches this
-project's precedent of running one-off scripts against the live DB from
-outside Docker). Command itself (`manage.py local_identify_printing_tags`)
-is unaffected either way - only the invocation environment differs.
+**Environment**: resolved via a host-side venv pointed at the
+already-`127.0.0.1`-exposed Postgres/Elasticsearch ports (zero
+Docker/container change) - `tesseract-ocr` installed via host apt,
+`pytesseract`/`ImageHash`/`Pillow` via the venv's `requirements.txt`
+install. No Dockerfile change made. (A future full-catalog run, if one
+ever happens, should revisit baking `tesseract-ocr` into
+`docker/django/Dockerfile` instead, per the original tradeoff writeup.)
 
-**Pilot discipline**: `--limit 300` default, explicit hold before any
-full-catalog run: this is genuinely new signal (visual inspection, not
-pure logical deduction) and needs a human spot-check of yield/accuracy
-before scaling up, unlike Stage 6's deduction which was provably exact by
-construction.
+### Real pilot run results (2026-07-15, `--limit 300 --engine both --nice`)
+
+**32m4.6s wall-clock, 19m36s user + 4m37s sys CPU (≈76% avg utilization of
+one core on this 2-CPU box), exit 0.** `--nice` confirmed actually
+throttling (process niceness observed alternating 5↔19 during the run).
+
+| Engine    | Attempted | Votes written | Yield |
+| --------- | --------- | ------------- | ----- |
+| OCR       | 300       | 77            | 25.7% |
+| Phash     | 300       | 13            | 4.3%  |
+| Fallback  | 210       | 4             | 1.9%  |
+| **Total** | —         | **94**        | —     |
+
+**Gate check: 0/94 affected cards resolved** - the human-backed gate held
+perfectly at this scale, same result as Stage 6's 0/28,112.
+
+Largest skip bucket by far: OCR's "parsed-but-no-match" at 176/300
+(58.7%) - a syntactically valid collector line that didn't match any of
+the card's own candidates. Not investigated further in this pilot (out of
+scope), but the single most promising lead for improving yield before any
+larger run - see the journal for the plausible-causes breakdown.
+
+Attribute votes: border `{black: 280, borderless: 17, white: 3}` (91 from
+ground truth, 209 from the pixel heuristic); frame `{modern: 258, old: 14}`, 28 abstains (91 from ground truth, 181 from the OCR/Illus.-anchor
+heuristic); **6 frame-mismatches** (printing vote withheld by the
+consistency check) - see the journal for all 10 sampled examples and the
+per-case reasoning.
+
+**Full-catalog projection: ~171,800 eligible cards remain (of 179,002 raw
+eligible pool) → naive linear projection ≈ 306 hours ≈ 12.8 days of
+continuous single-process runtime.** This is the key number for any
+future decision to scale up - not attempted in this pilot, and not
+practical as a single uninterrupted process. Before attempting it:
+parallelizing across multiple processes/pk-range partitions, and (more
+urgently) switching from the current one-giant-`bulk_create`-at-the-end
+write pattern to periodic batch flushing (matching
+`deductive_backfill.py`'s existing `batch_size`/`flush()` precedent) so a
+multi-day run's progress survives a crash/restart/deploy instead of
+losing everything accumulated since the last completed run - both raised
+but not implemented in this pilot, out of its locked scope.
+
+5-vote spot check, 20-vote random admin-link sample, 3 disagreement
+examples, and the filename tag-gap census (1,097 unresolved cards with an
+unmatchable `expansion_hint`) are all in the journal, not duplicated here.
+
+**Pilot discipline honored**: `--limit 300`, no full-catalog run attempted
+per the original hold.
 
 ## Key files
 
@@ -779,9 +846,11 @@ construction.
   via iterative screenshot review, not built against a real design system -
   owner has flagged that this needs a proper pass with the `/dataviz` skill
   in the future rather than further ad hoc CSS tuning.
-- `CanonicalCard.image_hash` is bootstrapped to `0` for every row
-  (`--skip-image-hash`); real perceptual-hash-based matching isn't
-  implemented yet.
+- `CanonicalCard.image_hash` was bootstrapped to `0` for every row
+  (`--skip-image-hash`) at import time; Stage 8's phash engine is the
+  first thing to actually populate it, lazily and only for rows it
+  needs - most of the table (any candidate no pilot run has hashed yet)
+  is still at the placeholder `0`.
 - Client-side (Orama) search has no Stage 3 parity — see above.
 - Upstreaming this feature is deprioritized — see
   [[../infrastructure.md]]'s Upstreaming section.
@@ -805,3 +874,27 @@ construction.
   deductive printing-tag backfill) reflect three concurrently-developed
   branches sharing this one doc file, numbered in landing order to avoid
   collisions.
+- **Future work: anonymous_id trust scoring via honeypot questions**
+  (2026-07-15, raised during Stage 8's pilot run). Idea: periodically
+  serve a voter a card whose printing is already known with very high
+  confidence — ideally an already-`RESOLVED` card (real human-backed
+  consensus), Stage 6's D1 tier as a fallback pool (0 false positives
+  across 27,424 live cards, but still AI-derived, not independently
+  human-verified, so using it as "trusted" ground truth to police other
+  submissions has a circularity worth being honest about) — without
+  telling the voter it's a check, and score their `anonymous_id` based on
+  whether they answer correctly. Deprioritize/downweight low-scoring
+  anonymous_ids to make data poisoning more costly. Same crowdsourcing
+  pattern as reCAPTCHA/Mechanical-Turk gold-standard questions. Known
+  limitation before this is worth building: `anonymous_id` is a
+  client-generated, trivially rotatable value
+  (`frontend/src/common/anonymousId.ts`) with no persisted identity —
+  a trust score raises the cost of poisoning (a fresh ID needed per
+  abuse attempt) but doesn't stop a determined actor, so it's a speed
+  bump, not a hard Sybil defense. Also a genuinely new subsystem, not a
+  small addition: a honeypot-injection point in `question_feed.py`
+  (nothing currently interrupts the three-tier ranked union with a
+  planted question), somewhere to persist per-`anonymous_id` trust state
+  (no such model exists today), and a way to feed that score back into
+  `vote_consensus`'s per-source weighting — worth its own design pass
+  rather than bolting onto an existing stage.
