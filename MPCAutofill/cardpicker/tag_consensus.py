@@ -170,6 +170,28 @@ def get_tag_vote_tally(card: Card, tag: Tag) -> list[TagVoteTallyEntry]:
     )
 
 
+def get_tag_net_polarity(card: Card, tag: Tag) -> float:
+    """
+    Weighted net polarity for (card, tag), normalized to [-1, 1] - the confidence-fill scalar
+    for the questionFeed attribute chips (see docs/features/printing-tags.md). 0.0 for no
+    votes (neutral gray, no signal either way) or a perfectly tied weighted split; sign gives
+    the fill color (positive/green vs. negative/red), magnitude gives the fill intensity.
+
+    Deliberately separate from `resolve_tag`/`resolve_weighted_consensus`, which collapse to a
+    categorical winner-or-None verdict and apply min_weight/min_share/privileged gates that
+    have no analogue for a continuous confidence display - this is the same underlying
+    weighted-sum math `get_tag_review_queue_pairs` already computes inline for its own
+    ordering, just normalized and exposed as its own function instead of staying buried there.
+    """
+    total_weight = 0.0
+    net = 0.0
+    for source, polarity in card.tag_votes.filter(tag=tag).values_list("source", "polarity"):
+        weight = _SOURCE_WEIGHTS[source]
+        total_weight += weight
+        net += polarity * weight
+    return net / total_weight if total_weight > 0 else 0.0
+
+
 def get_resolved_tag_overlay(card_ids: Iterable[int]) -> dict[int, dict[str, int]]:
     """
     Batched version of `resolve_tag`, computed for every (card, tag) pair with at least one
@@ -334,6 +356,7 @@ __all__ = [
     "resolve_tag",
     "resolve_and_persist_tag_votes",
     "get_tag_vote_tally",
+    "get_tag_net_polarity",
     "get_resolved_tag_overlay",
     "get_contested_tag_pairs",
     "get_tag_review_queue_pairs",

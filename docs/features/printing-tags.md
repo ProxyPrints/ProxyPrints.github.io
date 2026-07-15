@@ -74,6 +74,15 @@ because `import_canonical_card_data` was silently hanging for its full
 
 ## Frontend: vote-queue UI ("What's That Card?")
 
+**Superseded by Stage 7 (unified question feed) below** — `PrintingTagQueue.tsx`,
+`GenericVoteQueue.tsx`, `PrintingConfirmStrip.tsx`, and `ModerationQueue.tsx`
+(the tab switcher and its four tab bodies) were deleted as part of that
+change; their mechanics (starburst, sticky panel, reveal animation,
+candidate grid) live on, extracted into `cardPanel.tsx` and reused by the
+new `QuestionFeed.tsx`. This section is kept as the historical record of
+how those mechanics were originally built — still accurate for that, just
+not for "what renders today."
+
 `PrintingTagQueue.tsx` (standalone queue page) and `PrintingTagPicker.tsx`
 (embedded picker in `CardDetailedViewModal.tsx`) present candidate
 printings for a card with a themed starburst background, animated flicker,
@@ -537,7 +546,125 @@ The sensitive-tag moderation layer ([[moderation.md]]) builds directly on
 this system: a third seeded taxonomy (`seed_sensitive_tags` — NSFW/low-res/
 incorrect-info/appropriate-bleed, same command-not-migration convention as
 the two above), a privileged-approval gate in `resolve_weighted_consensus`,
-and a moderator-only queue tab beside the ones described here.
+and a moderator-only review surface (originally its own tab; folded into
+the unified question feed's `moderation` question type by Stage 7 below).
+
+## Stage 7: unified question feed (queue redesign)
+
+Replaces the printing/artist/tag/moderation tab switcher with a single
+`GET 2/questionFeed/`-driven stream: one question at a time, typed
+(`confirm_suggestion` | `identify_printing` | `artist` | `tag` |
+`moderation`), each with a `payload` shaped per type. A "dumb ranked
+union" v1 — four fixed-priority tiers, first non-empty tier wins, no
+cross-tier scoring. Full design rationale (chip taxonomy data grounding,
+layout tradeoffs, exact tier queries) lives in
+`journal/2026-07-14-queue-question-feed-design.md` (gitignored, local
+only) — this section captures the durable facts a future reader needs
+without that file.
+
+**Priority tiers**: (1) `confirm_suggestion` — cards with an unresolved
+AI-sourced printing vote and no human printing vote yet (28,112 cards at
+last count — the full deductive-backfill set from Stage 6); (2) contested
+printing/artist/tag pairs, existing per-kind ordering reused verbatim; (3)
+`moderation` — pending-approval sensitive tags
+(`get_pending_approval_queue_pairs`, unchanged from the moderation layer),
+gated on `is_moderator(request.user)` and simply never queried for a
+non-moderator request; (4) fresh unresolved. **Own-vote exclusion**: every
+tier excludes cards/pairs this exact `anonymous_id` has already voted on
+(scoped to `(card, tag)`, not just `card` — a card can carry ~11
+independent attribute-chip votes), so a single vote that doesn't itself
+resolve consensus doesn't re-serve the same question forever.
+
+**Starvation risk, not silently accepted**: at current volume, a voter
+working only this feed will not see a single contested/moderation item
+until all 28,112 tier-1 questions are exhausted. Flagged as a known v1
+property; an interleaved/weighted union is the likely v2 fix, out of scope
+here (matches the "ML/scoring schedulers beyond the ranked union"
+exclusion from this stage's own brief).
+
+**Attribute chips** (`frontend/src/features/attributeChips/`): tri-state
+per chip (untouched → positive → negative → untouched, cycling on tap),
+fill color/intensity renders the tag's weighted net polarity (a new
+`netPolarity` field on `TagConsensusEntry`, computed by
+`tag_consensus.get_tag_net_polarity` — the same weighted-sum math
+`get_tag_review_queue_pairs` already computed inline for its own ordering,
+now exposed as its own function). Chip taxonomy (11 tags total,
+`cardpicker/attribute_tags.py` + `frontend/.../attributeChips.ts`,
+kept in lockstep by tag name): standalone toggles Full Art / Borderless /
+Showcase / Extended (Art) / Etched, plus two **exclusion groups** — Border
+Color (Black/White/Silver) and Frame Style (Old/Modern/Future, bucketing
+Scryfall's four raw frame years into three) — encoded as one frontend
+constant (`EXCLUSION_GROUPS`) with a comment, per spec. A positive tap on
+one exclusion-group chip renders siblings implied-negative (dimmed) and
+drives live candidate filtering, but casts no vote on those siblings —
+only the frontend styling/filtering is group-aware, the vote write path
+never is. Chip set is deliberately narrower than "every value
+`CanonicalPrintingMetadata` stores" — `promo_types` is excluded entirely
+(mostly production/marketing provenance, not visually identifiable from a
+card image) and `frame_effects` is limited to the three values common
+enough (849–4165 occurrences at census time) to read as a distinct visual
+treatment to a non-expert; `legendary`/`inverted` had higher raw counts
+but were excluded as a judgment call (card-type marker and one narrow
+product line, respectively, not general printing-identification signal).
+
+**Retraction**: `CardTagVote` previously only supported apply/not-
+applicable (`update_or_create`, no delete path) — the tri-state chip's
+untouched-cycle-back needed a real "un-vote." Minimal addition:
+`post_submit_tag_vote` now also accepts `polarity=0` as a retract
+sentinel (never persisted — `VotePolarity`'s two real choices are
+unchanged), which deletes the existing `CardTagVote` row instead of
+upserting.
+
+**Auto-tag on selection**: picking a printing candidate casts the
+existing printing vote plus one positive `CardTagVote` per _standalone_
+attribute the candidate itself carries true (not the exclusion groups —
+border/frame aren't auto-derivable from a boolean flag the same way).
+`PrintingConfirmStrip` (Stage 4) is fully redundant under this — both
+attributes it used to manually confirm (Full Art, Borderless) are now
+auto-cast — and was deleted rather than kept as dead code.
+
+**No-match gating**: the "No match" candidate is disabled (visually and
+functionally) until at least one chip has an explicit (non-untouched)
+state, per spec — "describe what you see first."
+
+**Layout**: the starburst/sticky subject-card panel (with its surrounding
+chips) renders LEFT and the candidate grid RIGHT on desktop, in plain
+JSX/DOM order — the spec's original brief called for the opposite
+(candidates left, card right, via a CSS `order` flip so mobile stacking
+still worked); changed to this arrangement per direct follow-up
+instruction. Mobile stacks in the same DOM order (card+chips first/top,
+grid second/below) with no extra CSS needed.
+
+**A latent bug this stage's chips exposed, not introduced**: `CardPanel`
+has always used `z-index: -1` (see `cardPanel.tsx`, unchanged since the
+original `PrintingTagQueue.tsx`) so the starburst bleeding out from
+behind it doesn't paint over the page heading above. That negative
+z-index was never actually _contained_ to CardPanel's own column — with
+no positioned ancestor between it and the page root, it escapes all the
+way up, which happens to be harmless as long as nothing _inside_
+CardPanel needs to be clicked (the original component only ever showed a
+static image there). This stage is the first time CardPanel hosts real
+interactive content (the attribute chips), and the escape turned out to
+make CardPanel's entire subtree - chips included - unclickable at the
+browser's hit-testing layer: `elementFromPoint` at a chip's own screen
+coordinates resolved to its grandparent `Col`, not the chip, even though
+the chip visually renders exactly there. Caught via a real
+intercepted-click failure in Playwright (multiple false leads chased
+first - CSS `order`, dev-server staleness, duplicate mounts - before
+isolating it with `elementFromPoint` diagnostics and a bisection between
+`z-index: -1` and a throwaway positive value). Fixed by giving the `Col`
+wrapping `CardPanel` its own local stacking context: `position: relative`
+_and_ an explicit non-`auto` `z-index` (`0`) together - `position: relative` alone does not establish one, a distinction that cost a full
+extra round of "fixed, then still broken" before landing on the working
+combination.
+
+**Server deployment step**: `manage.py seed_attribute_tags` must run once
+before this feature is live (idempotent, same pattern as
+`seed_sensitive_tags` — see [[moderation.md]]'s checklist). Without it,
+the six non-default-taxonomy chips (Etched, Black/White/Silver Border,
+Old/Modern Border, Future Frame) 400 on tap; `Full Art`/`Borderless`/
+`Showcase`/`Extended` already work since they're seeded by the existing
+`seed_default_tags`.
 
 ## Key files
 
@@ -553,25 +680,49 @@ and a moderator-only queue tab beside the ones described here.
   `cardpicker/management/commands/seed_no_match_reason_tags.py` (Stage 4,
   display_name seeding Stage 5),
   `cardpicker/deductive_backfill.py` + management command
-  `deductive_backfill_printing_tags` (Stage 6)
-- Frontend: `frontend/src/features/printingTags/` (`PrintingTagQueue.tsx`,
-  `PrintingTagPicker.tsx`, `starburstShape.ts`, `useStickyTop`),
+  `deductive_backfill_printing_tags` (Stage 6),
+  `cardpicker/question_feed.py`, `cardpicker/attribute_tags.py` +
+  management command `seed_attribute_tags` (Stage 7)
+- Frontend: `frontend/src/features/printingTags/` (`PrintingTagPicker.tsx`,
+  `starburstShape.ts`, `cardPanel.tsx` — the extracted sticky/starburst/
+  reveal/candidate-grid mechanics, Stage 7),
   `frontend/src/features/filters/ResolvedAttributeFilter.tsx` (Stage 3),
   `frontend/src/common/processing.ts::getPrintingMatchLabel` (Stage 3),
   `frontend/src/features/attributeVoting/` (`ChipCard.tsx`,
-  `NoMatchReasonStrip.tsx`, `PrintingConfirmStrip.tsx` — Stage 4),
-  `frontend/src/common/tagDisplayNames.ts` (Stage 5)
+  `NoMatchReasonStrip.tsx` — Stage 4; `QueueTagQuestion.tsx`,
+  `ArtistVotePicker.tsx` — reused directly by Stage 7),
+  `frontend/src/common/tagDisplayNames.ts` (Stage 5),
+  `frontend/src/features/attributeChips/`, `frontend/src/features/ questionFeed/QuestionFeed.tsx`, `frontend/src/pages/whatsthat.tsx`
+  (renamed from `printingQueue.tsx` — Stage 7)
 - `docs/upstreaming/vote-system.md`, `docs/federation-v1.md` (`name` vs.
   `display_name` interchange-key note, Stage 5)
 
 ## Known gaps
 
+- The Stage 7 layout (starburst/card/chip-ring composition) was hand-tuned
+  via iterative screenshot review, not built against a real design system -
+  owner has flagged that this needs a proper pass with the `/dataviz` skill
+  in the future rather than further ad hoc CSS tuning.
 - `CanonicalCard.image_hash` is bootstrapped to `0` for every row
   (`--skip-image-hash`); real perceptual-hash-based matching isn't
   implemented yet.
 - Client-side (Orama) search has no Stage 3 parity — see above.
 - Upstreaming this feature is deprioritized — see
   [[../infrastructure.md]]'s Upstreaming section.
+- Tier-1 `confirm_suggestion` volume (28,112) is confirmed via a direct
+  live query, not the _live-usage_ starvation impact - whether it actually
+  swamps tiers 2-4 in practice (vs. just in raw candidate-set size) is a
+  server follow-up.
+- `netPolarity`'s optimistic client-side update (set to the tapped
+  direction's extreme immediately, reconciled with the server's real
+  value once the response lands) isn't linear in vote count once AI/admin
+  weights are involved - can't fully verify the two never visibly diverge
+  against MSW mocks alone.
+- Border Color's v1 chip set omits gold/yellow `border_color` values, and
+  the frame_effects chip set omits `legendary`/`inverted` despite higher
+  raw counts than the chips that made the cut - both flagged as judgment
+  calls in Stage 7 above, worth revisiting with real moderator/voter
+  feedback.
 - Stage numbering: Stage 4 (no-match reason tags, merged as PR #12),
   Stage 5 (tag identity/presentation decoupling via `Tag.display_name`,
   merged as PR #14), and Stage 6 (this document's current stage —

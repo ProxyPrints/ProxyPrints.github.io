@@ -1,29 +1,21 @@
 import styled from "@emotion/styled";
 import Head from "next/head";
-import React, { useState } from "react";
-import Nav from "react-bootstrap/Nav";
-import Tab from "react-bootstrap/Tab";
+import React from "react";
 
 import { ContentMaxWidth, ProjectName } from "@/common/constants";
-import { Kind } from "@/common/schema_types";
 import { NoBackendDefault } from "@/components/NoBackendDefault";
-import { GenericVoteQueue } from "@/features/attributeVoting/GenericVoteQueue";
 import { AuthWidget } from "@/features/moderation/AuthWidget";
-import { ModerationQueue } from "@/features/moderation/ModerationQueue";
-import { PrintingTagQueue } from "@/features/printingTags/PrintingTagQueue";
 import { STARBURST_BACKGROUND_COLOR } from "@/features/printingTags/starburstShape";
+import { QuestionFeed } from "@/features/questionFeed/QuestionFeed";
 import Footer from "@/features/ui/Footer";
 import { ProjectContainer } from "@/features/ui/Layout";
-import { useGetWhoamiQuery } from "@/store/api";
 import {
   useProjectName,
   useRemoteBackendConfigured,
 } from "@/store/slices/backendSlice";
 
-type VoteQueueTab = "printing" | "artist" | "tag" | "moderation";
-
 // Radiating starburst behind the game itself - a jagged
-// "explosion" burst (see starburstShape.ts, rendered inside PrintingTagQueue.tsx alongside
+// "explosion" burst (see starburstShape.ts, rendered inside QuestionFeed.tsx alongside
 // the subject card so the two stay glued together under position: sticky as the page
 // scrolls) built from two overlapping SVG polygons rather than a static image, so it scales
 // to any container size with no asset to host/maintain. Full-bleed to the viewport edges
@@ -35,7 +27,7 @@ type VoteQueueTab = "printing" | "artist" | "tag" | "moderation";
 const StarburstBackground = styled.div`
   position: relative;
   /* Deliberately clip-path, not overflow: hidden - the card+burst panel inside this uses
-     position: sticky (see CardPanel in PrintingTagQueue.tsx), and an overflow value other
+     position: sticky (see CardPanel in cardPanel.tsx), and an overflow value other
      than visible on ANY ancestor of a sticky element - even one that never actually
      scrolls - silently breaks its stickiness (a well-documented CSS gotcha: it changes
      what the sticky element's nearest scrolling ancestor resolves to). clip-path clips the
@@ -60,7 +52,7 @@ const StarburstBackground = styled.div`
 `;
 
 // Sits above the sticky card panel's stacking context (see CardPanel in
-// PrintingTagQueue.tsx) so the burst bleeding out from behind the card doesn't cover this
+// cardPanel.tsx) so the burst bleeding out from behind the card doesn't cover this
 // intro text, at the initial (unscrolled) position where they visually overlap.
 const StarburstContent = styled.div`
   position: relative;
@@ -70,73 +62,31 @@ const StarburstContent = styled.div`
   padding: 0 1.5rem;
 `;
 
+// The starburst+card assembly anchors to the right of the page (see QuestionFeed.tsx's
+// column order), so the intro copy above it reads right-to-left too, keeping the whole
+// header visually aligned with what sits below it rather than starting from the opposite edge.
+const IntroText = styled.div`
+  text-align: right;
+`;
+
 function PrintingQueueOrDefault() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
-  const [activeTab, setActiveTab] = useState<VoteQueueTab>("printing");
-  // gating the tab is presentation only - the backend 403s non-moderators regardless
-  const whoami = useGetWhoamiQuery();
-  const isModerator = whoami.data?.moderator === true;
 
   return remoteBackendConfigured ? (
     <>
       <StarburstBackground>
         <StarburstContent>
-          <h1>What&apos;s That Card?</h1>
-          <p>
-            Test your Magic: the Gathering knowledge! One card at a time, help
-            identify which real-world printing, artist, or descriptor tag each
-            card image depicts - contested cards come first, since they need
-            your eyes the most.
-          </p>
+          <IntroText>
+            <h1>What&apos;s That Card?</h1>
+            <p>
+              Test your Magic: the Gathering knowledge! One card at a time, help
+              identify which real-world printing, artist, or descriptor tag each
+              card image depicts - contested and AI-suggested cards come first,
+              since they need your eyes the most.
+            </p>
+          </IntroText>
           <AuthWidget />
-          <Tab.Container
-            activeKey={activeTab}
-            onSelect={(key) => {
-              if (key) setActiveTab(key as VoteQueueTab);
-            }}
-          >
-            <Nav variant="pills" className="mb-3">
-              <Nav.Item>
-                <Nav.Link eventKey="printing">Printings</Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link eventKey="artist">Artists</Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link eventKey="tag">Tags</Nav.Link>
-              </Nav.Item>
-              {isModerator && (
-                <Nav.Item>
-                  <Nav.Link eventKey="moderation">Moderation</Nav.Link>
-                </Nav.Item>
-              )}
-            </Nav>
-            <Tab.Content>
-              {/* mountOnEnter: each mode's queue does its own fetching/pagination on mount -
-                  no need to pay that cost for tabs the user hasn't visited yet. Printing
-                  mode's own component/behavior is completely unchanged from before this tab
-                  switcher existed. unmountOnExit on the two new tabs (not printing, to avoid
-                  touching its existing behavior at all): without it, react-bootstrap keeps an
-                  already-visited pane's DOM mounted (just hidden) rather than removing it,
-                  which both leaves an inactive tab's queue silently polling for more pages in
-                  the background and produces duplicate data-testid="vote-queue" elements in
-                  the DOM at once. */}
-              <Tab.Pane eventKey="printing" mountOnEnter>
-                <PrintingTagQueue />
-              </Tab.Pane>
-              <Tab.Pane eventKey="artist" mountOnEnter unmountOnExit>
-                <GenericVoteQueue kind={Kind.Artist} label="an artist tagged" />
-              </Tab.Pane>
-              <Tab.Pane eventKey="tag" mountOnEnter unmountOnExit>
-                <GenericVoteQueue kind={Kind.Tag} label="a tag reviewed" />
-              </Tab.Pane>
-              {isModerator && (
-                <Tab.Pane eventKey="moderation" mountOnEnter unmountOnExit>
-                  <ModerationQueue />
-                </Tab.Pane>
-              )}
-            </Tab.Content>
-          </Tab.Container>
+          <QuestionFeed />
         </StarburstContent>
       </StarburstBackground>
       <Footer />

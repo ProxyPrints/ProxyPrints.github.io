@@ -108,6 +108,26 @@ establishing a scroll container. Verify by scripting an actual scroll and
 measuring `getBoundingClientRect()` at multiple offsets — a static
 screenshot at one scroll position won't reveal a broken sticky context.
 
+**(3) A negative z-index on that sticky element (per (1) above) is a ticking
+time bomb once anything inside it needs to be clickable.** An uncontained
+`z-index: -1` escapes all the way up to whatever ancestor DOES establish a
+stacking context — which can be many levels up, or the document root — and
+can make the sticky element's _entire subtree_, descendants included,
+unclickable at the browser's hit-testing layer (`elementFromPoint` at a
+descendant's own on-screen coordinates resolves to a grandparent instead),
+even though everything still paints exactly where expected and looks
+completely normal in a screenshot. This is silent as long as the sticky
+element only ever shows static content — the bug was latent in this
+codebase's own starburst card panel for months before an unrelated feature
+added the first interactive control inside it. Fix: give the sticky
+element's _own parent_ a real, local stacking context — `position: relative`
+**and** an explicit non-`auto` `z-index` (e.g. `0`) together.
+`position: relative` alone does not establish one; that gap alone is worth
+budgeting a full extra "fixed, still broken" round for. Diagnose via
+`document.elementFromPoint(x, y)` at the target's own
+`getBoundingClientRect()` center, not via CSS inspection or screenshots —
+a screenshot cannot distinguish "renders here" from "is hit-testable here."
+
 ## A new wrapper placed around an existing effect can silently fight that effect's own CSS
 
 When component B is later wrapped around component A, check whether B's own
@@ -205,3 +225,21 @@ regardless of how the request is phrased ("data migration" in a task spec
 should be read as "a repeatable seeding step," not literally
 `migrations.RunPython`, when the target table has DB-wide list-all
 consumers).
+
+## A call-count-based MSW mock breaks under React 18 Strict Mode's dev-time double-invoke
+
+A Playwright mock like "return item X on the first `GET`, then a
+caught-up/empty response on every call after" is a trap in this codebase
+(`reactStrictMode: true` in `next.config.js`): Strict Mode double-invokes
+effects on mount in dev (mount → cleanup → mount again), so a fetch effect
+fires twice before the app "really" settles. A naive counter-based mock
+hands its one real item to the _first_ (thrown-away) invocation and the
+empty response to the second (kept) one — the UI never shows the item at
+all, and the resulting test failure (a locator that never appears) looks
+identical to a real rendering/interception bug, not a mock-design one.
+Symptom to watch for: a Playwright test times out waiting for content
+that a Jest/RTL test covering the identical interaction passes for
+instantly — Jest doesn't run Strict Mode's double-invoke the same way a
+real browser mount does. Fix: make the mock's "have I served the real
+item yet" state track a genuine domain event the flow itself causes
+(e.g. a specific vote being submitted), not a raw request count.

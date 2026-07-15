@@ -1,6 +1,6 @@
 /**
  * Procedurally generates the jagged "explosion" starburst silhouette used behind the
- * Vote queue (see printingQueue.tsx) - alternating spike-tip/valley vertices around
+ * Vote queue (see cardPanel.tsx) - alternating spike-tip/valley vertices around
  * a circle, with the tip radius heavily randomized per spike so the outline reads as an
  * irregular burst rather than a uniform star (matching the reference clip-art starburst
  * this was modeled on, e.g. https://i.sstatic.net/xpRS9.gif). Computed once at module load
@@ -60,7 +60,7 @@ export const STARBURST_INNER_COLOR = "#ffffff";
 // The reference gif isn't a single static shape - it flickers between several jagged
 // point-sets (a classic hand-drawn "explosion" vibration), so each layer precomputes a
 // handful of frames up front (still fully deterministic/seeded) rather than one fixed
-// shape. See useStarburstFrame in printingQueue.tsx for the interval that cycles through
+// shape. See useStarburstFrame in cardPanel.tsx for the interval that cycles through
 // these client-side, after the (hydration-safe) first paint always shows frame 0.
 const FRAME_COUNT = 5;
 

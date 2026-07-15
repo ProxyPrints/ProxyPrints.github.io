@@ -76,6 +76,7 @@ from cardpicker.printing_consensus import (
     resolve_and_persist_printing,
     resolve_printing,
 )
+from cardpicker.question_feed import get_next_question_feed_item, get_remaining_estimate
 from cardpicker.schema_types import (
     ArtistCandidatesRequest,
     ArtistCandidatesResponse,
@@ -122,6 +123,7 @@ from cardpicker.schema_types import (
     PrintingConsensusRequest,
     PrintingConsensusResponse,
     PrintingTagQueueResponse,
+    QuestionFeedResponse,
     ReportCardRequest,
     ReportCardResponse,
     SampleCardsResponse,
@@ -157,6 +159,7 @@ from cardpicker.sources.api import PathTraversalError, resolve_within_root
 from cardpicker.sources.source_types import SourceTypeChoices
 from cardpicker.tag_consensus import (
     get_pending_approval_queue_pairs,
+    get_tag_net_polarity,
     get_tag_review_queue_pairs,
     get_tag_vote_tally,
     resolve_and_persist_tag_votes,
@@ -1012,6 +1015,7 @@ def _build_tag_consensus_entry(card: Card, tag: Tag) -> TagConsensusEntry:
         # a sensitive tag awaiting privileged approval reads as unresolved to the public
         # consensus surface - the pending state is a moderation-queue concern, not a voter one
         resolvedPolarity=None if isinstance(resolved, _PendingPrivileged) else resolved,
+        netPolarity=get_tag_net_polarity(card, tag),
         tally=[
             TagVoteTallyEntry(polarity=entry["polarity"], count=entry["count"])
             for entry in get_tag_vote_tally(card, tag)
@@ -1066,13 +1070,25 @@ def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
         tag = Tag.objects.get(name=req.tagName)
     except Tag.DoesNotExist:
         raise BadRequestException(f"No tag found with name {req.tagName!r}.")
-    if req.polarity not in (VotePolarity.APPLY, VotePolarity.NOT_APPLICABLE):
-        raise BadRequestException(f"Invalid polarity {req.polarity!r} - must be 1 (apply) or -1 (not applicable).")
+    if req.polarity not in (VotePolarity.APPLY, VotePolarity.NOT_APPLICABLE, RETRACT_POLARITY):
+        raise BadRequestException(
+            f"Invalid polarity {req.polarity!r} - must be 1 (apply), -1 (not applicable), or 0 (retract)."
+        )
 
     _cast_tag_vote_and_resolve(
         card=card, tag=tag, anonymous_id=req.anonymousId, polarity=req.polarity, user=_requesting_user(request)
     )
     return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
+
+
+# Sentinel accepted by post_submit_tag_vote/_cast_tag_vote_and_resolve alongside the two real
+# VotePolarity values - never persisted (VotePolarity.choices is unchanged), it means "delete
+# my existing vote on this (card, tag) if I have one" - the untouched-with-no-votes state a
+# tri-state attribute chip cycles back to. See docs/features/printing-tags.md's questionFeed
+# section for why this didn't exist before the attribute-chip UI needed it: every prior tag
+# voter (QueueTagQuestion, PrintingConfirmStrip, NoMatchReasonStrip) only ever asks apply-or-
+# not-applicable, with no UI path back to "no opinion" once tapped.
+RETRACT_POLARITY = 0
 
 
 def _cast_tag_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str, polarity: int, user: Optional[User]) -> None:
@@ -1082,14 +1098,17 @@ def _cast_tag_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str, polarity
     the two entry points can never drift on how a vote lands or when consensus recomputes.
     """
     with transaction.atomic():
-        # `user` sits in defaults deliberately: the row reflects the *latest* submission from
-        # this (card, tag, anonymous_id), so a later unauthenticated re-vote clears it.
-        CardTagVote.objects.update_or_create(
-            card=card,
-            tag=tag,
-            anonymous_id=anonymous_id,
-            defaults={"polarity": polarity, "source": VoteSource.USER, "user": user},
-        )
+        if polarity == RETRACT_POLARITY:
+            CardTagVote.objects.filter(card=card, tag=tag, anonymous_id=anonymous_id).delete()
+        else:
+            # `user` sits in defaults deliberately: the row reflects the *latest* submission
+            # from this (card, tag, anonymous_id), so a later unauthenticated re-vote clears it.
+            CardTagVote.objects.update_or_create(
+                card=card,
+                tag=tag,
+                anonymous_id=anonymous_id,
+                defaults={"polarity": polarity, "source": VoteSource.USER, "user": user},
+            )
         resolve_and_persist_tag_votes(card)
 
 
@@ -1216,6 +1235,28 @@ def post_vote_queue(request: HttpRequest) -> HttpResponse:
         items = [VoteQueueItem(card=card.serialise(), tagName=None) for card in paginator.page(req.page).object_list]
 
     return JsonResponse(VoteQueueResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump())
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def get_question_feed(request: HttpRequest) -> HttpResponse:
+    """
+    The unified "What's That Card?" question feed (see cardpicker.question_feed and
+    docs/features/printing-tags.md) - one question at a time rather than a paginated batch,
+    since (unlike printingTagQueue/voteQueue) which question comes next depends on what this
+    same voter has already answered, evaluated fresh on every call.
+    """
+
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+
+    anonymous_id = request.GET.get("anonymousId")
+    if not anonymous_id:
+        raise BadRequestException("Missing required anonymousId query parameter.")
+
+    item = get_next_question_feed_item(anonymous_id, request.user)
+    remaining_estimate = get_remaining_estimate(request.user)
+    return JsonResponse(QuestionFeedResponse(item=item, remainingEstimate=remaining_estimate).model_dump())
 
 
 @csrf_exempt

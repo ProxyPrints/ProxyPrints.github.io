@@ -21,6 +21,11 @@ interface QueueTagQuestionProps {
   tagName: string;
   /** Called once the user has answered (apply/not applicable submitted successfully) or skipped. */
   onAnswered: () => void;
+  /** "include" attaches the moderator session cookie, making the vote privileged at
+   * resolution time - used by the question feed's "moderation" question type (see
+   * QuestionFeed.tsx), which reuses this exact component rather than forking a moderator-only
+   * variant. Defaults to "same-origin" - unchanged behavior for every pre-existing caller. */
+  credentials?: RequestCredentials;
 }
 
 const APPLY = 1;
@@ -31,6 +36,7 @@ export function QueueTagQuestion({
   cardIdentifier,
   tagName,
   onAnswered,
+  credentials = "same-origin",
 }: QueueTagQuestionProps) {
   const dispatch = useAppDispatch();
   const getTagDisplayName = useTagDisplayName();
@@ -43,7 +49,8 @@ export function QueueTagQuestion({
       cardIdentifier,
       getOrCreateAnonymousId(),
       tagName,
-      polarity
+      polarity,
+      credentials
     )
       .then(() => onAnswered())
       .catch(() =>

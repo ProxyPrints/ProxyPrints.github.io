@@ -18,6 +18,11 @@ def from_str(x: Any) -> str:
     return x
 
 
+def from_bool(x: Any) -> bool:
+    assert isinstance(x, bool)
+    return x
+
+
 def from_none(x: Any) -> Any:
     assert x is None
     return x
@@ -32,29 +37,24 @@ def from_union(fs, x):
     assert False
 
 
-def from_list(f: Callable[[Any], T], x: Any) -> List[T]:
-    assert isinstance(x, list)
-    return [f(y) for y in x]
-
-
-def to_class(c: Type[T], x: Any) -> dict:
-    assert isinstance(x, c)
-    return cast(Any, x).to_dict()
-
-
 def from_int(x: Any) -> int:
     assert isinstance(x, int) and not isinstance(x, bool)
     return x
 
 
-def from_bool(x: Any) -> bool:
-    assert isinstance(x, bool)
-    return x
+def from_list(f: Callable[[Any], T], x: Any) -> List[T]:
+    assert isinstance(x, list)
+    return [f(y) for y in x]
 
 
 def to_enum(c: Type[EnumT], x: Any) -> EnumT:
     assert isinstance(x, c)
     return x.value
+
+
+def to_class(c: Type[T], x: Any) -> dict:
+    assert isinstance(x, c)
+    return cast(Any, x).to_dict()
 
 
 def from_dict(f: Callable[[Any], T], x: Any) -> Dict[str, T]:
@@ -76,6 +76,399 @@ class Game(str, Enum):
     MTG = "MTG"
 
 
+class PrintingCandidate(BaseModel):
+    artist: str
+    borderColor: str
+    canonicalId: str
+    collectorNumber: str
+    expansionCode: str
+    expansionName: str
+    frame: str
+    fullArt: bool
+    identifier: str
+    isBorderless: bool
+    isEtched: bool
+    isExtendedArt: bool
+    isShowcase: bool
+    mediumThumbnailUrl: str
+    smallThumbnailUrl: str
+    releasedAt: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "PrintingCandidate":
+        assert isinstance(obj, dict)
+        artist = from_str(obj.get("artist"))
+        borderColor = from_str(obj.get("borderColor"))
+        canonicalId = from_str(obj.get("canonicalId"))
+        collectorNumber = from_str(obj.get("collectorNumber"))
+        expansionCode = from_str(obj.get("expansionCode"))
+        expansionName = from_str(obj.get("expansionName"))
+        frame = from_str(obj.get("frame"))
+        fullArt = from_bool(obj.get("fullArt"))
+        identifier = from_str(obj.get("identifier"))
+        isBorderless = from_bool(obj.get("isBorderless"))
+        isEtched = from_bool(obj.get("isEtched"))
+        isExtendedArt = from_bool(obj.get("isExtendedArt"))
+        isShowcase = from_bool(obj.get("isShowcase"))
+        mediumThumbnailUrl = from_str(obj.get("mediumThumbnailUrl"))
+        smallThumbnailUrl = from_str(obj.get("smallThumbnailUrl"))
+        releasedAt = from_union([from_none, from_str], obj.get("releasedAt"))
+        return PrintingCandidate(
+            artist,
+            borderColor,
+            canonicalId,
+            collectorNumber,
+            expansionCode,
+            expansionName,
+            frame,
+            fullArt,
+            identifier,
+            isBorderless,
+            isEtched,
+            isExtendedArt,
+            isShowcase,
+            mediumThumbnailUrl,
+            smallThumbnailUrl,
+            releasedAt,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["artist"] = from_str(self.artist)
+        result["borderColor"] = from_str(self.borderColor)
+        result["canonicalId"] = from_str(self.canonicalId)
+        result["collectorNumber"] = from_str(self.collectorNumber)
+        result["expansionCode"] = from_str(self.expansionCode)
+        result["expansionName"] = from_str(self.expansionName)
+        result["frame"] = from_str(self.frame)
+        result["fullArt"] = from_bool(self.fullArt)
+        result["identifier"] = from_str(self.identifier)
+        result["isBorderless"] = from_bool(self.isBorderless)
+        result["isEtched"] = from_bool(self.isEtched)
+        result["isExtendedArt"] = from_bool(self.isExtendedArt)
+        result["isShowcase"] = from_bool(self.isShowcase)
+        result["mediumThumbnailUrl"] = from_str(self.mediumThumbnailUrl)
+        result["smallThumbnailUrl"] = from_str(self.smallThumbnailUrl)
+        if self.releasedAt is not None:
+            result["releasedAt"] = from_union([from_none, from_str], self.releasedAt)
+        return result
+
+
+class CanonicalArtistClass(BaseModel):
+    name: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CanonicalArtistClass":
+        assert isinstance(obj, dict)
+        name = from_str(obj.get("name"))
+        return CanonicalArtistClass(name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["name"] = from_str(self.name)
+        return result
+
+
+class CanonicalCardClass(BaseModel):
+    collectorNumber: str
+    expansionCode: str
+    expansionName: str
+    identifier: str
+    mediumThumbnailUrl: str
+    smallThumbnailUrl: str
+    artist: Optional[str] = None
+    canonicalId: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CanonicalCardClass":
+        assert isinstance(obj, dict)
+        collectorNumber = from_str(obj.get("collectorNumber"))
+        expansionCode = from_str(obj.get("expansionCode"))
+        expansionName = from_str(obj.get("expansionName"))
+        identifier = from_str(obj.get("identifier"))
+        mediumThumbnailUrl = from_str(obj.get("mediumThumbnailUrl"))
+        smallThumbnailUrl = from_str(obj.get("smallThumbnailUrl"))
+        artist = from_union([from_str, from_none], obj.get("artist"))
+        canonicalId = from_union([from_str, from_none], obj.get("canonicalId"))
+        return CanonicalCardClass(
+            collectorNumber,
+            expansionCode,
+            expansionName,
+            identifier,
+            mediumThumbnailUrl,
+            smallThumbnailUrl,
+            artist,
+            canonicalId,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["collectorNumber"] = from_str(self.collectorNumber)
+        result["expansionCode"] = from_str(self.expansionCode)
+        result["expansionName"] = from_str(self.expansionName)
+        result["identifier"] = from_str(self.identifier)
+        result["mediumThumbnailUrl"] = from_str(self.mediumThumbnailUrl)
+        result["smallThumbnailUrl"] = from_str(self.smallThumbnailUrl)
+        if self.artist is not None:
+            result["artist"] = from_union([from_str, from_none], self.artist)
+        if self.canonicalId is not None:
+            result["canonicalId"] = from_union([from_str, from_none], self.canonicalId)
+        return result
+
+
+class CardType(str, Enum):
+    CARD = "CARD"
+    CARDBACK = "CARDBACK"
+    TOKEN = "TOKEN"
+
+
+class PrintingTagStatus(str, Enum):
+    """Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
+    community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
+    the frontend to show a 'matched by community tags' indicator and is otherwise
+    informational.
+    """
+
+    nomatch = "no_match"
+    resolved = "resolved"
+    unresolved = "unresolved"
+
+
+class SourceType(str, Enum):
+    AWSS3 = "AWS S3"
+    GoogleDrive = "Google Drive"
+    LocalFile = "Local File"
+
+
+class Card(BaseModel):
+    cardType: CardType
+    dateCreated: str
+    """Created date - formatted by backend"""
+
+    dateModified: str
+    """Modified date - formatted by backend"""
+
+    dpi: int
+    extension: str
+    identifier: str
+    language: str
+    mediumThumbnailUrl: str
+    name: str
+    printingTagStatus: PrintingTagStatus
+    """Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
+    community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
+    the frontend to show a 'matched by community tags' indicator and is otherwise
+    informational.
+    """
+    priority: int
+    searchq: str
+    size: int
+    smallThumbnailUrl: str
+    source: str
+    sourceId: int
+    sourceName: str
+    sourceVerbose: str
+    tags: List[str]
+    canonicalArtist: Optional[CanonicalArtistClass] = None
+    canonicalArtistIsFromVoteOnly: Optional[bool] = None
+    """True only when canonicalArtist was supplied by artist-vote consensus alone, with no
+    confirmed indexing match or resolved printing backing it - lets the frontend distinguish
+    a confidently-known artist from a vote-derived one (e.g. for the ArtistVotePicker
+    'wrong?' affordance) without needing to know serialise()'s fallback chain itself.
+    """
+    canonicalArtistSource: Optional[str] = None
+    """Which rung of the artist fallback chain actually supplied canonicalArtist -
+    debug/introspection field, not load-bearing for any current frontend logic.
+    """
+    canonicalCard: Optional[CanonicalCardClass] = None
+    sourceExternalLink: Optional[str] = None
+    sourceType: Optional[SourceType] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "Card":
+        assert isinstance(obj, dict)
+        cardType = CardType(obj.get("cardType"))
+        dateCreated = from_str(obj.get("dateCreated"))
+        dateModified = from_str(obj.get("dateModified"))
+        dpi = from_int(obj.get("dpi"))
+        extension = from_str(obj.get("extension"))
+        identifier = from_str(obj.get("identifier"))
+        language = from_str(obj.get("language"))
+        mediumThumbnailUrl = from_str(obj.get("mediumThumbnailUrl"))
+        name = from_str(obj.get("name"))
+        printingTagStatus = PrintingTagStatus(obj.get("printingTagStatus"))
+        priority = from_int(obj.get("priority"))
+        searchq = from_str(obj.get("searchq"))
+        size = from_int(obj.get("size"))
+        smallThumbnailUrl = from_str(obj.get("smallThumbnailUrl"))
+        source = from_str(obj.get("source"))
+        sourceId = from_int(obj.get("sourceId"))
+        sourceName = from_str(obj.get("sourceName"))
+        sourceVerbose = from_str(obj.get("sourceVerbose"))
+        tags = from_list(from_str, obj.get("tags"))
+        canonicalArtist = from_union([from_none, CanonicalArtistClass.from_dict], obj.get("canonicalArtist"))
+        canonicalArtistIsFromVoteOnly = from_union([from_bool, from_none], obj.get("canonicalArtistIsFromVoteOnly"))
+        canonicalArtistSource = from_union([from_none, from_str], obj.get("canonicalArtistSource"))
+        canonicalCard = from_union([from_none, CanonicalCardClass.from_dict], obj.get("canonicalCard"))
+        sourceExternalLink = from_union([from_str, from_none], obj.get("sourceExternalLink"))
+        sourceType = from_union([SourceType, from_none], obj.get("sourceType"))
+        return Card(
+            cardType,
+            dateCreated,
+            dateModified,
+            dpi,
+            extension,
+            identifier,
+            language,
+            mediumThumbnailUrl,
+            name,
+            printingTagStatus,
+            priority,
+            searchq,
+            size,
+            smallThumbnailUrl,
+            source,
+            sourceId,
+            sourceName,
+            sourceVerbose,
+            tags,
+            canonicalArtist,
+            canonicalArtistIsFromVoteOnly,
+            canonicalArtistSource,
+            canonicalCard,
+            sourceExternalLink,
+            sourceType,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["cardType"] = to_enum(CardType, self.cardType)
+        result["dateCreated"] = from_str(self.dateCreated)
+        result["dateModified"] = from_str(self.dateModified)
+        result["dpi"] = from_int(self.dpi)
+        result["extension"] = from_str(self.extension)
+        result["identifier"] = from_str(self.identifier)
+        result["language"] = from_str(self.language)
+        result["mediumThumbnailUrl"] = from_str(self.mediumThumbnailUrl)
+        result["name"] = from_str(self.name)
+        result["printingTagStatus"] = to_enum(PrintingTagStatus, self.printingTagStatus)
+        result["priority"] = from_int(self.priority)
+        result["searchq"] = from_str(self.searchq)
+        result["size"] = from_int(self.size)
+        result["smallThumbnailUrl"] = from_str(self.smallThumbnailUrl)
+        result["source"] = from_str(self.source)
+        result["sourceId"] = from_int(self.sourceId)
+        result["sourceName"] = from_str(self.sourceName)
+        result["sourceVerbose"] = from_str(self.sourceVerbose)
+        result["tags"] = from_list(from_str, self.tags)
+        if self.canonicalArtist is not None:
+            result["canonicalArtist"] = from_union(
+                [from_none, lambda x: to_class(CanonicalArtistClass, x)], self.canonicalArtist
+            )
+        if self.canonicalArtistIsFromVoteOnly is not None:
+            result["canonicalArtistIsFromVoteOnly"] = from_union(
+                [from_bool, from_none], self.canonicalArtistIsFromVoteOnly
+            )
+        if self.canonicalArtistSource is not None:
+            result["canonicalArtistSource"] = from_union([from_none, from_str], self.canonicalArtistSource)
+        if self.canonicalCard is not None:
+            result["canonicalCard"] = from_union(
+                [from_none, lambda x: to_class(CanonicalCardClass, x)], self.canonicalCard
+            )
+        if self.sourceExternalLink is not None:
+            result["sourceExternalLink"] = from_union([from_str, from_none], self.sourceExternalLink)
+        if self.sourceType is not None:
+            result["sourceType"] = from_union([lambda x: to_enum(SourceType, x), from_none], self.sourceType)
+        return result
+
+
+class TypeEnum(str, Enum):
+    artist = "artist"
+    confirmsuggestion = "confirm_suggestion"
+    identifyprinting = "identify_printing"
+    moderation = "moderation"
+    tag = "tag"
+
+
+class QuestionFeedItem(BaseModel):
+    card: Card
+    type: TypeEnum
+    candidates: Optional[List[PrintingCandidate]] = None
+    confidentlyKnownArtistName: Optional[str] = None
+    reportCount: Optional[int] = None
+    reportExcerpts: Optional[List[str]] = None
+    suggestedPrinting: Optional[PrintingCandidate] = None
+    tagConfidence: Optional[Dict[str, float]] = None
+    tagName: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "QuestionFeedItem":
+        assert isinstance(obj, dict)
+        card = Card.from_dict(obj.get("card"))
+        type = TypeEnum(obj.get("type"))
+        candidates = from_union([lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("candidates"))
+        confidentlyKnownArtistName = from_union([from_none, from_str], obj.get("confidentlyKnownArtistName"))
+        reportCount = from_union([from_int, from_none], obj.get("reportCount"))
+        reportExcerpts = from_union([lambda x: from_list(from_str, x), from_none], obj.get("reportExcerpts"))
+        suggestedPrinting = from_union([PrintingCandidate.from_dict, from_none], obj.get("suggestedPrinting"))
+        tagConfidence = from_union([lambda x: from_dict(from_float, x), from_none], obj.get("tagConfidence"))
+        tagName = from_union([from_str, from_none], obj.get("tagName"))
+        return QuestionFeedItem(
+            card,
+            type,
+            candidates,
+            confidentlyKnownArtistName,
+            reportCount,
+            reportExcerpts,
+            suggestedPrinting,
+            tagConfidence,
+            tagName,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["card"] = to_class(Card, self.card)
+        result["type"] = to_enum(TypeEnum, self.type)
+        if self.candidates is not None:
+            result["candidates"] = from_union(
+                [lambda x: from_list(lambda x: to_class(PrintingCandidate, x), x), from_none], self.candidates
+            )
+        if self.confidentlyKnownArtistName is not None:
+            result["confidentlyKnownArtistName"] = from_union([from_none, from_str], self.confidentlyKnownArtistName)
+        if self.reportCount is not None:
+            result["reportCount"] = from_union([from_int, from_none], self.reportCount)
+        if self.reportExcerpts is not None:
+            result["reportExcerpts"] = from_union([lambda x: from_list(from_str, x), from_none], self.reportExcerpts)
+        if self.suggestedPrinting is not None:
+            result["suggestedPrinting"] = from_union(
+                [lambda x: to_class(PrintingCandidate, x), from_none], self.suggestedPrinting
+            )
+        if self.tagConfidence is not None:
+            result["tagConfidence"] = from_union([lambda x: from_dict(to_float, x), from_none], self.tagConfidence)
+        if self.tagName is not None:
+            result["tagName"] = from_union([from_str, from_none], self.tagName)
+        return result
+
+
+class QuestionFeedResponse(BaseModel):
+    remainingEstimate: int
+    item: Optional[QuestionFeedItem] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "QuestionFeedResponse":
+        assert isinstance(obj, dict)
+        remainingEstimate = from_int(obj.get("remainingEstimate"))
+        item = from_union([QuestionFeedItem.from_dict, from_none], obj.get("item"))
+        return QuestionFeedResponse(remainingEstimate, item)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["remainingEstimate"] = from_int(self.remainingEstimate)
+        if self.item is not None:
+            result["item"] = from_union([lambda x: to_class(QuestionFeedItem, x), from_none], self.item)
+        return result
+
+
 class ArtistCandidatesRequest(BaseModel):
     identifier: str
     query: Optional[str] = None
@@ -92,21 +485,6 @@ class ArtistCandidatesRequest(BaseModel):
         result["identifier"] = from_str(self.identifier)
         if self.query is not None:
             result["query"] = from_union([from_none, from_str], self.query)
-        return result
-
-
-class CanonicalArtistClass(BaseModel):
-    name: str
-
-    @staticmethod
-    def from_dict(obj: Any) -> "CanonicalArtistClass":
-        assert isinstance(obj, dict)
-        name = from_str(obj.get("name"))
-        return CanonicalArtistClass(name)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["name"] = from_str(self.name)
         return result
 
 
@@ -347,219 +725,6 @@ class CardsRequest(BaseModel):
     def to_dict(self) -> dict:
         result: dict = {}
         result["cardIdentifiers"] = from_list(from_str, self.cardIdentifiers)
-        return result
-
-
-class CanonicalCardClass(BaseModel):
-    collectorNumber: str
-    expansionCode: str
-    expansionName: str
-    identifier: str
-    mediumThumbnailUrl: str
-    smallThumbnailUrl: str
-    artist: Optional[str] = None
-    canonicalId: Optional[str] = None
-
-    @staticmethod
-    def from_dict(obj: Any) -> "CanonicalCardClass":
-        assert isinstance(obj, dict)
-        collectorNumber = from_str(obj.get("collectorNumber"))
-        expansionCode = from_str(obj.get("expansionCode"))
-        expansionName = from_str(obj.get("expansionName"))
-        identifier = from_str(obj.get("identifier"))
-        mediumThumbnailUrl = from_str(obj.get("mediumThumbnailUrl"))
-        smallThumbnailUrl = from_str(obj.get("smallThumbnailUrl"))
-        artist = from_union([from_str, from_none], obj.get("artist"))
-        canonicalId = from_union([from_str, from_none], obj.get("canonicalId"))
-        return CanonicalCardClass(
-            collectorNumber,
-            expansionCode,
-            expansionName,
-            identifier,
-            mediumThumbnailUrl,
-            smallThumbnailUrl,
-            artist,
-            canonicalId,
-        )
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["collectorNumber"] = from_str(self.collectorNumber)
-        result["expansionCode"] = from_str(self.expansionCode)
-        result["expansionName"] = from_str(self.expansionName)
-        result["identifier"] = from_str(self.identifier)
-        result["mediumThumbnailUrl"] = from_str(self.mediumThumbnailUrl)
-        result["smallThumbnailUrl"] = from_str(self.smallThumbnailUrl)
-        if self.artist is not None:
-            result["artist"] = from_union([from_str, from_none], self.artist)
-        if self.canonicalId is not None:
-            result["canonicalId"] = from_union([from_str, from_none], self.canonicalId)
-        return result
-
-
-class CardType(str, Enum):
-    CARD = "CARD"
-    CARDBACK = "CARDBACK"
-    TOKEN = "TOKEN"
-
-
-class PrintingTagStatus(str, Enum):
-    """Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
-    community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
-    the frontend to show a 'matched by community tags' indicator and is otherwise
-    informational.
-    """
-
-    nomatch = "no_match"
-    resolved = "resolved"
-    unresolved = "unresolved"
-
-
-class SourceType(str, Enum):
-    AWSS3 = "AWS S3"
-    GoogleDrive = "Google Drive"
-    LocalFile = "Local File"
-
-
-class Card(BaseModel):
-    cardType: CardType
-    dateCreated: str
-    """Created date - formatted by backend"""
-
-    dateModified: str
-    """Modified date - formatted by backend"""
-
-    dpi: int
-    extension: str
-    identifier: str
-    language: str
-    mediumThumbnailUrl: str
-    name: str
-    printingTagStatus: PrintingTagStatus
-    """Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
-    community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
-    the frontend to show a 'matched by community tags' indicator and is otherwise
-    informational.
-    """
-    priority: int
-    searchq: str
-    size: int
-    smallThumbnailUrl: str
-    source: str
-    sourceId: int
-    sourceName: str
-    sourceVerbose: str
-    tags: List[str]
-    canonicalArtist: Optional[CanonicalArtistClass] = None
-    canonicalArtistIsFromVoteOnly: Optional[bool] = None
-    """True only when canonicalArtist was supplied by artist-vote consensus alone, with no
-    confirmed indexing match or resolved printing backing it - lets the frontend distinguish
-    a confidently-known artist from a vote-derived one (e.g. for the ArtistVotePicker
-    'wrong?' affordance) without needing to know serialise()'s fallback chain itself.
-    """
-    canonicalArtistSource: Optional[str] = None
-    """Which rung of the artist fallback chain actually supplied canonicalArtist -
-    debug/introspection field, not load-bearing for any current frontend logic.
-    """
-    canonicalCard: Optional[CanonicalCardClass] = None
-    sourceExternalLink: Optional[str] = None
-    sourceType: Optional[SourceType] = None
-
-    @staticmethod
-    def from_dict(obj: Any) -> "Card":
-        assert isinstance(obj, dict)
-        cardType = CardType(obj.get("cardType"))
-        dateCreated = from_str(obj.get("dateCreated"))
-        dateModified = from_str(obj.get("dateModified"))
-        dpi = from_int(obj.get("dpi"))
-        extension = from_str(obj.get("extension"))
-        identifier = from_str(obj.get("identifier"))
-        language = from_str(obj.get("language"))
-        mediumThumbnailUrl = from_str(obj.get("mediumThumbnailUrl"))
-        name = from_str(obj.get("name"))
-        printingTagStatus = PrintingTagStatus(obj.get("printingTagStatus"))
-        priority = from_int(obj.get("priority"))
-        searchq = from_str(obj.get("searchq"))
-        size = from_int(obj.get("size"))
-        smallThumbnailUrl = from_str(obj.get("smallThumbnailUrl"))
-        source = from_str(obj.get("source"))
-        sourceId = from_int(obj.get("sourceId"))
-        sourceName = from_str(obj.get("sourceName"))
-        sourceVerbose = from_str(obj.get("sourceVerbose"))
-        tags = from_list(from_str, obj.get("tags"))
-        canonicalArtist = from_union([from_none, CanonicalArtistClass.from_dict], obj.get("canonicalArtist"))
-        canonicalArtistIsFromVoteOnly = from_union([from_bool, from_none], obj.get("canonicalArtistIsFromVoteOnly"))
-        canonicalArtistSource = from_union([from_none, from_str], obj.get("canonicalArtistSource"))
-        canonicalCard = from_union([from_none, CanonicalCardClass.from_dict], obj.get("canonicalCard"))
-        sourceExternalLink = from_union([from_str, from_none], obj.get("sourceExternalLink"))
-        sourceType = from_union([SourceType, from_none], obj.get("sourceType"))
-        return Card(
-            cardType,
-            dateCreated,
-            dateModified,
-            dpi,
-            extension,
-            identifier,
-            language,
-            mediumThumbnailUrl,
-            name,
-            printingTagStatus,
-            priority,
-            searchq,
-            size,
-            smallThumbnailUrl,
-            source,
-            sourceId,
-            sourceName,
-            sourceVerbose,
-            tags,
-            canonicalArtist,
-            canonicalArtistIsFromVoteOnly,
-            canonicalArtistSource,
-            canonicalCard,
-            sourceExternalLink,
-            sourceType,
-        )
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["cardType"] = to_enum(CardType, self.cardType)
-        result["dateCreated"] = from_str(self.dateCreated)
-        result["dateModified"] = from_str(self.dateModified)
-        result["dpi"] = from_int(self.dpi)
-        result["extension"] = from_str(self.extension)
-        result["identifier"] = from_str(self.identifier)
-        result["language"] = from_str(self.language)
-        result["mediumThumbnailUrl"] = from_str(self.mediumThumbnailUrl)
-        result["name"] = from_str(self.name)
-        result["printingTagStatus"] = to_enum(PrintingTagStatus, self.printingTagStatus)
-        result["priority"] = from_int(self.priority)
-        result["searchq"] = from_str(self.searchq)
-        result["size"] = from_int(self.size)
-        result["smallThumbnailUrl"] = from_str(self.smallThumbnailUrl)
-        result["source"] = from_str(self.source)
-        result["sourceId"] = from_int(self.sourceId)
-        result["sourceName"] = from_str(self.sourceName)
-        result["sourceVerbose"] = from_str(self.sourceVerbose)
-        result["tags"] = from_list(from_str, self.tags)
-        if self.canonicalArtist is not None:
-            result["canonicalArtist"] = from_union(
-                [from_none, lambda x: to_class(CanonicalArtistClass, x)], self.canonicalArtist
-            )
-        if self.canonicalArtistIsFromVoteOnly is not None:
-            result["canonicalArtistIsFromVoteOnly"] = from_union(
-                [from_bool, from_none], self.canonicalArtistIsFromVoteOnly
-            )
-        if self.canonicalArtistSource is not None:
-            result["canonicalArtistSource"] = from_union([from_none, from_str], self.canonicalArtistSource)
-        if self.canonicalCard is not None:
-            result["canonicalCard"] = from_union(
-                [from_none, lambda x: to_class(CanonicalCardClass, x)], self.canonicalCard
-            )
-        if self.sourceExternalLink is not None:
-            result["sourceExternalLink"] = from_union([from_str, from_none], self.sourceExternalLink)
-        if self.sourceType is not None:
-            result["sourceType"] = from_union([lambda x: to_enum(SourceType, x), from_none], self.sourceType)
         return result
 
 
@@ -1238,68 +1403,6 @@ class PrintingCandidatesRequest(BaseModel):
         return result
 
 
-class PrintingCandidate(BaseModel):
-    artist: str
-    canonicalId: str
-    collectorNumber: str
-    expansionCode: str
-    expansionName: str
-    frame: str
-    fullArt: bool
-    identifier: str
-    isBorderless: bool
-    mediumThumbnailUrl: str
-    smallThumbnailUrl: str
-    releasedAt: Optional[str] = None
-
-    @staticmethod
-    def from_dict(obj: Any) -> "PrintingCandidate":
-        assert isinstance(obj, dict)
-        artist = from_str(obj.get("artist"))
-        canonicalId = from_str(obj.get("canonicalId"))
-        collectorNumber = from_str(obj.get("collectorNumber"))
-        expansionCode = from_str(obj.get("expansionCode"))
-        expansionName = from_str(obj.get("expansionName"))
-        frame = from_str(obj.get("frame"))
-        fullArt = from_bool(obj.get("fullArt"))
-        identifier = from_str(obj.get("identifier"))
-        isBorderless = from_bool(obj.get("isBorderless"))
-        mediumThumbnailUrl = from_str(obj.get("mediumThumbnailUrl"))
-        smallThumbnailUrl = from_str(obj.get("smallThumbnailUrl"))
-        releasedAt = from_union([from_none, from_str], obj.get("releasedAt"))
-        return PrintingCandidate(
-            artist,
-            canonicalId,
-            collectorNumber,
-            expansionCode,
-            expansionName,
-            frame,
-            fullArt,
-            identifier,
-            isBorderless,
-            mediumThumbnailUrl,
-            smallThumbnailUrl,
-            releasedAt,
-        )
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["artist"] = from_str(self.artist)
-        result["canonicalId"] = from_str(self.canonicalId)
-        result["collectorNumber"] = from_str(self.collectorNumber)
-        result["expansionCode"] = from_str(self.expansionCode)
-        result["expansionName"] = from_str(self.expansionName)
-        result["frame"] = from_str(self.frame)
-        result["fullArt"] = from_bool(self.fullArt)
-        result["identifier"] = from_str(self.identifier)
-        result["isBorderless"] = from_bool(self.isBorderless)
-        result["mediumThumbnailUrl"] = from_str(self.mediumThumbnailUrl)
-        result["smallThumbnailUrl"] = from_str(self.smallThumbnailUrl)
-        if self.releasedAt is not None:
-            result["releasedAt"] = from_union([from_none, from_str], self.releasedAt)
-        return result
-
-
 class PrintingCandidatesResponse(BaseModel):
     results: List[PrintingCandidate]
 
@@ -1622,6 +1725,7 @@ class TagVoteTallyEntry(BaseModel):
 
 
 class TagConsensusEntry(BaseModel):
+    netPolarity: float
     tagName: str
     tally: List[TagVoteTallyEntry]
     resolvedPolarity: Optional[int] = None
@@ -1629,17 +1733,19 @@ class TagConsensusEntry(BaseModel):
     @staticmethod
     def from_dict(obj: Any) -> "TagConsensusEntry":
         assert isinstance(obj, dict)
+        netPolarity = from_float(obj.get("netPolarity"))
         tagName = from_str(obj.get("tagName"))
         tally = from_list(TagVoteTallyEntry.from_dict, obj.get("tally"))
-        resolvedPolarity = from_union([from_none, from_int], obj.get("resolvedPolarity"))
-        return TagConsensusEntry(tagName, tally, resolvedPolarity)
+        resolvedPolarity = from_union([from_int, from_none], obj.get("resolvedPolarity"))
+        return TagConsensusEntry(netPolarity, tagName, tally, resolvedPolarity)
 
     def to_dict(self) -> dict:
         result: dict = {}
+        result["netPolarity"] = to_float(self.netPolarity)
         result["tagName"] = from_str(self.tagName)
         result["tally"] = from_list(lambda x: to_class(TagVoteTallyEntry, x), self.tally)
         if self.resolvedPolarity is not None:
-            result["resolvedPolarity"] = from_union([from_none, from_int], self.resolvedPolarity)
+            result["resolvedPolarity"] = from_union([from_int, from_none], self.resolvedPolarity)
         return result
 
 
@@ -1943,6 +2049,22 @@ def PrintingTagStatusfromdict(s: Any) -> PrintingTagStatus:
 
 def PrintingTagStatustodict(x: PrintingTagStatus) -> Any:
     return to_enum(PrintingTagStatus, x)
+
+
+def QuestionFeedItemfromdict(s: Any) -> QuestionFeedItem:
+    return QuestionFeedItem.from_dict(s)
+
+
+def QuestionFeedItemtodict(x: QuestionFeedItem) -> Any:
+    return to_class(QuestionFeedItem, x)
+
+
+def QuestionFeedResponsefromdict(s: Any) -> QuestionFeedResponse:
+    return QuestionFeedResponse.from_dict(s)
+
+
+def QuestionFeedResponsetodict(x: QuestionFeedResponse) -> Any:
+    return to_class(QuestionFeedResponse, x)
 
 
 def SearchQueryfromdict(s: Any) -> SearchQuery:

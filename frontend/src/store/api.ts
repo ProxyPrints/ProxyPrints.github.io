@@ -47,6 +47,7 @@ import {
   PrintingCandidatesResponse,
   PrintingConsensusResponse,
   PrintingTagQueueResponse,
+  QuestionFeedResponse,
   Reason as ReportReason,
   ReportCardResponse,
   SampleCardsResponse,
@@ -612,6 +613,32 @@ export async function APIGetPrintingTagQueue(
   return rawResponse.json().then((content) => {
     if (rawResponse.status === 200 && content.cards != null) {
       return content as PrintingTagQueueResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APIGetQuestionFeed(
+  backendURL: string,
+  anonymousId: string,
+  // "include" attaches the moderator session cookie so the moderation tier is visible - same
+  // opt-in rationale as APISubmitTagVote's credentials param
+  credentials: RequestCredentials = "same-origin"
+): Promise<QuestionFeedResponse> {
+  const rawResponse = await fetch(
+    formatURL(
+      backendURL,
+      `/2/questionFeed/?anonymousId=${encodeURIComponent(anonymousId)}`
+    ),
+    {
+      method: "GET",
+      credentials,
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.remainingEstimate != null) {
+      return content as QuestionFeedResponse;
     }
     throw { name: content.name, message: content.message };
   });

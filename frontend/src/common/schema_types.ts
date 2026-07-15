@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, ModerationQueueRequest, ModerationQueueResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
+//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedItem, QuestionFeedResponse, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, ModerationQueueRequest, ModerationQueueResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
@@ -18,6 +18,8 @@
 //   const newCardsFirstPage = Convert.toNewCardsFirstPage(json);
 //   const printingCandidate = Convert.toPrintingCandidate(json);
 //   const printingTagStatus = Convert.toPrintingTagStatus(json);
+//   const questionFeedItem = Convert.toQuestionFeedItem(json);
+//   const questionFeedResponse = Convert.toQuestionFeedResponse(json);
 //   const searchQuery = Convert.toSearchQuery(json);
 //   const searchSettings = Convert.toSearchSettings(json);
 //   const searchTypeSettings = Convert.toSearchTypeSettings(json);
@@ -88,6 +90,139 @@ export enum Game {
   Mtg = "MTG",
 }
 
+export interface QuestionFeedResponse {
+  item?: QuestionFeedItem;
+  remainingEstimate: number;
+}
+
+export interface QuestionFeedItem {
+  candidates?: PrintingCandidate[];
+  card: Card;
+  confidentlyKnownArtistName?: null | string;
+  reportCount?: number;
+  reportExcerpts?: string[];
+  suggestedPrinting?: PrintingCandidate;
+  tagConfidence?: { [key: string]: number };
+  tagName?: string;
+  type: Type;
+}
+
+export interface PrintingCandidate {
+  artist: string;
+  borderColor: string;
+  canonicalId: string;
+  collectorNumber: string;
+  expansionCode: string;
+  expansionName: string;
+  frame: string;
+  fullArt: boolean;
+  identifier: string;
+  isBorderless: boolean;
+  isEtched: boolean;
+  isExtendedArt: boolean;
+  isShowcase: boolean;
+  mediumThumbnailUrl: string;
+  releasedAt?: null | string;
+  smallThumbnailUrl: string;
+}
+
+export interface Card {
+  canonicalArtist?: CanonicalArtist | null;
+  /**
+   * True only when canonicalArtist was supplied by artist-vote consensus alone, with no
+   * confirmed indexing match or resolved printing backing it - lets the frontend distinguish
+   * a confidently-known artist from a vote-derived one (e.g. for the ArtistVotePicker
+   * 'wrong?' affordance) without needing to know serialise()'s fallback chain itself.
+   */
+  canonicalArtistIsFromVoteOnly?: boolean;
+  /**
+   * Which rung of the artist fallback chain actually supplied canonicalArtist -
+   * debug/introspection field, not load-bearing for any current frontend logic.
+   */
+  canonicalArtistSource?: null | string;
+  canonicalCard?: CanonicalCard | null;
+  cardType: CardType;
+  /**
+   * Created date - formatted by backend
+   */
+  dateCreated: string;
+  /**
+   * Modified date - formatted by backend
+   */
+  dateModified: string;
+  dpi: number;
+  extension: string;
+  identifier: string;
+  language: string;
+  mediumThumbnailUrl: string;
+  name: string;
+  /**
+   * Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
+   * community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
+   * the frontend to show a 'matched by community tags' indicator and is otherwise
+   * informational.
+   */
+  printingTagStatus: PrintingTagStatus;
+  priority: number;
+  searchq: string;
+  size: number;
+  smallThumbnailUrl: string;
+  source: string;
+  sourceExternalLink?: string;
+  sourceId: number;
+  sourceName: string;
+  sourceType?: SourceType;
+  sourceVerbose: string;
+  tags: string[];
+}
+
+export interface CanonicalArtist {
+  name: string;
+}
+
+export interface CanonicalCard {
+  artist?: string;
+  canonicalId?: string;
+  collectorNumber: string;
+  expansionCode: string;
+  expansionName: string;
+  identifier: string;
+  mediumThumbnailUrl: string;
+  smallThumbnailUrl: string;
+}
+
+export enum CardType {
+  Card = "CARD",
+  Cardback = "CARDBACK",
+  Token = "TOKEN",
+}
+
+/**
+ * Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
+ * community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
+ * the frontend to show a 'matched by community tags' indicator and is otherwise
+ * informational.
+ */
+export enum PrintingTagStatus {
+  NoMatch = "no_match",
+  Resolved = "resolved",
+  Unresolved = "unresolved",
+}
+
+export enum SourceType {
+  AwsS3 = "AWS S3",
+  GoogleDrive = "Google Drive",
+  LocalFile = "Local File",
+}
+
+export enum Type {
+  Artist = "artist",
+  ConfirmSuggestion = "confirm_suggestion",
+  IdentifyPrinting = "identify_printing",
+  Moderation = "moderation",
+  Tag = "tag",
+}
+
 export interface ArtistCandidatesRequest {
   identifier: string;
   query?: null | string;
@@ -95,10 +230,6 @@ export interface ArtistCandidatesRequest {
 
 export interface ArtistCandidatesResponse {
   results: Array<CanonicalArtist | null>;
-}
-
-export interface CanonicalArtist {
-  name: string;
 }
 
 export interface ArtistConsensusRequest {
@@ -194,91 +325,6 @@ export interface CardsRequest {
 
 export interface CardsResponse {
   results: { [key: string]: Card };
-}
-
-export interface Card {
-  canonicalArtist?: CanonicalArtist | null;
-  /**
-   * True only when canonicalArtist was supplied by artist-vote consensus alone, with no
-   * confirmed indexing match or resolved printing backing it - lets the frontend distinguish
-   * a confidently-known artist from a vote-derived one (e.g. for the ArtistVotePicker
-   * 'wrong?' affordance) without needing to know serialise()'s fallback chain itself.
-   */
-  canonicalArtistIsFromVoteOnly?: boolean;
-  /**
-   * Which rung of the artist fallback chain actually supplied canonicalArtist -
-   * debug/introspection field, not load-bearing for any current frontend logic.
-   */
-  canonicalArtistSource?: null | string;
-  canonicalCard?: CanonicalCard | null;
-  cardType: CardType;
-  /**
-   * Created date - formatted by backend
-   */
-  dateCreated: string;
-  /**
-   * Modified date - formatted by backend
-   */
-  dateModified: string;
-  dpi: number;
-  extension: string;
-  identifier: string;
-  language: string;
-  mediumThumbnailUrl: string;
-  name: string;
-  /**
-   * Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
-   * community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
-   * the frontend to show a 'matched by community tags' indicator and is otherwise
-   * informational.
-   */
-  printingTagStatus: PrintingTagStatus;
-  priority: number;
-  searchq: string;
-  size: number;
-  smallThumbnailUrl: string;
-  source: string;
-  sourceExternalLink?: string;
-  sourceId: number;
-  sourceName: string;
-  sourceType?: SourceType;
-  sourceVerbose: string;
-  tags: string[];
-}
-
-export interface CanonicalCard {
-  artist?: string;
-  canonicalId?: string;
-  collectorNumber: string;
-  expansionCode: string;
-  expansionName: string;
-  identifier: string;
-  mediumThumbnailUrl: string;
-  smallThumbnailUrl: string;
-}
-
-export enum CardType {
-  Card = "CARD",
-  Cardback = "CARDBACK",
-  Token = "TOKEN",
-}
-
-/**
- * Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
- * community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
- * the frontend to show a 'matched by community tags' indicator and is otherwise
- * informational.
- */
-export enum PrintingTagStatus {
-  NoMatch = "no_match",
-  Resolved = "resolved",
-  Unresolved = "unresolved",
-}
-
-export enum SourceType {
-  AwsS3 = "AWS S3",
-  GoogleDrive = "Google Drive",
-  LocalFile = "Local File",
 }
 
 export interface ContributionsResponse {
@@ -477,21 +523,6 @@ export interface PrintingCandidatesResponse {
   results: PrintingCandidate[];
 }
 
-export interface PrintingCandidate {
-  artist: string;
-  canonicalId: string;
-  collectorNumber: string;
-  expansionCode: string;
-  expansionName: string;
-  frame: string;
-  fullArt: boolean;
-  identifier: string;
-  isBorderless: boolean;
-  mediumThumbnailUrl: string;
-  releasedAt?: null | string;
-  smallThumbnailUrl: string;
-}
-
 export interface PrintingConsensusRequest {
   identifier: string;
 }
@@ -584,6 +615,7 @@ export interface TagConsensusResponse {
 }
 
 export interface TagConsensusEntry {
+  netPolarity: number;
   resolvedPolarity?: number | null;
   tagName: string;
   tally: TagVoteTallyEntry[];
@@ -766,6 +798,24 @@ export class Convert {
 
   public static printingTagStatusToJson(value: PrintingTagStatus): string {
     return JSON.stringify(uncast(value, r("PrintingTagStatus")), null, 2);
+  }
+
+  public static toQuestionFeedItem(json: string): QuestionFeedItem {
+    return cast(JSON.parse(json), r("QuestionFeedItem"));
+  }
+
+  public static questionFeedItemToJson(value: QuestionFeedItem): string {
+    return JSON.stringify(uncast(value, r("QuestionFeedItem")), null, 2);
+  }
+
+  public static toQuestionFeedResponse(json: string): QuestionFeedResponse {
+    return cast(JSON.parse(json), r("QuestionFeedResponse"));
+  }
+
+  public static questionFeedResponseToJson(
+    value: QuestionFeedResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("QuestionFeedResponse")), null, 2);
   }
 
   public static toSearchQuery(json: string): SearchQuery {
@@ -1576,6 +1626,140 @@ function r(name: string) {
 }
 
 const typeMap: any = {
+  QuestionFeedResponse: o(
+    [
+      { json: "item", js: "item", typ: u(undefined, r("QuestionFeedItem")) },
+      { json: "remainingEstimate", js: "remainingEstimate", typ: 0 },
+    ],
+    false
+  ),
+  QuestionFeedItem: o(
+    [
+      {
+        json: "candidates",
+        js: "candidates",
+        typ: u(undefined, a(r("PrintingCandidate"))),
+      },
+      { json: "card", js: "card", typ: r("Card") },
+      {
+        json: "confidentlyKnownArtistName",
+        js: "confidentlyKnownArtistName",
+        typ: u(undefined, u(null, "")),
+      },
+      { json: "reportCount", js: "reportCount", typ: u(undefined, 0) },
+      {
+        json: "reportExcerpts",
+        js: "reportExcerpts",
+        typ: u(undefined, a("")),
+      },
+      {
+        json: "suggestedPrinting",
+        js: "suggestedPrinting",
+        typ: u(undefined, r("PrintingCandidate")),
+      },
+      {
+        json: "tagConfidence",
+        js: "tagConfidence",
+        typ: u(undefined, m(3.14)),
+      },
+      { json: "tagName", js: "tagName", typ: u(undefined, "") },
+      { json: "type", js: "type", typ: r("Type") },
+    ],
+    false
+  ),
+  PrintingCandidate: o(
+    [
+      { json: "artist", js: "artist", typ: "" },
+      { json: "borderColor", js: "borderColor", typ: "" },
+      { json: "canonicalId", js: "canonicalId", typ: "" },
+      { json: "collectorNumber", js: "collectorNumber", typ: "" },
+      { json: "expansionCode", js: "expansionCode", typ: "" },
+      { json: "expansionName", js: "expansionName", typ: "" },
+      { json: "frame", js: "frame", typ: "" },
+      { json: "fullArt", js: "fullArt", typ: true },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "isBorderless", js: "isBorderless", typ: true },
+      { json: "isEtched", js: "isEtched", typ: true },
+      { json: "isExtendedArt", js: "isExtendedArt", typ: true },
+      { json: "isShowcase", js: "isShowcase", typ: true },
+      { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
+      { json: "releasedAt", js: "releasedAt", typ: u(undefined, u(null, "")) },
+      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
+    ],
+    false
+  ),
+  Card: o(
+    [
+      {
+        json: "canonicalArtist",
+        js: "canonicalArtist",
+        typ: u(undefined, u(r("CanonicalArtist"), null)),
+      },
+      {
+        json: "canonicalArtistIsFromVoteOnly",
+        js: "canonicalArtistIsFromVoteOnly",
+        typ: u(undefined, true),
+      },
+      {
+        json: "canonicalArtistSource",
+        js: "canonicalArtistSource",
+        typ: u(undefined, u(null, "")),
+      },
+      {
+        json: "canonicalCard",
+        js: "canonicalCard",
+        typ: u(undefined, u(r("CanonicalCard"), null)),
+      },
+      { json: "cardType", js: "cardType", typ: r("CardType") },
+      { json: "dateCreated", js: "dateCreated", typ: "" },
+      { json: "dateModified", js: "dateModified", typ: "" },
+      { json: "dpi", js: "dpi", typ: 0 },
+      { json: "extension", js: "extension", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "language", js: "language", typ: "" },
+      { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
+      { json: "name", js: "name", typ: "" },
+      {
+        json: "printingTagStatus",
+        js: "printingTagStatus",
+        typ: r("PrintingTagStatus"),
+      },
+      { json: "priority", js: "priority", typ: 0 },
+      { json: "searchq", js: "searchq", typ: "" },
+      { json: "size", js: "size", typ: 0 },
+      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
+      { json: "source", js: "source", typ: "" },
+      {
+        json: "sourceExternalLink",
+        js: "sourceExternalLink",
+        typ: u(undefined, ""),
+      },
+      { json: "sourceId", js: "sourceId", typ: 0 },
+      { json: "sourceName", js: "sourceName", typ: "" },
+      {
+        json: "sourceType",
+        js: "sourceType",
+        typ: u(undefined, r("SourceType")),
+      },
+      { json: "sourceVerbose", js: "sourceVerbose", typ: "" },
+      { json: "tags", js: "tags", typ: a("") },
+    ],
+    false
+  ),
+  CanonicalArtist: o([{ json: "name", js: "name", typ: "" }], false),
+  CanonicalCard: o(
+    [
+      { json: "artist", js: "artist", typ: u(undefined, "") },
+      { json: "canonicalId", js: "canonicalId", typ: u(undefined, "") },
+      { json: "collectorNumber", js: "collectorNumber", typ: "" },
+      { json: "expansionCode", js: "expansionCode", typ: "" },
+      { json: "expansionName", js: "expansionName", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
+      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
+    ],
+    false
+  ),
   ArtistCandidatesRequest: o(
     [
       { json: "identifier", js: "identifier", typ: "" },
@@ -1587,7 +1771,6 @@ const typeMap: any = {
     [{ json: "results", js: "results", typ: a(u(r("CanonicalArtist"), null)) }],
     false
   ),
-  CanonicalArtist: o([{ json: "name", js: "name", typ: "" }], false),
   ArtistConsensusRequest: o(
     [{ json: "identifier", js: "identifier", typ: "" }],
     false
@@ -1680,77 +1863,6 @@ const typeMap: any = {
   ),
   CardsResponse: o(
     [{ json: "results", js: "results", typ: m(r("Card")) }],
-    false
-  ),
-  Card: o(
-    [
-      {
-        json: "canonicalArtist",
-        js: "canonicalArtist",
-        typ: u(undefined, u(r("CanonicalArtist"), null)),
-      },
-      {
-        json: "canonicalArtistIsFromVoteOnly",
-        js: "canonicalArtistIsFromVoteOnly",
-        typ: u(undefined, true),
-      },
-      {
-        json: "canonicalArtistSource",
-        js: "canonicalArtistSource",
-        typ: u(undefined, u(null, "")),
-      },
-      {
-        json: "canonicalCard",
-        js: "canonicalCard",
-        typ: u(undefined, u(r("CanonicalCard"), null)),
-      },
-      { json: "cardType", js: "cardType", typ: r("CardType") },
-      { json: "dateCreated", js: "dateCreated", typ: "" },
-      { json: "dateModified", js: "dateModified", typ: "" },
-      { json: "dpi", js: "dpi", typ: 0 },
-      { json: "extension", js: "extension", typ: "" },
-      { json: "identifier", js: "identifier", typ: "" },
-      { json: "language", js: "language", typ: "" },
-      { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
-      { json: "name", js: "name", typ: "" },
-      {
-        json: "printingTagStatus",
-        js: "printingTagStatus",
-        typ: r("PrintingTagStatus"),
-      },
-      { json: "priority", js: "priority", typ: 0 },
-      { json: "searchq", js: "searchq", typ: "" },
-      { json: "size", js: "size", typ: 0 },
-      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
-      { json: "source", js: "source", typ: "" },
-      {
-        json: "sourceExternalLink",
-        js: "sourceExternalLink",
-        typ: u(undefined, ""),
-      },
-      { json: "sourceId", js: "sourceId", typ: 0 },
-      { json: "sourceName", js: "sourceName", typ: "" },
-      {
-        json: "sourceType",
-        js: "sourceType",
-        typ: u(undefined, r("SourceType")),
-      },
-      { json: "sourceVerbose", js: "sourceVerbose", typ: "" },
-      { json: "tags", js: "tags", typ: a("") },
-    ],
-    false
-  ),
-  CanonicalCard: o(
-    [
-      { json: "artist", js: "artist", typ: u(undefined, "") },
-      { json: "canonicalId", js: "canonicalId", typ: u(undefined, "") },
-      { json: "collectorNumber", js: "collectorNumber", typ: "" },
-      { json: "expansionCode", js: "expansionCode", typ: "" },
-      { json: "expansionName", js: "expansionName", typ: "" },
-      { json: "identifier", js: "identifier", typ: "" },
-      { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
-      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
-    ],
     false
   ),
   ContributionsResponse: o(
@@ -1980,23 +2092,6 @@ const typeMap: any = {
     [{ json: "results", js: "results", typ: a(r("PrintingCandidate")) }],
     false
   ),
-  PrintingCandidate: o(
-    [
-      { json: "artist", js: "artist", typ: "" },
-      { json: "canonicalId", js: "canonicalId", typ: "" },
-      { json: "collectorNumber", js: "collectorNumber", typ: "" },
-      { json: "expansionCode", js: "expansionCode", typ: "" },
-      { json: "expansionName", js: "expansionName", typ: "" },
-      { json: "frame", js: "frame", typ: "" },
-      { json: "fullArt", js: "fullArt", typ: true },
-      { json: "identifier", js: "identifier", typ: "" },
-      { json: "isBorderless", js: "isBorderless", typ: true },
-      { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
-      { json: "releasedAt", js: "releasedAt", typ: u(undefined, u(null, "")) },
-      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
-    ],
-    false
-  ),
   PrintingConsensusRequest: o(
     [{ json: "identifier", js: "identifier", typ: "" }],
     false
@@ -2110,6 +2205,7 @@ const typeMap: any = {
   ),
   TagConsensusEntry: o(
     [
+      { json: "netPolarity", js: "netPolarity", typ: 3.14 },
       {
         json: "resolvedPolarity",
         js: "resolvedPolarity",
@@ -2203,6 +2299,13 @@ const typeMap: any = {
   CardType: ["CARD", "CARDBACK", "TOKEN"],
   PrintingTagStatus: ["no_match", "resolved", "unresolved"],
   SourceType: ["AWS S3", "Google Drive", "Local File"],
+  Type: [
+    "artist",
+    "confirm_suggestion",
+    "identify_printing",
+    "moderation",
+    "tag",
+  ],
   SortBy: [
     "dateCreatedAscending",
     "dateCreatedDescending",
