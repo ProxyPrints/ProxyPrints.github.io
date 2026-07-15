@@ -4,7 +4,7 @@ from typing import Any
 from django.core.management.base import BaseCommand, CommandError
 
 from cardpicker import local_identify_printing_tags, local_ocr, local_phash
-from cardpicker.local_identify_printing_tags import run_pilot
+from cardpicker.local_identify_printing_tags import Engine, run_pilot
 
 
 class Command(BaseCommand):
@@ -72,6 +72,24 @@ class Command(BaseCommand):
             "ordering would otherwise hit these first and fetch/hash all of them). Default: "
             f"{local_identify_printing_tags.PHASH_MAX_CANDIDATES}.",
         )
+        parser.add_argument(
+            "--exclude-sources-ocr",
+            type=str,
+            default="1",
+            help="Comma-separated Source pks to deprioritize from OCR selection (their cards are "
+            "never selected as candidates by the OCR engine this invocation - existing votes/tags "
+            "are untouched, this is a selection-time filter only). Default: '1' (WilfordGrimley - "
+            "the OCR engine's own operator's source; excluded by default so a routine invocation "
+            "doesn't cast machine votes on the operator's own cards. Pass '' to include it.) "
+            "Pass '' for no exclusion.",
+        )
+        parser.add_argument(
+            "--exclude-sources-phash",
+            type=str,
+            default="",
+            help="Comma-separated Source pks to deprioritize from phash selection. Same mechanism "
+            "as --exclude-sources-ocr, independently settable. Default: '' (no exclusion).",
+        )
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         engine = kwargs["engine"]
@@ -81,6 +99,14 @@ class Command(BaseCommand):
         nice = kwargs["nice"]
         crop_box_arg = kwargs["crop_box"]
         phash_max_candidates = kwargs["phash_max_candidates"]
+
+        def _parse_source_pks(raw: str) -> list[int]:
+            return [int(p) for p in raw.split(",") if p.strip()]
+
+        exclude_source_pks_by_engine: dict[Engine, list[int]] = {
+            "ocr": _parse_source_pks(kwargs["exclude_sources_ocr"]),
+            "phash": _parse_source_pks(kwargs["exclude_sources_phash"]),
+        }
 
         crop_box = local_ocr.DEFAULT_CROP_BOX
         if crop_box_arg is not None:
@@ -103,7 +129,9 @@ class Command(BaseCommand):
         mode = "DRY RUN" if dry_run else "WRITE"
         print(
             f"[{mode}] local_identify_printing_tags --engine={engine} --limit={limit} "
-            f"--nice={nice} --crop-box={crop_box}"
+            f"--nice={nice} --crop-box={crop_box} "
+            f"--exclude-sources-ocr={exclude_source_pks_by_engine['ocr']} "
+            f"--exclude-sources-phash={exclude_source_pks_by_engine['phash']}"
         )
 
         results, attributes = run_pilot(
@@ -115,6 +143,7 @@ class Command(BaseCommand):
             phash_distance_threshold=local_phash.DEFAULT_DISTANCE_THRESHOLD,
             phash_margin=local_phash.DEFAULT_MARGIN,
             phash_max_candidates=phash_max_candidates,
+            exclude_source_pks_by_engine=exclude_source_pks_by_engine,
         )
 
         gate_violations: list[int] = []

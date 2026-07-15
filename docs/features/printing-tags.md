@@ -837,6 +837,29 @@ now match.** Projected full-engine impact: OCR yield 77/300 (25.7%) →
 Confirmed live via a real (non-simulated) `--dry-run` afterward: 62/250
 votes on a fresh selection window, consistent with the isolated measurement.
 
+**Yield reconciliation, old logic vs. new logic on that same 250-card
+window** (no new OCR work run for this - reusing already-known numbers):
+selection-order stability means the 250-card window is the 223-card
+reconstructed cohort above (still eligible - no vote was ever cast on a
+skip) plus 27 cards never seen in the original 300-card pilot run at all.
+Old-logic yield on the 223 known cards is **measured, not estimated**: 3
+(the "already-matching" cards, unaffected by the fix) out of 223 - the
+other 220 are old-logic non-matches by definition of how they were
+classified as skips. Old-logic yield on the 27 unseen cards is **not
+measured** - no new work was done to classify them - and is instead
+estimated by applying the original pilot's overall old-logic OCR base
+rate (77/300, 25.7%) to that count: 27 × 0.257 ≈ 7. Combined old-logic
+estimate: (3 + ~7)/250 ≈ 10/250 ≈ **4.0%**, against the confirmed
+new-logic **24.8%** (62/250) on the identical window - roughly a 6x
+relative lift here, well above the pilot-set's ~1.6x (60% relative)
+projection, because this window is disproportionately drawn from cards
+that were old-logic failures by construction (the 223-card skip cohort),
+not a representative sample of the full catalog. Treat the 24.8%-vs-4.0%
+comparison as the honest floor-to-floor number on hard cases, and the
+41.3%-vs-25.7% pilot-set figures as the representative full-run
+projection - they are not the same statistic and should not be quoted
+interchangeably.
+
 Of the 129 cases still unfixed: only 2/176 (1.1%) are genuinely-missing
 printings (the parsed set code is real, but no `CanonicalCard` row exists
 for that (set, number) at all); the remaining 127/176 (72.2%) are true
@@ -945,3 +968,18 @@ implied by this OCR fix and was not built.
   (no such model exists today), and a way to feed that score back into
   `vote_consensus`'s per-source weighting — worth its own design pass
   rather than bolting onto an existing stage.
+- **Future work: `(Front)`/`(Back)` name-matching fix for the
+  `expansion_hint` census gap** (2026-07-15, deferred out of the pre-scale
+  program by owner decision — deterministic parser fix, not part of
+  Stage 8's OCR/phash engines). The 1,097-card filename tag-gap census
+  (cards with an unmatchable `expansion_hint`, all with a fully
+  _recognized_ `CanonicalExpansion` code) was cross-checked against the
+  Stage 8 no-match autopsy above and confirmed to be a **different root
+  cause** — a name-matching problem, not the OCR set-code-position/
+  leading-zero bugs the autopsy fixed. Many of the 1,097 are
+  `(Front)`/`(Back)` filename-parsing artifacts on basic lands (a
+  double-faced-card naming convention this catalog's name-matching
+  doesn't strip before comparing against `CanonicalCard.name`). Belongs
+  with `cardpicker.deductive_backfill`'s deterministic tiers (D1/D2), not
+  Stage 8's visual-disambiguation engines — explicitly not the "D2.5
+  arriving for free" the autopsy's cross-check ruled out.

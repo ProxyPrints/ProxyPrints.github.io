@@ -125,6 +125,33 @@ class TestSelection:
         assert [s.card.pk for s in selected] == [multi.pk, single.pk]
 
 
+class TestSourceExclusion:
+    def test_excludes_cards_from_a_given_source_pk(self, db):
+        excluded_source = SourceFactory()
+        included_source = SourceFactory()
+        CanonicalCardFactory(name="Forest")
+        excluded_card = CardFactory(name="Forest", source=excluded_source)
+        included_card = CardFactory(name="Forest", source=included_source)
+
+        selected = select_candidates("ocr", exclude_source_pks=[excluded_source.pk])
+        assert [s.card.pk for s in selected] == [included_card.pk]
+        assert excluded_card.pk not in [s.card.pk for s in selected]
+
+    def test_no_exclusion_by_default(self, db):
+        source = SourceFactory()
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest", source=source)
+        assert [s.card.pk for s in select_candidates("ocr")] == [card.pk]
+
+    def test_exclusion_is_independent_per_engine(self, db):
+        source = SourceFactory()
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest", source=source)
+
+        assert select_candidates("ocr", exclude_source_pks=[source.pk]) == []
+        assert [s.card.pk for s in select_candidates("phash", exclude_source_pks=[])] == [card.pk]
+
+
 class TestCandidateNameIndex:
     def test_groups_by_normalised_name(self, db):
         CanonicalCardFactory(name="Kusari-Gama")
@@ -418,6 +445,37 @@ class TestRunPilotAgreementAndDisagreement:
         # "fallback" (pass 2) always gets a result entry - it isn't a selectable --engine, it
         # fires automatically whenever pass 1 (whichever engines were requested) misses
         assert set(results.keys()) == {"ocr", "fallback"}
+
+
+class TestRunPilotSourceExclusion:
+    def test_excluded_sources_cards_never_reach_the_engine(self, db, monkeypatch):
+        excluded_source = SourceFactory()
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        excluded_card = CardFactory(name="Forest", source=excluded_source)
+
+        import cardpicker.local_identify_printing_tags as module
+
+        def fake_ocr(selected, image, crop_box):
+            return module.OcrCardResult(
+                vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
+            )
+
+        monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card: None)
+
+        results, _attributes = run_pilot(
+            engine="ocr",
+            limit=10,
+            dry_run=False,
+            nice=False,
+            exclude_source_pks_by_engine={"ocr": [excluded_source.pk]},
+        )
+
+        assert results["ocr"].votes_written == 0
+        from cardpicker.models import CardPrintingTag
+
+        assert not CardPrintingTag.objects.filter(card=excluded_card).exists()
 
 
 class TestIdempotence:

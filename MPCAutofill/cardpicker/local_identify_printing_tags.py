@@ -21,7 +21,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Literal, Optional
+from typing import Iterable, Literal, Optional
 
 import requests
 from PIL import Image
@@ -115,7 +115,7 @@ class SelectedCard:
     candidates: list[CandidatePrinting]
 
 
-def _eligible_base_queryset(anonymous_id: str) -> "QuerySet[Card]":
+def _eligible_base_queryset(anonymous_id: str, exclude_source_pks: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
     """
     unresolved, no confirmed indexing match, no existing vote from this engine's own
     anonymous_id (the idempotence/checkpoint mechanism - see module docstring and
@@ -123,8 +123,12 @@ def _eligible_base_queryset(anonymous_id: str) -> "QuerySet[Card]":
     backfill (which is provably exact by construction where it applies - this pilot's engines
     are weaker, lower-confidence signal and shouldn't pile onto a card that already has a
     stronger deduction), and no resolved custom-art/non-english tag.
+
+    exclude_source_pks is a purely mechanical, caller-supplied deprioritization knob (no source
+    pk is ever hardcoded here) - see select_candidates and the management command's
+    --exclude-sources-ocr/--exclude-sources-phash flags.
     """
-    return (
+    queryset = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, canonical_card__isnull=True)
         .exclude(printing_tags__anonymous_id=anonymous_id)
         .exclude(printing_tags__anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID)
@@ -133,9 +137,14 @@ def _eligible_base_queryset(anonymous_id: str) -> "QuerySet[Card]":
         .distinct()
         .select_related("source")
     )
+    if exclude_source_pks:
+        queryset = queryset.exclude(source_id__in=exclude_source_pks)
+    return queryset
 
 
-def select_candidates(engine: Engine, index: Optional[CandidateNameIndex] = None) -> list[SelectedCard]:
+def select_candidates(
+    engine: Engine, index: Optional[CandidateNameIndex] = None, exclude_source_pks: Optional[Iterable[int]] = None
+) -> list[SelectedCard]:
     """Multi-candidate names first (the cases deductive backfill's D1/D2 tiers can't reach
     without an expansion_hint), then single-candidate names, in `Card.pk` order within each
     group for determinism."""
@@ -144,7 +153,7 @@ def select_candidates(engine: Engine, index: Optional[CandidateNameIndex] = None
     multi: list[SelectedCard] = []
     single: list[SelectedCard] = []
     for card in (
-        _eligible_base_queryset(anonymous_id)
+        _eligible_base_queryset(anonymous_id, exclude_source_pks)
         .only("pk", "name", "identifier", "source_id")
         .order_by("pk")
         .iterator(chunk_size=5000)
@@ -319,6 +328,7 @@ def run_pilot(
     phash_distance_threshold: int = local_phash.DEFAULT_DISTANCE_THRESHOLD,
     phash_margin: int = local_phash.DEFAULT_MARGIN,
     phash_max_candidates: int = PHASH_MAX_CANDIDATES,
+    exclude_source_pks_by_engine: Optional[dict[Engine, list[int]]] = None,
 ) -> tuple[dict[str, PilotResult], AttributeReport]:
     if nice:
         try:
@@ -331,7 +341,10 @@ def run_pilot(
     results: dict[str, PilotResult] = {e: PilotResult(engine=e, dry_run=dry_run) for e in engines_to_run}
     results["fallback"] = PilotResult(engine="fallback", dry_run=dry_run)
     attributes = AttributeReport()
-    selected_by_engine = {e: select_candidates(e, index)[:limit] for e in engines_to_run}
+    exclude_source_pks_by_engine = exclude_source_pks_by_engine or {}
+    selected_by_engine = {
+        e: select_candidates(e, index, exclude_source_pks_by_engine.get(e))[:limit] for e in engines_to_run
+    }
 
     # when both engines run, process the union of cards either engine selected so agreement/
     # disagreement can be evaluated per card - each engine still only ever votes on a card it
