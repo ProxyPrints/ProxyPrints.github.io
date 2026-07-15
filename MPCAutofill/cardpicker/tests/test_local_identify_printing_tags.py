@@ -152,6 +152,38 @@ class TestSourceExclusion:
         assert [s.card.pk for s in select_candidates("phash", exclude_source_pks=[])] == [card.pk]
 
 
+class TestManagementCommandExclusionDefaults:
+    """The library-level tests above always pass exclude_source_pks explicitly - none of them
+    touch the CLI's own --exclude-sources-ocr/--exclude-sources-phash argparse defaults. This
+    guards the actual thing Rider 2 was for: a bare invocation excludes source pk=1 from OCR
+    (and only OCR) without the operator having to remember the flag."""
+
+    def test_bare_invocation_defaults_to_excluding_source_pk_1_for_ocr_only(self, db, capsys):
+        from django.core.management import call_command
+
+        call_command("local_identify_printing_tags", "--dry-run", "--limit", "0")
+        printed = capsys.readouterr().out
+        assert "--exclude-sources-ocr=[1]" in printed
+        assert "--exclude-sources-phash=[]" in printed
+
+    def test_explicit_flag_overrides_the_default(self, db, capsys):
+        from django.core.management import call_command
+
+        call_command(
+            "local_identify_printing_tags",
+            "--dry-run",
+            "--limit",
+            "0",
+            "--exclude-sources-ocr",
+            "",
+            "--exclude-sources-phash",
+            "2,3",
+        )
+        printed = capsys.readouterr().out
+        assert "--exclude-sources-ocr=[]" in printed
+        assert "--exclude-sources-phash=[2, 3]" in printed
+
+
 class TestCandidateNameIndex:
     def test_groups_by_normalised_name(self, db):
         CanonicalCardFactory(name="Kusari-Gama")
