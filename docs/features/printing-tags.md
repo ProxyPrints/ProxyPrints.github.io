@@ -829,6 +829,48 @@ unmatchable `expansion_hint`) are all in the journal, not duplicated here.
 **Pilot discipline honored**: `--limit 300`, no full-catalog run attempted
 per the original hold.
 
+### Phase timing (2026-07-15, pre-scale program item 3a)
+
+Measured against real production data (read-only, no writes) via two
+instrumented 30-card samples run through the actual pipeline functions,
+not simulated. First sample (OCR + phash only) undercounted real cost -
+`run_pilot` also runs border/frame classification and pass-2 fallback for
+every card with an image, regardless of pass-1 outcome. Second sample
+matched `run_pilot`'s real per-card call sequence exactly:
+
+| phase                           | mean/card | share of measured total |
+| ------------------------------- | --------: | ----------------------: |
+| `detect_illus_anchor`           |    1.466s |                   33.0% |
+| pass-2 fallback (fires ~70%)    |  1.474s\* |                   23.2% |
+| `fetch_card_image`              |    1.187s |                   26.6% |
+| OCR (crop+preprocess+tesseract) |    0.602s |                   13.5% |
+| `classify_border_color`         |    0.159s |                    3.6% |
+| phash (hash+compare)            |    0.011s |                    0.2% |
+
+\*mean over the 21/30 cards it actually fired on; contributes 0 for the
+other 9.
+
+**Measured total: 4.46s/card** (sum of the above), against the real
+300-card pilot run's **observed 6.42s/card** (32m4.6s / 300) - a ~2s/card
+gap not fully attributed by this instrumented sample, plausibly per-card
+DB queries this sample didn't isolate (the frame-mismatch consistency
+check and ground-truth-metadata lookup each re-query `CanonicalCard` once
+per confirmed vote) and/or run-to-run network/cache variance (different
+selection window, different Scryfall/CDN load). Treat 6.42s/card as the
+trustworthy full-pipeline number and the phase breakdown above as
+directional (which phases dominate), not a component-by-component
+reconciliation.
+
+**`detect_illus_anchor` is the single largest cost, and it's partly
+redundant with the main OCR pass**: when pass 1's OCR text doesn't
+already contain the "Illus." artist credit, it runs its OWN
+crop+preprocess+tesseract pass (a second full OCR call per card, on a
+different crop) purely to extract the artist name for pass-2 evidence
+and the frame-style classifier's illus-anchor signal. This is a real
+optimization target flagged for a future pass, not fixed here - the
+addendum ledger closed on ideas beyond items 1-8, and this wasn't one of
+them.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run
