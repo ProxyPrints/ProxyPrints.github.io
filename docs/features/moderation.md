@@ -187,12 +187,28 @@ for low-res / incorrect-info yet).
 
 ## Server deployment checklist (one-time, in order)
 
+0. **SSL cert must exist before nginx is first started.** `nginx.conf`
+   hardcodes `ssl_certificate /etc/nginx/certs/origin.pem` /
+   `origin.key` for the (single) `listen 443` server block with no HTTP-only
+   fallback — if those files aren't present at `docker/nginx/certs/` when
+   the `nginx` container starts, nginx fails to load its config and the
+   **entire site** goes down, not just OAuth. On a brand-new server,
+   provision the Cloudflare origin cert and drop it in
+   `docker/nginx/certs/` (gitignored, never committed — see "Never commit")
+   before the first `docker compose up`/rebuild of `nginx`. Steps 1–7 below
+   assume this is already done.
 1. Discord developer portal: create an application, add redirect URI
    `https://api.proxyprints.ca/accounts/discord/login/callback/`.
-2. Env (`docker/.env` / django env): `DISCORD_CLIENT_ID`,
-   `DISCORD_CLIENT_SECRET`, `SESSION_COOKIE_SAMESITE=None`,
-   `SESSION_COOKIE_SECURE=True`, `CORS_ALLOW_CREDENTIALS=True`. Optional:
-   `VOTE_PRIVILEGED_WEIGHT`, `CARD_REPORT_RATE`, `MODERATORS_GROUP_NAME`.
+2. Env (`docker/.env`): `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+   `SESSION_COOKIE_SAMESITE=None`, `SESSION_COOKIE_SECURE=True`,
+   `CORS_ALLOW_CREDENTIALS=True`. Optional: `VOTE_PRIVILEGED_WEIGHT`,
+   `CARD_REPORT_RATE`, `MODERATORS_GROUP_NAME`. **`docker/.env` alone does
+   not inject these into the containers** — Compose only passes through
+   vars explicitly listed in a service's `environment:` block. All five are
+   already wired into both `django` and `worker` in
+   `docker-compose.prod.yml` as of 2026-07-15 (found missing during the
+   first live setup — a fresh checkout has this for free now, but a new
+   OAuth/session var still needs a matching line added there).
 3. `pip install -r requirements.txt` (adds `django-allauth[socialaccount]`),
    rebuild/restart django + worker containers (and nginx — see the
    stale-upstream gotcha in [[../infrastructure.md]]).
@@ -210,7 +226,41 @@ for low-res / incorrect-info yet).
    page → whoami shows `moderator: true` → the Moderation tab appears → cast
    one Approve on a test pending pair and verify the card's tags + ES search
    update; reverse the test votes afterwards (the cast-verify-reverse
-   discipline from [[printing-tags.md]]).
+   discipline from [[printing-tags.md]]). If this 404s, or Discord rejects
+   the redirect, see "nginx routing and proxy headers for `/accounts/`"
+   below before re-checking Discord portal config — both live bugs on the
+   first production attempt were server-side plumbing, not Discord config.
+
+### nginx routing and proxy headers for `/accounts/`
+
+Two more gaps found live during the first production OAuth attempt
+(2026-07-15), both now baked into the checked-in `docker/nginx/nginx.conf`
+and `MPCAutofill/settings.py` so a fresh checkout gets them automatically —
+documented here so the reasoning survives if either file is ever touched:
+
+- **Missing `/accounts/` proxy route.** `nginx.conf` only had `location`
+  blocks for `/2/`, `/3/`, `/admin/`, `/static/`; every allauth URL
+  (`/accounts/discord/login/`, the OAuth callback, logout) fell through to
+  the static-file `location /` block and 404'd even with
+  `DISCORD_AUTH_ENABLED=True` server-side. Fixed by an explicit
+  `location /accounts/ { proxy_pass http://django-api; }` block.
+- **`redirect_uri` built from the wrong host/scheme.** nginx's
+  `proxy_pass` defaults the `Host` header it forwards to `$proxy_host` (the
+  upstream container's own name, `django-api`) rather than the original
+  client's `Host`, and Django never learns the original request was HTTPS
+  without being told. Together this made django-allauth construct
+  `http://django-api/accounts/discord/login/callback/` as the OAuth
+  `redirect_uri` — an internal-only, plain-HTTP URL Discord's registered
+  callback can never match, so Discord silently rejected the login. Fixed
+  with `proxy_set_header Host $host;` and
+  `proxy_set_header X-Forwarded-Proto $scheme;` at the nginx server-block
+  level (inherited by every `location` below it), paired with
+  `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")` in
+  `settings.py` — without the Django-side setting, `request.is_secure()`
+  ignores the forwarded header and still reads `False`. Verified by
+  manually walking the flow with `curl` (GET the login page for a CSRF
+  token, POST it, inspect the 302 `Location` header) rather than a full
+  browser round-trip.
 
 ## Key files
 
@@ -232,8 +282,12 @@ for low-res / incorrect-info yet).
 
 ## Known gaps / follow-ups
 
-- Live OAuth round-trip is untested until the server checklist runs (this
-  branch was built in a cloud session against mocks by design).
+- Server-side OAuth plumbing (env wiring, nginx routing, redirect_uri
+  construction) is verified via a manual `curl` simulation of the login
+  flow as of 2026-07-15 — see "nginx routing and proxy headers for
+  `/accounts/`" above. The actual browser round-trip (a real moderator
+  clicking through Discord's consent screen) is still untested; do that
+  before considering step 7 of the checklist complete.
 - Discord guild-role sync for a federation-wide moderator roster (see "Who is
   a moderator").
 - Federation export/import of moderation verdicts is v1.1
