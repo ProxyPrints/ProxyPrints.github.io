@@ -1516,6 +1516,67 @@ scheduling shape is chosen, and removes one of Option B's stated
 requirements ("Dockerfile change...adding `tesseract-ocr`") since that
 part is now already done regardless of which scheduling path is picked.
 
+### Coverage-gap + demand ordering, skip-before-fetch (2026-07-15, addendum items 1/3/4)
+
+Full respecification from the owner, superseding the earlier AskUserQuestion-confirmed
+interpretations - implemented verbatim, not re-derived.
+
+**Item 1 - coverage-gap prioritization**: `select_candidates`'s ordering is now a full 5-key
+tuple, REPLACING the old "multi-candidate names first" primary split entirely (that split is now
+only tiebreak #4, "fewer candidates"): (1) names with zero covered printings first, (2)
+descending count of uncovered printings, (3) demand rank (item 3), (4) fewer candidates, (5) pk.
+"Covered" (`compute_covered_printing_pks`): a printing has >=1 `Card` with `canonical_card`
+pointing at it (a confirmed indexing match, no RESOLVED gate needed - already a direct,
+non-vote-based signal) OR `inferred_canonical_card` pointing at it with
+`printing_tag_status=RESOLVED` - gated on RESOLVED specifically so a machine vote pending human
+confirmation does NOT count as coverage, per the owner's explicit clarification. Computed fresh
+on every `run_pilot` call (never cached across invocations), so a nightly slice's ordering
+reflects human confirmations made in the queue since the previous slice. Fully-covered names
+still process, just LAST - redundant identifications add real value (image choice per printing,
+coverage-independent border/frame attribute votes). New report metric,
+`AttributeReport.uncovered_printings_closed`: of the printings in scope this run that were
+uncovered at the start, how many are covered by the end - the run's real progress metric per the
+owner ("that number, not raw votes"). Almost always 0 for a machine-only run BY DESIGN, not a
+bug: a pilot vote is never a direct resolve (the gate check asserts this structurally), and
+"covered" explicitly excludes unresolved machine votes - a printing only counts as closed once a
+human confirms it in the queue, which is what item 5 (follow-up) is for.
+
+**Item 3 - demand order via `edhrec_rank`**: already existed as a schema field
+(`CanonicalPrintingMetadata.edhrec_rank`, populated by the existing `printing_metadata_import`
+Scryfall bulk-data import) - checked live before assuming it needed adding: 101,133/113,224 rows
+(89.3%) genuinely populated. `CandidatePrinting` now carries `edhrec_rank` (fetched via
+`CandidateNameIndex`'s existing single query, `select_related("printing_metadata")` - zero extra
+queries). A name's demand rank is the MINIMUM `edhrec_rank` across its candidates (its most
+popular printing, not an average) - missing ranks (~10.7% of rows) sort LAST via a large
+sentinel, not first, so "no demand signal" never masquerades as highest-priority. Public Scryfall
+data, zero user tracking - explicitly the zero-telemetry-policy-clean substitute for a previously
+-parked export-popularity-ordering idea.
+
+**Item 4 - skip-before-fetch**: `RESOLUTION_FLOOR_DPI = 200` (the actual empirical floor from the
+6-way dpi sweep above - NOT `DEFAULT_FETCH_DPI = 250`, which is a safety margin above it) applied
+against `Card.dpi` (computed once at catalog-import time from the source image's own pixel
+height) directly in `select_candidates`' selection query (`.exclude(dpi__lt=...)`) - a source
+image already below the floor is never fetched at all, not just never OCR'd. `Card.size` (raw
+file bytes) is deliberately NOT used as a second condition despite the addendum's "dpi/size"
+phrasing: it's a compression-dependent proxy with no empirical calibration behind it, unlike
+dpi's direct, validated sweep - an unvalidated byte threshold would violate this pilot's own
+"measure, don't assume" discipline. New `PilotResult.skipped_below_resolution_floor` counter
+(`count_below_resolution_floor`, a separate COUNT query, cheap at full-catalog scale) - its own
+report line, not folded into the existing `skip_counts` dict (which is populated downstream of a
+fetch attempt; a selection-time skip never reaches that loop).
+
+Sequencing note (owner-directed): items 3/4/1 ship together with item 2a (cluster dedup, no
+schema change) as one PR. Item 2b (persisting `content_hash` for federation) and item 5
+(questionFeed ordering mirror) are deferred, logged as follow-ups, not built here.
+
+Verified: 82/82 pilot tests pass (15 new: `TestCoveragePriority`, `TestDemandRank`,
+`TestResolutionFloor`, `TestUncoveredPrintingsClosed`), including a coverage-tier test that
+specifically distinguishes "zero-covered" from "most uncovered" (a partially-covered name with
+MORE absolute uncovered printings than a zero-covered name must still sort after it) and an
+`inferred_canonical_card`-without-`RESOLVED` test (confirms an unconfirmed machine vote doesn't
+count as coverage). mypy clean (`MPCAutofill/`, whole-package invocation). `black`/`prettier`
+clean.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run

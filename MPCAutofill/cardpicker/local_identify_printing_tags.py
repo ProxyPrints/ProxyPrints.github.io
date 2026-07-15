@@ -92,25 +92,36 @@ class CandidatePrinting:
     pk: int
     expansion_code: str  # lowercase
     collector_number: str
+    # addendum item 3 (2026-07-15): Scryfall's public popularity signal, not user telemetry -
+    # explicitly the zero-telemetry-policy-clean substitute for a previously-parked
+    # export-popularity-ordering idea. Lower = more popular. None where Scryfall never ranked
+    # this specific printing (confirmed live: ~10.7% of CanonicalPrintingMetadata rows,
+    # 2026-07-15) - see _demand_rank_for_candidates for how a name's candidates combine this.
+    edhrec_rank: Optional[int] = None
 
 
 class CandidateNameIndex:
     """
     Like cardpicker.deductive_backfill.CanonicalNameIndex, but keyed on the same to_searchable
-    name normalisation and carrying (expansion_code, collector_number) per candidate instead of
-    just a printings_count - both engines here need to check a parsed/matched value against a
-    candidate's actual identity, not just count how many candidates exist. Built once, reused
-    across the whole scan (one query over CanonicalCard's 113k+ rows, not one per card).
+    name normalisation and carrying (expansion_code, collector_number, edhrec_rank) per candidate
+    instead of just a printings_count - both engines here need to check a parsed/matched value
+    against a candidate's actual identity, not just count how many candidates exist. Built once,
+    reused across the whole scan (one query over CanonicalCard's 113k+ rows, not one per card).
     """
 
     def __init__(self) -> None:
         by_name: dict[str, list[CandidatePrinting]] = collections.defaultdict(list)
-        rows = CanonicalCard.objects.select_related("expansion").values_list(
-            "pk", "name", "expansion__code", "collector_number"
+        rows = CanonicalCard.objects.select_related("expansion", "printing_metadata").values_list(
+            "pk", "name", "expansion__code", "collector_number", "printing_metadata__edhrec_rank"
         )
-        for pk, name, expansion_code, collector_number in rows:
+        for pk, name, expansion_code, collector_number, edhrec_rank in rows:
             by_name[to_searchable(name)].append(
-                CandidatePrinting(pk=pk, expansion_code=expansion_code.lower(), collector_number=collector_number)
+                CandidatePrinting(
+                    pk=pk,
+                    expansion_code=expansion_code.lower(),
+                    collector_number=collector_number,
+                    edhrec_rank=edhrec_rank,
+                )
             )
         self._by_name = dict(by_name)
 
@@ -124,6 +135,21 @@ class SelectedCard:
     candidates: list[CandidatePrinting]
 
 
+# addendum item 4 (2026-07-15): the empirical resolution floor from the 6-way dpi sweep
+# (docs/features/printing-tags.md "Resolution floor + payload reduction") - dpi<=150 degrades
+# OCR yield below the native-resolution baseline, dpi>=200 matches or exceeds it. This is the
+# FLOOR itself (200), not DEFAULT_FETCH_DPI (250, a safety margin above the floor) - applied
+# against Card.dpi (computed once at catalog-import time from the source image's own pixel
+# height - cardpicker.sources.update_database.transform_image_into_object) so a source image
+# that's ALREADY below the floor is never fetched at all: no CDN request, no OCR/phash cost,
+# since resizing can't manufacture detail the source never had. Card.size (raw file bytes) is
+# deliberately NOT used as a second condition despite the addendum spec's "dpi/size" phrasing -
+# it's a compression-dependent proxy with no empirical calibration behind it, unlike dpi's
+# direct, validated sweep; an unvalidated byte threshold would violate this pilot's own
+# "measure, don't assume" discipline that caught the phash/dpi false hypothesis (item 4 above).
+RESOLUTION_FLOOR_DPI = 200
+
+
 def _eligible_base_queryset(anonymous_id: str, exclude_source_pks: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
     """
     unresolved, no confirmed indexing match, no existing vote from this engine's own
@@ -132,6 +158,10 @@ def _eligible_base_queryset(anonymous_id: str, exclude_source_pks: Optional[Iter
     backfill (which is provably exact by construction where it applies - this pilot's engines
     are weaker, lower-confidence signal and shouldn't pile onto a card that already has a
     stronger deduction), and no resolved custom-art/non-english tag.
+
+    Does NOT apply the resolution floor (see select_candidates/count_below_resolution_floor,
+    which layer opposite conditions on top of this shared base so the "how many did the floor
+    skip" report metric doesn't duplicate this method's other exclusion rules).
 
     exclude_source_pks is a purely mechanical, caller-supplied deprioritization knob (no source
     pk is ever hardcoded here) - see select_candidates and the management command's
@@ -151,18 +181,82 @@ def _eligible_base_queryset(anonymous_id: str, exclude_source_pks: Optional[Iter
     return queryset
 
 
+def count_below_resolution_floor(anonymous_id: str, exclude_source_pks: Optional[Iterable[int]] = None) -> int:
+    """Addendum item 4's report metric: of the cards otherwise eligible, how many were skipped
+    for sitting below RESOLUTION_FLOOR_DPI. A separate COUNT query (not a Python-side tally) -
+    cheap even at full-catalog scale, and keeps select_candidates' own iteration untouched."""
+    return _eligible_base_queryset(anonymous_id, exclude_source_pks).filter(dpi__lt=RESOLUTION_FLOOR_DPI).count()
+
+
+# Sentinel for addendum item 3's demand-rank sort key: a name with NO printing Scryfall ever
+# ranked (edhrec_rank is null - ~10.7% of CanonicalPrintingMetadata rows, confirmed live
+# 2026-07-15) sorts LAST within its coverage tier, not first - "no demand signal" is treated as
+# lowest priority, not highest, so it never masquerades as the most in-demand name by accident.
+_NO_DEMAND_RANK = 2**31
+
+
+def _demand_rank_for_candidates(candidates: list[CandidatePrinting]) -> int:
+    """A name's demand rank is its MOST popular printing's edhrec_rank (the minimum, since lower
+    = more popular) - a name can span many printings and only needs one well-known one to be
+    worth prioritizing. Missing ranks are excluded from the min, not treated as 0."""
+    ranks = [c.edhrec_rank for c in candidates if c.edhrec_rank is not None]
+    return min(ranks) if ranks else _NO_DEMAND_RANK
+
+
+def compute_covered_printing_pks() -> set[int]:
+    """Addendum item 1's "covered" definition, computed fresh on every call (never cached across
+    invocations) so a nightly slice's ordering reflects that night's actual DB state, including
+    human confirmations made in the queue since the previous slice: a printing is covered if
+    >=1 Card has `canonical_card` pointing at it (a confirmed indexing match - already a direct,
+    non-vote-based signal) OR `inferred_canonical_card` pointing at it with
+    `printing_tag_status=RESOLVED` (a vote-derived match, gated on RESOLVED specifically so a
+    machine vote sitting unconfirmed does NOT count as coverage - redundant machine suggestions
+    on an already-machine-suggested-but-unconfirmed printing still add real value, per the
+    respec's "machine votes pending confirmation do NOT count as coverage")."""
+    via_confirmed = Card.objects.filter(canonical_card__isnull=False).values_list("canonical_card_id", flat=True)
+    via_resolved_inference = Card.objects.filter(
+        inferred_canonical_card__isnull=False, printing_tag_status=PrintingTagStatus.RESOLVED
+    ).values_list("inferred_canonical_card_id", flat=True)
+    return set(via_confirmed) | set(via_resolved_inference)
+
+
+def _coverage_priority_key(selected: SelectedCard, covered_printing_pks: set[int]) -> tuple[int, int, int, int, int]:
+    """Addendum item 1's full ordering, verbatim: (1) names with zero covered printings first,
+    (2) descending count of uncovered printings, (3) demand rank within tier (item 3), (4) fewer
+    candidates first, (5) pk for determinism. Fully REPLACES the old "multi-candidate names
+    first" primary split (see select_candidates) - coverage gap is now the primary driver, not a
+    secondary refinement on top of it."""
+    candidates = selected.candidates
+    total = len(candidates)
+    covered = sum(1 for c in candidates if c.pk in covered_printing_pks)
+    uncovered = total - covered
+    return (
+        0 if uncovered == total else 1,  # (1) zero-covered first
+        -uncovered,  # (2) descending uncovered count within each of the two tiers above
+        _demand_rank_for_candidates(candidates),  # (3) ascending edhrec_rank = more popular first
+        total,  # (4) fewer candidates first
+        selected.card.pk,  # (5) determinism
+    )
+
+
 def select_candidates(
-    engine: Engine, index: Optional[CandidateNameIndex] = None, exclude_source_pks: Optional[Iterable[int]] = None
+    engine: Engine,
+    index: Optional[CandidateNameIndex] = None,
+    exclude_source_pks: Optional[Iterable[int]] = None,
+    covered_printing_pks: Optional[set[int]] = None,
 ) -> list[SelectedCard]:
-    """Multi-candidate names first (the cases deductive backfill's D1/D2 tiers can't reach
-    without an expansion_hint), then single-candidate names, in `Card.pk` order within each
-    group for determinism."""
+    """Ordered by addendum item 1's coverage-gap + demand key (see _coverage_priority_key) -
+    names fully covered process LAST, not never, since redundant identifications still add image
+    choice per printing and border/frame attribute votes are coverage-independent value. Also
+    applies addendum item 4's resolution floor (RESOLUTION_FLOOR_DPI) - a card whose source image
+    is already below it is never selected, so never fetched."""
     index = index or CandidateNameIndex()
+    covered_printing_pks = covered_printing_pks if covered_printing_pks is not None else compute_covered_printing_pks()
     anonymous_id = OCR_ANONYMOUS_ID if engine == "ocr" else PHASH_ANONYMOUS_ID
-    multi: list[SelectedCard] = []
-    single: list[SelectedCard] = []
+    selected: list[SelectedCard] = []
     for card in (
         _eligible_base_queryset(anonymous_id, exclude_source_pks)
+        .exclude(dpi__lt=RESOLUTION_FLOOR_DPI)
         .only("pk", "name", "identifier", "source_id")
         .order_by("pk")
         .iterator(chunk_size=5000)
@@ -170,8 +264,9 @@ def select_candidates(
         candidates = index.candidates_for(card.name)
         if not candidates:
             continue
-        (multi if len(candidates) > 1 else single).append(SelectedCard(card=card, candidates=candidates))
-    return multi + single
+        selected.append(SelectedCard(card=card, candidates=candidates))
+    selected.sort(key=lambda s: _coverage_priority_key(s, covered_printing_pks))
+    return selected
 
 
 # The empirically-validated OCR resolution floor (pre-scale program item 6/3c, 2026-07-15):
@@ -449,6 +544,11 @@ class PilotResult:
     gate_violations: list[int] = field(default_factory=list)
     fetch_budget_exhausted: bool = False
     cards_not_attempted_this_invocation: int = 0
+    # addendum item 4 (2026-07-15): cards otherwise eligible but skipped in the selection query
+    # itself for sitting below RESOLUTION_FLOOR_DPI - never fetched, not just never OCR'd/hashed.
+    # Its own skip category, separate from skip_counts (which is populated downstream of a fetch
+    # attempt, not at selection time).
+    skipped_below_resolution_floor: int = 0
 
 
 @dataclass
@@ -471,6 +571,17 @@ class AttributeReport:
     # No ground-truth counterpart - unlike border/frame, there's no Scryfall field encoding this.
     bleed_votes_by_class: dict[str, int] = field(default_factory=lambda: collections.defaultdict(int))
     bleed_abstain_count: int = 0
+    # addendum item 1 (2026-07-15): the run's real progress metric, per the respec - "uncovered-
+    # printings CLOSED that night, not raw votes". A run-level (not per-engine) count: of the
+    # printings in scope this invocation that were uncovered at the start, how many are covered
+    # (see compute_covered_printing_pks) by the time it ends. Almost always 0 for a pilot-only
+    # run BY DESIGN, not a bug: a pilot vote is never a direct resolve (module docstring), and
+    # "covered" explicitly excludes unresolved machine votes - a printing only counts as closed
+    # here once a human confirms it in the queue and pushes it to RESOLVED, which is why item 5
+    # (queue mirror, follow-up) front-loads human attention onto the same names this run
+    # front-loaded machine effort onto. Always 0 in dry_run (nothing is written, so nothing can
+    # have newly resolved).
+    uncovered_printings_closed: int = 0
 
 
 def run_pilot(
@@ -501,9 +612,20 @@ def run_pilot(
     results["fallback"] = PilotResult(engine="fallback", dry_run=dry_run)
     attributes = AttributeReport()
     exclude_source_pks_by_engine = exclude_source_pks_by_engine or {}
+    # addendum item 1 (2026-07-15): computed ONCE per invocation (not once per engine) and
+    # reused for both select_candidates' ordering and the "uncovered_printings_closed" delta
+    # below - fresh every call, per the respec's "refreshed at each nightly slice start" so
+    # human confirmations from the queue since the last slice reshape this slice's ordering too.
+    covered_printing_pks_before = compute_covered_printing_pks()
     selected_by_engine = {
-        e: select_candidates(e, index, exclude_source_pks_by_engine.get(e))[:limit] for e in engines_to_run
+        e: select_candidates(e, index, exclude_source_pks_by_engine.get(e), covered_printing_pks_before)[:limit]
+        for e in engines_to_run
     }
+    for e in engines_to_run:
+        anonymous_id = OCR_ANONYMOUS_ID if e == "ocr" else PHASH_ANONYMOUS_ID
+        results[e].skipped_below_resolution_floor = count_below_resolution_floor(
+            anonymous_id, exclude_source_pks_by_engine.get(e)
+        )
 
     # when both engines run, process the union of cards either engine selected so agreement/
     # disagreement can be evaluated per card - each engine still only ever votes on a card it
@@ -512,6 +634,16 @@ def run_pilot(
     for e in engines_to_run:
         for s in selected_by_engine[e]:
             all_selected_by_card_id.setdefault(s.card.pk, s)
+
+    # addendum item 1's "uncovered-printings closed" metric: every printing pk that was
+    # uncovered at the start and belonged to some processed card's candidate list - checked
+    # against fresh coverage state after the run below (dry_run: nothing is written, so this
+    # set is used but the "after" recheck will always come back empty - see AttributeReport's
+    # uncovered_printings_closed docstring).
+    printing_pks_in_scope: set[int] = set()
+    for s in all_selected_by_card_id.values():
+        printing_pks_in_scope.update(c.pk for c in s.candidates)
+    uncovered_printing_pks_in_scope = printing_pks_in_scope - covered_printing_pks_before
 
     # fallback's own idempotence check - it has no selection query/anonymous_id exclusion of
     # its own (it rides on whichever cards ocr/phash already selected), so a card already
@@ -841,6 +973,10 @@ def run_pilot(
         result.fetch_budget_exhausted = budget_exhausted
         result.cards_not_attempted_this_invocation = cards_not_attempted
 
+    if uncovered_printing_pks_in_scope and not dry_run:
+        covered_printing_pks_after = compute_covered_printing_pks()
+        attributes.uncovered_printings_closed = len(uncovered_printing_pks_in_scope & covered_printing_pks_after)
+
     return results, attributes
 
 
@@ -869,6 +1005,9 @@ __all__ = [
     "CandidatePrinting",
     "CandidateNameIndex",
     "SelectedCard",
+    "RESOLUTION_FLOOR_DPI",
+    "count_below_resolution_floor",
+    "compute_covered_printing_pks",
     "select_candidates",
     "get_worker_image_url",
     "fetch_card_image",
@@ -879,6 +1018,7 @@ __all__ = [
     "run_ocr_for_card",
     "run_phash_for_card",
     "PilotResult",
+    "AttributeReport",
     "run_pilot",
     "verify_zero_resolutions",
 ]

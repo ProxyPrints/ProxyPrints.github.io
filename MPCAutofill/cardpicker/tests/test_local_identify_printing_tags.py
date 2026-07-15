@@ -19,8 +19,11 @@ from cardpicker.local_identify_printing_tags import (
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
     OCR_ANONYMOUS_ID,
     PHASH_ANONYMOUS_ID,
+    RESOLUTION_FLOOR_DPI,
     CandidateNameIndex,
     CandidatePrinting,
+    compute_covered_printing_pks,
+    count_below_resolution_floor,
     get_worker_image_url,
     run_pilot,
     select_candidates,
@@ -117,7 +120,11 @@ class TestSelection:
         CardFactory(name="Forest", tags=["non-english"])
         assert select_candidates("ocr") == []
 
-    def test_multi_candidate_names_come_before_single_candidate_names(self, db):
+    def test_more_uncovered_candidates_come_before_fewer_when_both_fully_uncovered(self, db):
+        # addendum item 1 (2026-07-15): with no coverage at all, both names sit in the
+        # zero-covered tier - the ORIGINAL "multi before single" ordering was actually a special
+        # case of this: 2 uncovered candidates outranks 1 uncovered candidate at priority (2),
+        # before "fewer candidates first" (priority 4) ever gets consulted.
         CanonicalCardFactory(name="Single Match")
         single = CardFactory(name="Single Match")
         CanonicalCardFactory(name="Multi Match", expansion=CanonicalExpansionFactory(code="aaa"))
@@ -126,6 +133,182 @@ class TestSelection:
 
         selected = select_candidates("ocr")
         assert [s.card.pk for s in selected] == [multi.pk, single.pk]
+
+
+class TestCoveragePriority:
+    """Addendum item 1 (2026-07-15): coverage-gap + demand ordering, the full 5-key tuple
+    (zero-covered first, descending uncovered count, demand rank, fewer candidates, pk)."""
+
+    def test_zero_covered_names_come_before_partially_covered_names_even_with_fewer_uncovered(self, db):
+        # a partially-covered name can have a HIGHER absolute uncovered count than a
+        # zero-covered name, but priority (1) (the zero-covered boolean) still wins - this is
+        # the case that distinguishes (1) from a pure "-uncovered_count" sort.
+        CanonicalCardFactory(name="Zero Covered")
+        zero_covered = CardFactory(name="Zero Covered")
+
+        partially_covered_printing_a = CanonicalCardFactory(
+            name="Partially Covered", expansion=CanonicalExpansionFactory(code="aaa")
+        )
+        for i in range(9):
+            CanonicalCardFactory(name="Partially Covered", expansion=CanonicalExpansionFactory(code=f"b{i:02}"))
+        # one of "Partially Covered"'s 10 printings is confirmed - 9 uncovered, more than "Zero
+        # Covered"'s single uncovered printing, but it must still sort AFTER.
+        CardFactory(canonical_card=partially_covered_printing_a)
+        partially_covered = CardFactory(name="Partially Covered")
+
+        selected = select_candidates("ocr")
+        assert [s.card.pk for s in selected] == [zero_covered.pk, partially_covered.pk]
+
+    def test_more_uncovered_beats_fewer_within_the_same_tier(self, db):
+        CanonicalCardFactory(name="Two Uncovered", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Two Uncovered", expansion=CanonicalExpansionFactory(code="bbb"))
+        two_uncovered = CardFactory(name="Two Uncovered")
+
+        CanonicalCardFactory(name="One Uncovered")
+        one_uncovered = CardFactory(name="One Uncovered")
+
+        selected = select_candidates("ocr")
+        assert [s.card.pk for s in selected] == [two_uncovered.pk, one_uncovered.pk]
+
+    def test_fewer_candidates_is_only_a_tiebreak_after_coverage_and_demand_are_equal(self, db):
+        # both names: single uncovered candidate each, no edhrec_rank (both hit the "no demand
+        # signal" sentinel) - so priority (4), fewer candidates, is what actually decides here.
+        CanonicalCardFactory(name="Fewer Candidates")
+        fewer = CardFactory(name="Fewer Candidates")
+
+        CanonicalCardFactory(name="More Candidates", expansion=CanonicalExpansionFactory(code="aaa"))
+        more_printing = CanonicalCardFactory(name="More Candidates", expansion=CanonicalExpansionFactory(code="bbb"))
+        # cover the second "More Candidates" printing so both names have exactly ONE uncovered
+        # candidate - otherwise priority (2) (descending uncovered count) would decide instead.
+        CardFactory(canonical_card=more_printing)
+        more = CardFactory(name="More Candidates")
+
+        selected = select_candidates("ocr")
+        assert [s.card.pk for s in selected] == [fewer.pk, more.pk]
+
+    def test_fully_covered_names_process_last_not_never(self, db):
+        covered_printing = CanonicalCardFactory(name="Fully Covered")
+        covered = CardFactory(name="Fully Covered")
+        CardFactory(canonical_card=covered_printing)
+
+        CanonicalCardFactory(name="Uncovered")
+        uncovered = CardFactory(name="Uncovered")
+
+        selected = select_candidates("ocr")
+        assert [s.card.pk for s in selected] == [uncovered.pk, covered.pk]
+
+    def test_inferred_canonical_card_only_counts_as_covered_when_resolved(self, db):
+        # "machine votes pending confirmation do NOT count as coverage" - an UNRESOLVED
+        # inferred_canonical_card (e.g. a machine vote awaiting human confirmation) must not
+        # make this name outrank a genuinely zero-covered one.
+        pending_printing = CanonicalCardFactory(name="Pending Inference")
+        pending = CardFactory(
+            name="Pending Inference",
+            inferred_canonical_card=pending_printing,
+            printing_tag_status=PrintingTagStatus.UNRESOLVED,
+        )
+
+        CanonicalCardFactory(name="Zero Covered")
+        zero_covered = CardFactory(name="Zero Covered")
+
+        covered_printing_pks = compute_covered_printing_pks()
+        assert pending_printing.pk not in covered_printing_pks
+
+        selected = select_candidates("ocr")
+        # both are single-candidate, zero-covered (pending's own printing isn't "covered" by the
+        # spec's own definition) - tiebreak (5), pk, decides between them.
+        assert {s.card.pk for s in selected} == {pending.pk, zero_covered.pk}
+
+    def test_resolved_inferred_canonical_card_does_count_as_covered(self, db):
+        resolved_printing = CanonicalCardFactory(name="Resolved Inference")
+        CardFactory(
+            name="Resolved Inference",
+            inferred_canonical_card=resolved_printing,
+            printing_tag_status=PrintingTagStatus.RESOLVED,
+        )
+        covered_printing_pks = compute_covered_printing_pks()
+        assert resolved_printing.pk in covered_printing_pks
+        # resolved's own card is excluded from selection entirely (printing_tag_status is no
+        # longer UNRESOLVED), but the coverage computation itself is what's under test here.
+        assert select_candidates("ocr") == []
+
+
+class TestDemandRank:
+    """Addendum item 3 (2026-07-15): priority (3) of the coverage-priority tuple - ascending
+    edhrec_rank (lower = more popular = processed first) as a tiebreak within a coverage tier."""
+
+    def test_lower_edhrec_rank_comes_first_within_the_same_coverage_tier(self, db):
+        high_demand_printing = CanonicalCardFactory(name="High Demand")
+        CanonicalPrintingMetadataFactory(canonical_card=high_demand_printing, edhrec_rank=5)
+        high_demand = CardFactory(name="High Demand")
+
+        low_demand_printing = CanonicalCardFactory(name="Low Demand")
+        CanonicalPrintingMetadataFactory(canonical_card=low_demand_printing, edhrec_rank=50000)
+        low_demand = CardFactory(name="Low Demand")
+
+        selected = select_candidates("ocr")
+        assert [s.card.pk for s in selected] == [high_demand.pk, low_demand.pk]
+
+    def test_missing_edhrec_rank_sorts_last_not_first(self, db):
+        ranked_printing = CanonicalCardFactory(name="Ranked")
+        CanonicalPrintingMetadataFactory(canonical_card=ranked_printing, edhrec_rank=99999)
+        ranked = CardFactory(name="Ranked")
+
+        # no CanonicalPrintingMetadata at all - edhrec_rank is unknown, not literally 0.
+        CanonicalCardFactory(name="Unranked")
+        unranked = CardFactory(name="Unranked")
+
+        selected = select_candidates("ocr")
+        assert [s.card.pk for s in selected] == [ranked.pk, unranked.pk]
+
+    def test_a_names_demand_rank_is_its_most_popular_printings_rank(self, db):
+        # a name with one well-known printing and one obscure one should be treated as
+        # high-demand overall - the MIN across its candidates, not e.g. an average.
+        mixed_a = CanonicalCardFactory(name="Mixed Demand", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalPrintingMetadataFactory(canonical_card=mixed_a, edhrec_rank=3)
+        mixed_b = CanonicalCardFactory(name="Mixed Demand", expansion=CanonicalExpansionFactory(code="bbb"))
+        CanonicalPrintingMetadataFactory(canonical_card=mixed_b, edhrec_rank=90000)
+        mixed = CardFactory(name="Mixed Demand")
+
+        mid_printing = CanonicalCardFactory(name="Mid Demand")
+        CanonicalPrintingMetadataFactory(canonical_card=mid_printing, edhrec_rank=500)
+        mid = CardFactory(name="Mid Demand")
+
+        selected = select_candidates("ocr")
+        assert [s.card.pk for s in selected] == [mixed.pk, mid.pk]
+
+
+class TestResolutionFloor:
+    """Addendum item 4 (2026-07-15): RESOLUTION_FLOOR_DPI applied in the selection query itself
+    - a source image already below it is never selected, so never fetched."""
+
+    def test_below_floor_card_is_never_selected(self, db):
+        CanonicalCardFactory(name="Low Res")
+        CardFactory(name="Low Res", dpi=RESOLUTION_FLOOR_DPI - 1)
+        assert select_candidates("ocr") == []
+
+    def test_at_floor_card_is_selected(self, db):
+        CanonicalCardFactory(name="At Floor")
+        at_floor = CardFactory(name="At Floor", dpi=RESOLUTION_FLOOR_DPI)
+        assert [s.card.pk for s in select_candidates("ocr")] == [at_floor.pk]
+
+    def test_count_below_resolution_floor_matches_what_was_skipped(self, db):
+        CanonicalCardFactory(name="Low Res")
+        CardFactory(name="Low Res", dpi=RESOLUTION_FLOOR_DPI - 1)
+        CanonicalCardFactory(name="High Res")
+        CardFactory(name="High Res", dpi=RESOLUTION_FLOOR_DPI)
+
+        assert count_below_resolution_floor(OCR_ANONYMOUS_ID) == 1
+        assert len(select_candidates("ocr")) == 1
+
+    def test_below_floor_cards_are_excluded_from_the_count_once_already_voted_on(self, db):
+        # count_below_resolution_floor shares _eligible_base_queryset's other rules (idempotence
+        # etc.) - a below-floor card that's already been voted on by this engine shouldn't be
+        # double-counted as a "would fetch except for the floor" skip forever.
+        printing = CanonicalCardFactory(name="Low Res")
+        card = CardFactory(name="Low Res", dpi=RESOLUTION_FLOOR_DPI - 1)
+        CardPrintingTagFactory(card=card, printing=printing, anonymous_id=OCR_ANONYMOUS_ID)
+        assert count_below_resolution_floor(OCR_ANONYMOUS_ID) == 0
 
 
 class TestSourceExclusion:
@@ -495,6 +678,48 @@ class TestRunPilotAgreementAndDisagreement:
         # "fallback" (pass 2) always gets a result entry - it isn't a selectable --engine, it
         # fires automatically whenever pass 1 (whichever engines were requested) misses
         assert set(results.keys()) == {"ocr", "fallback"}
+
+
+class TestUncoveredPrintingsClosed:
+    """Addendum item 1's run-level progress metric. A pilot vote is never a direct resolve (the
+    gate check - TestVerifyZeroResolutions - asserts this structurally), so a real write run
+    still can't move a printing from uncovered to covered by itself; this is the documented,
+    by-design behavior (AttributeReport.uncovered_printings_closed's own docstring), not
+    something these tests are expected to ever observe going non-zero via a pilot vote alone."""
+
+    def test_stays_zero_on_a_real_write_run_since_a_pilot_vote_alone_cannot_resolve_anything(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest")
+        CardFactory(name="Forest")
+
+        import cardpicker.local_identify_printing_tags as module
+
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
+            return module.OcrCardResult(
+                vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
+            )
+
+        monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        _results, attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+        assert attributes.uncovered_printings_closed == 0
+
+    def test_stays_zero_in_dry_run(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest")
+        CardFactory(name="Forest")
+
+        import cardpicker.local_identify_printing_tags as module
+
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
+            return module.OcrCardResult(
+                vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
+            )
+
+        monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        _results, attributes = run_pilot(engine="ocr", limit=10, dry_run=True, nice=False)
+        assert attributes.uncovered_printings_closed == 0
 
 
 class TestRunPilotSourceExclusion:

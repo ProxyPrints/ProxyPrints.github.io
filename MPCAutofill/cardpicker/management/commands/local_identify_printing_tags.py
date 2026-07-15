@@ -131,10 +131,12 @@ class Command(BaseCommand):
             help="Concurrent worker threads for the fetch+OCR+phash+fallback compute portion of "
             "each card (pre-scale program item 3d) - the DB-write portion stays single-threaded "
             "regardless. Measured, not assumed (2026-07-15): on this box (2 CPU cores, shared "
-            "with 5 live production containers), 2 workers gave a near-ideal ~2.1x wall-clock "
-            "speedup (tesseract's subprocess-based OCR genuinely parallelizes - the GIL releases "
-            "during the subprocess wait) for only ~5ms extra live-API latency over the "
-            "ALREADY-EXISTING single-threaded impact. Default: "
+            "with 5 live production containers), 2 workers gave only ~5ms extra live-API latency "
+            "over the ALREADY-EXISTING single-threaded impact (tesseract's subprocess-based OCR "
+            "genuinely parallelizes - the GIL releases during the subprocess wait), for a real "
+            "1.61x full-pipeline wall-clock speedup (item 3e's cross-validated figure - a "
+            "narrower fetch+OCR+phash-only benchmark showed ~2.1x, but detect_illus_anchor/pass-2 "
+            "fallback don't parallelize as cleanly). Default: "
             f"{local_identify_printing_tags.DEFAULT_WORKERS} (matches this box's core count - "
             "more would only add contention, not real parallelism). Pass --workers=1 to disable "
             "concurrency entirely.",
@@ -212,6 +214,8 @@ class Command(BaseCommand):
             print(f"  votes written: {result.votes_written}")
             for reason, count in sorted(result.skip_counts.items()):
                 print(f"  skipped ({reason}): {count}")
+            if result.skipped_below_resolution_floor:
+                print(f"  skipped (below-resolution-floor, never fetched): {result.skipped_below_resolution_floor}")
             gate_violations = result.gate_violations
 
         any_result = next(iter(results.values()), None)
@@ -233,6 +237,7 @@ class Command(BaseCommand):
         print(f"  frame mismatches (printing vote withheld): {len(attributes.frame_mismatches)}")
         print(f"  bleed votes: {dict(attributes.bleed_votes_by_class)}")
         print(f"  bleed abstains: {attributes.bleed_abstain_count}")
+        print(f"  uncovered printings closed this run: {attributes.uncovered_printings_closed}")
 
         if dry_run:
             print("Dry run - nothing written, gate check not run.")

@@ -267,3 +267,34 @@ instantly — Jest doesn't run Strict Mode's double-invoke the same way a
 real browser mount does. Fix: make the mock's "have I served the real
 item yet" state track a genuine domain event the flow itself causes
 (e.g. a specific vote being submitted), not a raw request count.
+
+## Ad hoc prod DB/ES access goes through `docker compose run`/`exec`, never a persistent host-side connection script
+
+The base `docker-compose.yml` publishes Postgres/ES to `127.0.0.1`, and
+the DB credentials are public dev defaults (no secret needed) — so a
+host-side script pointed at `127.0.0.1:5432`/`9200` connects to live
+production data with no further authorization required to _run_ it again
+later. That's the hazard: the container boundary (`docker exec`/`docker compose run`) is the actual behavioral guard on an otherwise-open
+localhost port, and a saved wrapper script quietly removes it, becoming
+ambient capability for whichever future session finds the file — same
+class of risk as leaving a dev server squatting a shared port. One-off
+reads for a specific task are fine; a durable script that outlives the
+task's intent is not, even when nothing in it is secret.
+
+**Scope, made explicit (2026-07-15)**: the rule guards paths to
+**production** data specifically, not "any DB access from a host venv."
+`pytest`'s own `testcontainers` fixtures (`cardpicker/tests/conftest.py`)
+spin up throwaway, isolated Postgres/ES on different ports
+(`47000`/`9300`, not `5432`/`9200`) for the lifetime of one test session
+and destroy them after — no path to the real service ever exists in that
+flow, so running the test suite from a host venv is not an exception to
+this rule, it's simply outside its scope. The venv still never gets
+settings/scripts pointing at the real `127.0.0.1:5432`/`9200` ports -
+that boundary is unchanged. If a test or fixture is ever found reaching
+the real ports instead of its testcontainer, that's a stop-and-report,
+not a judgment call. Corollary: mounting the Docker socket into a
+container to sidestep this (so tests run "through docker" too) is a
+strictly worse trade, not a safer one - it hands the container the
+equivalent of host root, a larger ambient capability than the
+direct-DB-connection risk it would replace. Declined as an option; don't
+build it for this or future workarounds.
