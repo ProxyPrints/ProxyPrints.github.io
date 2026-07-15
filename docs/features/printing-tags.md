@@ -1479,6 +1479,43 @@ program itself (every measurement in this doc was already real, run
 against the live DB), but it's a genuine loose end for whoever actually
 launches the full-catalog run.
 
+### Dockerized execution, host-venv retired (2026-07-15, closes the item 4 gap above)
+
+Closes the "host-venv disposition" gap flagged in the scaling proposal
+above: `docker/django/Dockerfile`'s shared `builder` stage now installs
+`tesseract-ocr tesseract-ocr-eng` alongside the existing
+`dos2unix gcc netcat-traditional curl libpq-dev` line - both the
+`webserver` and `worker` targets inherit it since they both `FROM builder`. Verified end-to-end, not just "image builds": rebuilt the
+`worker` image and ran
+`python3 manage.py local_identify_printing_tags --dry-run --limit 3 --skip-checks`
+inside a one-off `docker compose run --rm worker ...` container against
+the real live DB - tesseract resolved (`/usr/bin/tesseract`, v5.5.0),
+OCR/phash/fallback/attribute voting all executed and reported real
+(dry-run) output. The job-scoped host venv
+(`~/.claude/jobs/4495614d/tmp/venv`) used for every prior measurement in
+this doc is now retired - no job dependency for this recurring task
+lives outside the image anymore.
+
+Build-context note: `docker/django/check_client_secrets.sh` and
+`check_drives.sh` require `MPCAutofill/client_secrets.json` and
+`MPCAutofill/drives.csv` to exist in the build context (both gitignored,
+real content only on-disk per `CLAUDE.md`) - a fresh worktree doesn't
+have them by default, since worktrees share git history but not
+untracked files. Verifying this Dockerfile change from a worktree
+required temporarily copying those two files plus `docker/.env` (needed
+at container-run time for `SECRET_KEY`/DB config) in from the main
+checkout, with explicit user go-ahead for each, and deleting all three
+immediately after the verification container run completed. This is a
+one-time verification cost, not a recurring one - normal builds/deploys
+happen from the main checkout, where these files already live natively.
+
+This does not change the Option A vs. B scheduling recommendation above
+(still Option A, screen'd host process) - it only changes _how_ the
+command executes (containerized instead of a host venv) once a
+scheduling shape is chosen, and removes one of Option B's stated
+requirements ("Dockerfile change...adding `tesseract-ocr`") since that
+part is now already done regardless of which scheduling path is picked.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run
