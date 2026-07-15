@@ -33,6 +33,30 @@ Corollary: always kill your own leftover dev server when your task ends —
 it's a landmine for the next concurrent session, not something to leave
 running because it "seems harmless."
 
+## Absolute paths to the repo root silently target the wrong checkout in a worktree session
+
+`/home/ubuntu/ProxyPrints.github.io/<path>` and
+`/home/ubuntu/ProxyPrints.github.io/.claude/worktrees/<name>/<path>` are
+two entirely separate files on disk that happen to share a relative
+path — git worktrees don't share a working directory, only `.git`
+history/objects. A worktree session that reuses an absolute
+`/home/ubuntu/ProxyPrints.github.io/...` path (e.g. copy-pasted from an
+earlier grep, or muscle-memory from a non-worktree session) silently
+edits/commits the **main checkout's** copy of a tracked file, on
+whatever branch it has checked out (usually `master`) — not the
+worktree's branch. The edit "succeeds" with no error, and `git status`
+inside the worktree shows nothing wrong, because from the worktree's own
+perspective nothing happened at all. Caught only by an unexpectedly
+empty `git status --short` right before a commit that should have had
+staged content. Fix: always use relative paths (or a path built from the
+session's actual `pwd`) for file operations once inside a worktree,
+never a hardcoded absolute repo-root path remembered from earlier in the
+conversation. Exception: `WORKERS.md` and `journal/` are gitignored and
+by established convention (see CLAUDE.local.md) live in the **main
+checkout** specifically, so their absolute main-checkout paths are
+correct on purpose — the trap is specifically for git-tracked files that
+need to land on the worktree's branch.
+
 ## Swap in a debug color to disambiguate same-colored overlapping elements
 
 A pixel/computed-color check at one sample point can be genuinely ambiguous
