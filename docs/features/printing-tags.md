@@ -1099,6 +1099,15 @@ below for a follow-up idea that WOULD vote on it, deliberately deferred).
 | 200-299    |     40 |                  0 |            0 |      40 |
 | 300+       | 218089 |                  0 |            0 |  218089 |
 
+**Query mechanics sanity-checked before trusting an all-zero result**:
+the same `resolved`/`pending` query pattern run against tags known to
+have real production data - `NSFW` (339 resolved, via filename-bracket
+import tagging, not the vote flow), and `custom-art`/`AI-Generated`/
+`Borderless` (1, 1, 13 genuinely pending via the exact same
+`tag_votes__tag__name=...` pattern used above) - all returned correct
+nonzero counts. The `low-res` all-zero result is a real finding, not a
+broken query.
+
 Two things worth flagging, neither actionable within this item's scope:
 
 - **99.97% of cards already report full 300dpi** - `Card.dpi` isn't a
