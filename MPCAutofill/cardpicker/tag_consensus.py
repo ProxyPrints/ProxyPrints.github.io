@@ -13,7 +13,6 @@ from cardpicker.models import (
     TagModerationClass,
     TagVoteStatus,
     VotePolarity,
-    VoteSource,
 )
 from cardpicker.moderation import (
     get_moderator_user_ids,
@@ -27,6 +26,7 @@ from cardpicker.vote_consensus import (
     VoteTuple,
     _PendingPrivileged,
     contested_queryset,
+    is_human_backed_source,
     resolve_weighted_consensus,
 )
 
@@ -60,7 +60,7 @@ def resolve_tag(card: Card, tag: Tag, moderator_ids: set[int] | None = None) -> 
             VoteTuple(
                 outcome_key=vote.polarity,
                 weight=privileged_weight(vote.source, privileged),
-                is_human_backed=vote.source != VoteSource.AI,
+                is_human_backed=is_human_backed_source(vote.source),
                 is_privileged=privileged,
             )
         )
@@ -223,7 +223,7 @@ def get_resolved_tag_overlay(card_ids: Iterable[int]) -> dict[int, dict[str, int
             VoteTuple(
                 outcome_key=row["polarity"],
                 weight=privileged_weight(row["source"], privileged),
-                is_human_backed=row["source"] != VoteSource.AI,
+                is_human_backed=is_human_backed_source(row["source"]),
                 is_privileged=privileged,
             )
         )

@@ -27,9 +27,15 @@ export only locally-resolved consensus — never re-broadcast federated votes
                     | "tag:<tag name>:apply" | "tag:<tag name>:reject",
           "resolved_at": "<ISO 8601>",
           "vote_weight": <float — total weight behind the verdict>,
-          "human_votes": <int — non-AI vote count; importers MUST treat
-                          human_votes >= 1 as the condition for the imported
-                          vote to be human-backed for gate purposes>
+          "human_votes": <int — count of votes NOT from a machine-derived
+                          source (VoteSource.DEDUCTION or VoteSource.OCR —
+                          the single umbrella VoteSource.AI value this
+                          interchange format was designed against was split
+                          into these two 2026-07-15, same weight/gate
+                          treatment; see cardpicker/models.py's VoteSource
+                          docstring). Importers MUST treat human_votes >= 1
+                          as the condition for the imported vote to be
+                          human-backed for gate purposes>
         }
       ],
       "signature": "<ed25519 over canonical JSON (sorted keys, no whitespace)

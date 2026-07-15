@@ -47,7 +47,7 @@ def _preserve_shared_factory_sequences():
 def make_ai_suggested_card(anonymous_id: str = "ai-bot") -> tuple:
     card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
     printing = CanonicalCardFactory()
-    CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.AI, anonymous_id=anonymous_id)
+    CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=anonymous_id)
     return card, printing
 
 
@@ -87,7 +87,7 @@ class TestGetNextQuestionFeedItem:
         # the only tier-1 candidate has this same anonymous_id's own vote already
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         printing = CanonicalCardFactory()
-        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.AI, anonymous_id="ai-bot")
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER, anonymous_id="anon-1")
 
         item = get_next_question_feed_item("anon-1")
@@ -135,7 +135,7 @@ class TestGetNextQuestionFeedItem:
         # but is one vote closer to actually resolving than one with zero votes.
         almost_resolved = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         printing = CanonicalCardFactory()
-        CardPrintingTagFactory(card=almost_resolved, printing=printing, source=VoteSource.AI)
+        CardPrintingTagFactory(card=almost_resolved, printing=printing, source=VoteSource.DEDUCTION)
         CardPrintingTagFactory(card=almost_resolved, printing=printing, source=VoteSource.USER)
 
         item = get_next_question_feed_item("anon-1")

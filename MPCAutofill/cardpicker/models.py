@@ -176,7 +176,7 @@ class Source(models.Model):
     ordinal = models.IntegerField(default=0)  # TODO: why is this not unique?
 
     def __str__(self) -> str:
-        (qty_total, qty_cards, qty_cardbacks, qty_tokens, _) = self.count()
+        qty_total, qty_cards, qty_cardbacks, qty_tokens, _ = self.count()
         return (
             f"[{self.ordinal}.] {self.name} "
             f"[{qty_total} total: {qty_cards} cards, {qty_cardbacks} cardbacks, {qty_tokens} tokens]"
@@ -522,12 +522,28 @@ class VoteSource(models.TextChoices):
     """
     Shared `source` enum for every `AbstractWeightedVote` subclass (`CardPrintingTag`,
     `CardArtistVote`, `CardTagVote`) - not printing-tag-specific despite the historical name
-    this replaced (`CardPrintingTagSource`). The stored string values are unchanged.
+    this replaced (`CardPrintingTagSource`).
+
+    `AI` (a single umbrella value) was split 2026-07-15 into `DEDUCTION` and `OCR` - both were
+    genuinely different mechanisms sharing one label: DEDUCTION is pure logical inference from
+    already-trusted structured data (cardpicker.deductive_backfill - zero image inspection),
+    while OCR (kept as an umbrella name, not literal-OCR-only) covers everything in
+    cardpicker.local_identify_printing_tags/local_fallback that actually looks at the card
+    image - Tesseract text extraction, perceptual-hash art matching, and the border/artist/
+    symbol evidence-combination fallback. The individual technique within OCR's umbrella is
+    still distinguishable via `anonymous_id` (local-ocr-v1/local-phash-v1/local-fallback-v1) -
+    a third split wasn't worth it for that reason alone. Every existing production `source="ai"`
+    row predates this split entirely (deductive_backfill's own 28,112-vote production run, sole
+    source of "ai" rows at split time) - see migration 0060 for the one-time backfill.
+    Weight/gate treatment for both new values is identical to the old AI's (see
+    vote_consensus.py's _SOURCE_WEIGHTS and is_human_backed_source) - this was a label split,
+    not a policy change.
     """
 
     USER = "user", gettext_lazy("User")
     ADMIN = "admin", gettext_lazy("Admin")
-    AI = "ai", gettext_lazy("AI")
+    DEDUCTION = "deduction", gettext_lazy("Deduction")
+    OCR = "ocr", gettext_lazy("OCR")
     FEDERATED = "federated", gettext_lazy("Federated")
 
 
@@ -857,9 +873,11 @@ class Project(models.Model):
         }
         members: list[ProjectMember] = [
             ProjectMember(
-                card=card_identifiers_to_pk[card_identifier]
-                if (card_identifier := value.get("card_identifier", None)) is not None
-                else None,
+                card=(
+                    card_identifiers_to_pk[card_identifier]
+                    if (card_identifier := value.get("card_identifier", None)) is not None
+                    else None
+                ),
                 slot=value["slot"],
                 query=query,
                 face=face,

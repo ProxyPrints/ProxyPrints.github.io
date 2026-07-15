@@ -50,7 +50,7 @@ def _tag_confidence(card: Card) -> dict[str, float]:
 
 def _confirm_suggestion_item(card: Card) -> Optional[QuestionFeedItem]:
     ai_vote = (
-        card.printing_tags.filter(source=VoteSource.AI, is_no_match=False)
+        card.printing_tags.filter(source__in=[VoteSource.DEDUCTION, VoteSource.OCR], is_no_match=False)
         .select_related("printing__expansion", "printing__printing_metadata", "printing__artist")
         .first()
     )
@@ -94,7 +94,10 @@ def _tag_item(card: Card, tag_name: str) -> QuestionFeedItem:
 
 def _tier_1_confirm_suggestion(anonymous_id: str) -> Optional[QuestionFeedItem]:
     cards = (
-        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, printing_tags__source=VoteSource.AI)
+        Card.objects.filter(
+            printing_tag_status=PrintingTagStatus.UNRESOLVED,
+            printing_tags__source__in=[VoteSource.DEDUCTION, VoteSource.OCR],
+        )
         .exclude(printing_tags__source__in=[VoteSource.USER, VoteSource.ADMIN, VoteSource.FEDERATED])
         .exclude(printing_tags__anonymous_id=anonymous_id)
         .distinct()

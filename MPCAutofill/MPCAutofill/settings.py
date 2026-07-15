@@ -283,6 +283,14 @@ ELASTICSEARCH_DSL = {
 
 ELASTICSEARCH_DSL_AUTOSYNC = False
 
+# The Cloudflare Worker image CDN (image-cdn/, docs/features/image-cdn.md) - the frontend
+# reads this as a build-time NEXT_PUBLIC_ var, so the backend has never needed its own copy
+# until now: cardpicker.local_identify_printing_tags (docs/features/printing-tags.md's Stage 8)
+# fetches a card's own full-resolution image server-side for OCR/phash, via the same Worker's
+# "full" tier the PDF export path already relies on for print-quality output (Google Drive
+# sources only today - see get_worker_image_url in that module).
+IMAGE_WORKER_URL = env("IMAGE_WORKER_URL", default="https://cdn.proxyprints.ca")
+
 # Email for logging
 ADMINS = [("admin", env("TARGET_EMAIL", default=""))]
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
