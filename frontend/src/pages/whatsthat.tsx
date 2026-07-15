@@ -62,6 +62,13 @@ const StarburstContent = styled.div`
   padding: 0 1.5rem;
 `;
 
+// The starburst+card assembly anchors to the right of the page (see QuestionFeed.tsx's
+// column order), so the intro copy above it reads right-to-left too, keeping the whole
+// header visually aligned with what sits below it rather than starting from the opposite edge.
+const IntroText = styled.div`
+  text-align: right;
+`;
+
 function PrintingQueueOrDefault() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
 
@@ -69,13 +76,15 @@ function PrintingQueueOrDefault() {
     <>
       <StarburstBackground>
         <StarburstContent>
-          <h1>What&apos;s That Card?</h1>
-          <p>
-            Test your Magic: the Gathering knowledge! One card at a time, help
-            identify which real-world printing, artist, or descriptor tag each
-            card image depicts - contested and AI-suggested cards come first,
-            since they need your eyes the most.
-          </p>
+          <IntroText>
+            <h1>What&apos;s That Card?</h1>
+            <p>
+              Test your Magic: the Gathering knowledge! One card at a time, help
+              identify which real-world printing, artist, or descriptor tag each
+              card image depicts - contested and AI-suggested cards come first,
+              since they need your eyes the most.
+            </p>
+          </IntroText>
           <AuthWidget />
           <QuestionFeed />
         </StarburstContent>

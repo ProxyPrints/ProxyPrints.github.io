@@ -14,6 +14,8 @@ concrete consequence and the planned v2 fix (interleaved/weighted union, out of 
 
 from typing import Optional
 
+from django.db.models import Count
+
 from cardpicker.artist_consensus import get_contested_artist_card_ids
 from cardpicker.attribute_tags import ATTRIBUTE_CHIP_TAG_NAMES
 from cardpicker.models import (
@@ -168,11 +170,21 @@ def _tier_3_moderation(user: object) -> Optional[QuestionFeedItem]:
 
 
 def _tier_4_fresh(anonymous_id: str) -> Optional[QuestionFeedItem]:
+    # A card with one AI-sourced vote plus one *agreeing* human vote (weight 1.5 at default
+    # settings - still short of PRINTING_TAG_MIN_VOTES=2) is exactly as close to resolving as
+    # a card can get without being resolved outright, yet it's excluded from tier 1 (any human
+    # vote moves a card out of tier 1's "AI-only" pool) and isn't contested (agreeing votes,
+    # not conflicting, so tier 2's contested check doesn't catch it either) - it lands here,
+    # in tier 4, with zero votes and 28,112 genuinely-untouched cards. `-vote_count` surfaces
+    # these "one vote from resolving" cards first within this tier, a small, concrete answer
+    # to "prioritize whichever question is closest to actually resolving" without building a
+    # full scoring system (out of scope - see this module's docstring).
     printing_card = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         .exclude(pk__in=get_contested_card_ids())
         .exclude(printing_tags__anonymous_id=anonymous_id)
-        .order_by("-date_created")
+        .annotate(vote_count=Count("printing_tags", distinct=True))
+        .order_by("-vote_count", "-date_created")
         .first()
     )
     if printing_card is not None:

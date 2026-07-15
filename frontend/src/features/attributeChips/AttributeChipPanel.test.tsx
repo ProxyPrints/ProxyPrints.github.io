@@ -25,6 +25,7 @@ function Wrapper({ onSubmitted }: { onSubmitted?: (tagName: string) => void }) {
         tagConfidence={{}}
         chipStates={states}
         onChipStatesChange={setStates}
+        cardSlot={<div data-testid="card-slot-stub">card</div>}
       />
     </Provider>
   );

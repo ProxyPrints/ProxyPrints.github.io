@@ -62,6 +62,52 @@ const ChipRow = styled.div`
   justify-content: center;
 `;
 
+const ChipColumn = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: stretch;
+`;
+
+// A 3x3 grid with the card slot dead center and chips forming a ring around it - "top" holds
+// the standalone toggles, "left"/"right" hold the two exclusion groups (arbitrarily assigned;
+// nothing about a group is inherently left- or right-handed). Empty grid-template-columns
+// cells (corners, bottom) collapse via `auto` sizing rather than reserving dead space.
+const ChipRing = styled.div`
+  display: grid;
+  grid-template-areas:
+    ".    top   ."
+    "left card  right"
+    ".    .     .";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto;
+  gap: 0.6rem;
+  align-items: center;
+  justify-items: center;
+`;
+
+const TopArea = styled(ChipRow)`
+  grid-area: top;
+`;
+
+const LeftArea = styled(ChipColumn)`
+  grid-area: left;
+`;
+
+const RightArea = styled(ChipColumn)`
+  grid-area: right;
+`;
+
+// position: relative so an absolutely-positioned burst rendered as part of `cardSlot` (see
+// QuestionFeed.tsx) sizes and centers itself against the card's own box specifically, not
+// this whole ring (which includes the flanking chip columns and would make the burst far
+// larger, and off-center, than intended - see docs/features/printing-tags.md's Stage 7).
+const CardArea = styled.div`
+  grid-area: card;
+  width: 100%;
+  position: relative;
+`;
+
 interface AttributeChipPanelProps {
   backendURL: string;
   cardIdentifier: string;
@@ -71,6 +117,10 @@ interface AttributeChipPanelProps {
    * filtering (QuestionFeed.tsx) needs to read the same state. */
   chipStates: Record<string, ChipVoteState>;
   onChipStatesChange: (next: Record<string, ChipVoteState>) => void;
+  /** The card image/reveal-overlay/caption, rendered dead center with chips forming a ring
+   * around it - passed in rather than owned here so QuestionFeed.tsx keeps sole ownership of
+   * the reveal-animation state machine (revealed/onAnimationEnd) that slot's contents depend on. */
+  cardSlot: React.ReactNode;
 }
 
 export function AttributeChipPanel({
@@ -79,6 +129,7 @@ export function AttributeChipPanel({
   tagConfidence,
   chipStates,
   onChipStatesChange,
+  cardSlot,
 }: AttributeChipPanelProps) {
   const dispatch = useAppDispatch();
   const getTagDisplayName = useTagDisplayName();
@@ -176,17 +227,27 @@ export function AttributeChipPanel({
     );
   };
 
+  // EXCLUSION_GROUPS[0] (Border Color) renders left, [1] (Frame Style) renders right - an
+  // arbitrary but fixed assignment, not a semantic left/right meaning for either group.
+  const [leftGroup, rightGroup] = EXCLUSION_GROUPS;
+
   return (
-    <div data-testid="attribute-chip-panel">
-      <ChipRow className="mb-2">
+    <ChipRing data-testid="attribute-chip-panel">
+      <TopArea>
         {STANDALONE_CHIPS.map((chip) => renderChip(chip.tagName, chip.label))}
-      </ChipRow>
-      {EXCLUSION_GROUPS.map((group) => (
-        <ChipRow key={group.id} className="mb-2">
-          {group.chips.map((chip) => renderChip(chip.tagName, chip.label))}
-        </ChipRow>
-      ))}
-    </div>
+      </TopArea>
+      {leftGroup != null && (
+        <LeftArea>
+          {leftGroup.chips.map((chip) => renderChip(chip.tagName, chip.label))}
+        </LeftArea>
+      )}
+      <CardArea>{cardSlot}</CardArea>
+      {rightGroup != null && (
+        <RightArea>
+          {rightGroup.chips.map((chip) => renderChip(chip.tagName, chip.label))}
+        </RightArea>
+      )}
+    </ChipRing>
   );
 }
 

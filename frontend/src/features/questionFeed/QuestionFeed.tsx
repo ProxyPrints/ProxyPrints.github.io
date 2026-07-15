@@ -227,11 +227,14 @@ export function QuestionFeed() {
   const hiddenCount = allCandidates.length - visibleCandidates.length;
   const noMatchDisabled = !hasAnyExplicitChip(chipStates);
 
-  const cardPanel = (
-    <CardPanel
-      ref={cardPanelRef}
-      style={stickyTop != null ? { top: stickyTop } : undefined}
-    >
+  // BurstSvg renders alongside (not inside) RevealWrapper deliberately - RevealWrapper has
+  // overflow: hidden (it clips the silhouette-reveal animation to the card's own box), which
+  // would also clip the burst's intentional bleed if it were a descendant instead of a
+  // sibling. Both size themselves against whichever positioned ancestor contains them -
+  // AttributeChipPanel's CardArea now, so the burst centers on and scales with the card's own
+  // rendered width specifically, not the wider ring (card + flanking chip columns) around it.
+  const cardImage = (
+    <>
       <BurstSvg viewBox={STARBURST_VIEWBOX}>
         <polygon
           points={STARBURST_OUTER_FRAMES[starburstFrame]}
@@ -242,17 +245,6 @@ export function QuestionFeed() {
           fill={STARBURST_INNER_COLOR}
         />
       </BurstSvg>
-      {isCandidateType && (
-        <div className="mb-2">
-          <AttributeChipPanel
-            backendURL={backendURL}
-            cardIdentifier={item.card.identifier}
-            tagConfidence={item.tagConfidence ?? {}}
-            chipStates={chipStates}
-            onChipStatesChange={setChipStates}
-          />
-        </div>
-      )}
       <RevealWrapper>
         <img
           src={item.card.mediumThumbnailUrl}
@@ -269,6 +261,30 @@ export function QuestionFeed() {
         )}
       </RevealWrapper>
       <div className="text-center mt-1">{item.card.name}</div>
+    </>
+  );
+
+  // The card renders dead center with chips forming a ring around it (AttributeChipPanel's
+  // ChipRing grid) rather than stacked above it - the starburst behind the whole assembly is
+  // purely decorative (pointer-events: none throughout), so it never competes with any of
+  // this for clicks regardless of how it visually bleeds.
+  const cardPanel = (
+    <CardPanel
+      ref={cardPanelRef}
+      style={stickyTop != null ? { top: stickyTop } : undefined}
+    >
+      {/* cardPanel is only ever rendered from the isCandidateType branch below - the
+          artist/tag/moderation branch renders its own plain image directly, uninvolved with
+          chips or the starburst. BurstSvg now lives inside `cardImage` itself (see above),
+          not here, so it sizes against the card's own box rather than this whole ring. */}
+      <AttributeChipPanel
+        backendURL={backendURL}
+        cardIdentifier={item.card.identifier}
+        tagConfidence={item.tagConfidence ?? {}}
+        chipStates={chipStates}
+        onChipStatesChange={setChipStates}
+        cardSlot={cardImage}
+      />
     </CardPanel>
   );
 
@@ -287,16 +303,7 @@ export function QuestionFeed() {
         <Row className="g-4">
           {isCandidateType ? (
             <>
-              {/* position + a non-auto z-index together give this column its own local
-                  stacking context, containing CardPanel's z-index: -1 (see cardPanel.tsx) so
-                  it can't escape and render the whole panel - chips included - unclickable
-                  behind this sibling column at the hit-testing layer. position: relative
-                  alone does NOT establish a stacking context - see
-                  docs/features/printing-tags.md's Stage 7 section for the full story. */}
-              <Col xs={12} md={5} style={{ position: "relative", zIndex: 0 }}>
-                {cardPanel}
-              </Col>
-              <Col xs={12} md={7}>
+              <Col xs={12} md={5}>
                 {!revealed ? (
                   <div className="text-center py-4">
                     <Spinner size={2} />
@@ -438,17 +445,18 @@ export function QuestionFeed() {
                   </>
                 )}
               </Col>
+              {/* position + a non-auto z-index together give this column its own local
+                  stacking context, containing CardPanel's z-index: -1 (see cardPanel.tsx) so
+                  it can't escape and render the whole panel - chips included - unclickable
+                  behind this sibling column at the hit-testing layer. position: relative
+                  alone does NOT establish a stacking context - see
+                  docs/features/printing-tags.md's Stage 7 section for the full story. */}
+              <Col xs={12} md={7} style={{ position: "relative", zIndex: 0 }}>
+                {cardPanel}
+              </Col>
             </>
           ) : (
             <>
-              <Col xs={12} md={5}>
-                <img
-                  src={item.card.mediumThumbnailUrl}
-                  alt={item.card.name}
-                  style={{ width: "100%" }}
-                />
-                <div className="text-center mt-1">{item.card.name}</div>
-              </Col>
               <Col xs={12} md={7}>
                 {item.type === "artist" && (
                   <>
@@ -509,6 +517,14 @@ export function QuestionFeed() {
                     />
                   </>
                 )}
+              </Col>
+              <Col xs={12} md={5}>
+                <img
+                  src={item.card.mediumThumbnailUrl}
+                  alt={item.card.name}
+                  style={{ width: "100%" }}
+                />
+                <div className="text-center mt-1">{item.card.name}</div>
               </Col>
             </>
           )}
