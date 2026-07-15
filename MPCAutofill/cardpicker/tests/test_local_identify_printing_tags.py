@@ -451,7 +451,12 @@ class TestPass2Wiring:
         TagFactory(name="Black Border")
 
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
 
+        # no real tesseract binary in CI - the fake image below has "Illus. Marie Magny" drawn
+        # on it, but the crop/OCR fallback inside detect_illus_anchor() must not depend on the
+        # real binary reading it accurately; this mirrors what it would extract.
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "Illus. Marie Magny")
         monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
         monkeypatch.setattr(
             module,
@@ -480,6 +485,12 @@ class TestPass2Wiring:
         card = CardFactory(name="Forest")
 
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - the fetched image is blank (no text at all), so a
+        # real tesseract read would also find nothing, but the frame classifier's unconditional
+        # detect_illus_anchor() call must not depend on the real binary being present to do so.
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         def fake_ocr(selected, image, crop_box):
             return module.OcrCardResult(
@@ -506,6 +517,10 @@ class TestPass2Wiring:
         CardPrintingTagFactory(card=card, printing=printing, anonymous_id=FALLBACK_ANONYMOUS_ID)
 
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - see the identical note on the sibling test above
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         def fail_if_called(selected, image, ocr_raw_texts):
             raise AssertionError("run_fallback_for_card must not run again for an already-covered card")
@@ -538,6 +553,11 @@ class TestGroundTruthAttributeVotes:
         TagFactory(name="Modern Border")
 
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - the fetched image is blank, so this matches what a
+        # real read would find anyway; see the identical note on TestPass2Wiring above.
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         def fake_ocr(selected, image, crop_box):
             return module.OcrCardResult(
@@ -574,6 +594,10 @@ class TestGroundTruthAttributeVotes:
         TagFactory(name="Black Border")
 
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - see the identical note on the sibling test above
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
         monkeypatch.setattr(
@@ -598,6 +622,10 @@ class TestGroundTruthAttributeVotes:
         TagFactory(name="Black Border")
 
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - see the identical note on the sibling test above
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         def fake_ocr(selected, image, crop_box):
             return module.OcrCardResult(

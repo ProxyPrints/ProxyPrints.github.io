@@ -1,14 +1,21 @@
 """
 Tests for the pass-2 fallback engine (docs/features/printing-tags.md's Stage 8) - old-border
 frame handling (no collector line, no discriminating phash art match against reprints), and
-the standalone border-attribute-vote side effect. No network calls; set-symbol rendering uses
-the real vendored keyrune font (a local file, not a mock target) since it's pure local asset
-loading, no different in kind from the raw Pillow calls elsewhere in this suite.
+the standalone border-attribute-vote side effect. No network calls, and no real tesseract
+binary required - CI's environment doesn't have one installed, so every test that exercises
+`detect_illus_anchor`'s crop/OCR fallback path mocks `local_ocr.run_tesseract` with the exact
+text it would extract from the synthetic image being drawn, rather than trusting the real
+binary to read rendered text accurately (that accuracy is what
+`TestOcrLiveTesseractIntegration`-style skipif-guarded tests are for, not this module). Set-
+symbol rendering uses the real vendored keyrune font (a local file, not a mock target) since
+it's pure local asset loading, no different in kind from the raw Pillow calls elsewhere in
+this suite.
 """
 
 import pytest
 from PIL import Image, ImageDraw
 
+import cardpicker.local_ocr as local_ocr
 from cardpicker.local_fallback import (
     BORDER_COLOR_TO_TAG,
     FALLBACK_ANONYMOUS_ID,
@@ -224,7 +231,8 @@ class TestRunFallbackForCard:
         draw.text((150, 990), f"Illus. {artist_name}", fill=(255, 255, 255))
         return img
 
-    def test_border_plus_artist_agree_narrows_to_one_candidate(self, db):
+    def test_border_plus_artist_agree_narrows_to_one_candidate(self, db, monkeypatch):
+        monkeypatch.setattr(local_ocr, "run_tesseract", lambda image: "Illus. Marie Magny")
         selected, printing_a, printing_b = self._make_selected()
         image = self._black_bordered_image_with_artist_text("Marie Magny")
 
@@ -234,7 +242,8 @@ class TestRunFallbackForCard:
         assert "border" in outcome.evidence_types_used
         assert outcome.skip_reason == ""
 
-    def test_border_and_artist_contradict_eliminates_everything(self, db):
+    def test_border_and_artist_contradict_eliminates_everything(self, db, monkeypatch):
+        monkeypatch.setattr(local_ocr, "run_tesseract", lambda image: "Illus. Zephyr Okonkwo")
         selected, printing_a, printing_b = self._make_selected()
         # black border (matches printing_a) but artist text names printing_b's artist
         image = self._black_bordered_image_with_artist_text("Zephyr Okonkwo")
@@ -244,7 +253,8 @@ class TestRunFallbackForCard:
         assert outcome.printing_pk is None
         assert outcome.skip_reason == "eliminated"
 
-    def test_no_evidence_at_all_is_a_distinct_skip_reason(self, db):
+    def test_no_evidence_at_all_is_a_distinct_skip_reason(self, db, monkeypatch):
+        monkeypatch.setattr(local_ocr, "run_tesseract", lambda image: "")
         selected, _, _ = self._make_selected()
         # mid-brightness colored border (ambiguous) + no artist text at all
         image = Image.new("RGB", (750, 1050), (180, 140, 40))
@@ -269,7 +279,8 @@ class TestRunFallbackForCard:
 
         assert outcome.printing_pk == printing_a.pk
 
-    def test_illus_anchor_fired_is_tracked_independent_of_artist_match_success(self, db):
+    def test_illus_anchor_fired_is_tracked_independent_of_artist_match_success(self, db, monkeypatch):
+        monkeypatch.setattr(local_ocr, "run_tesseract", lambda image: "Illus. A Totally Unrelated Person")
         selected, printing_a, printing_b = self._make_selected()
         # "Illus." extracts fine, but the named artist matches neither candidate - the anchor
         # still fired even though artist evidence itself produced no usable reading
