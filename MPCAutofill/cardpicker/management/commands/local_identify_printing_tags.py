@@ -90,6 +90,16 @@ class Command(BaseCommand):
             help="Comma-separated Source pks to deprioritize from phash selection. Same mechanism "
             "as --exclude-sources-ocr, independently settable. Default: '' (no exclusion).",
         )
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=local_identify_printing_tags.DEFAULT_BATCH_SIZE,
+            help="Flush votes/tags to the DB (and run the gate check) every this many cards "
+            "processed, instead of one giant write at the very end - so a killed/interrupted "
+            "run keeps whatever it already committed (a plain re-invocation resumes cleanly, "
+            "same idempotence mechanism as --resume). Default: "
+            f"{local_identify_printing_tags.DEFAULT_BATCH_SIZE}.",
+        )
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         engine = kwargs["engine"]
@@ -99,6 +109,7 @@ class Command(BaseCommand):
         nice = kwargs["nice"]
         crop_box_arg = kwargs["crop_box"]
         phash_max_candidates = kwargs["phash_max_candidates"]
+        batch_size = kwargs["batch_size"]
 
         def _parse_source_pks(raw: str) -> list[int]:
             return [int(p) for p in raw.split(",") if p.strip()]
@@ -129,7 +140,7 @@ class Command(BaseCommand):
         mode = "DRY RUN" if dry_run else "WRITE"
         print(
             f"[{mode}] local_identify_printing_tags --engine={engine} --limit={limit} "
-            f"--nice={nice} --crop-box={crop_box} "
+            f"--nice={nice} --crop-box={crop_box} --batch-size={batch_size} "
             f"--exclude-sources-ocr={exclude_source_pks_by_engine['ocr']} "
             f"--exclude-sources-phash={exclude_source_pks_by_engine['phash']}"
         )
@@ -144,6 +155,7 @@ class Command(BaseCommand):
             phash_margin=local_phash.DEFAULT_MARGIN,
             phash_max_candidates=phash_max_candidates,
             exclude_source_pks_by_engine=exclude_source_pks_by_engine,
+            batch_size=batch_size,
         )
 
         gate_violations: list[int] = []

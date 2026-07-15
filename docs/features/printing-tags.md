@@ -794,13 +794,33 @@ eligible pool) → naive linear projection ≈ 306 hours ≈ 12.8 days of
 continuous single-process runtime.** This is the key number for any
 future decision to scale up - not attempted in this pilot, and not
 practical as a single uninterrupted process. Before attempting it:
-parallelizing across multiple processes/pk-range partitions, and (more
-urgently) switching from the current one-giant-`bulk_create`-at-the-end
-write pattern to periodic batch flushing (matching
-`deductive_backfill.py`'s existing `batch_size`/`flush()` precedent) so a
-multi-day run's progress survives a crash/restart/deploy instead of
-losing everything accumulated since the last completed run - both raised
-but not implemented in this pilot, out of its locked scope.
+parallelizing across multiple processes/pk-range partitions (raised, not
+yet implemented - see the pre-scale program's scaling proposal below).
+
+### Checkpointing (2026-07-15, pre-scale program item 2)
+
+`run_pilot` no longer does one giant `bulk_create` at the very end -
+matches `deductive_backfill.py`'s periodic-flush precedent (`--batch-size`,
+default 25 cards - much smaller than `deductive_backfill`'s 2000, since
+each card here costs a real image fetch plus OCR/phash CPU work, not just
+a DB write). A killed/interrupted run keeps whatever it already flushed;
+a plain re-invocation resumes cleanly with no separate checkpoint file,
+via the same `select_candidates` idempotence mechanism `--resume` already
+relied on. Verified live in tests (`TestCheckpointing`, not just
+plausible): flushes happen every `--batch-size` cards, a simulated kill
+mid-run leaves the already-flushed cards durably committed and a
+follow-up invocation completes exactly the remainder with no duplicates.
+
+**One deliberate deviation from `deductive_backfill`'s pattern**: the gate
+check (`verify_zero_resolutions`) now runs after every flush, not once at
+the end. `deductive_backfill`'s votes are provably exact by construction
+(a violation there is structurally impossible, so one end-of-run check is
+belt-and-suspenders); this pilot's OCR/phash/fallback votes are explicitly
+weaker, lower-confidence signal where a real violation is more plausible,
+and a kill is now an _expected_ event for a multi-day run - a violation in
+an already-flushed batch must not sit undetected in the DB indefinitely
+just because the process died before reaching a final check that may
+never come.
 
 5-vote spot check, 20-vote random admin-link sample, 3 disagreement
 examples, and the filename tag-gap census (1,097 unresolved cards with an

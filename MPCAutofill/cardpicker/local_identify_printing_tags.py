@@ -67,6 +67,13 @@ PHASH_CONFIDENCE = 0.8
 # out of scope for this pilot.
 PHASH_MAX_CANDIDATES = 12
 
+# Checkpointing (Stage 8 pre-scale program item 2, see run_pilot): flush every this many cards
+# processed. Deliberately much smaller than deductive_backfill's batch_size=2000 - that pipeline
+# is pure DB writes with no per-card network fetch/OCR/phash cost, so losing an un-flushed batch
+# to a crash is cheap there; here each card costs a real image fetch plus OCR/phash CPU work, so
+# a smaller batch bounds how much re-fetchable-but-not-yet-durable work a kill can waste.
+DEFAULT_BATCH_SIZE = 25
+
 # cardpicker.reason_tags.NO_MATCH_REASON_TAGS - a resolved custom-art/non-english tag already
 # tells us the PRINCIPLE's precondition (an authentic depiction of a real printing) is false,
 # same exclusion rationale as cardpicker.deductive_backfill's "Custom" tag check, just against
@@ -329,6 +336,8 @@ def run_pilot(
     phash_margin: int = local_phash.DEFAULT_MARGIN,
     phash_max_candidates: int = PHASH_MAX_CANDIDATES,
     exclude_source_pks_by_engine: Optional[dict[Engine, list[int]]] = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    progress_every: int = 50,
 ) -> tuple[dict[str, PilotResult], AttributeReport]:
     if nice:
         try:
@@ -363,13 +372,40 @@ def run_pilot(
         ).values_list("card_id", flat=True)
     )
 
-    outcomes: dict[int, CardOutcome] = {}
-    written_card_ids: list[int] = []
-    votes_to_create: list[CardPrintingTag] = []
-    tag_votes_to_create: list[CardTagVote] = []
-
     ocr_selected_ids = {s.card.pk for s in selected_by_engine.get("ocr", [])}
     phash_selected_ids = {s.card.pk for s in selected_by_engine.get("phash", [])}
+
+    # Checkpointing (Stage 8 pre-scale program item 2): a multi-day unattended run must survive
+    # a kill without losing everything accumulated since the last flush. Matches
+    # cardpicker.deductive_backfill.run_backfill's periodic-flush pattern (a plain re-invocation
+    # resumes cleanly with no separate checkpoint file, since select_candidates already excludes
+    # any card with an existing vote from this engine's own anonymous_id), but deliberately
+    # DIVERGES from that precedent on ONE point: the gate check runs after every flush here, not
+    # once at the very end. deductive_backfill's votes are provably exact by construction (a gate
+    # violation there is structurally impossible), so a single end-of-run check is just belt-and-
+    # suspenders; this pilot's OCR/phash/fallback votes are explicitly weaker, lower-confidence
+    # signal (module docstring) where a real violation is more plausible, and a kill is an
+    # EXPECTED event for a multi-day run (the whole reason this checkpointing exists) - a
+    # violation in an already-flushed batch must not sit undetected in the DB indefinitely just
+    # because the process died before reaching the final check.
+    written_card_ids: list[int] = []
+    all_gate_violations: list[int] = []
+    votes_batch: list[CardPrintingTag] = []
+    tag_votes_batch: list[CardTagVote] = []
+    batch_written_card_ids: list[int] = []
+
+    def flush() -> None:
+        nonlocal votes_batch, tag_votes_batch, batch_written_card_ids
+        if dry_run:
+            votes_batch, tag_votes_batch, batch_written_card_ids = [], [], []
+            return
+        if tag_votes_batch:
+            CardTagVote.objects.bulk_create(tag_votes_batch, ignore_conflicts=True)
+        if votes_batch:
+            CardPrintingTag.objects.bulk_create(votes_batch)
+        if batch_written_card_ids:
+            all_gate_violations.extend(verify_zero_resolutions(batch_written_card_ids))
+        votes_batch, tag_votes_batch, batch_written_card_ids = [], [], []
 
     for i, (card_id, selected) in enumerate(all_selected_by_card_id.items()):
         outcome = CardOutcome(card_id=card_id)
@@ -422,12 +458,12 @@ def run_pilot(
                     detail=",".join(fallback_outcome.evidence_types_used),
                 )
 
-        outcomes[card_id] = outcome
-
-        if nice and i % 20 == 0:
-            time.sleep(_NICE_SLEEP_SECONDS)
-
-    for card_id, outcome in outcomes.items():
+        # Finalize + queue for write - inlined here (rather than a second pass over a
+        # dict[int, CardOutcome] collected above) so a card's full cost (image fetch, OCR,
+        # phash, fallback) is only ever paid once before its result reaches the write batch;
+        # nothing here depends on any OTHER card's outcome, only this card's own DB state
+        # (the frame-mismatch consistency check below re-queries the matched printing's own
+        # metadata, independent of processing order).
         result_ocr = results.get("ocr")
         result_phash = results.get("phash")
         result_fallback = results["fallback"]
@@ -469,7 +505,7 @@ def run_pilot(
                 if printing_vote_withheld_for_frame_mismatch:
                     result_ocr.skip_counts["frame-mismatch"] += 1
                 else:
-                    votes_to_create.append(
+                    votes_batch.append(
                         CardPrintingTag(
                             card_id=card_id,
                             printing_id=outcome.ocr_vote.printing_pk,
@@ -482,6 +518,7 @@ def run_pilot(
                     result_ocr.votes_written += 1
                     result_ocr.audit.append({"card_id": card_id, "raw_text": outcome.ocr_vote.detail})
                     written_card_ids.append(card_id)
+                    batch_written_card_ids.append(card_id)
             elif outcome.ocr_skip_reason and result_ocr is not None:
                 result_ocr.skip_counts[outcome.ocr_skip_reason] += 1
 
@@ -489,7 +526,7 @@ def run_pilot(
                 if printing_vote_withheld_for_frame_mismatch:
                     result_phash.skip_counts["frame-mismatch"] += 1
                 else:
-                    votes_to_create.append(
+                    votes_batch.append(
                         CardPrintingTag(
                             card_id=card_id,
                             printing_id=outcome.phash_vote.printing_pk,
@@ -503,6 +540,7 @@ def run_pilot(
                     result_phash.audit.append({"card_id": card_id, "detail": outcome.phash_vote.detail})
                     if card_id not in written_card_ids:
                         written_card_ids.append(card_id)
+                        batch_written_card_ids.append(card_id)
             elif outcome.phash_skip_reason and result_phash is not None:
                 result_phash.skip_counts[outcome.phash_skip_reason] += 1
 
@@ -510,7 +548,7 @@ def run_pilot(
                 if printing_vote_withheld_for_frame_mismatch:
                     result_fallback.skip_counts["frame-mismatch"] += 1
                 else:
-                    votes_to_create.append(
+                    votes_batch.append(
                         CardPrintingTag(
                             card_id=card_id,
                             printing_id=outcome.fallback_vote.printing_pk,
@@ -524,6 +562,7 @@ def run_pilot(
                     result_fallback.audit.append({"card_id": card_id, "evidence": outcome.fallback_vote.detail})
                     if card_id not in written_card_ids:
                         written_card_ids.append(card_id)
+                        batch_written_card_ids.append(card_id)
             elif outcome.fallback_skip_reason:
                 result_fallback.skip_counts[outcome.fallback_skip_reason] += 1
 
@@ -568,7 +607,7 @@ def run_pilot(
             attributes.border_votes_by_class[border_class] += 1
             border_vote = local_fallback.cast_border_attribute_vote(card, border_class, confidence=border_confidence)
             if border_vote is not None and not dry_run:
-                tag_votes_to_create.append(border_vote)
+                tag_votes_batch.append(border_vote)
 
         frame_class = outcome.frame_class
         frame_confidence = local_fallback.FRAME_VOTE_CONFIDENCE
@@ -584,18 +623,22 @@ def run_pilot(
                 attributes.frame_votes_by_class[frame_class] += 1
                 frame_vote = local_fallback.cast_frame_style_vote(card, frame_class, confidence=frame_confidence)
                 if frame_vote is not None and not dry_run:
-                    tag_votes_to_create.append(frame_vote)
+                    tag_votes_batch.append(frame_vote)
             else:
                 attributes.frame_abstain_count += 1
 
-    if not dry_run and tag_votes_to_create:
-        CardTagVote.objects.bulk_create(tag_votes_to_create, ignore_conflicts=True)
+        if (i + 1) % batch_size == 0:
+            flush()
+        if nice and i % 20 == 0:
+            time.sleep(_NICE_SLEEP_SECONDS)
+        if progress_every and (i + 1) % progress_every == 0:
+            print(f"  ... {i + 1}/{len(all_selected_by_card_id)} candidates processed")
 
-    if not dry_run and votes_to_create:
-        CardPrintingTag.objects.bulk_create(votes_to_create)
-        gate_violations = verify_zero_resolutions(written_card_ids)
+    flush()
+
+    if not dry_run:
         for result in results.values():
-            result.gate_violations = gate_violations
+            result.gate_violations = all_gate_violations
 
     return results, attributes
 

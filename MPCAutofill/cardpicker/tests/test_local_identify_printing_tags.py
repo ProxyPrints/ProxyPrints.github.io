@@ -510,6 +510,106 @@ class TestRunPilotSourceExclusion:
         assert not CardPrintingTag.objects.filter(card=excluded_card).exists()
 
 
+class TestCheckpointing:
+    """Stage 8 pre-scale program item 2: run_pilot must survive a kill mid-run without losing
+    everything accumulated since the last flush, matching cardpicker.deductive_backfill's
+    periodic-flush precedent (see run_pilot's checkpointing comment for the one deliberate
+    deviation - the gate check runs per-flush here, not once at the end)."""
+
+    @staticmethod
+    def _wire_fake_ocr(monkeypatch, printing_pk):
+        import cardpicker.local_identify_printing_tags as module
+
+        def fake_ocr(selected, image, crop_box):
+            return module.OcrCardResult(
+                vote=module.EngineVote(engine="ocr", printing_pk=printing_pk, confidence=0.85, detail="raw")
+            )
+
+        monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card: None)
+
+    def test_flushes_periodically_not_just_once_at_the_end(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        for _ in range(5):
+            CardFactory(name="Forest")
+        self._wire_fake_ocr(monkeypatch, printing.pk)
+
+        bulk_create_calls: list[int] = []
+        original_bulk_create = CardPrintingTag.objects.bulk_create
+
+        def counting_bulk_create(objs, *args, **kwargs):
+            objs = list(objs)
+            bulk_create_calls.append(len(objs))
+            return original_bulk_create(objs, *args, **kwargs)
+
+        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", counting_bulk_create)
+
+        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, batch_size=2)
+
+        assert results["ocr"].votes_written == 5
+        # 5 cards at batch_size=2: flush after card 2, after card 4, and once more for the
+        # trailing single card - three separate writes, not one giant write at the very end.
+        assert bulk_create_calls == [2, 2, 1]
+
+    def test_gate_check_runs_per_flush_not_only_at_the_end(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        for _ in range(4):
+            CardFactory(name="Forest")
+        self._wire_fake_ocr(monkeypatch, printing.pk)
+
+        import cardpicker.local_identify_printing_tags as module
+
+        verify_calls: list[list[int]] = []
+        original_verify = module.verify_zero_resolutions
+
+        def counting_verify(card_ids, *args, **kwargs):
+            verify_calls.append(list(card_ids))
+            return original_verify(card_ids, *args, **kwargs)
+
+        monkeypatch.setattr(module, "verify_zero_resolutions", counting_verify)
+
+        run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, batch_size=2)
+
+        # 4 cards at batch_size=2: two flushes, each with its own gate check - not one call at
+        # the very end covering all 4.
+        assert len(verify_calls) == 2
+        assert all(len(c) == 2 for c in verify_calls)
+
+    def test_resume_after_a_simulated_kill_completes_the_remaining_cards(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        cards = [CardFactory(name="Forest") for _ in range(6)]
+        self._wire_fake_ocr(monkeypatch, printing.pk)
+
+        class SimulatedKill(Exception):
+            pass
+
+        original_bulk_create = CardPrintingTag.objects.bulk_create
+        call_count = {"n": 0}
+
+        def killing_bulk_create(objs, *args, **kwargs):
+            call_count["n"] += 1
+            result = original_bulk_create(objs, *args, **kwargs)
+            if call_count["n"] == 1:
+                raise SimulatedKill("process died immediately after the first flush committed")
+            return result
+
+        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", killing_bulk_create)
+
+        with pytest.raises(SimulatedKill):
+            run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, batch_size=2)
+
+        # the first flush's 2 cards are durably committed despite the "crash" on the next batch
+        assert CardPrintingTag.objects.filter(anonymous_id=OCR_ANONYMOUS_ID).count() == 2
+
+        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", original_bulk_create)
+        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, batch_size=2)
+
+        assert results["ocr"].votes_written == 4  # the 4 cards the killed run never reached
+        final_votes = CardPrintingTag.objects.filter(anonymous_id=OCR_ANONYMOUS_ID)
+        assert final_votes.count() == 6
+        assert {v.card_id for v in final_votes} == {c.pk for c in cards}
+
+
 class TestIdempotence:
     def test_a_card_voted_on_is_excluded_from_the_next_selection(self, db, monkeypatch):
         printing = CanonicalCardFactory(name="Forest")
