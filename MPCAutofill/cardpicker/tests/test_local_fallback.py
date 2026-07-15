@@ -17,10 +17,15 @@ from PIL import Image, ImageDraw
 
 import cardpicker.local_ocr as local_ocr
 from cardpicker.local_fallback import (
+    BLEED_ASPECT_RATIO,
+    BLEED_EDGE_TAG_NAME,
     BORDER_COLOR_TO_TAG,
     FALLBACK_ANONYMOUS_ID,
+    TRIM_ASPECT_RATIO,
+    cast_bleed_edge_vote,
     cast_border_attribute_vote,
     cast_frame_style_vote,
+    classify_bleed_edge,
     classify_border_color,
     classify_frame_style,
     extract_artist_name,
@@ -351,3 +356,54 @@ class TestFrameStyleIsConsistent:
     def test_disagreement(self):
         assert frame_style_is_consistent("old", "2015") is False
         assert frame_style_is_consistent("modern", "1993") is False
+
+
+class TestClassifyBleedEdge:
+    def test_trim_ratio_classifies_as_trimmed(self):
+        image = Image.new("RGB", (716, 1000), "white")  # 716/1000 ~= 63/88
+        assert classify_bleed_edge(image) == "trimmed"
+
+    def test_bleed_ratio_classifies_as_bleed(self):
+        image = Image.new("RGB", (735, 1000), "white")  # 735/1000 ~= BLEED_ASPECT_RATIO
+        assert classify_bleed_edge(image) == "bleed"
+
+    def test_far_from_both_references_is_ambiguous(self):
+        image = Image.new("RGB", (1000, 1000), "white")  # square - nowhere near either ratio
+        assert classify_bleed_edge(image) is None
+
+    def test_exact_reference_ratios_round_trip(self):
+        # exact float ratios (not the rounded pixel approximations above) must still classify
+        # correctly - guards against an off-by-epsilon tolerance bug
+        trim_image = Image.new("RGB", (int(TRIM_ASPECT_RATIO * 10000), 10000), "white")
+        bleed_image = Image.new("RGB", (int(BLEED_ASPECT_RATIO * 10000), 10000), "white")
+        assert classify_bleed_edge(trim_image) == "trimmed"
+        assert classify_bleed_edge(bleed_image) == "bleed"
+
+
+class TestCastBleedEdgeVote:
+    def test_no_reading_casts_nothing(self, db):
+        card = CardFactory()
+        assert cast_bleed_edge_vote(card, None) is None
+
+    def test_unseeded_tag_degrades_to_no_vote(self, db):
+        card = CardFactory()
+        assert cast_bleed_edge_vote(card, "bleed") is None
+
+    def test_bleed_casts_a_positive_vote_on_the_existing_tag(self, db):
+        TagFactory(name=BLEED_EDGE_TAG_NAME)
+        card = CardFactory()
+        vote = cast_bleed_edge_vote(card, "bleed")
+        assert vote is not None
+        assert vote.pk is None
+        assert vote.tag.name == BLEED_EDGE_TAG_NAME
+        assert vote.polarity == VotePolarity.APPLY
+        assert vote.anonymous_id == FALLBACK_ANONYMOUS_ID
+        assert vote.source == VoteSource.OCR
+        assert vote.confidence == 0.7
+
+    def test_trimmed_casts_a_negative_vote_on_the_existing_tag(self, db):
+        TagFactory(name=BLEED_EDGE_TAG_NAME)
+        card = CardFactory()
+        vote = cast_bleed_edge_vote(card, "trimmed")
+        assert vote is not None
+        assert vote.polarity == VotePolarity.NOT_APPLICABLE

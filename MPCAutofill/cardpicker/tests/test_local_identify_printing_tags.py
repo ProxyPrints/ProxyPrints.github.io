@@ -37,6 +37,7 @@ from cardpicker.models import (
     CardPrintingTag,
     CardTagVote,
     PrintingTagStatus,
+    VotePolarity,
     VoteSource,
 )
 from cardpicker.tests.factories import (
@@ -953,3 +954,81 @@ class TestGroundTruthAttributeVotes:
         assert attributes.border_votes_by_class == {"black": 1}
         assert attributes.border_ground_truth_count == 0
         assert CardTagVote.objects.filter(card=card, tag__name="Black Border").exists()
+
+
+class TestBleedEdgeVotesEndToEnd:
+    """Addendum item 7: run_pilot casts a real vote on the pre-existing appropriate-bleed tag
+    for every card with a fetched image, independent of printing-vote success."""
+
+    def test_bleed_shaped_image_casts_a_positive_vote(self, db, monkeypatch):
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        TagFactory(name="appropriate-bleed")
+
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
+        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
+        monkeypatch.setattr(
+            module,
+            "run_phash_for_card",
+            lambda selected, image, threshold, margin, max_candidates: (None, "too-many-candidates"),
+        )
+        # 735/1000 ~= BLEED_ASPECT_RATIO
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (735, 1000), (5, 5, 5)))
+
+        _results, attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert attributes.bleed_votes_by_class == {"bleed": 1}
+        vote = CardTagVote.objects.get(card=card, tag__name="appropriate-bleed")
+        assert vote.polarity == VotePolarity.APPLY
+
+    def test_trimmed_shaped_image_casts_a_negative_vote(self, db, monkeypatch):
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        TagFactory(name="appropriate-bleed")
+
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
+        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
+        monkeypatch.setattr(
+            module,
+            "run_phash_for_card",
+            lambda selected, image, threshold, margin, max_candidates: (None, "too-many-candidates"),
+        )
+        # 716/1000 ~= TRIM_ASPECT_RATIO
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (716, 1000), (5, 5, 5)))
+
+        _results, attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert attributes.bleed_votes_by_class == {"trimmed": 1}
+        vote = CardTagVote.objects.get(card=card, tag__name="appropriate-bleed")
+        assert vote.polarity == VotePolarity.NOT_APPLICABLE
+
+    def test_ambiguous_ratio_abstains_without_writing_anything(self, db, monkeypatch):
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        TagFactory(name="appropriate-bleed")
+
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
+        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, crop_box: module.OcrCardResult())
+        monkeypatch.setattr(
+            module,
+            "run_phash_for_card",
+            lambda selected, image, threshold, margin, max_candidates: (None, "too-many-candidates"),
+        )
+        monkeypatch.setattr(
+            module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (1000, 1000), (5, 5, 5))
+        )
+
+        _results, attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert attributes.bleed_votes_by_class == {}
+        assert attributes.bleed_abstain_count == 1
+        assert not CardTagVote.objects.filter(card=card, tag__name="appropriate-bleed").exists()

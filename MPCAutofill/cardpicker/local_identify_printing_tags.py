@@ -343,6 +343,11 @@ class AttributeReport:
     # ground-truth-preferred wiring.
     border_ground_truth_count: int = 0
     frame_ground_truth_count: int = 0
+    # addendum item 7 (2026-07-15): bleed-edge classification, votes on the pre-existing
+    # `appropriate-bleed` SENSITIVE tag (local_fallback.classify_bleed_edge/cast_bleed_edge_vote).
+    # No ground-truth counterpart - unlike border/frame, there's no Scryfall field encoding this.
+    bleed_votes_by_class: dict[str, int] = field(default_factory=lambda: collections.defaultdict(int))
+    bleed_abstain_count: int = 0
 
 
 def run_pilot(
@@ -667,6 +672,20 @@ def run_pilot(
                     tag_votes_batch.append(frame_vote)
             else:
                 attributes.frame_abstain_count += 1
+
+        # addendum item 7: bleed-edge classification - independent of printing-vote success,
+        # same "fires for any card with a fetched image" convention as border/frame above, and
+        # (unlike those two) has no ground-truth counterpart to prefer, since Scryfall doesn't
+        # encode this at all.
+        if image is not None:
+            bleed_class = local_fallback.classify_bleed_edge(image)
+            if bleed_class is not None:
+                attributes.bleed_votes_by_class[bleed_class] += 1
+                bleed_vote = local_fallback.cast_bleed_edge_vote(card, bleed_class)
+                if bleed_vote is not None and not dry_run:
+                    tag_votes_batch.append(bleed_vote)
+            else:
+                attributes.bleed_abstain_count += 1
 
         if (i + 1) % batch_size == 0:
             flush()

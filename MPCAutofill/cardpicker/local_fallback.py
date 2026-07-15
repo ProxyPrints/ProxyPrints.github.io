@@ -437,6 +437,74 @@ def frame_style_is_consistent(frame_class: Optional[str], printing_frame_value: 
 
 
 # ---------------------------------------------------------------------------------------------
+# 2c.5: bleed-edge classification, addendum item 7. Owner-directed design (2026-07-15): measure
+# the image's own aspect ratio against chilli_axe's two known reference ratios (trim-only vs.
+# trim-plus-bleed) rather than any pixel/color heuristic - geometric, resolution/DPI-independent,
+# and (unlike a color-uniformity approach) inherently unaffected by whether the card's own border
+# is visually a normal frame or borderless full-art, since the file's raw pixel dimensions carry
+# the same trim/bleed math either way. Votes on the PRE-EXISTING `appropriate-bleed` SENSITIVE
+# tag (sensitive_tags.py) - a moderator co-sign is still required to resolve it either direction,
+# per that tag's own design; this heuristic is one more signal, not an override.
+# ---------------------------------------------------------------------------------------------
+
+# frontend/src/common/constants.ts's CardWidthMM/CardHeightMM - the standard MTG trim size
+# (63x88mm) chilli_axe's own frame templates are built against.
+_CARD_TRIM_WIDTH_MM = 63
+_CARD_TRIM_HEIGHT_MM = 88
+_BLEED_MARGIN_MM = 3.175  # 1/8 inch per edge - the standard proxy-print bleed convention
+
+TRIM_ASPECT_RATIO = _CARD_TRIM_WIDTH_MM / _CARD_TRIM_HEIGHT_MM
+BLEED_ASPECT_RATIO = (_CARD_TRIM_WIDTH_MM + 2 * _BLEED_MARGIN_MM) / (_CARD_TRIM_HEIGHT_MM + 2 * _BLEED_MARGIN_MM)
+
+# real-world validation (2026-07-15, 40 cards sampled across 40 distinct sources): the bleed
+# cluster spread 0.7325-0.7393 (theoretical 0.7350), the one trimmed example measured 0.7163
+# (theoretical 0.7159) - a clean, well-separated bimodal signal with nothing observed in the
+# gap between clusters. 0.03 comfortably covers the observed bleed spread on either side while
+# still abstaining on an aspect ratio implausible for a standard MTG card altogether (a
+# double-faced composite scan, a token, a corrupted fetch).
+_BLEED_CLASSIFICATION_TOLERANCE = 0.03
+
+BLEED_EDGE_TAG_NAME = "appropriate-bleed"
+BLEED_EDGE_VOTE_CONFIDENCE = 0.7
+
+
+def classify_bleed_edge(card_image: "Image.Image") -> Optional[str]:
+    """Returns 'bleed'/'trimmed', or None if the image's aspect ratio is too far from BOTH known
+    reference ratios to classify confidently (ambiguous - a genuinely non-standard image, not
+    just a borderline case)."""
+    width, height = card_image.size
+    if height == 0:
+        return None
+    ratio = width / height
+    dist_to_trim = abs(ratio - TRIM_ASPECT_RATIO)
+    dist_to_bleed = abs(ratio - BLEED_ASPECT_RATIO)
+    if min(dist_to_trim, dist_to_bleed) > _BLEED_CLASSIFICATION_TOLERANCE:
+        return None
+    return "bleed" if dist_to_bleed < dist_to_trim else "trimmed"
+
+
+def cast_bleed_edge_vote(card: Card, bleed_class: Optional[str]) -> Optional[CardTagVote]:
+    """Positive (APPLY) vote for a clear bleed margin, negative (NOT_APPLICABLE) for clearly
+    trimmed, no vote at all for an ambiguous/unclassifiable reading (the caller counts this as
+    an abstain without writing anything, same convention as classify_frame_style's abstain
+    path)."""
+    if bleed_class is None:
+        return None
+    tag = Tag.objects.filter(name=BLEED_EDGE_TAG_NAME).first()
+    if tag is None:
+        return None
+    polarity = VotePolarity.APPLY if bleed_class == "bleed" else VotePolarity.NOT_APPLICABLE
+    return CardTagVote(
+        card=card,
+        tag=tag,
+        polarity=polarity,
+        anonymous_id=FALLBACK_ANONYMOUS_ID,
+        source=VoteSource.OCR,
+        confidence=BLEED_EDGE_VOTE_CONFIDENCE,
+    )
+
+
+# ---------------------------------------------------------------------------------------------
 # 2d: combine
 # ---------------------------------------------------------------------------------------------
 
@@ -530,6 +598,12 @@ __all__ = [
     "classify_frame_style",
     "cast_frame_style_vote",
     "frame_style_is_consistent",
+    "TRIM_ASPECT_RATIO",
+    "BLEED_ASPECT_RATIO",
+    "BLEED_EDGE_TAG_NAME",
+    "BLEED_EDGE_VOTE_CONFIDENCE",
+    "classify_bleed_edge",
+    "cast_bleed_edge_vote",
     "FallbackOutcome",
     "run_fallback_for_card",
 ]

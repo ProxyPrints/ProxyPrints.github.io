@@ -214,6 +214,8 @@ class Command(BaseCommand):
         )
         print(f"  frame abstains: {attributes.frame_abstain_count}")
         print(f"  frame mismatches (printing vote withheld): {len(attributes.frame_mismatches)}")
+        print(f"  bleed votes: {dict(attributes.bleed_votes_by_class)}")
+        print(f"  bleed abstains: {attributes.bleed_abstain_count}")
 
         if dry_run:
             print("Dry run - nothing written, gate check not run.")

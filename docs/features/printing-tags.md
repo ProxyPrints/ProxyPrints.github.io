@@ -1027,6 +1027,56 @@ level match set (same 8 card pks matched both ways) - zero yield
 regression on this sample. See `local_ocr.py`'s `DEFAULT_CROP_BOX`
 comment for the full derivation.
 
+### Bleed-edge tagging (2026-07-15, addendum item 7)
+
+**Checked whether a bleed tag already existed before proposing anything
+new, per the addendum's explicit gate**: `appropriate-bleed` already
+exists (`sensitive_tags.py`, 0 cards tagged) - but as a
+`TagModerationClass.SENSITIVE` tag, the same category as `low-res`/NSFW,
+with its own code comment: _"Sensitive because that verification is
+exactly a moderator's co-sign."_ It was designed for human-only
+verification. Surfaced this to the owner before building anything -
+decision: proceed, cast machine votes on the existing tag anyway (a
+SENSITIVE tag still requires a moderator co-sign to resolve either way,
+so a vote alone can't misuse it - it's one more signal moderators see,
+not an override).
+
+**Detection design, owner-directed**: measure the image's own aspect
+ratio against chilli_axe's two known reference card sizes
+(`frontend/src/common/constants.ts`'s `CardWidthMM`/`CardHeightMM` =
+63x88mm trim; +1/8" bleed per edge = 69.35x94.35mm) rather than any
+pixel-color heuristic - purely geometric, so it's inherently
+DPI/resolution-independent (verified: 0/15 mismatches between native and
+`--fetch-dpi=250`-scaled classification of the same real cards - Google's
+resize preserves aspect ratio) and unaffected by whether the card's own
+border is visually a normal frame or a borderless full-art printing
+(both follow the same file-dimension convention regardless of what's
+visible).
+
+- `TRIM_ASPECT_RATIO = 63/88 ≈ 0.7159`
+- `BLEED_ASPECT_RATIO = 69.35/94.35 ≈ 0.7350`
+
+**Validated against a real, source-diverse sample** (one card per
+distinct source, 40 sources, not the earlier 30-card OCR-selection
+sample - this needed source diversity, not OCR-selection-order
+diversity): a clean, well-separated bimodal signal. Every source but one
+clustered tightly at ratio 0.7325-0.7393 (bleed present); the one
+exception measured 0.7163, matching the theoretical trim ratio almost
+exactly. Nothing observed in the gap between clusters. Classification:
+nearest-reference-ratio, abstaining (no vote) when the ratio is more
+than 0.03 from BOTH references (`classify_bleed_edge`,
+`local_fallback.py`) - comfortably covers the observed real spread on
+either side while still abstaining on a genuinely non-standard image
+(a DFC composite scan, a token, a corrupted fetch).
+
+**Wired into `run_pilot`**: fires for every card with a fetched image,
+independent of printing-vote success (same "double duty" convention as
+border/frame attribute votes) - positive (`APPLY`) vote for bleed,
+negative (`NOT_APPLICABLE`) for trimmed, abstain (nothing written, only
+counted) for ambiguous. `VoteSource.OCR`, confidence 0.7
+(`BLEED_EDGE_VOTE_CONFIDENCE`). No ground-truth counterpart to prefer -
+unlike border/frame, Scryfall doesn't encode this at all.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run
