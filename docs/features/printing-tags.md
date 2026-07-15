@@ -1077,6 +1077,80 @@ counted) for ambiguous. `VoteSource.OCR`, confidence 0.7
 (`BLEED_EDGE_VOTE_CONFIDENCE`). No ground-truth counterpart to prefer -
 unlike border/frame, Scryfall doesn't encode this at all.
 
+### DPI-tag audit (2026-07-15, addendum item 8 - report only)
+
+Live, read-only cross-reference of `Card.dpi` (computed once at import
+time, `update_database.py`) against both places tag state lives -
+`Card.tags` (resolved/baked) and `CardTagVote` (raw votes, including
+anything pending a moderator co-sign) - for the `low-res` SENSITIVE tag
+specifically. No votes cast, no code changed; report only, per the
+addendum's own scope, and `low-res` itself stays untouched by this item
+(distinct from `appropriate-bleed` above - see the "Future work" note
+below for a follow-up idea that WOULD vote on it, deliberately deferred).
+
+**Findings (218,152 cards, live 2026-07-15):**
+
+| dpi bucket |  count | resolved `low-res` | pending vote | neither |
+| ---------- | -----: | -----------------: | -----------: | ------: |
+| 0 (unset)  |      4 |                  0 |            0 |       4 |
+| 1-99       |      7 |                  0 |            0 |       7 |
+| 100-149    |      9 |                  0 |            0 |       9 |
+| 150-199    |      3 |                  0 |            0 |       3 |
+| 200-299    |     40 |                  0 |            0 |      40 |
+| 300+       | 218089 |                  0 |            0 |  218089 |
+
+Two things worth flagging, neither actionable within this item's scope:
+
+- **99.97% of cards already report full 300dpi** - `Card.dpi` isn't a
+  useful prioritization signal on its own; the sub-300 tail is 63 cards
+  total across the whole catalog.
+- **The `low-res` tag has never been used, anywhere, by anyone** - 0
+  resolved, 0 pending, independent of dpi bucket. The report-flow
+  (`CardReportReason.LOW_QUALITY` -> `low-res` `CardTagVote`,
+  `sensitive_tags.REPORT_REASON_TO_TAG_NAME`) exists in code and has
+  never actually been exercised in production. Not a bug - just means
+  there's no existing signal to reconcile against yet, and any future
+  automated low-res detection (see below) would be establishing this
+  tag's first real usage, not correcting drift from manual reports.
+
+**Future work: art-crop-specific DPI check + Scryfall comparison
+(2026-07-15, flagged by owner during this item, deliberately deferred -
+not built).** `Card.dpi` measures the FULL card image's resolution, which
+this audit shows is essentially always fine (99.97% at 300dpi) - but a
+proxy can have a perfectly fine full-image dpi while still having a
+genuinely blurry/undersized ART specifically (upscaled source, a bad
+crop-and-stretch, etc.), which `Card.dpi` can't see. Sketched design,
+explicitly NOT built this pass:
+
+- Reuse `local_phash.ART_CROP_BOX` (already the art-region fraction used
+  for phash matching - one definition, not a second one) to crop the art
+  region out of the pilot's own fetched image.
+- Reuse the just-built `classify_bleed_edge` result to pick the correct
+  physical reference height per card (trim 88mm vs. bleed-inclusive
+  94.35mm - see the bleed-edge section above) before converting the
+  crop's pixel height to a real DPI number, rather than assuming one.
+- Cross-check against Scryfall's own official `art_crop` image for the
+  same printing (`local_phash._fetch_scryfall_art_crop_url` already
+  fetches this, reused not reinvented) as a second, comparative signal -
+  independent of the absolute-DPI estimate, catches "much smaller than
+  the official art for this exact card" even if the physical-mm math has
+  slack in it.
+- **This is additive, not a replacement for `Card.dpi`** - `Card.dpi`
+  stays as the whole-image import-time measurement it already is; this
+  would be a second, art-specific signal alongside it, for a different
+  failure mode `Card.dpi` structurally can't catch.
+- **Goes straight to the moderation pipeline when built** - `low-res` is
+  `TagModerationClass.SENSITIVE` (same property established for
+  `appropriate-bleed` above: a moderator co-sign is required to resolve
+  either way, so a machine vote alone can't misuse it), so this would
+  cast real `CardTagVote`s, not just report - unlike this item's
+  DB-audit scope, which deliberately doesn't.
+- Deferred rather than built now because it needs its own validation
+  pass (a real sample, Scryfall-vs-source comparison, a derived
+  threshold with a safety margin - the same discipline every other
+  detector in this pilot got) before casting anything real, and this
+  item's own scope was report-only.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run
