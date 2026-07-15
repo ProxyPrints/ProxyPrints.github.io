@@ -158,6 +158,24 @@ class TestOcrParsing:
         assert parsed.set_code is None
         assert parsed.collector_number is None
 
+    def test_leading_noise_token_before_number_is_skipped_for_real_set_code_after(self):
+        # 2026-07-15 no-match autopsy finding (docs/features/printing-tags.md's Stage 8): a
+        # plausible-looking 3-5 char token appearing BEFORE the collector number (a watermark,
+        # a rarity-letter glyph merging with a stray digit) must not win over the real set code
+        # that follows the number, per real MTG collector-line layout (number always comes
+        # first). "R0O324 WilfordGriml\nLCI ¢ EN..." - "R0O" is exactly such spurious noise.
+        parsed = parse_collector_line("R0O324 WilfordGriml\nLCI ¢ EN © SIDHARTH (")
+        assert parsed.collector_number == "324"
+        assert parsed.set_code == "lci"
+
+    def test_falls_back_to_a_before_number_token_when_nothing_plausible_follows(self):
+        # no real second line at all - the only plausible token is before the number, so it
+        # must still be used rather than giving up (some old-format lines genuinely have no
+        # "after" content to search).
+        parsed = parse_collector_line("MOM 158")
+        assert parsed.collector_number == "158"
+        assert parsed.set_code == "mom"
+
 
 class TestOcrValidationRail:
     CANDIDATES = [
@@ -194,6 +212,27 @@ class TestOcrValidationRail:
     def test_collector_only_matches_when_unambiguous(self):
         candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
         parsed = parse_collector_line("158")
+        matched, reason = validate_against_candidates(parsed, candidates)
+        assert matched is not None
+        assert matched.pk == 1
+        assert reason == ""
+
+    def test_leading_zero_in_parsed_number_matches_a_candidate_without_one(self):
+        # 2026-07-15 no-match autopsy finding: OCR often reads a spurious leading zero
+        # ("0093" for a real "93") - this alone accounted for the majority of a 47/176 (26.7%)
+        # yield-delta fix, see docs/features/printing-tags.md's Stage 8 no-match autopsy.
+        candidates = [CandidatePrinting(pk=1, expansion_code="unf", collector_number="93")]
+        parsed = parse_collector_line("C0093 WilfordGrim\nUNF EN ALEXANDE")
+        matched, reason = validate_against_candidates(parsed, candidates)
+        assert matched is not None
+        assert matched.pk == 1
+        assert reason == ""
+
+    def test_leading_zero_in_stored_candidate_matches_a_plain_parsed_number(self):
+        # the reverse direction - some CanonicalCard rows themselves store a zero-padded
+        # collector_number (e.g. "007" for a promo) - normalization must apply symmetrically.
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="007")]
+        parsed = parse_collector_line("7/287 R MOM EN")
         matched, reason = validate_against_candidates(parsed, candidates)
         assert matched is not None
         assert matched.pk == 1

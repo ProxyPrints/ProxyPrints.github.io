@@ -52,6 +52,20 @@ class OcrParseResult:
     collector_number: Optional[str]  # lowercased, or None
 
 
+def _normalize_collector_number(number: str) -> str:
+    """Leading zeros and case don't carry meaning in a collector number ("0093" and "93" are the
+    same printing) - real OCR reads add spurious leading zeros often enough (a stray dark pixel
+    column at the crop's left edge, a rarity-letter glyph tesseract folds into the digit run)
+    that literal string comparison silently drops otherwise-correct reads. Verified against real
+    production no-match cases, 2026-07-15 - see docs/features/printing-tags.md's Stage 8 no-match
+    autopsy: this alone accounted for the majority of a 47/176 (26.7%) yield-delta fix."""
+    number = number.lower()
+    letter = number[-1] if number and number[-1].isalpha() else ""
+    digits = number[:-1] if letter else number
+    digits = digits.lstrip("0") or "0"
+    return digits + letter
+
+
 def crop_collector_line(
     image: "Image.Image", crop_box: tuple[float, float, float, float] = DEFAULT_CROP_BOX
 ) -> "Image.Image":
@@ -93,17 +107,27 @@ def parse_collector_line(raw_text: str) -> OcrParseResult:
 
     set_code = None
     if collector_match:
-        # look for a plausible set-code token elsewhere on the line, not overlapping the
-        # collector-number match itself
-        remainder = raw_text[: collector_match.start()] + raw_text[collector_match.end() :]
-        for candidate in _SET_CODE_RE.findall(remainder):
-            # a pure-digit token is never a set code (it's more collector-number noise); a
-            # token that's actually the collector number's own digits (stray re-match) is
-            # skipped too
-            if candidate.isdigit() or candidate.lower() == collector_number:
-                continue
-            set_code = candidate.lower()
-            break
+        # a real MTG collector line always prints the number FIRST, then "SET . LANG ..." on
+        # the same or next line - a plausible-looking 3-5 char token found BEFORE the number is
+        # virtually always leading noise (a watermark, a rarity-letter glyph merging with a
+        # stray digit into something that coincidentally looks like a code), not a genuine
+        # layout variant. Search the text AFTER the collector number first, only falling back
+        # to before it if nothing plausible follows. Verified against real production no-match
+        # cases, 2026-07-15 - see docs/features/printing-tags.md's Stage 8 no-match autopsy.
+        before = raw_text[: collector_match.start()]
+        after = raw_text[collector_match.end() :]
+
+        def _find_set_code(segment: str) -> Optional[str]:
+            for candidate in _SET_CODE_RE.findall(segment):
+                # a pure-digit token is never a set code (it's more collector-number noise); a
+                # token that's actually the collector number's own digits (stray re-match) is
+                # skipped too
+                if candidate.isdigit() or candidate.lower() == collector_number:
+                    continue
+                return candidate.lower()
+            return None
+
+        set_code = _find_set_code(after) or _find_set_code(before)
 
     return OcrParseResult(raw_text=raw_text, set_code=set_code, collector_number=collector_number)
 
@@ -123,17 +147,19 @@ def validate_against_candidates(
     if parsed.collector_number is None:
         return None, "no-text"
 
+    normalized_parsed_number = _normalize_collector_number(parsed.collector_number)
     if parsed.set_code is not None:
         matches = [
             c
             for c in candidates
-            if c.expansion_code == parsed.set_code and c.collector_number.lower() == parsed.collector_number
+            if c.expansion_code == parsed.set_code
+            and _normalize_collector_number(c.collector_number) == normalized_parsed_number
         ]
     else:
         # pre-M15 cards have no set code on the collector line at all - fall back to matching
         # on collector number alone, which is enough when the name's candidates don't share a
         # number across sets (usually true, but not guaranteed - hence "ambiguous" below).
-        matches = [c for c in candidates if c.collector_number.lower() == parsed.collector_number]
+        matches = [c for c in candidates if _normalize_collector_number(c.collector_number) == normalized_parsed_number]
 
     if not matches:
         return None, "parsed-but-no-match"
