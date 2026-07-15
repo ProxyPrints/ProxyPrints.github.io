@@ -809,6 +809,53 @@ unmatchable `expansion_hint`) are all in the journal, not duplicated here.
 **Pilot discipline honored**: `--limit 300`, no full-catalog run attempted
 per the original hold.
 
+### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
+
+Classified all 176 OCR "parsed-but-no-match" cases from the pilot run
+(reconstructed via selection-order stability, since the CLI doesn't
+persist per-card raw text - a real gap, see the journal). Two real,
+contained parser bugs found, both now fixed in `local_ocr.py`:
+
+- **Set-code token position**: `parse_collector_line`'s set-code search
+  took the FIRST plausible 3-5 char token in the line, which is virtually
+  always leading noise (a watermark, a rarity-letter glyph merging with a
+  stray digit into something code-shaped) rather than the real set code
+  that always follows the collector number in a genuine card layout. Fixed
+  to search the text AFTER the number first, falling back to before only
+  if nothing plausible follows.
+- **Collector-number leading zeros**: OCR frequently reads a spurious
+  leading zero ("0093" for a real "93") that literal string comparison
+  silently rejected. Fixed via `_normalize_collector_number` (strip
+  leading zeros, keep any trailing variant letter) applied symmetrically
+  to both the parsed reading and every candidate's stored value.
+
+**Yield delta, precisely measured** (re-parsing the exact same 176 raw
+texts with both the old and new logic, isolating exactly this cohort from
+the 3 cards that already matched under the old parser): **47/176 (26.7%)
+now match.** Projected full-engine impact: OCR yield 77/300 (25.7%) →
+~124/300 (41.3%), a ~60% relative improvement, from a small parser fix.
+Confirmed live via a real (non-simulated) `--dry-run` afterward: 62/250
+votes on a fresh selection window, consistent with the isolated measurement.
+
+Of the 129 cases still unfixed: only 2/176 (1.1%) are genuinely-missing
+printings (the parsed set code is real, but no `CanonicalCard` row exists
+for that (set, number) at all); the remaining 127/176 (72.2%) are true
+OCR garbage with no salvageable signal - a meaningful fraction of which
+traces to one specific custom-frame Drive source
+(`Source pk=1, "WilfordGrimley"`, "Custom Cardbacks and alternate frames
+with Upscaled images") whose non-standard branding text sits inside the
+collector-line crop region and defeats OCR outright; not something a
+parsing fix can address.
+
+**Cross-check against the filename tag-gap census (1,097 unresolved cards
+with an unmatchable `expansion_hint`, from the pre-pilot addendum): NOT
+the same root cause.** All 1,097 have a fully _recognized_
+`CanonicalExpansion` code (0 unknown) - the gap is a name-matching problem
+(many are `(Front)`/`(Back)` filename-parsing artifacts on basic lands),
+unrelated to the OCR token-position bug above. Two separate fixes, not
+one parser fix arriving twice - the D2.5 deterministic tier is **not**
+implied by this OCR fix and was not built.
+
 ## Key files
 
 - Backend: `cardpicker/printing_consensus.py`,
