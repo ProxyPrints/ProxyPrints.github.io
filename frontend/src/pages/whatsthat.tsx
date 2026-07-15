@@ -1,18 +1,24 @@
 import styled from "@emotion/styled";
 import Head from "next/head";
-import React from "react";
+import React, { useState } from "react";
+import Nav from "react-bootstrap/Nav";
+import Tab from "react-bootstrap/Tab";
 
 import { ContentMaxWidth, ProjectName } from "@/common/constants";
 import { NoBackendDefault } from "@/components/NoBackendDefault";
 import { AuthWidget } from "@/features/moderation/AuthWidget";
+import { ModerationTab } from "@/features/moderation/ModerationTab";
 import { STARBURST_BACKGROUND_COLOR } from "@/features/printingTags/starburstShape";
 import { QuestionFeed } from "@/features/questionFeed/QuestionFeed";
 import Footer from "@/features/ui/Footer";
 import { ProjectContainer } from "@/features/ui/Layout";
+import { useGetWhoamiQuery } from "@/store/api";
 import {
   useProjectName,
   useRemoteBackendConfigured,
 } from "@/store/slices/backendSlice";
+
+type WhatsThatTab = "feed" | "moderation";
 
 // Radiating starburst behind the game itself - a jagged
 // "explosion" burst (see starburstShape.ts, rendered inside QuestionFeed.tsx alongside
@@ -71,6 +77,11 @@ const IntroText = styled.div`
 
 function PrintingQueueOrDefault() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
+  const [activeTab, setActiveTab] = useState<WhatsThatTab>("feed");
+  // gating the tab is presentation only - every moderation endpoint 403s non-moderators
+  // regardless (see docs/features/moderation.md)
+  const whoami = useGetWhoamiQuery();
+  const isModerator = whoami.data?.moderator === true;
 
   return remoteBackendConfigured ? (
     <>
@@ -86,7 +97,37 @@ function PrintingQueueOrDefault() {
             </p>
           </IntroText>
           <AuthWidget />
-          <QuestionFeed />
+          {isModerator ? (
+            <Tab.Container
+              activeKey={activeTab}
+              onSelect={(key) => {
+                if (key) setActiveTab(key as WhatsThatTab);
+              }}
+            >
+              <Nav variant="pills" className="mb-3">
+                <Nav.Item>
+                  <Nav.Link eventKey="feed">Question Feed</Nav.Link>
+                </Nav.Item>
+                <Nav.Item>
+                  <Nav.Link eventKey="moderation">Moderation</Nav.Link>
+                </Nav.Item>
+              </Nav>
+              <Tab.Content>
+                {/* mountOnEnter on both, unmountOnExit only on moderation - the question feed's
+                    own behavior/mount timing is unchanged from before this switcher existed
+                    for the common (non-moderator) case, matching the pre-redesign printing/
+                    artist/tag tab switcher's identical rationale for the same asymmetry. */}
+                <Tab.Pane eventKey="feed" mountOnEnter>
+                  <QuestionFeed />
+                </Tab.Pane>
+                <Tab.Pane eventKey="moderation" mountOnEnter unmountOnExit>
+                  <ModerationTab />
+                </Tab.Pane>
+              </Tab.Content>
+            </Tab.Container>
+          ) : (
+            <QuestionFeed />
+          )}
         </StarburstContent>
       </StarburstBackground>
       <Footer />

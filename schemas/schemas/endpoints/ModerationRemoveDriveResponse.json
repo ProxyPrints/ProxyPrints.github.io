@@ -1,0 +1,11 @@
+{
+  "title": "Moderation Remove Drive Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "removed": { "type": "boolean" },
+    "cardsRemoved": { "type": "integer" }
+  },
+  "required": ["removed", "cardsRemoved"],
+  "additionalProperties": false
+}

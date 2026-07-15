@@ -386,7 +386,6 @@ class TypeEnum(str, Enum):
     artist = "artist"
     confirmsuggestion = "confirm_suggestion"
     identifyprinting = "identify_printing"
-    moderation = "moderation"
     tag = "tag"
 
 
@@ -395,8 +394,6 @@ class QuestionFeedItem(BaseModel):
     type: TypeEnum
     candidates: Optional[List[PrintingCandidate]] = None
     confidentlyKnownArtistName: Optional[str] = None
-    reportCount: Optional[int] = None
-    reportExcerpts: Optional[List[str]] = None
     suggestedPrinting: Optional[PrintingCandidate] = None
     tagConfidence: Optional[Dict[str, float]] = None
     tagName: Optional[str] = None
@@ -408,21 +405,11 @@ class QuestionFeedItem(BaseModel):
         type = TypeEnum(obj.get("type"))
         candidates = from_union([lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("candidates"))
         confidentlyKnownArtistName = from_union([from_none, from_str], obj.get("confidentlyKnownArtistName"))
-        reportCount = from_union([from_int, from_none], obj.get("reportCount"))
-        reportExcerpts = from_union([lambda x: from_list(from_str, x), from_none], obj.get("reportExcerpts"))
         suggestedPrinting = from_union([PrintingCandidate.from_dict, from_none], obj.get("suggestedPrinting"))
         tagConfidence = from_union([lambda x: from_dict(from_float, x), from_none], obj.get("tagConfidence"))
         tagName = from_union([from_str, from_none], obj.get("tagName"))
         return QuestionFeedItem(
-            card,
-            type,
-            candidates,
-            confidentlyKnownArtistName,
-            reportCount,
-            reportExcerpts,
-            suggestedPrinting,
-            tagConfidence,
-            tagName,
+            card, type, candidates, confidentlyKnownArtistName, suggestedPrinting, tagConfidence, tagName
         )
 
     def to_dict(self) -> dict:
@@ -435,10 +422,6 @@ class QuestionFeedItem(BaseModel):
             )
         if self.confidentlyKnownArtistName is not None:
             result["confidentlyKnownArtistName"] = from_union([from_none, from_str], self.confidentlyKnownArtistName)
-        if self.reportCount is not None:
-            result["reportCount"] = from_union([from_int, from_none], self.reportCount)
-        if self.reportExcerpts is not None:
-            result["reportExcerpts"] = from_union([lambda x: from_list(from_str, x), from_none], self.reportExcerpts)
         if self.suggestedPrinting is not None:
             result["suggestedPrinting"] = from_union(
                 [lambda x: to_class(PrintingCandidate, x), from_none], self.suggestedPrinting
@@ -1100,6 +1083,141 @@ class LanguagesResponse(BaseModel):
         return result
 
 
+class ModerationDriveCardsRequest(BaseModel):
+    page: int
+    sourceId: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationDriveCardsRequest":
+        assert isinstance(obj, dict)
+        page = from_int(obj.get("page"))
+        sourceId = from_int(obj.get("sourceId"))
+        return ModerationDriveCardsRequest(page, sourceId)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["page"] = from_int(self.page)
+        result["sourceId"] = from_int(self.sourceId)
+        return result
+
+
+class Source(BaseModel):
+    description: str
+    key: str
+    name: str
+    pk: int
+    """Primary key"""
+
+    sourceType: SourceType
+    externalLink: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "Source":
+        assert isinstance(obj, dict)
+        description = from_str(obj.get("description"))
+        key = from_str(obj.get("key"))
+        name = from_str(obj.get("name"))
+        pk = from_int(obj.get("pk"))
+        sourceType = SourceType(obj.get("sourceType"))
+        externalLink = from_union([from_str, from_none], obj.get("externalLink"))
+        return Source(description, key, name, pk, sourceType, externalLink)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["description"] = from_str(self.description)
+        result["key"] = from_str(self.key)
+        result["name"] = from_str(self.name)
+        result["pk"] = from_int(self.pk)
+        result["sourceType"] = to_enum(SourceType, self.sourceType)
+        if self.externalLink is not None:
+            result["externalLink"] = from_union([from_str, from_none], self.externalLink)
+        return result
+
+
+class ModerationDriveCardsResponse(BaseModel):
+    cards: List[Card]
+    hits: int
+    pages: int
+    source: Source
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationDriveCardsResponse":
+        assert isinstance(obj, dict)
+        cards = from_list(Card.from_dict, obj.get("cards"))
+        hits = from_int(obj.get("hits"))
+        pages = from_int(obj.get("pages"))
+        source = Source.from_dict(obj.get("source"))
+        return ModerationDriveCardsResponse(cards, hits, pages, source)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["cards"] = from_list(lambda x: to_class(Card, x), self.cards)
+        result["hits"] = from_int(self.hits)
+        result["pages"] = from_int(self.pages)
+        result["source"] = to_class(Source, self.source)
+        return result
+
+
+class ModerationDrivesRequest(BaseModel):
+    page: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationDrivesRequest":
+        assert isinstance(obj, dict)
+        page = from_int(obj.get("page"))
+        return ModerationDrivesRequest(page)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["page"] = from_int(self.page)
+        return result
+
+
+class ModerationDriveItem(BaseModel):
+    qtyCardbacks: int
+    qtyCards: int
+    qtyTokens: int
+    source: Source
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationDriveItem":
+        assert isinstance(obj, dict)
+        qtyCardbacks = from_int(obj.get("qtyCardbacks"))
+        qtyCards = from_int(obj.get("qtyCards"))
+        qtyTokens = from_int(obj.get("qtyTokens"))
+        source = Source.from_dict(obj.get("source"))
+        return ModerationDriveItem(qtyCardbacks, qtyCards, qtyTokens, source)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["qtyCardbacks"] = from_int(self.qtyCardbacks)
+        result["qtyCards"] = from_int(self.qtyCards)
+        result["qtyTokens"] = from_int(self.qtyTokens)
+        result["source"] = to_class(Source, self.source)
+        return result
+
+
+class ModerationDrivesResponse(BaseModel):
+    hits: int
+    items: List[ModerationDriveItem]
+    pages: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationDrivesResponse":
+        assert isinstance(obj, dict)
+        hits = from_int(obj.get("hits"))
+        items = from_list(ModerationDriveItem.from_dict, obj.get("items"))
+        pages = from_int(obj.get("pages"))
+        return ModerationDrivesResponse(hits, items, pages)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["hits"] = from_int(self.hits)
+        result["items"] = from_list(lambda x: to_class(ModerationDriveItem, x), self.items)
+        result["pages"] = from_int(self.pages)
+        return result
+
+
 class ModerationQueueRequest(BaseModel):
     page: int
 
@@ -1160,36 +1278,66 @@ class ModerationQueueResponse(BaseModel):
         return result
 
 
-class Source(BaseModel):
-    description: str
-    key: str
-    name: str
-    pk: int
-    """Primary key"""
-
-    sourceType: SourceType
-    externalLink: Optional[str] = None
+class ModerationRemoveCardRequest(BaseModel):
+    identifier: str
 
     @staticmethod
-    def from_dict(obj: Any) -> "Source":
+    def from_dict(obj: Any) -> "ModerationRemoveCardRequest":
         assert isinstance(obj, dict)
-        description = from_str(obj.get("description"))
-        key = from_str(obj.get("key"))
-        name = from_str(obj.get("name"))
-        pk = from_int(obj.get("pk"))
-        sourceType = SourceType(obj.get("sourceType"))
-        externalLink = from_union([from_str, from_none], obj.get("externalLink"))
-        return Source(description, key, name, pk, sourceType, externalLink)
+        identifier = from_str(obj.get("identifier"))
+        return ModerationRemoveCardRequest(identifier)
 
     def to_dict(self) -> dict:
         result: dict = {}
-        result["description"] = from_str(self.description)
-        result["key"] = from_str(self.key)
-        result["name"] = from_str(self.name)
-        result["pk"] = from_int(self.pk)
-        result["sourceType"] = to_enum(SourceType, self.sourceType)
-        if self.externalLink is not None:
-            result["externalLink"] = from_union([from_str, from_none], self.externalLink)
+        result["identifier"] = from_str(self.identifier)
+        return result
+
+
+class ModerationRemoveCardResponse(BaseModel):
+    removed: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationRemoveCardResponse":
+        assert isinstance(obj, dict)
+        removed = from_bool(obj.get("removed"))
+        return ModerationRemoveCardResponse(removed)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["removed"] = from_bool(self.removed)
+        return result
+
+
+class ModerationRemoveDriveRequest(BaseModel):
+    sourceId: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationRemoveDriveRequest":
+        assert isinstance(obj, dict)
+        sourceId = from_int(obj.get("sourceId"))
+        return ModerationRemoveDriveRequest(sourceId)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["sourceId"] = from_int(self.sourceId)
+        return result
+
+
+class ModerationRemoveDriveResponse(BaseModel):
+    cardsRemoved: int
+    removed: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ModerationRemoveDriveResponse":
+        assert isinstance(obj, dict)
+        cardsRemoved = from_int(obj.get("cardsRemoved"))
+        removed = from_bool(obj.get("removed"))
+        return ModerationRemoveDriveResponse(cardsRemoved, removed)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["cardsRemoved"] = from_int(self.cardsRemoved)
+        result["removed"] = from_bool(self.removed)
         return result
 
 
@@ -1736,7 +1884,7 @@ class TagConsensusEntry(BaseModel):
         netPolarity = from_float(obj.get("netPolarity"))
         tagName = from_str(obj.get("tagName"))
         tally = from_list(TagVoteTallyEntry.from_dict, obj.get("tally"))
-        resolvedPolarity = from_union([from_int, from_none], obj.get("resolvedPolarity"))
+        resolvedPolarity = from_union([from_none, from_int], obj.get("resolvedPolarity"))
         return TagConsensusEntry(netPolarity, tagName, tally, resolvedPolarity)
 
     def to_dict(self) -> dict:
@@ -1745,7 +1893,7 @@ class TagConsensusEntry(BaseModel):
         result["tagName"] = from_str(self.tagName)
         result["tally"] = from_list(lambda x: to_class(TagVoteTallyEntry, x), self.tally)
         if self.resolvedPolarity is not None:
-            result["resolvedPolarity"] = from_union([from_int, from_none], self.resolvedPolarity)
+            result["resolvedPolarity"] = from_union([from_none, from_int], self.resolvedPolarity)
         return result
 
 
@@ -2017,6 +2165,14 @@ def Languagefromdict(s: Any) -> Language:
 
 def Languagetodict(x: Language) -> Any:
     return to_class(Language, x)
+
+
+def ModerationDriveItemfromdict(s: Any) -> ModerationDriveItem:
+    return ModerationDriveItem.from_dict(s)
+
+
+def ModerationDriveItemtodict(x: ModerationDriveItem) -> Any:
+    return to_class(ModerationDriveItem, x)
 
 
 def ModerationQueueItemfromdict(s: Any) -> ModerationQueueItem:
@@ -2355,6 +2511,38 @@ def LanguagesResponsetodict(x: LanguagesResponse) -> Any:
     return to_class(LanguagesResponse, x)
 
 
+def ModerationDriveCardsRequestfromdict(s: Any) -> ModerationDriveCardsRequest:
+    return ModerationDriveCardsRequest.from_dict(s)
+
+
+def ModerationDriveCardsRequesttodict(x: ModerationDriveCardsRequest) -> Any:
+    return to_class(ModerationDriveCardsRequest, x)
+
+
+def ModerationDriveCardsResponsefromdict(s: Any) -> ModerationDriveCardsResponse:
+    return ModerationDriveCardsResponse.from_dict(s)
+
+
+def ModerationDriveCardsResponsetodict(x: ModerationDriveCardsResponse) -> Any:
+    return to_class(ModerationDriveCardsResponse, x)
+
+
+def ModerationDrivesRequestfromdict(s: Any) -> ModerationDrivesRequest:
+    return ModerationDrivesRequest.from_dict(s)
+
+
+def ModerationDrivesRequesttodict(x: ModerationDrivesRequest) -> Any:
+    return to_class(ModerationDrivesRequest, x)
+
+
+def ModerationDrivesResponsefromdict(s: Any) -> ModerationDrivesResponse:
+    return ModerationDrivesResponse.from_dict(s)
+
+
+def ModerationDrivesResponsetodict(x: ModerationDrivesResponse) -> Any:
+    return to_class(ModerationDrivesResponse, x)
+
+
 def ModerationQueueRequestfromdict(s: Any) -> ModerationQueueRequest:
     return ModerationQueueRequest.from_dict(s)
 
@@ -2369,6 +2557,38 @@ def ModerationQueueResponsefromdict(s: Any) -> ModerationQueueResponse:
 
 def ModerationQueueResponsetodict(x: ModerationQueueResponse) -> Any:
     return to_class(ModerationQueueResponse, x)
+
+
+def ModerationRemoveCardRequestfromdict(s: Any) -> ModerationRemoveCardRequest:
+    return ModerationRemoveCardRequest.from_dict(s)
+
+
+def ModerationRemoveCardRequesttodict(x: ModerationRemoveCardRequest) -> Any:
+    return to_class(ModerationRemoveCardRequest, x)
+
+
+def ModerationRemoveCardResponsefromdict(s: Any) -> ModerationRemoveCardResponse:
+    return ModerationRemoveCardResponse.from_dict(s)
+
+
+def ModerationRemoveCardResponsetodict(x: ModerationRemoveCardResponse) -> Any:
+    return to_class(ModerationRemoveCardResponse, x)
+
+
+def ModerationRemoveDriveRequestfromdict(s: Any) -> ModerationRemoveDriveRequest:
+    return ModerationRemoveDriveRequest.from_dict(s)
+
+
+def ModerationRemoveDriveRequesttodict(x: ModerationRemoveDriveRequest) -> Any:
+    return to_class(ModerationRemoveDriveRequest, x)
+
+
+def ModerationRemoveDriveResponsefromdict(s: Any) -> ModerationRemoveDriveResponse:
+    return ModerationRemoveDriveResponse.from_dict(s)
+
+
+def ModerationRemoveDriveResponsetodict(x: ModerationRemoveDriveResponse) -> Any:
+    return to_class(ModerationRemoveDriveResponse, x)
 
 
 def NewCardsFirstPagesResponsefromdict(s: Any) -> NewCardsFirstPagesResponse:

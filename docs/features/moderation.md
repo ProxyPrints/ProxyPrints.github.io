@@ -59,8 +59,9 @@ logins at all.
   `api.proxyprints.ca`, so production needs `SESSION_COOKIE_SAMESITE=None`,
   `SESSION_COOKIE_SECURE=True`, `CORS_ALLOW_CREDENTIALS=True` (defaults suit
   same-site localhost dev). Only fetches that opt into `credentials:'include'`
-  are affected — whoami, reportCard, moderationQueue, and the moderation
-  queue's approve/reject votes; every anonymous surface is byte-identical.
+  are affected — whoami, reportCard, and every moderationQueue/moderationDrives\*/
+  moderationRemoveCard/moderationRemoveDrive call (plus the moderation
+  queue's approve/reject votes); every anonymous surface is byte-identical.
 
 ## CSRF: why csrf_exempt stays, and what replaces it
 
@@ -76,7 +77,8 @@ browsers unconditionally attach an `Origin` header to cross-origin POSTs and
 a page cannot forge it, so POSTs whose Origin is present but not in
 `CORS_ALLOWED_ORIGINS` (∪ the backend's own origin) are rejected with 403.
 Applied to every session-consuming POST (the three vote submit views,
-`reportCard`, `moderationQueue`). Non-browser clients send no Origin at all
+`reportCard`, `moderationQueue`, `moderationDrives`, `moderationDriveCards`,
+`moderationRemoveCard`, `moderationRemoveDrive`). Non-browser clients send no Origin at all
 and keep exactly today's trust level; GET endpoints (whoami) change no state
 and need nothing.
 
@@ -164,11 +166,27 @@ points cannot drift), in one transaction. Unseeded tag = report still lands,
 vote skipped. Broken image / Other are report-row-only. Rate limit:
 `CARD_REPORT_RATE` (default `10/d`) per anonymous_id, polite 429 in the UI.
 
-## Moderation queue
+## Moderation tab
 
-The vote-queue page grows a **Moderation** tab, rendered only when whoami says
-moderator (presentation; `POST 2/moderationQueue/` 403s non-moderators via
-`require_moderator`). Serves `pending_approval` pairs most-reported first
+`whatsthat.tsx` (`ModerationTab.tsx`) grows a **Moderation** tab alongside the
+ordinary Question Feed tab, rendered only when whoami says moderator
+(presentation; every endpoint below 403s non-moderators server-side via
+`require_moderator`). It has two independent sub-tabs — **Reports** and
+**Drives** — switched with a plain `Tab.Container`, the same idiom the
+pre-redesign printing/artist/tag tab switcher used.
+
+Report review used to be injected into the single-question feed itself as a
+moderator-only "tier 3" (between contested and fresh-unresolved), which meant
+any pending report displaced a moderator's ordinary tagging work for as long
+as it stayed pending. Reverted — `cardpicker/question_feed.py`'s
+`get_next_question_feed_item` never serves a `pending_approval` pair any
+more, for any role; see that module's docstring for the full history. Report
+review now lives only in the Moderation tab, so the two are always
+switchable, never one hijacking the other.
+
+### Reports (`ReportsPanel.tsx`)
+
+`POST 2/moderationQueue/` serves `pending_approval` pairs most-reported first
 (count of matching-reason CardReports; oldest first report breaks ties;
 organically-pending pairs last), each item: card image + tag + report count +
 up to three newest free-text excerpts + **Approve / Reject / Skip**. Approve
@@ -176,6 +194,31 @@ and Reject are ordinary `2/submitTagVote/` calls (polarity +1/−1) sent with
 credentials, so the vote records the moderator's user and the pair resolves —
 or not — through the normal pass. Pending pairs are excluded from the public
 tag queue.
+
+### Drives (`DrivesPanel.tsx`)
+
+A browse-and-manage view over `Source` rows, for spotting and removing a bad
+or spammy drive (or an individual card within an otherwise-fine one) —
+unrelated to report review; nothing here requires a `CardReport` to exist.
+
+- `POST 2/moderationDrives/` lists every Source, newest-first (ordered by
+  `-pk` — `Source` has no creation timestamp of its own; one existed briefly
+  in 2021 and was removed in favour of per-`Card` dates, see migration
+  `0004_auto_20210214_1126` — pk insertion order is a reliable enough proxy
+  for "recently added" without a new migration), each with its
+  card/cardback/token counts.
+- `POST 2/moderationDriveCards/` drills into one drive's individual cards
+  (paginated) so a specific card can be targeted.
+- `POST 2/moderationRemoveCard/` and `POST 2/moderationRemoveDrive/`
+  permanently delete a card or an entire drive (cascading onto every card it
+  contributed via `Card.source`'s `on_delete=CASCADE`) — irreversible, no
+  soft-delete, confirmed client-side via `window.confirm` since there's no
+  undo. Both remove from Elasticsearch first (`ELASTICSEARCH_DSL_AUTOSYNC = False` in settings.py means deletes are never automatic — a card-delete
+  reindexes via `CardSearch().update([card], action="delete")`, a drive-
+  delete bulk-removes by the indexed `source_pk` field in one
+  `delete_by_query` rather than one ES call per card) before the Postgres
+  delete; Postgres stays authoritative even if the ES side fails (same
+  swallow-and-log rationale as `reindex_card_safely` in documents.py).
 
 ## Consequence: NSFW hidden from search by default
 
@@ -268,26 +311,29 @@ documented here so the reasoning survives if either file is ever touched:
   `cardpicker/tag_consensus.py`, `cardpicker/moderation.py`,
   `cardpicker/security.py`, `cardpicker/sensitive_tags.py` (+ management
   command), `cardpicker/models.py` (user FK, `TagModerationClass`,
-  `CardReport`, `TagVoteStatus.PENDING_APPROVAL`), `cardpicker/views.py`
-  (whoami / reportCard / moderationQueue), `accounts/adapter.py`,
-  `MPCAutofill/settings.py`.
+  `CardReport`, `TagVoteStatus.PENDING_APPROVAL`), `cardpicker/question_feed.py`
+  (report review deliberately absent - see "Moderation tab" above),
+  `cardpicker/views.py` (whoami / reportCard / moderationQueue /
+  moderationDrives / moderationDriveCards / moderationRemoveCard /
+  moderationRemoveDrive), `accounts/adapter.py`, `MPCAutofill/settings.py`.
 - Frontend: `features/reporting/ReportCardPanel.tsx`,
-  `features/moderation/AuthWidget.tsx` + `ModerationQueue.tsx`,
-  `features/filters/MatureContentFilter.tsx`, `pages/whatsthat.tsx`,
-  `store/api.ts` (whoami query + credentialed fetches).
+  `features/moderation/AuthWidget.tsx` (Discord-branded login button) +
+  `ModerationTab.tsx` (Reports/Drives sub-tab switcher) + `ReportsPanel.tsx`
+  - `DrivesPanel.tsx`, `features/filters/MatureContentFilter.tsx`,
+    `pages/whatsthat.tsx` (Question Feed/Moderation tab switcher, moderator-
+    only), `store/api.ts` (whoami query + credentialed fetches).
 - Tests: `cardpicker/tests/test_moderation_gate.py`,
-  `test_moderation_views.py`, `test_sensitive_tags.py`;
+  `test_moderation_views.py`, `test_sensitive_tags.py`, `test_question_feed.py`
+  (asserts pending-approval pairs never surface in the ordinary feed);
   `frontend/src/features/reporting/ReportCardPanel.test.tsx`;
-  `frontend/tests/{ReportCard,ModerationQueue,MatureContentToggle}.spec.ts`.
+  `frontend/tests/{ReportCard,ModerationQueue,ModerationTab,MatureContentToggle}.spec.ts`.
 
 ## Known gaps / follow-ups
 
-- Server-side OAuth plumbing (env wiring, nginx routing, redirect_uri
-  construction) is verified via a manual `curl` simulation of the login
-  flow as of 2026-07-15 — see "nginx routing and proxy headers for
-  `/accounts/`" above. The actual browser round-trip (a real moderator
-  clicking through Discord's consent screen) is still untested; do that
-  before considering step 7 of the checklist complete.
+- Live Discord OAuth verified working end-to-end in production 2026-07-15
+  (server-side plumbing via `curl` simulation, then a real moderator's
+  browser round-trip) — see "nginx routing and proxy headers for
+  `/accounts/`" above.
 - Discord guild-role sync for a federation-wide moderator roster (see "Who is
   a moderator").
 - Federation export/import of moderation verdicts is v1.1

@@ -2,14 +2,21 @@
 Backs `GET 2/questionFeed/` - the unified single-question feed that replaces the three
 printing/artist/tag tabs (see docs/features/printing-tags.md's questionFeed section and
 journal/2026-07-14-queue-question-feed-design.md for the full design writeup this
-implements). Deliberately a "dumb ranked union" per spec: four fixed-order tiers, first
+implements). Deliberately a "dumb ranked union" per spec: three fixed-order tiers, first
 non-empty match wins, no cross-tier scoring/ML.
 
 Tier 1 (confirm_suggestion) is large relative to the others at current volume (28,112 cards
 - the full AI deductive-vote backfill, confirmed via a live query during design) - a voter
-working only this feed will not reach tiers 2-4 until tier 1 is exhausted. Flagged as a known
+working only this feed will not reach tiers 2-3 until tier 1 is exhausted. Flagged as a known
 v1 property, not silently accepted - see the design doc's "Starvation risk" section for the
 concrete consequence and the planned v2 fix (interleaved/weighted union, out of scope here).
+
+Moderator report review used to be a fourth tier here (pending_approval pairs, moderator-only,
+ranked between tiers 2 and 3-formerly-4) but that made every pending report displace the
+normal tagging feed entirely for any moderator, for as long as reports stayed pending -
+moved out to a dedicated Moderation tab (`POST 2/moderationQueue/` in views.py, unaffected by
+this module) so ordinary tagging and report review are separate, switchable views instead of
+one hijacking the other. See docs/features/moderation.md.
 """
 
 from typing import Optional
@@ -27,15 +34,10 @@ from cardpicker.models import (
     TagVoteStatus,
     VoteSource,
 )
-from cardpicker.moderation import is_moderator
 from cardpicker.printing_candidates import get_ranked_printing_candidates
 from cardpicker.printing_consensus import get_contested_card_ids
 from cardpicker.schema_types import QuestionFeedItem, TypeEnum
-from cardpicker.tag_consensus import (
-    get_pending_approval_queue_pairs,
-    get_tag_net_polarity,
-    get_tag_review_queue_pairs,
-)
+from cardpicker.tag_consensus import get_tag_net_polarity, get_tag_review_queue_pairs
 
 
 def _tag_confidence(card: Card) -> dict[str, float]:
@@ -90,16 +92,6 @@ def _tag_item(card: Card, tag_name: str) -> QuestionFeedItem:
     return QuestionFeedItem(type=TypeEnum.tag, card=card.serialise(), tagName=tag_name)
 
 
-def _moderation_item(card: Card, tag_name: str, report_count: int, excerpts: list[str]) -> QuestionFeedItem:
-    return QuestionFeedItem(
-        type=TypeEnum.moderation,
-        card=card.serialise(),
-        tagName=tag_name,
-        reportCount=report_count,
-        reportExcerpts=excerpts,
-    )
-
-
 def _tier_1_confirm_suggestion(anonymous_id: str) -> Optional[QuestionFeedItem]:
     cards = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, printing_tags__source=VoteSource.AI)
@@ -149,27 +141,10 @@ def _tier_2_contested(anonymous_id: str) -> Optional[QuestionFeedItem]:
     return None
 
 
-def _tier_3_moderation(user: object) -> Optional[QuestionFeedItem]:
-    """Same (card, tag) selection, report-count, and excerpt logic as `post_moderation_queue`
-    (views.py), narrowed to just the single highest-priority pair - see that view for why
-    reasons are matched via `REPORT_REASON_TO_TAG_NAME` and excerpts are capped at 3."""
-    if not is_moderator(user):  # type: ignore[arg-type]  # is_moderator accepts AbstractUser | AnonymousUser
-        return None
-    from cardpicker.models import CardReport
-    from cardpicker.sensitive_tags import REPORT_REASON_TO_TAG_NAME
-
-    pairs = get_pending_approval_queue_pairs()
-    if not pairs:
-        return None
-    card_id, tag_name = pairs[0]
-    card = Card.objects.get(pk=card_id)
-    reasons = [reason for reason, name in REPORT_REASON_TO_TAG_NAME.items() if name == tag_name]
-    reports = CardReport.objects.filter(card_id=card_id, reason__in=reasons)
-    excerpts = [row["text"] for row in reports.exclude(text="").order_by("-created_at").values("text")[:3]]
-    return _moderation_item(card, tag_name, report_count=reports.count(), excerpts=excerpts)
-
-
 def _tier_4_fresh(anonymous_id: str) -> Optional[QuestionFeedItem]:
+    # named "tier 4" (not renumbered to 3) even though moderation's former tier 3 was removed
+    # (see module docstring) - keeps this name stable against every docstring/test/comment
+    # that already refers to "tier 4" rather than triggering a pure-renumbering diff.
     # A card with one AI-sourced vote plus one *agreeing* human vote (weight 1.5 at default
     # settings - still short of PRINTING_TAG_MIN_VOTES=2) is exactly as close to resolving as
     # a card can get without being resolved outright, yet it's excluded from tier 1 (any human
@@ -210,31 +185,24 @@ def _tier_4_fresh(anonymous_id: str) -> Optional[QuestionFeedItem]:
     return None
 
 
-def get_next_question_feed_item(anonymous_id: str, user: object) -> Optional[QuestionFeedItem]:
+def get_next_question_feed_item(anonymous_id: str) -> Optional[QuestionFeedItem]:
     """The dumb ranked union itself - first non-None tier wins, in priority order."""
-    return (
-        _tier_1_confirm_suggestion(anonymous_id)
-        or _tier_2_contested(anonymous_id)
-        or _tier_3_moderation(user)
-        or _tier_4_fresh(anonymous_id)
-    )
+    return _tier_1_confirm_suggestion(anonymous_id) or _tier_2_contested(anonymous_id) or _tier_4_fresh(anonymous_id)
 
 
-def get_remaining_estimate(user: object) -> int:
+def get_remaining_estimate() -> int:
     """
     Best-effort total across tiers, for "Still need N cards" messaging - NOT per-voter (doesn't
     account for own-vote exclusion, which is comparatively cheap to skip here since this is
-    advisory copy, not a candidate set). Moderator-only tier only counted for moderators, same
-    visibility rule as the feed itself.
+    advisory copy, not a candidate set). Pending-moderation-report count is deliberately not
+    folded in here any more - it has its own badge on the dedicated Moderation tab now (see
+    this module's docstring), separate from ordinary tagging's "remaining" count.
     """
-    estimate = (
+    return (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED).count()
         + Card.objects.filter(artist_vote_status__in=[ArtistVoteStatus.UNRESOLVED, ArtistVoteStatus.CONTESTED]).count()
         + len(get_tag_review_queue_pairs())
     )
-    if is_moderator(user):  # type: ignore[arg-type]
-        estimate += len(get_pending_approval_queue_pairs())
-    return estimate
 
 
 __all__ = ["get_next_question_feed_item", "get_remaining_estimate"]

@@ -1,6 +1,5 @@
 import pytest
 
-from django.contrib.auth.models import AnonymousUser
 from django.urls import reverse
 
 from cardpicker import views
@@ -53,9 +52,11 @@ def make_ai_suggested_card(anonymous_id: str = "ai-bot") -> tuple:
 
 
 def make_pending_pair(tag_name: str = "sensitive-tag") -> tuple:
-    # printing/artist already resolved so this card is *only* a tier-3 candidate - isolates
-    # moderation-tier tests from tiers 2/4, which would otherwise also match this card via its
-    # (irrelevant, default-unresolved) printing/artist status
+    # printing/artist already resolved so this card would only ever match the old tier-3
+    # moderation candidate set (now removed from this feed entirely - see
+    # test_pending_approval_pairs_never_appear_in_the_feed below) - isolates it from tiers 2/4,
+    # which would otherwise also match this card via its (irrelevant, default-unresolved)
+    # printing/artist status
     card = CardFactory(
         tags=[], printing_tag_status=PrintingTagStatus.RESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
     )
@@ -69,12 +70,12 @@ def make_pending_pair(tag_name: str = "sensitive-tag") -> tuple:
 
 class TestGetNextQuestionFeedItem:
     def test_no_data_returns_none(self, db):
-        assert get_next_question_feed_item("anon-1", AnonymousUser()) is None
+        assert get_next_question_feed_item("anon-1") is None
 
     def test_tier_1_returns_confirm_suggestion_with_the_ai_suggested_printing(self, db):
         card, printing = make_ai_suggested_card()
 
-        item = get_next_question_feed_item("anon-1", AnonymousUser())
+        item = get_next_question_feed_item("anon-1")
 
         assert item is not None
         assert item.type.value == "confirm_suggestion"
@@ -89,7 +90,7 @@ class TestGetNextQuestionFeedItem:
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.AI, anonymous_id="ai-bot")
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER, anonymous_id="anon-1")
 
-        item = get_next_question_feed_item("anon-1", AnonymousUser())
+        item = get_next_question_feed_item("anon-1")
 
         # falls through past the excluded tier-1 card - no other data exists, so None
         assert item is None or item.card.identifier != card.identifier
@@ -97,7 +98,7 @@ class TestGetNextQuestionFeedItem:
     def test_a_second_voters_own_exclusion_does_not_affect_a_first_voter(self, db):
         card, _ = make_ai_suggested_card()
 
-        item_for_second_voter = get_next_question_feed_item("anon-2", AnonymousUser())
+        item_for_second_voter = get_next_question_feed_item("anon-2")
 
         assert item_for_second_voter is not None
         assert item_for_second_voter.card.identifier == card.identifier
@@ -110,7 +111,7 @@ class TestGetNextQuestionFeedItem:
         CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
         CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
 
-        item = get_next_question_feed_item("anon-1", AnonymousUser())
+        item = get_next_question_feed_item("anon-1")
 
         assert item is not None
         assert item.type.value == "identify_printing"
@@ -119,7 +120,7 @@ class TestGetNextQuestionFeedItem:
     def test_tier_4_fresh_unresolved_printing_when_nothing_higher_priority_exists(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
 
-        item = get_next_question_feed_item("anon-1", AnonymousUser())
+        item = get_next_question_feed_item("anon-1")
 
         assert item is not None
         assert item.type.value == "identify_printing"
@@ -137,7 +138,7 @@ class TestGetNextQuestionFeedItem:
         CardPrintingTagFactory(card=almost_resolved, printing=printing, source=VoteSource.AI)
         CardPrintingTagFactory(card=almost_resolved, printing=printing, source=VoteSource.USER)
 
-        item = get_next_question_feed_item("anon-1", AnonymousUser())
+        item = get_next_question_feed_item("anon-1")
 
         assert item is not None
         assert item.card.identifier == almost_resolved.identifier
@@ -147,30 +148,22 @@ class TestGetNextQuestionFeedItem:
             printing_tag_status=PrintingTagStatus.RESOLVED, artist_vote_status=ArtistVoteStatus.UNRESOLVED
         )
 
-        item = get_next_question_feed_item("anon-1", AnonymousUser())
+        item = get_next_question_feed_item("anon-1")
 
         assert item is not None
         assert item.type.value == "artist"
         assert item.card.identifier == card.identifier
 
-    def test_moderation_tier_hidden_from_non_moderators(self, db):
+    def test_pending_approval_pairs_never_appear_in_the_feed(self, db):
+        # pending-approval (card, tag) pairs used to surface here as a moderator-only tier 3 -
+        # that hijacked the whole feed for moderators for as long as any report stayed pending
+        # (see this module's docstring) and has moved to a dedicated Moderation tab
+        # (`POST 2/moderationQueue/`, tested in test_moderation_views.py); get_next_question_
+        # feed_item no longer even takes a `user` argument, since nothing here needs one any
+        # more - this feed must never serve a pending-approval pair again, for any role
         make_pending_pair()
 
-        item = get_next_question_feed_item("anon-1", AnonymousUser())
-
-        # no printing/artist/tag data exists other than the pending-approval pair, which a
-        # non-moderator must never see
-        assert item is None
-
-    def test_moderation_tier_visible_to_moderators(self, db, moderator_user):
-        card, tag = make_pending_pair(tag_name="NSFW")
-
-        item = get_next_question_feed_item("anon-1", moderator_user)
-
-        assert item is not None
-        assert item.type.value == "moderation"
-        assert item.card.identifier == card.identifier
-        assert item.tagName == tag.name
+        assert get_next_question_feed_item("anon-1") is None
 
     def test_own_vote_exclusion_is_scoped_to_the_specific_tag_not_the_whole_card(self, db):
         """A voter who already answered one contested tag on a card must still be served a
@@ -189,42 +182,34 @@ class TestGetNextQuestionFeedItem:
         # this voter already answered tag_a, but not tag_b
         CardTagVoteFactory(card=card, tag=tag_a, polarity=VotePolarity.APPLY, anonymous_id="anon-1")
 
-        item = get_next_question_feed_item("anon-1", AnonymousUser())
+        item = get_next_question_feed_item("anon-1")
 
         assert item is not None
         assert item.type.value == "tag"
         assert item.card.identifier == card.identifier
         assert item.tagName == tag_b.name
 
-    def test_moderation_tier_ranks_below_tier_2_contested(self, db, moderator_user):
-        make_pending_pair()
-        contested_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
-        CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
-        CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
-
-        item = get_next_question_feed_item("anon-1", moderator_user)
-
-        assert item is not None
-        assert item.type.value == "identify_printing"
-
 
 class TestGetRemainingEstimate:
     def test_is_non_negative(self, db):
-        assert get_remaining_estimate(AnonymousUser()) >= 0
+        assert get_remaining_estimate() >= 0
 
     def test_counts_unresolved_printing_cards(self, db):
-        before = get_remaining_estimate(AnonymousUser())
+        before = get_remaining_estimate()
         # artist_vote_status=RESOLVED so this card contributes to only the printing count -
         # a fresh CardFactory() defaults artist_vote_status to UNRESOLVED too, which would
         # otherwise add 1 to the artist-tier count as well and make this assertion brittle
         CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED)
-        after = get_remaining_estimate(AnonymousUser())
+        after = get_remaining_estimate()
         assert after == before + 1
 
-    def test_moderation_pairs_only_counted_for_moderators(self, db, moderator_user):
+    def test_pending_approval_pairs_are_not_counted(self, db):
+        # this feed's "remaining" count is ordinary-tagging advisory copy only - pending
+        # moderation reports have their own badge on the dedicated Moderation tab instead
+        # (see this module's docstring)
+        before = get_remaining_estimate()
         make_pending_pair()
-        assert get_remaining_estimate(AnonymousUser()) == 0
-        assert get_remaining_estimate(moderator_user) == 1
+        assert get_remaining_estimate() == before
 
 
 class TestGetQuestionFeedView:
@@ -244,12 +229,11 @@ class TestGetQuestionFeedView:
         assert response.status_code == 200
         assert response.json()["item"]["card"]["identifier"] == card.identifier
 
-    def test_moderation_item_requires_moderator_session(self, client, django_settings, moderator_user):
+    def test_pending_approval_pairs_never_surface_here_even_for_a_moderator_session(
+        self, client, django_settings, moderator_user
+    ):
         make_pending_pair()
 
-        anonymous_response = client.get(reverse(views.get_question_feed), {"anonymousId": "anon-1"})
-        assert anonymous_response.json()["item"] is None
-
         client.force_login(moderator_user)
-        moderator_response = client.get(reverse(views.get_question_feed), {"anonymousId": "anon-1"})
-        assert moderator_response.json()["item"]["type"] == "moderation"
+        response = client.get(reverse(views.get_question_feed), {"anonymousId": "anon-1"})
+        assert response.json()["item"] is None

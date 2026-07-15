@@ -2,7 +2,7 @@
  * The unified "What's That Card?" question feed - replaces the old printing/artist/tag tab
  * switcher (PrintingTagQueue.tsx + GenericVoteQueue.tsx, both deleted alongside this file)
  * with a single `GET 2/questionFeed/`-driven stream of one question at a time, typed per
- * cardpicker.question_feed's four-tier ranked union. See docs/features/printing-tags.md's
+ * cardpicker.question_feed's three-tier ranked union. See docs/features/printing-tags.md's
  * questionFeed section and journal/2026-07-14-queue-question-feed-design.md for the full
  * design writeup (chip taxonomy grounding, layout rationale, starvation-risk tradeoff).
  *
@@ -13,7 +13,6 @@
  */
 
 import React, { useEffect, useState } from "react";
-import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
@@ -21,7 +20,6 @@ import Row from "react-bootstrap/Row";
 import { getPrintingCandidateDataAttributes } from "@/common/cardDom";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { PrintingCandidate, QuestionFeedItem } from "@/common/schema_types";
-import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { SetIcon } from "@/components/SetIcon";
 import { Spinner } from "@/components/Spinner";
@@ -72,7 +70,6 @@ type FollowUp = "none" | "no-match-reason";
 export function QuestionFeed() {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
-  const getTagDisplayName = useTagDisplayName();
   const starburstFrame = useStarburstFrame();
 
   const [item, setItem] = useState<QuestionFeedItem | null>(null);
@@ -100,11 +97,7 @@ export function QuestionFeed() {
       return;
     }
     setLoading(true);
-    // "include" (not the default "same-origin") so a moderator's session cookie always
-    // attaches - the backend only surfaces tier-3 moderation questions when it can see who's
-    // asking (is_moderator(request.user)); an anonymous request just sends no cookie, same as
-    // APIReportCard's unconditional "include" elsewhere.
-    APIGetQuestionFeed(backendURL, getOrCreateAnonymousId(), "include")
+    APIGetQuestionFeed(backendURL, getOrCreateAnonymousId())
       .then((response) => {
         setItem(response.item ?? null);
         setRemainingEstimate(response.remainingEstimate);
@@ -274,9 +267,9 @@ export function QuestionFeed() {
       style={stickyTop != null ? { top: stickyTop } : undefined}
     >
       {/* cardPanel is only ever rendered from the isCandidateType branch below - the
-          artist/tag/moderation branch renders its own plain image directly, uninvolved with
-          chips or the starburst. BurstSvg now lives inside `cardImage` itself (see above),
-          not here, so it sizes against the card's own box rather than this whole ring. */}
+          artist/tag branch renders its own plain image directly, uninvolved with chips or the
+          starburst. BurstSvg now lives inside `cardImage` itself (see above), not here, so it
+          sizes against the card's own box rather than this whole ring. */}
       <AttributeChipPanel
         backendURL={backendURL}
         cardIdentifier={item.card.identifier}
@@ -482,40 +475,6 @@ export function QuestionFeed() {
                     tagName={item.tagName}
                     onAnswered={advance}
                   />
-                )}
-                {item.type === "moderation" && item.tagName != null && (
-                  <>
-                    <p>
-                      Should this card carry the tag{" "}
-                      <b>{getTagDisplayName(item.tagName)}</b>?
-                    </p>
-                    <p>
-                      <Badge
-                        bg="danger"
-                        data-testid="question-feed-moderation-report-count"
-                      >
-                        {item.reportCount ?? 0} report
-                        {(item.reportCount ?? 0) !== 1 && "s"}
-                      </Badge>
-                    </p>
-                    {(item.reportExcerpts ?? []).length > 0 && (
-                      <ul
-                        className="text-muted small"
-                        data-testid="question-feed-moderation-excerpts"
-                      >
-                        {(item.reportExcerpts ?? []).map((excerpt, index) => (
-                          <li key={index}>&ldquo;{excerpt}&rdquo;</li>
-                        ))}
-                      </ul>
-                    )}
-                    <QueueTagQuestion
-                      backendURL={backendURL}
-                      cardIdentifier={item.card.identifier}
-                      tagName={item.tagName}
-                      onAnswered={advance}
-                      credentials="include"
-                    />
-                  </>
                 )}
               </Col>
               <Col xs={12} md={5}>

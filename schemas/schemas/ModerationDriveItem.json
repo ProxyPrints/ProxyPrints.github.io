@@ -1,0 +1,13 @@
+{
+  "title": "Moderation Drive Item",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "source": { "$ref": "./Source.json" },
+    "qtyCards": { "type": "integer" },
+    "qtyCardbacks": { "type": "integer" },
+    "qtyTokens": { "type": "integer" }
+  },
+  "required": ["source", "qtyCards", "qtyCardbacks", "qtyTokens"],
+  "additionalProperties": false
+}

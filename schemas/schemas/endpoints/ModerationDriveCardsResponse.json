@@ -1,0 +1,16 @@
+{
+  "title": "Moderation Drive Cards Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "hits": { "type": "integer" },
+    "pages": { "type": "integer" },
+    "source": { "$ref": "../Source.json" },
+    "cards": {
+      "type": "array",
+      "items": { "$ref": "../Card.json" }
+    }
+  },
+  "required": ["hits", "pages", "source", "cards"],
+  "additionalProperties": false
+}

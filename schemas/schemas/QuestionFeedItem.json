@@ -5,13 +5,7 @@
   "properties": {
     "type": {
       "type": "string",
-      "enum": [
-        "confirm_suggestion",
-        "identify_printing",
-        "artist",
-        "tag",
-        "moderation"
-      ]
+      "enum": ["confirm_suggestion", "identify_printing", "artist", "tag"]
     },
     "card": { "$ref": "./Card.json" },
     "suggestedPrinting": { "$ref": "./PrintingCandidate.json" },
@@ -24,12 +18,7 @@
       "additionalProperties": { "type": "number" }
     },
     "confidentlyKnownArtistName": { "type": ["string", "null"] },
-    "tagName": { "type": "string" },
-    "reportCount": { "type": "integer" },
-    "reportExcerpts": {
-      "type": "array",
-      "items": { "type": "string" }
-    }
+    "tagName": { "type": "string" }
   },
   "required": ["type", "card"],
   "additionalProperties": false

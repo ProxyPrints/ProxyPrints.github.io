@@ -976,24 +976,6 @@ export const questionFeedTag = http.get(buildRoute("2/questionFeed/"), () =>
   )
 );
 
-export const questionFeedModeration = http.get(
-  buildRoute("2/questionFeed/"),
-  () =>
-    HttpResponse.json(
-      {
-        item: {
-          type: "moderation",
-          card: cardDocument9,
-          tagName: "NSFW",
-          reportCount: 2,
-          reportExcerpts: ["too spicy"],
-        },
-        remainingEstimate: 1,
-      },
-      { status: 200 }
-    )
-);
-
 export const questionFeedCaughtUp = http.get(
   buildRoute("2/questionFeed/"),
   () => HttpResponse.json({ remainingEstimate: 0 }, { status: 200 })
@@ -1157,6 +1139,64 @@ export const moderationQueueForbidden = http.post(
     HttpResponse.json(createError("Moderator access required"), {
       status: 403,
     })
+);
+
+export const moderationDrivesTwoResults = http.post(
+  buildRoute("2/moderationDrives/"),
+  () =>
+    HttpResponse.json(
+      {
+        hits: 2,
+        pages: 1,
+        items: [
+          {
+            source: sourceDocument2,
+            qtyCards: 3,
+            qtyCardbacks: 0,
+            qtyTokens: 1,
+          },
+          {
+            source: sourceDocument1,
+            qtyCards: 1,
+            qtyCardbacks: 1,
+            qtyTokens: 0,
+          },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
+export const moderationDrivesForbidden = http.post(
+  buildRoute("2/moderationDrives/"),
+  () =>
+    HttpResponse.json(createError("Moderator access required"), {
+      status: 403,
+    })
+);
+
+export const moderationDriveCardsOneResult = http.post(
+  buildRoute("2/moderationDriveCards/"),
+  () =>
+    HttpResponse.json(
+      {
+        hits: 1,
+        pages: 1,
+        source: sourceDocument1,
+        cards: [cardDocument1],
+      },
+      { status: 200 }
+    )
+);
+
+export const moderationRemoveCardSucceeds = http.post(
+  buildRoute("2/moderationRemoveCard/"),
+  () => HttpResponse.json({ removed: true }, { status: 200 })
+);
+
+export const moderationRemoveDriveSucceeds = http.post(
+  buildRoute("2/moderationRemoveDrive/"),
+  () => HttpResponse.json({ removed: true, cardsRemoved: 1 }, { status: 200 })
 );
 
 //# endregion

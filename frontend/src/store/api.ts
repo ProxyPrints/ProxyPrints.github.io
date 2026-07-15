@@ -36,7 +36,11 @@ import {
   Kind as VoteQueueKind,
   Language,
   LanguagesResponse,
+  ModerationDriveCardsResponse,
+  ModerationDrivesResponse,
   ModerationQueueResponse,
+  ModerationRemoveCardResponse,
+  ModerationRemoveDriveResponse,
   NewCardsFirstPage,
   NewCardsFirstPagesResponse,
   NewCardsPageResponse,
@@ -598,6 +602,107 @@ export async function APIGetModerationQueue(
   });
 }
 
+export async function APIGetModerationDrives(
+  backendURL: string,
+  page: number
+): Promise<ModerationDrivesResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/moderationDrives/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ page }),
+      credentials: "include", // the backend 403s without a moderator session
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.items != null) {
+      return content as ModerationDrivesResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+export async function APIGetModerationDriveCards(
+  backendURL: string,
+  sourceId: number,
+  page: number
+): Promise<ModerationDriveCardsResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/moderationDriveCards/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ sourceId, page }),
+      credentials: "include", // the backend 403s without a moderator session
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.cards != null) {
+      return content as ModerationDriveCardsResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+export async function APIRemoveModerationCard(
+  backendURL: string,
+  identifier: string
+): Promise<ModerationRemoveCardResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/moderationRemoveCard/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ identifier }),
+      credentials: "include", // the backend 403s without a moderator session
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.removed != null) {
+      return content as ModerationRemoveCardResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+export async function APIRemoveModerationDrive(
+  backendURL: string,
+  sourceId: number
+): Promise<ModerationRemoveDriveResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/moderationRemoveDrive/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ sourceId }),
+      credentials: "include", // the backend 403s without a moderator session
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.removed != null) {
+      return content as ModerationRemoveDriveResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
 export async function APIGetPrintingTagQueue(
   backendURL: string,
   page: number
@@ -621,8 +726,6 @@ export async function APIGetPrintingTagQueue(
 export async function APIGetQuestionFeed(
   backendURL: string,
   anonymousId: string,
-  // "include" attaches the moderator session cookie so the moderation tier is visible - same
-  // opt-in rationale as APISubmitTagVote's credentials param
   credentials: RequestCredentials = "same-origin"
 ): Promise<QuestionFeedResponse> {
   const rawResponse = await fetch(

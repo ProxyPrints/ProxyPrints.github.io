@@ -108,9 +108,18 @@ from cardpicker.schema_types import Kind as VoteQueueKind
 from cardpicker.schema_types import (
     Language,
     LanguagesResponse,
+    ModerationDriveCardsRequest,
+    ModerationDriveCardsResponse,
+    ModerationDriveItem,
+    ModerationDrivesRequest,
+    ModerationDrivesResponse,
     ModerationQueueItem,
     ModerationQueueRequest,
     ModerationQueueResponse,
+    ModerationRemoveCardRequest,
+    ModerationRemoveCardResponse,
+    ModerationRemoveDriveRequest,
+    ModerationRemoveDriveResponse,
     NewCardsFirstPage,
     NewCardsFirstPagesResponse,
     NewCardsPageResponse,
@@ -701,6 +710,13 @@ def _get_card_or_400(identifier: str) -> Card:
         raise BadRequestException(f"No card found with identifier {identifier!r}.")
 
 
+def _get_source_or_400(source_id: int) -> Source:
+    try:
+        return Source.objects.get(pk=source_id)
+    except Source.DoesNotExist:
+        raise BadRequestException(f"No source found with id {source_id!r}.")
+
+
 def _requesting_user(request: HttpRequest) -> Optional[User]:
     """
     The authenticated user behind a vote/report submission, or None for the (typical)
@@ -1254,8 +1270,8 @@ def get_question_feed(request: HttpRequest) -> HttpResponse:
     if not anonymous_id:
         raise BadRequestException("Missing required anonymousId query parameter.")
 
-    item = get_next_question_feed_item(anonymous_id, request.user)
-    remaining_estimate = get_remaining_estimate(request.user)
+    item = get_next_question_feed_item(anonymous_id)
+    remaining_estimate = get_remaining_estimate()
     return JsonResponse(QuestionFeedResponse(item=item, remainingEstimate=remaining_estimate).model_dump())
 
 
@@ -1317,6 +1333,136 @@ def post_moderation_queue(request: HttpRequest) -> HttpResponse:
     return JsonResponse(
         ModerationQueueResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump()
     )
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_moderation_drives(request: HttpRequest) -> HttpResponse:
+    """
+    Moderator-only "recently added drives" list (Moderation > Drives tab -
+    docs/features/moderation.md): every Source, newest-first, each with its card/cardback/
+    token counts so a moderator can spot a bad or spammy drive at a glance and drill into
+    removing individual cards or the whole thing via post_moderation_remove_card/_drive below.
+
+    Ordered by `-pk` rather than a creation timestamp - Source has no date field of its own
+    (one existed briefly in 2021 and was removed in favour of per-Card dates, see migration
+    0004_auto_20210214_1126), and pk insertion order is a reliable enough proxy for "recently
+    added" without introducing a new migration for a moderator-facing sort order.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ModerationDrivesRequest.model_validate(json.loads(request.body))
+    sources = Source.objects.order_by("-pk").annotate(
+        qty_cards=Count("card", filter=Q(card__card_type=CardTypes.CARD), distinct=True),
+        qty_cardbacks=Count("card", filter=Q(card__card_type=CardTypes.CARDBACK), distinct=True),
+        qty_tokens=Count("card", filter=Q(card__card_type=CardTypes.TOKEN), distinct=True),
+    )
+    paginator = _paginate(sources, req.page)
+    items = [
+        ModerationDriveItem(
+            source=source.serialise(),
+            qtyCards=source.qty_cards,
+            qtyCardbacks=source.qty_cardbacks,
+            qtyTokens=source.qty_tokens,
+        )
+        for source in paginator.page(req.page).object_list
+    ]
+    return JsonResponse(
+        ModerationDrivesResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump()
+    )
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_moderation_drive_cards(request: HttpRequest) -> HttpResponse:
+    """
+    Moderator-only card listing for a single drive (Moderation > Drives tab, drill-down from
+    post_moderation_drives above) - the per-drive card/cardback/token counts on that list are
+    just totals, this is where a moderator actually sees and picks individual cards to remove
+    via post_moderation_remove_card.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ModerationDriveCardsRequest.model_validate(json.loads(request.body))
+    source = _get_source_or_400(req.sourceId)
+    cards = Card.objects.filter(source=source).order_by("name", "identifier")
+    paginator = _paginate(cards, req.page)
+    return JsonResponse(
+        ModerationDriveCardsResponse(
+            hits=paginator.count,
+            pages=paginator.num_pages,
+            source=source.serialise(),
+            cards=[card.serialise() for card in paginator.page(req.page).object_list],
+        ).model_dump()
+    )
+
+
+def _delete_card_from_index_safely(card: Card) -> None:
+    """
+    Mirrors `reindex_card_safely`'s error-swallow rationale (documents.py) but for removal -
+    Postgres is authoritative for the delete; a failed Elasticsearch delete just leaves a
+    stale doc that the next full reindex (`search_index --rebuild`) cleans up, so it must
+    never block or partially-fail the moderator's actual delete action. Needs the live `Card`
+    instance (not just its pk) to resolve the document, mirroring reindex_card_safely.
+    """
+    try:
+        CardSearch().update([card], action="delete")
+    except Exception:
+        logger.exception("Failed to remove card %s from Elasticsearch after moderator deletion", card.identifier)
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_moderation_remove_card(request: HttpRequest) -> HttpResponse:
+    """
+    Permanently delete a single card (Moderation > Drives tab). Removes it from Elasticsearch
+    before the Postgres delete (the ES document lookup needs the live Card instance), then
+    deletes the row - irreversible, no soft-delete/undo, by design: this is a moderator-only
+    action for spam/bad-content cleanup, not something voters trigger.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ModerationRemoveCardRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    _delete_card_from_index_safely(card)
+    card.delete()
+    return JsonResponse(ModerationRemoveCardResponse(removed=True).model_dump())
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_moderation_remove_drive(request: HttpRequest) -> HttpResponse:
+    """
+    Permanently delete an entire drive/source and every card it contributed (Moderation >
+    Drives tab) - irreversible, same rationale as post_moderation_remove_card above. Bulk-
+    removes from Elasticsearch by `source_pk` (CardSearch indexes this - see documents.py)
+    before the Postgres delete, which cascades onto every Card row via Card.source's
+    on_delete=CASCADE - one delete_by_query instead of one ES call per card, since a drive can
+    carry thousands of cards.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ModerationRemoveDriveRequest.model_validate(json.loads(request.body))
+    source = _get_source_or_400(req.sourceId)
+    cards_removed = Card.objects.filter(source=source).count()
+    try:
+        CardSearch().search().filter("term", source_pk=str(source.pk)).delete()
+    except Exception:
+        logger.exception("Failed to bulk-remove source %s from Elasticsearch before deletion", source.pk)
+    source.delete()
+    return JsonResponse(ModerationRemoveDriveResponse(removed=True, cardsRemoved=cards_removed).model_dump())
 
 
 @csrf_exempt
