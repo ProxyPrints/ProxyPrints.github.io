@@ -1577,6 +1577,52 @@ MORE absolute uncovered printings than a zero-covered name must still sort after
 count as coverage). mypy clean (`MPCAutofill/`, whole-package invocation). `black`/`prettier`
 clean.
 
+### Cluster dedup, run-scoped (2026-07-15, addendum item 2a)
+
+Before slicing, `compute_own_image_clusters` phashes OUR OWN eligible images (local only - no
+candidate/Scryfall downloads) via the same `local_phash.compute_card_art_hash` the phash engine
+already uses, and collapses distance-0 (EXACT 64-bit hash match) groups to one representative
+(lowest pk, for determinism) - only representatives reach `_compute_card`; absorbed members never
+run their own OCR/phash/border/frame/fallback at all. "One read answers N cards": an accepted
+vote on the representative propagates as an identical `CardPrintingTag` (same anonymous*id,
+printing, confidence, source) to every absorbed member. Sound by construction: a distance-0 match
+among OUR OWN uploaded images most plausibly means a duplicate/shared-source image, not
+independent depictions that coincidentally look alike (that's the \_candidate* art-crop clustering
+problem the phash engine already handles separately via `DEFAULT_DISTANCE_THRESHOLD=20`, a much
+looser bar than 0) - identical image genuinely entails identical printing. Costs one extra fetch
+per selected card (the clustering pass itself) to save the far more expensive per-card compute
+pipeline on every absorbed duplicate.
+
+Scoped to the printing-identification vote only, not border/frame/bleed attribute votes -
+absorbed members never get their own image classified, so there's nothing of theirs to
+propagate for those; a documented limitation, not a silent gap. Run-scoped only, no schema
+change: no `content_hash` persisted anywhere (that's item 2b, deferred as a standalone future
+task for federation-v1's content_hash groundwork). New `AttributeReport.cluster_count`/
+`cards_absorbed_into_clusters` report fields.
+
+**A real idempotence gap found and fixed before landing, not just anticipated**: a cluster
+member can reach clustering via one engine's independent eligibility (e.g. phash) while already
+carrying a vote from a DIFFERENT engine's `anonymous_id` from a prior invocation (the exact
+reason it was excluded from that OTHER engine's selection this run). Propagating a same-
+`anonymous_id` vote to it anyway would violate `CardPrintingTag`'s own
+`(card, printing, anonymous_id)` uniqueness constraint - checked once per run (a single query
+across all cluster members, not re-queried per propagation call) and skipped, not attempted.
+`ocr_selected_ids`/`phash_selected_ids` also get absorbed into the representative's own
+eligibility (a representative must run an engine if EITHER it or any absorbed member was
+independently selected for that engine), so clustering can't silently drop an engine's
+eligibility just because the specific card that became the representative wasn't itself
+originally selected for it.
+
+Verified: 96/96 pilot tests pass (7 new: `TestClusterDedup`), including a test that caught a
+genuine test-fixture bug during development (two different solid-color images accidentally
+hashed identically - imagehash's DCT-based `phash` has zero frequency content on any uniform
+fill regardless of color, so distinguishable synthetic fixtures need actual drawn shapes, not
+just a different fill color; the production clustering logic was working correctly the whole
+time), a test proving the double-vote/overwrite gap above is actually fixed (not just that some
+vote exists), and a test proving the efficiency win itself (an absorbed member's card id is
+never passed to `run_ocr_for_card`, not just that it ends up with a vote). mypy clean.
+`black`/`prettier` clean.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run

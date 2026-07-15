@@ -582,6 +582,68 @@ class AttributeReport:
     # front-loaded machine effort onto. Always 0 in dry_run (nothing is written, so nothing can
     # have newly resolved).
     uncovered_printings_closed: int = 0
+    # addendum item 2a (2026-07-15): cluster dedup report - see compute_own_image_clusters.
+    cluster_count: int = 0
+    cards_absorbed_into_clusters: int = 0
+
+
+@dataclass(frozen=True)
+class ClusterResult:
+    representatives: list[SelectedCard]
+    # representative card_id -> the OTHER card_ids (never including the representative itself)
+    # whose distance-0-identical image means an accepted vote on the representative should
+    # propagate to them too. Absent entries mean "no cluster" (singleton).
+    members_by_representative: dict[int, list[int]]
+
+
+def compute_own_image_clusters(
+    selected: list[SelectedCard], fetch_dpi: Optional[int] = DEFAULT_FETCH_DPI
+) -> ClusterResult:
+    """Addendum item 2a (2026-07-15): phash OUR OWN eligible images (local only - no candidate/
+    Scryfall downloads, no extra network cost beyond one fetch per selected card) and collapse
+    distance-0 (EXACT 64-bit hash match) clusters to one representative (lowest pk, for
+    determinism) in the work queue. "One read answers N cards": an accepted vote on the
+    representative propagates as identical votes (same anonymous_id) to every other cluster
+    member (see run_pilot's write loop) - sound by construction, since a distance-0 match among
+    OUR OWN uploaded images most plausibly means a duplicate/shared-source image (not
+    independent depictions that coincidentally look alike - that's the *candidate* art-crop
+    clustering problem this pilot's phash engine already has to handle via a real
+    DEFAULT_DISTANCE_THRESHOLD=20, not distance 0), so identical image genuinely entails
+    identical printing.
+
+    Costs one extra fetch per selected card (this function's own hashing pass, ahead of
+    _compute_card's own separate fetch) to save the far more expensive OCR/phash/border/frame/
+    fallback compute on every absorbed non-representative card - only representatives reach
+    _compute_card afterward. Scoped to the PRINTING vote only, not border/frame/bleed attribute
+    votes - absorbed members never get their own image classified at all, so there is nothing of
+    theirs to propagate for those; documented as a known limitation, not silently dropped.
+    """
+    hash_by_card_id: dict[int, int] = {}
+    for s in selected:
+        image = fetch_card_image(s.card, fetch_dpi)
+        if image is None:
+            continue
+        bleed_class = local_fallback.classify_bleed_edge(image)
+        hash_by_card_id[s.card.pk] = local_phash.compute_card_art_hash(image, bleed_class)
+
+    card_ids_by_hash: dict[int, list[int]] = collections.defaultdict(list)
+    for s in selected:
+        h = hash_by_card_id.get(s.card.pk)
+        if h is not None:
+            card_ids_by_hash[h].append(s.card.pk)
+
+    members_by_representative: dict[int, list[int]] = {}
+    absorbed_member_ids: set[int] = set()
+    for card_ids in card_ids_by_hash.values():
+        if len(card_ids) < 2:
+            continue
+        representative_id = min(card_ids)
+        others = [c for c in card_ids if c != representative_id]
+        members_by_representative[representative_id] = others
+        absorbed_member_ids.update(others)
+
+    representatives = [s for s in selected if s.card.pk not in absorbed_member_ids]
+    return ClusterResult(representatives=representatives, members_by_representative=members_by_representative)
 
 
 def run_pilot(
@@ -645,6 +707,30 @@ def run_pilot(
         printing_pks_in_scope.update(c.pk for c in s.candidates)
     uncovered_printing_pks_in_scope = printing_pks_in_scope - covered_printing_pks_before
 
+    # addendum item 2a (2026-07-15): collapse distance-0 duplicate-image clusters to one
+    # representative BEFORE slicing/chunking - only representatives reach _compute_card; an
+    # absorbed member's vote comes from propagation in the write loop below instead.
+    cluster_result = compute_own_image_clusters(list(all_selected_by_card_id.values()), fetch_dpi)
+    all_selected_by_card_id = {s.card.pk: s for s in cluster_result.representatives}
+    attributes.cluster_count = len(cluster_result.members_by_representative)
+    attributes.cards_absorbed_into_clusters = sum(len(m) for m in cluster_result.members_by_representative.values())
+
+    # a member can be a cluster member (via one engine's selection) while ALREADY having its own
+    # vote from a DIFFERENT engine's anonymous_id from a prior invocation - e.g. only
+    # phash-eligible this run (so it appears here) but already has an OCR vote from a previous
+    # run (which is exactly why it was excluded from THIS run's OCR selection). Propagating a
+    # same-anonymous_id vote to it anyway would violate CardPrintingTag's own
+    # (card, printing, anonymous_id) uniqueness constraint - checked once, up front, per
+    # anonymous_id, not re-queried per propagation call.
+    _cluster_member_ids = {m for members in cluster_result.members_by_representative.values() for m in members}
+    members_already_voted_by_anonymous_id: dict[str, set[int]] = collections.defaultdict(set)
+    if _cluster_member_ids:
+        for _card_id, _anonymous_id in CardPrintingTag.objects.filter(
+            card_id__in=_cluster_member_ids,
+            anonymous_id__in=[OCR_ANONYMOUS_ID, PHASH_ANONYMOUS_ID, FALLBACK_ANONYMOUS_ID],
+        ).values_list("card_id", "anonymous_id"):
+            members_already_voted_by_anonymous_id[_anonymous_id].add(_card_id)
+
     # fallback's own idempotence check - it has no selection query/anonymous_id exclusion of
     # its own (it rides on whichever cards ocr/phash already selected), so a card already
     # covered by a prior fallback run is excluded here instead.
@@ -654,8 +740,19 @@ def run_pilot(
         ).values_list("card_id", flat=True)
     )
 
-    ocr_selected_ids = {s.card.pk for s in selected_by_engine.get("ocr", [])}
-    phash_selected_ids = {s.card.pk for s in selected_by_engine.get("phash", [])}
+    def _absorb_engine_selection(engine_selected_ids: set[int]) -> set[int]:
+        # a cluster's representative must run an engine if EITHER it or any absorbed member was
+        # independently selected for that engine - otherwise clustering could silently drop an
+        # engine's own eligibility just because the specific card that happened to become the
+        # representative wasn't itself selected for it.
+        absorbed = set(engine_selected_ids)
+        for representative_id, member_ids in cluster_result.members_by_representative.items():
+            if any(m in engine_selected_ids for m in member_ids):
+                absorbed.add(representative_id)
+        return absorbed
+
+    ocr_selected_ids = _absorb_engine_selection({s.card.pk for s in selected_by_engine.get("ocr", [])})
+    phash_selected_ids = _absorb_engine_selection({s.card.pk for s in selected_by_engine.get("phash", [])})
 
     # Checkpointing (Stage 8 pre-scale program item 2): a multi-day unattended run must survive
     # a kill without losing everything accumulated since the last flush. Matches
@@ -688,6 +785,40 @@ def run_pilot(
         if batch_written_card_ids:
             all_gate_violations.extend(verify_zero_resolutions(batch_written_card_ids))
         votes_batch, tag_votes_batch, batch_written_card_ids = [], [], []
+
+    def propagate_cluster_vote(
+        representative_card_id: int, printing_pk: int, anonymous_id: str, confidence: float
+    ) -> int:
+        """Addendum item 2a: an accepted vote on a cluster representative propagates as an
+        identical vote (same anonymous_id, printing, confidence) to every OTHER cluster member -
+        absorbed members never ran their own OCR/phash/fallback, so this is the only vote they
+        ever get. Skips any member that already has a vote from this SAME anonymous_id (e.g. one
+        engine's vote from a prior invocation, on a member only newly eligible for a DIFFERENT
+        engine this run) - propagating anyway would violate CardPrintingTag's own
+        (card, printing, anonymous_id) uniqueness constraint, and would silently double-vote or
+        attempt to overwrite an existing vote regardless. Returns how many propagated votes were
+        actually queued, for the engine's votes_written tally."""
+        member_ids = cluster_result.members_by_representative.get(representative_card_id, [])
+        already_voted = members_already_voted_by_anonymous_id.get(anonymous_id, set())
+        propagated = 0
+        for member_id in member_ids:
+            if member_id in already_voted:
+                continue
+            votes_batch.append(
+                CardPrintingTag(
+                    card_id=member_id,
+                    printing_id=printing_pk,
+                    is_no_match=False,
+                    anonymous_id=anonymous_id,
+                    source=VoteSource.OCR,
+                    confidence=confidence,
+                )
+            )
+            if member_id not in written_card_ids:
+                written_card_ids.append(member_id)
+                batch_written_card_ids.append(member_id)
+            propagated += 1
+        return propagated
 
     # Fetch budget (pre-scale program item 3b): every image fetch is one request against the
     # image CDN Worker, which shares its daily request quota with live site traffic
@@ -830,6 +961,9 @@ def run_pilot(
                         result_ocr.audit.append({"card_id": card_id, "raw_text": outcome.ocr_vote.detail})
                         written_card_ids.append(card_id)
                         batch_written_card_ids.append(card_id)
+                        result_ocr.votes_written += propagate_cluster_vote(
+                            card_id, outcome.ocr_vote.printing_pk, OCR_ANONYMOUS_ID, outcome.ocr_vote.confidence
+                        )
                 elif outcome.ocr_skip_reason and result_ocr is not None:
                     result_ocr.skip_counts[outcome.ocr_skip_reason] += 1
 
@@ -852,6 +986,9 @@ def run_pilot(
                         if card_id not in written_card_ids:
                             written_card_ids.append(card_id)
                             batch_written_card_ids.append(card_id)
+                        result_phash.votes_written += propagate_cluster_vote(
+                            card_id, outcome.phash_vote.printing_pk, PHASH_ANONYMOUS_ID, outcome.phash_vote.confidence
+                        )
                 elif outcome.phash_skip_reason and result_phash is not None:
                     result_phash.skip_counts[outcome.phash_skip_reason] += 1
 
@@ -874,6 +1011,12 @@ def run_pilot(
                         if card_id not in written_card_ids:
                             written_card_ids.append(card_id)
                             batch_written_card_ids.append(card_id)
+                        result_fallback.votes_written += propagate_cluster_vote(
+                            card_id,
+                            outcome.fallback_vote.printing_pk,
+                            FALLBACK_ANONYMOUS_ID,
+                            outcome.fallback_vote.confidence,
+                        )
                 elif outcome.fallback_skip_reason:
                     result_fallback.skip_counts[outcome.fallback_skip_reason] += 1
 
@@ -1008,6 +1151,8 @@ __all__ = [
     "RESOLUTION_FLOOR_DPI",
     "count_below_resolution_floor",
     "compute_covered_printing_pks",
+    "ClusterResult",
+    "compute_own_image_clusters",
     "select_candidates",
     "get_worker_image_url",
     "fetch_card_image",

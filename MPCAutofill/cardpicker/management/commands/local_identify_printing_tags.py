@@ -238,6 +238,10 @@ class Command(BaseCommand):
         print(f"  bleed votes: {dict(attributes.bleed_votes_by_class)}")
         print(f"  bleed abstains: {attributes.bleed_abstain_count}")
         print(f"  uncovered printings closed this run: {attributes.uncovered_printings_closed}")
+        print(
+            f"  image clusters: {attributes.cluster_count} "
+            f"(cards absorbed: {attributes.cards_absorbed_into_clusters})"
+        )
 
         if dry_run:
             print("Dry run - nothing written, gate check not run.")

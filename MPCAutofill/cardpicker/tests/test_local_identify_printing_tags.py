@@ -23,6 +23,7 @@ from cardpicker.local_identify_printing_tags import (
     CandidateNameIndex,
     CandidatePrinting,
     compute_covered_printing_pks,
+    compute_own_image_clusters,
     count_below_resolution_floor,
     get_worker_image_url,
     run_pilot,
@@ -1367,3 +1368,212 @@ class TestConcurrency:
         run_pilot(engine="ocr", limit=10, dry_run=True, nice=False, workers=1)
 
         assert "OMP_THREAD_LIMIT" not in os.environ
+
+
+class TestClusterDedup:
+    """Addendum item 2a (2026-07-15): distance-0 (byte-identical fetched image) clustering,
+    scoped to this run only - no schema/content_hash persistence (that's item 2b, deferred)."""
+
+    def test_two_cards_with_identical_images_cluster_with_lower_pk_as_representative(self, db):
+        CanonicalCardFactory(name="Forest")
+        card_a = CardFactory(name="Forest")
+        card_b = CardFactory(name="Forest")
+        assert card_a.pk < card_b.pk
+
+        selected = select_candidates("ocr")
+        assert {s.card.pk for s in selected} == {card_a.pk, card_b.pk}
+
+        import cardpicker.local_identify_printing_tags as module
+
+        identical_image = Image.new("RGB", (750, 1050), (5, 5, 5))
+        module_monkeypatch_target = module.fetch_card_image
+        try:
+            module.fetch_card_image = lambda card, dpi=None: identical_image
+            cluster_result = compute_own_image_clusters(selected)
+        finally:
+            module.fetch_card_image = module_monkeypatch_target
+
+        assert cluster_result.members_by_representative == {card_a.pk: [card_b.pk]}
+        assert [s.card.pk for s in cluster_result.representatives] == [card_a.pk]
+
+    def test_different_images_do_not_cluster(self, db, monkeypatch):
+        # a solid, uniform fill has ZERO frequency content, so a DCT-based perceptual hash
+        # (imagehash's phash) can't distinguish one flat color from another - real art crops
+        # always have texture/detail, so distinguishable synthetic fixtures need actual drawn
+        # content, not just a different fill color (this genuinely tripped the first version of
+        # this test - a plain color-swap fixture accidentally clustered against production code
+        # that was working correctly).
+        CanonicalCardFactory(name="Forest")
+        card_a = CardFactory(name="Forest")
+        card_b = CardFactory(name="Forest")
+
+        import cardpicker.local_identify_printing_tags as module
+
+        image_a = Image.new("RGB", (750, 1050), (5, 5, 5))
+        draw_a = ImageDraw.Draw(image_a)
+        draw_a.rectangle([100, 100, 300, 300], fill=(200, 30, 30))
+
+        image_b = Image.new("RGB", (750, 1050), (5, 5, 5))
+        draw_b = ImageDraw.Draw(image_b)
+        draw_b.ellipse([400, 400, 700, 700], fill=(30, 200, 30))
+
+        images_by_card_id = {card_a.pk: image_a, card_b.pk: image_b}
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: images_by_card_id[card.pk])
+
+        cluster_result = module.compute_own_image_clusters(select_candidates("ocr"))
+
+        assert cluster_result.members_by_representative == {}
+        assert {s.card.pk for s in cluster_result.representatives} == {card_a.pk, card_b.pk}
+
+    def test_unfetchable_image_stays_a_singleton_representative(self, db, monkeypatch):
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+
+        import cardpicker.local_identify_printing_tags as module
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        cluster_result = module.compute_own_image_clusters(select_candidates("ocr"))
+
+        assert cluster_result.members_by_representative == {}
+        assert [s.card.pk for s in cluster_result.representatives] == [card.pk]
+
+    def test_accepted_vote_on_representative_propagates_to_absorbed_member(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card_a = CardFactory(name="Forest")
+        card_b = CardFactory(name="Forest")
+
+        import cardpicker.local_identify_printing_tags as module
+
+        identical_image = Image.new("RGB", (750, 1050), (5, 5, 5))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: identical_image)
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+                vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
+            ),
+        )
+
+        results, attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        # one real OCR call, one propagated vote - both cards end up with an identical vote.
+        assert results["ocr"].votes_written == 2
+        assert attributes.cluster_count == 1
+        assert attributes.cards_absorbed_into_clusters == 1
+        vote_a = CardPrintingTag.objects.get(card=card_a, anonymous_id=OCR_ANONYMOUS_ID)
+        vote_b = CardPrintingTag.objects.get(card=card_b, anonymous_id=OCR_ANONYMOUS_ID)
+        # not just "some vote exists" - the propagated vote is a genuine copy: same printing,
+        # same anonymous_id, same confidence, same source as the representative's real vote.
+        assert vote_a.printing_id == vote_b.printing_id == printing.pk
+        assert vote_a.anonymous_id == vote_b.anonymous_id == OCR_ANONYMOUS_ID
+        assert vote_a.confidence == vote_b.confidence == 0.85
+        assert vote_a.source == vote_b.source == VoteSource.OCR
+        assert vote_a.is_no_match == vote_b.is_no_match is False
+
+    def test_member_with_an_existing_vote_from_a_prior_run_is_not_double_voted_or_overwritten(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        other_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(name="Forest")
+        card_b = CardFactory(name="Forest")
+        # card_b already has its OWN OCR vote from a prior run, on a DIFFERENT printing than
+        # what card_a (the representative) is about to vote for this run - simulates the exact
+        # scenario that would violate the (card, printing, anonymous_id) uniqueness constraint
+        # (or silently create a second conflicting OCR vote) if propagation didn't guard it.
+        existing_vote = CardPrintingTagFactory(
+            card=card_b, printing=other_printing, anonymous_id=OCR_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+
+        import cardpicker.local_identify_printing_tags as module
+
+        identical_image = Image.new("RGB", (750, 1050), (5, 5, 5))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: identical_image)
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+                vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
+            ),
+        )
+        # card_b is already excluded from OCR selection (existing vote), so it only reaches
+        # all_selected_by_card_id (and thus clustering) via an independent phash eligibility.
+        monkeypatch.setattr(
+            module,
+            "run_phash_for_card",
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (None, "no-clear-winner"),
+        )
+
+        results, _attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False)
+
+        # exactly one OCR vote written this run (card_a's real vote) - propagation to card_b was
+        # correctly skipped, not attempted and silently failed.
+        assert results["ocr"].votes_written == 1
+        assert CardPrintingTag.objects.filter(card=card_b, anonymous_id=OCR_ANONYMOUS_ID).count() == 1
+        untouched_vote = CardPrintingTag.objects.get(card=card_b, anonymous_id=OCR_ANONYMOUS_ID)
+        assert untouched_vote.pk == existing_vote.pk
+        assert untouched_vote.printing_id == other_printing.pk  # unchanged, not overwritten
+
+    def test_absorbed_member_never_reaches_ocr_or_phash_processing(self, db, monkeypatch):
+        # the whole point of dedup is not re-running the expensive engines on cluster members -
+        # this is the test that actually proves the efficiency win, not just vote correctness.
+        CanonicalCardFactory(name="Forest")
+        card_a = CardFactory(name="Forest")
+        card_b = CardFactory(name="Forest")
+        assert card_a.pk < card_b.pk
+
+        import cardpicker.local_identify_printing_tags as module
+
+        identical_image = Image.new("RGB", (750, 1050), (5, 5, 5))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: identical_image)
+
+        ocr_called_for_card_ids: list[int] = []
+
+        def recording_run_ocr_for_card(selected, image, crop_box, bleed_class=None):
+            ocr_called_for_card_ids.append(selected.card.pk)
+            return module.OcrCardResult()
+
+        monkeypatch.setattr(module, "run_ocr_for_card", recording_run_ocr_for_card)
+
+        run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert ocr_called_for_card_ids == [card_a.pk]
+        assert card_b.pk not in ocr_called_for_card_ids
+
+    def test_absorbed_members_own_engine_eligibility_still_runs_via_the_representative(self, db, monkeypatch):
+        # card_a (the lower-pk representative) is only phash-eligible; card_b (absorbed member)
+        # is only ocr-eligible - the representative must still run OCR on card_a's behalf, or
+        # card_b's OCR opportunity is silently lost when it gets absorbed.
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card_a = CardFactory(name="Forest")
+        card_b = CardFactory(name="Forest")
+
+        import cardpicker.local_identify_printing_tags as module
+
+        identical_image = Image.new("RGB", (750, 1050), (5, 5, 5))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: identical_image)
+
+        def fake_select_candidates(engine, index=None, exclude_source_pks=None, covered_printing_pks=None):
+            real = select_candidates(engine, index, exclude_source_pks, covered_printing_pks)
+            if engine == "ocr":
+                return [s for s in real if s.card.pk == card_b.pk]
+            return [s for s in real if s.card.pk == card_a.pk]
+
+        monkeypatch.setattr(module, "select_candidates", fake_select_candidates)
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+                vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
+            ),
+        )
+        monkeypatch.setattr(
+            module,
+            "run_phash_for_card",
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (None, "no-clear-winner"),
+        )
+
+        results, _attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False)
+
+        assert results["ocr"].votes_written == 2
+        assert CardPrintingTag.objects.filter(card=card_a, anonymous_id=OCR_ANONYMOUS_ID).exists()
+        assert CardPrintingTag.objects.filter(card=card_b, anonymous_id=OCR_ANONYMOUS_ID).exists()
