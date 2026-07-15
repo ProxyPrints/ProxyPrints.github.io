@@ -5,8 +5,26 @@ from cardpicker.tests.factories import CardArtistVoteFactory, CardFactory
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
     VoteTuple,
+    is_human_backed_source,
     resolve_weighted_consensus,
 )
+
+
+class TestIsHumanBackedSource:
+    """Direct coverage of the 2026-07-15 AI->DEDUCTION/OCR split's single source of truth for
+    the human-backed gate - both new machine-derived values must read as non-human-backed,
+    same as the old single AI value did; everything else (including a future FEDERATED vote,
+    whose human-backed-ness is reported by the exporting peer, not derived from `source`) is
+    human-backed by default."""
+
+    def test_deduction_and_ocr_are_not_human_backed(self):
+        assert is_human_backed_source(VoteSource.DEDUCTION) is False
+        assert is_human_backed_source(VoteSource.OCR) is False
+
+    def test_user_admin_federated_are_human_backed(self):
+        assert is_human_backed_source(VoteSource.USER) is True
+        assert is_human_backed_source(VoteSource.ADMIN) is True
+        assert is_human_backed_source(VoteSource.FEDERATED) is True
 
 
 class TestResolveWeightedConsensus:

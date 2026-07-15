@@ -129,7 +129,7 @@ class TestD1Selection:
         CardPrintingTagFactory(
             card=card,
             printing=CanonicalCardFactory(),
-            source=VoteSource.AI,
+            source=VoteSource.DEDUCTION,
             anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
         )
         assert list(select_d1_candidates()) == []
@@ -193,7 +193,7 @@ class TestRunBackfillWriteShape:
         assert vote.printing_id == printing.pk
         assert vote.is_no_match is False
         assert vote.anonymous_id == DEDUCTIVE_BACKFILL_ANONYMOUS_ID
-        assert vote.source == VoteSource.AI
+        assert vote.source == VoteSource.DEDUCTION
         assert vote.confidence == 0.95
 
     def test_d2_vote_row_shape(self, db):
@@ -205,7 +205,7 @@ class TestRunBackfillWriteShape:
 
         vote = card.printing_tags.get()
         assert vote.printing_id == matching.pk
-        assert vote.source == VoteSource.AI
+        assert vote.source == VoteSource.DEDUCTION
         assert vote.confidence == 0.90
 
     def test_dry_run_writes_nothing(self, db):

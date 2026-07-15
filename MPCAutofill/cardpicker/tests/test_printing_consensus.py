@@ -101,13 +101,14 @@ class TestResolvePrinting:
         CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
         assert resolve_printing(card) == printing_a
 
-    def test_ai_only_insufficient(self, db):
-        # even a large, unanimous pile of AI-sourced votes can never resolve consensus
-        # alone - the winning group must contain at least one non-AI vote
+    @pytest.mark.parametrize("machine_source", [VoteSource.DEDUCTION, VoteSource.OCR])
+    def test_machine_only_insufficient(self, db, machine_source):
+        # even a large, unanimous pile of machine-sourced votes (deduction or OCR) can never
+        # resolve consensus alone - the winning group must contain at least one human-backed vote
         card = CardFactory()
         printing = CanonicalCardFactory()
         for _ in range(4):
-            CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.AI)
+            CardPrintingTagFactory(card=card, printing=printing, source=machine_source)
         assert resolve_printing(card) is None
 
 

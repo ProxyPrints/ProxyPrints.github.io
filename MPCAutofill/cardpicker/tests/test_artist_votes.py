@@ -81,7 +81,7 @@ class TestResolveArtist:
         card = CardFactory()
         artist = CanonicalArtistFactory()
         for _ in range(4):
-            CardArtistVoteFactory(card=card, artist=artist, source=VoteSource.AI)
+            CardArtistVoteFactory(card=card, artist=artist, source=VoteSource.DEDUCTION)
         assert resolve_artist(card) is None
 
 

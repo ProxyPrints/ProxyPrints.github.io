@@ -436,7 +436,7 @@ what a future _rename_ of `name` (not what this stage does) would break
 
 ## Stage 6: deductive backfill (AI-weight votes for logically-entailed printings)
 
-Casts `source=ai` `CardPrintingTag` votes (`cardpicker/deductive_backfill.py`,
+Casts `source=deduction` `CardPrintingTag` votes (`cardpicker/deductive_backfill.py`,
 management command `deductive_backfill_printing_tags`) for cards whose
 printing is entailed by data already in the catalog, rather than waiting
 for a human to vote from scratch on every one of the ~207k untagged
@@ -448,6 +448,20 @@ allows custom art - so a deduction is always a _vote_
 "at least one human-backed vote" gate in
 `vote_consensus.resolve_weighted_consensus` means an AI-only vote can
 never resolve a card by itself, at any volume - a human still confirms.
+
+> **2026-07-15 vocabulary split**: the single `VoteSource.AI` value this
+> stage originally wrote (`source=ai`) was split into `VoteSource.DEDUCTION`
+> (this stage - pure logical inference, zero image inspection) and
+> `VoteSource.OCR` (Stage 8 below - anything that actually looks at the
+> card image). Same weight (`PRINTING_TAG_AI_WEIGHT`, setting name
+> unchanged) and gate treatment for both - a label split, not a policy
+> change; see `cardpicker/models.py`'s `VoteSource` docstring and migration
+> `0060_votesource_deduction_ocr_split.py` (schema choices + one-time data
+> backfill of every existing `source='ai'` row to `source='deduction'`,
+> since every pre-split row came from this stage's own production run).
+> `is_human_backed_source()` (`vote_consensus.py`) is the one place that
+> now knows which `VoteSource` values are machine-derived, replacing the
+> scattered `!= VoteSource.AI` comparisons this doc's examples used to show.
 
 **Two confidence tiers**, both keyed on `to_searchable`-normalized name
 (the same normalizer `printing_candidates.py`'s queue lookup uses,
@@ -527,7 +541,8 @@ resolved** - the human-backed gate held at scale exactly as designed, no
 AI-only vote pushed a card into `RESOLVED` on its own.
 
 5-card spot check (random sample) confirmed every vote as
-`source=ai`, `anonymous_id=deductive-backfill-v1`, `confidence` 0.95/0.90
+`source=ai` (since migrated to `source=deduction` by the vocabulary split
+above - the underlying rows are unchanged, only the label), `anonymous_id=deductive-backfill-v1`, `confidence` 0.95/0.90
 matching its tier, `is_no_match=False`, printing name matching the card
 name, and the card's `printing_tag_status` still `unresolved`.
 **Confirmed via code path, not just this sample: the queue's candidate

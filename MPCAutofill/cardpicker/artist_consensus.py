@@ -2,17 +2,12 @@ from typing import Literal, TypedDict
 
 from django.conf import settings
 
-from cardpicker.models import (
-    ArtistVoteStatus,
-    CanonicalArtist,
-    Card,
-    CardArtistVote,
-    VoteSource,
-)
+from cardpicker.models import ArtistVoteStatus, CanonicalArtist, Card, CardArtistVote
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
     VoteTuple,
     contested_queryset,
+    is_human_backed_source,
     resolve_weighted_consensus,
 )
 
@@ -51,7 +46,7 @@ def resolve_artist(card: Card) -> CanonicalArtist | Literal["UNKNOWN"] | None:
             VoteTuple(
                 outcome_key=key,
                 weight=_SOURCE_WEIGHTS[vote.source],
-                is_human_backed=vote.source != VoteSource.AI,
+                is_human_backed=is_human_backed_source(vote.source),
             )
         )
 
