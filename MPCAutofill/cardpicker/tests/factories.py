@@ -48,7 +48,7 @@ class CardFactory(factory.django.DjangoModelFactory):
     extension = factory.LazyFunction(lambda: "png")
     size = factory.LazyFunction(lambda: 100)
     language = factory.LazyAttribute(lambda o: "en")
-    image_hash = 0
+    content_phash = None
 
 
 class TagFactory(factory.django.DjangoModelFactory):

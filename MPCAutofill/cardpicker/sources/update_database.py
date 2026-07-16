@@ -8,6 +8,7 @@ from typing import Optional, Type
 from django.conf import settings
 from django.db import transaction
 
+from cardpicker import local_phash
 from cardpicker.constants import DEFAULT_LANGUAGE, MAX_SIZE_MB
 from cardpicker.documents import CardSearch
 from cardpicker.models import Card, CardTypes, Source, VotePolarity
@@ -115,7 +116,10 @@ def transform_image_into_object(source: Source, image: Image, tags: Tags) -> Car
         canonical_card_id=canonical_card_pk,
         canonical_artist_id=canonical_artist_pk,
         expansion_hint=expansion_hint or "",
-        image_hash=0,
+        # content_phash deliberately left unset (defaults to None/NULL - "not yet computed") -
+        # populated by hash_newly_created_cards below, for CREATED cards only. This function
+        # builds an in-memory, not-yet-persisted Card from folder-listing metadata only (no
+        # image fetch here at all).
     )
 
 
@@ -164,6 +168,42 @@ def transform_images_into_objects(source: Source, images: list[Image], tags: Tag
             print(f"* {error}", flush=True)
 
     return cards
+
+
+def hash_newly_created_cards(created: list[Card]) -> None:
+    """
+    Hash-at-ingest (docs/features/printing-tags.md, 2026-07-16): computes and sets
+    `content_phash` in-memory on every card in `created`, before it's ever written to the DB.
+    CREATED cards only, deliberately - an UPDATED card (existing identifier, some metadata
+    changed) already has a `content_phash` in the DB that this sync's own `bulk_update` call
+    never touches (see bulk_sync_objects - content_phash isn't in that field list), so there is
+    nothing to hash for that cohort here; a genuinely changed image at the same Drive file id
+    (rare - Drive normally assigns a new id on real content replacement) isn't detected or
+    corrected by this function - the standalone backfill command's NULL-only filter is the
+    correction path if that's ever suspected for a specific card.
+
+    A real, per-card network fetch (see image_cdn_fetch.fetch_card_image) - this pipeline
+    doesn't touch image bytes anywhere else (explore_folder only reads Drive folder-listing
+    metadata), so this is genuine new cost, not a free byproduct of existing work. Threaded to
+    match this module's own MAX_WORKERS concurrency for Drive scanning. Best-effort per card: a
+    fetch/hash failure just leaves that card's content_phash unset (NULL) for the backfill
+    command to retry later - never blocks the sync.
+    """
+    if not created:
+        return
+    print(f"Hashing {TEXT_BOLD}{len(created)}{TEXT_END} newly-created card image/s...", end="", flush=True)
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        hashes = list(executor.map(local_phash.compute_content_phash_for_card, created))
+    hashed_count = 0
+    for card, content_hash in zip(created, hashes):
+        if content_hash is not None:
+            card.content_phash = content_hash
+            hashed_count += 1
+    print(
+        f" and done! Hashed {TEXT_BOLD}{hashed_count}{TEXT_END}/{TEXT_BOLD}{len(created)}{TEXT_END} in "
+        f"{TEXT_BOLD}{(time.time() - t0):.2f}{TEXT_END} seconds."
+    )
 
 
 def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
@@ -216,6 +256,8 @@ def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
             updated.append(incoming[identifier])
     deleted_ids = existing_ids - incoming_ids
     deleted = [existing[identifier] for identifier in deleted_ids]
+
+    hash_newly_created_cards(created)
 
     with transaction.atomic():
         if created:

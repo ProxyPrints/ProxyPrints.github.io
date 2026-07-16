@@ -24,17 +24,20 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from io import BytesIO
 from typing import Iterable, Literal, Optional, cast
 
-import requests
 from PIL import Image
 
-from django.conf import settings
 from django.db.models import QuerySet
 from django.utils import timezone
 
-from cardpicker import local_fallback, local_ocr, local_phash
+from cardpicker import (
+    image_cdn_fetch,
+    local_clustering,
+    local_fallback,
+    local_ocr,
+    local_phash,
+)
 from cardpicker.local_fallback import (
     FALLBACK_ANONYMOUS_ID,
     FALLBACK_CONFIDENCE_MULTI_EVIDENCE,
@@ -50,7 +53,6 @@ from cardpicker.models import (
     VoteSource,
 )
 from cardpicker.search.sanitisation import to_searchable
-from cardpicker.sources.source_types import SourceTypeChoices
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +277,7 @@ def select_candidates(
     for card in (
         _eligible_base_queryset(anonymous_id, exclude_source_pks)
         .exclude(dpi__lt=RESOLUTION_FLOOR_DPI)
-        .only("pk", "name", "identifier", "source_id", "expansion_hint")
+        .only("pk", "name", "identifier", "source_id", "expansion_hint", "content_phash")
         .order_by("pk")
         .iterator(chunk_size=5000)
     ):
@@ -299,35 +301,13 @@ def select_candidates(
 # 2.5x reduction). PILOT-ONLY: this constant is local_identify_printing_tags' own default, not
 # shared with frontend/src/features/pdf/ or .../download/, which need full print resolution by
 # design and are untouched by this change.
-DEFAULT_FETCH_DPI: Optional[int] = 250
-
-
-def get_worker_image_url(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Optional[str]:
-    """
-    The card's image via the image CDN Worker's "full" tier (image-cdn/, docs/features/image-cdn.md)
-    - the same route the PDF export path uses, but at a resolution capped via `dpi` (see
-    DEFAULT_FETCH_DPI) rather than the print-quality original PDF export needs. Google Drive
-    sources only, matching that Worker's current scope (frontend/src/common/image.ts's
-    getWorkerImageURL has the identical restriction) - any other source type returns None,
-    counted by the caller as an "unsupported-source-type" skip.
-    """
-    if card.get_source_type_choices() != SourceTypeChoices.GOOGLE_DRIVE:
-        return None
-    dpi_param = f"&dpi={dpi}" if dpi is not None else ""
-    return f"{settings.IMAGE_WORKER_URL}/images/google_drive/full/{card.identifier}.jpg?jpgQuality=100{dpi_param}"
-
-
-def fetch_card_image(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Optional["Image.Image"]:
-    url = get_worker_image_url(card, dpi)
-    if url is None:
-        return None
-    try:
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-        return Image.open(BytesIO(response.content))
-    except Exception:
-        logger.exception("Failed to fetch image for card %s", card.identifier)
-        return None
+#
+# get_worker_image_url/fetch_card_image moved to cardpicker.image_cdn_fetch (2026-07-16,
+# hash-at-ingest work) - re-imported below since a second, non-pilot caller
+# (cardpicker.sources.update_database's ingest hook) now needs the identical fetch.
+DEFAULT_FETCH_DPI = image_cdn_fetch.DEFAULT_FETCH_DPI
+get_worker_image_url = image_cdn_fetch.get_worker_image_url
+fetch_card_image = image_cdn_fetch.fetch_card_image
 
 
 @dataclass(frozen=True)
@@ -641,68 +621,10 @@ class AttributeReport:
     # front-loaded machine effort onto. Always 0 in dry_run (nothing is written, so nothing can
     # have newly resolved).
     uncovered_printings_closed: int = 0
-    # addendum item 2a (2026-07-15): cluster dedup report - see compute_own_image_clusters.
+    # addendum item 2a (2026-07-15) -> superseded 2026-07-16: cluster dedup report - see
+    # cardpicker.local_clustering.compute_two_threshold_clusters.
     cluster_count: int = 0
     cards_absorbed_into_clusters: int = 0
-
-
-@dataclass(frozen=True)
-class ClusterResult:
-    representatives: list[SelectedCard]
-    # representative card_id -> the OTHER card_ids (never including the representative itself)
-    # whose distance-0-identical image means an accepted vote on the representative should
-    # propagate to them too. Absent entries mean "no cluster" (singleton).
-    members_by_representative: dict[int, list[int]]
-
-
-def compute_own_image_clusters(
-    selected: list[SelectedCard], fetch_dpi: Optional[int] = DEFAULT_FETCH_DPI
-) -> ClusterResult:
-    """Addendum item 2a (2026-07-15): phash OUR OWN eligible images (local only - no candidate/
-    Scryfall downloads, no extra network cost beyond one fetch per selected card) and collapse
-    distance-0 (EXACT 64-bit hash match) clusters to one representative (lowest pk, for
-    determinism) in the work queue. "One read answers N cards": an accepted vote on the
-    representative propagates as identical votes (same anonymous_id) to every other cluster
-    member (see run_pilot's write loop) - sound by construction, since a distance-0 match among
-    OUR OWN uploaded images most plausibly means a duplicate/shared-source image (not
-    independent depictions that coincidentally look alike - that's the *candidate* art-crop
-    clustering problem this pilot's phash engine already has to handle via a real
-    DEFAULT_DISTANCE_THRESHOLD=20, not distance 0), so identical image genuinely entails
-    identical printing.
-
-    Costs one extra fetch per selected card (this function's own hashing pass, ahead of
-    _compute_card's own separate fetch) to save the far more expensive OCR/phash/border/frame/
-    fallback compute on every absorbed non-representative card - only representatives reach
-    _compute_card afterward. Scoped to the PRINTING vote only, not border/frame/bleed attribute
-    votes - absorbed members never get their own image classified at all, so there is nothing of
-    theirs to propagate for those; documented as a known limitation, not silently dropped.
-    """
-    hash_by_card_id: dict[int, int] = {}
-    for s in selected:
-        image = fetch_card_image(s.card, fetch_dpi)
-        if image is None:
-            continue
-        bleed_class = local_fallback.classify_bleed_edge(image)
-        hash_by_card_id[s.card.pk] = local_phash.compute_card_art_hash(image, bleed_class)
-
-    card_ids_by_hash: dict[int, list[int]] = collections.defaultdict(list)
-    for s in selected:
-        h = hash_by_card_id.get(s.card.pk)
-        if h is not None:
-            card_ids_by_hash[h].append(s.card.pk)
-
-    members_by_representative: dict[int, list[int]] = {}
-    absorbed_member_ids: set[int] = set()
-    for card_ids in card_ids_by_hash.values():
-        if len(card_ids) < 2:
-            continue
-        representative_id = min(card_ids)
-        others = [c for c in card_ids if c != representative_id]
-        members_by_representative[representative_id] = others
-        absorbed_member_ids.update(others)
-
-    representatives = [s for s in selected if s.card.pk not in absorbed_member_ids]
-    return ClusterResult(representatives=representatives, members_by_representative=members_by_representative)
 
 
 def run_pilot(
@@ -772,28 +694,28 @@ def run_pilot(
         printing_pks_in_scope.update(c.pk for c in s.candidates)
     uncovered_printing_pks_in_scope = printing_pks_in_scope - covered_printing_pks_before
 
-    # addendum item 2a (2026-07-15) - DISABLED (2026-07-16, live full-catalog run): the
-    # pre-pass itself is a genuine wall-clock net LOSS at full-catalog scale, not just an
-    # optimization with a cost - it's a fully SEQUENTIAL fetch over the entire selected pool
-    # (~172k cards), unaffected by --workers (see task #108's original finding), costing
-    # ~21.6h fixed regardless of core count - MORE than the compute time it saves by
-    # absorbing ~20-28% of cards into cheap propagated votes. Confirmed directly against this
-    # session's own HOLD #2 numbers: raw/no-clustering projected 1.82 days vs.
-    # cluster-dedup-adjusted 2.34 days - the "optimization" made the real run slower. It also
-    # has zero progress visibility for its entire duration (no print statements inside
-    # compute_own_image_clusters), which looks identical to a hung process from the outside -
-    # a job silently in this phase for 31 minutes was mistaken for possibly stuck before this
-    # was diagnosed. Left in place, not called: `compute_own_image_clusters`, `ClusterResult`,
-    # and all of the propagation/absorption logic below still work correctly against a
-    # no-op ClusterResult (every selected card is its own "representative", zero clusters) -
-    # this is the minimal, structurally-safe way to disable the feature without touching the
-    # write-loop code that depends on `cluster_result`'s shape. A future chunk-scoped redesign
-    # (compute the hash from the SAME image _compute_card already fetches for OCR/phash,
-    # cluster within a chunk instead of the whole pool) could recover the dedup benefit
-    # without the sequential-pre-pass cost or the observability gap - not built here.
-    cluster_result = ClusterResult(representatives=list(all_selected_by_card_id.values()), members_by_representative={})
+    # addendum item 2a (2026-07-15) -> SUPERSEDED (2026-07-16, hash-at-ingest work,
+    # docs/features/printing-tags.md): the disabled fetch-based pre-pass
+    # (compute_own_image_clusters, see git history for cf1bf007's disablement) is replaced by a
+    # pure DB-column read over Card.content_phash (local_clustering.
+    # compute_two_threshold_clusters) - no network fetch, no sequential pre-pass, no
+    # observability gap. The disabled pre-pass's own fixed ~21.6h sequential cost (the reason it
+    # was disabled) simply doesn't exist in this design; see local_clustering's module docstring
+    # for the full d=0/d<=2 semantics. Cards without a stored hash yet (not ingested/backfilled)
+    # cluster as singletons - the same safe fallback the old pre-pass had for a failed fetch.
+    cluster_result = local_clustering.compute_two_threshold_clusters(list(all_selected_by_card_id.values()))
     attributes.cluster_count = len(cluster_result.members_by_representative)
     attributes.cards_absorbed_into_clusters = sum(len(m) for m in cluster_result.members_by_representative.values())
+    # Only representatives reach _compute_card below - an absorbed (distance-0) member's vote
+    # comes from propagate_cluster_vote in the write loop instead. Restores the filtering the
+    # original (pre-disablement) implementation had (`all_selected_by_card_id = {s.card.pk: s
+    # for s in cluster_result.representatives}`) - the no-op disabled version dropped this since
+    # it was a no-op anyway with an always-empty members_by_representative.
+    _absorbed_member_ids = {m for members in cluster_result.members_by_representative.values() for m in members}
+    if _absorbed_member_ids:
+        all_selected_by_card_id = {
+            card_id: s for card_id, s in all_selected_by_card_id.items() if card_id not in _absorbed_member_ids
+        }
 
     # a member can be a cluster member (via one engine's selection) while ALREADY having its own
     # vote from a DIFFERENT engine's anonymous_id from a prior invocation - e.g. only
@@ -1375,8 +1297,6 @@ __all__ = [
     "RESOLUTION_FLOOR_DPI",
     "count_below_resolution_floor",
     "compute_covered_printing_pks",
-    "ClusterResult",
-    "compute_own_image_clusters",
     "select_candidates",
     "get_worker_image_url",
     "fetch_card_image",

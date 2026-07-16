@@ -14,6 +14,10 @@ import shutil
 import pytest
 from PIL import Image, ImageDraw
 
+from cardpicker.local_clustering import (
+    NEAR_DUPLICATE_MAX_DISTANCE,
+    compute_two_threshold_clusters,
+)
 from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID
 from cardpicker.local_identify_printing_tags import (
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
@@ -25,7 +29,6 @@ from cardpicker.local_identify_printing_tags import (
     CandidateNameIndex,
     CandidatePrinting,
     compute_covered_printing_pks,
-    compute_own_image_clusters,
     count_below_resolution_floor,
     get_worker_image_url,
     run_name_frequency_elimination,
@@ -40,7 +43,12 @@ from cardpicker.local_ocr import (
     run_tesseract,
     validate_against_candidates,
 )
-from cardpicker.local_phash import find_best_match
+from cardpicker.local_phash import (
+    BackfillResult,
+    compute_content_phash_for_card,
+    find_best_match,
+    run_content_phash_backfill,
+)
 from cardpicker.models import (
     CardPrintingTag,
     CardTagVote,
@@ -1769,94 +1777,78 @@ class TestConcurrency:
         assert "OMP_THREAD_LIMIT" not in os.environ
 
 
-_CLUSTERING_DISABLED_REASON = (
-    "addendum item 2a's clustering pre-pass is disabled in run_pilot (2026-07-16) - it's a "
-    "sequential fetch over the whole selected pool, unaffected by --workers, and its own fixed "
-    "cost measurably exceeded the compute time it saved at full-catalog scale (see "
-    "local_identify_printing_tags.py's run_pilot comment at the cluster_result assignment). "
-    "compute_own_image_clusters itself is untouched and still tested directly above; only the "
-    "run_pilot integration is skipped until a future chunk-scoped redesign re-enables it."
-)
-
-
 class TestClusterDedup:
-    """Addendum item 2a (2026-07-15): distance-0 (byte-identical fetched image) clustering,
-    scoped to this run only - no schema/content_hash persistence (that's item 2b, deferred).
+    """Addendum item 2a (2026-07-15) -> superseded 2026-07-16 (docs/features/printing-tags.md's
+    hash-at-ingest architecture): distance-0/distance<=2 clustering over Card.content_phash - a
+    stored-hash DB read, not a live fetch. See cardpicker.local_clustering's module docstring
+    for the full d=0 (vote propagation) / d<=2 (narrowing prior, never wired below - out of
+    scope this pass, see docs) semantics. Cards without content_phash set cluster as
+    singletons - CardFactory defaults content_phash to None, so most tests below set it
+    explicitly via CardFactory(content_phash=...) to opt into clustering."""
 
-    NOTE (2026-07-16): run_pilot no longer calls compute_own_image_clusters (see
-    _CLUSTERING_DISABLED_REASON) - the tests below that exercise clustering directly still
-    pass and still matter; the ones that expect run_pilot's own integration to cluster are
-    marked skip, not deleted, so they're ready to re-enable alongside a future redesign."""
-
-    def test_two_cards_with_identical_images_cluster_with_lower_pk_as_representative(self, db):
+    def test_two_cards_with_identical_hash_cluster_with_lower_pk_as_representative(self, db):
         CanonicalCardFactory(name="Forest")
-        card_a = CardFactory(name="Forest")
-        card_b = CardFactory(name="Forest")
+        card_a = CardFactory(name="Forest", content_phash=123)
+        card_b = CardFactory(name="Forest", content_phash=123)
         assert card_a.pk < card_b.pk
 
         selected = select_candidates("ocr")
         assert {s.card.pk for s in selected} == {card_a.pk, card_b.pk}
 
-        import cardpicker.local_identify_printing_tags as module
-
-        identical_image = Image.new("RGB", (750, 1050), (5, 5, 5))
-        module_monkeypatch_target = module.fetch_card_image
-        try:
-            module.fetch_card_image = lambda card, dpi=None: identical_image
-            cluster_result = compute_own_image_clusters(selected)
-        finally:
-            module.fetch_card_image = module_monkeypatch_target
+        cluster_result = compute_two_threshold_clusters(selected)
 
         assert cluster_result.members_by_representative == {card_a.pk: [card_b.pk]}
-        assert [s.card.pk for s in cluster_result.representatives] == [card_a.pk]
 
-    def test_different_images_do_not_cluster(self, db, monkeypatch):
-        # a solid, uniform fill has ZERO frequency content, so a DCT-based perceptual hash
-        # (imagehash's phash) can't distinguish one flat color from another - real art crops
-        # always have texture/detail, so distinguishable synthetic fixtures need actual drawn
-        # content, not just a different fill color (this genuinely tripped the first version of
-        # this test - a plain color-swap fixture accidentally clustered against production code
-        # that was working correctly).
+    def test_different_hashes_do_not_cluster(self, db):
         CanonicalCardFactory(name="Forest")
-        card_a = CardFactory(name="Forest")
-        card_b = CardFactory(name="Forest")
+        CardFactory(name="Forest", content_phash=123)
+        CardFactory(name="Forest", content_phash=456)
 
-        import cardpicker.local_identify_printing_tags as module
-
-        image_a = Image.new("RGB", (750, 1050), (5, 5, 5))
-        draw_a = ImageDraw.Draw(image_a)
-        draw_a.rectangle([100, 100, 300, 300], fill=(200, 30, 30))
-
-        image_b = Image.new("RGB", (750, 1050), (5, 5, 5))
-        draw_b = ImageDraw.Draw(image_b)
-        draw_b.ellipse([400, 400, 700, 700], fill=(30, 200, 30))
-
-        images_by_card_id = {card_a.pk: image_a, card_b.pk: image_b}
-        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: images_by_card_id[card.pk])
-
-        cluster_result = module.compute_own_image_clusters(select_candidates("ocr"))
+        cluster_result = compute_two_threshold_clusters(select_candidates("ocr"))
 
         assert cluster_result.members_by_representative == {}
-        assert {s.card.pk for s in cluster_result.representatives} == {card_a.pk, card_b.pk}
 
-    def test_unfetchable_image_stays_a_singleton_representative(self, db, monkeypatch):
+    def test_unhashed_card_stays_a_singleton(self, db):
         CanonicalCardFactory(name="Forest")
-        card = CardFactory(name="Forest")
+        CardFactory(name="Forest", content_phash=None)
 
-        import cardpicker.local_identify_printing_tags as module
-
-        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
-
-        cluster_result = module.compute_own_image_clusters(select_candidates("ocr"))
+        cluster_result = compute_two_threshold_clusters(select_candidates("ocr"))
 
         assert cluster_result.members_by_representative == {}
-        assert [s.card.pk for s in cluster_result.representatives] == [card.pk]
+        assert cluster_result.near_duplicate_ids_by_card_id == {}
 
-    @pytest.mark.skip(reason=_CLUSTERING_DISABLED_REASON)
+    def test_near_duplicate_within_threshold_is_hinted_but_not_clustered_for_propagation(self, db):
+        # distance 1 (one bit flipped) - within NEAR_DUPLICATE_MAX_DISTANCE, but NOT distance 0,
+        # so it must show up as a narrowing hint, never as a vote-propagation cluster member.
+        CanonicalCardFactory(name="Forest")
+        card_a = CardFactory(name="Forest", content_phash=0b0000)
+        card_b = CardFactory(name="Forest", content_phash=0b0001)
+        assert bin(card_a.content_phash ^ card_b.content_phash).count("1") == 1
+        assert 1 <= NEAR_DUPLICATE_MAX_DISTANCE
+
+        cluster_result = compute_two_threshold_clusters(select_candidates("ocr"))
+
+        assert cluster_result.members_by_representative == {}
+        assert cluster_result.near_duplicate_ids_by_card_id == {
+            card_a.pk: {card_b.pk},
+            card_b.pk: {card_a.pk},
+        }
+
+    def test_beyond_threshold_hash_produces_no_hint_either(self, db):
+        CanonicalCardFactory(name="Forest")
+        CardFactory(name="Forest", content_phash=0b0000)
+        # 3 bits flipped - beyond NEAR_DUPLICATE_MAX_DISTANCE (2).
+        CardFactory(name="Forest", content_phash=0b0111)
+
+        cluster_result = compute_two_threshold_clusters(select_candidates("ocr"))
+
+        assert cluster_result.members_by_representative == {}
+        assert cluster_result.near_duplicate_ids_by_card_id == {}
+
     def test_accepted_vote_on_representative_propagates_to_absorbed_member(self, db, monkeypatch):
         printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
-        card_a = CardFactory(name="Forest")
-        card_b = CardFactory(name="Forest")
+        card_a = CardFactory(name="Forest", content_phash=123)
+        card_b = CardFactory(name="Forest", content_phash=123)
 
         import cardpicker.local_identify_printing_tags as module
 
@@ -1886,16 +1878,11 @@ class TestClusterDedup:
         assert vote_a.source == vote_b.source == VoteSource.OCR
         assert vote_a.is_no_match == vote_b.is_no_match is False
 
-    @pytest.mark.skip(
-        reason=_CLUSTERING_DISABLED_REASON + " Passes vacuously with clustering off (no "
-        "propagation is ever attempted, so the guard it tests is never exercised) - skipped "
-        "rather than left green for the wrong reason."
-    )
     def test_member_with_an_existing_vote_from_a_prior_run_is_not_double_voted_or_overwritten(self, db, monkeypatch):
         printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
         other_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
-        CardFactory(name="Forest")
-        card_b = CardFactory(name="Forest")
+        CardFactory(name="Forest", content_phash=123)
+        card_b = CardFactory(name="Forest", content_phash=123)
         # card_b already has its OWN OCR vote from a prior run, on a DIFFERENT printing than
         # what card_a (the representative) is about to vote for this run - simulates the exact
         # scenario that would violate the (card, printing, anonymous_id) uniqueness constraint
@@ -1933,13 +1920,12 @@ class TestClusterDedup:
         assert untouched_vote.pk == existing_vote.pk
         assert untouched_vote.printing_id == other_printing.pk  # unchanged, not overwritten
 
-    @pytest.mark.skip(reason=_CLUSTERING_DISABLED_REASON)
     def test_absorbed_member_never_reaches_ocr_or_phash_processing(self, db, monkeypatch):
         # the whole point of dedup is not re-running the expensive engines on cluster members -
         # this is the test that actually proves the efficiency win, not just vote correctness.
         CanonicalCardFactory(name="Forest")
-        card_a = CardFactory(name="Forest")
-        card_b = CardFactory(name="Forest")
+        card_a = CardFactory(name="Forest", content_phash=123)
+        card_b = CardFactory(name="Forest", content_phash=123)
         assert card_a.pk < card_b.pk
 
         import cardpicker.local_identify_printing_tags as module
@@ -1960,14 +1946,13 @@ class TestClusterDedup:
         assert ocr_called_for_card_ids == [card_a.pk]
         assert card_b.pk not in ocr_called_for_card_ids
 
-    @pytest.mark.skip(reason=_CLUSTERING_DISABLED_REASON)
     def test_absorbed_members_own_engine_eligibility_still_runs_via_the_representative(self, db, monkeypatch):
         # card_a (the lower-pk representative) is only phash-eligible; card_b (absorbed member)
         # is only ocr-eligible - the representative must still run OCR on card_a's behalf, or
         # card_b's OCR opportunity is silently lost when it gets absorbed.
         printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
-        card_a = CardFactory(name="Forest")
-        card_b = CardFactory(name="Forest")
+        card_a = CardFactory(name="Forest", content_phash=123)
+        card_b = CardFactory(name="Forest", content_phash=123)
 
         import cardpicker.local_identify_printing_tags as module
 
@@ -1999,3 +1984,128 @@ class TestClusterDedup:
         assert results["ocr"].votes_written == 2
         assert CardPrintingTag.objects.filter(card=card_a, anonymous_id=OCR_ANONYMOUS_ID).exists()
         assert CardPrintingTag.objects.filter(card=card_b, anonymous_id=OCR_ANONYMOUS_ID).exists()
+
+
+class TestComputeContentPhashForCard:
+    """docs/features/printing-tags.md's hash-at-ingest architecture (2026-07-16): the shared
+    fetch+hash primitive used by both the ingest hook (update_database) and the backfill
+    command."""
+
+    def test_returns_a_hash_for_a_fetchable_image(self, db, monkeypatch):
+        card = CardFactory(name="Forest")
+        import cardpicker.local_phash as module
+
+        image = Image.new("RGB", (750, 1050), (5, 5, 5))
+        ImageDraw.Draw(image).rectangle([100, 100, 300, 300], fill=(200, 30, 30))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = compute_content_phash_for_card(card)
+
+        assert result is not None
+        assert isinstance(result, int)
+
+    def test_returns_none_when_the_fetch_fails(self, db, monkeypatch):
+        card = CardFactory(name="Forest")
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        assert compute_content_phash_for_card(card) is None
+
+    def test_uses_the_small_ingest_dpi_by_default(self, db, monkeypatch):
+        card = CardFactory(name="Forest")
+        import cardpicker.local_phash as module
+
+        seen_dpi = []
+
+        def recording_fetch(card, dpi=None):
+            seen_dpi.append(dpi)
+            return Image.new("RGB", (750, 1050), (5, 5, 5))
+
+        monkeypatch.setattr(module, "fetch_card_image", recording_fetch)
+
+        compute_content_phash_for_card(card)
+
+        assert seen_dpi == [module.INGEST_HASH_FETCH_DPI]
+
+
+class TestContentPhashBackfill:
+    """docs/features/printing-tags.md's hash-at-ingest architecture (2026-07-16): the one-time
+    backfill command for existing NULL-content_phash cards."""
+
+    def test_hashes_every_null_card_and_persists_the_result(self, db, monkeypatch):
+        card_a = CardFactory(name="Forest", content_phash=None)
+        card_b = CardFactory(name="Island", content_phash=None)
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: 42)
+
+        result = run_content_phash_backfill(nice=False)
+
+        assert result == BackfillResult(dry_run=False, total_candidates=2, hashed=2, failed=0)
+        card_a.refresh_from_db()
+        card_b.refresh_from_db()
+        assert card_a.content_phash == 42
+        assert card_b.content_phash == 42
+
+    def test_already_hashed_cards_are_not_touched(self, db, monkeypatch):
+        already_hashed = CardFactory(name="Forest", content_phash=99)
+        import cardpicker.local_phash as module
+
+        called = []
+        monkeypatch.setattr(
+            module,
+            "compute_content_phash_for_card",
+            lambda card, dpi=module.INGEST_HASH_FETCH_DPI: called.append(card.pk) or 42,
+        )
+
+        result = run_content_phash_backfill(nice=False)
+
+        assert result.total_candidates == 0
+        assert called == []
+        already_hashed.refresh_from_db()
+        assert already_hashed.content_phash == 99
+
+    def test_a_failed_hash_stays_null_and_is_counted_as_failed(self, db, monkeypatch):
+        card = CardFactory(name="Forest", content_phash=None)
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(
+            module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: None
+        )
+
+        result = run_content_phash_backfill(nice=False)
+
+        assert result.hashed == 0
+        assert result.failed == 1
+        card.refresh_from_db()
+        assert card.content_phash is None
+
+    def test_dry_run_writes_nothing(self, db, monkeypatch):
+        card = CardFactory(name="Forest", content_phash=None)
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: 42)
+
+        result = run_content_phash_backfill(dry_run=True, nice=False)
+
+        assert result.hashed == 1
+        card.refresh_from_db()
+        assert card.content_phash is None
+
+    def test_a_second_invocation_only_processes_what_the_first_missed(self, db, monkeypatch):
+        # simulates a kill mid-backfill and a plain re-invocation - the NULL filter is the
+        # checkpoint, no separate --resume flag needed.
+        already_hashed = CardFactory(name="Forest", content_phash=42)
+        still_null = CardFactory(name="Island", content_phash=None)
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: 7)
+
+        result = run_content_phash_backfill(nice=False)
+
+        assert result.total_candidates == 1
+        already_hashed.refresh_from_db()
+        still_null.refresh_from_db()
+        assert already_hashed.content_phash == 42  # untouched
+        assert still_null.content_phash == 7  # newly hashed
