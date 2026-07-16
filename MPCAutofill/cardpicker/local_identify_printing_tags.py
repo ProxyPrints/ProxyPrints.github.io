@@ -42,6 +42,7 @@ from cardpicker.models import (
     Card,
     CardPrintingTag,
     CardTagVote,
+    CardTypes,
     PrintingTagStatus,
     VoteSource,
 )
@@ -157,7 +158,19 @@ def _eligible_base_queryset(anonymous_id: str, exclude_source_pks: Optional[Iter
     cardpicker.deductive_backfill's identical pattern), not already covered by the deductive
     backfill (which is provably exact by construction where it applies - this pilot's engines
     are weaker, lower-confidence signal and shouldn't pile onto a card that already has a
-    stronger deduction), and no resolved custom-art/non-english tag.
+    stronger deduction), no resolved custom-art/non-english tag, and card_type=CARD only.
+
+    Tokens (and cardbacks) are excluded (2026-07-16, diagnosed live): a token's printed
+    collector line reads its PARENT set's code (e.g. "MM3"), while its CanonicalCard
+    candidates use token-specific set codes (e.g. "tm3c") that never match - a structural
+    mismatch, not a fixable parsing bug. Combined with item 1's coverage-gap ordering (generic
+    multi-set token names like "Beast" have huge candidate counts and near-zero coverage, so
+    they score maximally on "descending uncovered count"), this was front-loading an
+    essentially-0%-matchable cohort to the very front of every selection - confirmed live by
+    sampling real OCR output against real candidates for the first 8 selected cards in a real
+    250-card window, all 8 of which were "Beast" tokens. Future work (not built): a
+    token-aware path using Scryfall's own token detection (`layout=token`/similar) to search
+    collector info or the set ICON instead of the parent-set text tokens don't reliably print.
 
     Does NOT apply the resolution floor (see select_candidates/count_below_resolution_floor,
     which layer opposite conditions on top of this shared base so the "how many did the floor
@@ -168,7 +181,9 @@ def _eligible_base_queryset(anonymous_id: str, exclude_source_pks: Optional[Iter
     --exclude-sources-ocr/--exclude-sources-phash flags.
     """
     queryset = (
-        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, canonical_card__isnull=True)
+        Card.objects.filter(
+            printing_tag_status=PrintingTagStatus.UNRESOLVED, canonical_card__isnull=True, card_type=CardTypes.CARD
+        )
         .exclude(printing_tags__anonymous_id=anonymous_id)
         .exclude(printing_tags__anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID)
         .exclude(tags__contains=[EXCLUDED_RESOLVED_TAGS[0]])

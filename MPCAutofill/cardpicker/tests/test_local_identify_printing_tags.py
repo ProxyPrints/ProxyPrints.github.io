@@ -41,6 +41,7 @@ from cardpicker.local_phash import find_best_match
 from cardpicker.models import (
     CardPrintingTag,
     CardTagVote,
+    CardTypes,
     PrintingTagStatus,
     VotePolarity,
     VoteSource,
@@ -96,6 +97,21 @@ class TestSelection:
         card = CardFactory(name="Forest")
         selected = select_candidates("ocr")
         assert [s.card.pk for s in selected] == [card.pk]
+
+    def test_excludes_tokens(self, db):
+        # 2026-07-16, diagnosed live: a token's printed collector line reads its PARENT set's
+        # code, while its CanonicalCard candidates use token-specific set codes that never
+        # match - structurally unmatchable, not a fixable parsing bug. Combined with item 1's
+        # "descending uncovered count" ordering, generic multi-set token names were being
+        # front-loaded to the very front of every real selection.
+        CanonicalCardFactory(name="Beast")
+        CardFactory(name="Beast", card_type=CardTypes.TOKEN)
+        assert select_candidates("ocr") == []
+
+    def test_excludes_cardbacks(self, db):
+        CanonicalCardFactory(name="Forest")
+        CardFactory(name="Forest", card_type=CardTypes.CARDBACK)
+        assert select_candidates("ocr") == []
 
     def test_excludes_card_with_existing_vote_from_this_engines_own_anonymous_id(self, db):
         printing = CanonicalCardFactory(name="Forest")
