@@ -1856,6 +1856,10 @@ implied by this OCR fix and was not built.
   (renamed from `printingQueue.tsx` — Stage 7)
 - `docs/upstreaming/vote-system.md`, `docs/federation-v1.md` (`name` vs.
   `display_name` interchange-key note, Stage 5)
+- `docs/features/catalog-completion-plan.md` (iteration safety - Part 1
+  detail), `cardpicker/utils.py` (`find_stale_applied_migrations`,
+  `get_baked_git_sha`), `cardpicker/management/commands/purge_machine_votes.py`,
+  migration `0061_pilotrunledger_cardartistvote_run_id_and_more.py`
 
 ## Known gaps
 
@@ -1930,6 +1934,12 @@ implied by this OCR fix and was not built.
   with `cardpicker.deductive_backfill`'s deterministic tiers (D1/D2), not
   Stage 8's visual-disambiguation engines — explicitly not the "D2.5
   arriving for free" the autopsy's cross-check ruled out.
+- **`deductive_backfill.py`'s own votes don't carry `run_id` yet** (2026-07-16,
+  iteration-safety Part 1's explicit scoping decision, not an oversight) —
+  the `run_id` threading in this section only covers
+  `local_identify_printing_tags.py`/`local_fallback.py`'s engines.
+  `deductive_backfill.run_backfill()` would benefit from the same
+  revocability property but wasn't in scope for this pass.
 
 ## HOLD #2: full package report (2026-07-16)
 
@@ -2193,3 +2203,40 @@ with the false-split evidence still too thin to call proven. Even if proven, the
 avoiding a _separate_ pre-pass fetch entirely - reusing the image OCR/phash already fetches per
 card, rather than shrinking a redundant one. That reframes task #108/#118 more than resolving
 task #117 on its own does.
+
+## Iteration safety: run_id, purge, staleness guard (2026-07-16)
+
+Full design/build detail lives in
+[`docs/features/catalog-completion-plan.md`](catalog-completion-plan.md)'s Part 1 - this section
+is the pointer from the pilot's own doc, stating the complete safety-property set this module
+now guarantees, since Part 1 completes it rather than replacing anything below.
+
+**Four properties, three pre-existing and one new:**
+
+1. **Machine votes can never resolve a card by themselves** (pre-existing, unchanged) -
+   `vote_consensus.resolve_weighted_consensus`'s human-backed gate: no matter how many
+   `VoteSource.OCR`/`VoteSource.DEDUCTION` votes pile up, a card only reaches `RESOLVED` with at
+   least one human-backed vote behind the winning outcome. This is the foundational invariant
+   every stage of this project is built on - see the module's own opening paragraph.
+2. **A killed/interrupted run is restart-safe** (pre-existing, unchanged) - the NULL-filter/
+   `anonymous_id`-exclusion idempotence in `_eligible_base_queryset`, plus batch-flush
+   checkpointing (see "Checkpointing" above): a plain re-invocation resumes cleanly, never
+   double-votes, loses at most one in-flight batch on a kill.
+3. **Revocability** (new, Part 1) - every machine vote now carries a `run_id` (a separate,
+   nullable, indexed field on `AbstractWeightedVote` - `anonymous_id` itself is untouched, its
+   exact-match reuse across invocations is what property 2 above depends on, so it could never
+   be safely repurposed as a per-run stamp). `manage.py purge_machine_votes --run-id <id>` deletes
+   exactly one invocation's votes and re-resolves every affected card, so a bad iteration can be
+   cleaned up surgically without touching any other run's votes.
+4. **Staleness guard** (new, Part 1) - every pilot command refuses to start if the DB has
+   migrations applied that the running image's own code doesn't know about
+   (`cardpicker.utils.find_stale_applied_migrations`) - automates the PR #24/#26 lesson (a
+   `docker compose build` can report success while a BuildKit caching bug ships old code
+   underneath) instead of relying on someone remembering to check image timestamps.
+
+**Updated rebuild command, now required** (adds the git-SHA build-info bake - best-effort
+visibility, logged at each command's startup, never itself the gate):
+
+```bash
+GIT_SHA=$(git rev-parse --short HEAD) docker compose -f docker/docker-compose.prod.yml build
+```
