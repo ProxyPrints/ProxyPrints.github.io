@@ -1369,6 +1369,42 @@ class TestConcurrency:
 
         assert results_seq["phash"].votes_written == results_conc["phash"].votes_written == 6
 
+    def test_thread_pool_is_created_once_for_the_whole_run_not_per_chunk(self, transactional_db, monkeypatch):
+        # bug fix (2026-07-16): the pool used to be created fresh inside the chunk loop, which -
+        # because Django DB connections are thread-local and nothing closes a connection when
+        # its owning thread is torn down - leaked one Postgres connection per worker per chunk
+        # and crashed a live full-catalog run with "sorry, too many clients already" within
+        # minutes. Reusing one pool for the whole run means each worker thread (and its DB
+        # connection) is created at most once, regardless of chunk count.
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_phash as phash_module
+
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        for _ in range(9):
+            CardFactory(name="Forest")
+
+        card_image = Image.new("RGB", (750, 1050), (5, 5, 5))
+        pinned_hash = phash_module.compute_card_art_hash(card_image)
+        monkeypatch.setattr(phash_module, "get_or_compute_canonical_hash", lambda canonical: pinned_hash)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: card_image)
+
+        construction_count = 0
+        real_executor_cls = module.ThreadPoolExecutor
+
+        class CountingThreadPoolExecutor(real_executor_cls):
+            def __init__(self, *args, **kwargs):
+                nonlocal construction_count
+                construction_count += 1
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(module, "ThreadPoolExecutor", CountingThreadPoolExecutor)
+
+        # 9 cards / batch_size=3 = 3 chunks - a pre-fix run would construct the pool 3 times.
+        results, _ = run_pilot(engine="phash", limit=10, dry_run=True, nice=False, workers=3, batch_size=3)
+
+        assert results["phash"].votes_written == 9  # sanity: real work actually flowed through all 3 chunks
+        assert construction_count == 1
+
     def test_omp_thread_limit_is_set_when_running_concurrently(self, db, monkeypatch):
         monkeypatch.delenv("OMP_THREAD_LIMIT", raising=False)
         import cardpicker.local_identify_printing_tags as module

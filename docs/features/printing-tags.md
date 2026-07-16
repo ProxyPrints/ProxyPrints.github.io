@@ -2042,3 +2042,28 @@ trigger), PR #19's disposition (owner's convenience).
 
 **Full-catalog run: not yet fired.** This report is the synthesizing deliverable requested
 before that authorization - awaiting explicit owner go-ahead.
+
+## Incident: per-chunk thread pool leaked Postgres connections, crashed the live run (2026-07-16)
+
+The second full-catalog relaunch (post cluster-dedup removal) died ~3 minutes in with
+`psycopg2.OperationalError: FATAL: sorry, too many clients already`. Root cause: pipeline
+concurrency's `ThreadPoolExecutor` (item 3d above) was constructed **inside** the chunk `while`
+loop, once per chunk, instead of once for the whole run. Django DB connections are thread-local
+and nothing closes a connection when its owning thread is torn down, so every chunk's disposable
+`ThreadPoolExecutor` leaked up to `workers` Postgres connections that were never coming back.
+At `DEFAULT_BATCH_SIZE=25` and `workers=7`, against `max_connections=100` with ~10 already in
+use by live traffic, the math works out to roughly a dozen chunks (~300 cards) before
+exhaustion - consistent with the observed crash timing at workers=7's measured throughput.
+
+Production site itself was never affected (confirmed 200s on both domains, and Postgres
+recovered to its normal ~8 connections once the crashed process released its leaked slots) -
+this was a background management-command process, not user-facing traffic.
+
+**Fix**: hoist the `with ThreadPoolExecutor(...)` (falling back to `contextlib.nullcontext()`
+for `workers==1`) to wrap the entire chunk loop, so the same pool - and therefore the same
+`workers` threads, and therefore each thread's single DB connection - is reused across every
+chunk instead of recreated. Zero behavior change to write ordering or chunking semantics (see
+the code comment at the fix site); regression test
+`TestConcurrency::test_thread_pool_is_created_once_for_the_whole_run_not_per_chunk` asserts
+pool construction count stays at 1 across multiple real chunks of work, not just that votes
+still get written.

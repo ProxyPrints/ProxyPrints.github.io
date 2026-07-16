@@ -21,9 +21,10 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Iterable, Literal, Optional
+from typing import Iterable, Literal, Optional, cast
 
 import requests
 from PIL import Image
@@ -897,247 +898,268 @@ def run_pilot(
     )
 
     chunk_start = 0
-    while chunk_start < total_cards:
-        # Fetch budget (pre-scale program item 3b, belt-and-suspenders alongside the image CDN
-        # Worker's own IMAGE_FULL_TIER_RATE_LIMITER - see the CLI command's --fetch-budget help):
-        # checked between chunks, not per-card - a chunk already in flight always runs to
-        # completion once started, so the real bound on an overshoot is one chunk's worth of
-        # fetches (<= batch_size), not zero. Acceptable given this is explicitly the secondary
-        # safeguard, not the primary one.
-        if fetch_budget is not None and fetches_made >= fetch_budget:
-            budget_exhausted = True
-            break
-        chunk = all_items[chunk_start : chunk_start + batch_size]
-        chunk_start += len(chunk)
-        selected_in_chunk = [selected for _card_id, selected in chunk]
+    # The pool is created ONCE for the whole run, outside the chunk loop (bug fix, 2026-07-16:
+    # it used to be recreated per chunk here, which - because Django DB connections are
+    # thread-local and nothing closes a connection when its owning thread is torn down -
+    # leaked one Postgres connection per worker per chunk. At DEFAULT_BATCH_SIZE=25 and
+    # workers=7 that exhausted max_connections=100 within minutes on a full-catalog run,
+    # crashing it with "sorry, too many clients already". Reusing the same threads across
+    # every chunk means each worker opens its DB connection at most once for the entire run,
+    # exactly like workers=1's single persistent connection.) `nullcontext()` keeps the
+    # workers==1 path allocation-free, same as before.
+    pool_cm: "ThreadPoolExecutor | nullcontext[None]" = (
+        ThreadPoolExecutor(max_workers=workers) if workers > 1 else nullcontext()
+    )
+    with pool_cm as pool:
+        while chunk_start < total_cards:
+            # Fetch budget (pre-scale program item 3b, belt-and-suspenders alongside the image
+            # CDN Worker's own IMAGE_FULL_TIER_RATE_LIMITER - see the CLI command's
+            # --fetch-budget help): checked between chunks, not per-card - a chunk already in
+            # flight always runs to completion once started, so the real bound on an overshoot
+            # is one chunk's worth of fetches (<= batch_size), not zero. Acceptable given this
+            # is explicitly the secondary safeguard, not the primary one.
+            if fetch_budget is not None and fetches_made >= fetch_budget:
+                budget_exhausted = True
+                break
+            chunk = all_items[chunk_start : chunk_start + batch_size]
+            chunk_start += len(chunk)
+            selected_in_chunk = [selected for _card_id, selected in chunk]
 
-        if workers > 1:
-            with ThreadPoolExecutor(max_workers=workers) as pool:
+            if workers > 1:
                 # .map() preserves submission order in its results regardless of completion
                 # order - the write loop below sees cards in the exact same order it would with
                 # workers=1, so nothing downstream needs to know concurrency happened at all.
-                chunk_results = list(pool.map(compute, selected_in_chunk))
-        else:
-            chunk_results = [compute(s) for s in selected_in_chunk]
+                # cast: workers > 1 is exactly the condition under which pool_cm above was built
+                # as a real ThreadPoolExecutor rather than nullcontext()'s None.
+                chunk_results = list(cast(ThreadPoolExecutor, pool).map(compute, selected_in_chunk))
+            else:
+                chunk_results = [compute(s) for s in selected_in_chunk]
 
-        for compute_result in chunk_results:
-            card_id = compute_result.card_id
-            outcome = compute_result.outcome
-            cards_attempted += 1
-            if compute_result.fetch_attempted:
-                fetches_made += 1
+            for compute_result in chunk_results:
+                card_id = compute_result.card_id
+                outcome = compute_result.outcome
+                cards_attempted += 1
+                if compute_result.fetch_attempted:
+                    fetches_made += 1
 
-            # Finalize + queue for write - a card's full cost (image fetch, OCR, phash,
-            # fallback) was already paid once in _compute_card above; nothing here depends on
-            # any OTHER card's outcome, only this card's own DB state (the frame-mismatch
-            # consistency check below re-queries the matched printing's own metadata,
-            # independent of processing order).
-            result_ocr = results.get("ocr")
-            result_phash = results.get("phash")
-            result_fallback = results["fallback"]
+                # Finalize + queue for write - a card's full cost (image fetch, OCR, phash,
+                # fallback) was already paid once in _compute_card above; nothing here depends on
+                # any OTHER card's outcome, only this card's own DB state (the frame-mismatch
+                # consistency check below re-queries the matched printing's own metadata,
+                # independent of processing order).
+                result_ocr = results.get("ocr")
+                result_phash = results.get("phash")
+                result_fallback = results["fallback"]
 
-            printing_vote_withheld_for_frame_mismatch = False
-            # consistency check: only meaningful once a printing vote (from either pass) exists
-            # to compare against the observed frame reading.
-            candidate_vote = outcome.ocr_vote or outcome.phash_vote or outcome.fallback_vote
-            if outcome.frame_class is not None and candidate_vote is not None and not outcome.disagreement:
-                canonical = (
-                    CanonicalCard.objects.filter(pk=candidate_vote.printing_pk)
-                    .select_related("printing_metadata")
-                    .first()
-                )
-                printing_frame_value = (
-                    canonical.printing_metadata.frame
-                    if canonical is not None and getattr(canonical, "printing_metadata", None) is not None
+                printing_vote_withheld_for_frame_mismatch = False
+                # consistency check: only meaningful once a printing vote (from either pass) exists
+                # to compare against the observed frame reading.
+                candidate_vote = outcome.ocr_vote or outcome.phash_vote or outcome.fallback_vote
+                if outcome.frame_class is not None and candidate_vote is not None and not outcome.disagreement:
+                    canonical = (
+                        CanonicalCard.objects.filter(pk=candidate_vote.printing_pk)
+                        .select_related("printing_metadata")
+                        .first()
+                    )
+                    printing_frame_value = (
+                        canonical.printing_metadata.frame
+                        if canonical is not None and getattr(canonical, "printing_metadata", None) is not None
+                        else None
+                    )
+                    if not local_fallback.frame_style_is_consistent(outcome.frame_class, printing_frame_value):
+                        outcome.frame_mismatch = True
+                        printing_vote_withheld_for_frame_mismatch = True
+                        attributes.frame_mismatches.append(
+                            {
+                                "card_id": card_id,
+                                "observed_frame_class": outcome.frame_class,
+                                "matched_printing_pk": candidate_vote.printing_pk,
+                                "matched_printing_frame_value": printing_frame_value,
+                            }
+                        )
+
+                if outcome.disagreement:
+                    assert (
+                        result_ocr is not None and result_phash is not None
+                    )  # both engines ran, or there's no disagreement to detect
+                    result_ocr.disagreements.append(
+                        {"card_id": card_id, "ocr": outcome.ocr_vote, "phash": outcome.phash_vote}
+                    )
+                    result_ocr.skip_counts["disagreement-with-other-engine"] += 1
+                    result_phash.skip_counts["disagreement-with-other-engine"] += 1
+                else:
+                    if outcome.ocr_vote is not None and result_ocr is not None:
+                        if printing_vote_withheld_for_frame_mismatch:
+                            result_ocr.skip_counts["frame-mismatch"] += 1
+                        else:
+                            votes_batch.append(
+                                CardPrintingTag(
+                                    card_id=card_id,
+                                    printing_id=outcome.ocr_vote.printing_pk,
+                                    is_no_match=False,
+                                    anonymous_id=OCR_ANONYMOUS_ID,
+                                    source=VoteSource.OCR,
+                                    confidence=outcome.ocr_vote.confidence,
+                                )
+                            )
+                            result_ocr.votes_written += 1
+                            result_ocr.audit.append({"card_id": card_id, "raw_text": outcome.ocr_vote.detail})
+                            written_card_ids.append(card_id)
+                            batch_written_card_ids.append(card_id)
+                            result_ocr.votes_written += propagate_cluster_vote(
+                                card_id, outcome.ocr_vote.printing_pk, OCR_ANONYMOUS_ID, outcome.ocr_vote.confidence
+                            )
+                    elif outcome.ocr_skip_reason and result_ocr is not None:
+                        result_ocr.skip_counts[outcome.ocr_skip_reason] += 1
+
+                    if outcome.phash_vote is not None and result_phash is not None:
+                        if printing_vote_withheld_for_frame_mismatch:
+                            result_phash.skip_counts["frame-mismatch"] += 1
+                        else:
+                            votes_batch.append(
+                                CardPrintingTag(
+                                    card_id=card_id,
+                                    printing_id=outcome.phash_vote.printing_pk,
+                                    is_no_match=False,
+                                    anonymous_id=PHASH_ANONYMOUS_ID,
+                                    source=VoteSource.OCR,
+                                    confidence=outcome.phash_vote.confidence,
+                                )
+                            )
+                            result_phash.votes_written += 1
+                            result_phash.audit.append({"card_id": card_id, "detail": outcome.phash_vote.detail})
+                            if card_id not in written_card_ids:
+                                written_card_ids.append(card_id)
+                                batch_written_card_ids.append(card_id)
+                            result_phash.votes_written += propagate_cluster_vote(
+                                card_id,
+                                outcome.phash_vote.printing_pk,
+                                PHASH_ANONYMOUS_ID,
+                                outcome.phash_vote.confidence,
+                            )
+                    elif outcome.phash_skip_reason and result_phash is not None:
+                        result_phash.skip_counts[outcome.phash_skip_reason] += 1
+
+                    if outcome.fallback_vote is not None:
+                        if printing_vote_withheld_for_frame_mismatch:
+                            result_fallback.skip_counts["frame-mismatch"] += 1
+                        else:
+                            votes_batch.append(
+                                CardPrintingTag(
+                                    card_id=card_id,
+                                    printing_id=outcome.fallback_vote.printing_pk,
+                                    is_no_match=False,
+                                    anonymous_id=FALLBACK_ANONYMOUS_ID,
+                                    source=VoteSource.OCR,
+                                    confidence=outcome.fallback_vote.confidence,
+                                )
+                            )
+                            result_fallback.votes_written += 1
+                            result_fallback.audit.append({"card_id": card_id, "evidence": outcome.fallback_vote.detail})
+                            if card_id not in written_card_ids:
+                                written_card_ids.append(card_id)
+                                batch_written_card_ids.append(card_id)
+                            result_fallback.votes_written += propagate_cluster_vote(
+                                card_id,
+                                outcome.fallback_vote.printing_pk,
+                                FALLBACK_ANONYMOUS_ID,
+                                outcome.fallback_vote.confidence,
+                            )
+                    elif outcome.fallback_skip_reason:
+                        result_fallback.skip_counts[outcome.fallback_skip_reason] += 1
+
+                # border/frame attribute votes are independent of printing-vote success or the
+                # consistency-check outcome above - they fire for any card a border/frame reading
+                # was taken on, per the module docstring's "double duty" note. BUT when a printing
+                # was actually confirmed for this card this run, ground truth from that printing's
+                # own CanonicalPrintingMetadata (Scryfall border_color/frame) is preferred over the
+                # pixel/OCR heuristic estimate - the heuristic's whole purpose was to independently
+                # validate an uncertain match (the consistency check above needs an independent
+                # signal to compare against), not to guess an answer we now actually know. Falls
+                # back to the heuristic reading whenever no printing was confirmed this run, or the
+                # confirmed printing has no usable ground truth for that particular attribute.
+                card = all_selected_by_card_id[card_id].card
+                confirmed_printing_pk = (
+                    candidate_vote.printing_pk
+                    if candidate_vote is not None
+                    and not outcome.disagreement
+                    and not printing_vote_withheld_for_frame_mismatch
                     else None
                 )
-                if not local_fallback.frame_style_is_consistent(outcome.frame_class, printing_frame_value):
-                    outcome.frame_mismatch = True
-                    printing_vote_withheld_for_frame_mismatch = True
-                    attributes.frame_mismatches.append(
-                        {
-                            "card_id": card_id,
-                            "observed_frame_class": outcome.frame_class,
-                            "matched_printing_pk": candidate_vote.printing_pk,
-                            "matched_printing_frame_value": printing_frame_value,
-                        }
+                ground_truth_metadata = None
+                if confirmed_printing_pk is not None:
+                    confirmed_canonical = (
+                        CanonicalCard.objects.filter(pk=confirmed_printing_pk)
+                        .select_related("printing_metadata")
+                        .first()
                     )
+                    if (
+                        confirmed_canonical is not None
+                        and getattr(confirmed_canonical, "printing_metadata", None) is not None
+                    ):
+                        ground_truth_metadata = confirmed_canonical.printing_metadata
 
-            if outcome.disagreement:
-                assert (
-                    result_ocr is not None and result_phash is not None
-                )  # both engines ran, or there's no disagreement to detect
-                result_ocr.disagreements.append(
-                    {"card_id": card_id, "ocr": outcome.ocr_vote, "phash": outcome.phash_vote}
-                )
-                result_ocr.skip_counts["disagreement-with-other-engine"] += 1
-                result_phash.skip_counts["disagreement-with-other-engine"] += 1
-            else:
-                if outcome.ocr_vote is not None and result_ocr is not None:
-                    if printing_vote_withheld_for_frame_mismatch:
-                        result_ocr.skip_counts["frame-mismatch"] += 1
+                border_class = outcome.border_color
+                border_confidence = local_fallback.BORDER_ATTRIBUTE_VOTE_CONFIDENCE
+                if ground_truth_metadata is not None and ground_truth_metadata.border_color:
+                    # gate on a known tag mapping before overriding - Scryfall's border_color can be
+                    # "gold", outside this v1 taxonomy (see local_fallback.BORDER_COLOR_TO_TAG's
+                    # docstring); an unmapped ground truth value must not discard a valid heuristic
+                    # reading in favour of a vote that will silently resolve to nothing.
+                    ground_truth_border_class = ground_truth_metadata.border_color
+                    if ground_truth_border_class in local_fallback.BORDER_COLOR_TO_TAG:
+                        border_class = ground_truth_border_class
+                        border_confidence = local_fallback.GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE
+                        attributes.border_ground_truth_count += 1
+
+                if border_class is not None:
+                    attributes.border_votes_by_class[border_class] += 1
+                    border_vote = local_fallback.cast_border_attribute_vote(
+                        card, border_class, confidence=border_confidence
+                    )
+                    if border_vote is not None and not dry_run:
+                        tag_votes_batch.append(border_vote)
+
+                frame_class = outcome.frame_class
+                frame_confidence = local_fallback.FRAME_VOTE_CONFIDENCE
+                if ground_truth_metadata is not None and ground_truth_metadata.frame:
+                    ground_truth_frame_class = local_fallback.FRAME_VALUE_TO_CLASS.get(ground_truth_metadata.frame)
+                    if ground_truth_frame_class is not None:
+                        frame_class = ground_truth_frame_class
+                        frame_confidence = local_fallback.GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE
+                        attributes.frame_ground_truth_count += 1
+
+                if outcome.frame_reading_attempted:
+                    if frame_class is not None:
+                        attributes.frame_votes_by_class[frame_class] += 1
+                        frame_vote = local_fallback.cast_frame_style_vote(
+                            card, frame_class, confidence=frame_confidence
+                        )
+                        if frame_vote is not None and not dry_run:
+                            tag_votes_batch.append(frame_vote)
                     else:
-                        votes_batch.append(
-                            CardPrintingTag(
-                                card_id=card_id,
-                                printing_id=outcome.ocr_vote.printing_pk,
-                                is_no_match=False,
-                                anonymous_id=OCR_ANONYMOUS_ID,
-                                source=VoteSource.OCR,
-                                confidence=outcome.ocr_vote.confidence,
-                            )
-                        )
-                        result_ocr.votes_written += 1
-                        result_ocr.audit.append({"card_id": card_id, "raw_text": outcome.ocr_vote.detail})
-                        written_card_ids.append(card_id)
-                        batch_written_card_ids.append(card_id)
-                        result_ocr.votes_written += propagate_cluster_vote(
-                            card_id, outcome.ocr_vote.printing_pk, OCR_ANONYMOUS_ID, outcome.ocr_vote.confidence
-                        )
-                elif outcome.ocr_skip_reason and result_ocr is not None:
-                    result_ocr.skip_counts[outcome.ocr_skip_reason] += 1
+                        attributes.frame_abstain_count += 1
 
-                if outcome.phash_vote is not None and result_phash is not None:
-                    if printing_vote_withheld_for_frame_mismatch:
-                        result_phash.skip_counts["frame-mismatch"] += 1
-                    else:
-                        votes_batch.append(
-                            CardPrintingTag(
-                                card_id=card_id,
-                                printing_id=outcome.phash_vote.printing_pk,
-                                is_no_match=False,
-                                anonymous_id=PHASH_ANONYMOUS_ID,
-                                source=VoteSource.OCR,
-                                confidence=outcome.phash_vote.confidence,
-                            )
-                        )
-                        result_phash.votes_written += 1
-                        result_phash.audit.append({"card_id": card_id, "detail": outcome.phash_vote.detail})
-                        if card_id not in written_card_ids:
-                            written_card_ids.append(card_id)
-                            batch_written_card_ids.append(card_id)
-                        result_phash.votes_written += propagate_cluster_vote(
-                            card_id, outcome.phash_vote.printing_pk, PHASH_ANONYMOUS_ID, outcome.phash_vote.confidence
-                        )
-                elif outcome.phash_skip_reason and result_phash is not None:
-                    result_phash.skip_counts[outcome.phash_skip_reason] += 1
+                # addendum item 7: bleed-edge classification - independent of printing-vote success,
+                # same "fires for any card with a fetched image" convention as border/frame above,
+                # and (unlike those two) has no ground-truth counterpart to prefer, since Scryfall
+                # doesn't encode this at all. Already computed once in _compute_card - FIRST, ahead
+                # of everything else (see that function's docstring) - so this reads outcome.bleed_
+                # class/outcome.image_fetched rather than recomputing against `image` (which is no
+                # longer available here now that fetch+compute moved into _compute_card).
+                if outcome.bleed_class is not None:
+                    attributes.bleed_votes_by_class[outcome.bleed_class] += 1
+                    bleed_vote = local_fallback.cast_bleed_edge_vote(card, outcome.bleed_class)
+                    if bleed_vote is not None and not dry_run:
+                        tag_votes_batch.append(bleed_vote)
+                elif outcome.image_fetched:
+                    attributes.bleed_abstain_count += 1
 
-                if outcome.fallback_vote is not None:
-                    if printing_vote_withheld_for_frame_mismatch:
-                        result_fallback.skip_counts["frame-mismatch"] += 1
-                    else:
-                        votes_batch.append(
-                            CardPrintingTag(
-                                card_id=card_id,
-                                printing_id=outcome.fallback_vote.printing_pk,
-                                is_no_match=False,
-                                anonymous_id=FALLBACK_ANONYMOUS_ID,
-                                source=VoteSource.OCR,
-                                confidence=outcome.fallback_vote.confidence,
-                            )
-                        )
-                        result_fallback.votes_written += 1
-                        result_fallback.audit.append({"card_id": card_id, "evidence": outcome.fallback_vote.detail})
-                        if card_id not in written_card_ids:
-                            written_card_ids.append(card_id)
-                            batch_written_card_ids.append(card_id)
-                        result_fallback.votes_written += propagate_cluster_vote(
-                            card_id,
-                            outcome.fallback_vote.printing_pk,
-                            FALLBACK_ANONYMOUS_ID,
-                            outcome.fallback_vote.confidence,
-                        )
-                elif outcome.fallback_skip_reason:
-                    result_fallback.skip_counts[outcome.fallback_skip_reason] += 1
-
-            # border/frame attribute votes are independent of printing-vote success or the
-            # consistency-check outcome above - they fire for any card a border/frame reading
-            # was taken on, per the module docstring's "double duty" note. BUT when a printing
-            # was actually confirmed for this card this run, ground truth from that printing's
-            # own CanonicalPrintingMetadata (Scryfall border_color/frame) is preferred over the
-            # pixel/OCR heuristic estimate - the heuristic's whole purpose was to independently
-            # validate an uncertain match (the consistency check above needs an independent
-            # signal to compare against), not to guess an answer we now actually know. Falls
-            # back to the heuristic reading whenever no printing was confirmed this run, or the
-            # confirmed printing has no usable ground truth for that particular attribute.
-            card = all_selected_by_card_id[card_id].card
-            confirmed_printing_pk = (
-                candidate_vote.printing_pk
-                if candidate_vote is not None
-                and not outcome.disagreement
-                and not printing_vote_withheld_for_frame_mismatch
-                else None
-            )
-            ground_truth_metadata = None
-            if confirmed_printing_pk is not None:
-                confirmed_canonical = (
-                    CanonicalCard.objects.filter(pk=confirmed_printing_pk).select_related("printing_metadata").first()
-                )
-                if (
-                    confirmed_canonical is not None
-                    and getattr(confirmed_canonical, "printing_metadata", None) is not None
-                ):
-                    ground_truth_metadata = confirmed_canonical.printing_metadata
-
-            border_class = outcome.border_color
-            border_confidence = local_fallback.BORDER_ATTRIBUTE_VOTE_CONFIDENCE
-            if ground_truth_metadata is not None and ground_truth_metadata.border_color:
-                # gate on a known tag mapping before overriding - Scryfall's border_color can be
-                # "gold", outside this v1 taxonomy (see local_fallback.BORDER_COLOR_TO_TAG's
-                # docstring); an unmapped ground truth value must not discard a valid heuristic
-                # reading in favour of a vote that will silently resolve to nothing.
-                ground_truth_border_class = ground_truth_metadata.border_color
-                if ground_truth_border_class in local_fallback.BORDER_COLOR_TO_TAG:
-                    border_class = ground_truth_border_class
-                    border_confidence = local_fallback.GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE
-                    attributes.border_ground_truth_count += 1
-
-            if border_class is not None:
-                attributes.border_votes_by_class[border_class] += 1
-                border_vote = local_fallback.cast_border_attribute_vote(
-                    card, border_class, confidence=border_confidence
-                )
-                if border_vote is not None and not dry_run:
-                    tag_votes_batch.append(border_vote)
-
-            frame_class = outcome.frame_class
-            frame_confidence = local_fallback.FRAME_VOTE_CONFIDENCE
-            if ground_truth_metadata is not None and ground_truth_metadata.frame:
-                ground_truth_frame_class = local_fallback.FRAME_VALUE_TO_CLASS.get(ground_truth_metadata.frame)
-                if ground_truth_frame_class is not None:
-                    frame_class = ground_truth_frame_class
-                    frame_confidence = local_fallback.GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE
-                    attributes.frame_ground_truth_count += 1
-
-            if outcome.frame_reading_attempted:
-                if frame_class is not None:
-                    attributes.frame_votes_by_class[frame_class] += 1
-                    frame_vote = local_fallback.cast_frame_style_vote(card, frame_class, confidence=frame_confidence)
-                    if frame_vote is not None and not dry_run:
-                        tag_votes_batch.append(frame_vote)
-                else:
-                    attributes.frame_abstain_count += 1
-
-            # addendum item 7: bleed-edge classification - independent of printing-vote success,
-            # same "fires for any card with a fetched image" convention as border/frame above,
-            # and (unlike those two) has no ground-truth counterpart to prefer, since Scryfall
-            # doesn't encode this at all. Already computed once in _compute_card - FIRST, ahead
-            # of everything else (see that function's docstring) - so this reads outcome.bleed_
-            # class/outcome.image_fetched rather than recomputing against `image` (which is no
-            # longer available here now that fetch+compute moved into _compute_card).
-            if outcome.bleed_class is not None:
-                attributes.bleed_votes_by_class[outcome.bleed_class] += 1
-                bleed_vote = local_fallback.cast_bleed_edge_vote(card, outcome.bleed_class)
-                if bleed_vote is not None and not dry_run:
-                    tag_votes_batch.append(bleed_vote)
-            elif outcome.image_fetched:
-                attributes.bleed_abstain_count += 1
-
-        flush()
-        if nice:
-            time.sleep(_NICE_SLEEP_SECONDS)
-        if progress_every and chunk_start % progress_every < len(chunk):
-            print(f"  ... {chunk_start}/{total_cards} candidates processed")
+            flush()
+            if nice:
+                time.sleep(_NICE_SLEEP_SECONDS)
+            if progress_every and chunk_start % progress_every < len(chunk):
+                print(f"  ... {chunk_start}/{total_cards} candidates processed")
 
     cards_not_attempted = len(all_selected_by_card_id) - cards_attempted
     for result in results.values():
