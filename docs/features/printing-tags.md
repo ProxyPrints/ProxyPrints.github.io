@@ -1710,6 +1710,52 @@ doesn't give intra-run stability granularity (e.g. whether the first 50 cards pr
 different rate than the last 50) - a finer-grained timing pass would be needed for that
 specific claim, not done here.
 
+### Token exclusion + post-resize soak comparison (2026-07-16)
+
+**A real correctness gap found and fixed before trusting any throughput number from this
+window**: the first several 250-card soak-test runs at both pre- and post-resize core counts
+showed 0/250 OCR votes - a stark regression from the original 94/300 baseline. Diagnosed live
+by sampling real OCR output against real candidates for the first 8 selected cards: all 8 were
+generic "Beast" tokens (source-uploaded images with `card_type=TOKEN`) with ~90 candidate
+printings each across token-only sets. A token's printed collector line reads its PARENT set's
+code (e.g. "MM3"), while its `CanonicalCard` candidates use token-specific set codes (e.g.
+"tm3c") that never match - structural, not a parsing bug. Item 1's "descending uncovered count"
+ordering was front-loading this near-0%-matchable cohort (huge candidate counts, near-zero
+coverage) to the very front of every real selection. Fixed: `_eligible_base_queryset` now
+filters to `card_type=CARD` only (excludes tokens and cardbacks) - confirmed via a fresh
+eligible-pool count, 172,494 cards (the pilot's own real filtered count, not a naive
+unfiltered query). Future work (not built): a token-aware matching path using Scryfall's own
+token detection to search collector info or the set icon instead of the parent-set text tokens
+don't reliably print.
+
+**Corrected before/after comparison**, same 250-card window, re-run after the fix - OCR yield
+now healthy and consistent at both core counts (56/198 votes, 28.3%, matching the original
+94/300 baseline):
+
+| config (pre-resize vs. post-resize core count) | wall-clock | processing-only rate |
+| ---------------------------------------------- | ---------: | -------------------: |
+| lower core count (`--workers 2`)               |       456s |          2.051s/card |
+| higher core count (`--workers 7`)              |       230s |          0.914s/card |
+
+**Speedup: 2.24x** (up from an earlier token-contaminated measurement's 2.03x - the sequential
+clustering pre-pass, still unparallelized, see below, is a smaller share of a longer, more
+representative run). Full-catalog re-projection (172,494 eligible pool):
+
+|                   |   raw (naive) | cluster-dedup-adjusted (incl. ~21.6h sequential clustering pre-pass) |
+| ----------------- | ------------: | -------------------------------------------------------------------: |
+| lower core count  |     4.09 days |                                                            4.14 days |
+| higher core count | **1.82 days** |                                                        **2.34 days** |
+
+The sequential clustering pre-pass (`compute_own_image_clusters`, confirmed via code inspection
+AND a live `docker stats` capture showing a single-core-only ~100% CPU plateau during that
+phase) is ~21.6h fixed regardless of core count - ~38% of total time at the higher core count.
+Parallelizing that one loop (flagged as a follow-up, not built) remains the highest-leverage
+lever to push below ~2.3 days. Verified via direct `docker stats` sampling (not just aggregate
+system `top`) that the compute phase itself DOES achieve real multi-core parallelism (a peak of
+~625% CPU observed, consistent with most of a 7-worker pool active simultaneously) once past the
+pre-pass - an earlier read of aggregate `top` data alone had incorrectly suggested a GIL-bound
+compute phase; the direct per-process measurement corrected that.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run
