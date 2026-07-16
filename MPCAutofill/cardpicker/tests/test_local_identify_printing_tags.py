@@ -2109,3 +2109,76 @@ class TestContentPhashBackfill:
         still_null.refresh_from_db()
         assert already_hashed.content_phash == 42  # untouched
         assert still_null.content_phash == 7  # newly hashed
+
+
+class TestPipelinedBackfillOutOfOrder:
+    """Part 2 (docs/features/catalog-completion-plan.md): the pipelined backfill's sliding
+    fetch window means completion order isn't submission order once more than one worker
+    thread is in flight - this proves persistence is correct regardless of which order fetches
+    actually finish in, unlike run_pilot's ThreadPoolExecutor.map() which gets ordering for
+    free."""
+
+    def test_persists_correctly_when_completion_order_differs_from_submission_order(self, db, monkeypatch):
+        # card_a is submitted first (lower pk, since the queryset orders by pk) but its fetch
+        # is made to finish LAST - proves the persisted result is keyed by which card the
+        # future belongs to, not by submission/completion position.
+        card_a = CardFactory(name="Forest", content_phash=None)
+        card_b = CardFactory(name="Island", content_phash=None)
+        card_c = CardFactory(name="Mountain", content_phash=None)
+        import time
+
+        import cardpicker.local_phash as module
+
+        delays = {card_a.pk: 0.3, card_b.pk: 0.05, card_c.pk: 0.15}
+        hashes = {card_a.pk: 111, card_b.pk: 222, card_c.pk: 333}
+
+        def slow_variable_hash(card: object, dpi: int = module.INGEST_HASH_FETCH_DPI) -> int:
+            time.sleep(delays[card.pk])  # type: ignore[attr-defined]
+            return hashes[card.pk]  # type: ignore[attr-defined]
+
+        monkeypatch.setattr(module, "compute_content_phash_for_card", slow_variable_hash)
+
+        # workers=3 keeps all three in flight simultaneously (window_size = max(batch_size *
+        # queue_depth_batches, workers) = max(2, 3) = 3), so completion order is purely
+        # determined by the delays above (b, then c, then a) - the reverse of submission order.
+        result = run_content_phash_backfill(nice=False, batch_size=1, workers=3, queue_depth_batches=1)
+
+        assert result == BackfillResult(dry_run=False, total_candidates=3, hashed=3, failed=0)
+        card_a.refresh_from_db()
+        card_b.refresh_from_db()
+        card_c.refresh_from_db()
+        assert card_a.content_phash == 111
+        assert card_b.content_phash == 222
+        assert card_c.content_phash == 333
+
+    def test_checkpoint_flushes_progressively_not_all_at_once(self, db, monkeypatch):
+        # proves the pipeline actually flushes as it goes (the "kill loses at most one batch"
+        # safety property) rather than accumulating every result and writing once at the end,
+        # which would silently defeat that property while still passing every other test here.
+        cards = [CardFactory(name=f"Card {i}", content_phash=None) for i in range(6)]
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(
+            module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: card.pk
+        )
+
+        bulk_update_calls: list[int] = []
+        original_bulk_update = module.Card.objects.bulk_update
+
+        def counting_bulk_update(objs: object, fields: object, **kwargs: object) -> object:
+            bulk_update_calls.append(len(list(objs)))  # type: ignore[arg-type]
+            return original_bulk_update(objs, fields, **kwargs)
+
+        monkeypatch.setattr(module.Card.objects, "bulk_update", counting_bulk_update)
+
+        result = run_content_phash_backfill(nice=False, batch_size=2, workers=2, queue_depth_batches=1)
+
+        assert result.hashed == 6
+        # 6 cards at batch_size=2 must flush at least 3 times (could be more if timing splits a
+        # window awkwardly, but never fewer) - the key assertion is "more than one," proving
+        # this isn't a single end-of-run write.
+        assert len(bulk_update_calls) >= 3
+        assert sum(bulk_update_calls) == 6
+        for card in cards:
+            card.refresh_from_db()
+            assert card.content_phash == card.pk

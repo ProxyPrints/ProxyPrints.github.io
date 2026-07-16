@@ -11,7 +11,7 @@ selected card's name actually produced, never a bulk backfill of the full 113k-r
 
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from io import BytesIO
 from typing import TYPE_CHECKING, Optional
@@ -162,6 +162,14 @@ class BackfillResult:
     failed: int = 0
 
 
+# Part 2 (docs/features/catalog-completion-plan.md): the CDN Worker's shared full-tier rate
+# limiter (image-cdn/wrangler.toml's IMAGE_FULL_TIER_RATE_LIMITER, 3 req/sec) is the real
+# throughput ceiling, shared with live PDF export/bulk download - "N fetch threads sized to
+# saturate the allowance" means N~3-5, not a large pool, since throughput beyond ~3/sec is
+# rate-limited regardless of local thread count.
+DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES = 2
+
+
 def run_content_phash_backfill(
     dry_run: bool = False,
     batch_size: int = DEFAULT_BACKFILL_BATCH_SIZE,
@@ -169,6 +177,7 @@ def run_content_phash_backfill(
     limit: Optional[int] = None,
     nice: bool = True,
     progress_every: int = 1000,
+    queue_depth_batches: int = DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES,
 ) -> BackfillResult:
     """
     One-time backfill (docs/features/printing-tags.md, 2026-07-16): hashes every existing Card
@@ -181,10 +190,28 @@ def run_content_phash_backfill(
     Idempotent and resumable by construction: filters on content_phash__isnull=True, so a plain
     re-invocation after a kill picks up exactly where it left off with no separate checkpoint
     file or --resume flag needed - same NULL-filter-as-checkpoint discipline
-    local_identify_printing_tags.run_pilot uses via its own anonymous_id exclusion. Batched:
-    fetches+hashes `batch_size` cards concurrently (via `workers` threads, matching
-    update_database's own ingest-hook concurrency), then persists that whole batch with one
-    bulk_update - a kill loses at most one in-flight batch, never more.
+    local_identify_printing_tags.run_pilot uses via its own anonymous_id exclusion.
+
+    Pipelined, not per-batch-blocking (Part 2): ONE long-lived `workers`-thread pool for the
+    whole run (not recreated per batch - the original implementation's actual inefficiency
+    wasn't the per-batch bulk_update, which is cheap, but the strict alternation between "wait
+    for this batch's fetches" and "wait for this batch's persist" with no overlap between the
+    two). A sliding submission window of `batch_size * queue_depth_batches` futures is kept full
+    at all times via `concurrent.futures.wait(..., return_when=FIRST_COMPLETED)` - as soon as
+    any fetch completes, its slot is immediately refilled with the next card, so a batch's
+    persist (fast, DB-only) happens in the main thread while the worker pool keeps fetching
+    ahead, uninterrupted. `queue_depth_batches` bounds how many fetched-but-not-yet-persisted
+    Card objects can be in flight at once (memory bound), independent of `workers` (the CDN rate
+    limit bounds real fetch throughput regardless of pool size - see DEFAULT_BACKFILL_WORKERS).
+
+    Completion order is NOT submission order once more than one worker thread is fetching
+    concurrently - a later-submitted card can finish before an earlier one (a slow/large image,
+    a transient retry, network jitter). This is safe here specifically because each card's
+    persist is independent (no ordering dependency, no shared cross-card state, unlike e.g. a
+    running index or a "first N" cutoff) - see TestPipelinedBackfillOutOfOrder in
+    test_local_identify_printing_tags.py for the explicit proof. A kill/crash loses at most the
+    in-flight window (`batch_size * queue_depth_batches` cards, already-persisted batches are
+    safe) - the same NULL-filter checkpoint discipline covers it on the next invocation.
     """
     if nice:
         try:
@@ -206,26 +233,47 @@ def run_content_phash_backfill(
 
     hashed = 0
     failed = 0
-    for chunk_start in range(0, total, batch_size):
-        chunk = all_cards[chunk_start : chunk_start + batch_size]
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            hashes = list(executor.map(compute_content_phash_for_card, chunk))
+    processed = 0
+    to_persist: list[Card] = []
+    window_size = max(batch_size * queue_depth_batches, workers)
 
-        to_update = []
-        for card, content_hash in zip(chunk, hashes):
-            if content_hash is not None:
-                card.content_phash = content_hash
-                to_update.append(card)
-                hashed += 1
-            else:
-                failed += 1
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending: dict["Future[Optional[int]]", Card] = {}
+        card_iter = iter(all_cards)
 
-        if to_update and not dry_run:
-            Card.objects.bulk_update(to_update, ["content_phash"], batch_size=batch_size)
+        def submit_next() -> None:
+            card = next(card_iter, None)
+            if card is not None:
+                pending[executor.submit(compute_content_phash_for_card, card)] = card
 
-        done = chunk_start + len(chunk)
-        if progress_every and done % progress_every < len(chunk):
-            print(f"  ... {done}/{total} cards hashed")
+        for _ in range(window_size):
+            submit_next()
+
+        while pending:
+            done, _ = wait(pending.keys(), return_when=FIRST_COMPLETED)
+            for done_future in done:
+                card = pending.pop(done_future)
+                content_hash = done_future.result()
+                processed += 1
+                submit_next()  # keep the window full - fetch stays ahead of persist
+
+                if content_hash is not None:
+                    card.content_phash = content_hash
+                    to_persist.append(card)
+                    hashed += 1
+                else:
+                    failed += 1
+
+                if len(to_persist) >= batch_size:
+                    if not dry_run:
+                        Card.objects.bulk_update(to_persist, ["content_phash"], batch_size=batch_size)
+                    to_persist = []
+
+                if progress_every and processed % progress_every < len(done):
+                    print(f"  ... {processed}/{total} cards hashed")
+
+        if to_persist and not dry_run:
+            Card.objects.bulk_update(to_persist, ["content_phash"], batch_size=batch_size)
 
     return BackfillResult(dry_run=dry_run, total_candidates=total, hashed=hashed, failed=failed)
 
@@ -282,6 +330,7 @@ __all__ = [
     "INGEST_HASH_FETCH_DPI",
     "DEFAULT_BACKFILL_BATCH_SIZE",
     "DEFAULT_BACKFILL_WORKERS",
+    "DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES",
     "PhashMatch",
     "BackfillResult",
     "get_or_compute_canonical_hash",

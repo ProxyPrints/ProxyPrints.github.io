@@ -312,6 +312,31 @@ informally assumed before this constraint was found.
 5. Report the corrected wall-clock projection (pipelined vs. sequential,
    at the real 3/sec ceiling) when this part is built.
 
+**Built** (2026-07-16): `run_content_phash_backfill` (`cardpicker/local_phash.py`) rewritten
+around a sliding submission window (`concurrent.futures.wait(..., return_when=FIRST_COMPLETED)`)
+instead of a `ThreadPoolExecutor` recreated per batch - one long-lived pool for the whole run,
+window size `batch_size * queue_depth_batches` kept full at all times, checkpoint-flush as
+completions arrive rather than in lockstep with a batch boundary. New
+`TestPipelinedBackfillOutOfOrder` proves persistence is correct when completion order differs
+from submission order (a later-submitted card finishing before an earlier one), and that
+checkpoint-flushes happen progressively, not as one write at the end. All 5 pre-existing
+backfill tests pass unchanged (`compute_content_phash_for_card` stays the per-card unit of
+work, only the outer orchestration changed).
+
+**Honest wall-clock correction, not an oversell**: at the real backlog size (218,152 cards, 0
+hashed as of 2026-07-16) and the 3 req/sec shared ceiling, the floor is **~20.2 hours**
+regardless of pipelining - `218,152 / 3 ≈ 72,717s`. Pipelining does **not** meaningfully reduce
+this: the old per-batch design's actual wasted time was the gap between "fetch phase ends" and
+"next batch's fetch phase starts" while a `bulk_update` runs, which is fast (~437 batches at
+`batch_size=500` × well under 1s each ≈ a few minutes total, under 0.5% of the full run) - not
+the dominant cost the naive "eliminate the gaps" framing might suggest. The real value of this
+rewrite is **not** a wall-clock win; it's the checkpoint/idempotence guarantees now being
+explicit and tested (a kill loses at most one window's worth of in-flight fetches, proven
+correct under real out-of-order completion) rather than assumed. Confirms the plan's own
+"~15+ hours if run alone" estimate was in the right ballpark; ~20.2h is the precise figure now
+that the real backlog size is known. Per item 4 above, this still shouldn't run concurrently
+with the live pilot - sequencing after remains the right call regardless of this correction.
+
 ---
 
 ## Part 3 — Shared evidence-recovery module (after PR #27 merges; expanded)
