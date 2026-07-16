@@ -312,6 +312,85 @@ informally assumed before this constraint was found.
 5. Report the corrected wall-clock projection (pipelined vs. sequential,
    at the real 3/sec ceiling) when this part is built.
 
+**WAIT vs. `--throttle` trickle, grounded in the pilot's real observed rate (2026-07-16)**:
+the live pilot fetches exactly one image per candidate through the shared CDN Worker (confirmed
+by reading `_compute_card` - one `fetch_card_image` call serves OCR, phash, and border/frame/
+bleed classification together; phash's own candidate-hash comparisons hit Scryfall directly,
+not this Worker, so they don't count against the shared ceiling). Measured over 1.5h of the
+current post-restart run: **13,800 candidates in 5,400s = 2.556 req/s** - the pilot is CPU-bound
+(OCR/phash/classification compute per candidate), not currently saturating the 3 req/s ceiling
+itself, which is what leaves a **headroom of ~0.444 req/s (14.8% of the ceiling)** in principle.
+
+Two scenarios, both starting from the pilot's remaining 152,170 candidates (16.5h at 2.556/s)
+and the backfill's full 218,152-card backlog (0 hashed as of this writing):
+
+- **WAIT** (pilot finishes undisturbed, backfill then runs alone at the full 3/s):
+  16.5h + (218,152 / 3 ≈ 20.2h) = **~36.7h total**.
+- **TRICKLE, optimistic case** (headroom is real and the limiter shares cleanly between
+  unrelated callers - unverified assumption, not measured): trickle backfills
+  `16.5h × 0.444/s ≈ 26,464 cards` (**12.1% of the backlog**) during the pilot's remaining run,
+  then the remaining 191,688 cards finish at full 3/s once the pilot's done (~17.7h):
+  16.5h + 17.7h = **~34.3h total** - a **2.5h (6.7%) faster** finish than WAIT, in the best case.
+
+That 6.7% is the _entire_ case for trickling, and it rests on an unverified sharing-fairness
+assumption about the Cloudflare Worker's token bucket under two unrelated concurrent callers -
+exactly the kind of assumption that motivated building this rate limiter in the first place
+(an earlier unattended backfill script hammered this same endpoint) and that caused a real
+incident earlier in this same work session (an unverified concurrent-container assumption broke
+the live pilot job outright). If the assumption is wrong even partially - the limiter doesn't
+share as cleanly as modeled, or the pilot's own rate isn't as stably CPU-bound as one 1.5h
+sample suggests - trickling directly steals throughput from a days-long production job for a
+worst-case downside that's asymmetric with the 6.7%-best-case upside. And even in the optimistic
+case, only 12.1% backlog coverage exists by the time the pilot finishes - nowhere near
+"substantial" for Part 3's own needs (its own volume check already found near-zero coverage
+uninformative at 0%; 12% isn't a meaningfully different starting point). **The arithmetic does
+not overturn WAIT** - it's confirmed as the right call, not merely the safer-feeling one.
+
+**Built** (2026-07-16): `run_content_phash_backfill` (`cardpicker/local_phash.py`) rewritten
+around a sliding submission window (`concurrent.futures.wait(..., return_when=FIRST_COMPLETED)`)
+instead of a `ThreadPoolExecutor` recreated per batch - one long-lived pool for the whole run,
+window size `batch_size * queue_depth_batches` kept full at all times, checkpoint-flush as
+completions arrive rather than in lockstep with a batch boundary. New
+`TestPipelinedBackfillOutOfOrder` proves persistence is correct when completion order differs
+from submission order (a later-submitted card finishing before an earlier one), and that
+checkpoint-flushes happen progressively, not as one write at the end. All 5 pre-existing
+backfill tests pass unchanged (`compute_content_phash_for_card` stays the per-card unit of
+work, only the outer orchestration changed).
+
+**Honest wall-clock correction, not an oversell**: at the real backlog size (218,152 cards, 0
+hashed as of 2026-07-16) and the 3 req/sec shared ceiling, the floor is **~20.2 hours**
+regardless of pipelining - `218,152 / 3 ≈ 72,717s`. Pipelining does **not** meaningfully reduce
+this: the old per-batch design's actual wasted time was the gap between "fetch phase ends" and
+"next batch's fetch phase starts" while a `bulk_update` runs, which is fast (~437 batches at
+`batch_size=500` × well under 1s each ≈ a few minutes total, under 0.5% of the full run) - not
+the dominant cost the naive "eliminate the gaps" framing might suggest. The real value of this
+rewrite is **not** a wall-clock win; it's the checkpoint/idempotence guarantees now being
+explicit and tested (a kill loses at most one window's worth of in-flight fetches, proven
+correct under real out-of-order completion) rather than assumed. Confirms the plan's own
+"~15+ hours if run alone" estimate was in the right ballpark; ~20.2h is the precise figure now
+that the real backlog size is known. Per item 4 above, this still shouldn't run concurrently
+with the live pilot - sequencing after remains the right call regardless of this correction.
+
+**Start mechanism: documented manual step, not an unattended trigger.** WAIT means the
+execution gate holds regardless of anything else landing (this PR, a future merge, an idle CI
+run) - the backfill does not start while the pilot owns the CDN Worker capacity. No cron job,
+no post-merge hook, no "starts automatically once X." After the pilot's own completion report
+exists (its final summary in `pilot_full_run_logs/full_run.log` /
+`journal/`), start it the same way the pilot itself is started - a `screen`/`tmux` session, run
+by whoever is watching the pilot finish:
+
+```bash
+screen -dmS content_phash_backfill bash -c 'sudo docker compose -f docker/docker-compose.prod.yml run --rm -T worker \
+  python manage.py local_backfill_content_phash --skip-checks \
+  > /home/ubuntu/content_phash_backfill_logs/backfill.log 2>&1
+echo "BACKFILL EXITED WITH CODE $?" >> /home/ubuntu/content_phash_backfill_logs/backfill.log'
+```
+
+Deliberately manual: this session had one incident already this week from an automated/
+composed step firing at an assumed-safe moment that turned out not to be. A human confirming
+the pilot has actually finished (not just "looks idle") before starting the next unattended,
+multi-hour job is worth the few seconds of friction.
+
 ---
 
 ## Part 3 — Shared evidence-recovery module (after PR #27 merges; expanded)
@@ -335,6 +414,16 @@ logic between them.
    Scryfall artist or resolved artist consensus), or (b) a withheld-
    printing frame-mismatch where art matched a known printing. If the
    combined number is small (<~2k), log-and-defer; report before building.
+   **Blocked on Part 2 for (a)**: `Card.content_phash` is 100% NULL until
+   the backfill runs (checked live, 2026-07-16: 0/218,152 populated) - a
+   d=0 sibling relationship doesn't exist to count until real hashes
+   exist. **(b) isn't a stored-data query at all**: frame-mismatch
+   withholding drops the vote with zero DB trace (confirmed by reading
+   the code path directly - the vote is never appended to the write
+   batch), so getting a real count requires an actual fetch+OCR+frame-
+   check compute pass, not a query. Re-run this check once Part 2's
+   backfill has populated a meaningful fraction of `content_phash` for
+   (a); (b) needs its own small sampling pass regardless.
 2. **d=0 siblings** → `CardArtistVote`, `anonymous_id='art-hash-artist-v1'`
    (17 chars, fits well under `max_length=40`) + Part 1's `run_id`,
    confidence 0.9 (identical-image entailment).
@@ -440,14 +529,56 @@ over a closed codebook.
    multi-channel weak evidence, human-gated resolution) and 2-3 domains
    beyond MTG. Written for an external reader — doubles as the federation
    pitch's technical annex.
+6. **Sybil/bad-actor unification** (added 2026-07-16, future-work
+   addendum — nothing built until there's an observed attack or real
+   resolution volume; detectors ship as admin reports first, never
+   automatic enforcement): the identification machinery doubles as the
+   integrity layer, because it already treats every vote as noisy
+   evidence rather than ground truth.
+   - Machine evidence as an independent witness: a planned, report-only
+     detector computing per-`anonymous_id` disagreement rate against
+     validated machine evidence, plus a human-consensus-vs-machine
+     contradiction list — surfaces a misbehaving or miscalibrated
+     source without touching the resolution path itself.
+   - Cluster consistency as a free contradiction detector: `d=0` cluster
+     members that resolve differently are, by the clustering
+     definition itself (same uploaded image), already a contradiction —
+     no new machinery needed, just a report over
+     `local_clustering`'s existing output.
+   - Cohort revocation generalizes beyond `run_id`: the same purge
+     pattern (`purge_machine_votes`, the post-purge invariant) applies
+     to a suspect _human_ cohort scoped by `created_at` window instead
+     of `run_id` — same mechanism, same invariant, different scoping
+     dimension.
+   - Trust tiers, if ever needed, enter as one more vote-tuple
+     dimension (`is_established`) alongside source/confidence — not a
+     parallel system.
+   - This section gains a subsection relating the voter-as-noisy-channel
+     model to Dawid-Skene reliability estimation: one framework
+     covering OCR noise, honest human error, and deliberate
+     manipulation together, and the basis for federation's own
+     per-peer reliability measurement against shared `content_hash`es
+     (see `docs/federation-v1.md`).
 
 ---
 
 ## Status
 
-- Part 1: in progress on `worktree-run-cohort-safety`, this doc is its
-  first commit. Design fully settled (this doc); implementation next.
-- Parts 2-6: designed/sketched above, not started. Parts 2 and 3 proceed
-  in parallel after HOLD #A. Part 4 after that, gated by HOLD #B. Part 5
-  after that, gated by HOLD #C. Part 6 last, gated on the full run's own
+- Part 1: **merged** (PR #28) - `run_id`, `PilotRunLedger`, staleness
+  guard, `purge_machine_votes`, migration 0061 applied to production.
+  HOLD #A cleared.
+- PR #27 (hash-at-ingest + two-threshold clustering) also merged, after
+  fixing a migration-number collision (both PRs independently picked
+  `0061`; PR #27's was renumbered to `0062` and its dependency
+  retargeted at PR #28's `0061`).
+- Deploying PR #27's merge crashed the live pilot job (2026-07-16
+  15:39 UTC) - see [[../troubleshooting.md]]'s "Entrypoint + migrate
+  composition traps" entry for what happened, and
+  [[printing-tags.md]]'s "Iteration safety" section for the resulting
+  cohort convention (`run_id IS NULL` = pre-crash, not "pre-natural-
+  completion"). Verified no data loss before restarting: 0 violations
+  from `verify_no_machine_only_resolutions` run against the whole
+  resolved-card pool.
+- Parts 2 and 3 proceed now that #27 is merged. Part 4 after HOLD #B.
+  Part 5 after HOLD #C. Part 6 last, gated on the full run's own
   completion.

@@ -1918,15 +1918,18 @@ human-backed votes behind it is a violation - `resolve_weighted_consensus`'s own
 gate should make that structurally impossible, so if it ever happens it means something upstream
 broke, not that the purge did anything wrong.
 
-**Cohort convention while this rolls out**: the live full-catalog run in flight when this
-migration lands keeps writing votes with `run_id` NULL for the rest of its current invocation -
-that's correct and meaningful, not a gap. NULL `run_id` identifies the **pre-safety-era
-cohort**: still fully governed by properties 1/2 above (the gate and restart-safety were never
-conditional on `run_id` existing), just not individually purgeable by run the way anything
-stamped going forward is. The run is not restarted solely to gain stamping - it folds in
-naturally at whatever iteration the run next gets restarted for anyway, and until then the NULL
-cohort stays identifiable by `anonymous_id` + `run_id IS NULL` if it's ever needed.
+**Cohort convention**: `run_id IS NULL` identifies the **pre-crash cohort** - every vote from
+every invocation of this pilot before 2026-07-16 15:39 UTC. Any `run_id` value identifies the
+**post-crash cohort** - stamped, individually purgeable, `PilotRunLedger`-tracked, from that
+timestamp onward. The dividing line is that specific crash, not a "run completes naturally, then
+stamping begins" boundary - see [[../troubleshooting.md]]'s "Entrypoint + migrate composition
+traps" entry for what happened and why. Properties 1/2 above were never conditional on `run_id`
+existing, so the crash changed nothing about correctness, only when stamping started - a
+strictly better state than waiting for a natural completion that was never guaranteed to arrive
+first.
 
-**Expected side effect once this merges and migrates**: any restart from an OLDER image built
-before this migration existed will trip the staleness guard (property 4) and refuse to start,
-forcing a rebuild first. That's the guard doing exactly its job, not a bug.
+**What the staleness guard does and doesn't catch**: it blocks a restart from an image older
+than the DB's applied migrations (property 4) - the guard doing its job. It does NOT catch a
+non-additive migration landing via `docker compose up` while a _different_, already-running
+container is still on the old code, since that container never restarts and so never re-checks.
+See the troubleshooting.md entry above for the operational rule this established.

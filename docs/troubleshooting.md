@@ -201,6 +201,13 @@ migration manually from an old-code container before recreating anything.
 Check `entrypoint.sh` (or equivalent) before assuming deploy and migrate
 are actually separable. (`8c957aa5`, 2026-07-16.)
 
+**Related gotcha, same incident**: `GIT_SHA=$(git rev-parse --short HEAD) sudo docker compose build ...` bakes `unknown` instead of the real SHA —
+`sudo` doesn't preserve environment variables set before it on the same
+command line. Use `sudo env GIT_SHA=$SHA docker compose build ...` or
+`sudo -E` instead. Cosmetic only (git-SHA baking is best-effort
+visibility, never the staleness guard itself), but silently wrong if
+unfixed.
+
 ## A quicktype-generated frontend type is "missing" a field
 
 **Symptom**: a `PrintingCandidate`/`Tag`/etc. TypeScript type (generated

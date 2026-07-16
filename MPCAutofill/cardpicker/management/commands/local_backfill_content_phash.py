@@ -5,19 +5,26 @@ from django.core.management.base import BaseCommand
 from cardpicker.local_phash import (
     DEFAULT_BACKFILL_BATCH_SIZE,
     DEFAULT_BACKFILL_WORKERS,
+    DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES,
     run_content_phash_backfill,
 )
 
 
 class Command(BaseCommand):
     help = (
-        "One-time backfill (see docs/features/printing-tags.md's hash-at-ingest architecture): "
-        "computes and persists Card.content_phash for every existing card that doesn't have "
-        "one yet. Idempotent and resumable by construction (filters on content_phash__isnull="
-        "True, so a plain re-invocation after a kill just picks up where it left off) - no "
-        "separate --resume flag needed. Going forward, cardpicker.sources.update_database "
-        "hashes newly-created cards automatically; this command is for the existing backlog "
-        "and for any card an ingest-time fetch failure left unhashed."
+        "One-time backfill (see docs/features/catalog-completion-plan.md's Part 2): computes "
+        "and persists Card.content_phash for every existing card that doesn't have one yet. "
+        "Idempotent and resumable by construction (filters on content_phash__isnull=True, so a "
+        "plain re-invocation after a kill just picks up where it left off) - no separate "
+        "--resume flag needed. Pipelined: one long-lived thread pool for the whole run, a "
+        "sliding fetch window bounded by --batch-size * --queue-depth-batches, checkpoint-flush "
+        "per batch as fetches complete (not per-batch pool spinup). Going forward, "
+        "cardpicker.sources.update_database hashes newly-created cards automatically; this "
+        "command is for the existing backlog and for any card an ingest-time fetch failure left "
+        "unhashed. Sequencing recommendation (shared CDN rate limiter, see the plan doc): run "
+        "this after the live full-catalog pilot completes, not concurrently with it - both are "
+        "bottlenecked by the same ~3 req/sec limit, so running alongside buys no real extra "
+        "throughput while risking contention with live user-facing traffic."
     )
 
     def add_arguments(self, parser: Any) -> None:
@@ -31,15 +38,22 @@ class Command(BaseCommand):
             "--batch-size",
             type=int,
             default=DEFAULT_BACKFILL_BATCH_SIZE,
-            help=f"Cards fetched+hashed concurrently, then persisted in one bulk_update. "
-            f"Default: {DEFAULT_BACKFILL_BATCH_SIZE}.",
+            help=f"Cards persisted per checkpoint-flush bulk_update. Default: {DEFAULT_BACKFILL_BATCH_SIZE}.",
         )
         parser.add_argument(
             "--workers",
             type=int,
             default=DEFAULT_BACKFILL_WORKERS,
-            help=f"Thread pool size for concurrent image fetches within a batch. "
-            f"Default: {DEFAULT_BACKFILL_WORKERS}.",
+            help=f"Fetch thread pool size, long-lived for the whole run - size to the shared CDN "
+            f"rate limiter (~3-5), not for raw parallelism. Default: {DEFAULT_BACKFILL_WORKERS}.",
+        )
+        parser.add_argument(
+            "--queue-depth-batches",
+            type=int,
+            default=DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES,
+            help=f"How many batches' worth of fetches can be in flight (fetched-but-not-yet-"
+            f"persisted) at once - bounds memory, decoupled from --workers. "
+            f"Default: {DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES}.",
         )
         parser.add_argument(
             "--limit",
@@ -67,19 +81,22 @@ class Command(BaseCommand):
         dry_run = kwargs["dry_run"]
         batch_size = kwargs["batch_size"]
         workers = kwargs["workers"]
+        queue_depth_batches = kwargs["queue_depth_batches"]
         limit = kwargs["limit"]
         nice = kwargs["nice"]
 
         mode = "DRY RUN" if dry_run else "WRITE"
         print(
             f"[{mode}] local_backfill_content_phash --batch-size={batch_size} "
-            f"--workers={workers} --limit={limit} --nice={nice}"
+            f"--workers={workers} --queue-depth-batches={queue_depth_batches} "
+            f"--limit={limit} --nice={nice}"
         )
 
         result = run_content_phash_backfill(
             dry_run=dry_run,
             batch_size=batch_size,
             workers=workers,
+            queue_depth_batches=queue_depth_batches,
             limit=limit,
             nice=nice,
         )
