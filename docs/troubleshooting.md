@@ -151,21 +151,24 @@ test that touches the DB from a worker thread — same fix as an existing
 wrap the entire loop, not per-chunk — see [[features/printing-tags.md]]'s
 build history for the incident this was found in.
 
-## Boot-time migration triggers a multi-minute rescan / entrypoint blocks gunicorn
+## Entrypoint + migrate composition traps (boot-time rescan, deploy/migrate fusion)
 
-**Symptom**: after a deploy, the API is unreachable for 10+ minutes on
-container start — a purely schema-only migration (e.g. one nullable
-column) triggers a full catalog rescan across every source before
-gunicorn binds; if a per-source `IntegrityError` crashes the container
-mid-rescan, it stays down (no restart policy) with `docker compose logs`
-looking identical to a slow-but-alive container on casual inspection.
+Two distinct symptoms, same root subsystem: `docker/django/entrypoint.sh`
+always runs `migrate` before anything else on `django`/`worker` start.
 
-**Cause**: `docker/django/entrypoint.sh` used to gate
+**Symptom 1 — API unreachable for 10+ minutes after a deploy**: a purely
+schema-only migration (e.g. one nullable column) triggers a full catalog
+rescan across every source before gunicorn binds; if a per-source
+`IntegrityError` crashes the container mid-rescan, it stays down (no
+restart policy) with `docker compose logs` looking identical to a
+slow-but-alive container on casual inspection.
+
+**Cause 1**: entrypoint used to gate
 `import_sources`/`update_database`/`update_dfcs` behind `migrate --check`
 ("did any migration apply") — the wrong proxy for "does catalog content
 need rescanning."
 
-**Fix**: entrypoint now only runs `migrate` + `import_sources` before
+**Fix 1**: entrypoint now only runs `migrate` + `import_sources` before
 binding; content sync is scheduled (daily/weekly django-q jobs) plus a
 fresh-bootstrap-only guard (`eaece1fd`, #18). Hardened a week later with
 `restart: unless-stopped` on every service (`8b1ec5e5`) plus a systemd
@@ -173,13 +176,30 @@ unit + verified reboot test (`ac6bb7e3`). See
 [[infrastructure.md]]'s "Startup vs. scheduled catalog sync" and
 "Boot-time recovery" sections for current behavior.
 
-**Entry pending (2026-07-16 incident, not yet landed as of this
-writing)**: a related "entrypoint auto-migrate composition trap" is being
-written up in `docs/lessons.md` by the worker handling the
-catalog-completion package's incident-recovery queue. If it's the same
-subsystem (entrypoint + migrate interaction) as above, treat it as part
-of this same entry family rather than a separate heading once it lands —
-update this section in place rather than appending a new one.
+**Symptom 2 — a live long-running job crashes mid-query with `column ... does not exist` right after an unrelated deploy**: recreating the
+persistent `django`/`worker` containers to ship new code applied a
+column-rename migration (`Card.image_hash` → `content_phash`, PR #27) as
+an unintended side effect, while a separate one-off container
+(`docker compose run --rm worker ...`, a live full-catalog pilot job) was
+still running the _old_ image against the same database. The rename
+executed mid-query under the live job, which crashed on its next read.
+
+**Cause 2**: entrypoint's fix for Symptom 1 (above) made `migrate` run
+_unconditionally_ on every `django`/`worker` start, by design (PR #18 —
+so a container that failed to migrate self-heals on its next boot). That
+means `docker compose up -d django worker` is a fused deploy+migrate
+step with no way to do one without the other — a "build → deploy →
+migrate" plan that assumes three separable steps may already be two.
+
+**Fix 2**: never recreate the persistent `django`/`worker` containers
+while any other container on an older image is actively running against
+the same database, unless every pending migration is strictly additive
+(nullable column, new table — anything old-code ORM simply ignores). For
+a non-additive migration (rename, type change, NOT NULL backfill): stop
+the long-running job first and restart it after the deploy, or apply the
+migration manually from an old-code container before recreating anything.
+Check `entrypoint.sh` (or equivalent) before assuming deploy and migrate
+are actually separable. (`8c957aa5`, 2026-07-16.)
 
 ## A quicktype-generated frontend type is "missing" a field
 
