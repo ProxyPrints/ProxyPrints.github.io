@@ -30,11 +30,16 @@ SENSITIVE_TAGS: list[tuple[str, str, str]] = [
     (NSFW, "Mature/adult content - excluded from search by default", "NSFW"),
     ("low-res", "Image quality too poor to print", "Low quality"),
     ("incorrect-info", "Card text/details do not match the real card", "Incorrect card info"),
-    # Deliberately the POSITIVE framing ("has appropriate bleed"), not a negative
-    # "missing-bleed": upstream drives REQUIRE appropriate bleed on every card, so the useful
-    # verified state is the positive one - absence just means "not yet verified", and a
-    # definitive "lacks bleed" verdict is still expressible as this tag resolving REJECT.
-    # Sensitive because that verification is exactly a moderator's co-sign.
+    # Positive framing in the NAME ("has appropriate bleed"), but the VOTING convention
+    # changed 2026-07-16 (consolidated respec item 4b) once local_fallback.classify_bleed_edge
+    # gave reliable machine coverage of the negative case: the pilot casts a vote ONLY for a
+    # detected 'trimmed' image (NOT_APPLICABLE) - absence of ANY vote is now the documented
+    # convention for "presumed normal bleed", not "not yet verified" as originally designed.
+    # This deliberately supersedes the original human-moderation-era framing (absence used to
+    # mean "unchecked") - a SENSITIVE tag existing to catch the RARE exception is a better fit
+    # once ~97.5% of cards can be machine-confirmed normal (see local_fallback.py's
+    # cast_bleed_edge_vote for the full rationale) than voting APPLY on the routine majority
+    # ever was. Sensitive because a moderator co-sign is still required either direction.
     ("appropriate-bleed", "Verified to include the full bleed margin required for printing", "Appropriate Bleed"),
 ]
 

@@ -106,19 +106,23 @@ def match_artist(
     return surviving or None
 
 
-def detect_illus_anchor(card_image: "Image.Image", ocr_raw_texts: list[str]) -> tuple[bool, Optional[str]]:
+def detect_illus_anchor(
+    card_image: "Image.Image", ocr_raw_texts: list[str], bleed_class: Optional[str] = None
+) -> tuple[bool, Optional[str]]:
     """The "Illus." extraction step, standalone from candidate matching - used both by
     run_fallback_for_card (which also needs the extracted name for match_artist) and by the
     frame-style classifier (which only needs to know whether the anchor fired at all, for
     every card regardless of whether pass 1 already produced a printing vote - see
     classify_frame_style). Returns (fired, extracted_name); reuses `ocr_raw_texts` (pass 1's
     already-computed OCR variants) before falling back to its own crop/OCR pass, same
-    rationale as run_fallback_for_card's identical shortcut."""
+    rationale as run_fallback_for_card's identical shortcut. `bleed_class` (from
+    classify_bleed_edge, run once per card ahead of everything else - see run_pilot) remaps
+    ARTIST_CROP_BOX for a trimmed image via normalize_crop_box; a no-op otherwise."""
     for text in ocr_raw_texts:
         name = extract_artist_name(text)
         if name is not None:
             return True, name
-    artist_crop = local_ocr.crop_collector_line(card_image, ARTIST_CROP_BOX)
+    artist_crop = local_ocr.crop_collector_line(card_image, normalize_crop_box(ARTIST_CROP_BOX, bleed_class))
     for variant in local_ocr.preprocess_variants(artist_crop):
         name = extract_artist_name(local_ocr.run_tesseract(variant))
         if name is not None:
@@ -210,15 +214,19 @@ def _scan_strip_for_best_symbol_window(strip: "Image.Image", reference: "Image.I
 
 
 def find_symbol_matches(
-    card_image: "Image.Image", candidates: list["CandidatePrinting"], expansion_code_by_pk: dict[int, str]
+    card_image: "Image.Image",
+    candidates: list["CandidatePrinting"],
+    expansion_code_by_pk: dict[int, str],
+    bleed_class: Optional[str] = None,
 ) -> Optional[set[int]]:
     """Compares the card's symbol strip against each DISTINCT candidate expansion's rendered
     keyrune glyph (candidates sharing an expansion never need re-comparing), returns the
     candidates whose expansion produced the best distance within threshold and clear of the
     margin - None if no expansion's glyph could even be rendered (unmapped code) or nothing
-    cleared the threshold at all."""
+    cleared the threshold at all. `bleed_class` remaps SYMBOL_STRIP_BOX via normalize_crop_box
+    for a trimmed image; a no-op otherwise."""
     width, height = card_image.size
-    left, top, right, bottom = SYMBOL_STRIP_BOX
+    left, top, right, bottom = normalize_crop_box(SYMBOL_STRIP_BOX, bleed_class)
     strip = card_image.crop((int(left * width), int(top * height), int(right * width), int(bottom * height))).convert(
         "L"
     )
@@ -271,17 +279,21 @@ BORDER_COLOR_TO_TAG: dict[str, str] = {
 }
 
 
-def classify_border_color(card_image: "Image.Image") -> Optional[str]:
+def classify_border_color(card_image: "Image.Image", bleed_class: Optional[str] = None) -> Optional[str]:
     """Returns 'black'/'white'/'silver'/'borderless', or None if the sample is ambiguous
     (non-uniform - e.g. art bleeding right to the edge in a way that doesn't read as a clean
     'borderless' card, or a color this taxonomy doesn't cover, e.g. gold/yellow - out of scope,
-    see docs/features/printing-tags.md's chip taxonomy v1 exclusions)."""
+    see docs/features/printing-tags.md's chip taxonomy v1 exclusions). `bleed_class` remaps each
+    of _BORDER_SAMPLE_BANDS via normalize_crop_box for a trimmed image; a no-op otherwise -
+    empirically checked (2026-07-15) that solid-color borders read identical RGB with or without
+    this remap on real bleed-inclusive images (border color extends uniformly through the bleed
+    margin), so applying it here unconditionally doesn't risk the majority case."""
     import statistics
 
     width, height = card_image.size
     samples: list[tuple[int, int, int]] = []
     stds: list[float] = []
-    for left, top, right, bottom in _BORDER_SAMPLE_BANDS:
+    for left, top, right, bottom in (normalize_crop_box(band, bleed_class) for band in _BORDER_SAMPLE_BANDS):
         band = card_image.crop(
             (int(left * width), int(top * height), int(right * width), int(bottom * height))
         ).convert("RGB")
@@ -437,6 +449,127 @@ def frame_style_is_consistent(frame_class: Optional[str], printing_frame_value: 
 
 
 # ---------------------------------------------------------------------------------------------
+# 2c.5: bleed-edge classification, addendum item 7. Owner-directed design (2026-07-15): measure
+# the image's own aspect ratio against chilli_axe's two known reference ratios (trim-only vs.
+# trim-plus-bleed) rather than any pixel/color heuristic - geometric, resolution/DPI-independent,
+# and (unlike a color-uniformity approach) inherently unaffected by whether the card's own border
+# is visually a normal frame or borderless full-art, since the file's raw pixel dimensions carry
+# the same trim/bleed math either way. Votes on the PRE-EXISTING `appropriate-bleed` SENSITIVE
+# tag (sensitive_tags.py) - a moderator co-sign is still required to resolve it either direction,
+# per that tag's own design; this heuristic is one more signal, not an override.
+# ---------------------------------------------------------------------------------------------
+
+# frontend/src/common/constants.ts's CardWidthMM/CardHeightMM - the standard MTG trim size
+# (63x88mm) chilli_axe's own frame templates are built against.
+_CARD_TRIM_WIDTH_MM = 63
+_CARD_TRIM_HEIGHT_MM = 88
+_BLEED_MARGIN_MM = 3.175  # 1/8 inch per edge - the standard proxy-print bleed convention
+
+TRIM_ASPECT_RATIO = _CARD_TRIM_WIDTH_MM / _CARD_TRIM_HEIGHT_MM
+BLEED_ASPECT_RATIO = (_CARD_TRIM_WIDTH_MM + 2 * _BLEED_MARGIN_MM) / (_CARD_TRIM_HEIGHT_MM + 2 * _BLEED_MARGIN_MM)
+
+# What fraction of the full image the bleed margin occupies per edge, on each axis - derived
+# from the same reference geometry above, not a separate guess. Every fixed-fraction crop box
+# in this module and local_ocr/local_phash (DEFAULT_CROP_BOX, ART_CROP_BOX, ARTIST_CROP_BOX,
+# SYMBOL_STRIP_BOX, _BORDER_SAMPLE_BANDS) was empirically tuned against real fetched images,
+# which are ~97.5% bleed-inclusive (see the 40-source validation above) - meaning those boxes
+# are already implicitly calibrated for THAT convention, not a separate one needing correction.
+# The ~2.5% TRIMMED minority is the one case where a box tuned against bleed-inclusive images
+# lands in the wrong place: removing the bleed margin shifts where the same physical card
+# position falls as a fraction of the (now smaller) full image.
+_WIDTH_MARGIN_FRACTION = _BLEED_MARGIN_MM / (_CARD_TRIM_WIDTH_MM + 2 * _BLEED_MARGIN_MM)
+_HEIGHT_MARGIN_FRACTION = _BLEED_MARGIN_MM / (_CARD_TRIM_HEIGHT_MM + 2 * _BLEED_MARGIN_MM)
+
+
+def normalize_crop_box(
+    box: tuple[float, float, float, float], bleed_class: Optional[str]
+) -> tuple[float, float, float, float]:
+    """Remaps a fixed-fraction crop box (tuned against a bleed-inclusive image, per the module
+    comment above) onto a TRIMMED image's own coordinate space - a no-op (returns `box`
+    unchanged) for 'bleed' or None (abstain - no confident reading, so no correction to apply
+    either), since those cases are already the convention the box was tuned against.
+
+    Empirically checked before use (2026-07-15, not just derived): sampled real bleed-classified
+    cards' border-color bands with and without this remap applied - solid-color borders (the
+    common case) read IDENTICAL RGB regardless of exact sample position within the bleed zone
+    (border color extends uniformly through the bleed margin), confirming this is safe to apply
+    unconditionally across all five fixed-fraction crop sites without a special case for any one
+    of them.
+    """
+    if bleed_class != "trimmed":
+        return box
+    left, top, right, bottom = box
+
+    def _rescale(fraction: float, margin_fraction: float) -> float:
+        # clamped to [0, 1]: a box (or band, like _BORDER_SAMPLE_BANDS' edge samples) that sat
+        # entirely within the bleed margin on the original bleed-inclusive convention rescales
+        # to at-or-past the trimmed image's own edge - genuinely degenerate for a trimmed image
+        # (that content doesn't exist anymore, it was cut off), not a bug in the math. Callers
+        # already handle a resulting zero-area crop gracefully (empty-sample skip, see
+        # classify_border_color).
+        return min(1.0, max(0.0, (fraction - margin_fraction) / (1 - 2 * margin_fraction)))
+
+    return (
+        _rescale(left, _WIDTH_MARGIN_FRACTION),
+        _rescale(top, _HEIGHT_MARGIN_FRACTION),
+        _rescale(right, _WIDTH_MARGIN_FRACTION),
+        _rescale(bottom, _HEIGHT_MARGIN_FRACTION),
+    )
+
+
+# real-world validation (2026-07-15, 40 cards sampled across 40 distinct sources): the bleed
+# cluster spread 0.7325-0.7393 (theoretical 0.7350), the one trimmed example measured 0.7163
+# (theoretical 0.7159) - a clean, well-separated bimodal signal with nothing observed in the
+# gap between clusters. 0.03 comfortably covers the observed bleed spread on either side while
+# still abstaining on an aspect ratio implausible for a standard MTG card altogether (a
+# double-faced composite scan, a token, a corrupted fetch).
+_BLEED_CLASSIFICATION_TOLERANCE = 0.03
+
+BLEED_EDGE_TAG_NAME = "appropriate-bleed"
+BLEED_EDGE_VOTE_CONFIDENCE = 0.7
+
+
+def classify_bleed_edge(card_image: "Image.Image") -> Optional[str]:
+    """Returns 'bleed'/'trimmed', or None if the image's aspect ratio is too far from BOTH known
+    reference ratios to classify confidently (ambiguous - a genuinely non-standard image, not
+    just a borderline case)."""
+    width, height = card_image.size
+    if height == 0:
+        return None
+    ratio = width / height
+    dist_to_trim = abs(ratio - TRIM_ASPECT_RATIO)
+    dist_to_bleed = abs(ratio - BLEED_ASPECT_RATIO)
+    if min(dist_to_trim, dist_to_bleed) > _BLEED_CLASSIFICATION_TOLERANCE:
+        return None
+    return "bleed" if dist_to_bleed < dist_to_trim else "trimmed"
+
+
+def cast_bleed_edge_vote(card: Card, bleed_class: Optional[str]) -> Optional[CardTagVote]:
+    """Negative-only (2026-07-15, consolidated respec item 4b, supersedes this function's
+    original both-directions design): a vote is cast ONLY for a clearly 'trimmed' reading
+    (NOT_APPLICABLE) - no vote at all for 'bleed' (the ~97.5% common case, per the 40-source
+    validation) or an ambiguous/unclassifiable reading. Absence of any vote is the documented
+    convention for "this card has normal bleed" - see BLEED_EDGE_TAG_NAME's own description and
+    docs/features/printing-tags.md's Stage 8 section. Rationale: `appropriate-bleed` is a
+    SENSITIVE tag needing moderator co-sign regardless of machine votes - voting APPLY on the
+    routine 97.5% case would flood moderation with confirmations of normalcy rather than
+    surfacing the rare real exception, which is what a SENSITIVE tag is for."""
+    if bleed_class != "trimmed":
+        return None
+    tag = Tag.objects.filter(name=BLEED_EDGE_TAG_NAME).first()
+    if tag is None:
+        return None
+    return CardTagVote(
+        card=card,
+        tag=tag,
+        polarity=VotePolarity.NOT_APPLICABLE,
+        anonymous_id=FALLBACK_ANONYMOUS_ID,
+        source=VoteSource.OCR,
+        confidence=BLEED_EDGE_VOTE_CONFIDENCE,
+    )
+
+
+# ---------------------------------------------------------------------------------------------
 # 2d: combine
 # ---------------------------------------------------------------------------------------------
 
@@ -456,12 +589,15 @@ def run_fallback_for_card(
     selected: "SelectedCard",
     card_image: "Image.Image",
     ocr_raw_texts: list[str],
+    bleed_class: Optional[str] = None,
 ) -> FallbackOutcome:
     """`ocr_raw_texts` reuses pass 1's already-computed OCR variants where available (the
     orchestrator passes whatever it already ran) - this only runs the extra full-width artist
     crop/OCR pass when pass 1's own text didn't already contain an "Illus." match, avoiding a
     redundant tesseract call on cards where the artist line already happened to be visible in
-    the narrower pass-1 crop."""
+    the narrower pass-1 crop. `bleed_class` (from classify_bleed_edge, run once per card ahead
+    of everything else - see run_pilot) is threaded through to every sub-check's own
+    fixed-fraction crop box via normalize_crop_box."""
     candidate_pks = {c.pk for c in selected.candidates}
     canonicals = {
         c.pk: c
@@ -475,13 +611,13 @@ def run_fallback_for_card(
         if getattr(c, "printing_metadata", None) is not None and c.printing_metadata.border_color
     }
 
-    border_color = classify_border_color(card_image)
+    border_color = classify_border_color(card_image, bleed_class)
     border_filtered = filter_by_border_color(border_color, selected.candidates, border_color_by_pk)
 
-    illus_anchor_fired, artist_name = detect_illus_anchor(card_image, ocr_raw_texts)
+    illus_anchor_fired, artist_name = detect_illus_anchor(card_image, ocr_raw_texts, bleed_class)
     artist_filtered = match_artist(artist_name, selected.candidates, artist_by_pk) if artist_name else None
 
-    symbol_filtered = find_symbol_matches(card_image, selected.candidates, expansion_code_by_pk)
+    symbol_filtered = find_symbol_matches(card_image, selected.candidates, expansion_code_by_pk, bleed_class)
 
     survivors = set(candidate_pks)
     evidence_types_used: list[str] = []
@@ -530,6 +666,13 @@ __all__ = [
     "classify_frame_style",
     "cast_frame_style_vote",
     "frame_style_is_consistent",
+    "TRIM_ASPECT_RATIO",
+    "BLEED_ASPECT_RATIO",
+    "BLEED_EDGE_TAG_NAME",
+    "BLEED_EDGE_VOTE_CONFIDENCE",
+    "classify_bleed_edge",
+    "cast_bleed_edge_vote",
+    "normalize_crop_box",
     "FallbackOutcome",
     "run_fallback_for_card",
 ]
