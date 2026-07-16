@@ -482,19 +482,14 @@ over a closed codebook.
   fixing a migration-number collision (both PRs independently picked
   `0061`; PR #27's was renumbered to `0062` and its dependency
   retargeted at PR #28's `0061`).
-- **Incident, 2026-07-16 15:39 UTC**: deploying PR #27's merge (a
-  non-additive migration - `Card.image_hash` renamed to
-  `content_phash`) recreated the persistent `django`/`worker`
-  containers, which auto-migrate on boot by design
-  (`entrypoint.sh`) - the live pilot job (separate one-off container,
-  old image) was querying the old column name at that moment and
-  crashed. See [[printing-tags.md]]'s "Cohort convention, superseded"
-  section and [[../lessons.md]]'s entrypoint entry for full detail.
-  Verified no data loss (`verify_no_machine_only_resolutions` run
-  read-only against the whole resolved-card pool: 0 violations) before
-  restarting in a new screen session on the current image. The
-  NULL-run_id / stamped cohort boundary is now the crash timestamp, not
-  "natural completion."
+- Deploying PR #27's merge crashed the live pilot job (2026-07-16
+  15:39 UTC) - see [[../troubleshooting.md]]'s "Entrypoint + migrate
+  composition traps" entry for what happened, and
+  [[printing-tags.md]]'s "Iteration safety" section for the resulting
+  cohort convention (`run_id IS NULL` = pre-crash, not "pre-natural-
+  completion"). Verified no data loss before restarting: 0 violations
+  from `verify_no_machine_only_resolutions` run against the whole
+  resolved-card pool.
 - Parts 2 and 3 proceed now that #27 is merged. Part 4 after HOLD #B.
   Part 5 after HOLD #C. Part 6 last, gated on the full run's own
   completion.

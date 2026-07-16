@@ -1918,34 +1918,18 @@ human-backed votes behind it is a violation - `resolve_weighted_consensus`'s own
 gate should make that structurally impossible, so if it ever happens it means something upstream
 broke, not that the purge did anything wrong.
 
-**Cohort convention, superseded (2026-07-16) - the actual dividing line turned out to be a
-crash, not a natural completion**: the original plan here was "the live run keeps writing NULL
-`run_id` until it completes naturally, then stamping starts on the next invocation." That
-didn't happen - see [[../lessons.md]]'s "`docker compose up` on django/worker is a deploy+migrate
-fused step" entry for the incident. Deploying PR #27 (which included a **non-additive**
-migration - `Card.image_hash` renamed to `content_phash`) recreated the persistent `django`/
-`worker` containers, which auto-migrated on boot per `entrypoint.sh`'s unconditional `migrate`
-step, while the live pilot job (a separate one-off container, still on the old image) was
-actively querying the old column name. It crashed at **2026-07-16 15:39 UTC** (`PILOT RUN EXITED WITH CODE 1`, `column cardpicker_card.image_hash does not exist`). Before restarting,
-`purge_machine_votes.verify_no_machine_only_resolutions` was run read-only against every
-currently-resolved card (the whole pool, not just the crashed batch - cheap, 3 cards) to convert
-"believed intact" into "verified intact": zero violations. The job was then restarted in a new
-screen session, same command, on the now-current image.
+**Cohort convention**: `run_id IS NULL` identifies the **pre-crash cohort** - every vote from
+every invocation of this pilot before 2026-07-16 15:39 UTC. Any `run_id` value identifies the
+**post-crash cohort** - stamped, individually purgeable, `PilotRunLedger`-tracked, from that
+timestamp onward. The dividing line is that specific crash, not a "run completes naturally, then
+stamping begins" boundary - see [[../troubleshooting.md]]'s "Entrypoint + migrate composition
+traps" entry for what happened and why. Properties 1/2 above were never conditional on `run_id`
+existing, so the crash changed nothing about correctness, only when stamping started - a
+strictly better state than waiting for a natural completion that was never guaranteed to arrive
+first.
 
-**The clean dividing line is therefore the crash timestamp, not "natural completion":**
-`run_id IS NULL` = the **pre-crash cohort** (everything written through 2026-07-16 15:39 UTC,
-across every invocation of this pilot before Part 1 existed). Any `run_id` value = **post-crash**
-(this restart onward, and every invocation after it) - stamped, individually purgeable,
-`PilotRunLedger`-tracked. This is a strictly better state than the original plan, not a worse
-one: revocability went live mid-run instead of waiting for a natural completion that was never
-guaranteed to arrive first. The properties this run needed all along - the human-backed gate,
-NULL-filter/anonymous_id-exclusion restart-safety - were never conditional on `run_id` existing,
-so the crash and restart changed nothing about correctness, only when stamping started.
-
-**Expected side effect once a non-additive migration merges and deploys**: any restart from an
-OLDER image built before that migration existed will trip the staleness guard (property 4) and
-refuse to start, forcing a rebuild first - that's the guard doing its job. What the guard does
-NOT catch: a non-additive migration landing via `docker compose up` while a _different_,
-already-running container (not itself subject to the guard, because it never restarts) is still
-on the old code. See the lessons.md entry above for the operational rule this incident
-established.
+**What the staleness guard does and doesn't catch**: it blocks a restart from an image older
+than the DB's applied migrations (property 4) - the guard doing its job. It does NOT catch a
+non-additive migration landing via `docker compose up` while a _different_, already-running
+container is still on the old code, since that container never restarts and so never re-checks.
+See the troubleshooting.md entry above for the operational rule this established.
