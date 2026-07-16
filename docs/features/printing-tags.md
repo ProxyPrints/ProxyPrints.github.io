@@ -1071,11 +1071,29 @@ either side while still abstaining on a genuinely non-standard image
 
 **Wired into `run_pilot`**: fires for every card with a fetched image,
 independent of printing-vote success (same "double duty" convention as
-border/frame attribute votes) - positive (`APPLY`) vote for bleed,
-negative (`NOT_APPLICABLE`) for trimmed, abstain (nothing written, only
-counted) for ambiguous. `VoteSource.OCR`, confidence 0.7
-(`BLEED_EDGE_VOTE_CONFIDENCE`). No ground-truth counterpart to prefer -
-unlike border/frame, Scryfall doesn't encode this at all.
+border/frame attribute votes) - classification is censused
+(`AttributeReport.bleed_votes_by_class`) for every card regardless, but
+see the negative-only voting change below for what actually gets
+written. `VoteSource.OCR`, confidence 0.7 (`BLEED_EDGE_VOTE_CONFIDENCE`).
+No ground-truth counterpart to prefer - unlike border/frame, Scryfall
+doesn't encode this at all.
+
+**Negative-only voting (2026-07-16, consolidated respec item 4b -
+supersedes the original both-directions design above)**: a vote is now
+cast ONLY for a `trimmed` reading (`NOT_APPLICABLE`) - a `bleed` reading
+(the ~97.5% common case per the 40-source validation) still counts
+toward the census but writes NO `CardTagVote` at all. **Absence of any
+vote is the documented convention for "presumed normal bleed"** -
+updated in `sensitive_tags.py`'s `SENSITIVE_TAGS` comment alongside this
+doc, since the tag's _original_ design comment said the opposite
+("absence just means not yet verified") from before this pilot existed.
+Rationale: `appropriate-bleed` is `SENSITIVE` and needs a moderator
+co-sign regardless of machine votes - voting `APPLY` on the routine 97.5%
+case would flood moderation with confirmations of normalcy instead of
+surfacing the rare real exception, which is what a SENSITIVE tag is for.
+Confidence unchanged (0.7). No new tag seeded - the existing-tag check
+(`Tag.objects.filter(name=...).first()`, degrades to no vote if absent)
+was already in place before this change.
 
 ### DPI-tag audit (2026-07-15, addendum item 8 - report only)
 

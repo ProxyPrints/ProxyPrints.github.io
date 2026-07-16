@@ -1213,10 +1213,13 @@ class TestGroundTruthAttributeVotes:
 
 
 class TestBleedEdgeVotesEndToEnd:
-    """Addendum item 7: run_pilot casts a real vote on the pre-existing appropriate-bleed tag
-    for every card with a fetched image, independent of printing-vote success."""
+    """Addendum item 7 + consolidated respec item 4b (2026-07-16, negative-only): run_pilot casts
+    a vote on the pre-existing appropriate-bleed tag ONLY for a 'trimmed' reading. A 'bleed'
+    reading (the ~97.5% common case) still counts toward the census (bleed_votes_by_class) but
+    writes NO vote at all - absence of any vote is the documented convention for "presumed
+    normal bleed", per sensitive_tags.py's SENSITIVE_TAGS comment."""
 
-    def test_bleed_shaped_image_casts_a_positive_vote(self, db, monkeypatch):
+    def test_bleed_shaped_image_is_censused_but_casts_no_vote(self, db, monkeypatch):
         CanonicalCardFactory(name="Forest")
         card = CardFactory(name="Forest")
         TagFactory(name="appropriate-bleed")
@@ -1238,9 +1241,10 @@ class TestBleedEdgeVotesEndToEnd:
 
         _results, attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
 
+        # census still reflects the classification...
         assert attributes.bleed_votes_by_class == {"bleed": 1}
-        vote = CardTagVote.objects.get(card=card, tag__name="appropriate-bleed")
-        assert vote.polarity == VotePolarity.APPLY
+        # ...but no vote was actually written - absence IS the signal for this case.
+        assert not CardTagVote.objects.filter(card=card, tag__name="appropriate-bleed").exists()
 
     def test_trimmed_shaped_image_casts_a_negative_vote(self, db, monkeypatch):
         CanonicalCardFactory(name="Forest")

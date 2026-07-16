@@ -381,29 +381,31 @@ class TestClassifyBleedEdge:
 
 
 class TestCastBleedEdgeVote:
+    """Negative-only (2026-07-16, consolidated respec item 4b, supersedes the original
+    both-directions design): a vote is cast ONLY for 'trimmed' - 'bleed' casts nothing at all,
+    regardless of whether the tag exists, since absence of a vote IS the "normal bleed" signal."""
+
     def test_no_reading_casts_nothing(self, db):
         card = CardFactory()
         assert cast_bleed_edge_vote(card, None) is None
 
-    def test_unseeded_tag_degrades_to_no_vote(self, db):
+    def test_bleed_reading_casts_nothing_even_with_the_tag_seeded(self, db):
+        TagFactory(name=BLEED_EDGE_TAG_NAME)
         card = CardFactory()
         assert cast_bleed_edge_vote(card, "bleed") is None
 
-    def test_bleed_casts_a_positive_vote_on_the_existing_tag(self, db):
-        TagFactory(name=BLEED_EDGE_TAG_NAME)
+    def test_unseeded_tag_degrades_trimmed_to_no_vote(self, db):
         card = CardFactory()
-        vote = cast_bleed_edge_vote(card, "bleed")
-        assert vote is not None
-        assert vote.pk is None
-        assert vote.tag.name == BLEED_EDGE_TAG_NAME
-        assert vote.polarity == VotePolarity.APPLY
-        assert vote.anonymous_id == FALLBACK_ANONYMOUS_ID
-        assert vote.source == VoteSource.OCR
-        assert vote.confidence == 0.7
+        assert cast_bleed_edge_vote(card, "trimmed") is None
 
     def test_trimmed_casts_a_negative_vote_on_the_existing_tag(self, db):
         TagFactory(name=BLEED_EDGE_TAG_NAME)
         card = CardFactory()
         vote = cast_bleed_edge_vote(card, "trimmed")
         assert vote is not None
+        assert vote.pk is None
+        assert vote.tag.name == BLEED_EDGE_TAG_NAME
         assert vote.polarity == VotePolarity.NOT_APPLICABLE
+        assert vote.anonymous_id == FALLBACK_ANONYMOUS_ID
+        assert vote.source == VoteSource.OCR
+        assert vote.confidence == 0.7

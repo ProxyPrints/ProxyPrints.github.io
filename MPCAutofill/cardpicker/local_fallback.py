@@ -545,20 +545,24 @@ def classify_bleed_edge(card_image: "Image.Image") -> Optional[str]:
 
 
 def cast_bleed_edge_vote(card: Card, bleed_class: Optional[str]) -> Optional[CardTagVote]:
-    """Positive (APPLY) vote for a clear bleed margin, negative (NOT_APPLICABLE) for clearly
-    trimmed, no vote at all for an ambiguous/unclassifiable reading (the caller counts this as
-    an abstain without writing anything, same convention as classify_frame_style's abstain
-    path)."""
-    if bleed_class is None:
+    """Negative-only (2026-07-15, consolidated respec item 4b, supersedes this function's
+    original both-directions design): a vote is cast ONLY for a clearly 'trimmed' reading
+    (NOT_APPLICABLE) - no vote at all for 'bleed' (the ~97.5% common case, per the 40-source
+    validation) or an ambiguous/unclassifiable reading. Absence of any vote is the documented
+    convention for "this card has normal bleed" - see BLEED_EDGE_TAG_NAME's own description and
+    docs/features/printing-tags.md's Stage 8 section. Rationale: `appropriate-bleed` is a
+    SENSITIVE tag needing moderator co-sign regardless of machine votes - voting APPLY on the
+    routine 97.5% case would flood moderation with confirmations of normalcy rather than
+    surfacing the rare real exception, which is what a SENSITIVE tag is for."""
+    if bleed_class != "trimmed":
         return None
     tag = Tag.objects.filter(name=BLEED_EDGE_TAG_NAME).first()
     if tag is None:
         return None
-    polarity = VotePolarity.APPLY if bleed_class == "bleed" else VotePolarity.NOT_APPLICABLE
     return CardTagVote(
         card=card,
         tag=tag,
-        polarity=polarity,
+        polarity=VotePolarity.NOT_APPLICABLE,
         anonymous_id=FALLBACK_ANONYMOUS_ID,
         source=VoteSource.OCR,
         confidence=BLEED_EDGE_VOTE_CONFIDENCE,
