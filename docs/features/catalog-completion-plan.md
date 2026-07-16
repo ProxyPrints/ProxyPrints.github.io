@@ -451,6 +451,82 @@ logic between them.
    `resolve_and_persist_artist(card)` called for correct surfacing) and
    the "wrong?" pre-fill chain.
 
+### Scan-log: persisted abstention evidence (built 2026-07-16)
+
+Upgraded from propose-to-hold to build — restores the originally-intended
+design (the bleed engine's negative-only votes and item 3 below's own
+evidence-gathered-and-negative guard both presuppose that a durable
+negative record exists somewhere, not just a positive one).
+
+New `CardScanLog` model (`cardpicker/models.py`, migration `0063`,
+additive-only): `(card, anonymous_id, run_id, skip_reason, scanned_at)`.
+One row per engine abstention — `skip_reason` uses the pipeline's own
+existing strings verbatim (`no-text`, `parsed-but-no-match`,
+`too-many-candidates`, `no-hashable-candidates`, `no-clear-winner`,
+`no-evidence`, `eliminated`, `ambiguous`, `frame-mismatch`,
+`disagreement-with-other-engine`, `unfetchable-image`) — not a
+separately-invented vocabulary, so a `grep` for a skip reason in the log
+output and a `WHERE skip_reason = '...'` query agree. Voted cards get no
+row (the vote is the record); batched into the existing checkpoint flush,
+no per-card writes.
+
+`RESCANNABLE_SKIP_REASONS = {"unfetchable-image", "frame-mismatch"}` stay
+eligible for re-selection - a transient fetch failure isn't a conclusion
+about the card, and `frame-mismatch` needs to stay revisitable so this
+Part's own dual-yield step (above) can still process it for artist
+extraction even though the printing vote stays withheld. Every other
+reason is a genuine, repeatable negative conclusion against the same
+deterministic image/candidates - re-scanning those would just burn CDN
+budget to re-derive the identical answer.
+
+`_eligible_base_queryset` and fallback's own `already_fallback_covered`
+set both now exclude a card with a non-re-scannable scan-log row for that
+engine, same per-engine exact-match idempotence pattern votes already
+use. Implemented as an explicit `.values_list("card_id", ...)` subquery,
+not a single `.exclude(Q(...) & ~Q(...))` on the to-many `scan_logs`
+relation - the latter looks equivalent but isn't: Django translates a
+negated lookup on a multi-valued relation into its own independent
+`NOT EXISTS(...)`, not a same-row condition, so a card with both a
+rescannable AND a later non-rescannable row would have incorrectly stayed
+eligible under that formulation. Caught by
+`TestScanLog::test_a_later_non_rescannable_reason_overrides_an_earlier_rescannable_one`
+before it shipped, not assumed correct from how the query reads.
+
+Progress line rewritten: `this invocation N/total (unseen-remaining M)`
+plus the corpus-wide unresolved count reported separately (the two move
+for different reasons - this invocation's own pool doesn't shrink from
+other engines' or humans' activity, the corpus-wide count does), plus a
+real rate/ETA computed from elapsed wall-clock since this invocation
+started, not a guess.
+
+**What this dissolves downstream, now that it exists:**
+
+- Item 1's own volume-check sub-item (b) - "frame-mismatch withholding
+  leaves zero DB trace, needs a live compute pass, not a query" is no
+  longer true once this ships and a run has been through the code path
+  at least once. Both count and dual-yield population become queries
+  against `CardScanLog.objects.filter(skip_reason="frame-mismatch")`,
+  not a recompute pass.
+- Part 5's "evidence-gathered-and-negative guard" (residual
+  classification's hard guard against absence-of-evidence, distinct from
+  a genuine negative result) becomes a query against this table too -
+  "did an engine actually look at this card and reach a real conclusion"
+  is now answerable directly, not inferred from the absence of a vote
+  (which was always ambiguous between "looked and found nothing" and
+  "never looked").
+
+Migration deploy sequencing (per the entrypoint-composition lesson,
+`docs/troubleshooting.md`): `0063_cardscanlog.py` is a pure
+`CreateModel` - additive-only, no existing table touched, so the running
+pilot is safe regardless of when this lands. Applied the same way as
+`0061`/`0062`: `docker compose run --rm django python manage.py migrate`
+(a one-off container), never `docker compose up -d django worker`
+(persistent-container recreation) while the pilot's own container is
+still running - the additive-only property makes this specific migration
+individually safe either way, but the sequencing discipline is kept
+uniform rather than case-by-case judgment calls about which migrations
+are "safe enough" to bend the rule for.
+
 ---
 
 ## Part 4 — LANDS (artist-decomposed identification)

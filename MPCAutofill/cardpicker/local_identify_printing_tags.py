@@ -47,6 +47,7 @@ from cardpicker.models import (
     CanonicalCard,
     Card,
     CardPrintingTag,
+    CardScanLog,
     CardTagVote,
     CardTypes,
     PrintingTagStatus,
@@ -87,6 +88,18 @@ DEFAULT_BATCH_SIZE = 25
 # same exclusion rationale as cardpicker.deductive_backfill's "Custom" tag check, just against
 # this taxonomy's tag names instead of the filename-inferred one.
 EXCLUDED_RESOLVED_TAGS = ["custom-art", "non-english"]
+
+# Part 3 addendum item 3 (docs/features/catalog-completion-plan.md, upgraded from propose-to-
+# hold to build 2026-07-16): skip_reason values that stay eligible for re-selection on a future
+# invocation instead of permanently excluding the card, same as a vote would. "unfetchable-image"
+# is a transient CDN/network condition, not a conclusion about the card - worth retrying later.
+# "frame-mismatch" is deliberately re-scannable because Part 3's own dual-yield design needs to
+# revisit these cards for artist extraction even though the printing vote stays withheld - a
+# permanent skip here would silently starve that future consumer of its own input. Every OTHER
+# skip_reason ("no-text", "parsed-but-no-match", "no-clear-winner", etc.) represents a genuine,
+# repeatable negative conclusion against the same deterministic image/candidates - re-scanning
+# those would just burn CDN budget to re-derive the identical answer.
+RESCANNABLE_SKIP_REASONS = frozenset({"unfetchable-image", "frame-mismatch"})
 
 Engine = Literal["ocr", "phash"]
 
@@ -184,13 +197,34 @@ def _eligible_base_queryset(anonymous_id: str, exclude_source_pks: Optional[Iter
     exclude_source_pks is a purely mechanical, caller-supplied deprioritization knob (no source
     pk is ever hardcoded here) - see select_candidates and the management command's
     --exclude-sources-ocr/--exclude-sources-phash flags.
+
+    Also excludes a card with a scan-log row (CardScanLog, Part 3 addendum item 3) for this
+    SAME anonymous_id, UNLESS that row's skip_reason is in RESCANNABLE_SKIP_REASONS - same
+    per-engine exact-match idempotence pattern votes already use, just for abstentions instead
+    of assents. Computed as an explicit `.values_list("card_id", ...)` subquery
+    (non_rescannable_scanned_card_ids), NOT a single `.exclude(Q(...) & ~Q(...))` on the
+    to-many `scan_logs` relation - that formulation looks equivalent but silently is not:
+    Django translates a negated lookup on a multi-valued relation into its own independent
+    `NOT EXISTS(...)` clause rather than a same-row condition, so `~Q(scan_logs__skip_reason__
+    in=X)` really means "no scan_log row at all has that reason" (true even when a DIFFERENT
+    row for this card does), not "this specific matched row doesn't have that reason". A card
+    with both a rescannable AND a later non-rescannable row for the same anonymous_id would
+    incorrectly stay eligible under the Q-object formulation - caught by
+    TestScanLog::test_a_later_non_rescannable_reason_overrides_an_earlier_rescannable_one before
+    this shipped, not assumed correct from the query reading right at a glance.
     """
+    non_rescannable_scanned_card_ids = (
+        CardScanLog.objects.filter(anonymous_id=anonymous_id)
+        .exclude(skip_reason__in=RESCANNABLE_SKIP_REASONS)
+        .values_list("card_id", flat=True)
+    )
     queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED, canonical_card__isnull=True, card_type=CardTypes.CARD
         )
         .exclude(printing_tags__anonymous_id=anonymous_id)
         .exclude(printing_tags__anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID)
+        .exclude(pk__in=non_rescannable_scanned_card_ids)
         .exclude(tags__contains=[EXCLUDED_RESOLVED_TAGS[0]])
         .exclude(tags__contains=[EXCLUDED_RESOLVED_TAGS[1]])
         .distinct()
@@ -654,6 +688,11 @@ def run_pilot(
     # than always generating one internally) keeps this deterministic for tests and lets the
     # management command log/report it before any work starts.
     run_id = run_id or generate_run_id()
+    # Part 3 addendum item 3: real-rate ETA math for the progress line below, not a guess -
+    # wall-clock since THIS invocation started, measured against candidates actually processed
+    # so far in it (not the corpus-wide unresolved count, which the progress line reports
+    # separately and which this invocation alone can't project a rate against).
+    run_start_time = time.time()
 
     index = CandidateNameIndex()
     engines_to_run: list[Engine] = ["ocr", "phash"] if engine == "both" else [engine]
@@ -735,11 +774,19 @@ def run_pilot(
 
     # fallback's own idempotence check - it has no selection query/anonymous_id exclusion of
     # its own (it rides on whichever cards ocr/phash already selected), so a card already
-    # covered by a prior fallback run is excluded here instead.
+    # covered by a prior fallback run is excluded here instead. Part 3 addendum item 3: a
+    # non-re-scannable fallback scan-log row counts as "covered" too, same as a vote - fallback
+    # abstaining for a real reason (not a transient fetch failure or a frame-mismatch withhold)
+    # shouldn't be silently re-attempted forever just because fallback has no selection query
+    # of its own to apply RESCANNABLE_SKIP_REASONS through.
     already_fallback_covered = set(
         CardPrintingTag.objects.filter(
             card_id__in=all_selected_by_card_id.keys(), anonymous_id=FALLBACK_ANONYMOUS_ID
         ).values_list("card_id", flat=True)
+    ) | set(
+        CardScanLog.objects.filter(card_id__in=all_selected_by_card_id.keys(), anonymous_id=FALLBACK_ANONYMOUS_ID)
+        .exclude(skip_reason__in=RESCANNABLE_SKIP_REASONS)
+        .values_list("card_id", flat=True)
     )
 
     def _absorb_engine_selection(engine_selected_ids: set[int]) -> set[int]:
@@ -774,19 +821,25 @@ def run_pilot(
     votes_batch: list[CardPrintingTag] = []
     tag_votes_batch: list[CardTagVote] = []
     batch_written_card_ids: list[int] = []
+    # Part 3 addendum item 3: abstention evidence, batched and flushed alongside votes (same
+    # checkpoint granularity, no separate per-card write) - see RESCANNABLE_SKIP_REASONS and
+    # _eligible_base_queryset for how these rows feed back into future runs' resume logic.
+    scan_log_batch: list[CardScanLog] = []
 
     def flush() -> None:
-        nonlocal votes_batch, tag_votes_batch, batch_written_card_ids
+        nonlocal votes_batch, tag_votes_batch, batch_written_card_ids, scan_log_batch
         if dry_run:
-            votes_batch, tag_votes_batch, batch_written_card_ids = [], [], []
+            votes_batch, tag_votes_batch, batch_written_card_ids, scan_log_batch = [], [], [], []
             return
         if tag_votes_batch:
             CardTagVote.objects.bulk_create(tag_votes_batch, ignore_conflicts=True)
         if votes_batch:
             CardPrintingTag.objects.bulk_create(votes_batch)
+        if scan_log_batch:
+            CardScanLog.objects.bulk_create(scan_log_batch)
         if batch_written_card_ids:
             all_gate_violations.extend(verify_zero_resolutions(batch_written_card_ids))
-        votes_batch, tag_votes_batch, batch_written_card_ids = [], [], []
+        votes_batch, tag_votes_batch, batch_written_card_ids, scan_log_batch = [], [], [], []
 
     def propagate_cluster_vote(
         representative_card_id: int, printing_pk: int, anonymous_id: str, confidence: float
@@ -959,10 +1012,34 @@ def run_pilot(
                     )
                     result_ocr.skip_counts["disagreement-with-other-engine"] += 1
                     result_phash.skip_counts["disagreement-with-other-engine"] += 1
+                    scan_log_batch.append(
+                        CardScanLog(
+                            card_id=card_id,
+                            anonymous_id=OCR_ANONYMOUS_ID,
+                            run_id=run_id,
+                            skip_reason="disagreement-with-other-engine",
+                        )
+                    )
+                    scan_log_batch.append(
+                        CardScanLog(
+                            card_id=card_id,
+                            anonymous_id=PHASH_ANONYMOUS_ID,
+                            run_id=run_id,
+                            skip_reason="disagreement-with-other-engine",
+                        )
+                    )
                 else:
                     if outcome.ocr_vote is not None and result_ocr is not None:
                         if printing_vote_withheld_for_frame_mismatch:
                             result_ocr.skip_counts["frame-mismatch"] += 1
+                            scan_log_batch.append(
+                                CardScanLog(
+                                    card_id=card_id,
+                                    anonymous_id=OCR_ANONYMOUS_ID,
+                                    run_id=run_id,
+                                    skip_reason="frame-mismatch",
+                                )
+                            )
                         else:
                             votes_batch.append(
                                 CardPrintingTag(
@@ -984,10 +1061,26 @@ def run_pilot(
                             )
                     elif outcome.ocr_skip_reason and result_ocr is not None:
                         result_ocr.skip_counts[outcome.ocr_skip_reason] += 1
+                        scan_log_batch.append(
+                            CardScanLog(
+                                card_id=card_id,
+                                anonymous_id=OCR_ANONYMOUS_ID,
+                                run_id=run_id,
+                                skip_reason=outcome.ocr_skip_reason,
+                            )
+                        )
 
                     if outcome.phash_vote is not None and result_phash is not None:
                         if printing_vote_withheld_for_frame_mismatch:
                             result_phash.skip_counts["frame-mismatch"] += 1
+                            scan_log_batch.append(
+                                CardScanLog(
+                                    card_id=card_id,
+                                    anonymous_id=PHASH_ANONYMOUS_ID,
+                                    run_id=run_id,
+                                    skip_reason="frame-mismatch",
+                                )
+                            )
                         else:
                             votes_batch.append(
                                 CardPrintingTag(
@@ -1013,10 +1106,26 @@ def run_pilot(
                             )
                     elif outcome.phash_skip_reason and result_phash is not None:
                         result_phash.skip_counts[outcome.phash_skip_reason] += 1
+                        scan_log_batch.append(
+                            CardScanLog(
+                                card_id=card_id,
+                                anonymous_id=PHASH_ANONYMOUS_ID,
+                                run_id=run_id,
+                                skip_reason=outcome.phash_skip_reason,
+                            )
+                        )
 
                     if outcome.fallback_vote is not None:
                         if printing_vote_withheld_for_frame_mismatch:
                             result_fallback.skip_counts["frame-mismatch"] += 1
+                            scan_log_batch.append(
+                                CardScanLog(
+                                    card_id=card_id,
+                                    anonymous_id=FALLBACK_ANONYMOUS_ID,
+                                    run_id=run_id,
+                                    skip_reason="frame-mismatch",
+                                )
+                            )
                         else:
                             votes_batch.append(
                                 CardPrintingTag(
@@ -1042,6 +1151,14 @@ def run_pilot(
                             )
                     elif outcome.fallback_skip_reason:
                         result_fallback.skip_counts[outcome.fallback_skip_reason] += 1
+                        scan_log_batch.append(
+                            CardScanLog(
+                                card_id=card_id,
+                                anonymous_id=FALLBACK_ANONYMOUS_ID,
+                                run_id=run_id,
+                                skip_reason=outcome.fallback_skip_reason,
+                            )
+                        )
 
                 # border/frame attribute votes are independent of printing-vote success or the
                 # consistency-check outcome above - they fire for any card a border/frame reading
@@ -1134,7 +1251,21 @@ def run_pilot(
             if nice:
                 time.sleep(_NICE_SLEEP_SECONDS)
             if progress_every and chunk_start % progress_every < len(chunk):
-                print(f"  ... {chunk_start}/{total_cards} candidates processed")
+                # Part 3 addendum item 3: "this invocation" progress is scoped to THIS run's own
+                # selected pool (total_cards, already net of every prior invocation's votes and
+                # scan-log rows) - separate from the corpus-wide unresolved count, which moves
+                # for reasons this invocation doesn't control (human votes, other engines).
+                # Conflating the two would make neither number trustworthy.
+                elapsed = time.time() - run_start_time
+                rate = chunk_start / elapsed if elapsed > 0 else 0.0
+                unseen_remaining = total_cards - chunk_start
+                eta_str = f"{(unseen_remaining / rate) / 3600:.1f}h" if rate > 0 else "unknown"
+                unresolved_pool = Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED).count()
+                print(
+                    f"  ... this invocation {chunk_start}/{total_cards} "
+                    f"(unseen-remaining {unseen_remaining}), {unresolved_pool} unresolved "
+                    f"catalog-wide, rate={rate:.2f}/s, ETA {eta_str}"
+                )
 
     cards_not_attempted = len(all_selected_by_card_id) - cards_attempted
     for result in results.values():

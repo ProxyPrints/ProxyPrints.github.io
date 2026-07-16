@@ -8,6 +8,7 @@ docs/features/printing-tags.md's Stage 8 environment section - CI's django image
 it, only the host venv used for the real pilot run does).
 """
 
+import collections
 import os
 import shutil
 
@@ -25,6 +26,7 @@ from cardpicker.local_identify_printing_tags import (
     NAME_FREQUENCY_CONFIDENCE,
     OCR_ANONYMOUS_ID,
     PHASH_ANONYMOUS_ID,
+    RESCANNABLE_SKIP_REASONS,
     RESOLUTION_FLOOR_DPI,
     CandidateNameIndex,
     CandidatePrinting,
@@ -51,6 +53,7 @@ from cardpicker.local_phash import (
 )
 from cardpicker.models import (
     CardPrintingTag,
+    CardScanLog,
     CardTagVote,
     CardTypes,
     PilotRunLedger,
@@ -1313,6 +1316,143 @@ class TestIdempotence:
         # re-running the exact same selection now excludes this card - it already has a vote
         # under OCR_ANONYMOUS_ID
         assert select_candidates("ocr") == []
+
+
+class TestScanLog:
+    """Part 3 addendum item 3 (docs/features/catalog-completion-plan.md, upgraded from
+    propose-to-hold to build 2026-07-16): abstention evidence persists exactly like assent
+    evidence - a CardScanLog row per (card, anonymous_id) an engine looked at and abstained on,
+    consumed by the same exclusion pattern votes already use."""
+
+    def test_a_skipped_card_gets_a_scan_log_row_and_is_excluded_next_time(self, db, monkeypatch):
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        import cardpicker.local_identify_printing_tags as module
+
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(skip_reason="no-text"),
+        )
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        assert select_candidates("ocr") != []  # eligible before this run
+        run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        rows = list(CardScanLog.objects.filter(card=card))
+        assert len(rows) == 1
+        assert rows[0].anonymous_id == OCR_ANONYMOUS_ID
+        assert rows[0].skip_reason == "no-text"
+        assert select_candidates("ocr") == []  # excluded now, same as a vote would exclude it
+
+    def test_a_voted_card_gets_no_scan_log_row(self, db, monkeypatch):
+        # "voted cards need no row (the vote IS the record)" - CardPrintingTag alone must be
+        # sufficient for exclusion; a scan-log row would be redundant bookkeeping.
+        printing = CanonicalCardFactory(name="Forest")
+        CardFactory(name="Forest")
+        import cardpicker.local_identify_printing_tags as module
+
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+                vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
+            ),
+        )
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+        run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert CardScanLog.objects.count() == 0
+
+    def test_rescannable_skip_reasons_stay_eligible_next_time(self, db, monkeypatch):
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        import cardpicker.local_identify_printing_tags as module
+
+        assert "unfetchable-image" in RESCANNABLE_SKIP_REASONS
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)  # -> unfetchable-image
+        run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        row = CardScanLog.objects.get(card=card)
+        assert row.skip_reason == "unfetchable-image"
+        # still eligible - a transient fetch failure isn't a conclusion about the card
+        selected = select_candidates("ocr")
+        assert [s.card.pk for s in selected] == [card.pk]
+
+    def test_a_later_non_rescannable_reason_overrides_an_earlier_rescannable_one(self, db, monkeypatch):
+        # the resume query re-evaluates ALL of a card's scan-log rows for this anonymous_id
+        # every time, not just the first - a card that abstained transiently once and then
+        # abstained for a REAL reason later must end up excluded, regardless of which happened
+        # first. This is the "order doesn't matter, latest conclusive state wins" property.
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        import cardpicker.local_identify_printing_tags as module
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+        run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)  # -> unfetchable-image, rescannable
+        assert select_candidates("ocr") != []
+
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(skip_reason="no-text"),
+        )
+        # image now "fetches" (a real tiny image - classify_bleed_edge needs .size, not a bare
+        # object) - this also makes fallback newly eligible to run (it requires image is not
+        # None), so it gets its OWN scan-log row too; scoping the assertion to OCR_ANONYMOUS_ID
+        # is what this test is actually about, not fallback's independent behavior.
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (10, 10)))
+        run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)  # -> no-text, NOT rescannable
+
+        ocr_rows = CardScanLog.objects.filter(card=card, anonymous_id=OCR_ANONYMOUS_ID)
+        assert ocr_rows.count() == 2
+        assert {r.skip_reason for r in ocr_rows} == {"unfetchable-image", "no-text"}
+        assert select_candidates("ocr") == []
+
+    def test_kill_mid_run_then_restart_only_rescans_the_rescannable_set(self, db, monkeypatch):
+        # the explicit restart-resume proof: a run processes several cards with a mix of
+        # outcomes (vote, non-rescannable skip, rescannable skip), a restart happens, and only
+        # the rescannable-skip card is genuinely re-fetched - zero re-fetches for everything else.
+        printing = CanonicalCardFactory(name="Forest")
+        voted_card = CardFactory(name="Forest")
+        skipped_card = CardFactory(name="Forest")
+        rescannable_card = CardFactory(name="Forest")
+        import cardpicker.local_identify_printing_tags as module
+
+        fetch_calls: dict[int, int] = collections.defaultdict(int)
+
+        def counting_fetch(card: object, dpi: object = None) -> object:
+            fetch_calls[card.pk] += 1  # type: ignore[attr-defined]
+            if card.pk == rescannable_card.pk:  # type: ignore[attr-defined]
+                return None  # unfetchable-image every time - genuinely transient
+            return Image.new("RGB", (10, 10))  # real image - run_ocr_for_card below is also monkeypatched
+
+        def per_card_ocr_result(selected: object, image: object, crop_box: object, bleed_class: object = None):
+            card_id = selected.card.pk  # type: ignore[attr-defined]
+            if card_id == voted_card.pk:
+                return module.OcrCardResult(
+                    vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
+                )
+            if card_id == skipped_card.pk:
+                return module.OcrCardResult(skip_reason="no-text")
+            return module.OcrCardResult(skip_reason="unfetchable-image")  # unreached for rescannable_card
+
+        monkeypatch.setattr(module, "fetch_card_image", counting_fetch)
+        monkeypatch.setattr(module, "run_ocr_for_card", per_card_ocr_result)
+
+        run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)  # "kill" = just one invocation
+
+        assert fetch_calls[voted_card.pk] == 1
+        assert fetch_calls[skipped_card.pk] == 1
+        assert fetch_calls[rescannable_card.pk] == 1
+
+        run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)  # "restart"
+
+        # zero re-fetches for the voted and non-rescannable-skipped cards - still exactly 1 each
+        assert fetch_calls[voted_card.pk] == 1
+        assert fetch_calls[skipped_card.pk] == 1
+        # the rescannable card is genuinely re-fetched - this is the point of leaving it eligible
+        assert fetch_calls[rescannable_card.pk] == 2
 
 
 class TestVerifyZeroResolutions:
