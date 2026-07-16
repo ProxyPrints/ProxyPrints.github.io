@@ -19,6 +19,16 @@ only) for deployment, hosting, and domain specifics.
 
 ## Tooling rules
 
+- **Docs convention**: task-end doc updates EDIT the relevant reference
+  file in place — never append a dated section. If a blocker costs more
+  than 15 minutes to resolve, add a symptom-first entry to
+  `docs/troubleshooting.md` before the task closes (grep it first before
+  re-deriving a fix — recurring blockers live there, not buried in a
+  changelog).
+- **Wiki maintenance**: a change that affects user-facing or admin-facing
+  behavior updates the corresponding GitHub wiki page as part of the same
+  task, not as a follow-up. Wiki pages link to `docs/` for operational
+  detail — never duplicate a fact that changes.
 - **Push policy**: commit and push straight to `master` for solo work on
   this repo, no PR needed. PRs (+ user approval before merge) are reserved
   for upstreaming to `chilli-axe/mpc-autofill`. Never `git push --force` as
@@ -51,6 +61,9 @@ only) for deployment, hosting, and domain specifics.
 
 ## docs/ index
 
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) — symptom-first
+  index of recurring blockers (grep your error text here first, before
+  re-deriving a fix or reading anything else below).
 - [`docs/infrastructure.md`](docs/infrastructure.md) — Docker build/deploy,
   secrets & credentials detail, telemetry removal, CI/CD state, push
   policy detail, upstreaming workflow, the drives.csv history-rewrite
