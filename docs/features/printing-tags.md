@@ -2240,3 +2240,34 @@ visibility, logged at each command's startup, never itself the gate):
 ```bash
 GIT_SHA=$(git rev-parse --short HEAD) docker compose -f docker/docker-compose.prod.yml build
 ```
+
+**The post-purge invariant, stated precisely** (this is the safety property revocability rests
+on - "corrected" without the exact statement isn't reviewable, so here it is verbatim against
+the actual implementation, `cardpicker.management.commands.purge_machine_votes. verify_no_machine_only_resolutions`): after a real (non-dry-run) purge, every affected card is
+**re-resolved from scratch** via the persisting consensus resolvers
+(`resolve_and_persist_printing`/`resolve_and_persist_artist`/`resolve_and_persist_tag_votes`),
+using whatever votes actually remain after the purge - not a diff against pre-purge state. The
+command then asserts: for every affected card whose `printing_tag_status` is `RESOLVED`, at
+least one of its surviving `CardPrintingTag` votes for that resolved printing has a human-backed
+`source` (not `VoteSource.DEDUCTION`/`VoteSource.OCR`); identically for `artist_vote_status`
+against the resolved artist, and for each individual tag whose `tag_vote_statuses` entry is
+`RESOLVED_APPLY`/`RESOLVED_REJECT` against that specific tag's own surviving votes. **A card is
+NOT required to return to its pre-purge status** - un-resolving as a consequence of losing
+machine-only weight is the expected, correct outcome, reported separately
+(`cards_unresolved_by_purge`), never a violation. Only a `RESOLVED` outcome with zero surviving
+human-backed votes behind it is a violation - `resolve_weighted_consensus`'s own human-backed
+gate should make that structurally impossible, so if it ever happens it means something upstream
+broke, not that the purge did anything wrong.
+
+**Cohort convention while this rolls out**: the live full-catalog run in flight when this
+migration lands keeps writing votes with `run_id` NULL for the rest of its current invocation -
+that's correct and meaningful, not a gap. NULL `run_id` identifies the **pre-safety-era
+cohort**: still fully governed by properties 1/2 above (the gate and restart-safety were never
+conditional on `run_id` existing), just not individually purgeable by run the way anything
+stamped going forward is. The run is not restarted solely to gain stamping - it folds in
+naturally at whatever iteration the run next gets restarted for anyway, and until then the NULL
+cohort stays identifiable by `anonymous_id` + `run_id IS NULL` if it's ever needed.
+
+**Expected side effect once this merges and migrates**: any restart from an OLDER image built
+before this migration existed will trip the staleness guard (property 4) and refuse to start,
+forcing a rebuild first. That's the guard doing exactly its job, not a bug.

@@ -223,10 +223,18 @@ those 2 machine votes correctly drops the weight below threshold and the
 card **legitimately un-resolves** — correct consensus recalculation, not a
 violation. The invariant actually worth asserting, mirroring
 `verify_zero_resolutions`'s "structurally impossible but verify against
-real data" spirit: **any card still RESOLVED after re-resolution must have
-at least one surviving human-backed vote** (`source not in {VoteSource.DEDUCTION, VoteSource.OCR}`).
-A card resolved with only machine-sourced survivors is a real, halting
-violation — `raise CommandError(...)`, matching the existing gate-violation
+real data" spirit, stated precisely (per docs/features/printing-tags.md's
+"Iteration safety" section, the canonical statement - implemented in
+`verify_no_machine_only_resolutions`): for every affected card whose
+`printing_tag_status` is RESOLVED, at least one surviving `CardPrintingTag`
+vote for that resolved printing must be human-backed
+(`source not in {VoteSource.DEDUCTION, VoteSource.OCR}`); identically per-tag
+for `artist_vote_status`/`tag_vote_statuses`. A card is NOT required to
+return to its pre-purge status - un-resolving is the expected, correct
+outcome (reported separately, `cards_unresolved_by_purge`), never a
+violation. Only a RESOLVED outcome with zero surviving human-backed votes
+behind it is a violation — `raise CommandError(...)`, matching the existing
+gate-violation
 message/truncation style.
 
 6. Print a summary; on success, set `purged_at=now()` on the
