@@ -23,94 +23,32 @@ them.
 
 ### Startup vs. scheduled catalog sync
 
-`update_database` (rescans every configured source against its real
-backend — Google Drive, local filesystem, etc.) and `update_dfcs` used to
-run synchronously inside `docker/django/entrypoint.sh`, gated behind
-`migrate --check` ("did any migration just apply"). That's the wrong
-proxy for "does catalog content need rescanning" — a purely schema-only
-migration (e.g. adding one nullable column) would trigger the same full
-rescan as a migration that actually changes how cards are parsed.
-
-**Incident, 2026-07-14**: merging three PRs — one adding
-`Tag.display_name`, additive, unrelated to catalog content — triggered
-this gate on restart. Worker's container completed the full 254-source
-rescan cleanly in 22m8s (measured: 75% of that is Drive API listing
-calls, 25% is everything else — migrate/import_sources/diff-and-sync/
-update_dfcs). django's own copy of the same rescan crashed ~9 minutes in
-on an unhandled `IntegrityError` (re-inserting a `Card` row that already
-existed from an earlier scan) and stayed down until manually restarted —
-there's no `restart:` policy on these containers, and a stopped
-container's `docker compose logs` output looks identical to a slow one on
-casual inspection, which delayed catching it.
-
-**Fix**: the entrypoint now only ever runs `migrate` (always, fast,
-genuinely schema-blocking) and `import_sources` (always, cheap) before
-binding gunicorn — content scanning never blocks the API from coming up,
-regardless of how long it takes or whether it fails. Coverage for actual
-content sync:
+`docker/django/entrypoint.sh` runs only `migrate` (fast, schema-blocking)
+and `import_sources` (cheap, local) before binding gunicorn — a boot never
+waits on a catalog rescan, and a per-source scan failure can't take the
+API down. Actual content sync is scheduled work, not boot-time work:
 
 - **Steady state**: a daily `update_database` schedule and weekly
-  `update_dfcs`/`import_canonical_card_data` schedules already exist,
-  seeded via data migrations (`0043_auto_20250529_0233.py`,
-  `0048_auto_20260426_2140.py`) and run by the `worker` container's
-  `manage.py qcluster` process — confirmed via `django_q.models.Task`
-  history showing a full week of consecutive successful daily runs. This
-  was already working the entire time; the entrypoint's old boot-time
-  block was a redundant duplicate of it for every restart, not a
-  necessary fallback.
-- **Fresh bootstrap** (disaster recovery / a genuinely new instance):
-  django-q's `Schedule.next_run` defaults to `timezone.now()` at row
-  creation, so the very first `migrate` on a new instance schedules an
-  almost-immediate async first scan with zero entrypoint involvement.
-  `import_sources` additionally checks, after syncing `Source` rows, for
-  "sources exist but zero `Card` rows exist yet" and — only in that exact
-  case — enqueues one extra immediate async `update_database` run as a
-  safety net against the (unlikely) case where the daily schedule's first
-  firing loses the race against `import_sources` (which would otherwise
-  mean waiting a full 24h for the next scheduled attempt).
-- A per-source failure (like the crash above) is now isolated — one
-  source's exception is caught, logged, and skipped rather than aborting
-  the other ~250 sources' scans, whether run sequentially or (see below)
-  concurrently.
-- The previously fully-sequential per-source loop is now bounded-parallel
-  (`MAX_SOURCE_WORKERS` concurrent sources, each already internally using
-  its own small worker pool for its own folder tree) — the Drive API's
-  20,000 calls/100s quota has enough headroom that this is latency-bound,
-  not quota-bound, so this is expected to cut a full rescan's wall-clock
-  time substantially without new quota risk.
+  `update_dfcs`/`import_canonical_card_data` schedules (seeded via data
+  migrations `0043_auto_20250529_0233.py`, `0048_auto_20260426_2140.py`)
+  run via the `worker` container's `manage.py qcluster` process.
+- **Fresh bootstrap only**: `import_sources` enqueues one immediate async
+  `update_database` run, but only if `Source` rows exist with zero `Card`
+  rows yet (a genuinely new instance) — steady-state restarts never
+  trigger this.
+- Per-source scan failures are caught/logged/skipped, not fatal to the
+  whole rescan; the per-source loop is bounded-parallel
+  (`MAX_SOURCE_WORKERS`), well within the Drive API's quota headroom.
+- **Known monitoring gap**: `django_q.models.Success.result` is always
+  `None` for these runs (`call_command` returns nothing) — "how much
+  changed on the last scan" is only in worker/entrypoint stdout, not
+  queryable.
 
-None of this changes what data ends up in the catalog or when the daily
-scan runs — only when a _boot-time_ rescan can happen, and whether it can
-ever block the API.
-
-**Measured, deployed 2026-07-14** (PR #18, merged alongside #16/#17):
-
-- **Time-to-bind**: ~29s from container start to `api.proxyprints.ca`
-  returning 200 on `2/sources/` — down from the ~22m8s the pre-fix
-  gated rescan held gunicorn's bind hostage for. Entrypoint log confirmed
-  `migrate` → `import_sources` → `gunicorn` with no `update_database` at
-  boot; the bootstrap guard correctly stayed silent (both `Source` and
-  `Card` rows already present).
-- **Schedule liveness**: `django_q.models.Success` shows five consecutive
-  daily runs at 18:49 UTC (2026-07-10 through 2026-07-14) — the schedule
-  survived the deploy unchanged, as expected (it's a DB row, not
-  entrypoint state).
-- **First post-deploy parallel scan** (manually triggered to observe the
-  new `MAX_SOURCE_WORKERS=8` behavior directly rather than waiting for
-  the next 18:49 UTC firing): 252 sources, **6m9s** wall-clock — versus
-  the ~22m8s sequential baseline from the incident, roughly a 3.6x
-  speedup. Zero Drive 429s, zero per-source failures (the
-  `_update_database_for_source_isolated` catch-and-log path never fired —
-  clean run, so isolation is proven by the earlier unit tests rather than
-  this particular scan). Totals: 13 created, 21 updated, 0 deleted.
-- **Where totals surface today**: `manage.py update_database`'s own
-  stdout (captured in worker/entrypoint logs for a live run; not
-  persisted anywhere queryable). `django_q.models.Success.result` is
-  always `None` for these runs — `call_command` doesn't return a value,
-  so the scheduler's own task history can't answer "how much changed on
-  the last scan" without a code change to have the command return/log a
-  structured summary. Flagged here as a monitoring gap, not fixed as part
-  of this change.
+Entrypoint previously gated this behind `migrate --check`, the wrong
+proxy for "does content need rescanning" — see [[troubleshooting.md]]
+("Boot-time migration triggers a multi-minute rescan") for the incident
+this fixed and its follow-on hardening. Fixed by `eaece1fd` (#18,
+2026-07-14).
 
 - `docker-compose.prod.yml` builds all three services (`django`, `worker`,
   `nginx`) with the repo root as build context (`context: ..`). There was no
@@ -129,40 +67,21 @@ ever block the API.
 - Postgres/ES ports are bound to `127.0.0.1` deliberately — they were
   internet-exposed at one point.
 - **After `docker compose up -d django worker` (or any command that
-  recreates the `django` container), also restart `nginx`.** `nginx`'s
-  `upstream django-api { server django:8000; }` resolves the `django`
-  service name to a Docker-internal IP once at nginx's own startup/reload,
-  not per-request — recreating the django container assigns it a _new_
-  internal IP, which nginx keeps proxying to as if nothing changed, so
-  every request 502s (`connect() failed (111: Connection refused) ... upstream: "http://<stale-ip>:8000/..."` in nginx's logs) until nginx
-  itself is restarted (`sudo docker compose -f docker-compose.prod.yml restart nginx`). Found live during the tag-taxonomy-followup PR's
-  activation sequence — api.proxyprints.ca was fully down for a few
-  minutes as a result before this was diagnosed and fixed.
+  recreates the `django` container), also restart `nginx`** — see
+  [[troubleshooting.md]] ("nginx 502s everything after a django container
+  restart") for the mechanism and exact fix.
 
-### Boot-time recovery (2026-07-16, ahead of an OCI instance resize)
+### Boot-time recovery
 
-Every service in `docker-compose.prod.yml` now has `restart: unless-stopped`
-(previously none did — a container crash or Docker daemon restart left it
-down until someone manually ran `docker compose up`). Belt-and-suspenders
-alongside that: a systemd unit,
+Every service in `docker-compose.prod.yml` has `restart: unless-stopped`
+(`8b1ec5e5`). Additionally, a systemd unit —
 **`/etc/systemd/system/mpcautofill-docker-compose.service`** (OS-level,
-**not** git-tracked — this note is its only record), runs
-`docker compose -f docker/docker-compose.prod.yml up -d` on boot
-(`WantedBy=multi-user.target`, `enabled`). This exists specifically because
-`restart: unless-stopped` alone doesn't cover every recovery path (e.g. a
-container that was fully removed, not just stopped) — the systemd unit
-re-derives the whole stack from the compose file regardless of individual
-container restart-policy state. `docker.service` itself was already
-`enabled` at the systemd level (starts the daemon on boot); this unit is
-what actually brings the _application_ containers back up, since nothing
-did that before.
-
-**Verified with a real `sudo reboot`** (not simulated) before trusting it
-for the actual resize's stop/start cycle: all 5 containers came back up
-unattended within minutes (systemd unit exited 0, explicit per-container
-start log), and both `api.proxyprints.ca` and `proxyprints.ca` returned
-HTTP 200 shortly after. If this box is ever rebuilt, recreate this unit
-manually — it has no git-tracked source to restore from.
+**not** git-tracked — this note is its only record), `WantedBy=multi-user.target`, enabled — runs `docker compose -f docker/docker-compose.prod.yml up -d` on boot, covering recovery paths
+`restart: unless-stopped` alone doesn't (e.g. a fully-removed container).
+Verified with a real `sudo reboot`: all 5 containers came back up
+unattended, both `api.proxyprints.ca` and `proxyprints.ca` returned HTTP
+200 shortly after (`ac6bb7e3`). If this box is ever rebuilt, recreate this
+unit manually — it has no git-tracked source to restore from.
 
 ## Secrets and credentials
 
@@ -251,34 +170,6 @@ directly.
   `-R`) defaults the base repo to the **upstream parent**, not this fork —
   always pass `-R ProxyPrints/ProxyPrints.github.io` to `gh pr create`, or
   check the base-repo dropdown, when the PR is meant to land on this repo.
-
-## CI investigation: mypy errors that looked "pre-existing" weren't actually being checked
-
-Several sessions in a row treated 4 mypy errors (`desktop-tool/processing.py`,
-`desktop-tool/io.py`, `mtg.py`) as a known, unchanged baseline, safe to
-ignore — confirmed stable across many local runs. This was wrong: checking
-actual GitHub Actions history (`gh run list`/`gh run view --log`) showed the
-"Formatting and static type checking" workflow had been passing cleanly (0
-errors) the whole time. Root cause: adding `from PIL import Image` to
-`cardpicker/sources/source_types.py` (for [[features/local-file-source.md]])
-put Pillow on `models.py`'s import chain, which `mypy_django_plugin`
-genuinely imports (not just statically analyzes) to introspect Django
-models — and Pillow was never listed in `.pre-commit-config.yaml`'s mypy
-`additional_dependencies`, so in CI's isolated hook environment this was a
-hard `ModuleNotFoundError` that crashed mypy entirely, rather than producing
-a type error. Every local run used a venv with the full `requirements.txt`
-installed (needed for pytest), which masked the crash completely —
-`ignore_missing_imports = True` in `mypy.ini` silently treated every
-PIL-typed expression as `Any` instead of surfacing anything. Adding
-`"Pillow~=12.3"` to the mypy hook's `additional_dependencies` fixed the
-crash, and — as a side effect — made PIL's types visible to mypy for the
-first time, which is what actually revealed the 4 real (if minor) errors:
-a `TYPE_CHECKING` import of the module `PIL.Image` used as a return-type
-annotation instead of the class `PIL.Image.Image` (plus two cascading
-errors from the same mistake), and one `Image.open(requests.get(...).raw)`
-call that doesn't nominally satisfy `IO[bytes]` per `types-requests`'
-stubs despite being `read()`-compatible at runtime (scoped `# type: ignore[arg-type]`, matching this file's existing convention for
-third-party stub gaps). See [[lessons.md]] for the generalized lesson.
 
 ## Push policy
 
