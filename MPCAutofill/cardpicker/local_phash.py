@@ -10,6 +10,8 @@ selected card's name actually produced, never a bulk backfill of the full 113k-r
 """
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from io import BytesIO
 from typing import TYPE_CHECKING, Optional
@@ -18,8 +20,9 @@ import imagehash
 import requests
 from PIL import Image
 
-from cardpicker.local_fallback import normalize_crop_box
-from cardpicker.models import CanonicalCard
+from cardpicker.image_cdn_fetch import fetch_card_image
+from cardpicker.local_fallback import classify_bleed_edge, normalize_crop_box
+from cardpicker.models import CanonicalCard, Card
 from cardpicker.utils import twos_complement
 
 if TYPE_CHECKING:
@@ -50,6 +53,18 @@ DEFAULT_MARGIN = 5
 # reasonable average, not tuned per-frame-era, which is exactly the kind of imprecision a
 # margin-gated match (not just a threshold) is meant to tolerate.
 ART_CROP_BOX: tuple[float, float, float, float] = (0.07, 0.10, 0.93, 0.58)
+
+# Hash-at-ingest/backfill fetch size (2026-07-16, docs/features/printing-tags.md's "Phash
+# accuracy at small CDN sizes"): deliberately small, NOT DEFAULT_FETCH_DPI (250) - phash's own
+# internal downsample to 32x32 grayscale before its DCT means 148px is already ~5x the
+# resolution the algorithm actually uses, and measured on 150 real cards/11,175 pairs, zero
+# false merges occurred at this size (min distance among confirmed-different pairs: 16-18,
+# nowhere near 0). MUST be a multiple of 10 - see image_cdn_fetch.get_worker_image_url's
+# docstring for why (Google's lh4 endpoint 400s on a non-integer height param). 40 (148px) over
+# 50 (185px): the false-merge/false-split evidence didn't distinguish between them at the
+# sample size measured, and the smaller size is ~15-20% faster to fetch on top of the ~2-2.5x
+# win either one already gets over full resolution.
+INGEST_HASH_FETCH_DPI = 40
 
 
 def _hash_to_int(image_hash: "imagehash.ImageHash") -> int:
@@ -115,6 +130,106 @@ def compute_card_art_hash(card_image: "Image.Image", bleed_class: Optional[str] 
     return _hash_to_int(imagehash.phash(art_region))
 
 
+def compute_content_phash_for_card(card: "Card", dpi: int = INGEST_HASH_FETCH_DPI) -> Optional[int]:
+    """
+    Hash-at-ingest/backfill primitive (docs/features/printing-tags.md, 2026-07-16): fetches
+    `card`'s own image at a small CDN size and computes its content phash - the same
+    `compute_card_art_hash` the pilot's phash engine and cluster dedup both already use, just at
+    a much smaller fetch size (see INGEST_HASH_FETCH_DPI) since this is meant to run
+    unconditionally at ingest time, not only for a run's selected pool.
+
+    Best-effort: returns None on any fetch/hash failure (a transient CDN hiccup should never
+    block a card from being created/updated - it just stays unset for a later backfill pass or
+    the next ingest to retry, same NULL-means-not-yet-computed contract as
+    Card.content_phash itself).
+    """
+    image = fetch_card_image(card, dpi)
+    if image is None:
+        return None
+    bleed_class = classify_bleed_edge(image)
+    return compute_card_art_hash(image, bleed_class)
+
+
+DEFAULT_BACKFILL_BATCH_SIZE = 500
+DEFAULT_BACKFILL_WORKERS = 5  # matches cardpicker.sources.update_database's own MAX_WORKERS
+
+
+@dataclass(frozen=True)
+class BackfillResult:
+    dry_run: bool = False
+    total_candidates: int = 0
+    hashed: int = 0
+    failed: int = 0
+
+
+def run_content_phash_backfill(
+    dry_run: bool = False,
+    batch_size: int = DEFAULT_BACKFILL_BATCH_SIZE,
+    workers: int = DEFAULT_BACKFILL_WORKERS,
+    limit: Optional[int] = None,
+    nice: bool = True,
+    progress_every: int = 1000,
+) -> BackfillResult:
+    """
+    One-time backfill (docs/features/printing-tags.md, 2026-07-16): hashes every existing Card
+    row whose content_phash is still NULL - the correction path for rows that predate
+    hash-at-ingest (cardpicker.sources.update_database.hash_newly_created_cards runs only for
+    CREATED cards going forward - see its own docstring), or that hashing failed for at ingest
+    time (a transient CDN fetch error - see compute_content_phash_for_card's best-effort
+    contract).
+
+    Idempotent and resumable by construction: filters on content_phash__isnull=True, so a plain
+    re-invocation after a kill picks up exactly where it left off with no separate checkpoint
+    file or --resume flag needed - same NULL-filter-as-checkpoint discipline
+    local_identify_printing_tags.run_pilot uses via its own anonymous_id exclusion. Batched:
+    fetches+hashes `batch_size` cards concurrently (via `workers` threads, matching
+    update_database's own ingest-hook concurrency), then persists that whole batch with one
+    bulk_update - a kill loses at most one in-flight batch, never more.
+    """
+    if nice:
+        try:
+            os.nice(15)
+        except (AttributeError, PermissionError, OSError):
+            logger.warning("os.nice unavailable in this environment - --nice throttling is CPU-yield-only")
+
+    queryset = (
+        Card.objects.filter(content_phash__isnull=True)
+        .select_related("source")
+        .only("pk", "identifier", "source_id", "source__source_type")
+        .order_by("pk")
+    )
+    if limit is not None:
+        queryset = queryset[:limit]
+    all_cards = list(queryset)
+    total = len(all_cards)
+    print(f"{total} card/s with no content_phash yet.")
+
+    hashed = 0
+    failed = 0
+    for chunk_start in range(0, total, batch_size):
+        chunk = all_cards[chunk_start : chunk_start + batch_size]
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            hashes = list(executor.map(compute_content_phash_for_card, chunk))
+
+        to_update = []
+        for card, content_hash in zip(chunk, hashes):
+            if content_hash is not None:
+                card.content_phash = content_hash
+                to_update.append(card)
+                hashed += 1
+            else:
+                failed += 1
+
+        if to_update and not dry_run:
+            Card.objects.bulk_update(to_update, ["content_phash"], batch_size=batch_size)
+
+        done = chunk_start + len(chunk)
+        if progress_every and done % progress_every < len(chunk):
+            print(f"  ... {done}/{total} cards hashed")
+
+    return BackfillResult(dry_run=dry_run, total_candidates=total, hashed=hashed, failed=failed)
+
+
 @dataclass(frozen=True)
 class PhashMatch:
     candidate: "CandidatePrinting"
@@ -164,8 +279,14 @@ __all__ = [
     "DEFAULT_DISTANCE_THRESHOLD",
     "DEFAULT_MARGIN",
     "ART_CROP_BOX",
+    "INGEST_HASH_FETCH_DPI",
+    "DEFAULT_BACKFILL_BATCH_SIZE",
+    "DEFAULT_BACKFILL_WORKERS",
     "PhashMatch",
+    "BackfillResult",
     "get_or_compute_canonical_hash",
     "compute_card_art_hash",
+    "compute_content_phash_for_card",
+    "run_content_phash_backfill",
     "find_best_match",
 ]

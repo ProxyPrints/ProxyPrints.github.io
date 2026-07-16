@@ -2193,3 +2193,144 @@ with the false-split evidence still too thin to call proven. Even if proven, the
 avoiding a _separate_ pre-pass fetch entirely - reusing the image OCR/phash already fetches per
 card, rather than shrinking a redundant one. That reframes task #108/#118 more than resolving
 task #117 on its own does.
+
+## Hash-at-ingest + two-threshold clustering (2026-07-16)
+
+Built on `worktree-hash-at-ingest` as the coherent follow-on the research above pointed at:
+hash ONCE at ingest, store, never recompute corpus-wide - absorbing deferred item 2b and making
+cluster dedup a per-run DB query at zero fetch cost, so the standalone pre-pass (disabled above)
+never needs to exist again in any form. Built while the fast-follow-enabled full-catalog run
+(PR #26) continued unattended - this work does not touch that run, it's the next-run
+architecture.
+
+### Schema: `Card.content_phash`
+
+`Card.image_hash` (migration 0046) turned out to already exist as a dead field - added
+alongside `expansion_hint`'s era, always written as a literal `0` placeholder by
+`update_database`, never read anywhere (confirmed: zero references outside `models.py` and that
+one write site). Rather than add a second, confusingly-similar hash field next to a dead one on
+the same model, migration 0061 renames it to `content_phash`, makes it nullable (existing `0`
+rows migrated to `NULL` - none of them were ever real hashes), and indexes it. Dual consumer:
+this pilot's own clustering, and federation-v1's reserved `content_hash` field (see
+`docs/federation-v1.md`) - one field, two consumers. Algorithm/params documented as a
+cross-instance interchange contract in the field's own docstring: `imagehash.phash`,
+`hash_size=8` (64-bit) - the library default, inherited from `CanonicalCard.image_hash`'s
+pre-existing convention rather than deliberately chosen; changing it later is a re-hash
+migration, not a config flip, since federation peers would need to agree on the same params.
+
+### Fetch-path extraction
+
+`get_worker_image_url`/`fetch_card_image` moved from `local_identify_printing_tags.py` to a new
+`cardpicker/image_cdn_fetch.py` - a second, non-pilot caller (`update_database`'s ingest hook)
+needed the identical fetch, and the core ingest pipeline shouldn't depend on the pilot
+orchestration module for something this foundational.
+
+### Hash at ingest - a real cost, not a free byproduct
+
+The task brief's premise here needed a correction, found before building anything wrong:
+`update_database`'s per-card path (`transform_image_into_object`) builds a `Card` row purely
+from Google Drive folder-listing metadata (id/name/size/height/timestamps) - it never touches
+image bytes. There was no existing fetch to piggyback on. `hash_newly_created_cards`
+(`cardpicker/sources/update_database.py`) is therefore genuine new cost: one small-CDN-size
+fetch per newly-created card, threaded (`MAX_WORKERS=5`, matching this module's own Drive-scan
+concurrency), called right before `bulk_create`. Best-effort - a fetch/hash failure just leaves
+`content_phash` NULL for the backfill command to retry, never blocks a sync.
+
+**Scoped to CREATED cards only, not UPDATED ones - a deliberate narrowing of the brief's literal
+"new/changed cards" wording, flagged explicitly rather than silently assumed:** `content_phash`
+was never in `bulk_sync_objects`'s `bulk_update` field whitelist (confirmed - the whitelist's own
+comment claims "every field except identifier," which was already inaccurate before this
+change), so there is nothing to persist for an updated card even if it were re-hashed - the
+write would be silently discarded. A genuinely changed image at the same Drive file id (rare -
+Drive normally assigns a new id on real content replacement) isn't detected or corrected here;
+the standalone backfill command's NULL-only filter is the correction path if that's ever
+suspected for a specific card. Building real change-detection for that rare case was judged out
+of proportion to the risk - logged here rather than built.
+
+### Backfill command
+
+`local_backfill_content_phash` (new management command, `local_phash.run_content_phash_backfill`)
+hashes every existing `content_phash IS NULL` row. Idempotent and resumable by construction (the
+NULL filter IS the checkpoint - no separate `--resume` flag or state file), batched
+(fetch+hash `batch_size` cards concurrently, one `bulk_update` per batch - a kill loses at most
+one in-flight batch), `--nice` by default matching `run_pilot`'s convention.
+
+### Two-threshold clustering (`cardpicker/local_clustering.py`)
+
+Replaces the disabled fetch-based pre-pass entirely - `run_pilot`'s cluster_result call site now
+reads `Card.content_phash` (already loaded via `select_candidates`'s `.only()`) instead of
+fetching. Restores the representative-only filtering the original (pre-disablement)
+implementation had (`all_selected_by_card_id` narrowed to non-absorbed cards before the compute
+loop) - the disabled no-op version had dropped this line since it was a no-op with an
+always-empty `members_by_representative`; re-enabling clustering without restoring it would have
+silently run full OCR/phash/fallback compute on absorbed members AND propagated a redundant
+vote to them.
+
+Two tiers, two trust levels: **d=0** (exact hash match) propagates votes exactly as the old
+pre-pass did - sound entailment, unchanged semantics. **0 < d <= 2** is a narrowing PRIOR only
+(never auto-votes) - required, not optional, given small-size hashing is in use (the earlier
+"Phash accuracy at small CDN sizes" section found a real true-duplicate pair landing at exactly
+d=2). The d<=2 narrowing HINT is computed (`near_duplicate_ids_by_card_id`) but **not yet wired
+into `_compute_card`'s actual candidate-narrowing chain** - flagged explicitly as a scoped-out
+fast-follow, not silently half-built: wiring it into the hot per-card compute path under a
+`ThreadPoolExecutor` needed more careful threading verification than this pass's effort budget
+allowed, and the d=0 propagation win stands on its own without it.
+
+**Performance, benchmarked before trusting the design, not assumed:** the two tiers are computed
+as independent steps (advisor review caught this before it shipped as one coupled pass) - d=0 is
+a plain dict grouping, measured 0.13s at N=166,422 real-scale synthetic hashes. The d<=2 tier
+(chunked numpy XOR + `numpy.bitwise_count` popcount, never a Python pairwise loop or an
+all-at-once O(N^2) allocation) measured ~2-3 minutes at the same N (contended with this box's
+own concurrently-running full-catalog job at benchmark time) - a ~500-650x win over the disabled
+pre-pass's ~21.6h, and it's pure in-memory compute, so it doesn't compete for the shared CDN
+request budget the old pre-pass did. Wrapped in a try/except: a failure in the d<=2 scan falls
+back to "no near-duplicate hints this run," never taking down d=0's already-proven propagation.
+
+### Validation against real production data (not the earlier n=2 sample)
+
+The original "Phash accuracy at small CDN sizes" research flagged its own weakness: only 2 true
+duplicates existed in that 150-card sample, too thin to trust. The live full-catalog run
+(running throughout this work) provided a much better source: **harvested 300 real pairs of
+different Card rows that received a vote for the SAME printing** from the run's own OCR/phash
+engines (1,771 such pairs existed at harvest time), plus 300 pairs voted for different
+printings (false-merge check), via a read-only query against the live production DB.
+
+**A ground-truth correction made before trusting the numbers**: "voted for the same printing"
+is NOT the same claim as "the same uploaded image" - two community members can scan/photograph
+the same real card differently, and the clustering feature's own definition of "true duplicate"
+(from its original docstring) is full-resolution hash distance-0, not "same printing." Computed
+full-resolution hashes for the same-printing sample too, and partitioned by that ground truth
+before drawing any conclusion:
+
+- **79 pairs were true duplicates** (full-res distance=0, i.e. really the same uploaded image):
+  100% landed at small-size distance<=2 (73 at exactly 0, 6 at 2) - **zero false splits**,
+  directly confirming the d<=2 threshold is the correct one for small-size hashing, at 40x the
+  sample size of the original n=2 test.
+- **162 pairs were different photos of the same real printing** (full-res distance>0) - correctly
+  did NOT cluster in the vast majority (mean small-size distance 17.8, ranging 0-38); 19/162
+  (11.7%) coincidentally landed at d<=2 anyway. Noted as a real but benign effect: since the
+  underlying printing genuinely is the same, an incorrect "same upload" assumption still
+  propagates a factually correct vote - not a correctness risk, just a documented imprecision in
+  the "distance-0 means duplicate upload" model.
+- **269 different-printing pairs** (false-merge check): **zero** landed at distance<=2 - minimum
+  observed distance was 6, comfortably clear of the threshold.
+
+### Projected wall-clock for the next full run
+
+This run's own live numbers (no clustering active - PR #26's code, not this branch, is what's
+actually running): ~2.65 candidates/sec observed, projecting **~0.73 days** for the full
+166,422-candidate catalog. Bottleneck-split measurement (earlier in this doc) found 26-28%
+cluster absorption in real samples; applying that reduction to the compute-bound majority of the
+pipeline projects **~0.52-0.54 days (~12.6-12.9h)** for the next run, once `content_phash` is
+backfilled - clustering as a zero-fetch DB read rather than a competing sequential pre-pass.
+The one-time backfill itself (166,422 cards, small-size fetch, 5 concurrent workers) projects to
+roughly **~2.8 hours** - a one-time investment, not a recurring cost; the ingest hook keeps
+future new cards hashed automatically at near-zero marginal cost going forward.
+
+### Out of scope this pass (logged, not built)
+
+Art-region second hash (needs the frame-mismatch census's own value estimate first - separate
+task, #119), multi-hash ensembles, deep-embedding dedup (violates the cheap-deterministic
+discipline this whole engine is built on), `hash_size` re-tuning (parked until the art-hash
+question is taken up), and wiring the d<=2 narrowing hint into `_compute_card`'s live candidate
+matching (computed and tested, not yet consumed - see above).

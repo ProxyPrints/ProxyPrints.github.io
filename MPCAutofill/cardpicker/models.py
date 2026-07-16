@@ -399,7 +399,27 @@ class Card(models.Model):
     # source filename (e.g. "[MH3]") - not resolved to a specific printing (no collector
     # number was present to pair with it), just a ranking hint for get_ranked_printing_candidates
     expansion_hint = models.CharField(max_length=10, blank=True, db_index=True)
-    image_hash = models.BigIntegerField()
+    # Perceptual hash (imagehash.phash) of THIS card's own uploaded image - NOT the same concept
+    # as CanonicalCard.image_hash above (that's a Scryfall CANDIDATE image's hash, computed
+    # lazily by local_phash.get_or_compute_canonical_hash; this is OUR OWN uploaded image's
+    # hash). Was a dead field named `image_hash` (migration 0046) - always written as a literal
+    # 0 placeholder by update_database and never read anywhere; repurposed and renamed here
+    # (2026-07-16, hash-at-ingest work, docs/features/printing-tags.md) into a real, populated
+    # column, since a same-named-but-different-purpose dead field sitting next to a live one
+    # would be a permanent footgun for future readers.
+    #
+    # Dual consumer, one field: (1) cardpicker.local_clustering's two-threshold dedup (d=0 vote
+    # propagation, d<=2 candidate narrowing) - a per-run DB read instead of a per-run fetch; (2)
+    # docs/federation-v1.md's reserved `content_hash` verdict-exchange field ("the planned
+    # upgrade path for surviving re-uploads"). Cross-instance interchange contract: algorithm is
+    # imagehash.phash, hash_size=8 (the library default, 64-bit output - inherited from
+    # CanonicalCard.image_hash's pre-existing convention, not deliberately chosen; changing it
+    # is a re-hash migration, not a config flip, since federation peers would need to agree on
+    # the same params). NULL = not yet computed (see cardpicker.local_phash's ingest/backfill
+    # helpers) - distinct from a real hash value of 0, which is why this is nullable rather than
+    # reusing 0 as a sentinel the way CanonicalCard.image_hash does (that field predates this
+    # decision; not retrofitted here, out of scope).
+    content_phash = models.BigIntegerField(null=True, blank=True, db_index=True)
 
     def __str__(self) -> str:
         return (
