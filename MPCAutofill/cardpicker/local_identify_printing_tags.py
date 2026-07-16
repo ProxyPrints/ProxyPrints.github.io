@@ -272,7 +272,7 @@ def select_candidates(
     for card in (
         _eligible_base_queryset(anonymous_id, exclude_source_pks)
         .exclude(dpi__lt=RESOLUTION_FLOOR_DPI)
-        .only("pk", "name", "identifier", "source_id")
+        .only("pk", "name", "identifier", "source_id", "expansion_hint")
         .order_by("pk")
         .iterator(chunk_size=5000)
     ):
@@ -470,6 +470,37 @@ def run_phash_for_card(
 DEFAULT_WORKERS = 2
 
 
+def _narrow_candidates_by_expansion_hint(selected: SelectedCard) -> SelectedCard:
+    """Fast-follow (2026-07-16): a confidence PRIOR, not an entailment - narrows the candidate
+    list an engine considers when the card's own `expansion_hint` (extracted from its filename
+    at import time by `cardpicker.tags.Tags.extract` - a lone set-code bracket token that
+    didn't resolve a direct CanonicalCard match, e.g. "[UNF]" with no collector number) matches
+    at least one of its name's real candidates. Never narrows to empty: if the hint matches zero
+    candidates (a real, measured ~9% data-quality case - the hint may be stale or mismatched),
+    the full candidate list is used instead, exactly as if there were no hint at all - narrowing
+    that made matching IMPOSSIBLE would be worse than not narrowing.
+
+    Scoped to engine-matching ONLY - never call this from select_candidates/
+    compute_covered_printing_pks/anything computing coverage or ordering, which need the true,
+    unnarrowed candidate set to stay correct. The returned SelectedCard is a LOCAL substitute
+    used only for this card's own OCR/phash/fallback calls within _compute_card; nothing
+    downstream (run_pilot's own all_selected_by_card_id) ever sees the narrowed version.
+
+    Real yield (measured live, 2026-07-15): of 2,466 pilot-eligible cards with a real
+    expansion_hint, 645 currently exceed PHASH_MAX_CANDIDATES and get skipped entirely -
+    narrowing brings 407 of those back under the cap, giving phash a real shot where it
+    currently never runs at all. OCR's own exact-match logic doesn't benefit from narrowing
+    (a smaller candidate list doesn't change whether a parsed code+number is IN it) - this is a
+    phash-only unlock in practice, though harmless to apply uniformly to all three engines."""
+    hint = selected.card.expansion_hint
+    if not hint:
+        return selected
+    narrowed = [c for c in selected.candidates if c.expansion_code == hint]
+    if not narrowed:
+        return selected
+    return SelectedCard(card=selected.card, candidates=narrowed)
+
+
 def _compute_card(
     selected: SelectedCard,
     ocr_selected_ids: set[int],
@@ -500,6 +531,11 @@ def _compute_card(
     fetch_attempted = get_worker_image_url(selected.card, fetch_dpi) is not None
     image = fetch_card_image(selected.card, fetch_dpi)
     ocr_raw_texts: list[str] = []
+
+    # fast-follow (2026-07-16): narrow the candidate list every engine below sees, using this
+    # card's own expansion_hint if it has one - `selected.card`/`card_id` above still reference
+    # the ORIGINAL card either way; only the candidate list used for matching changes.
+    selected = _narrow_candidates_by_expansion_hint(selected)
 
     outcome.image_fetched = image is not None
     bleed_class = local_fallback.classify_bleed_edge(image) if image is not None else None
@@ -1153,6 +1189,105 @@ def run_pilot(
     return results, attributes
 
 
+# Fast-follow (2026-07-16): name-frequency elimination - see run_name_frequency_elimination's
+# own docstring for the full design rationale (in particular the SAFE 1:1 gate that makes this
+# sound, not just "one uncovered printing").
+NAME_FREQUENCY_ANONYMOUS_ID = "local-name-frequency-v1"
+# Deliberately modest relative to OCR/phash's own confidences (0.85/0.75/0.8) - this is a purely
+# structural deduction (no visual confirmation of THIS card at all), weaker evidence than an
+# engine that actually looked at the image, even though the 1:1 gate makes it sound.
+NAME_FREQUENCY_CONFIDENCE = 0.6
+
+
+@dataclass
+class NameFrequencyResult:
+    dry_run: bool = False
+    votes_written: int = 0
+    gate_violations: list[int] = field(default_factory=list)
+
+
+def run_name_frequency_elimination(dry_run: bool = False, batch_size: int = DEFAULT_BATCH_SIZE) -> NameFrequencyResult:
+    """Fast-follow (2026-07-16): for a NAME where exactly one of its printings remains
+    uncovered (see compute_covered_printing_pks) AND exactly one pilot-eligible card is
+    unresolved for that name, the match is deducible by elimination alone - no image fetch, no
+    OCR/phash, no visual disambiguation needed at all.
+
+    The SAFE gate is "exactly one uncovered printing AND exactly one unresolved-eligible card",
+    not just "exactly one uncovered printing" - a name can have one uncovered printing while
+    SEVERAL unresolved cards share that name, in which case elimination does NOT tell you WHICH
+    of those cards is the missing one (any of the others could just as easily be a redundant
+    depiction of an ALREADY-covered printing, uploaded by a different source). Gating on "and
+    exactly one unresolved card too" is what makes the deduction airtight; it is not a
+    nice-to-have refinement, it is the difference between a sound inference and a coin flip.
+    Measured live against the full (not sampled) catalog, 2026-07-16: 2,076 names have exactly
+    one uncovered printing; only 1,678 of those also have exactly one unresolved eligible card.
+    The naive, ungated version would have voted - incorrectly, on average - for the other ~400
+    names' multiple candidate cards.
+
+    Still just a VOTE (this function's own anonymous_id), never a direct resolve - same
+    consensus/gate-check discipline as every other engine in this module. Reuses
+    _eligible_base_queryset for the exact same base eligibility rules (unresolved, no confirmed
+    match, card_type=CARD, not deductive-backfill-covered, no custom-art/non-english tag) plus
+    this function's own anonymous_id for idempotence, and the SAME batch-flush + gate-check
+    pattern as run_pilot (a kill loses at most one batch; a plain re-invocation resumes cleanly).
+    """
+    covered_printing_pks = compute_covered_printing_pks()
+    index = CandidateNameIndex()
+
+    cards_by_name: dict[str, list[int]] = collections.defaultdict(list)
+    for card_id, name in (
+        _eligible_base_queryset(NAME_FREQUENCY_ANONYMOUS_ID)
+        .values_list("pk", "name")
+        .order_by("pk")
+        .iterator(chunk_size=5000)
+    ):
+        cards_by_name[name].append(card_id)
+
+    result = NameFrequencyResult(dry_run=dry_run)
+    votes_batch: list[CardPrintingTag] = []
+    batch_written_card_ids: list[int] = []
+
+    def flush() -> None:
+        nonlocal votes_batch, batch_written_card_ids
+        if dry_run:
+            votes_batch, batch_written_card_ids = [], []
+            return
+        if votes_batch:
+            CardPrintingTag.objects.bulk_create(votes_batch)
+        if batch_written_card_ids:
+            result.gate_violations.extend(verify_zero_resolutions(batch_written_card_ids))
+        votes_batch, batch_written_card_ids = [], []
+
+    for name, card_ids in cards_by_name.items():
+        if len(card_ids) != 1:
+            continue
+        candidates = index.candidates_for(name)
+        if not candidates:
+            continue
+        uncovered = [c for c in candidates if c.pk not in covered_printing_pks]
+        if len(uncovered) != 1:
+            continue
+
+        votes_batch.append(
+            CardPrintingTag(
+                card_id=card_ids[0],
+                printing_id=uncovered[0].pk,
+                is_no_match=False,
+                anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID,
+                source=VoteSource.OCR,
+                confidence=NAME_FREQUENCY_CONFIDENCE,
+            )
+        )
+        batch_written_card_ids.append(card_ids[0])
+        result.votes_written += 1
+
+        if len(batch_written_card_ids) >= batch_size:
+            flush()
+
+    flush()
+    return result
+
+
 def verify_zero_resolutions(card_ids: list[int], batch_size: int = 2000) -> list[int]:
     """Identical rationale/mechanism to cardpicker.deductive_backfill.verify_zero_resolutions -
     the *pure* resolve_printing (never resolve_and_persist_printing, which must never itself
@@ -1195,5 +1330,9 @@ __all__ = [
     "PilotResult",
     "AttributeReport",
     "run_pilot",
+    "NAME_FREQUENCY_ANONYMOUS_ID",
+    "NAME_FREQUENCY_CONFIDENCE",
+    "NameFrequencyResult",
+    "run_name_frequency_elimination",
     "verify_zero_resolutions",
 ]

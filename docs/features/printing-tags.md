@@ -2042,3 +2042,56 @@ trigger), PR #19's disposition (owner's convenience).
 
 **Full-catalog run: not yet fired.** This report is the synthesizing deliverable requested
 before that authorization - awaiting explicit owner go-ahead.
+
+## Two fast-follows, built after HOLD #2 (2026-07-16)
+
+Both researched and sized before building (see the HOLD #2 section above and this doc's earlier
+feasibility notes) - neither required schema changes, both reuse already-existing, already-
+populated data.
+
+### `expansion_hint` candidate narrowing
+
+`_narrow_candidates_by_expansion_hint` (`local_identify_printing_tags.py`) narrows the
+candidate list every engine considers, using `Card.expansion_hint` - a field that already
+existed and is already populated at import time by `cardpicker.tags.Tags.extract` (a lone
+set-code bracket token in the filename that didn't resolve a direct match, e.g. `[UNF]` with no
+collector number). Not a new signal - just newly wired into the pilot; `deductive_backfill`'s
+own D2 tier already trusts this same field for direct resolution when it narrows to exactly
+one candidate.
+
+A confidence PRIOR, not an entailment: narrows the list passed to `run_ocr_for_card`/
+`run_phash_for_card`/`run_fallback_for_card` inside `_compute_card` only - never touches
+`select_candidates`'s ordering, `compute_covered_printing_pks`, or the
+`uncovered_printings_closed` metric, all of which need the true, unnarrowed candidate set to
+stay correct. Never narrows to empty: if the hint matches zero of the name's real candidates (a
+real, measured ~9% data-quality case - the hint may be stale or mismatched), the full list is
+used instead.
+
+**Real yield, measured live**: of 2,466 pilot-eligible cards with a real `expansion_hint`, 645
+currently get skipped by phash outright (`too-many-candidates`) - narrowing brings 407 of those
+back under `PHASH_MAX_CANDIDATES`, giving phash a real shot where it currently never runs.
+OCR's own exact-match logic doesn't benefit (a smaller candidate list doesn't change whether a
+parsed code+number is in it) - this is a phash-only unlock in practice.
+
+### Name-frequency elimination
+
+`run_name_frequency_elimination` (new function, new management command
+`local_name_frequency_elimination`) - for a NAME where exactly one printing remains uncovered
+AND exactly one pilot-eligible card is unresolved for that name, the match is deducible by
+elimination alone: no image fetch, no OCR/phash, no visual disambiguation at all.
+
+**The safety gate is the whole point, not a refinement.** A name can have exactly one uncovered
+printing while SEVERAL unresolved cards share that name - in that case elimination does NOT
+tell you WHICH card is the missing one (any of the others could just as easily be a redundant
+depiction of an already-covered printing uploaded by a different source). The naive version
+(gate on "one uncovered printing" alone) was the original researched number; adding "and
+exactly one unresolved card too" is what makes the deduction airtight. Measured live against
+the full catalog (not a sample), 2026-07-16: 2,076 names have exactly one uncovered printing;
+only 1,678 of those also have exactly one unresolved eligible card - the naive version would
+have voted incorrectly, on average, for the other ~400 names' multiple candidate cards.
+
+Confidence deliberately modest (0.6, vs. OCR/phash's 0.85/0.75/0.8) - a purely structural
+deduction is weaker evidence than an engine that actually looked at the image, even with the
+1:1 gate making it sound. Still just a vote (`NAME_FREQUENCY_ANONYMOUS_ID`), never a direct
+resolve - same consensus/gate-check discipline as every other engine in this module, same
+batch-flush checkpointing pattern as `run_pilot`.
