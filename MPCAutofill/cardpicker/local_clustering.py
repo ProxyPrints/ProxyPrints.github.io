@@ -123,7 +123,11 @@ def _find_pairs_within_distance(
             # only j > i: avoids self-pairs (distance 0 to itself) and double-counting (i, j)
             # and (j, i) as separate entries.
             row = distances[local_i, i + 1 :]
-            close_local_js = np.nonzero(row <= max_distance)[0]
+            # .tolist() before iterating: a plain Python list's iterability doesn't depend on
+            # which numpy-stubs version mypy happens to resolve for np.nonzero's return type
+            # (a real cross-environment mypy failure this hit once already - numpy isn't pinned
+            # anywhere, so different environments can resolve different versions/stubs).
+            close_local_js = np.nonzero(row <= max_distance)[0].tolist()
             for local_j in close_local_js:
                 j = i + 1 + int(local_j)
                 pairs.append((i, j, int(row[local_j])))

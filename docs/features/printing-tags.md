@@ -2281,10 +2281,24 @@ as independent steps (advisor review caught this before it shipped as one couple
 a plain dict grouping, measured 0.13s at N=166,422 real-scale synthetic hashes. The d<=2 tier
 (chunked numpy XOR + `numpy.bitwise_count` popcount, never a Python pairwise loop or an
 all-at-once O(N^2) allocation) measured ~2-3 minutes at the same N (contended with this box's
-own concurrently-running full-catalog job at benchmark time) - a ~500-650x win over the disabled
-pre-pass's ~21.6h, and it's pure in-memory compute, so it doesn't compete for the shared CDN
-request budget the old pre-pass did. Wrapped in a try/except: a failure in the d<=2 scan falls
-back to "no near-duplicate hints this run," never taking down d=0's already-proven propagation.
+own concurrently-running full-catalog job at benchmark time), and it's pure in-memory compute,
+so it doesn't compete for the shared CDN request budget the old pre-pass did.
+
+**Correcting an overstated comparison (caught when the owner asked "are we sure this is
+legitimate" rather than accepting the headline number)**: the naive "~500-650x win over the
+disabled pre-pass's ~21.6h" comparison is misleading on two counts, not a fair apples-to-apples
+claim. First, it's comparing two different operations - 21.6h was a recurring per-run network
+fetch, 2-3 min is a one-time-amortized in-memory read that only works AFTER the separate ~2.8h
+backfill has populated `content_phash` (see below) - not "the same work, done faster." Second,
+the 21.6h baseline was never threaded (`--workers` had no effect on the fetch loop, which is
+WHY it was disabled) - a fair comparison should be against what a THREADED fetch pre-pass could
+have achieved (~21.6h / 7 workers ≈ ~3h), not the unoptimized sequential baseline. Against that
+fairer baseline, the real improvement is closer to **~60-90x** (~3h / ~2.5min), not 500-650x.
+The underlying design is still a genuine, large win - eliminating a recurring network-bound cost
+in favor of a one-time investment plus a fast in-memory read - but the specific multiplier
+quoted needs to be the honest one, not the most dramatic one available. Wrapped in a try/except:
+a failure in the d<=2 scan falls back to "no near-duplicate hints this run," never taking down
+d=0's already-proven propagation.
 
 ### Validation against real production data (not the earlier n=2 sample)
 
