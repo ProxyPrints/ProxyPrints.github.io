@@ -1641,6 +1641,50 @@ vote exists), and a test proving the efficiency win itself (an absorbed member's
 never passed to `run_ocr_for_card`, not just that it ends up with a vote). mypy clean.
 `black`/`prettier` clean.
 
+### Bottleneck split, current pipeline state (2026-07-16, throughput track item 2a)
+
+Re-measured phase timing against the CURRENT code (post items 1/2a/3/4/4b) rather than trusting
+item 3a's original breakdown, which predates dpi=250, crop tightening, bleed-first
+classification, and clustering entirely. Real instrumented run, 50 selected candidates
+(representative-only, post-clustering), against the live DB/API - not simulated:
+
+| phase                                 | mean/card | share (uncorrected) |
+| ------------------------------------- | --------: | ------------------: |
+| `fetch_card_image`                    |    0.450s |               13.4% |
+| `classify_bleed_edge`                 |   ~0.000s |               ~0.0% |
+| OCR (crop+preprocess+tesseract)       |    0.478s |               14.3% |
+| phash (hash+compare)                  |   ~0.000s |               ~0.0% |
+| border/frame (`detect_illus_anchor`+) |    1.206s |               36.0% |
+| pass-2 fallback                       |    1.218s |               36.3% |
+
+**Measurement caveat, stated plainly**: this run called fallback unconditionally for every
+representative (not gated on pass-1's real accept/reject outcome), so its 36.3% share is
+inflated relative to real `run_pilot` behavior (item 3a's original sample: fallback fires
+~70% of the time). Corrected estimate using that same 70% rate:
+`0.450 + 0.478 + 1.206 + (1.218 × 0.7) ≈ 2.99s/card` sequential, for cards that reach full
+compute (clustering representatives only).
+
+**Bonus real data point from the same sample**: 13/50 selected cards (26%) were absorbed into
+10 clusters by item 2a's dedup - a materially higher rate than assumed, though from one
+50-card sample, not a claim about the full-catalog rate.
+
+**The clear finding: this is CPU-bound, not I/O-bound.** `fetch_card_image` is ~13% of
+per-card cost; `detect_illus_anchor`-plus-border-classification and pass-2 fallback together
+are ~72% (uncorrected) / ~65% (corrected). This directly answers throughput track item 2a's own
+question: **the "6-8 fetch threads, I/O-bound, no core needed" idea does not currently exist as
+a mechanism** - `_compute_card`'s single `ThreadPoolExecutor(max_workers=workers)` runs fetch
+AND OCR AND phash AND fallback all in the SAME worker, sized for CPU-bound work
+(`DEFAULT_WORKERS=2`, matching this box's core count). Decoupling fetch into its own larger pool
+would only ever attack the ~13% fetch share - a real potential improvement, but not the
+dominant cost, and not built in this pass. This bottleneck split is the evidence that makes
+manifest mode (item 2c) and a core-count resize (item 2b) the higher-leverage levers, not a
+larger fetch pool.
+
+**Current instance shape** (OCI instance-metadata endpoint, no auth needed - confirmed
+`169.254.169.254/opc/v2/instance/`): `VM.Standard.A1.Flex`, **2 OCPUs, 12 GB RAM**,
+`ca-montreal-1`. Matches `DEFAULT_WORKERS=2`'s own derivation (item 3d) exactly - this box has
+never had spare cores for a bigger pool without a resize.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run
