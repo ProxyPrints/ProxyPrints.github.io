@@ -53,6 +53,7 @@ from cardpicker.models import (
     CardPrintingTag,
     CardTagVote,
     CardTypes,
+    PilotRunLedger,
     PrintingTagStatus,
     VotePolarity,
     VoteSource,
@@ -949,6 +950,74 @@ class TestNameFrequencyEliminationCommand:
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID).exists()
 
 
+class TestPilotRunLedger:
+    """docs/features/catalog-completion-plan.md's Part 1: each real (non-dry-run) command
+    invocation creates a PilotRunLedger row and keeps it in lockstep with the run's outcome -
+    RUNNING at start, COMPLETED on success, FAILED on an exception or a gate violation. A
+    missing/inconsistent row must never block a purge (see test_purge_machine_votes.py), but a
+    real invocation should still produce a correct one."""
+
+    def test_dry_run_creates_no_ledger_row(self, db):
+        from django.core.management import call_command
+
+        CanonicalCardFactory(name="Forest")
+        CardFactory(name="Forest")
+
+        call_command("local_identify_printing_tags", "--dry-run", "--engine=ocr", "--limit=5")
+
+        assert not PilotRunLedger.objects.exists()
+
+    def test_real_run_creates_a_completed_ledger_row(self, db, monkeypatch):
+        from django.core.management import call_command
+
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CardFactory(name="Forest")
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+
+        call_command("local_identify_printing_tags", "--engine=ocr", "--limit=5")
+
+        entry = PilotRunLedger.objects.get(command="local_identify_printing_tags")
+        assert entry.status == PilotRunLedger.Status.COMPLETED
+        assert entry.finished_at is not None
+        assert entry.votes_written == 1
+        assert entry.dry_run is False
+        vote = CardPrintingTag.objects.get(anonymous_id=OCR_ANONYMOUS_ID)
+        assert vote.run_id == entry.run_id
+
+    def test_an_exception_mid_run_leaves_the_ledger_row_failed_not_dangling(self, db, monkeypatch):
+        from django.core.management import call_command
+
+        CanonicalCardFactory(name="Forest")
+        CardFactory(name="Forest")
+
+        import cardpicker.management.commands.local_identify_printing_tags as command_module
+
+        def raising_run_pilot(*args, **kwargs):
+            raise RuntimeError("simulated mid-run crash")
+
+        monkeypatch.setattr(command_module, "run_pilot", raising_run_pilot)
+
+        with pytest.raises(RuntimeError):
+            call_command("local_identify_printing_tags", "--engine=ocr", "--limit=5")
+
+        entry = PilotRunLedger.objects.get(command="local_identify_printing_tags")
+        assert entry.status == PilotRunLedger.Status.FAILED
+        assert entry.finished_at is not None
+
+    def test_staleness_refusal_creates_no_ledger_row(self, db, monkeypatch):
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+
+        import cardpicker.management.commands.local_identify_printing_tags as command_module
+
+        monkeypatch.setattr(command_module, "find_stale_applied_migrations", lambda: [("cardpicker", "9999_fake")])
+
+        with pytest.raises(CommandError):
+            call_command("local_identify_printing_tags", "--engine=ocr", "--limit=5")
+
+        assert not PilotRunLedger.objects.exists()
+
+
 class TestRunPilotSourceExclusion:
     def test_excluded_sources_cards_never_reach_the_engine(self, db, monkeypatch):
         excluded_source = SourceFactory()
@@ -1078,6 +1147,78 @@ class TestCheckpointing:
         final_votes = CardPrintingTag.objects.filter(anonymous_id=OCR_ANONYMOUS_ID)
         assert final_votes.count() == 6
         assert {v.card_id for v in final_votes} == {c.pk for c in cards}
+
+
+class TestRunIdStamping:
+    """docs/features/catalog-completion-plan.md's Part 1: every MACHINE-cast vote from one
+    invocation shares a single run_id, and different invocations get different run_ids -
+    anonymous_id's own exact-match reuse across invocations is completely untouched (see
+    generate_run_id's docstring for why this is a separate field, not a suffix)."""
+
+    def test_every_vote_from_one_run_shares_one_run_id(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        for _ in range(3):
+            CardFactory(name="Forest")
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+
+        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert results["ocr"].votes_written == 3
+        assert results["ocr"].run_id  # non-empty
+        votes = list(CardPrintingTag.objects.filter(anonymous_id=OCR_ANONYMOUS_ID))
+        assert len(votes) == 3
+        run_ids = {v.run_id for v in votes}
+        assert run_ids == {results["ocr"].run_id}
+
+    def test_two_invocations_get_distinct_run_ids(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card_a = CardFactory(name="Forest")
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+
+        results_1, _ = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+        assert results_1["ocr"].votes_written == 1
+
+        # a second card so the second invocation has something new to vote on (the first card
+        # is already excluded by this run's own anonymous_id-based idempotence).
+        card_b = CardFactory(name="Forest")
+        results_2, _ = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+        assert results_2["ocr"].votes_written == 1
+
+        assert results_1["ocr"].run_id != results_2["ocr"].run_id
+        vote_a = CardPrintingTag.objects.get(card=card_a, anonymous_id=OCR_ANONYMOUS_ID)
+        vote_b = CardPrintingTag.objects.get(card=card_b, anonymous_id=OCR_ANONYMOUS_ID)
+        assert vote_a.run_id == results_1["ocr"].run_id
+        assert vote_b.run_id == results_2["ocr"].run_id
+
+    def test_an_explicit_run_id_is_respected_not_regenerated(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CardFactory(name="Forest")
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+
+        results, _ = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, run_id="explicit-test-run-id")
+
+        assert results["ocr"].run_id == "explicit-test-run-id"
+        vote = CardPrintingTag.objects.get(anonymous_id=OCR_ANONYMOUS_ID)
+        assert vote.run_id == "explicit-test-run-id"
+
+    def test_name_frequency_elimination_gets_its_own_run_id(self, db):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CardFactory(name="Forest")
+
+        result = run_name_frequency_elimination()
+
+        assert result.votes_written == 1
+        assert result.run_id
+        vote = CardPrintingTag.objects.get(anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+        assert vote.run_id == result.run_id
+
+    def test_human_submitted_votes_are_never_stamped(self, db):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card = CardFactory(name="Forest")
+        human_vote = CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+
+        assert human_vote.run_id is None
 
 
 class TestFetchDpi:

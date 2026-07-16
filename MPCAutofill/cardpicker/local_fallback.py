@@ -342,13 +342,18 @@ def filter_by_border_color(
 
 
 def cast_border_attribute_vote(
-    card: Card, border_color: Optional[str], confidence: float = BORDER_ATTRIBUTE_VOTE_CONFIDENCE
+    card: Card,
+    border_color: Optional[str],
+    confidence: float = BORDER_ATTRIBUTE_VOTE_CONFIDENCE,
+    run_id: Optional[str] = None,
 ) -> Optional[CardTagVote]:
     """An unsaved CardTagVote instance ready for bulk_create, or None if the sample was
     ambiguous or the classified color has no attribute-chip tag (gold/yellow - excluded from
     the v1 taxonomy, see attribute_tags.py). Caller batches these across the whole pilot run.
     `confidence` defaults to the heuristic tier - callers pass GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE
-    when `border_color` came from the matched printing's own metadata instead of the pixel sample."""
+    when `border_color` came from the matched printing's own metadata instead of the pixel sample.
+    `run_id`: docs/features/catalog-completion-plan.md's Part 1 - the caller's own per-invocation
+    run_id, threaded through so this vote is revocable the same way printing votes are."""
     if border_color is None:
         return None
     tag_name = BORDER_COLOR_TO_TAG.get(border_color)
@@ -364,6 +369,7 @@ def cast_border_attribute_vote(
         anonymous_id=FALLBACK_ANONYMOUS_ID,
         source=VoteSource.OCR,
         confidence=confidence,
+        run_id=run_id,
     )
 
 
@@ -409,11 +415,15 @@ def classify_frame_style(parsed_a_collector_number: bool, illus_anchor_fired: bo
 
 
 def cast_frame_style_vote(
-    card: Card, frame_class: Optional[str], confidence: float = FRAME_VOTE_CONFIDENCE
+    card: Card,
+    frame_class: Optional[str],
+    confidence: float = FRAME_VOTE_CONFIDENCE,
+    run_id: Optional[str] = None,
 ) -> Optional[CardTagVote]:
     """`confidence` defaults to the heuristic tier - callers pass
     GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE when `frame_class` came from the matched printing's
-    own metadata (via FRAME_VALUE_TO_CLASS) instead of this module's OCR/Illus.-anchor signals."""
+    own metadata (via FRAME_VALUE_TO_CLASS) instead of this module's OCR/Illus.-anchor signals.
+    `run_id`: see cast_border_attribute_vote's own docstring - identical rationale."""
     if frame_class is None:
         return None
     tag_name = FRAME_STYLE_TO_TAG.get(frame_class)
@@ -429,6 +439,7 @@ def cast_frame_style_vote(
         anonymous_id=FALLBACK_ANONYMOUS_ID,
         source=VoteSource.OCR,
         confidence=confidence,
+        run_id=run_id,
     )
 
 
@@ -544,7 +555,7 @@ def classify_bleed_edge(card_image: "Image.Image") -> Optional[str]:
     return "bleed" if dist_to_bleed < dist_to_trim else "trimmed"
 
 
-def cast_bleed_edge_vote(card: Card, bleed_class: Optional[str]) -> Optional[CardTagVote]:
+def cast_bleed_edge_vote(card: Card, bleed_class: Optional[str], run_id: Optional[str] = None) -> Optional[CardTagVote]:
     """Negative-only (2026-07-15, consolidated respec item 4b, supersedes this function's
     original both-directions design): a vote is cast ONLY for a clearly 'trimmed' reading
     (NOT_APPLICABLE) - no vote at all for 'bleed' (the ~97.5% common case, per the 40-source
@@ -553,7 +564,8 @@ def cast_bleed_edge_vote(card: Card, bleed_class: Optional[str]) -> Optional[Car
     docs/features/printing-tags.md's Stage 8 section. Rationale: `appropriate-bleed` is a
     SENSITIVE tag needing moderator co-sign regardless of machine votes - voting APPLY on the
     routine 97.5% case would flood moderation with confirmations of normalcy rather than
-    surfacing the rare real exception, which is what a SENSITIVE tag is for."""
+    surfacing the rare real exception, which is what a SENSITIVE tag is for. `run_id`: see
+    cast_border_attribute_vote's own docstring - identical rationale."""
     if bleed_class != "trimmed":
         return None
     tag = Tag.objects.filter(name=BLEED_EDGE_TAG_NAME).first()
@@ -566,6 +578,7 @@ def cast_bleed_edge_vote(card: Card, bleed_class: Optional[str]) -> Optional[Car
         anonymous_id=FALLBACK_ANONYMOUS_ID,
         source=VoteSource.OCR,
         confidence=BLEED_EDGE_VOTE_CONFIDENCE,
+        run_id=run_id,
     )
 
 

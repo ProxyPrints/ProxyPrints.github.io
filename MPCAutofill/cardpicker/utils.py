@@ -2,10 +2,13 @@ import datetime as dt
 import json
 import time
 from math import floor
-from typing import Any, Callable, TypeVar, cast
+from pathlib import Path
+from typing import Any, Callable, Optional, TypeVar, cast
 
 import ratelimit
 import requests
+
+from django.conf import settings
 
 TEXT_BOLD = "\033[1m"
 TEXT_END = "\033[0m"
@@ -62,3 +65,46 @@ def twos_complement(hexstr: str, bits: int) -> int:
     if value & (1 << (bits - 1)):
         value -= 1 << bits
     return value
+
+
+def get_baked_git_sha() -> Optional[str]:
+    """
+    Iteration safety (docs/features/catalog-completion-plan.md's Part 1): the git SHA baked
+    into this image at build time (docker/django/Dockerfile's GIT_SHA build ARG), if the build
+    was invoked with one - `None` for a local non-Docker dev run, or a build that skipped the
+    now-required `GIT_SHA=$(git rev-parse --short HEAD)` prefix on the build command.
+
+    Best-effort VISIBILITY only - logged prominently at each pilot command's startup and stored
+    on the PilotRunLedger row, but never the thing that blocks a start. Capturing it correctly
+    depends on a host-side step that could be forgotten; find_stale_applied_migrations below is
+    the actual hard gate, and is deliberately independent of whether this file exists.
+    """
+    path = Path(settings.BASE_DIR) / "GIT_SHA"
+    try:
+        sha = path.read_text().strip()
+    except OSError:
+        return None
+    return sha or None
+
+
+def find_stale_applied_migrations() -> list[tuple[str, str]]:
+    """
+    (app, migration_name) pairs recorded as applied in the DB that THIS image's own migrations
+    directory doesn't know about - the signature of a stale image (docs/features/
+    catalog-completion-plan.md's Part 1): a NEWER image applied these migrations before being
+    replaced by an older/stale rebuild (the known BuildKit layer-caching bug where "Successfully
+    built" can still ship old code underneath - the PR #24/#26 lesson this assertion automates).
+    Empty is the only healthy result.
+
+    Deliberately DB+code introspection only, independent of get_baked_git_sha above - that file
+    is best-effort visibility and could itself be skipped by a forgotten build-arg; this check
+    can't be silently bypassed the same way, since it only depends on what's actually in this
+    image's own migrations/ directory and what the DB itself reports as applied.
+    """
+    from django.db import connection
+    from django.db.migrations.loader import MigrationLoader
+    from django.db.migrations.recorder import MigrationRecorder
+
+    disk = set(MigrationLoader(connection, ignore_no_migrations=True).disk_migrations.keys())
+    applied = set(MigrationRecorder(connection).applied_migrations().keys())
+    return sorted(applied - disk)

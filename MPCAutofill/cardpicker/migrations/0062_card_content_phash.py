@@ -25,7 +25,7 @@ def noop_reverse(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> No
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("cardpicker", "0060_votesource_deduction_ocr_split"),
+        ("cardpicker", "0061_pilotrunledger_cardartistvote_run_id_and_more"),
     ]
 
     operations = [
