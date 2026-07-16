@@ -312,6 +312,40 @@ informally assumed before this constraint was found.
 5. Report the corrected wall-clock projection (pipelined vs. sequential,
    at the real 3/sec ceiling) when this part is built.
 
+**WAIT vs. `--throttle` trickle, grounded in the pilot's real observed rate (2026-07-16)**:
+the live pilot fetches exactly one image per candidate through the shared CDN Worker (confirmed
+by reading `_compute_card` - one `fetch_card_image` call serves OCR, phash, and border/frame/
+bleed classification together; phash's own candidate-hash comparisons hit Scryfall directly,
+not this Worker, so they don't count against the shared ceiling). Measured over 1.5h of the
+current post-restart run: **13,800 candidates in 5,400s = 2.556 req/s** - the pilot is CPU-bound
+(OCR/phash/classification compute per candidate), not currently saturating the 3 req/s ceiling
+itself, which is what leaves a **headroom of ~0.444 req/s (14.8% of the ceiling)** in principle.
+
+Two scenarios, both starting from the pilot's remaining 152,170 candidates (16.5h at 2.556/s)
+and the backfill's full 218,152-card backlog (0 hashed as of this writing):
+
+- **WAIT** (pilot finishes undisturbed, backfill then runs alone at the full 3/s):
+  16.5h + (218,152 / 3 ≈ 20.2h) = **~36.7h total**.
+- **TRICKLE, optimistic case** (headroom is real and the limiter shares cleanly between
+  unrelated callers - unverified assumption, not measured): trickle backfills
+  `16.5h × 0.444/s ≈ 26,464 cards` (**12.1% of the backlog**) during the pilot's remaining run,
+  then the remaining 191,688 cards finish at full 3/s once the pilot's done (~17.7h):
+  16.5h + 17.7h = **~34.3h total** - a **2.5h (6.7%) faster** finish than WAIT, in the best case.
+
+That 6.7% is the _entire_ case for trickling, and it rests on an unverified sharing-fairness
+assumption about the Cloudflare Worker's token bucket under two unrelated concurrent callers -
+exactly the kind of assumption that motivated building this rate limiter in the first place
+(an earlier unattended backfill script hammered this same endpoint) and that caused a real
+incident earlier in this same work session (an unverified concurrent-container assumption broke
+the live pilot job outright). If the assumption is wrong even partially - the limiter doesn't
+share as cleanly as modeled, or the pilot's own rate isn't as stably CPU-bound as one 1.5h
+sample suggests - trickling directly steals throughput from a days-long production job for a
+worst-case downside that's asymmetric with the 6.7%-best-case upside. And even in the optimistic
+case, only 12.1% backlog coverage exists by the time the pilot finishes - nowhere near
+"substantial" for Part 3's own needs (its own volume check already found near-zero coverage
+uninformative at 0%; 12% isn't a meaningfully different starting point). **The arithmetic does
+not overturn WAIT** - it's confirmed as the right call, not merely the safer-feeling one.
+
 **Built** (2026-07-16): `run_content_phash_backfill` (`cardpicker/local_phash.py`) rewritten
 around a sliding submission window (`concurrent.futures.wait(..., return_when=FIRST_COMPLETED)`)
 instead of a `ThreadPoolExecutor` recreated per batch - one long-lived pool for the whole run,
@@ -336,6 +370,26 @@ correct under real out-of-order completion) rather than assumed. Confirms the pl
 "~15+ hours if run alone" estimate was in the right ballpark; ~20.2h is the precise figure now
 that the real backlog size is known. Per item 4 above, this still shouldn't run concurrently
 with the live pilot - sequencing after remains the right call regardless of this correction.
+
+**Start mechanism: documented manual step, not an unattended trigger.** WAIT means the
+execution gate holds regardless of anything else landing (this PR, a future merge, an idle CI
+run) - the backfill does not start while the pilot owns the CDN Worker capacity. No cron job,
+no post-merge hook, no "starts automatically once X." After the pilot's own completion report
+exists (its final summary in `pilot_full_run_logs/full_run.log` /
+`journal/`), start it the same way the pilot itself is started - a `screen`/`tmux` session, run
+by whoever is watching the pilot finish:
+
+```bash
+screen -dmS content_phash_backfill bash -c 'sudo docker compose -f docker/docker-compose.prod.yml run --rm -T worker \
+  python manage.py local_backfill_content_phash --skip-checks \
+  > /home/ubuntu/content_phash_backfill_logs/backfill.log 2>&1
+echo "BACKFILL EXITED WITH CODE $?" >> /home/ubuntu/content_phash_backfill_logs/backfill.log'
+```
+
+Deliberately manual: this session had one incident already this week from an automated/
+composed step firing at an assumed-safe moment that turned out not to be. A human confirming
+the pilot has actually finished (not just "looks idle") before starting the next unattended,
+multi-hour job is worth the few seconds of friction.
 
 ---
 
