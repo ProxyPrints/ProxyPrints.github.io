@@ -391,6 +391,15 @@ composed step firing at an assumed-safe moment that turned out not to be. A huma
 the pilot has actually finished (not just "looks idle") before starting the next unattended,
 multi-hour job is worth the few seconds of friction.
 
+**Quota, resolved (2026-07-16)**: the backfill's 218k full-tier fetches exceed the Cloudflare
+Workers free tier's 100,000 invocations/day cap on their own, independent of the shared 3 req/sec
+rate limiter's own pacing (see `docs/features/image-cdn.md`'s "Full-tier requests" note - every
+fetch, pilot or backfill, is one Worker invocation). Resolved by upgrading to Workers Paid
+($5/month, 10M requests/month) the same day this was found - the 100k/day cap no longer applies.
+The rate limiter itself is unchanged and un-removable by this upgrade - it's a Google-politeness
+and live-traffic-fairness control, not a cost control, so the WAIT sequencing above and the
+~20.2h wall-clock projection both still hold exactly as stated.
+
 ---
 
 ## Part 3 — Shared evidence-recovery module (after PR #27 merges; expanded)
