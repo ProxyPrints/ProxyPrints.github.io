@@ -722,11 +722,26 @@ def run_pilot(
         printing_pks_in_scope.update(c.pk for c in s.candidates)
     uncovered_printing_pks_in_scope = printing_pks_in_scope - covered_printing_pks_before
 
-    # addendum item 2a (2026-07-15): collapse distance-0 duplicate-image clusters to one
-    # representative BEFORE slicing/chunking - only representatives reach _compute_card; an
-    # absorbed member's vote comes from propagation in the write loop below instead.
-    cluster_result = compute_own_image_clusters(list(all_selected_by_card_id.values()), fetch_dpi)
-    all_selected_by_card_id = {s.card.pk: s for s in cluster_result.representatives}
+    # addendum item 2a (2026-07-15) - DISABLED (2026-07-16, live full-catalog run): the
+    # pre-pass itself is a genuine wall-clock net LOSS at full-catalog scale, not just an
+    # optimization with a cost - it's a fully SEQUENTIAL fetch over the entire selected pool
+    # (~172k cards), unaffected by --workers (see task #108's original finding), costing
+    # ~21.6h fixed regardless of core count - MORE than the compute time it saves by
+    # absorbing ~20-28% of cards into cheap propagated votes. Confirmed directly against this
+    # session's own HOLD #2 numbers: raw/no-clustering projected 1.82 days vs.
+    # cluster-dedup-adjusted 2.34 days - the "optimization" made the real run slower. It also
+    # has zero progress visibility for its entire duration (no print statements inside
+    # compute_own_image_clusters), which looks identical to a hung process from the outside -
+    # a job silently in this phase for 31 minutes was mistaken for possibly stuck before this
+    # was diagnosed. Left in place, not called: `compute_own_image_clusters`, `ClusterResult`,
+    # and all of the propagation/absorption logic below still work correctly against a
+    # no-op ClusterResult (every selected card is its own "representative", zero clusters) -
+    # this is the minimal, structurally-safe way to disable the feature without touching the
+    # write-loop code that depends on `cluster_result`'s shape. A future chunk-scoped redesign
+    # (compute the hash from the SAME image _compute_card already fetches for OCR/phash,
+    # cluster within a chunk instead of the whole pool) could recover the dedup benefit
+    # without the sequential-pre-pass cost or the observability gap - not built here.
+    cluster_result = ClusterResult(representatives=list(all_selected_by_card_id.values()), members_by_representative={})
     attributes.cluster_count = len(cluster_result.members_by_representative)
     attributes.cards_absorbed_into_clusters = sum(len(m) for m in cluster_result.members_by_representative.values())
 

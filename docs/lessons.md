@@ -332,3 +332,17 @@ scan time (`transform_image_into_object`/`unpack_name` extract name/tags/languag
   it requires either a one-time raw-filename capture added to the import path going forward
   (useless retroactively for already-imported cards) or re-deriving candidate filenames from the
   Drive API directly per source (expensive, not a DB query).
+
+## A sequential single-item pre-pass over a large pool needs its own progress logging, not just the loop after it
+
+`local_identify_printing_tags.py`'s cluster-dedup pre-pass (`compute_own_image_clusters`)
+fetches every selected candidate's image ONE AT A TIME before the main chunked loop - which
+does have `progress_every` logging - even starts. A full-catalog run sat silent for 31 minutes
+before anyone could tell whether it was working or hung, because the pre-pass itself prints
+nothing for its entire (potentially many-hour) duration. Same shape as "verify claims before
+trusting aggregate numbers" (see this doc's other entries), applied to job observability
+specifically: a genuinely-working process with zero output is indistinguishable from a dead one
+from the outside, and "give it more time" is not a diagnosis. Any future sequential phase over a
+large pool - a pre-pass, a warm-up cache fill, a one-time backfill scan - needs a periodic print
+(even a bare `print(f"... {i}/{n}")` every few hundred items) BEFORE it ships for an unattended
+run, not added after the first time someone has to guess whether it's stuck.

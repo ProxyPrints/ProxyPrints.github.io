@@ -1390,9 +1390,24 @@ class TestConcurrency:
         assert "OMP_THREAD_LIMIT" not in os.environ
 
 
+_CLUSTERING_DISABLED_REASON = (
+    "addendum item 2a's clustering pre-pass is disabled in run_pilot (2026-07-16) - it's a "
+    "sequential fetch over the whole selected pool, unaffected by --workers, and its own fixed "
+    "cost measurably exceeded the compute time it saved at full-catalog scale (see "
+    "local_identify_printing_tags.py's run_pilot comment at the cluster_result assignment). "
+    "compute_own_image_clusters itself is untouched and still tested directly above; only the "
+    "run_pilot integration is skipped until a future chunk-scoped redesign re-enables it."
+)
+
+
 class TestClusterDedup:
     """Addendum item 2a (2026-07-15): distance-0 (byte-identical fetched image) clustering,
-    scoped to this run only - no schema/content_hash persistence (that's item 2b, deferred)."""
+    scoped to this run only - no schema/content_hash persistence (that's item 2b, deferred).
+
+    NOTE (2026-07-16): run_pilot no longer calls compute_own_image_clusters (see
+    _CLUSTERING_DISABLED_REASON) - the tests below that exercise clustering directly still
+    pass and still matter; the ones that expect run_pilot's own integration to cluster are
+    marked skip, not deleted, so they're ready to re-enable alongside a future redesign."""
 
     def test_two_cards_with_identical_images_cluster_with_lower_pk_as_representative(self, db):
         CanonicalCardFactory(name="Forest")
@@ -1458,6 +1473,7 @@ class TestClusterDedup:
         assert cluster_result.members_by_representative == {}
         assert [s.card.pk for s in cluster_result.representatives] == [card.pk]
 
+    @pytest.mark.skip(reason=_CLUSTERING_DISABLED_REASON)
     def test_accepted_vote_on_representative_propagates_to_absorbed_member(self, db, monkeypatch):
         printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
         card_a = CardFactory(name="Forest")
@@ -1491,6 +1507,11 @@ class TestClusterDedup:
         assert vote_a.source == vote_b.source == VoteSource.OCR
         assert vote_a.is_no_match == vote_b.is_no_match is False
 
+    @pytest.mark.skip(
+        reason=_CLUSTERING_DISABLED_REASON + " Passes vacuously with clustering off (no "
+        "propagation is ever attempted, so the guard it tests is never exercised) - skipped "
+        "rather than left green for the wrong reason."
+    )
     def test_member_with_an_existing_vote_from_a_prior_run_is_not_double_voted_or_overwritten(self, db, monkeypatch):
         printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
         other_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
@@ -1533,6 +1554,7 @@ class TestClusterDedup:
         assert untouched_vote.pk == existing_vote.pk
         assert untouched_vote.printing_id == other_printing.pk  # unchanged, not overwritten
 
+    @pytest.mark.skip(reason=_CLUSTERING_DISABLED_REASON)
     def test_absorbed_member_never_reaches_ocr_or_phash_processing(self, db, monkeypatch):
         # the whole point of dedup is not re-running the expensive engines on cluster members -
         # this is the test that actually proves the efficiency win, not just vote correctness.
@@ -1559,6 +1581,7 @@ class TestClusterDedup:
         assert ocr_called_for_card_ids == [card_a.pk]
         assert card_b.pk not in ocr_called_for_card_ids
 
+    @pytest.mark.skip(reason=_CLUSTERING_DISABLED_REASON)
     def test_absorbed_members_own_engine_eligibility_still_runs_via_the_representative(self, db, monkeypatch):
         # card_a (the lower-pk representative) is only phash-eligible; card_b (absorbed member)
         # is only ocr-eligible - the representative must still run OCR on card_a's behalf, or
