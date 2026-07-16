@@ -45,6 +45,7 @@ from cardpicker.models import (
     CardPrintingTag,
     CardTagVote,
     CardTypes,
+    PilotRunLedger,
     PrintingTagStatus,
     VotePolarity,
     VoteSource,
@@ -939,6 +940,74 @@ class TestNameFrequencyEliminationCommand:
         assert "[WRITE]" in printed
         assert "Gate check passed: 0/1 affected cards resolved." in printed
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID).exists()
+
+
+class TestPilotRunLedger:
+    """docs/features/catalog-completion-plan.md's Part 1: each real (non-dry-run) command
+    invocation creates a PilotRunLedger row and keeps it in lockstep with the run's outcome -
+    RUNNING at start, COMPLETED on success, FAILED on an exception or a gate violation. A
+    missing/inconsistent row must never block a purge (see test_purge_machine_votes.py), but a
+    real invocation should still produce a correct one."""
+
+    def test_dry_run_creates_no_ledger_row(self, db):
+        from django.core.management import call_command
+
+        CanonicalCardFactory(name="Forest")
+        CardFactory(name="Forest")
+
+        call_command("local_identify_printing_tags", "--dry-run", "--engine=ocr", "--limit=5")
+
+        assert not PilotRunLedger.objects.exists()
+
+    def test_real_run_creates_a_completed_ledger_row(self, db, monkeypatch):
+        from django.core.management import call_command
+
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CardFactory(name="Forest")
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+
+        call_command("local_identify_printing_tags", "--engine=ocr", "--limit=5")
+
+        entry = PilotRunLedger.objects.get(command="local_identify_printing_tags")
+        assert entry.status == PilotRunLedger.Status.COMPLETED
+        assert entry.finished_at is not None
+        assert entry.votes_written == 1
+        assert entry.dry_run is False
+        vote = CardPrintingTag.objects.get(anonymous_id=OCR_ANONYMOUS_ID)
+        assert vote.run_id == entry.run_id
+
+    def test_an_exception_mid_run_leaves_the_ledger_row_failed_not_dangling(self, db, monkeypatch):
+        from django.core.management import call_command
+
+        CanonicalCardFactory(name="Forest")
+        CardFactory(name="Forest")
+
+        import cardpicker.management.commands.local_identify_printing_tags as command_module
+
+        def raising_run_pilot(*args, **kwargs):
+            raise RuntimeError("simulated mid-run crash")
+
+        monkeypatch.setattr(command_module, "run_pilot", raising_run_pilot)
+
+        with pytest.raises(RuntimeError):
+            call_command("local_identify_printing_tags", "--engine=ocr", "--limit=5")
+
+        entry = PilotRunLedger.objects.get(command="local_identify_printing_tags")
+        assert entry.status == PilotRunLedger.Status.FAILED
+        assert entry.finished_at is not None
+
+    def test_staleness_refusal_creates_no_ledger_row(self, db, monkeypatch):
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+
+        import cardpicker.management.commands.local_identify_printing_tags as command_module
+
+        monkeypatch.setattr(command_module, "find_stale_applied_migrations", lambda: [("cardpicker", "9999_fake")])
+
+        with pytest.raises(CommandError):
+            call_command("local_identify_printing_tags", "--engine=ocr", "--limit=5")
+
+        assert not PilotRunLedger.objects.exists()
 
 
 class TestRunPilotSourceExclusion:
