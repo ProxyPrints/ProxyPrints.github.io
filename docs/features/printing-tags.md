@@ -1685,6 +1685,24 @@ larger fetch pool.
 `ca-montreal-1`. Matches `DEFAULT_WORKERS=2`'s own derivation (item 3d) exactly - this box has
 never had spare cores for a bigger pool without a resize.
 
+### Soak test at the current box (2026-07-16, throughput track item 2d)
+
+Real 250-card `--dry-run --workers 2` run (not a burst - the prior `--workers=2` safety
+validation was only ~20 seconds/10 cards) against the live DB/API with live services running
+normally. Clustering (item 2a) absorbed 70/250 selected candidates (28%) into 59 clusters before
+the main loop even started, leaving 180 representatives actually processed - closely matching
+the bottleneck-split sample's independently-observed 26% (13/50) absorption rate, two samples
+now agreeing rather than one small anecdote. Total wall-clock ~400s (00:16:10 start to 00:22:50
+log-file mtime), including container startup/migrate/collectstatic overhead (~45-60s fixed cost,
+not pilot processing) - effective throughput **≈1.94s/card** across the 180 processed
+representatives, consistent with the previously-established top-down 1.863s/card figure from
+the original 392-candidate real run. **Caveat, stated plainly**: this run's progress markers
+(50/100/150-candidate checkpoints) weren't individually timestamped, so this confirms
+AGGREGATE throughput held up over a real multi-hundred-card window (not just a burst) but
+doesn't give intra-run stability granularity (e.g. whether the first 50 cards processed at a
+different rate than the last 50) - a finer-grained timing pass would be needed for that
+specific claim, not done here.
+
 ### No-match autopsy (2026-07-15, post-merge Hold #1 of the pre-scale program)
 
 Classified all 176 OCR "parsed-but-no-match" cases from the pilot run
