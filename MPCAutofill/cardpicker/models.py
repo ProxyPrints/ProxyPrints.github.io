@@ -573,6 +573,20 @@ class AbstractWeightedVote(models.Model):
     peer = models.CharField(
         max_length=64, null=True, blank=True, help_text="Federation peer name; set only when source='federated'"
     )
+    # Iteration-safety revocability (docs/features/catalog-completion-plan.md's Part 1): set on
+    # every MACHINE-cast vote from local_identify_printing_tags.py/local_fallback.py's engines -
+    # one fresh value generated once per run_pilot()/run_name_frequency_elimination() invocation
+    # and threaded through every vote that invocation writes. NEVER set on a human-submitted
+    # vote (views.py's post_submit_* views construct votes with no run_id kwarg, so it stays
+    # NULL there). Deliberately separate from anonymous_id, whose EXACT-MATCH reuse across
+    # invocations is load-bearing for _eligible_base_queryset's idempotence/resume logic and
+    # must never change - confirmed via direct investigation that every production call site
+    # depends on that exact-match reuse, and that anonymous_id's own max_length=40 would hard-
+    # block a stamped value for at least two engines anyway. This field exists purely so one bad
+    # invocation's votes can be identified and purged (management command purge_machine_votes
+    # --run-id <id>) without touching any other invocation's votes under the same anonymous_id.
+    # Indexed since the purge command filters on it directly.
+    run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
 
     class Meta:
         abstract = True
@@ -925,6 +939,38 @@ class ProjectMember(models.Model):
         }
 
 
+class PilotRunLedger(models.Model):
+    """
+    One row per local-pilot invocation (run_pilot/run_name_frequency_elimination), written at
+    start (status=RUNNING) and updated at end (status=COMPLETED/FAILED) - the durable, queryable
+    record purge_machine_votes and any future tooling consult by run_id (see
+    docs/features/catalog-completion-plan.md's Part 1). Purely an audit/context layer: the
+    actual purge target set is always found by querying CardPrintingTag/CardArtistVote/
+    CardTagVote directly by run_id, never by trusting this table's row count - a missing or
+    inconsistent ledger row must never block a purge.
+    """
+
+    class Status(models.TextChoices):
+        RUNNING = "running", gettext_lazy("Running")
+        COMPLETED = "completed", gettext_lazy("Completed")
+        FAILED = "failed", gettext_lazy("Failed")
+
+    run_id = models.CharField(max_length=64, unique=True)
+    command = models.CharField(max_length=64)
+    dry_run = models.BooleanField(default=False)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.RUNNING)
+    # best-effort visibility only (see AbstractWeightedVote.run_id's own docstring for why this
+    # is never a hard gate) - the image's baked-in git SHA, if the build-time ARG was set.
+    git_sha = models.CharField(max_length=40, null=True, blank=True)
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    votes_written = models.IntegerField(null=True, blank=True)
+    purged_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"[{self.status}] {self.command} run_id={self.run_id}"
+
+
 __all__ = [
     "Faces",
     "CardTypes",
@@ -941,4 +987,5 @@ __all__ = [
     "get_default_cardback",
     "Project",
     "ProjectMember",
+    "PilotRunLedger",
 ]

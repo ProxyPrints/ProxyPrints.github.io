@@ -2,9 +2,12 @@ import argparse
 from typing import Any, Optional
 
 from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 
 from cardpicker import local_identify_printing_tags, local_ocr, local_phash
-from cardpicker.local_identify_printing_tags import Engine, run_pilot
+from cardpicker.local_identify_printing_tags import Engine, generate_run_id, run_pilot
+from cardpicker.models import PilotRunLedger
+from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
 
 
 class Command(BaseCommand):
@@ -143,6 +146,21 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
+        # Iteration safety (docs/features/catalog-completion-plan.md's Part 1) - the hard gate,
+        # checked before ANY other work, including the [DRY RUN]/[WRITE] line: refuse to start
+        # if this image is older than a previously-deployed one.
+        stale = find_stale_applied_migrations()
+        if stale:
+            raise CommandError(
+                f"STALE IMAGE: the DB has {len(stale)} migration(s) applied that this image's "
+                f"own code doesn't know about ({stale[:10]}{'...' if len(stale) > 10 else ''}) - "
+                "this image is older than a previously-deployed one. Rebuild with the current "
+                "code (see docs/features/catalog-completion-plan.md's rebuild command) before "
+                "running this command."
+            )
+        git_sha = get_baked_git_sha()
+        print(f"[GIT_SHA] {git_sha or 'unknown (not baked - non-Docker run?)'}")
+
         engine = kwargs["engine"]
         limit = kwargs["limit"]
         dry_run = kwargs["dry_run"]
@@ -184,29 +202,47 @@ class Command(BaseCommand):
             print(f"[RESUME] already cast: local-ocr-v1={ocr_already}, local-phash-v1={phash_already}")
 
         mode = "DRY RUN" if dry_run else "WRITE"
+        run_id = generate_run_id()
         print(
             f"[{mode}] local_identify_printing_tags --engine={engine} --limit={limit} "
             f"--nice={nice} --crop-box={crop_box} --batch-size={batch_size} "
             f"--fetch-budget={fetch_budget} --fetch-dpi={fetch_dpi} --workers={workers} "
             f"--exclude-sources-ocr={exclude_source_pks_by_engine['ocr']} "
-            f"--exclude-sources-phash={exclude_source_pks_by_engine['phash']}"
+            f"--exclude-sources-phash={exclude_source_pks_by_engine['phash']} run_id={run_id}"
         )
 
-        results, attributes = run_pilot(
-            engine=engine,
-            limit=limit,
-            dry_run=dry_run,
-            nice=nice,
-            ocr_crop_box=crop_box,
-            phash_distance_threshold=local_phash.DEFAULT_DISTANCE_THRESHOLD,
-            phash_margin=local_phash.DEFAULT_MARGIN,
-            phash_max_candidates=phash_max_candidates,
-            exclude_source_pks_by_engine=exclude_source_pks_by_engine,
-            batch_size=batch_size,
-            fetch_budget=fetch_budget,
-            fetch_dpi=fetch_dpi,
-            workers=workers,
-        )
+        ledger_entry = None
+        if not dry_run:
+            ledger_entry = PilotRunLedger.objects.create(
+                run_id=run_id,
+                command="local_identify_printing_tags",
+                dry_run=dry_run,
+                git_sha=git_sha,
+            )
+
+        try:
+            results, attributes = run_pilot(
+                engine=engine,
+                limit=limit,
+                dry_run=dry_run,
+                nice=nice,
+                ocr_crop_box=crop_box,
+                phash_distance_threshold=local_phash.DEFAULT_DISTANCE_THRESHOLD,
+                phash_margin=local_phash.DEFAULT_MARGIN,
+                phash_max_candidates=phash_max_candidates,
+                exclude_source_pks_by_engine=exclude_source_pks_by_engine,
+                batch_size=batch_size,
+                fetch_budget=fetch_budget,
+                fetch_dpi=fetch_dpi,
+                workers=workers,
+                run_id=run_id,
+            )
+        except Exception:
+            if ledger_entry is not None:
+                ledger_entry.status = PilotRunLedger.Status.FAILED
+                ledger_entry.finished_at = timezone.now()
+                ledger_entry.save(update_fields=["status", "finished_at"])
+            raise
 
         gate_violations: list[int] = []
         for name, result in results.items():
@@ -247,7 +283,14 @@ class Command(BaseCommand):
             print("Dry run - nothing written, gate check not run.")
             return
 
+        total_written = sum(r.votes_written for r in results.values())
+
         if gate_violations:
+            if ledger_entry is not None:
+                ledger_entry.status = PilotRunLedger.Status.FAILED
+                ledger_entry.finished_at = timezone.now()
+                ledger_entry.votes_written = total_written
+                ledger_entry.save(update_fields=["status", "finished_at", "votes_written"])
             raise CommandError(
                 f"GATE VIOLATION: {len(gate_violations)} card(s) resolved after a machine-only "
                 f"(deduction/ocr) vote, which should be structurally impossible - STOP and "
@@ -255,5 +298,11 @@ class Command(BaseCommand):
                 + (" (truncated)" if len(gate_violations) > 50 else "")
             )
 
-        total_written = sum(r.votes_written for r in results.values())
+        if ledger_entry is not None:
+            ledger_entry.status = PilotRunLedger.Status.COMPLETED
+            ledger_entry.finished_at = timezone.now()
+            ledger_entry.votes_written = total_written
+            ledger_entry.save(update_fields=["status", "finished_at", "votes_written"])
+
+        print(f"run_id: {run_id}")
         print(f"Gate check passed: 0/{total_written} affected cards resolved.")
