@@ -48,12 +48,27 @@ function questionFeedUntilNoMatchVoted(): {
               candidates: [printingCandidate1, printingCandidate2],
               tagConfidence: { "Full Art": 0, Borderless: 0.6 },
             },
-            remainingEstimate: 1,
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
           },
           { status: 200 }
         );
       }
-      return HttpResponse.json({ remainingEstimate: 0 }, { status: 200 });
+      return HttpResponse.json(
+        {
+          remainingEstimate: {
+            total: 0,
+            confirmable: 0,
+            contested: 0,
+            fresh: 0,
+          },
+        },
+        { status: 200 }
+      );
     }),
     submitPrintingTagNoMatch: http.post(
       buildRoute("2/submitPrintingTag/"),

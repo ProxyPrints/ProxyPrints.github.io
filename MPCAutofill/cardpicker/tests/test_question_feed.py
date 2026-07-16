@@ -3,6 +3,7 @@ import pytest
 from django.urls import reverse
 
 from cardpicker import views
+from cardpicker.artist_consensus import resolve_and_persist_artist
 from cardpicker.models import (
     ArtistVoteStatus,
     PrintingTagStatus,
@@ -17,6 +18,7 @@ from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
+    CardArtistVoteFactory,
     CardFactory,
     CardPrintingTagFactory,
     CardTagVoteFactory,
@@ -192,24 +194,102 @@ class TestGetNextQuestionFeedItem:
 
 class TestGetRemainingEstimate:
     def test_is_non_negative(self, db):
-        assert get_remaining_estimate() >= 0
+        counts = get_remaining_estimate()
+        assert counts.total >= 0
+        assert counts.confirmable >= 0
+        assert counts.contested >= 0
+        assert counts.fresh >= 0
 
-    def test_counts_unresolved_printing_cards(self, db):
-        before = get_remaining_estimate()
-        # artist_vote_status=RESOLVED so this card contributes to only the printing count -
-        # a fresh CardFactory() defaults artist_vote_status to UNRESOLVED too, which would
-        # otherwise add 1 to the artist-tier count as well and make this assertion brittle
-        CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED)
-        after = get_remaining_estimate()
+    def test_total_counts_a_card_unresolved_in_both_printing_and_artist_only_once(self, db):
+        """Regression test for the bug this shape replaced: the old implementation summed
+        printing.count() + artist.count() + len(tag_pairs), so a single fresh card - UNRESOLVED
+        on both printing and artist by default - added 2 to the total instead of 1. `total` is
+        now a distinct-card union, so it must add exactly 1."""
+        before = get_remaining_estimate().total
+        # CardFactory() defaults both printing_tag_status and artist_vote_status to UNRESOLVED
+        CardFactory()
+        after = get_remaining_estimate().total
         assert after == before + 1
 
+    def test_total_counts_fresh_confirmable_and_contested_cards_but_not_resolved_ones(self, db):
+        before = get_remaining_estimate().total
+
+        # confirmable: unresolved printing with an AI-sourced vote, no human vote yet
+        confirmable_card, _ = make_ai_suggested_card(anonymous_id="ai-bot")
+        # contested: conflicting human printing votes
+        contested_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        # fresh: no votes at all
+        CardFactory()
+        # resolved: must not be counted
+        CardFactory(printing_tag_status=PrintingTagStatus.RESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED)
+
+        after = get_remaining_estimate().total
+        assert after == before + 3
+
+    def test_confirmable_counts_cards_with_an_unconfirmed_ai_suggestion(self, db):
+        before = get_remaining_estimate().confirmable
+        make_ai_suggested_card(anonymous_id="ai-bot")
+        after = get_remaining_estimate().confirmable
+        assert after == before + 1
+
+    def test_confirmable_excludes_cards_with_a_human_vote_already(self, db):
+        card, printing = make_ai_suggested_card(anonymous_id="ai-bot")
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        # human vote moves it out of "confirmable" (no longer AI-only), and since it's not
+        # conflicting with the AI vote, it's not contested either - not asserted here, just
+        # confirming it leaves the confirmable bucket
+        assert get_remaining_estimate().confirmable == 0
+
+    def test_contested_counts_conflicting_printing_votes(self, db):
+        before = get_remaining_estimate().contested
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        after = get_remaining_estimate().contested
+        assert after == before + 1
+
+    def test_contested_counts_conflicting_artist_votes(self, db):
+        before = get_remaining_estimate().contested
+        card = CardFactory(printing_tag_status=PrintingTagStatus.RESOLVED)
+        CardArtistVoteFactory(card=card, artist=CanonicalArtistFactory(), source=VoteSource.USER)
+        CardArtistVoteFactory(card=card, artist=CanonicalArtistFactory(), source=VoteSource.USER)
+        resolve_and_persist_artist(card)
+        card.refresh_from_db()
+        assert card.artist_vote_status == ArtistVoteStatus.CONTESTED
+        after = get_remaining_estimate().contested
+        assert after == before + 1
+
+    def test_fresh_counts_totally_untouched_cards(self, db):
+        before = get_remaining_estimate().fresh
+        # unresolved on both printing and artist, but `fresh` (like `total`) is a distinct-card
+        # count, so this one card only adds 1 even though it matches both axes' OR clauses
+        CardFactory()
+        after = get_remaining_estimate().fresh
+        assert after == before + 1
+
+    def test_fresh_excludes_contested_printing_cards(self, db):
+        before = get_remaining_estimate().fresh
+        card = CardFactory(
+            printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
+        )
+        CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        after = get_remaining_estimate().fresh
+        assert after == before
+
     def test_pending_approval_pairs_are_not_counted(self, db):
-        # this feed's "remaining" count is ordinary-tagging advisory copy only - pending
+        # this feed's "remaining" counts are ordinary-tagging advisory copy only - pending
         # moderation reports have their own badge on the dedicated Moderation tab instead
         # (see this module's docstring)
         before = get_remaining_estimate()
         make_pending_pair()
-        assert get_remaining_estimate() == before
+        after = get_remaining_estimate()
+        assert after.total == before.total
+        assert after.confirmable == before.confirmable
+        assert after.contested == before.contested
+        assert after.fresh == before.fresh
 
 
 class TestGetQuestionFeedView:
@@ -221,7 +301,12 @@ class TestGetQuestionFeedView:
         response = client.get(reverse(views.get_question_feed), {"anonymousId": "anon-1"})
         assert response.status_code == 200
         assert response.json()["item"] is None
-        assert response.json()["remainingEstimate"] == 0
+        assert response.json()["remainingEstimate"] == {
+            "total": 0,
+            "confirmable": 0,
+            "contested": 0,
+            "fresh": 0,
+        }
 
     def test_returns_the_next_item(self, client, django_settings):
         card, _ = make_ai_suggested_card()

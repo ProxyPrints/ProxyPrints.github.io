@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedItem, QuestionFeedResponse, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
+//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
@@ -19,6 +19,7 @@
 //   const newCardsFirstPage = Convert.toNewCardsFirstPage(json);
 //   const printingCandidate = Convert.toPrintingCandidate(json);
 //   const printingTagStatus = Convert.toPrintingTagStatus(json);
+//   const questionFeedCounts = Convert.toQuestionFeedCounts(json);
 //   const questionFeedItem = Convert.toQuestionFeedItem(json);
 //   const questionFeedResponse = Convert.toQuestionFeedResponse(json);
 //   const searchQuery = Convert.toSearchQuery(json);
@@ -101,7 +102,7 @@ export enum Game {
 
 export interface QuestionFeedResponse {
   item?: QuestionFeedItem;
-  remainingEstimate: number;
+  remainingEstimate: QuestionFeedCounts;
 }
 
 export interface QuestionFeedItem {
@@ -227,6 +228,13 @@ export enum Type {
   ConfirmSuggestion = "confirm_suggestion",
   IdentifyPrinting = "identify_printing",
   Tag = "tag",
+}
+
+export interface QuestionFeedCounts {
+  confirmable: number;
+  contested: number;
+  fresh: number;
+  total: number;
 }
 
 export interface ArtistCandidatesRequest {
@@ -858,6 +866,14 @@ export class Convert {
 
   public static printingTagStatusToJson(value: PrintingTagStatus): string {
     return JSON.stringify(uncast(value, r("PrintingTagStatus")), null, 2);
+  }
+
+  public static toQuestionFeedCounts(json: string): QuestionFeedCounts {
+    return cast(JSON.parse(json), r("QuestionFeedCounts"));
+  }
+
+  public static questionFeedCountsToJson(value: QuestionFeedCounts): string {
+    return JSON.stringify(uncast(value, r("QuestionFeedCounts")), null, 2);
   }
 
   public static toQuestionFeedItem(json: string): QuestionFeedItem {
@@ -1813,7 +1829,11 @@ const typeMap: any = {
   QuestionFeedResponse: o(
     [
       { json: "item", js: "item", typ: u(undefined, r("QuestionFeedItem")) },
-      { json: "remainingEstimate", js: "remainingEstimate", typ: 0 },
+      {
+        json: "remainingEstimate",
+        js: "remainingEstimate",
+        typ: r("QuestionFeedCounts"),
+      },
     ],
     false
   ),
@@ -1935,6 +1955,15 @@ const typeMap: any = {
       { json: "identifier", js: "identifier", typ: "" },
       { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
       { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
+    ],
+    false
+  ),
+  QuestionFeedCounts: o(
+    [
+      { json: "confirmable", js: "confirmable", typ: 0 },
+      { json: "contested", js: "contested", typ: 0 },
+      { json: "fresh", js: "fresh", typ: 0 },
+      { json: "total", js: "total", typ: 0 },
     ],
     false
   ),

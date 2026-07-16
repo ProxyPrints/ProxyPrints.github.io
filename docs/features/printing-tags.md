@@ -107,6 +107,21 @@ printings, artists, tags, and moderation from one screen.
   ~28k are exhausted — an interleaved/weighted union is the likely v2
   fix, out of scope for v1. Every tier excludes `(card, tag)` pairs the
   requesting `anonymous_id` already voted on.
+- **Remaining-work count**: `get_remaining_estimate()` returns
+  `QuestionFeedCounts` (`schemas/schemas/QuestionFeedCounts.json`), not a
+  single number. `total` is a `.distinct().count()` union across
+  printing/artist/tag categories, bounded by catalogue size - the
+  non-overlapping "cards needing review in any category" figure.
+  `confirmable`/`contested`/`fresh` mirror the feed's own three tiers and
+  are independent metrics, **not** a partition of `total` - a card can
+  count toward more than one bucket (e.g. AI-suggested-but-unconfirmed
+  printing plus a still-fresh artist question). A fresh, untouched card
+  defaults to `UNRESOLVED` on both `printing_tag_status` and
+  `artist_vote_status` simultaneously, which is why a flat sum of the
+  three category counts (the pre-fix implementation) over-counted every
+  such card 2-3x. `QuestionFeed.tsx`'s headline leads with `confirmable`
+  ("N quick confirmations ready") when non-zero, falling back to `total`
+  once nothing quick remains.
 
 ## Frontend architecture
 

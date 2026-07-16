@@ -4,7 +4,7 @@
   "type": "object",
   "properties": {
     "item": { "$ref": "./QuestionFeedItem.json" },
-    "remainingEstimate": { "type": "integer" }
+    "remainingEstimate": { "$ref": "./QuestionFeedCounts.json" }
   },
   "required": ["remainingEstimate"],
   "additionalProperties": false

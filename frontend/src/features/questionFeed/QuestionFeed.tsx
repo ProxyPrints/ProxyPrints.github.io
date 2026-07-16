@@ -19,7 +19,11 @@ import Row from "react-bootstrap/Row";
 
 import { getPrintingCandidateDataAttributes } from "@/common/cardDom";
 import { getOrCreateAnonymousId } from "@/common/cookies";
-import { PrintingCandidate, QuestionFeedItem } from "@/common/schema_types";
+import {
+  PrintingCandidate,
+  QuestionFeedCounts,
+  QuestionFeedItem,
+} from "@/common/schema_types";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { SetIcon } from "@/components/SetIcon";
 import { Spinner } from "@/components/Spinner";
@@ -73,7 +77,7 @@ export function QuestionFeed() {
   const starburstFrame = useStarburstFrame();
 
   const [item, setItem] = useState<QuestionFeedItem | null>(null);
-  const [remainingEstimate, setRemainingEstimate] = useState<number>(0);
+  const [counts, setCounts] = useState<QuestionFeedCounts | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [caughtUp, setCaughtUp] = useState<boolean>(false);
   const [flavorText, setFlavorText] = useState<string | null>(null);
@@ -100,7 +104,7 @@ export function QuestionFeed() {
     APIGetQuestionFeed(backendURL, getOrCreateAnonymousId())
       .then((response) => {
         setItem(response.item ?? null);
-        setRemainingEstimate(response.remainingEstimate);
+        setCounts(response.remainingEstimate);
         setCaughtUp(response.item == null);
       })
       .catch(() => {
@@ -283,10 +287,27 @@ export function QuestionFeed() {
 
   return (
     <div data-testid="question-feed">
-      <p className="text-primary">
-        Still need help with: {remainingEstimate} card
-        {remainingEstimate !== 1 && "s"}
-      </p>
+      {counts != null && (
+        <>
+          {/* Headline leads with quick confirmations (tier 1 - an unresolved AI-suggested
+              printing awaiting a one-tap human yes/no) since that's the easiest, fastest-to-
+              clear category - falls back to the overall total once there's nothing quick left,
+              rather than always showing the same undifferentiated "cards remaining" copy. */}
+          <p className="text-primary" data-testid="question-feed-headline">
+            {counts.confirmable > 0
+              ? `${counts.confirmable} quick confirmation${
+                  counts.confirmable !== 1 ? "s" : ""
+                } ready`
+              : `Still need help with: ${counts.total} card${
+                  counts.total !== 1 ? "s" : ""
+                }`}
+          </p>
+          <p className="text-muted small" data-testid="question-feed-subcounts">
+            {counts.total} total &middot; {counts.contested} contested &middot;{" "}
+            {counts.fresh} fresh
+          </p>
+        </>
+      )}
       {flavorText != null && (
         <p className="text-muted" data-testid="question-feed-flavor-text">
           {flavorText}
