@@ -6,6 +6,9 @@ entries here only if they're genuinely reusable across unrelated future
 tasks, not a one-off narrative (those belong in `journal/` or a feature doc
 under `docs/features/`).
 
+See also [[troubleshooting.md]] — same source material, indexed by the
+symptom you'd actually search for instead of by cause.
+
 ## Trust CI history, not a matching local venv, once a change touches Django's model-import chain
 
 A local mypy run can pass identically across many sessions and still not be
