@@ -173,7 +173,7 @@ def find_stale_applied_migrations() -> list[tuple[str, str]]:
     from django.db.migrations.recorder import MigrationRecorder
 
     disk = set(MigrationLoader(connection, ignore_no_migrations=True).disk_migrations.keys())
-    applied = MigrationRecorder(connection).applied_migrations()
+    applied = set(MigrationRecorder(connection).applied_migrations().keys())
     return sorted(applied - disk)
 ```
 
