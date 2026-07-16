@@ -190,6 +190,41 @@ printings, artists, tags, and moderation from one screen.
   animation sampling, and data-migration-vs-command-seeding gotchas
   surfaced while building this
 
+### `remainingEstimate` overlap fix (2026-07-16)
+
+`get_remaining_estimate()` (`cardpicker/question_feed.py`) was reporting
+400k+ against a ~218k-card catalogue. Diagnosis: the old implementation
+summed three independent per-category counts —
+`printing.count() + artist.count() + len(tag_pairs)` — but a fresh,
+untouched card defaults to `UNRESOLVED` on *both* `printing_tag_status`
+and `artist_vote_status` simultaneously, so it was counted 2-3+ times
+instead of once. Cluster-propagated votes (Stage 8's run-scoped
+image-hash dedup, `local_identify_printing_tags.py`) were ruled out as a
+contributing cause — clustering isn't a DB concept `question_feed.py`
+knows about at all, and each cluster member is a genuinely distinct
+`Card` row needing its own confirmation, so one feed entry per member is
+correct behavior, not a grouping bug.
+
+Fixed by replacing the flat sum with `QuestionFeedCounts` (new
+quicktype-generated schema, `schemas/schemas/QuestionFeedCounts.json`):
+`total` is now a single `.distinct().count()` union query across the
+three categories (printing/artist/tag), bounded by catalogue size, same
+shape as the ground-truth cross-check query used to diagnose the bug.
+Also returns `confirmable`/`contested`/`fresh` — aggregate counts
+mirroring the feed's own three tiers, independent per-tier metrics (not
+a partition of `total` — a card can count toward more than one bucket,
+same as it can appear in more than one tier across separate voter
+sessions in the real feed). Query cost: 2 queries to compute
+contested-printing/contested-or-unresolved-tag card ids once
+(`get_contested_card_ids()`, `_tag_review_card_ids_by_status()`), reused
+across all four buckets, plus one indexed `.count()` per bucket — 6
+queries total, no per-card sub-queries in a loop.
+
+`QuestionFeed.tsx`'s headline now leads with `confirmable` ("N quick
+confirmations ready") when non-zero — the easiest, fastest-to-clear
+category — falling back to `total` once nothing quick remains, with a
+`total`/`contested`/`fresh` breakdown as a subline.
+
 ## Stage 8: local (zero-API-cost) printing-identification backfill pilot
 
 **Status: built and pilot-run against live production** (2026-07-15,

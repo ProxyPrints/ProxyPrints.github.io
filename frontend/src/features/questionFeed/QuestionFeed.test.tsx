@@ -85,7 +85,10 @@ const identifyPrintingItem = {
 function questionFeedOnce() {
   return http.get(buildRoute("2/questionFeed/"), () =>
     HttpResponse.json(
-      { item: identifyPrintingItem, remainingEstimate: 1 },
+      {
+        item: identifyPrintingItem,
+        remainingEstimate: { total: 1, confirmable: 0, contested: 0, fresh: 1 },
+      },
       { status: 200 }
     )
   );
@@ -136,10 +139,28 @@ describe("QuestionFeed", () => {
         feedFetchCount += 1;
         return feedFetchCount === 1
           ? HttpResponse.json(
-              { item: identifyPrintingItem, remainingEstimate: 1 },
+              {
+                item: identifyPrintingItem,
+                remainingEstimate: {
+                  total: 1,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 1,
+                },
+              },
               { status: 200 }
             )
-          : HttpResponse.json({ remainingEstimate: 0 }, { status: 200 });
+          : HttpResponse.json(
+              {
+                remainingEstimate: {
+                  total: 0,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 0,
+                },
+              },
+              { status: 200 }
+            );
       })
     );
     server.use(
@@ -190,10 +211,28 @@ describe("QuestionFeed", () => {
         feedFetchCount += 1;
         return feedFetchCount === 1
           ? HttpResponse.json(
-              { item: identifyPrintingItem, remainingEstimate: 1 },
+              {
+                item: identifyPrintingItem,
+                remainingEstimate: {
+                  total: 1,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 1,
+                },
+              },
               { status: 200 }
             )
-          : HttpResponse.json({ remainingEstimate: 0 }, { status: 200 });
+          : HttpResponse.json(
+              {
+                remainingEstimate: {
+                  total: 0,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 0,
+                },
+              },
+              { status: 200 }
+            );
       })
     );
     server.use(

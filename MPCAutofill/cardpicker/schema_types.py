@@ -433,20 +433,44 @@ class QuestionFeedItem(BaseModel):
         return result
 
 
+class QuestionFeedCounts(BaseModel):
+    confirmable: int
+    contested: int
+    fresh: int
+    total: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "QuestionFeedCounts":
+        assert isinstance(obj, dict)
+        confirmable = from_int(obj.get("confirmable"))
+        contested = from_int(obj.get("contested"))
+        fresh = from_int(obj.get("fresh"))
+        total = from_int(obj.get("total"))
+        return QuestionFeedCounts(confirmable, contested, fresh, total)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["confirmable"] = from_int(self.confirmable)
+        result["contested"] = from_int(self.contested)
+        result["fresh"] = from_int(self.fresh)
+        result["total"] = from_int(self.total)
+        return result
+
+
 class QuestionFeedResponse(BaseModel):
-    remainingEstimate: int
+    remainingEstimate: QuestionFeedCounts
     item: Optional[QuestionFeedItem] = None
 
     @staticmethod
     def from_dict(obj: Any) -> "QuestionFeedResponse":
         assert isinstance(obj, dict)
-        remainingEstimate = from_int(obj.get("remainingEstimate"))
+        remainingEstimate = QuestionFeedCounts.from_dict(obj.get("remainingEstimate"))
         item = from_union([QuestionFeedItem.from_dict, from_none], obj.get("item"))
         return QuestionFeedResponse(remainingEstimate, item)
 
     def to_dict(self) -> dict:
         result: dict = {}
-        result["remainingEstimate"] = from_int(self.remainingEstimate)
+        result["remainingEstimate"] = to_class(QuestionFeedCounts, self.remainingEstimate)
         if self.item is not None:
             result["item"] = from_union([lambda x: to_class(QuestionFeedItem, x), from_none], self.item)
         return result
@@ -2205,6 +2229,14 @@ def PrintingTagStatusfromdict(s: Any) -> PrintingTagStatus:
 
 def PrintingTagStatustodict(x: PrintingTagStatus) -> Any:
     return to_enum(PrintingTagStatus, x)
+
+
+def QuestionFeedCountsfromdict(s: Any) -> QuestionFeedCounts:
+    return QuestionFeedCounts.from_dict(s)
+
+
+def QuestionFeedCountstodict(x: QuestionFeedCounts) -> Any:
+    return to_class(QuestionFeedCounts, x)
 
 
 def QuestionFeedItemfromdict(s: Any) -> QuestionFeedItem:

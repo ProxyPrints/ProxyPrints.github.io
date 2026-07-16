@@ -1,0 +1,13 @@
+{
+  "title": "Question Feed Counts",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "total": { "type": "integer" },
+    "confirmable": { "type": "integer" },
+    "contested": { "type": "integer" },
+    "fresh": { "type": "integer" }
+  },
+  "required": ["total", "confirmable", "contested", "fresh"],
+  "additionalProperties": false
+}

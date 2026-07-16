@@ -21,7 +21,7 @@ one hijacking the other. See docs/features/moderation.md.
 
 from typing import Optional
 
-from django.db.models import Count
+from django.db.models import Count, Q
 
 from cardpicker.artist_consensus import get_contested_artist_card_ids
 from cardpicker.attribute_tags import ATTRIBUTE_CHIP_TAG_NAMES
@@ -36,7 +36,7 @@ from cardpicker.models import (
 )
 from cardpicker.printing_candidates import get_ranked_printing_candidates
 from cardpicker.printing_consensus import get_contested_card_ids
-from cardpicker.schema_types import QuestionFeedItem, TypeEnum
+from cardpicker.schema_types import QuestionFeedCounts, QuestionFeedItem, TypeEnum
 from cardpicker.tag_consensus import get_tag_net_polarity, get_tag_review_queue_pairs
 
 
@@ -193,19 +193,101 @@ def get_next_question_feed_item(anonymous_id: str) -> Optional[QuestionFeedItem]
     return _tier_1_confirm_suggestion(anonymous_id) or _tier_2_contested(anonymous_id) or _tier_4_fresh(anonymous_id)
 
 
-def get_remaining_estimate() -> int:
+def _tag_review_card_ids_by_status() -> tuple[set[int], set[int]]:
     """
-    Best-effort total across tiers, for "Still need N cards" messaging - NOT per-voter (doesn't
-    account for own-vote exclusion, which is comparatively cheap to skip here since this is
-    advisory copy, not a candidate set). Pending-moderation-report count is deliberately not
-    folded in here any more - it has its own badge on the dedicated Moderation tab now (see
-    this module's docstring), separate from ordinary tagging's "remaining" count.
+    (contested_card_ids, unresolved_card_ids) - distinct cards with >=1 persisted
+    `tag_vote_statuses` entry of that status. Same source query as
+    `tag_consensus.get_tag_review_queue_pairs` (one pass over `Card.tag_vote_statuses` - a
+    JSONField has no native per-key/per-value DB filter, see that function's docstring), but
+    skips its second query (vote weights, for pair ordering) and the interleaving, since a
+    distinct-card count doesn't need per-pair identity or ordering.
     """
-    return (
-        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED).count()
-        + Card.objects.filter(artist_vote_status__in=[ArtistVoteStatus.UNRESOLVED, ArtistVoteStatus.CONTESTED]).count()
-        + len(get_tag_review_queue_pairs())
+    contested_ids: set[int] = set()
+    unresolved_ids: set[int] = set()
+    for card_id, statuses in Card.objects.exclude(tag_vote_statuses={}).values_list("id", "tag_vote_statuses"):
+        values = statuses.values()
+        if TagVoteStatus.CONTESTED in values:
+            contested_ids.add(card_id)
+        if TagVoteStatus.UNRESOLVED in values:
+            unresolved_ids.add(card_id)
+    return contested_ids, unresolved_ids
+
+
+def get_remaining_estimate() -> QuestionFeedCounts:
+    """
+    "Still need help with" counts for the feed header - NOT per-voter (doesn't account for
+    own-vote exclusion, which is comparatively cheap to skip here since this is advisory copy,
+    not a candidate set). Pending-moderation-report count is deliberately not folded in here -
+    it has its own badge on the dedicated Moderation tab (see this module's docstring),
+    separate from ordinary tagging's "remaining" counts.
+
+    Returns four numbers instead of one flat sum:
+    - `total`: DISTINCT cards needing review in any category (printing, artist, or tag) - a
+      single `.distinct().count()` query, bounded by catalogue size. This replaces the old
+      implementation's `printing.count() + artist.count() + len(tag_pairs)`, which summed three
+      overlapping per-category counts and could count the same untouched card 2-3+ times (every
+      fresh card defaults to UNRESOLVED on *both* printing and artist simultaneously) - see
+      docs/features/printing-tags.md's questionFeed section for the diagnosis that motivated
+      this fix.
+    - `confirmable`/`contested`/`fresh`: aggregate counts mirroring the feed's own three tiers
+      (`_tier_1_confirm_suggestion`/`_tier_2_contested`/`_tier_4_fresh`), for a more informative
+      header than one opaque number - e.g. "N quick confirmations" up front. These are
+      independent per-tier metrics, not a partition of `total`: a single card can count toward
+      more than one bucket (e.g. an AI-suggested-but-unconfirmed printing plus a still-fresh
+      artist question), same as it can appear in more than one tier across separate voter
+      sessions in the real feed.
+
+    Query shape: `get_contested_card_ids()` (contested-printing ids) and
+    `_tag_review_card_ids_by_status()` (contested/unresolved-tag ids) each run once and get
+    reused across every bucket below - 2 queries total for those, plus one indexed `.count()`
+    per bucket (4 buckets), for 6 queries overall. No per-card sub-queries in a loop - the only
+    Python-side materialization is the tag-status scan, which was already the established
+    pattern for this JSONField (see `_tag_review_card_ids_by_status`'s docstring).
+    """
+    contested_printing_ids = get_contested_card_ids()
+    tag_contested_ids, tag_unresolved_ids = _tag_review_card_ids_by_status()
+
+    confirmable = (
+        Card.objects.filter(
+            printing_tag_status=PrintingTagStatus.UNRESOLVED,
+            printing_tags__source__in=[VoteSource.DEDUCTION, VoteSource.OCR],
+        )
+        .exclude(printing_tags__source__in=[VoteSource.USER, VoteSource.ADMIN, VoteSource.FEDERATED])
+        .distinct()
+        .count()
     )
+
+    contested = (
+        Card.objects.filter(
+            (Q(pk__in=contested_printing_ids) & Q(printing_tag_status=PrintingTagStatus.UNRESOLVED))
+            | Q(artist_vote_status=ArtistVoteStatus.CONTESTED)
+            | Q(pk__in=tag_contested_ids)
+        )
+        .distinct()
+        .count()
+    )
+
+    fresh = (
+        Card.objects.filter(
+            (Q(printing_tag_status=PrintingTagStatus.UNRESOLVED) & ~Q(pk__in=contested_printing_ids))
+            | Q(artist_vote_status=ArtistVoteStatus.UNRESOLVED)
+            | Q(pk__in=tag_unresolved_ids)
+        )
+        .distinct()
+        .count()
+    )
+
+    total = (
+        Card.objects.filter(
+            Q(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+            | Q(artist_vote_status__in=[ArtistVoteStatus.UNRESOLVED, ArtistVoteStatus.CONTESTED])
+            | Q(pk__in=tag_contested_ids | tag_unresolved_ids)
+        )
+        .distinct()
+        .count()
+    )
+
+    return QuestionFeedCounts(total=total, confirmable=confirmable, contested=contested, fresh=fresh)
 
 
 __all__ = ["get_next_question_feed_item", "get_remaining_estimate"]

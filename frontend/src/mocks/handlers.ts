@@ -5,6 +5,7 @@ import { computeSearchQueryHashKey } from "@/common/processing";
 import {
   Campaign,
   CardType,
+  QuestionFeedCounts,
   Supporter,
   SupporterTier,
 } from "@/common/schema_types";
@@ -894,6 +895,15 @@ export const voteQueueNoResults = http.post(buildRoute("2/voteQueue/"), () =>
 
 //# region question feed
 
+// counts default to a plausible non-zero breakdown (one bucket standing in for "some work
+// remains") - callers that care about a specific bucket's value pass an override rather than
+// every mock spelling out all four fields for a number the test doesn't actually check.
+function questionFeedCounts(
+  overrides: Partial<QuestionFeedCounts> = {}
+): QuestionFeedCounts {
+  return { total: 5, confirmable: 0, contested: 0, fresh: 5, ...overrides };
+}
+
 export const questionFeedConfirmSuggestion = http.get(
   buildRoute("2/questionFeed/"),
   () =>
@@ -906,7 +916,11 @@ export const questionFeedConfirmSuggestion = http.get(
           candidates: [printingCandidate1, printingCandidate2],
           tagConfidence: { "Full Art": 0, Borderless: 0 },
         },
-        remainingEstimate: 5,
+        remainingEstimate: questionFeedCounts({
+          total: 5,
+          confirmable: 5,
+          fresh: 0,
+        }),
       },
       { status: 200 }
     )
@@ -923,7 +937,7 @@ export const questionFeedIdentifyPrinting = http.get(
           candidates: [printingCandidate1, printingCandidate2],
           tagConfidence: { "Full Art": 0, Borderless: 0.6 },
         },
-        remainingEstimate: 3,
+        remainingEstimate: questionFeedCounts({ total: 3, fresh: 3 }),
       },
       { status: 200 }
     )
@@ -937,7 +951,7 @@ export const questionFeedArtist = http.get(buildRoute("2/questionFeed/"), () =>
         card: cardDocument8,
         confidentlyKnownArtistName: null,
       },
-      remainingEstimate: 2,
+      remainingEstimate: questionFeedCounts({ total: 2, fresh: 2 }),
     },
     { status: 200 }
   )
@@ -956,7 +970,7 @@ export const questionFeedArtistConfidentlyKnown = http.get(
           card: cardDocument8,
           confidentlyKnownArtistName: "Alpha Artist",
         },
-        remainingEstimate: 2,
+        remainingEstimate: questionFeedCounts({ total: 2, fresh: 2 }),
       },
       { status: 200 }
     )
@@ -970,7 +984,7 @@ export const questionFeedTag = http.get(buildRoute("2/questionFeed/"), () =>
         card: cardDocument9,
         tagName: "Borderless",
       },
-      remainingEstimate: 1,
+      remainingEstimate: questionFeedCounts({ total: 1, fresh: 1 }),
     },
     { status: 200 }
   )
@@ -978,7 +992,11 @@ export const questionFeedTag = http.get(buildRoute("2/questionFeed/"), () =>
 
 export const questionFeedCaughtUp = http.get(
   buildRoute("2/questionFeed/"),
-  () => HttpResponse.json({ remainingEstimate: 0 }, { status: 200 })
+  () =>
+    HttpResponse.json(
+      { remainingEstimate: questionFeedCounts({ total: 0, fresh: 0 }) },
+      { status: 200 }
+    )
 );
 
 //# endregion
