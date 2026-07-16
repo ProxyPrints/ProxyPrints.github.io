@@ -25,10 +25,11 @@ only) for deployment, hosting, and domain specifics.
   `docs/troubleshooting.md` before the task closes (grep it first before
   re-deriving a fix — recurring blockers live there, not buried in a
   changelog).
-- **Wiki maintenance**: a change that affects user-facing or admin-facing
-  behavior updates the corresponding GitHub wiki page as part of the same
-  task, not as a follow-up. Wiki pages link to `docs/` for operational
-  detail — never duplicate a fact that changes.
+- **Wiki maintenance**: task-end check — did this change what a USER sees
+  or what an ADMIN does? If yes: server sessions update the wiki page in
+  the same task; cloud sessions add "wiki: `<page>` needs `<change>`" to
+  their PR's merge-time checklist. Wiki pages link to `docs/` for
+  operational detail — never duplicate a fact that changes.
 - **Push policy**: commit and push straight to `master` for solo work on
   this repo, no PR needed. PRs (+ user approval before merge) are reserved
   for upstreaming to `chilli-axe/mpc-autofill`. Never `git push --force` as
