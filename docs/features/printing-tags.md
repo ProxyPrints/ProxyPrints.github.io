@@ -2120,3 +2120,39 @@ the code comment at the fix site); regression test
 `TestConcurrency::test_thread_pool_is_created_once_for_the_whole_run_not_per_chunk` asserts
 pool construction count stays at 1 across multiple real chunks of work, not just that votes
 still get written.
+
+## Prior-art read: phash calibration in other MTG card-ID projects (2026-07-16)
+
+Timeboxed (~1hr) research task, ahead of designing the two-threshold clustering (item 3) and
+art-region hash variant (item 4) follow-ups. Examined
+[`tmikonen/magic_card_detector`](https://github.com/tmikonen/magic_card_detector) and
+[`freeall/mtg-card-detector`](https://github.com/freeall/mtg-card-detector), both MIT-licensed
+(copyright Timo Ikonen). **These are not two independent implementations** - freeall's repo is
+an explicit fork of tmikonen's; the core hashing/matching code (`magic_card_detector.py`) is
+essentially unmodified between them, freeall's changes being CLI ergonomics and a filename
+convention for carrying Scryfall IDs through. Credit: threshold/matching approach below is
+tmikonen's original work, referenced here as prior art per project attribution policy - no code
+adopted verbatim, MIT terms would apply if that changes.
+
+**Their "threshold" is not directly reusable as a Hamming-distance number.** They use
+`imagehash.phash(hash_size=32)` (a 32x32/1024-bit hash, far larger than imagehash's 8x8 default),
+but the match decision isn't a flat distance cutoff - it's a per-query statistical outlier test:
+the best (smallest) Hamming distance among all candidates is compared to the _mean and standard
+deviation of the distances to every other candidate_, and accepted only if it's more than 4
+standard deviations below that mean. Reusing "4" as if it were a raw phash bit-distance (the way
+this pilot's own d=0/d<=2 tiers are expressed) would be a category error - the two numbers aren't
+on the same scale. The transferable idea, if any, is the _method_: validating a distance
+threshold against the population's own distance distribution rather than picking a fixed cutoff
+in isolation - a possible cross-check for calibrating d<=2, not a value to copy.
+
+**No working art-region hash code exists in either project.** tmikonen's own blog post
+(tmikonen.github.io) names hashing a separate art-only reference image as future work, never
+implemented in either repo. Nothing to borrow beyond "someone else independently considered this
+useful," which is a weak signal, not a design.
+
+Other notes: both preprocess with CLAHE histogram equalization and hash at all 4 rotations
+(a "photo of a physical card" concern from unknown-orientation scans - doesn't apply to this
+pilot's Scryfall-sourced digital images, which are already upright). Neither repo touches the
+Scryfall API directly; both assume a pre-populated local image folder, matched by brute-force
+linear scan against every reference hash (no indexing/bucketing) - not a scale precedent worth
+following at 172k+ cards regardless of threshold source.
