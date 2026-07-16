@@ -335,6 +335,16 @@ logic between them.
    Scryfall artist or resolved artist consensus), or (b) a withheld-
    printing frame-mismatch where art matched a known printing. If the
    combined number is small (<~2k), log-and-defer; report before building.
+   **Blocked on Part 2 for (a)**: `Card.content_phash` is 100% NULL until
+   the backfill runs (checked live, 2026-07-16: 0/218,152 populated) - a
+   d=0 sibling relationship doesn't exist to count until real hashes
+   exist. **(b) isn't a stored-data query at all**: frame-mismatch
+   withholding drops the vote with zero DB trace (confirmed by reading
+   the code path directly - the vote is never appended to the write
+   batch), so getting a real count requires an actual fetch+OCR+frame-
+   check compute pass, not a query. Re-run this check once Part 2's
+   backfill has populated a meaningful fraction of `content_phash` for
+   (a); (b) needs its own small sampling pass regardless.
 2. **d=0 siblings** → `CardArtistVote`, `anonymous_id='art-hash-artist-v1'`
    (17 chars, fits well under `max_length=40`) + Part 1's `run_id`,
    confidence 0.9 (identical-image entailment).
