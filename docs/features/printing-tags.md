@@ -1,690 +1,194 @@
 # Printing-aware card tagging ("What's That Card?" vote queue)
 
+_Current-state reference, as of 2026-07-16._ Full stage-by-stage build
+history (Stages 1–7 below): `git log e4eb6cb3 -- docs/features/printing-tags.md`
+and earlier commits — that SHA is the last commit before this file was
+rewritten from a linear changelog into this reference.
+
+**Stage 8 onward (local/zero-API-cost printing-ID backfill, a.k.a. the
+"catalog-completion" package) is still in active development and not yet
+migrated into this file** — for its current status, architecture, and
+known gaps, see [[catalog-completion-plan.md]] (that file is the live
+source of truth for it) and this file's own tail section below the "Stage
+8" heading, kept as-is until that work reaches a hold.
+
+## What it does
+
 Additive, upstream-pitchable feature letting users/admins tag which
-Scryfall printing a `Card` (a catalog image) depicts, with a
-weighted-consensus mechanism to auto-resolve uncontested cases. Stage 1
-(schema + consensus + import command) shipped; a generalized
-artist/tag-taxonomy layer and a federation-readiness stub have since
-merged on top (PR #7).
-
-## Backend design
-
-**Key recon finding that shaped the design**: `CanonicalCard`
-(`cardpicker/models.py`) already IS a per-printing model —
-`identifier` = Scryfall's printing UUID, `canonical_id` = Scryfall's
-`oracle_id`, unique on `(expansion, collector_number)`, own
-`artist`/`image_hash`/thumbnails — populated weekly by
-`import_canonical_card_data`, which already downloads+caches Scryfall's
-`default_cards` bulk file. A fully separate `CanonicalPrinting` model would
-have duplicated ~90% of this via a second, independently-scheduled Scryfall
-sync that could drift out of agreement. Decision instead:
-**`CardPrintingTag.printing` FKs directly to the existing `CanonicalCard`**;
-a new `CanonicalPrintingMetadata` model (OneToOne to `CanonicalCard`) holds
-only the Scryfall fields `CanonicalCard` doesn't already store (full_art,
-border_color, frame, frame_effects, promo_types, edhrec_rank,
-printings_count, released_at, lang).
-
-`cardpicker/printing_consensus.py` (`resolve_printing(card)`) — weighted-
-vote formula: user weight 1, admin weight `PRINTING_TAG_ADMIN_WEIGHT`
-(default 5), ai weight `PRINTING_TAG_AI_WEIGHT` (default 0.5).
-`PRINTING_TAG_MIN_VOTES` is compared against **summed weight**, not raw row
-count — that's what makes a single admin vote alone clear the default
-threshold of 2, with no special-cased branch, just the one unified formula.
-A winning group additionally needs `PRINTING_TAG_MIN_SHARE` (default 0.6)
-of total weight AND at least one non-AI vote, so no volume of AI-only votes
-can resolve consensus alone. Settings live in `MPCAutofill/settings.py`.
-
-`cardpicker/printing_metadata_import.py` + management command
-`import_scryfall_printing_metadata` reuses the same
-`scryfall_cache/default_cards.json` cache path as `import_canonical_card_data`
-(within the same 7-day window, only one of the two commands actually
-downloads); skips rows whose Scryfall id has no matching `CanonicalCard`
-rather than doing its own lang/paper filtering (that boundary already lives
-in `MTGIntegration`).
-
-## CanonicalCard population fix (data pipeline)
-
-`CanonicalCard` had 0 rows despite `CanonicalExpansion` having 1000+,
-because `import_canonical_card_data` was silently hanging for its full
-12-hour django-q timeout. Root-caused and fixed in
-`cardpicker/integrations/game/mtg.py`:
-
-- No `requests.get(...)` call had a `timeout=`, so one stalled Scryfall
-  connection could hang a worker thread forever.
-- The `ThreadPoolExecutor` was submitted-and-immediately-`.result()`'d one
-  row at a time inside the loop — effectively fully serial despite
-  `max_workers=10`. Fixed to submit all rows up front, gather at the end.
-- Scryfall's bulk file can legitimately contain more than one printing for
-  the same `(expansion, collector_number)` slot (a language-exclusive
-  variant alongside the English one), which violated `CanonicalCard`'s
-  uniqueness constraint and crashed the import. Fixed with a slot-ownership
-  mechanism that keeps the English printing and skips/displaces non-English
-  duplicates for the same slot.
-- Added `--skip-image-hash`: the per-card perceptual-hash step dominates a
-  full import's runtime, and nothing in the codebase reads
-  `CanonicalCard.image_hash` yet — bootstraps metadata from the bulk JSON
-  alone (`image_hash=0`), deferring real hash computation until hash-based
-  matching actually exists. A full import (~113k rows post-dedup) now takes
-  about a minute instead of hanging.
-- Verified end-to-end against real Scryfall data:
-  `CanonicalCard.objects.count() == 113224`,
-  `CanonicalArtist.objects.count() == 2505`, and
-  `import_scryfall_printing_metadata` produced 113,224
-  `CanonicalPrintingMetadata` rows against that real data.
-
-## Frontend: vote-queue UI ("What's That Card?")
-
-**Superseded by Stage 7 (unified question feed) below** — `PrintingTagQueue.tsx`,
-`GenericVoteQueue.tsx`, `PrintingConfirmStrip.tsx`, and `ModerationQueue.tsx`
-(the tab switcher and its four tab bodies) were deleted as part of that
-change; their mechanics (starburst, sticky panel, reveal animation,
-candidate grid) live on, extracted into `cardPanel.tsx` and reused by the
-new `QuestionFeed.tsx`. This section is kept as the historical record of
-how those mechanics were originally built — still accurate for that, just
-not for "what renders today."
-
-`PrintingTagQueue.tsx` (standalone queue page) and `PrintingTagPicker.tsx`
-(embedded picker in `CardDetailedViewModal.tsx`) present candidate
-printings for a card with a themed starburst background, animated flicker,
-and hover-zoomed candidate thumbnails. Current state (after several rounds
-of visual iteration):
-
-- `starburstShape.ts` — a seeded PRNG (mulberry32) generates alternating
-  spike-tip/valley polygon vertices per layer, precomputing 5 frames per
-  layer (deterministic) so the shape flickers rather than holding static.
-- The card panel is `position: sticky` (measured offset via
-  `useStickyTop`, not a hardcoded navbar constant, so it pins at wherever
-  it actually rendered rather than jumping to a fixed position on first
-  scroll) and full-bleeds to the viewport edges.
-- Every candidate thumbnail (including "No match") shows a blue
-  `ArtPlaceholder` ("?" background) while loading, hover-zooms uncropped on
-  hover, and has no border (a border previously clipped the hover-zoomed
-  art against a stationary frame).
-- Consensus-resolved candidates get a solid blue `CandidateButton`
-  highlight instead of Bootstrap's default green `success` variant.
-- Animation is skipped under `prefers-reduced-motion` (checked once via
-  `matchMedia`, not a live listener).
-- See [[../lessons.md]] for the sticky/overflow CSS gotchas, debug-color
-  verification trick, and cyclic-animation sampling gotcha found while
-  building this.
-
-## Printing-candidate DOM wiring
-
-Candidate buttons in both `PrintingTagQueue.tsx` and `PrintingTagPicker.tsx`
-carry the card DOM API's data attributes — see [[card-dom-api.md]].
-
-## Genericized theming identifiers
-
-Every identifier/comment/copy referencing a specific third-party media
-franchise (the original visual inspiration for the starburst/quiz-show
-theming) was renamed to neutral terms — zero such references anywhere in
-code, comments, copy, or docs. Page title/headers: **"What's That Card?"**.
-`GenericVoteQueue.tsx` (artist/tag vote modes) already used
-`data-testid="vote-queue"`; `PrintingTagQueue.tsx` needed a _different_
-testid (`printing-tag-queue*`) rather than reusing that string, because its
-`Tab.Pane` stays mounted (hidden, no `unmountOnExit`) after switching tabs —
-reusing the same testid would produce two simultaneously-mounted elements
-sharing it. Caught via review before shipping — see
-[[../lessons.md]] (testid collision check).
-
-## Multi-worker coordination fallout
-
-A cross-session push conflict on this page's file (two sessions pushed to
-`master` unaware of each other, landing overlapping edits within a few
-lines of each other in `PrintingTagQueue.tsx`) is what motivated adding
-`WORKERS.md` as a coordination file — see CLAUDE.md's tooling rules and
-`WORKERS.md` itself for the protocol this produced.
-
-## Upstream extraction status
-
-`docs/upstreaming/vote-system.md` is a companion document: a commit-by-
-commit cherry-pick classification for the whole vote system (Stage 1
-through the federation stub and contested-review generalization, PR #7),
-for whoever eventually cuts an upstream extraction branch. It flags that
-`PrintingTagQueue.tsx`/`printingQueue.tsx` interleave real vote-queue logic
-with the fork-only starburst theming across many commits and should not be
-cherry-picked commit-by-commit as a result.
-
-## Stage 3: consumption (search re-rank, attribute filters, match indicator)
-
-Resolved printing-tag consensus previously did nothing outside the vote
-queue itself. Stage 3 makes `printing_tag_status == RESOLVED` actually
-affect search — gated so unresolved/no-match cards behave exactly as
-before.
-
-**Shared hard-gate helper**: `cardpicker/printing_consensus.py::get_resolved_printings(identifiers)`
-— batch DB lookup returning `ResolvedPrinting` (expansion_code,
-collector_number, full_art, border_color) only for identifiers with
-`printing_tag_status == RESOLVED`. Both the re-rank and the attribute
-filters call this one function, so they can't drift on what counts as
-"resolved."
-
-**Search re-rank** (`cardpicker/search/search_functions.py::retrieve_card_identifiers`):
-a narrow post-fetch stable-sort boost, applied _after_ the pre-existing
-(unrelated, untouched) ES hard filter on `expansion_code`/
-`collector_number` — never a new query path. Tiers: exact set+collector
-match > set-only match > everything else (today's order, unchanged).
-**Real gap found and closed along the way**: that pre-existing hard filter
-is fed by `Card.get_expansion_code`/`get_collector_number`
-(models.py:481-497), which historically only read `canonical_card` — a
-field set at _ingestion time_ from source-file tags (`cardpicker/tags.py`),
-entirely unrelated to voting. Verified empirically (grepped for every
-`canonical_card` assignment in application code) that cards which actually
-need community printing-tag votes almost always have `canonical_card = None` — meaning the re-rank boost would have been nearly inert for its
-own target population, since those cards would never survive the hard
-filter to reach the boost step at all. Fixed by widening
-`get_expansion_code`/`get_collector_number` to fall back to
-`inferred_canonical_card` when `printing_tag_status == RESOLVED` (mirrors
-the same fallback chain `Card.serialise()` already uses for
-`canonicalCard`), plus widening `documents.py`'s `select_related` to eager-
-load it. Same hard match-or-exclude semantics as before — only the data
-the filter can see got wider, not the exclude logic itself.
-
-**Attribute filters** (Full art / Borderless, opt-in, default off):
-`FilterSettings.fullArtOnly`/`borderlessOnly` (new JSON-schema fields,
-regenerated via `schemas/` quicktype build — see below). Applied as a
-post-fetch filter in the same function, same `get_resolved_printings`
-call reused for both re-rank and filter when both are active (not two
-separate lookups). Hard requirement: a card absent from
-`get_resolved_printings` (UNRESOLVED/NO_MATCH) always passes the filter —
-unresolved cards are unknowns, not mismatches. UI:
-`frontend/src/features/filters/ResolvedAttributeFilter.tsx`, states the
-"unresolved cards still show" semantic explicitly in the toggle copy.
-
-**Match indicator**: `Card.printingTagStatus` (new field, `Card.serialise()`
-
-- regenerated schema) lets the frontend know a slot's selected card is
-  community-resolved. `frontend/src/common/processing.ts::getPrintingMatchLabel`
-  (pure function) compares the slot's originating `SearchQuery` (parsed from
-  the decklist line) against the selected `CardDocument`'s `canonicalCard`,
-  returning a tooltip string or `null`. Rendered in
-  `frontend/src/features/card/Card.tsx`'s `CardImage`, reusing the existing
-  small-overlay-icon mechanism (`isFavorite`'s `CardIcon`) via a new sibling
-  `MatchIndicatorIcon` in the opposite corner (so favorite + match indicator
-  never overlap on the same card).
-
-**Bug caught only by the Playwright test, not unit tests**: the shared
-`Icon` component (`frontend/src/components/icon.tsx`) didn't forward
-`data-testid`/other rest props to the underlying `<i>` element — the
-indicator rendered correctly in the DOM but was unfindable by any
-testid-based selector. Fixed by spreading `...rest` onto the `<i>`; this
-also benefits any other future consumer of `Icon` needing a testid/
-aria-label.
-
-**Schema changes require the quicktype regeneration step**, not hand-
-editing `schema_types.py`/`schema_types.ts` (both say "Generated by
-quicktype. Do not manually modify this file." at the top): edit the
-source JSON Schema files in `schemas/schemas/`, then `cd schemas && npm run build`. The raw quicktype output isn't black/isort/prettier-
-formatted — run those afterward, or the diff is mostly reformatting noise
-unrelated to the actual schema change.
-
-**Known deferred gap**: client-side (local-folder/Google Drive,
-Orama-indexed) search gets no re-rank/filter/indicator parity — that path
-has no ES/DB access to consult `printing_tag_status`. Flagged explicitly,
-not silently built.
-
-## Stage 3.5: immediate reindex on vote transition
-
-Stage 3's re-rank/filters read `printing_tag_status` and the indexed
-`expansion_code`/`collector_number` (see the fallback widening above) —
-but nothing pushed a changed card into ES until the next scheduled
-`update_database` re-scan. A vote that just resolved (or un-resolved) a
-printing was invisible to search until that next scan ran.
-
-`cardpicker/documents.py::reindex_card_safely(card)` — the shared,
-failure-isolated push (`CardSearch().update([card], action="index")`,
-exception caught and logged, never raised: Postgres is truth, ES is a
-projection, so an ES hiccup must never break vote submission or roll back
-a write that already committed).
-
-`printing_consensus.py::resolve_and_persist_printing` calls it, but only
-when the _effective indexed_ printing id actually changes
-(`_effective_indexed_printing_id` — the same RESOLVED-gated fallback
-`get_expansion_code`/`get_collector_number` use). Covers both directions:
-entering RESOLVED, leaving RESOLVED (contested/unresolved again), and the
-resolved printing itself changing while staying RESOLVED. A re-resolve
-landing on the same outcome (the common case for an already-settled card)
-touches the DB but not the index.
-
-`tag_consensus.py::resolve_and_persist_tag_votes` already had an
-ES push for `tags` (an ES-indexed field, unlike the printing/artist
-denormalised columns) gated on its own `tags_changed` flag — switched to
-`reindex_card_safely` for the same failure isolation, no change to when
-it fires.
-
-Artist resolution (`artist_consensus.py`) never touches an ES-indexed
-field (`inferred_canonical_artist`/`artist_vote_status` only,
-serialise-time-only) — confirmed against `documents.py`'s field list, no
-hook needed.
-
-## Stage 4: no-match reason tags + post-vote follow-up strips
-
-A resolved printing vote and an explicit "No match" vote both used to
-advance the queue with zero follow-up (or, for no-match, the general
-`AttributeVotingPanel`) — no fast way to capture _why_ a card had no
-match, and no prompt to confirm full-art/borderless while the card was
-still on screen. Two new, narrowly-scoped strips render in
-`PrintingTagQueue.tsx` between a vote submitting and the queue
-auto-advancing, both a brief, skippable dwell that never blocks
-advancing:
-
-- `PrintingConfirmStrip` (after a vote resolves a printing) — two chips,
-  "Full art"/"Borderless", pre-filled (highlighted) from the resolved
-  candidate's own `fullArt`/`isBorderless` flags. A tap casts one
-  `CardTagVote` for the existing `Full Art`/`Borderless` tags (seeded by
-  `cardpicker.default_tags`, not new) with polarity matching the
-  preview. No new tags, no new endpoint.
-- `NoMatchReasonStrip` (after an explicit "No match" vote) — six chips
-  for a new reason-code taxonomy (below). One tap casts one positive
-  `CardTagVote` and advances. Replaces `AttributeVotingPanel` only in
-  this specific branch — a card that's still contested from a candidate
-  pick (not an explicit no-match) keeps showing `AttributeVotingPanel`
-  unchanged.
-
-Both strips reuse the existing `CardTagVote`/`submitTagVote` machinery
-end to end — no new backend endpoints or vote types, just narrower UI
-over what Stage "attribute voting" already shipped.
-
-**`isBorderless` added to `PrintingCandidate`**: the schema had
-`fullArt` but no border-color-derived field, so `PrintingConfirmStrip`
-couldn't pre-fill a borderless preview from data "already in the
-payload" as originally assumed — it wasn't. Added via the quicktype
-regeneration step (`schemas/schemas/PrintingCandidate.json` →
-`cd schemas && npm run build`), wired in
-`CanonicalCard.serialise_as_printing_candidate()` as
-`metadata.border_color == "borderless"`. Verified against live data
-first (read-only `CanonicalPrintingMetadata.objects.values("border_color").annotate(...)`
-query) rather than assumed from general Scryfall knowledge: the stored
-values are exactly `black`/`borderless`/`white`/`gold`/`silver`/`yellow`.
-
-**Reason-code taxonomy — six new `Tag` rows, seeded by a management
-command, not a migration**: `custom-art`, `altered-frame`, `upscaled`,
-`ai-art`, `no-collector-line`, `non-english`
-(`cardpicker/reason_tags.py`, `manage.py seed_no_match_reason_tags`,
-mirroring the existing `cardpicker/default_tags.py`/
-`seed_default_tags` pattern exactly). **These names are a federation
-interchange contract** — other instances consuming our vote export
-expect these exact strings; renaming any of them is a breaking change,
-not a refactor.
-
-A first pass seeded these via a data migration instead, per the
-original task spec. That broke 5 unrelated tests
-(`test_views.py::TestGetTags::*`, `test_tag_votes.py:: TestPostTagConsensus::test_returns_an_entry_for_every_seeded_tag`) —
-they assert the _complete_ set of `Tag` rows, and document that a fresh
-DB has zero real `Tag` rows besides the synthetic, never-persisted
-`"NSFW"` pseudo-tag (`cardpicker/tags.py`). `seed_default_tags` is
-deliberately **not** wired into any migration for the same reason: a
-migration runs unconditionally at DB-setup time (including the test
-DB), permanently seeding rows nothing asked for. Switched to a command
-to match that established convention; suite back to the known 4-failure
-baseline (2 unrelated `moxfield` network tests, 2 unrelated
-`test_sources.py` path issues) afterward.
-
-**Deliberately a separate taxonomy from `DEFAULT_TAGS`**, not a reuse:
-`upscaled`/`custom-art`/`ai-art` cover near-identical concepts to the
-existing `Upscaled`/`Custom`/`AI-Generated` (which parse filename
-bracket content at _upload_ time), but these are cast by a _human_ as
-the reason they picked "no match" in the queue — kept as distinct rows
-(exact-string-distinct, case included) so the two vote populations
-don't silently merge into one consensus.
-
-`Tag` has no `description` field — the descriptions given in the task
-spec live as documentation only (`reason_tags.py`'s module comment,
-mirrored as frontend display copy in `NoMatchReasonStrip.tsx`), not a
-new DB column or serializer field.
-
-**Activation note**: `manage.py seed_no_match_reason_tags` must be run
-once after this deploys, or `NoMatchReasonStrip` votes 400
-(`post_submit_tag_vote` does `Tag.objects.get(name=...)`, not
-`get_or_create` — a miss raises `BadRequestException`, not a silent
-no-op). Confirmed live: `Full Art`/`Borderless` (used by
-`PrintingConfirmStrip`) already exist in production — `seed_default_tags`
-has been run there before — so that strip needs no activation step.
-
-**Graceful degradation for the un-activated case**: `NoMatchReasonStrip`
-filters its six chips against `useGetTagsQuery` (the existing, already-
-cached `2/tags/` query — no new endpoint/fetch) and hides any chip whose
-tag doesn't exist yet, rather than rendering a chip that will only ever 400. While that query is still loading it shows all six optimistically.
-
-**Status: live** (merged as PR #12, 2026-07-14). Activation sequence
-completed: django/worker rebuilt and restarted,
-`seed_no_match_reason_tags` run (created all 6, none pre-existing — no
-prior partial-seed to reconcile), both follow-up strips proven end to
-end against the real production API (`api.proxyprints.ca`, not a local
-mock): a real no-match vote + `custom-art` reason chip landed as
-expected `CardPrintingTag`/`CardTagVote` rows on "Llanowar Elves [FDN]",
-and a real resolving printing vote + `Borderless` confirm chip (correctly
-polarity `NOT_APPLICABLE`, matching that printing's real
-`isBorderless: false`) landed as expected on "Loki, Lord of Misrule
-[MSC]". Both cards' test votes were then deleted and the cards
-re-resolved to restore their real prior state (the same "cast, verify,
-reverse" discipline as Stage 3.5's live proof) — confirmed one genuine
-pre-existing `Borderless` vote on the Loki card survived the cleanup
-untouched, proving the deletion was scoped correctly to only the test
-rows.
-
-**Operational gotcha hit during this activation**: recreating the
-`django` container left `nginx` proxying to a stale internal IP (full
-502 on every API request) until `nginx` itself was restarted — see
-[[../infrastructure.md]]'s Docker/backend deploy section for the
-mechanism and the now-standard extra restart step.
-
-## Stage 5: decouple tag identity (`name`) from presentation (`display_name`)
-
-`Tag.name` is both the machine key (votes, `Card.tags`, filename-bracket
-matching, federation — see `docs/federation-v1.md`) and, until now, the
-only text ever shown to a human. That coupling meant a purely cosmetic
-relabel (fixing a typo, adding nicer casing) was indistinguishable from
-a breaking rename — both touched the same field. `Tag.display_name`
-(nullable `CharField`, additive migration) splits them: `name` stays
-forever immutable post-creation, `display_name` is freely editable
-presentation text, admin-editable via the already-registered `Tag`
-admin (now also in `list_display`/`search_fields`).
-
-**Serialization**: `Tag.serialise()` includes `displayName`;
-`schemas/schemas/Tag.json` gained the field (quicktype-regenerated, not
-hand-edited — see the note above). Nullable/optional, so it doesn't
-disturb any response that doesn't set it.
-
-**Frontend**: one shared lookup, `frontend/src/common/tagDisplayNames.ts`'s
-`useTagDisplayName()` — built off the same already-cached
-`useGetTagsQuery()` other consumers (e.g. `TagFilter`) already use, so
-adding a lookup call site never triggers a new fetch. Flattens the tag
-tree (children included) into a `name -> displayName` map and returns a
-`(name) => displayName ?? name` function. Wired into every render site
-that showed a raw tag name: `TagFilter.tsx` (filter dropdown labels),
-`CardDetailedViewModal.tsx` (a card's resolved tag badges),
-`TagVotePicker.tsx`, `QueueTagQuestion.tsx`, `NoMatchReasonStrip.tsx`,
-`PrintingConfirmStrip.tsx`. API submissions/filters (`includesTags`,
-`excludesTags`, `APISubmitTagVote`'s `tagName`, ...) are untouched —
-they always send `name`.
-
-`NoMatchReasonStrip`/`PrintingConfirmStrip` previously hardcoded their
-own chip label strings, duplicating what `display_name` now owns -
-refactored both to look the label up dynamically instead, so editing a
-`display_name` in admin changes what's shown without a frontend deploy.
-One visible, intentional side effect: `PrintingConfirmStrip`'s "Full
-art" chip (a hand-picked lowercase label) now reads "Full Art" (the
-seeded `display_name`, matching `Tag.name`'s own casing exactly).
-
-**Seeding**: `seed_no_match_reason_tags` sets `display_name` for its six
-tags at creation, and backfills it on an already-existing tag only when
-still null (never clobbers a manual admin edit). `seed_default_tags`
-gained the identical idempotent pattern, but only for `Full Art`/
-`Borderless` — `display_name = name` verbatim for those two (not
-renamed, just given an explicit row so no actively-displayed tag
-silently relies on fallback); the other eleven `DEFAULT_TAGS` entries
-are left with no `display_name` (already nice Title Case `name`s, the
-`displayName ?? name` fallback covers them for free).
-
-**Filename tag-extraction pipeline is unaffected, and here's why that
-matters**: `cardpicker/tags.py`'s `Tags.get_tags()` builds its raw-token
-lookup as `{tag.name.lower(): tag for tag in [...]}`, matched against
-`Tag.name`/`aliases` only (`match_tag_fuzzy`, `extract()`) — never reads
-`display_name`. `Card.tags` (the persisted, denormalised ArrayField)
-stores `tag_object.name`, again never `display_name`. So adding
-`display_name` changes nothing about indexing today. The reverse case -
-what a future _rename_ of `name` (not what this stage does) would break
-
-- is exactly why `name` needed protecting in the first place: an exact
-  `.lower()` match against old filenames would silently stop firing
-  unless the old name were preserved as an alias, and every already-
-  persisted `Card.tags` array containing the old string would go stale
-  relative to the renamed row, with no migration path to reconcile them
-  (it's a snapshot array, not a live FK). `display_name` exists precisely
-  so that presentation changes never need to risk this at all.
-
-## Stage 6: deductive backfill (AI-weight votes for logically-entailed printings)
-
-Casts `source=deduction` `CardPrintingTag` votes (`cardpicker/deductive_backfill.py`,
-management command `deductive_backfill_printing_tags`) for cards whose
-printing is entailed by data already in the catalog, rather than waiting
-for a human to vote from scratch on every one of the ~207k untagged
-cards. **PRINCIPLE**: a deduction is only valid conditional on the image
-actually being an authentic depiction of the named card - this catalog
-allows custom art - so a deduction is always a _vote_
-(`PRINTING_TAG_AI_WEIGHT`, default 0.5), never a direct
-`printing_tag_status`/`inferred_canonical_card` write. The hard
-"at least one human-backed vote" gate in
-`vote_consensus.resolve_weighted_consensus` means an AI-only vote can
-never resolve a card by itself, at any volume - a human still confirms.
-
-> **2026-07-15 vocabulary split**: the single `VoteSource.AI` value this
-> stage originally wrote (`source=ai`) was split into `VoteSource.DEDUCTION`
-> (this stage - pure logical inference, zero image inspection) and
-> `VoteSource.OCR` (Stage 8 below - anything that actually looks at the
-> card image). Same weight (`PRINTING_TAG_AI_WEIGHT`, setting name
-> unchanged) and gate treatment for both - a label split, not a policy
-> change; see `cardpicker/models.py`'s `VoteSource` docstring and migration
-> `0060_votesource_deduction_ocr_split.py` (schema choices + one-time data
-> backfill of every existing `source='ai'` row to `source='deduction'`,
-> since every pre-split row came from this stage's own production run).
-> `is_human_backed_source()` (`vote_consensus.py`) is the one place that
-> now knows which `VoteSource` values are machine-derived, replacing the
-> scattered `!= VoteSource.AI` comparisons this doc's examples used to show.
-
-**Two confidence tiers**, both keyed on `to_searchable`-normalized name
-(the same normalizer `printing_candidates.py`'s queue lookup uses,
-post-#460 - no mid-string "the" stripping):
-
-- **D1** (confidence 0.95): the name matches exactly one `CanonicalCard`
-  row. Cross-verified against Scryfall's own `printings_count`
-  (`CanonicalPrintingMetadata`, not derived from our import) so "exactly
-  one row in our table" can't be mistaken for "Scryfall says this card
-  only has one printing" when the two disagree - a card is only D1 if
-  both agree. A `CanonicalCard` with no `CanonicalPrintingMetadata`
-  sidecar at all is treated as unverifiable, never as count-1.
-- **D2** (confidence 0.90): the name matches more than one `CanonicalCard`
-  row, but `Card.expansion_hint` (already parsed at upload time from a
-  lone set-code bracket token in the source filename -
-  `cardpicker/tags.py::Tags.extract()`, no new parsing built for this)
-  narrows `(name, expansion)` to exactly one row.
-
-**Eligibility, beyond the two tiers above**: `printing_tag_status == UNRESOLVED`, no `canonical_card` (a confirmed ingestion-time match already
-settles it), **no existing vote of any kind** - not just no prior
-deductive vote. A card with a pre-existing human vote is exactly the
-scenario where adding a same-outcome AI vote could push an _already_
-human-backed group's weight over the resolution threshold; excluding
-these outright removes the scenario rather than relying on the live gate
-check below to catch it. Also excludes a card with the `"Custom"` tag
-already resolved (`Card.tags` - the PRINCIPLE's precondition is already
-known false) and a non-English card (`Card.language` - name-matching
-compares against Scryfall's English oracle name, so a coincidental match
-against a foreign-language name isn't trustworthy).
-
-**Idempotent / resumable**: the "no existing vote" exclusion above is
-also the checkpoint mechanism - an interrupted run leaves whatever it
-already committed, and simply re-invoking the command later picks up
-exactly where it left off with no separate checkpoint file. `--limit`
-caps a single invocation; `--dry-run` selects and counts without writing.
-
-**Live gate check**: after writing (unless `--dry-run`), every affected
-card is re-fetched fresh and run through the _pure_ `resolve_printing`
-(never `resolve_and_persist_printing` - the check itself must never be
-able to cause a write) to confirm none of them actually resolved. Should
-be structurally impossible per the paragraph above; verified live against
-the real data anyway rather than only trusted in theory. Any violation
-raises `CommandError` and stops rather than continuing past it.
-
-**Census** (2026-07-14, `printing_tag_status=UNRESOLVED`,
-`canonical_card` null pool of 207,123 / 218,128 total cards): D1 =
-26,962, D2 = 1,202 after the Custom-tag/non-English exclusions (27,424 /
-1,204 before them). Every D1 candidate's Scryfall `printings_count`
-cross-check passed (0 false positives out of 27,424). D2's `(name, expansion)` narrowing occasionally collides across distinct oracle
-objects sharing a display name (generic tokens - Treasure, Zombie, Beast,
-etc. - and one real card, Llanowar Elves, colliding with an unrelated
-same-named token in a token-only set); doesn't affect any individual
-vote's correctness since each vote's own `(name, expansion_hint)` pair is
-independently verified to narrow to one row.
-
-**Out of scope for this stage**: vision/AI image classification calls
-(this is pure logical deduction from existing structured data, zero new
-dependencies), `is_no_match` votes, fuzzy/lower-confidence signals beyond
-D1/D2, a "suggested" badge in the queue UI, and artist/tag deduction
-(printing only).
-
-**Status: live** (merged as PR #11, 2026-07-14; real production run same
-day). `manage.py deductive_backfill_printing_tags --tier all` executed
-against production: **D1 = 26,931, D2 = 1,181, total = 28,112** votes
-written (a `bulk_create` of `CardPrintingTag` rows directly - never routed
-through `resolve_and_persist_printing`, so this write path cannot trigger
-`reindex_card_safely`; ES reindex firings from this run are zero by
-construction, not merely by observed log silence). Slightly below the
-same-day census (D1 26,962 / D2 1,202 / total 28,164, taken hours
-earlier) - the ~52-vote gap matches cards resolved or voted on for other
-reasons in the interim, consistent with real production traffic between
-the census and the run; the command's own `--dry-run` immediately
-beforehand reproduced the identical 28,112 figure deterministically.
-Post-write live gate check (`verify_zero_resolutions`, the pure
-`resolve_printing` path, never persisting): **0/28,112 affected cards
-resolved** - the human-backed gate held at scale exactly as designed, no
-AI-only vote pushed a card into `RESOLVED` on its own.
-
-5-card spot check (random sample) confirmed every vote as
-`source=ai` (since migrated to `source=deduction` by the vocabulary split
-above - the underlying rows are unchanged, only the label), `anonymous_id=deductive-backfill-v1`, `confidence` 0.95/0.90
-matching its tier, `is_no_match=False`, printing name matching the card
-name, and the card's `printing_tag_status` still `unresolved`.
-**Confirmed via code path, not just this sample: the queue's candidate
-grid highlight is keyed strictly on
-`consensus?.resolvedPrinting?.identifier === candidate.identifier`**
-(`PrintingTagQueue.tsx`), which only ever populates for a truly
-`RESOLVED` card - so the "suggested" printing from a deductive-backfill
-vote does **not** surface as a pre-filled highlight in the queue today.
-This is the documented, deliberate scope decision above (no "suggested"
-badge this stage), not a bug; a UX follow-up to surface AI-only
-suggestions visually is a separate, future proposal.
-
-## Moderation layer (stage 1)
-
-The sensitive-tag moderation layer ([[moderation.md]]) builds directly on
-this system: a third seeded taxonomy (`seed_sensitive_tags` — NSFW/low-res/
-incorrect-info/appropriate-bleed, same command-not-migration convention as
-the two above), a privileged-approval gate in `resolve_weighted_consensus`,
-and a moderator-only review surface. Briefly folded into the unified
-question feed's `moderation` question type when Stage 7 shipped (below),
-then split back out into its own Moderation tab (Reports + Drives sub-tabs
-— see [[moderation.md]]) once live use showed that made any pending report
-displace a moderator's ordinary tagging work for as long as it stayed
-pending - `question_feed.py` never serves a pending-approval pair now, for
-any role.
-
-## Stage 7: unified question feed (queue redesign)
-
-Replaces the printing/artist/tag/moderation tab switcher with a single
-`GET 2/questionFeed/`-driven stream: one question at a time, typed
-(`confirm_suggestion` | `identify_printing` | `artist` | `tag` |
-`moderation`), each with a `payload` shaped per type. A "dumb ranked
-union" v1 — four fixed-priority tiers, first non-empty tier wins, no
-cross-tier scoring. Full design rationale (chip taxonomy data grounding,
-layout tradeoffs, exact tier queries) lives in
-`journal/2026-07-14-queue-question-feed-design.md` (gitignored, local
-only) — this section captures the durable facts a future reader needs
-without that file.
-
-**Priority tiers**: (1) `confirm_suggestion` — cards with an unresolved
-AI-sourced printing vote and no human printing vote yet (28,112 cards at
-last count — the full deductive-backfill set from Stage 6); (2) contested
-printing/artist/tag pairs, existing per-kind ordering reused verbatim; (3)
-`moderation` — pending-approval sensitive tags
-(`get_pending_approval_queue_pairs`, unchanged from the moderation layer),
-gated on `is_moderator(request.user)` and simply never queried for a
-non-moderator request; (4) fresh unresolved. **Own-vote exclusion**: every
-tier excludes cards/pairs this exact `anonymous_id` has already voted on
-(scoped to `(card, tag)`, not just `card` — a card can carry ~11
-independent attribute-chip votes), so a single vote that doesn't itself
-resolve consensus doesn't re-serve the same question forever.
-
-**Starvation risk, not silently accepted**: at current volume, a voter
-working only this feed will not see a single contested/moderation item
-until all 28,112 tier-1 questions are exhausted. Flagged as a known v1
-property; an interleaved/weighted union is the likely v2 fix, out of scope
-here (matches the "ML/scoring schedulers beyond the ranked union"
-exclusion from this stage's own brief).
-
-**Attribute chips** (`frontend/src/features/attributeChips/`): tri-state
-per chip (untouched → positive → negative → untouched, cycling on tap),
-fill color/intensity renders the tag's weighted net polarity (a new
-`netPolarity` field on `TagConsensusEntry`, computed by
-`tag_consensus.get_tag_net_polarity` — the same weighted-sum math
-`get_tag_review_queue_pairs` already computed inline for its own ordering,
-now exposed as its own function). Chip taxonomy (11 tags total,
-`cardpicker/attribute_tags.py` + `frontend/.../attributeChips.ts`,
-kept in lockstep by tag name): standalone toggles Full Art / Borderless /
-Showcase / Extended (Art) / Etched, plus two **exclusion groups** — Border
-Color (Black/White/Silver) and Frame Style (Old/Modern/Future, bucketing
-Scryfall's four raw frame years into three) — encoded as one frontend
-constant (`EXCLUSION_GROUPS`) with a comment, per spec. A positive tap on
-one exclusion-group chip renders siblings implied-negative (dimmed) and
-drives live candidate filtering, but casts no vote on those siblings —
-only the frontend styling/filtering is group-aware, the vote write path
-never is. Chip set is deliberately narrower than "every value
-`CanonicalPrintingMetadata` stores" — `promo_types` is excluded entirely
-(mostly production/marketing provenance, not visually identifiable from a
-card image) and `frame_effects` is limited to the three values common
-enough (849–4165 occurrences at census time) to read as a distinct visual
-treatment to a non-expert; `legendary`/`inverted` had higher raw counts
-but were excluded as a judgment call (card-type marker and one narrow
-product line, respectively, not general printing-identification signal).
-
-**Retraction**: `CardTagVote` previously only supported apply/not-
-applicable (`update_or_create`, no delete path) — the tri-state chip's
-untouched-cycle-back needed a real "un-vote." Minimal addition:
-`post_submit_tag_vote` now also accepts `polarity=0` as a retract
-sentinel (never persisted — `VotePolarity`'s two real choices are
-unchanged), which deletes the existing `CardTagVote` row instead of
-upserting.
-
-**Auto-tag on selection**: picking a printing candidate casts the
-existing printing vote plus one positive `CardTagVote` per _standalone_
-attribute the candidate itself carries true (not the exclusion groups —
-border/frame aren't auto-derivable from a boolean flag the same way).
-`PrintingConfirmStrip` (Stage 4) is fully redundant under this — both
-attributes it used to manually confirm (Full Art, Borderless) are now
-auto-cast — and was deleted rather than kept as dead code.
-
-**No-match gating**: the "No match" candidate is disabled (visually and
-functionally) until at least one chip has an explicit (non-untouched)
-state, per spec — "describe what you see first."
-
-**Layout**: the starburst/sticky subject-card panel (with its surrounding
-chips) renders LEFT and the candidate grid RIGHT on desktop, in plain
-JSX/DOM order — the spec's original brief called for the opposite
-(candidates left, card right, via a CSS `order` flip so mobile stacking
-still worked); changed to this arrangement per direct follow-up
-instruction. Mobile stacks in the same DOM order (card+chips first/top,
-grid second/below) with no extra CSS needed.
-
-**A latent bug this stage's chips exposed, not introduced**: `CardPanel`
-has always used `z-index: -1` (see `cardPanel.tsx`, unchanged since the
-original `PrintingTagQueue.tsx`) so the starburst bleeding out from
-behind it doesn't paint over the page heading above. That negative
-z-index was never actually _contained_ to CardPanel's own column — with
-no positioned ancestor between it and the page root, it escapes all the
-way up, which happens to be harmless as long as nothing _inside_
-CardPanel needs to be clicked (the original component only ever showed a
-static image there). This stage is the first time CardPanel hosts real
-interactive content (the attribute chips), and the escape turned out to
-make CardPanel's entire subtree - chips included - unclickable at the
-browser's hit-testing layer: `elementFromPoint` at a chip's own screen
-coordinates resolved to its grandparent `Col`, not the chip, even though
-the chip visually renders exactly there. Caught via a real
-intercepted-click failure in Playwright (multiple false leads chased
-first - CSS `order`, dev-server staleness, duplicate mounts - before
-isolating it with `elementFromPoint` diagnostics and a bisection between
-`z-index: -1` and a throwaway positive value). Fixed by giving the `Col`
-wrapping `CardPanel` its own local stacking context: `position: relative`
-_and_ an explicit non-`auto` `z-index` (`0`) together - `position: relative` alone does not establish one, a distinction that cost a full
-extra round of "fixed, then still broken" before landing on the working
-combination.
-
-**Server deployment step**: `manage.py seed_attribute_tags` must run once
-before this feature is live (idempotent, same pattern as
-`seed_sensitive_tags` — see [[moderation.md]]'s checklist). Without it,
-the six non-default-taxonomy chips (Etched, Black/White/Silver Border,
-Old/Modern Border, Future Frame) 400 on tap; `Full Art`/`Borderless`/
-`Showcase`/`Extended` already work since they're seeded by the existing
-`seed_default_tags`.
+Scryfall printing a `Card` (catalog image) depicts, with a
+weighted-consensus mechanism to auto-resolve uncontested cases. A single
+unified question feed (`GET 2/questionFeed/`) now drives voting for
+printings, artists, tags, and moderation from one screen.
+
+## Backend architecture
+
+- **Data model**: `CanonicalCard` (`cardpicker/models.py`) is already a
+  per-printing model (`identifier` = Scryfall printing UUID, unique on
+  `(expansion, collector_number)`) — no separate `CanonicalPrinting` model
+  was added. `CanonicalPrintingMetadata` (OneToOne) holds only the
+  Scryfall fields `CanonicalCard` doesn't (full_art, border_color, frame,
+  frame_effects, promo_types, edhrec_rank, printings_count, released_at,
+  lang), populated by `cardpicker/printing_metadata_import.py` +
+  `import_scryfall_printing_metadata`. `CardPrintingTag.printing` FKs
+  directly to `CanonicalCard`.
+- **Consensus**: `cardpicker/printing_consensus.py::resolve_printing(card)`
+  — weighted-vote formula, weight by source (user 1, admin
+  `PRINTING_TAG_ADMIN_WEIGHT` default 5, AI/deduction/OCR
+  `PRINTING_TAG_AI_WEIGHT` default 0.5; settings in
+  `MPCAutofill/settings.py`). `PRINTING_TAG_MIN_VOTES` compares against
+  _summed weight_, not row count. A winning group also needs
+  `PRINTING_TAG_MIN_SHARE` (default 0.6) of total weight **and** at least
+  one non-AI vote — `vote_consensus.is_human_backed_source()` is the one
+  place that knows which `VoteSource` values are machine-derived, so no
+  volume of AI-only votes can resolve a card alone.
+- **Search consumption**: `printing_consensus.py::get_resolved_printings(identifiers)`
+  is the single shared gate (`printing_tag_status == RESOLVED` only) that
+  both the search re-rank (`search_functions.py::retrieve_card_identifiers`,
+  a stable-sort boost after the existing ES hard filter, never a new query
+  path) and the opt-in Full Art/Borderless attribute filters
+  (`ResolvedAttributeFilter.tsx`) consult, so they can't drift on what
+  counts as "resolved." `Card.get_expansion_code`/`get_collector_number`
+  (models.py) fall back to `inferred_canonical_card` when RESOLVED, so
+  community-tagged cards (which mostly lack `canonical_card`) are actually
+  reachable by the boost/filter, not just ingestion-time-matched ones.
+  `Card.printingTagStatus` + `getPrintingMatchLabel` drive the frontend's
+  match-indicator icon. **Known gap**: client-side (local-folder/Drive,
+  Orama-indexed) search has no ES/DB access and gets no re-rank/filter/
+  indicator parity.
+- **Reindex on vote transition**: `documents.py::reindex_card_safely(card)`
+  is the shared, failure-isolated ES push (never raises — Postgres is
+  truth, ES is a projection) that `resolve_and_persist_printing` and
+  `tag_consensus.py::resolve_and_persist_tag_votes` call when a card's
+  _effective indexed_ printing/tags actually change, so a vote that just
+  resolved consensus is searchable immediately rather than waiting for the
+  next scheduled `update_database` scan.
+- **No-match reason tags**: six `Tag` rows (`custom-art`, `altered-frame`,
+  `upscaled`, `ai-art`, `no-collector-line`, `non-english`) seeded by
+  `manage.py seed_no_match_reason_tags` (a management command, **not** a
+  migration — see [[../lessons.md]]'s data-migration-vs-command-seeding
+  entry). **These exact strings are a federation interchange contract**
+  (other instances consuming our vote export expect them) — renaming any
+  of them is a breaking change. Deliberately a separate taxonomy from
+  `DEFAULT_TAGS` even where concepts overlap (`upscaled` vs `Upscaled`
+  etc.), since one is cast at upload-time from filename parsing and the
+  other is a human's queue-time judgment — kept exact-string-distinct so
+  the two vote populations don't silently merge.
+- **Tag identity vs. presentation**: `Tag.name` is the immutable machine
+  key (votes, `Card.tags`, filename-bracket matching, federation);
+  `Tag.display_name` (nullable, additive) is freely-editable presentation
+  text, admin-editable, looked up frontend-wide via
+  `frontend/src/common/tagDisplayNames.ts::useTagDisplayName()`. The
+  filename tag-extraction pipeline (`cardpicker/tags.py`) only ever reads
+  `name`, never `display_name` — presentation changes can never affect
+  ingestion-time matching.
+- **Deductive backfill**: `cardpicker/deductive_backfill.py` +
+  `manage.py deductive_backfill_printing_tags` casts `source=deduction`
+  votes (weight `PRINTING_TAG_AI_WEIGHT`) for cards whose printing is
+  logically entailed by data already in the catalog — D1 (name matches
+  exactly one `CanonicalCard`, cross-verified against Scryfall's own
+  `printings_count`) and D2 (name + `Card.expansion_hint` narrows to
+  exactly one row) tiers. Idempotent/resumable (the "no existing vote"
+  eligibility check doubles as the checkpoint). `VoteSource.DEDUCTION`
+  (pure logical inference) and `VoteSource.OCR` (Stage 8, image-inspecting)
+  are a label split of what was originally one `VoteSource.AI` value —
+  same weight/gate treatment for both, see `models.py`'s `VoteSource`
+  docstring. Production run: 28,112 votes written, 0/28,112 later
+  resolved a card on their own (human-backed gate verified at scale).
+- **Moderation layer**: builds on the same consensus system — see
+  [[moderation.md]] for the sensitive-tag taxonomy, privileged-approval
+  gate, and its own Reports/Drives review surface.
+- **Unified question feed**: `GET 2/questionFeed/` replaces the old
+  printing/artist/tag/moderation tab switcher with one typed, prioritized
+  stream (`confirm_suggestion` → contested pairs → `moderation` → fresh
+  unresolved; "dumb ranked union," no cross-tier scoring). Full rationale
+  in `journal/2026-07-14-queue-question-feed-design.md` (gitignored,
+  local-only). **Known v1 property, not a bug**: at current volume a
+  voter only sees tier-1 (`confirm_suggestion`) questions until all
+  ~28k are exhausted — an interleaved/weighted union is the likely v2
+  fix, out of scope for v1. Every tier excludes `(card, tag)` pairs the
+  requesting `anonymous_id` already voted on.
+
+## Frontend architecture
+
+- `frontend/src/pages/whatsthat.tsx` (renamed from `printingQueue.tsx`) +
+  `QuestionFeed.tsx` render the single unified feed; the old standalone
+  `PrintingTagQueue.tsx`/`GenericVoteQueue.tsx`/`ModerationQueue.tsx` tab
+  switcher was deleted, its mechanics extracted into `cardPanel.tsx` and
+  reused directly.
+- `starburstShape.ts` — seeded PRNG (mulberry32) generates the animated
+  starburst background, 5 precomputed frames per layer; skipped under
+  `prefers-reduced-motion` (checked once via `matchMedia`).
+- `cardPanel.tsx` — `position: sticky` (via `useStickyTop`, not a hardcoded
+  navbar constant), full-bleeds to the viewport. Needs its own local
+  stacking context (`position: relative` **and** an explicit non-`auto`
+  `z-index`, together) on its wrapping `Col` — `position: relative` alone
+  does not establish one, and the card's own `z-index: -1` otherwise
+  escapes all the way to the page root and makes its interactive content
+  unclickable at the hit-testing layer.
+- `frontend/src/features/attributeChips/` — tri-state chips
+  (untouched → positive → negative), fill color renders weighted net
+  polarity (`tag_consensus.get_tag_net_polarity`). Two exclusion groups
+  (Border Color, Frame Style) are frontend-only styling/filtering
+  concerns — the vote write path treats every chip independently.
+  Picking a printing candidate auto-casts one positive vote per
+  standalone attribute the candidate carries true.
+- `frontend/src/common/tagDisplayNames.ts` — shared `name -> displayName`
+  lookup, built off the already-cached tags query (no new fetch per
+  consumer).
+- Candidate buttons carry the card DOM API's data attributes — see
+  [[card-dom-api.md]].
+
+## Key files (Stages 1–7; Stage 8+ files are in [[catalog-completion-plan.md]])
+
+- Backend: `cardpicker/printing_consensus.py`,
+  `cardpicker/printing_metadata_import.py`,
+  `cardpicker/integrations/game/mtg.py`, `cardpicker/models.py`,
+  `cardpicker/search/search_functions.py`, `cardpicker/documents.py`,
+  `cardpicker/tag_consensus.py`, `cardpicker/reason_tags.py`,
+  `cardpicker/default_tags.py`,
+  `cardpicker/management/commands/seed_no_match_reason_tags.py`,
+  `cardpicker/deductive_backfill.py` +
+  `deductive_backfill_printing_tags` management command,
+  `cardpicker/question_feed.py`, `cardpicker/attribute_tags.py` +
+  `seed_attribute_tags` management command.
+- Frontend: `frontend/src/features/printingTags/`
+  (`PrintingTagPicker.tsx`, `starburstShape.ts`, `cardPanel.tsx`),
+  `frontend/src/features/filters/ResolvedAttributeFilter.tsx`,
+  `frontend/src/common/processing.ts::getPrintingMatchLabel`,
+  `frontend/src/features/attributeVoting/` (`ChipCard.tsx`,
+  `NoMatchReasonStrip.tsx`, `QueueTagQuestion.tsx`,
+  `ArtistVotePicker.tsx`), `frontend/src/common/tagDisplayNames.ts`,
+  `frontend/src/features/attributeChips/`,
+  `frontend/src/features/questionFeed/QuestionFeed.tsx`,
+  `frontend/src/pages/whatsthat.tsx`.
+- Docs: `docs/upstreaming/vote-system.md` (upstream cherry-pick
+  classification — flags that the starburst theming is interleaved with
+  real vote-queue logic across many commits and shouldn't be cherry-picked
+  commit-by-commit), `docs/federation-v1.md` (`name` vs `display_name`
+  interchange-key note).
+
+## Known gaps
+
+- Client-side (local-folder/Google Drive) search gets no re-rank/filter/
+  match-indicator parity — no ES/DB access on that path.
+- The starburst/card/chip-ring layout was hand-tuned via iterative
+  screenshot review, not built against a formal design system — flagged
+  for a `/dataviz`-skill pass.
+- Ranked-union v1 has a known starvation property (see above);
+  interleaved/weighted scheduling is a future v2, not built.
+- Stage 8+ (local printing-ID backfill / catalog-completion) gaps: see
+  [[catalog-completion-plan.md]].
+
+## Related docs
+
+- [[moderation.md]] — sensitive-tag moderation layer
+- [[card-dom-api.md]] — printing-candidate DOM attribute wiring
+- [[catalog-completion-plan.md]] — Stage 8+ (active development)
+- `../upstreaming/vote-system.md` — upstream cherry-pick manifest
+- `../federation-v1.md` — federation verdict exchange format
+- [[../lessons.md]] — sticky/overflow CSS, testid collisions, cyclic-
+  animation sampling, and data-migration-vs-command-seeding gotchas
+  surfaced while building this
 
 ## Stage 8: local (zero-API-cost) printing-identification backfill pilot
 
