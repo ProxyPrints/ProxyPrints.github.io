@@ -367,3 +367,35 @@ work is not evidence it addressed its actual assignment - check the report again
 directive, not just its internal coherence; (2) if a narrowly-scoped fork's task will outlive a
 likely compaction boundary, the directive text itself needs to be re-assertable / distinguishable
 from parent history at a glance, since compaction can flatten that distinction away.
+
+## `docker compose up` on django/worker is a deploy+migrate fused step, by design, not by accident
+
+`docker/django/entrypoint.sh` runs `python3 manage.py migrate` **unconditionally on every
+container start**, for both the `django` and `worker` services (they share the same image/
+entrypoint) - the script's own comment states this is deliberate: "Schema migrations are the
+only step allowed to block gunicorn binding - always run, regardless of whether anything's
+pending" (a PR #18 boot-recovery fix, so a container that failed to migrate on a previous boot
+self-heals on the next one, rather than needing a manual intervention). This makes `docker compose up -d django worker` (or any command that recreates those containers) equivalent to
+"deploy new code AND apply any pending migrations," inseparably - there is no `docker compose up`
+that deploys code without also migrating.
+
+This bit hard on 2026-07-16: a migration that **renamed** a column (`Card.image_hash` ->
+`content_phash`, PR #27) was applied as an unintended side effect of recreating the persistent
+`django`/`worker` containers to deploy new code, while a separate one-off container (`docker compose run --rm worker ...`, the live full-catalog pilot job) was still actively running the
+OLD image against the same database. The rename executed under the live job mid-query; it
+crashed on the next read (`column cardpicker_card.image_hash does not exist`). The plan going in
+correctly identified the rename-vs-old-code risk and intended to sequence around it (recreate
+persistent containers first, migrate explicitly second) - the plan just didn't know the two
+steps aren't actually separable via `docker compose up`, because the entrypoint always migrates
+first internally.
+
+**The rule this establishes**: never recreate the persistent `django`/`worker` containers while
+any other container on an older image is actively running against the same database, unless
+every pending migration is strictly additive (a nullable column, a new table - anything an
+old-code ORM layer simply ignores because it doesn't know the field exists). For a
+non-additive migration (a rename, a type change, a NOT NULL backfill) sequence one of: stop the
+long-running job first and restart it after the deploy; or apply the migration manually
+(`docker compose run --rm django python manage.py migrate`) from a container built off the OLD
+code before recreating anything, so the rename never straddles two code versions. Check
+`entrypoint.sh` (or equivalent) before assuming any "build then deploy then migrate" three-step
+plan is actually three separable steps - it may already be two.

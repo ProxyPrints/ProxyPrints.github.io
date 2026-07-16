@@ -440,14 +440,61 @@ over a closed codebook.
    multi-channel weak evidence, human-gated resolution) and 2-3 domains
    beyond MTG. Written for an external reader — doubles as the federation
    pitch's technical annex.
+6. **Sybil/bad-actor unification** (added 2026-07-16, future-work
+   addendum — nothing built until there's an observed attack or real
+   resolution volume; detectors ship as admin reports first, never
+   automatic enforcement): the identification machinery doubles as the
+   integrity layer, because it already treats every vote as noisy
+   evidence rather than ground truth.
+   - Machine evidence as an independent witness: a planned, report-only
+     detector computing per-`anonymous_id` disagreement rate against
+     validated machine evidence, plus a human-consensus-vs-machine
+     contradiction list — surfaces a misbehaving or miscalibrated
+     source without touching the resolution path itself.
+   - Cluster consistency as a free contradiction detector: `d=0` cluster
+     members that resolve differently are, by the clustering
+     definition itself (same uploaded image), already a contradiction —
+     no new machinery needed, just a report over
+     `local_clustering`'s existing output.
+   - Cohort revocation generalizes beyond `run_id`: the same purge
+     pattern (`purge_machine_votes`, the post-purge invariant) applies
+     to a suspect _human_ cohort scoped by `created_at` window instead
+     of `run_id` — same mechanism, same invariant, different scoping
+     dimension.
+   - Trust tiers, if ever needed, enter as one more vote-tuple
+     dimension (`is_established`) alongside source/confidence — not a
+     parallel system.
+   - This section gains a subsection relating the voter-as-noisy-channel
+     model to Dawid-Skene reliability estimation: one framework
+     covering OCR noise, honest human error, and deliberate
+     manipulation together, and the basis for federation's own
+     per-peer reliability measurement against shared `content_hash`es
+     (see `docs/federation-v1.md`).
 
 ---
 
 ## Status
 
-- Part 1: in progress on `worktree-run-cohort-safety`, this doc is its
-  first commit. Design fully settled (this doc); implementation next.
-- Parts 2-6: designed/sketched above, not started. Parts 2 and 3 proceed
-  in parallel after HOLD #A. Part 4 after that, gated by HOLD #B. Part 5
-  after that, gated by HOLD #C. Part 6 last, gated on the full run's own
+- Part 1: **merged** (PR #28) - `run_id`, `PilotRunLedger`, staleness
+  guard, `purge_machine_votes`, migration 0061 applied to production.
+  HOLD #A cleared.
+- PR #27 (hash-at-ingest + two-threshold clustering) also merged, after
+  fixing a migration-number collision (both PRs independently picked
+  `0061`; PR #27's was renumbered to `0062` and its dependency
+  retargeted at PR #28's `0061`).
+- **Incident, 2026-07-16 15:39 UTC**: deploying PR #27's merge (a
+  non-additive migration - `Card.image_hash` renamed to
+  `content_phash`) recreated the persistent `django`/`worker`
+  containers, which auto-migrate on boot by design
+  (`entrypoint.sh`) - the live pilot job (separate one-off container,
+  old image) was querying the old column name at that moment and
+  crashed. See [[printing-tags.md]]'s "Cohort convention, superseded"
+  section and [[../lessons.md]]'s entrypoint entry for full detail.
+  Verified no data loss (`verify_no_machine_only_resolutions` run
+  read-only against the whole resolved-card pool: 0 violations) before
+  restarting in a new screen session on the current image. The
+  NULL-run_id / stamped cohort boundary is now the crash timestamp, not
+  "natural completion."
+- Parts 2 and 3 proceed now that #27 is merged. Part 4 after HOLD #B.
+  Part 5 after HOLD #C. Part 6 last, gated on the full run's own
   completion.
