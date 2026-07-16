@@ -991,6 +991,46 @@ class PilotRunLedger(models.Model):
         return f"[{self.status}] {self.command} run_id={self.run_id}"
 
 
+class CardScanLog(models.Model):
+    """
+    Persists ABSTENTION evidence exactly like `AbstractWeightedVote` subclasses persist assent
+    evidence (docs/features/catalog-completion-plan.md's addendum item 3, upgraded from
+    propose-to-hold to build 2026-07-16) - one row per (card, engine) an engine actually looked
+    at and did NOT cast a vote for. This restores the originally-intended design: the bleed
+    engine's negative-only votes and Part 5's evidence-gathered-and-negative guard both
+    presuppose a durable negative record existing somewhere, not just a positive one.
+
+    Deliberately slim and additive-only - no vote-semantics change, the human-backed resolution
+    gate is completely untouched by this model's existence. `skip_reason` uses the pipeline's
+    own existing reason strings verbatim (see local_identify_printing_tags.py's skip_counts
+    call sites) - not a separately-invented vocabulary - so a `grep` for a skip reason in the
+    log output and a `WHERE skip_reason = '...'` query agree on what string to look for.
+
+    A card can have at most one CURRENT scan-log row per (card, anonymous_id) that actually
+    matters for the resume-exclusion query (see local_identify_printing_tags._eligible_base_
+    queryset) - older rows for the same pair are historical (multiple runs can each abstain on
+    the same card for different or the same reason over time), not deduplicated away, since the
+    resume query only cares whether ANY non-re-scannable row exists, and the scan_log table
+    itself is a append-only audit trail like the vote tables are.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="scan_logs")
+    # same field, same width, same semantics as AbstractWeightedVote.anonymous_id - this is
+    # deliberately NOT a subclass of AbstractWeightedVote (a scan-log row is not a vote, has no
+    # source/confidence/user, and should never be reachable via vote_consensus's resolution
+    # machinery even by accident).
+    anonymous_id = models.CharField(max_length=40)
+    run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    skip_reason = models.CharField(max_length=64)
+    scanned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["card", "anonymous_id"])]
+
+    def __str__(self) -> str:
+        return f"card={self.card_id} anonymous_id={self.anonymous_id} skip_reason={self.skip_reason}"
+
+
 __all__ = [
     "Faces",
     "CardTypes",
@@ -1008,4 +1048,5 @@ __all__ = [
     "Project",
     "ProjectMember",
     "PilotRunLedger",
+    "CardScanLog",
 ]
