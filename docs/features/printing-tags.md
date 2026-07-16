@@ -1680,18 +1680,19 @@ dominant cost, and not built in this pass. This bottleneck split is the evidence
 manifest mode (item 2c) and a core-count resize (item 2b) the higher-leverage levers, not a
 larger fetch pool.
 
-**Current instance shape** (OCI instance-metadata endpoint, no auth needed - confirmed
-`169.254.169.254/opc/v2/instance/`): `VM.Standard.A1.Flex`, **2 OCPUs, 12 GB RAM**,
-`ca-montreal-1`. Matches `DEFAULT_WORKERS=2`'s own derivation (item 3d) exactly - this box has
-never had spare cores for a bigger pool without a resize.
+**Current instance shape** (checked via the cloud provider's own instance-metadata endpoint,
+no auth needed - exact shape/region kept out of this public doc, see CLAUDE.local.md/journal
+for the specific values): core count matches `DEFAULT_WORKERS=2`'s own derivation (item 3d)
+exactly - this box has never had spare cores for a bigger pool without a resize.
 
 ### Soak test at the current box, PRE-RESIZE baseline (2026-07-16, throughput track item 2d)
 
-**This measurement is at the CURRENT shape (2 OCPU/12GB, `--workers 2`) - it is the pre-resize
+**This measurement is at the box's PRE-RESIZE core count (`--workers 2`) - it is the pre-resize
 baseline, NOT the workers=3 post-resize number the resize decision is waiting on.** A separate
-post-resize soak test (same 250-card window, same selection/dedup) at `--workers 3` on 4
-OCPU/24GB is required before comparing - see the entry below once that lands. Do not conflate
-the two numbers.
+post-resize soak test (same 250-card window, same selection/dedup) at a higher `--workers` count
+on the resized shape is required before comparing - see the entry below once that lands. Do not
+conflate the two numbers. (Exact shape/OCPU/RAM values kept out of this public doc - see
+CLAUDE.local.md/journal.)
 
 Real 250-card `--dry-run --workers 2` run (not a burst - the prior `--workers=2` safety
 validation was only ~20 seconds/10 cards) against the live DB/API with live services running
