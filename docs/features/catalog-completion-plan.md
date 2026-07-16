@@ -56,14 +56,14 @@ votes (`views.py`'s `post_submit_*` views construct votes with no `run_id`
 kwarg — stays NULL there). One `AddField` migration wave adds the column to
 all three models simultaneously, mirroring how migration
 `0054_cardartistvote_peer_cardprintingtag_peer_and_more.py` rolled out
-`peer`. Next migration number: `0061` (last is
-`0060_votesource_deduction_ocr_split.py`) — let `makemigrations` auto-name
-it.
+`peer`.
 
-New, separate, non-abstract model `PilotRunLedger` (own migration `0062`,
-kept separate from `0061`'s field-addition wave, mirroring how
-`0059_cardreport.py` shipped its own model separately from `peer`'s
-multi-model rollout):
+New, separate, non-abstract model `PilotRunLedger` (added in the same
+migration since both changes landed in the same commit — Django's
+autodetector naturally bundles them and there's no data-migration/
+dependency reason to force a split, unlike `0059_cardreport.py`'s
+historical separation from `peer`'s rollout, which was circumstantial
+timing, not a functional requirement):
 
 ```python
 class PilotRunLedger(models.Model):
