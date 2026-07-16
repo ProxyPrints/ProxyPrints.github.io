@@ -1930,3 +1930,115 @@ implied by this OCR fix and was not built.
   with `cardpicker.deductive_backfill`'s deterministic tiers (D1/D2), not
   Stage 8's visual-disambiguation engines — explicitly not the "D2.5
   arriving for free" the autopsy's cross-check ruled out.
+
+## HOLD #2: full package report (2026-07-16)
+
+Synthesizing deliverable gating full-catalog run authorization. Everything below is either
+already-linked from earlier in this doc or newly summarized here; nothing in this section is a
+new claim not otherwise sourced above.
+
+**Infrastructure prerequisites - all landed:**
+
+- Rate limiter (PR #25): merged to master. Deploy confirmed live via direct requests against
+  `cdn.proxyprints.ca`'s full tier (4 real requests, all HTTP 200, 0.46-1.67s latency, no 429s)
+  - the underlying fetch path PDF export and bulk download both depend on is healthy
+    post-merge. (CI's "Publish image CDN" job shows red on every run, before and after this
+    merge - a separate, pre-existing, unrelated failure in a `thumbnail-refresh` Cloudflare
+    Workflow trigger, not the image-serving route itself; logged as its own follow-up, task
+    #111, not a gate.)
+- Tesseract dockerized (`docker/django/Dockerfile`'s shared `builder` stage) - verified
+  end-to-end via a real `--dry-run --limit 3` inside the rebuilt container. Host venv retired.
+- Container boot-recovery hardened: `restart: unless-stopped` on all 5 services plus a
+  `mpcautofill-docker-compose.service` systemd unit as belt-and-suspenders - verified with a
+  real `sudo reboot`, not simulated (all containers back up unattended within minutes, site
+  returned 200 on both domains).
+- Batch-flush checkpointing (item 2): a kill loses at most one `--batch-size` (default 25)
+  worth of unflushed work; a plain re-invocation resumes cleanly via the existing idempotent
+  selection query. Verified with a simulated-kill test.
+
+**Throughput, real and corrected:**
+
+A real correctness gap was found and fixed before trusting any number from this window: the
+first several soak-test runs showed 0/250 OCR votes (vs. an original 94/300 baseline) - traced
+to generic multi-set token names (e.g. "Beast", ~90 candidates each, essentially 0% coverage)
+being front-loaded by item 1's coverage-gap ordering into a cohort that's structurally
+unmatchable by OCR (a token's printed collector line reads its parent set's code; its DB
+candidates use token-specific codes that never match). Fixed by excluding `card_type=TOKEN`/
+`CARDBACK` from selection. Post-fix, OCR yield is healthy and consistent (56/198 votes, 28.3%,
+matching the original baseline) at every core count tested.
+
+Corrected same-window (250-card) before/after comparison, real `docker stats`-verified multi-core
+parallelism (not just inferred from noisy aggregate `top`):
+
+| core count | wall-clock | processing-only rate |
+| ---------- | ---------: | -------------------: |
+| lower      |       456s |          2.051s/card |
+| higher     |       230s |          0.914s/card |
+
+**Speedup: 2.24x.** Full-catalog re-projection (172,494 eligible pool, freshly counted with the
+token/cardback fix applied):
+
+|                   |   raw (naive) | cluster-dedup-adjusted |
+| ----------------- | ------------: | ---------------------: |
+| lower core count  |     4.09 days |              4.14 days |
+| higher core count | **1.82 days** |          **2.34 days** |
+
+The instance is now running at its higher core count as the standing configuration (not a
+temporary state for this measurement alone) - not reverting to the lower count, though not
+treated as permanently fixed either; revisit whenever convenient, no urgency either way.
+
+**Cluster + coverage census:** clustering (item 2a) absorbed ~21% of selected candidates into
+representatives in the corrected (token-excluded) sample - down from an earlier ~26-28% observed
+in the token-contaminated sample, consistent with tokens/generic images being more prone to
+visual duplication. The sequential clustering pre-pass (`compute_own_image_clusters`, confirmed
+via code inspection and a live `docker stats` capture showing a single-core ~100% CPU plateau
+during that phase specifically) is ~21.6h fixed regardless of core count - ~38% of total time at
+the higher core count. Logged as task #108, held as an available future optimization, not built
+now - the current projection is already a good number for a background job.
+
+**Track 4 (pilot-quality items):**
+
+- Bleed tag: negative-only voting shipped (item 4b) - votes only on a detected `trimmed`
+  reading, absence of any vote is the documented convention for "presumed normal bleed" (updated
+  in both this doc and `sensitive_tags.py`'s own comment, which previously documented the
+  opposite pre-pilot convention). The existing-tag check (`Tag.objects.filter(...).first()`,
+  degrades to no vote if the tag isn't seeded) was already in place before this change - no new
+  tag seeded, matching the "wait for owner ok" instruction by construction. The underlying
+  aspect-ratio classification itself was validated against a real 40-source diverse sample
+  (Bleed-edge tagging section above) - the negative-only voting change is a polarity/gating
+  change on top of that already-validated classification, not a new detection algorithm needing
+  its own separate validation pass.
+- DPI-tag audit (item 8, report only): 99.97% of the catalog already at 300+dpi - not a useful
+  prioritization signal on its own. `low-res` SENSITIVE tag has never been used in production
+  (0 resolved, 0 pending) - stays untouched, human-judgment/moderation-gated as designed. Both
+  tag stores checked (`Card.tags` resolved/baked array and `CardTagVote` raw votes).
+
+**Git/branch audit:** clean. This session's branch (`worktree-pilot-prescale`, PR #24) is
+in sync with origin, mergeable. PR #25 merged (rate limiter). PR #20 (unrelated frontend fix)
+merged at the owner's request, reviewed and confirmed by the owner before merging. PR #19
+(unrelated docs-only Playwright-flake note) remains open with a trivial, keep-both `docs/lessons.md`
+conflict against master - not a dependency of anything in this program, disposition left to the
+owner's convenience. Several other worktree branches exist but are either already merged or have
+zero unique diff against master (content already landed via a different commit path) - no lost
+work found anywhere in the audit.
+
+**Scaling recommendation, updated for the shorter true runtime:** the original Option A
+(screen'd process) vs. Option B (django-q nightly slices) decision assumed a ~7-day run,
+where crash-recovery and unattended multi-night scheduling mattered enough to weigh a full
+scheduler infrastructure investment. At the now-real ~1.8-2.3 day full-catalog runtime, **a
+single continuous run is the right shape - chunked nightly slicing is not needed.** Item 2's
+own batch-flush checkpointing already provides crash-resilience within that single run (a kill
+loses at most one batch, a plain re-invocation resumes cleanly), which is the main protection
+django-q's scheduler infrastructure would otherwise buy - not worth the added complexity for a
+run this short. Execution is via the now-dockerized image (`docker compose run`, matching every
+verification run this session), not a host venv - a `screen`/`tmux`-wrapped single invocation is
+sufficient; no new infrastructure to build.
+
+**Open, non-blocking items** (logged, not gates): item 2b (persist `content_hash` for
+federation, deferred), item 5 (questionFeed ordering mirror, separate follow-up PR), task #108
+(parallelize the clustering pre-pass), task #109's future-work note (token-aware matching via
+Scryfall's own token detection), task #111 (unrelated CI noise in the thumbnail-refresh
+trigger), PR #19's disposition (owner's convenience).
+
+**Full-catalog run: not yet fired.** This report is the synthesizing deliverable requested
+before that authorization - awaiting explicit owner go-ahead.
