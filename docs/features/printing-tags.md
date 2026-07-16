@@ -2043,6 +2043,59 @@ trigger), PR #19's disposition (owner's convenience).
 **Full-catalog run: not yet fired.** This report is the synthesizing deliverable requested
 before that authorization - awaiting explicit owner go-ahead.
 
+## Two fast-follows, built after HOLD #2 (2026-07-16)
+
+Both researched and sized before building (see the HOLD #2 section above and this doc's earlier
+feasibility notes) - neither required schema changes, both reuse already-existing, already-
+populated data.
+
+### `expansion_hint` candidate narrowing
+
+`_narrow_candidates_by_expansion_hint` (`local_identify_printing_tags.py`) narrows the
+candidate list every engine considers, using `Card.expansion_hint` - a field that already
+existed and is already populated at import time by `cardpicker.tags.Tags.extract` (a lone
+set-code bracket token in the filename that didn't resolve a direct match, e.g. `[UNF]` with no
+collector number). Not a new signal - just newly wired into the pilot; `deductive_backfill`'s
+own D2 tier already trusts this same field for direct resolution when it narrows to exactly
+one candidate.
+
+A confidence PRIOR, not an entailment: narrows the list passed to `run_ocr_for_card`/
+`run_phash_for_card`/`run_fallback_for_card` inside `_compute_card` only - never touches
+`select_candidates`'s ordering, `compute_covered_printing_pks`, or the
+`uncovered_printings_closed` metric, all of which need the true, unnarrowed candidate set to
+stay correct. Never narrows to empty: if the hint matches zero of the name's real candidates (a
+real, measured ~9% data-quality case - the hint may be stale or mismatched), the full list is
+used instead.
+
+**Real yield, measured live**: of 2,466 pilot-eligible cards with a real `expansion_hint`, 645
+currently get skipped by phash outright (`too-many-candidates`) - narrowing brings 407 of those
+back under `PHASH_MAX_CANDIDATES`, giving phash a real shot where it currently never runs.
+OCR's own exact-match logic doesn't benefit (a smaller candidate list doesn't change whether a
+parsed code+number is in it) - this is a phash-only unlock in practice.
+
+### Name-frequency elimination
+
+`run_name_frequency_elimination` (new function, new management command
+`local_name_frequency_elimination`) - for a NAME where exactly one printing remains uncovered
+AND exactly one pilot-eligible card is unresolved for that name, the match is deducible by
+elimination alone: no image fetch, no OCR/phash, no visual disambiguation at all.
+
+**The safety gate is the whole point, not a refinement.** A name can have exactly one uncovered
+printing while SEVERAL unresolved cards share that name - in that case elimination does NOT
+tell you WHICH card is the missing one (any of the others could just as easily be a redundant
+depiction of an already-covered printing uploaded by a different source). The naive version
+(gate on "one uncovered printing" alone) was the original researched number; adding "and
+exactly one unresolved card too" is what makes the deduction airtight. Measured live against
+the full catalog (not a sample), 2026-07-16: 2,076 names have exactly one uncovered printing;
+only 1,678 of those also have exactly one unresolved eligible card - the naive version would
+have voted incorrectly, on average, for the other ~400 names' multiple candidate cards.
+
+Confidence deliberately modest (0.6, vs. OCR/phash's 0.85/0.75/0.8) - a purely structural
+deduction is weaker evidence than an engine that actually looked at the image, even with the
+1:1 gate making it sound. Still just a vote (`NAME_FREQUENCY_ANONYMOUS_ID`), never a direct
+resolve - same consensus/gate-check discipline as every other engine in this module, same
+batch-flush checkpointing pattern as `run_pilot`.
+
 ## Incident: per-chunk thread pool leaked Postgres connections, crashed the live run (2026-07-16)
 
 The second full-catalog relaunch (post cluster-dedup removal) died ~3 minutes in with
@@ -2067,3 +2120,76 @@ the code comment at the fix site); regression test
 `TestConcurrency::test_thread_pool_is_created_once_for_the_whole_run_not_per_chunk` asserts
 pool construction count stays at 1 across multiple real chunks of work, not just that votes
 still get written.
+
+## Prior-art read: phash calibration in other MTG card-ID projects (2026-07-16)
+
+Timeboxed (~1hr) research task, ahead of designing the two-threshold clustering (item 3) and
+art-region hash variant (item 4) follow-ups. Examined
+[`tmikonen/magic_card_detector`](https://github.com/tmikonen/magic_card_detector) and
+[`freeall/mtg-card-detector`](https://github.com/freeall/mtg-card-detector), both MIT-licensed
+(copyright Timo Ikonen). **These are not two independent implementations** - freeall's repo is
+an explicit fork of tmikonen's; the core hashing/matching code (`magic_card_detector.py`) is
+essentially unmodified between them, freeall's changes being CLI ergonomics and a filename
+convention for carrying Scryfall IDs through. Credit: threshold/matching approach below is
+tmikonen's original work, referenced here as prior art per project attribution policy - no code
+adopted verbatim, MIT terms would apply if that changes.
+
+**Their "threshold" is not directly reusable as a Hamming-distance number.** They use
+`imagehash.phash(hash_size=32)` (a 32x32/1024-bit hash, far larger than imagehash's 8x8 default),
+but the match decision isn't a flat distance cutoff - it's a per-query statistical outlier test:
+the best (smallest) Hamming distance among all candidates is compared to the _mean and standard
+deviation of the distances to every other candidate_, and accepted only if it's more than 4
+standard deviations below that mean. Reusing "4" as if it were a raw phash bit-distance (the way
+this pilot's own d=0/d<=2 tiers are expressed) would be a category error - the two numbers aren't
+on the same scale. The transferable idea, if any, is the _method_: validating a distance
+threshold against the population's own distance distribution rather than picking a fixed cutoff
+in isolation - a possible cross-check for calibrating d<=2, not a value to copy.
+
+**No working art-region hash code exists in either project.** tmikonen's own blog post
+(tmikonen.github.io) names hashing a separate art-only reference image as future work, never
+implemented in either repo. Nothing to borrow beyond "someone else independently considered this
+useful," which is a weak signal, not a design.
+
+Other notes: both preprocess with CLAHE histogram equalization and hash at all 4 rotations
+(a "photo of a physical card" concern from unknown-orientation scans - doesn't apply to this
+pilot's Scryfall-sourced digital images, which are already upright). Neither repo touches the
+Scryfall API directly; both assume a pre-populated local image folder, matched by brute-force
+linear scan against every reference hash (no indexing/bucketing) - not a scale precedent worth
+following at 172k+ cards regardless of threshold source.
+
+## Phash accuracy at small CDN sizes (2026-07-16)
+
+Investigated whether the disabled cluster-dedup pre-pass (`compute_own_image_clusters`, see the
+disablement entry above) could be cheaply re-added by hashing small CDN-resized images instead
+of full resolution. There's only one fetch path in the whole module
+(`fetch_card_image`/`get_worker_image_url`) - OCR, the main phash engine, and clustering all go
+through it identically, so a smaller size needs no new plumbing, just a smaller `fetch_dpi`.
+**Gotcha**: the CDN's dpi-to-pixel-height conversion isn't rounded - a `dpi` not a multiple of
+10 produces a non-integer height param that Google's `lh4` endpoint flat-out rejects with a 400.
+Usable small sizes confirmed: `dpi=40` (148px), `dpi=50` (185px).
+
+Measured on 150 real cards (11,175 pairs), hashed at full res (250dpi/~925px) and both small
+sizes with the exact production hash function:
+
+- **Zero false merges** for the clustering pre-pass's actual exact-match (distance-0) criterion,
+  across ~11k confirmed-different pairs - minimum observed distance at small size was 16-18,
+  nowhere near 0.
+- **False splits**: only 2 true-duplicate pairs existed in the sample; one survived at small
+  size, one drifted to distance 2 at both small sizes and would no longer cluster. 1/2 is a real
+  signal but too thin (n=2) to call this proven safe - would need a larger duplicate-focused
+  sample before trusting it for a real re-add.
+- Separately (not the clustering path, but relevant): checked against the _other_ phash engine's
+  own match threshold (`DEFAULT_DISTANCE_THRESHOLD=20`) - 1.0% of confirmed-different pairs fell
+  ≤20 at 148px vs 0.56% at 185px, a real erosion of that engine's already-tight margin. Not
+  itself a reason to change that engine (it doesn't use small images), but a caution against
+  assuming small-size hashing is free of cost everywhere it might get reused.
+- **Fetch time**: real ~2-2.5x speedup (not the ~6x pixel-count reduction would suggest - cost is
+  dominated by network/proxy round-trip overhead, not payload size). At full-catalog scale this
+  still leaves roughly 9-11h of _fixed sequential_ pre-pass cost, down from ~21.6h - a real
+  improvement, but likely not enough alone to justify re-adding a separate pre-pass fetch.
+
+**Conclusion**: small-size hashing looks safe for the clustering pre-pass's specific use case,
+with the false-split evidence still too thin to call proven. Even if proven, the bigger lever is
+avoiding a _separate_ pre-pass fetch entirely - reusing the image OCR/phash already fetches per
+card, rather than shrinking a redundant one. That reframes task #108/#118 more than resolving
+task #117 on its own does.

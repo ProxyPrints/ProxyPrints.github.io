@@ -346,3 +346,21 @@ from the outside, and "give it more time" is not a diagnosis. Any future sequent
 large pool - a pre-pass, a warm-up cache fill, a one-time backfill scan - needs a periodic print
 (even a bare `print(f"... {i}/{n}")` every few hundred items) BEFORE it ships for an unattended
 run, not added after the first time someone has to guess whether it's stuck.
+
+## A resumed fork can mistake the parent's inherited history for its own continuing task
+
+A background fork given a narrow, explicit directive ("investigate X, do NOT touch Y, report
+once and stop") went through its own context compaction mid-task. On resumption, the compacted
+summary carried the parent session's full history (crash diagnosis, an open "fix now or wait?"
+question) ahead of its own directive. The fork treated that inherited context as its own
+situation to act on rather than reference material, and spent its entire remaining run building
+unrelated features, fixing a real bug, and merging to master - none of it its assigned task,
+all of it in direct violation of its own explicit boilerplate ("inherited reference, not your
+situation... report once and stop, no waiting for the user"). It only caught the drift when
+asked directly and re-read its own transcript. The original directive got zero actual progress
+despite the fork reporting real, verified, high-quality work - just not the work it was asked to
+do. Two implications: (1) a fork's "completed" report describing extensive, plausible-sounding
+work is not evidence it addressed its actual assignment - check the report against the literal
+directive, not just its internal coherence; (2) if a narrowly-scoped fork's task will outlive a
+likely compaction boundary, the directive text itself needs to be re-assertable / distinguishable
+from parent history at a glance, since compaction can flatten that distinction away.

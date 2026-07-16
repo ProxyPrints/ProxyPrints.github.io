@@ -17,6 +17,8 @@ from PIL import Image, ImageDraw
 from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID
 from cardpicker.local_identify_printing_tags import (
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+    NAME_FREQUENCY_ANONYMOUS_ID,
+    NAME_FREQUENCY_CONFIDENCE,
     OCR_ANONYMOUS_ID,
     PHASH_ANONYMOUS_ID,
     RESOLUTION_FLOOR_DPI,
@@ -26,6 +28,7 @@ from cardpicker.local_identify_printing_tags import (
     compute_own_image_clusters,
     count_below_resolution_floor,
     get_worker_image_url,
+    run_name_frequency_elimination,
     run_pilot,
     select_candidates,
     verify_zero_resolutions,
@@ -150,6 +153,85 @@ class TestSelection:
 
         selected = select_candidates("ocr")
         assert [s.card.pk for s in selected] == [multi.pk, single.pk]
+
+
+class TestExpansionHintNarrowing:
+    """Fast-follow (2026-07-16): _narrow_candidates_by_expansion_hint narrows the candidate
+    list an engine considers using Card.expansion_hint (already populated at import time by
+    cardpicker.tags.Tags.extract - not a new field, just newly wired into the pilot)."""
+
+    def test_no_hint_returns_selected_unchanged(self, db):
+        import cardpicker.local_identify_printing_tags as module
+
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        card = CardFactory(name="Forest", expansion_hint="")
+        index = CandidateNameIndex()
+        selected = module.SelectedCard(card=card, candidates=index.candidates_for("Forest"))
+
+        narrowed = module._narrow_candidates_by_expansion_hint(selected)
+
+        assert narrowed is selected
+        assert len(narrowed.candidates) == 2
+
+    def test_hint_narrows_to_only_matching_candidates(self, db):
+        import cardpicker.local_identify_printing_tags as module
+
+        expansion_bbb = CanonicalExpansionFactory(code="bbb")
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=expansion_bbb)
+        CanonicalCardFactory(name="Forest", expansion=expansion_bbb)
+        card = CardFactory(name="Forest", expansion_hint="bbb")
+        index = CandidateNameIndex()
+        selected = module.SelectedCard(card=card, candidates=index.candidates_for("Forest"))
+        assert len(selected.candidates) == 3
+
+        narrowed = module._narrow_candidates_by_expansion_hint(selected)
+
+        assert len(narrowed.candidates) == 2
+        assert all(c.expansion_code == "bbb" for c in narrowed.candidates)
+        assert narrowed.card is card
+
+    def test_hint_matching_zero_candidates_falls_back_to_full_list(self, db):
+        # a real, measured data-quality case: the hint doesn't match anything in this name's
+        # actual candidate pool - narrowing to empty would make matching IMPOSSIBLE, strictly
+        # worse than not narrowing at all.
+        import cardpicker.local_identify_printing_tags as module
+
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card = CardFactory(name="Forest", expansion_hint="zzz")
+        index = CandidateNameIndex()
+        selected = module.SelectedCard(card=card, candidates=index.candidates_for("Forest"))
+
+        narrowed = module._narrow_candidates_by_expansion_hint(selected)
+
+        assert len(narrowed.candidates) == 1
+
+    def test_phash_unlocked_when_narrowing_crosses_under_the_candidate_cap(self, db, monkeypatch):
+        # the real, measured benefit: a name with MORE than PHASH_MAX_CANDIDATES total
+        # printings gets skipped entirely ("too-many-candidates") - but if this card's own
+        # expansion_hint narrows it down to a small handful, phash gets a real shot instead.
+        import cardpicker.local_identify_printing_tags as module
+
+        for i in range(module.PHASH_MAX_CANDIDATES + 3):
+            CanonicalCardFactory(name="Beast", expansion=CanonicalExpansionFactory(code=f"e{i:02}"))
+        CanonicalCardFactory(name="Beast", expansion=CanonicalExpansionFactory(code="hnt"))
+        CardFactory(name="Beast", expansion_hint="hnt")
+
+        phash_call_candidate_counts: list[int] = []
+
+        def recording_run_phash_for_card(selected, image, threshold, margin, max_candidates, bleed_class=None):
+            phash_call_candidate_counts.append(len(selected.candidates))
+            return None, "no-clear-winner"
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050)))
+        monkeypatch.setattr(module, "run_phash_for_card", recording_run_phash_for_card)
+
+        run_pilot(engine="phash", limit=10, dry_run=True, nice=False)
+
+        # narrowed to just the "hnt" candidate (1), not the full 13+ - phash actually ran
+        # (recorded a call) instead of being skipped at selection-adjacent "too-many-candidates".
+        assert phash_call_candidate_counts == [1]
 
 
 class TestCoveragePriority:
@@ -737,6 +819,126 @@ class TestUncoveredPrintingsClosed:
 
         _results, attributes = run_pilot(engine="ocr", limit=10, dry_run=True, nice=False)
         assert attributes.uncovered_printings_closed == 0
+
+
+class TestNameFrequencyElimination:
+    """Fast-follow (2026-07-16): run_name_frequency_elimination's SAFE 1:1 gate - exactly one
+    uncovered printing AND exactly one unresolved-eligible card for that name - not just "one
+    uncovered printing" (which is unsound whenever more than one unresolved card shares a name;
+    see the function's own docstring for the full rationale, backed by a live measurement)."""
+
+    def test_votes_for_the_single_uncovered_printing_when_exactly_one_card_and_one_gap(self, db):
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        uncovered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)  # confirms "aaa" as covered
+        card = CardFactory(name="Forest")  # the single unresolved card for this name
+
+        result = run_name_frequency_elimination(dry_run=False)
+
+        assert result.votes_written == 1
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID)
+        assert vote.printing_id == uncovered_printing.pk
+        assert vote.confidence == NAME_FREQUENCY_CONFIDENCE
+        assert vote.is_no_match is False
+
+    def test_does_not_vote_when_multiple_unresolved_cards_share_the_name(self, db):
+        # the unsafe case this gate exists specifically to exclude: TWO unresolved cards for
+        # "Forest", only one uncovered printing - elimination can't tell you which card (if
+        # either) is the missing one, so it must abstain for BOTH, not guess for either.
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)
+        CardFactory(name="Forest")
+        CardFactory(name="Forest")
+
+        result = run_name_frequency_elimination(dry_run=False)
+
+        assert result.votes_written == 0
+        assert not CardPrintingTag.objects.filter(anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID).exists()
+
+    def test_does_not_vote_when_more_than_one_printing_is_uncovered(self, db):
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(name="Forest")  # single unresolved card, but nothing covered at all
+
+        result = run_name_frequency_elimination(dry_run=False)
+
+        assert result.votes_written == 0
+
+    def test_does_not_vote_when_fully_covered(self, db):
+        printing = CanonicalCardFactory(name="Forest")
+        CardFactory(canonical_card=printing)
+        CardFactory(name="Forest")
+
+        result = run_name_frequency_elimination(dry_run=False)
+
+        assert result.votes_written == 0
+
+    def test_dry_run_writes_nothing(self, db):
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)
+        CardFactory(name="Forest")
+
+        result = run_name_frequency_elimination(dry_run=True)
+
+        assert result.votes_written == 1  # counted, even though nothing is persisted
+        assert not CardPrintingTag.objects.exists()
+
+    def test_idempotent_on_a_second_invocation(self, db):
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)
+        CardFactory(name="Forest")
+
+        first = run_name_frequency_elimination(dry_run=False)
+        second = run_name_frequency_elimination(dry_run=False)
+
+        assert first.votes_written == 1
+        assert second.votes_written == 0
+        assert CardPrintingTag.objects.filter(anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID).count() == 1
+
+    def test_excludes_tokens_and_cardbacks(self, db):
+        covered_printing = CanonicalCardFactory(name="Beast", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Beast", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)
+        CardFactory(name="Beast", card_type=CardTypes.TOKEN)
+
+        result = run_name_frequency_elimination(dry_run=False)
+
+        assert result.votes_written == 0
+
+
+class TestNameFrequencyEliminationCommand:
+    def test_dry_run_writes_nothing(self, db, capsys):
+        from django.core.management import call_command
+
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)
+        CardFactory(name="Forest")
+
+        call_command("local_name_frequency_elimination", "--dry-run")
+
+        printed = capsys.readouterr().out
+        assert "[DRY RUN]" in printed
+        assert "votes written: 1" in printed
+        assert not CardPrintingTag.objects.exists()
+
+    def test_real_run_writes_and_passes_gate_check(self, db, capsys):
+        from django.core.management import call_command
+
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)
+        card = CardFactory(name="Forest")
+
+        call_command("local_name_frequency_elimination")
+
+        printed = capsys.readouterr().out
+        assert "[WRITE]" in printed
+        assert "Gate check passed: 0/1 affected cards resolved." in printed
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID).exists()
 
 
 class TestRunPilotSourceExclusion:
