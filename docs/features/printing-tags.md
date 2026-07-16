@@ -1685,7 +1685,13 @@ larger fetch pool.
 `ca-montreal-1`. Matches `DEFAULT_WORKERS=2`'s own derivation (item 3d) exactly - this box has
 never had spare cores for a bigger pool without a resize.
 
-### Soak test at the current box (2026-07-16, throughput track item 2d)
+### Soak test at the current box, PRE-RESIZE baseline (2026-07-16, throughput track item 2d)
+
+**This measurement is at the CURRENT shape (2 OCPU/12GB, `--workers 2`) - it is the pre-resize
+baseline, NOT the workers=3 post-resize number the resize decision is waiting on.** A separate
+post-resize soak test (same 250-card window, same selection/dedup) at `--workers 3` on 4
+OCPU/24GB is required before comparing - see the entry below once that lands. Do not conflate
+the two numbers.
 
 Real 250-card `--dry-run --workers 2` run (not a burst - the prior `--workers=2` safety
 validation was only ~20 seconds/10 cards) against the live DB/API with live services running
