@@ -139,6 +139,31 @@ ever block the API.
   activation sequence — api.proxyprints.ca was fully down for a few
   minutes as a result before this was diagnosed and fixed.
 
+### Boot-time recovery (2026-07-16, ahead of an OCI instance resize)
+
+Every service in `docker-compose.prod.yml` now has `restart: unless-stopped`
+(previously none did — a container crash or Docker daemon restart left it
+down until someone manually ran `docker compose up`). Belt-and-suspenders
+alongside that: a systemd unit,
+**`/etc/systemd/system/mpcautofill-docker-compose.service`** (OS-level,
+**not** git-tracked — this note is its only record), runs
+`docker compose -f docker/docker-compose.prod.yml up -d` on boot
+(`WantedBy=multi-user.target`, `enabled`). This exists specifically because
+`restart: unless-stopped` alone doesn't cover every recovery path (e.g. a
+container that was fully removed, not just stopped) — the systemd unit
+re-derives the whole stack from the compose file regardless of individual
+container restart-policy state. `docker.service` itself was already
+`enabled` at the systemd level (starts the daemon on boot); this unit is
+what actually brings the _application_ containers back up, since nothing
+did that before.
+
+**Verified with a real `sudo reboot`** (not simulated) before trusting it
+for the actual resize's stop/start cycle: all 5 containers came back up
+unattended within minutes (systemd unit exited 0, explicit per-container
+start log), and both `api.proxyprints.ca` and `proxyprints.ca` returned
+HTTP 200 shortly after. If this box is ever rebuilt, recreate this unit
+manually — it has no git-tracked source to restore from.
+
 ## Secrets and credentials
 
 Never commit: `docker/.env` (holds `DJANGO_SECRET_KEY`, referenced as
