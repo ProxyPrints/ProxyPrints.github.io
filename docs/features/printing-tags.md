@@ -107,6 +107,21 @@ printings, artists, tags, and moderation from one screen.
   ~28k are exhausted — an interleaved/weighted union is the likely v2
   fix, out of scope for v1. Every tier excludes `(card, tag)` pairs the
   requesting `anonymous_id` already voted on.
+- **Remaining-work count**: `get_remaining_estimate()` returns
+  `QuestionFeedCounts` (`schemas/schemas/QuestionFeedCounts.json`), not a
+  single number. `total` is a `.distinct().count()` union across
+  printing/artist/tag categories, bounded by catalogue size - the
+  non-overlapping "cards needing review in any category" figure.
+  `confirmable`/`contested`/`fresh` mirror the feed's own three tiers and
+  are independent metrics, **not** a partition of `total` - a card can
+  count toward more than one bucket (e.g. AI-suggested-but-unconfirmed
+  printing plus a still-fresh artist question). A fresh, untouched card
+  defaults to `UNRESOLVED` on both `printing_tag_status` and
+  `artist_vote_status` simultaneously, which is why a flat sum of the
+  three category counts (the pre-fix implementation) over-counted every
+  such card 2-3x. `QuestionFeed.tsx`'s headline leads with `confirmable`
+  ("N quick confirmations ready") when non-zero, falling back to `total`
+  once nothing quick remains.
 
 ## Frontend architecture
 
@@ -189,41 +204,6 @@ printings, artists, tags, and moderation from one screen.
 - [[../lessons.md]] — sticky/overflow CSS, testid collisions, cyclic-
   animation sampling, and data-migration-vs-command-seeding gotchas
   surfaced while building this
-
-### `remainingEstimate` overlap fix (2026-07-16)
-
-`get_remaining_estimate()` (`cardpicker/question_feed.py`) was reporting
-400k+ against a ~218k-card catalogue. Diagnosis: the old implementation
-summed three independent per-category counts —
-`printing.count() + artist.count() + len(tag_pairs)` — but a fresh,
-untouched card defaults to `UNRESOLVED` on *both* `printing_tag_status`
-and `artist_vote_status` simultaneously, so it was counted 2-3+ times
-instead of once. Cluster-propagated votes (Stage 8's run-scoped
-image-hash dedup, `local_identify_printing_tags.py`) were ruled out as a
-contributing cause — clustering isn't a DB concept `question_feed.py`
-knows about at all, and each cluster member is a genuinely distinct
-`Card` row needing its own confirmation, so one feed entry per member is
-correct behavior, not a grouping bug.
-
-Fixed by replacing the flat sum with `QuestionFeedCounts` (new
-quicktype-generated schema, `schemas/schemas/QuestionFeedCounts.json`):
-`total` is now a single `.distinct().count()` union query across the
-three categories (printing/artist/tag), bounded by catalogue size, same
-shape as the ground-truth cross-check query used to diagnose the bug.
-Also returns `confirmable`/`contested`/`fresh` — aggregate counts
-mirroring the feed's own three tiers, independent per-tier metrics (not
-a partition of `total` — a card can count toward more than one bucket,
-same as it can appear in more than one tier across separate voter
-sessions in the real feed). Query cost: 2 queries to compute
-contested-printing/contested-or-unresolved-tag card ids once
-(`get_contested_card_ids()`, `_tag_review_card_ids_by_status()`), reused
-across all four buckets, plus one indexed `.count()` per bucket — 6
-queries total, no per-card sub-queries in a loop.
-
-`QuestionFeed.tsx`'s headline now leads with `confirmable` ("N quick
-confirmations ready") when non-zero — the easiest, fastest-to-clear
-category — falling back to `total` once nothing quick remains, with a
-`total`/`contested`/`fresh` breakdown as a subline.
 
 ## Stage 8: local (zero-API-cost) printing-identification backfill pilot
 
