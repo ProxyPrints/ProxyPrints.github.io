@@ -313,3 +313,22 @@ strictly worse trade, not a safer one - it hands the container the
 equivalent of host root, a larger ambient capability than the
 direct-DB-connection risk it would replace. Declined as an option; don't
 build it for this or future workarounds.
+
+## `Card.identifier` is the Google Drive file ID, not the original filename - raw filenames are never persisted
+
+`update_database.py`'s import path discards the source filename after parsing it once at
+scan time (`transform_image_into_object`/`unpack_name` extract name/tags/language and move on)
+
+- only the Drive file ID survives on `Card.identifier`. Any future "census the raw filenames for
+  X" idea (checked live, 2026-07-16, trying to count unparsed `[SET]collector` suffixes the
+  indexer's regex might have missed) hits this same wall: there is no persisted raw-filename field
+  to query against, at any point after import. The closest available proxy - an unmatched real
+  set-code sitting in `Card.tags` (i.e. present in `()`/`[]` bracket-delimited filename segments
+  but never combined with a collector number into a match) - only catches bracket-delimited
+  misses; a filename using a different convention (no brackets, glued-together like `MOM158`)
+  never produces an extractable tag artifact at all, so it's invisible to that proxy too. A "zero"
+  result from this kind of census means "no bracket-delimited misses found," not "no unparsed
+  filenames exist" - don't report it as the latter. If this measurement is ever genuinely needed,
+  it requires either a one-time raw-filename capture added to the import path going forward
+  (useless retroactively for already-imported cards) or re-deriving candidate filenames from the
+  Drive API directly per source (expensive, not a DB query).
