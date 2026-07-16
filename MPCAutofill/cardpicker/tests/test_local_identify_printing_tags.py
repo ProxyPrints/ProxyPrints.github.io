@@ -1072,6 +1072,78 @@ class TestCheckpointing:
         assert {v.card_id for v in final_votes} == {c.pk for c in cards}
 
 
+class TestRunIdStamping:
+    """docs/features/catalog-completion-plan.md's Part 1: every MACHINE-cast vote from one
+    invocation shares a single run_id, and different invocations get different run_ids -
+    anonymous_id's own exact-match reuse across invocations is completely untouched (see
+    generate_run_id's docstring for why this is a separate field, not a suffix)."""
+
+    def test_every_vote_from_one_run_shares_one_run_id(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        for _ in range(3):
+            CardFactory(name="Forest")
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+
+        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert results["ocr"].votes_written == 3
+        assert results["ocr"].run_id  # non-empty
+        votes = list(CardPrintingTag.objects.filter(anonymous_id=OCR_ANONYMOUS_ID))
+        assert len(votes) == 3
+        run_ids = {v.run_id for v in votes}
+        assert run_ids == {results["ocr"].run_id}
+
+    def test_two_invocations_get_distinct_run_ids(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card_a = CardFactory(name="Forest")
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+
+        results_1, _ = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+        assert results_1["ocr"].votes_written == 1
+
+        # a second card so the second invocation has something new to vote on (the first card
+        # is already excluded by this run's own anonymous_id-based idempotence).
+        card_b = CardFactory(name="Forest")
+        results_2, _ = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+        assert results_2["ocr"].votes_written == 1
+
+        assert results_1["ocr"].run_id != results_2["ocr"].run_id
+        vote_a = CardPrintingTag.objects.get(card=card_a, anonymous_id=OCR_ANONYMOUS_ID)
+        vote_b = CardPrintingTag.objects.get(card=card_b, anonymous_id=OCR_ANONYMOUS_ID)
+        assert vote_a.run_id == results_1["ocr"].run_id
+        assert vote_b.run_id == results_2["ocr"].run_id
+
+    def test_an_explicit_run_id_is_respected_not_regenerated(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CardFactory(name="Forest")
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+
+        results, _ = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, run_id="explicit-test-run-id")
+
+        assert results["ocr"].run_id == "explicit-test-run-id"
+        vote = CardPrintingTag.objects.get(anonymous_id=OCR_ANONYMOUS_ID)
+        assert vote.run_id == "explicit-test-run-id"
+
+    def test_name_frequency_elimination_gets_its_own_run_id(self, db):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CardFactory(name="Forest")
+
+        result = run_name_frequency_elimination()
+
+        assert result.votes_written == 1
+        assert result.run_id
+        vote = CardPrintingTag.objects.get(anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+        assert vote.run_id == result.run_id
+
+    def test_human_submitted_votes_are_never_stamped(self, db):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card = CardFactory(name="Forest")
+        human_vote = CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+
+        assert human_vote.run_id is None
+
+
 class TestFetchDpi:
     """Item 6/3c's empirically-validated resolution floor - see local_identify_printing_tags'
     DEFAULT_FETCH_DPI comment for the measured yield numbers behind the default."""

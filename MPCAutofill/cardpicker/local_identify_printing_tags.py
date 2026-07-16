@@ -20,6 +20,7 @@ import functools
 import logging
 import os
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -31,6 +32,7 @@ from PIL import Image
 
 from django.conf import settings
 from django.db.models import QuerySet
+from django.utils import timezone
 
 from cardpicker import local_fallback, local_ocr, local_phash
 from cardpicker.local_fallback import (
@@ -589,6 +591,11 @@ def _compute_card(
 class PilotResult:
     engine: str
     dry_run: bool = False
+    # the run_id this invocation stamped every vote it wrote with (docs/features/
+    # catalog-completion-plan.md's Part 1) - printed by the command so an operator can target a
+    # future purge_machine_votes --run-id. Empty string means run_pilot wasn't actually invoked
+    # for this engine (a PilotResult can exist as a placeholder before any work happens).
+    run_id: str = ""
     votes_written: int = 0
     skip_counts: dict[str, int] = field(default_factory=lambda: collections.defaultdict(int))
     disagreements: list[dict[str, object]] = field(default_factory=list)
@@ -713,6 +720,7 @@ def run_pilot(
     fetch_budget: Optional[int] = None,
     fetch_dpi: Optional[int] = DEFAULT_FETCH_DPI,
     workers: int = DEFAULT_WORKERS,
+    run_id: Optional[str] = None,
 ) -> tuple[dict[str, PilotResult], AttributeReport]:
     if nice:
         try:
@@ -720,10 +728,15 @@ def run_pilot(
         except (AttributeError, PermissionError, OSError):
             logger.warning("os.nice unavailable in this environment - --nice throttling is CPU-yield-only")
 
+    # Part 1 (docs/features/catalog-completion-plan.md): accepting an explicit value (rather
+    # than always generating one internally) keeps this deterministic for tests and lets the
+    # management command log/report it before any work starts.
+    run_id = run_id or generate_run_id()
+
     index = CandidateNameIndex()
     engines_to_run: list[Engine] = ["ocr", "phash"] if engine == "both" else [engine]
-    results: dict[str, PilotResult] = {e: PilotResult(engine=e, dry_run=dry_run) for e in engines_to_run}
-    results["fallback"] = PilotResult(engine="fallback", dry_run=dry_run)
+    results: dict[str, PilotResult] = {e: PilotResult(engine=e, dry_run=dry_run, run_id=run_id) for e in engines_to_run}
+    results["fallback"] = PilotResult(engine="fallback", dry_run=dry_run, run_id=run_id)
     attributes = AttributeReport()
     exclude_source_pks_by_engine = exclude_source_pks_by_engine or {}
     # addendum item 1 (2026-07-15): computed ONCE per invocation (not once per engine) and
@@ -879,6 +892,7 @@ def run_pilot(
                     anonymous_id=anonymous_id,
                     source=VoteSource.OCR,
                     confidence=confidence,
+                    run_id=run_id,
                 )
             )
             if member_id not in written_card_ids:
@@ -1036,6 +1050,7 @@ def run_pilot(
                                     anonymous_id=OCR_ANONYMOUS_ID,
                                     source=VoteSource.OCR,
                                     confidence=outcome.ocr_vote.confidence,
+                                    run_id=run_id,
                                 )
                             )
                             result_ocr.votes_written += 1
@@ -1060,6 +1075,7 @@ def run_pilot(
                                     anonymous_id=PHASH_ANONYMOUS_ID,
                                     source=VoteSource.OCR,
                                     confidence=outcome.phash_vote.confidence,
+                                    run_id=run_id,
                                 )
                             )
                             result_phash.votes_written += 1
@@ -1088,6 +1104,7 @@ def run_pilot(
                                     anonymous_id=FALLBACK_ANONYMOUS_ID,
                                     source=VoteSource.OCR,
                                     confidence=outcome.fallback_vote.confidence,
+                                    run_id=run_id,
                                 )
                             )
                             result_fallback.votes_written += 1
@@ -1151,7 +1168,7 @@ def run_pilot(
                 if border_class is not None:
                     attributes.border_votes_by_class[border_class] += 1
                     border_vote = local_fallback.cast_border_attribute_vote(
-                        card, border_class, confidence=border_confidence
+                        card, border_class, confidence=border_confidence, run_id=run_id
                     )
                     if border_vote is not None and not dry_run:
                         tag_votes_batch.append(border_vote)
@@ -1169,7 +1186,7 @@ def run_pilot(
                     if frame_class is not None:
                         attributes.frame_votes_by_class[frame_class] += 1
                         frame_vote = local_fallback.cast_frame_style_vote(
-                            card, frame_class, confidence=frame_confidence
+                            card, frame_class, confidence=frame_confidence, run_id=run_id
                         )
                         if frame_vote is not None and not dry_run:
                             tag_votes_batch.append(frame_vote)
@@ -1185,7 +1202,7 @@ def run_pilot(
                 # longer available here now that fetch+compute moved into _compute_card).
                 if outcome.bleed_class is not None:
                     attributes.bleed_votes_by_class[outcome.bleed_class] += 1
-                    bleed_vote = local_fallback.cast_bleed_edge_vote(card, outcome.bleed_class)
+                    bleed_vote = local_fallback.cast_bleed_edge_vote(card, outcome.bleed_class, run_id=run_id)
                     if bleed_vote is not None and not dry_run:
                         tag_votes_batch.append(bleed_vote)
                 elif outcome.image_fetched:
@@ -1224,11 +1241,14 @@ NAME_FREQUENCY_CONFIDENCE = 0.6
 @dataclass
 class NameFrequencyResult:
     dry_run: bool = False
+    run_id: str = ""
     votes_written: int = 0
     gate_violations: list[int] = field(default_factory=list)
 
 
-def run_name_frequency_elimination(dry_run: bool = False, batch_size: int = DEFAULT_BATCH_SIZE) -> NameFrequencyResult:
+def run_name_frequency_elimination(
+    dry_run: bool = False, batch_size: int = DEFAULT_BATCH_SIZE, run_id: Optional[str] = None
+) -> NameFrequencyResult:
     """Fast-follow (2026-07-16): for a NAME where exactly one of its printings remains
     uncovered (see compute_covered_printing_pks) AND exactly one pilot-eligible card is
     unresolved for that name, the match is deducible by elimination alone - no image fetch, no
@@ -1253,6 +1273,10 @@ def run_name_frequency_elimination(dry_run: bool = False, batch_size: int = DEFA
     this function's own anonymous_id for idempotence, and the SAME batch-flush + gate-check
     pattern as run_pilot (a kill loses at most one batch; a plain re-invocation resumes cleanly).
     """
+    # a separate invocation entrypoint from run_pilot (own management command, own gate-check
+    # loop) - generates its OWN run_id, never one shared with a run_pilot() call.
+    run_id = run_id or generate_run_id()
+
     covered_printing_pks = compute_covered_printing_pks()
     index = CandidateNameIndex()
 
@@ -1265,7 +1289,7 @@ def run_name_frequency_elimination(dry_run: bool = False, batch_size: int = DEFA
     ):
         cards_by_name[name].append(card_id)
 
-    result = NameFrequencyResult(dry_run=dry_run)
+    result = NameFrequencyResult(dry_run=dry_run, run_id=run_id)
     votes_batch: list[CardPrintingTag] = []
     batch_written_card_ids: list[int] = []
 
@@ -1298,6 +1322,7 @@ def run_name_frequency_elimination(dry_run: bool = False, batch_size: int = DEFA
                 anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID,
                 source=VoteSource.OCR,
                 confidence=NAME_FREQUENCY_CONFIDENCE,
+                run_id=run_id,
             )
         )
         batch_written_card_ids.append(card_ids[0])
@@ -1308,6 +1333,18 @@ def run_name_frequency_elimination(dry_run: bool = False, batch_size: int = DEFA
 
     flush()
     return result
+
+
+def generate_run_id() -> str:
+    """Fresh per-invocation run_id (docs/features/catalog-completion-plan.md's Part 1, see
+    AbstractWeightedVote.run_id's own docstring for the full rationale) - a UTC-timestamp prefix
+    for human scannability in logs/--dry-run output, plus a short random suffix so two
+    invocations started in the same second never collide. Deliberately NOT the image's git SHA
+    (that's logged separately - see cardpicker.utils.get_baked_git_sha - keeping run_id
+    generation independent of whether the git-SHA build-info file happens to be present avoids
+    coupling two different failure modes together). NOT reused across invocations, unlike
+    anonymous_id - see purge_machine_votes for how this is consumed."""
+    return f"{timezone.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
 
 def verify_zero_resolutions(card_ids: list[int], batch_size: int = 2000) -> list[int]:
@@ -1357,4 +1394,5 @@ __all__ = [
     "NameFrequencyResult",
     "run_name_frequency_elimination",
     "verify_zero_resolutions",
+    "generate_run_id",
 ]
