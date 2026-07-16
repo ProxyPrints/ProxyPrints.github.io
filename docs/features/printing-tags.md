@@ -2156,3 +2156,40 @@ pilot's Scryfall-sourced digital images, which are already upright). Neither rep
 Scryfall API directly; both assume a pre-populated local image folder, matched by brute-force
 linear scan against every reference hash (no indexing/bucketing) - not a scale precedent worth
 following at 172k+ cards regardless of threshold source.
+
+## Phash accuracy at small CDN sizes (2026-07-16)
+
+Investigated whether the disabled cluster-dedup pre-pass (`compute_own_image_clusters`, see the
+disablement entry above) could be cheaply re-added by hashing small CDN-resized images instead
+of full resolution. There's only one fetch path in the whole module
+(`fetch_card_image`/`get_worker_image_url`) - OCR, the main phash engine, and clustering all go
+through it identically, so a smaller size needs no new plumbing, just a smaller `fetch_dpi`.
+**Gotcha**: the CDN's dpi-to-pixel-height conversion isn't rounded - a `dpi` not a multiple of
+10 produces a non-integer height param that Google's `lh4` endpoint flat-out rejects with a 400.
+Usable small sizes confirmed: `dpi=40` (148px), `dpi=50` (185px).
+
+Measured on 150 real cards (11,175 pairs), hashed at full res (250dpi/~925px) and both small
+sizes with the exact production hash function:
+
+- **Zero false merges** for the clustering pre-pass's actual exact-match (distance-0) criterion,
+  across ~11k confirmed-different pairs - minimum observed distance at small size was 16-18,
+  nowhere near 0.
+- **False splits**: only 2 true-duplicate pairs existed in the sample; one survived at small
+  size, one drifted to distance 2 at both small sizes and would no longer cluster. 1/2 is a real
+  signal but too thin (n=2) to call this proven safe - would need a larger duplicate-focused
+  sample before trusting it for a real re-add.
+- Separately (not the clustering path, but relevant): checked against the _other_ phash engine's
+  own match threshold (`DEFAULT_DISTANCE_THRESHOLD=20`) - 1.0% of confirmed-different pairs fell
+  ≤20 at 148px vs 0.56% at 185px, a real erosion of that engine's already-tight margin. Not
+  itself a reason to change that engine (it doesn't use small images), but a caution against
+  assuming small-size hashing is free of cost everywhere it might get reused.
+- **Fetch time**: real ~2-2.5x speedup (not the ~6x pixel-count reduction would suggest - cost is
+  dominated by network/proxy round-trip overhead, not payload size). At full-catalog scale this
+  still leaves roughly 9-11h of _fixed sequential_ pre-pass cost, down from ~21.6h - a real
+  improvement, but likely not enough alone to justify re-adding a separate pre-pass fetch.
+
+**Conclusion**: small-size hashing looks safe for the clustering pre-pass's specific use case,
+with the false-split evidence still too thin to call proven. Even if proven, the bigger lever is
+avoiding a _separate_ pre-pass fetch entirely - reusing the image OCR/phash already fetches per
+card, rather than shrinking a redundant one. That reframes task #108/#118 more than resolving
+task #117 on its own does.
