@@ -507,3 +507,36 @@ submissions - please slow down" instead of a generic failure.
 
 **Refs**: `MPCAutofill/MPCAutofill/settings.py` (rate + LOGGING
 comments), `frontend/src/store/api.ts`'s `APISubmitTagVote`.
+
+## A single Jest test fails only in the full `npx jest` run, passes every time alone or with `-t`
+
+**Symptom**: `npx jest` (default parallel workers) fails one specific
+test deterministically on every run, always at a `waitFor`/`findBy*`
+timeout — but `npx jest path/to/file.test.tsx` (whole file) and
+`npx jest -t "the failing test name"` (isolated) both pass reliably,
+every time, no code change in between.
+
+**Cause**: this sandbox's CPU is shared across as many parallel Jest
+worker processes as `npx jest` defaults to spawning (one per detected
+core) — under that contention, a test whose passing path depends on a
+real (non-fake-timer) React state update landing inside the default
+1000ms `waitFor` window can lose the race purely from scheduling
+delay, not from a logic bug. `QuestionFeed.test.tsx`'s
+`revealCard()` helper (fires a synthetic `animationEnd` on
+`RevealOverlay`, since jsdom never runs the real CSS animation) hit
+exactly this: reliably reproduces the timeout under full-suite
+parallelism, reliably passes standalone or under `--runInBand`.
+
+**Fix**: don't chase it as a logic bug once `--runInBand` (single
+worker, no contention) passes 3/3 — that's the confirming test, and
+matches the file's own comment about jsdom never firing animations for
+real. Where a helper's caller depends on the state update actually
+having landed (not just the event having fired), make the helper wait
+for its own effect (e.g. `revealCard()` now also asserts the overlay
+is gone via `waitFor`) rather than firing-and-hoping — this doesn't
+eliminate resource-contention timeouts entirely, but keeps the
+helper's contract honest. For a one-off local verification, prefer
+`npx jest --runInBand` over chasing the parallel-worker flake.
+
+**Refs**: `frontend/src/features/questionFeed/QuestionFeed.test.tsx`'s
+`revealCard()`.

@@ -267,9 +267,3 @@ export function initialChipStates(): Record<string, ChipVoteState> {
     ALL_ATTRIBUTE_CHIPS.map((chip) => [chip.tagName, "untouched"])
   );
 }
-
-export function hasAnyExplicitChip(
-  chipStates: Record<string, ChipVoteState>
-): boolean {
-  return Object.values(chipStates).some((state) => state !== "untouched");
-}

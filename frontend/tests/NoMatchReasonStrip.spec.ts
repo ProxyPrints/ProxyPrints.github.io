@@ -97,12 +97,7 @@ test.describe("NoMatchReasonStrip tests", () => {
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const noMatch = page.getByTestId("question-feed-no-match");
-    await expect(noMatch).toBeDisabled();
-
-    await page.getByTestId("attribute-chip-Full Art").click();
-    await expect(noMatch).not.toBeDisabled();
-    await noMatch.click();
+    await page.getByTestId("question-feed-no-match").click();
 
     const strip = page.getByTestId("no-match-reason-strip");
     await expect(strip).toBeVisible();
@@ -127,7 +122,6 @@ test.describe("NoMatchReasonStrip tests", () => {
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("attribute-chip-Full Art").click();
     await page.getByTestId("question-feed-no-match").click();
 
     const strip = page.getByTestId("no-match-reason-strip");
@@ -163,7 +157,6 @@ test.describe("NoMatchReasonStrip tests", () => {
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("attribute-chip-Full Art").click();
     await page.getByTestId("question-feed-no-match").click();
     await page.getByTestId("no-match-reason-ai-art").click();
 
@@ -190,18 +183,12 @@ test.describe("NoMatchReasonStrip tests", () => {
       ...defaultHandlers
     );
     page.on("request", (request) => {
-      // ignore the gating "Full Art" chip's own vote - only a *reason* tag vote after
-      // Skip would indicate the bug this test guards against
-      if (
-        request.url().includes("/2/submitTagVote/") &&
-        request.postDataJSON()?.tagName !== "Full Art"
-      ) {
+      if (request.url().includes("/2/submitTagVote/")) {
         reasonVoteSubmitted = true;
       }
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("attribute-chip-Full Art").click();
     await page.getByTestId("question-feed-no-match").click();
     await expect(page.getByTestId("no-match-reason-strip")).toBeVisible();
     await page.getByTestId("no-match-reason-skip").click();

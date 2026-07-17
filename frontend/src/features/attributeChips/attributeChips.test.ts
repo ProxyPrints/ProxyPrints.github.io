@@ -7,6 +7,8 @@ import {
   ALL_ATTRIBUTE_CHIPS,
   filterCandidatesByChipStates,
   findExclusionGroup,
+  getAutoTagChips,
+  getOpenExclusionGroups,
   nextChipState,
 } from "./attributeChips";
 
@@ -81,5 +83,46 @@ describe("filterCandidatesByChipStates", () => {
       Borderless: "negative", // contradictory - candidate2 is both fullArt and borderless
     });
     expect(noMatch).toEqual([]);
+  });
+});
+
+describe("getAutoTagChips", () => {
+  // printingCandidate1: fullArt=false, isBorderless=false, isShowcase=false,
+  // isExtendedArt=false, isEtched=false, borderColor="black", frame="2015"
+  it("derives every standalone-false candidate as no chips, plus the matching exclusion-group values", () => {
+    const tagNames = getAutoTagChips(printingCandidate1).map(
+      (chip) => chip.tagName
+    );
+    expect(tagNames).toEqual(["Black Border", "Modern Border"]);
+  });
+
+  // printingCandidate2: fullArt=true, isBorderless=true, isShowcase=true, borderColor=
+  // "borderless" (outside the Border Color taxonomy), frame="2003"
+  it("derives every true standalone plus the matching frame chip, but no border-color chip", () => {
+    const tagNames = getAutoTagChips(printingCandidate2).map(
+      (chip) => chip.tagName
+    );
+    expect(tagNames).toEqual(
+      expect.arrayContaining([
+        "Full Art",
+        "Borderless",
+        "Showcase",
+        "Modern Border",
+      ])
+    );
+    expect(tagNames).not.toEqual(
+      expect.arrayContaining(["Black Border", "White Border", "Silver Border"])
+    );
+  });
+});
+
+describe("getOpenExclusionGroups", () => {
+  it("is empty for a candidate whose border color and frame both match a taxonomy chip", () => {
+    expect(getOpenExclusionGroups(printingCandidate1)).toEqual([]);
+  });
+
+  it("flags Border Color as open for a candidate outside black/white/silver", () => {
+    const openGroups = getOpenExclusionGroups(printingCandidate2);
+    expect(openGroups.map((group) => group.id)).toEqual(["borderColor"]);
   });
 });
