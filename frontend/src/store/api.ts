@@ -416,7 +416,11 @@ export async function APISubmitPrintingTag(
   identifier: string,
   anonymousId: string,
   printingIdentifier?: string,
-  isNoMatch = false
+  isNoMatch = false,
+  // Which UI surface cast this vote (e.g. "deckbuilder" / "question-feed") - optional and
+  // additive (see MPCAutofill/cardpicker/models.py's AbstractWeightedVote.vote_surface),
+  // omitted entirely for surfaces that haven't been wired yet rather than sending a guess.
+  voteSurface?: string
 ): Promise<PrintingConsensusResponse> {
   const rawResponse = await fetch(
     formatURL(backendURL, "/2/submitPrintingTag/"),
@@ -427,6 +431,7 @@ export async function APISubmitPrintingTag(
         anonymousId,
         printingIdentifier,
         isNoMatch,
+        voteSurface,
       }),
       credentials: "same-origin",
       headers: getCSRFHeader(),
@@ -493,13 +498,21 @@ export async function APISubmitArtistVote(
   identifier: string,
   anonymousId: string,
   artistName?: string,
-  isUnknown = false
+  isUnknown = false,
+  // See APISubmitPrintingTag's identical param for the full rationale.
+  voteSurface?: string
 ): Promise<ArtistConsensusResponse> {
   const rawResponse = await fetch(
     formatURL(backendURL, "/2/submitArtistVote/"),
     {
       method: "POST",
-      body: JSON.stringify({ identifier, anonymousId, artistName, isUnknown }),
+      body: JSON.stringify({
+        identifier,
+        anonymousId,
+        artistName,
+        isUnknown,
+        voteSurface,
+      }),
       credentials: "same-origin",
       headers: getCSRFHeader(),
     }
@@ -545,11 +558,19 @@ export async function APISubmitTagVote(
   // (making it privileged at resolution time). Deliberately opt-in per call: third-party
   // backends without CORS_ALLOW_CREDENTIALS reject credentialed requests outright, so the
   // default must stay "same-origin" for every pre-existing anonymous voting surface.
-  credentials: RequestCredentials = "same-origin"
+  credentials: RequestCredentials = "same-origin",
+  // See APISubmitPrintingTag's identical param for the full rationale.
+  voteSurface?: string
 ): Promise<TagConsensusResponse["tags"][number]> {
   const rawResponse = await fetch(formatURL(backendURL, "/2/submitTagVote/"), {
     method: "POST",
-    body: JSON.stringify({ identifier, anonymousId, tagName, polarity }),
+    body: JSON.stringify({
+      identifier,
+      anonymousId,
+      tagName,
+      polarity,
+      voteSurface,
+    }),
     credentials,
     headers: getCSRFHeader(),
   });

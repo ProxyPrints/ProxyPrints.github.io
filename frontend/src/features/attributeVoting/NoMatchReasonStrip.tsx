@@ -86,7 +86,9 @@ export function NoMatchReasonStrip({
       cardIdentifier,
       getOrCreateAnonymousId(),
       tagName,
-      APPLY
+      APPLY,
+      "same-origin",
+      "question-feed"
     )
       .then(() => onDone())
       .catch((error) => {

@@ -28,6 +28,7 @@ import { wrapIndex } from "@/common/utils";
 import { RightPaddedIcon } from "@/components/icon";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import { CardFooter } from "@/features/card/CardFooter";
+import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
 import { GridSelectorModal } from "@/features/gridSelector/GridSelectorModal";
 import { selectCardDocumentByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import { showChangeQueryModal } from "@/store/slices/modalsSlice";
@@ -335,6 +336,14 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
           searchResultsForQueryOrDefault.length === 0
         }
       />
+
+      {selectedImage != null && (
+        <DeckbuilderConfirmAffordance
+          cardIdentifier={selectedImage}
+          searchQuery={searchQuery}
+          onOpenGridSelector={handleShowGridSelector}
+        />
+      )}
 
       {searchResultsForQuery.length > 1 && showGridSelector && (
         <MemoizedCardSlotGridSelector

@@ -228,6 +228,45 @@ printings, artists, tags, and moderation from one screen.
   confirmable/contested/fresh split would need a new field on
   `QuestionFeedItem` (a schema + `question_feed.py` change), which is
   outside this pass's presentation-only scope.
+- **Level 0 — in-context deckbuilder confirmation** (frontend-polish
+  package, second funnel PR), a different surface entirely from the
+  `/whatsthat` funnel above: `frontend/src/features/card/
+  DeckbuilderConfirmAffordance.tsx`, mounted from `CardSlot.tsx` right
+  after the card image. Shows a small, inert badge under a slot whose
+  search query names a specific printing (`expansionCode`/
+  `collectorNumber`) that isn't yet the human-resolved consensus for the
+  currently selected image — the gate reuses `getPrintingMatchLabel`'s
+  own logic, inverted, rather than a new condition. Hover (desktop) or
+  tap (touch, since click fires on both) pins the reference printing's
+  thumbnail near the badge and enables Y/N, which stay disabled until
+  that compare has fired once (misclick protection for what's otherwise
+  a one-tap vote). YES casts a real `submitPrintingTag` vote for the
+  imported printing; NO opens the slot's existing
+  `showGridSelector`/`setShowGridSelector` state (no new plumbing) with
+  **no vote cast** — `CardPrintingTag` (`models.py`) has no schema
+  concept of "this specific candidate is wrong," only a positive vote
+  for one printing or a global `is_no_match=True` ("no known printing
+  matches this card at all"), and the latter would misrepresent what NO
+  actually means here. Density (v1): no cap on how many slots show the
+  badge at once, but each is genuinely inert until touched, and once
+  explicitly resolved (YES or NO) never reappears for that specific
+  image this session — tracked in a module-level, non-persisted
+  `Set<identifier>`, not Redux, since it only needs to survive this
+  browser session, not a reload. No banners, no counters, no review
+  mode.
+- **Vote provenance (`voteSurface`)**: `AbstractWeightedVote.vote_surface`
+  (backend PR #48, nullable additive field, already on
+  `SubmitPrintingTagRequest`/`SubmitArtistVoteRequest`/
+  `SubmitTagVoteRequest` in `schema_types.ts`) is now sent by every vote
+  call in the `/whatsthat` funnel (`"question-feed"`) and by Level 0's
+  own vote (`"deckbuilder"`). `ArtistVotePicker.tsx` — shared between the
+  funnel and the card-detail-modal's `AttributeVotingPanel` — takes an
+  optional `voteSurface` prop rather than hardcoding it, same pattern as
+  its existing `onRateLimited` prop: the funnel passes
+  `"question-feed"`, `AttributeVotingPanel` passes nothing (unchanged).
+  Every other voting surface (`PrintingTagPicker.tsx`, `TagVotePicker.tsx`,
+  `ReportsPanel.tsx`) is untouched — `voteSurface` stays `undefined`
+  there, not a guessed value.
 
 ## Key files (Stages 1–7; Stage 8+ files are in [[catalog-completion-plan.md]])
 

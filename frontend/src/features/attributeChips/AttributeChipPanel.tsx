@@ -170,7 +170,9 @@ export function AttributeChipPanel({
       cardIdentifier,
       getOrCreateAnonymousId(),
       tagName,
-      polarity
+      polarity,
+      "same-origin",
+      "question-feed"
     )
       .then((response) => {
         setConfidence((previous) => ({
