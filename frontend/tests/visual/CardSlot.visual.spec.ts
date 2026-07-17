@@ -41,10 +41,10 @@ test.describe("CardSlot visual tests", () => {
     await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
 
     await expect(page.getByTestId("front-slot0")).toMatchAriaSnapshot(`
-      - button "Slot 1 select-front0 ":
+      - button "Slot 1 select-front0 More options":
         - paragraph: Slot 1
         - button "select-front0"
-        - button ""
+        - button "More options"
       - img "Card 1"
       - text: Card 1
       - paragraph: /Source 1 \\[\\d+ DPI\\]/
@@ -70,10 +70,10 @@ test.describe("CardSlot visual tests", () => {
     await selectSlot(page, 1, "front");
 
     await expect(page.getByTestId("front-slot0")).toMatchAriaSnapshot(`
-      - button "Slot 1 select-front0 ":
+      - button "Slot 1 select-front0 More options":
         - paragraph: Slot 1
         - button "select-front0"
-        - button ""
+        - button "More options"
       - img "Card 1"
       - text: Card 1
       - paragraph: /Source 1 \\[\\d+ DPI\\]/
@@ -100,10 +100,10 @@ test.describe("CardSlot visual tests", () => {
     await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
 
     await expect(page.getByTestId("front-slot0")).toMatchAriaSnapshot(`
-      - button "Slot 1 select-front0 ":
+      - button "Slot 1 select-front0 More options":
         - paragraph: Slot 1
         - button "select-front0"
-        - button ""
+        - button "More options"
       - img "Card 1"
       - text: Card 1
       - paragraph: /Source 1 \\[\\d+ DPI\\]/
@@ -130,10 +130,10 @@ test.describe("CardSlot visual tests", () => {
     await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 3);
 
     await expect(page.getByTestId("front-slot0")).toMatchAriaSnapshot(`
-      - button "Slot 1 select-front0 ":
+      - button "Slot 1 select-front0 More options":
         - paragraph: Slot 1
         - button "select-front0"
-        - button ""
+        - button "More options"
       - img "Card 1"
       - img "Card 2"
       - img "Card 3"
@@ -216,6 +216,13 @@ test.describe("CardSlot visual tests", () => {
           - list:
             - listitem: Choose...
           - text: ""
+        - heading "Mature Content" [level=5]
+        - text: Cards the community has confirmed as NSFW are hidden from search by default. This switch drives the NSFW entry in the tag filter above — they're the same setting.
+        - button "Showing Mature Content Hiding Mature Content"
+        - heading "Community-Confirmed Printing Attributes" [level=5]
+        - text: These filters only affect cards with a printing the community has confirmed via voting. Cards without a confirmed printing are unknowns, not mismatches — they're never hidden by these filters.
+        - button "Full Art Only Include All Art"
+        - button "Borderless Only Include All Borders"
         - button "Disable all drives"
         - table:
           - rowgroup:
@@ -243,10 +250,14 @@ test.describe("CardSlot visual tests", () => {
               - cell "Source 3"
               - cell
               - cell
-        - img "Card 1"
-        - img "Card 2"
-        - img "Card 3"
-        - img "Card 4"
+        - button "Card 1":
+          - img "Card 1"
+        - button "Card 2":
+          - img "Card 2"
+        - button "Card 3":
+          - img "Card 3"
+        - button "Card 4":
+          - img "Card 4"
         - button "Close"
       `);
   });
@@ -329,6 +340,13 @@ test.describe("CardSlot visual tests", () => {
           - list:
             - listitem: Choose...
           - text: ""
+        - heading "Mature Content" [level=5]
+        - text: Cards the community has confirmed as NSFW are hidden from search by default. This switch drives the NSFW entry in the tag filter above — they're the same setting.
+        - button "Showing Mature Content Hiding Mature Content"
+        - heading "Community-Confirmed Printing Attributes" [level=5]
+        - text: These filters only affect cards with a printing the community has confirmed via voting. Cards without a confirmed printing are unknowns, not mismatches — they're never hidden by these filters.
+        - button "Full Art Only Include All Art"
+        - button "Borderless Only Include All Borders"
         - button "Disable all drives"
         - table:
           - rowgroup:
@@ -360,10 +378,14 @@ test.describe("CardSlot visual tests", () => {
         - heading "4 versions" [level=6]
         - button "":
           - heading "" [level=5]
-        - img "Card 1"
-        - img "Card 2"
-        - img "Card 3"
-        - img "Card 4"
+        - button "Card 1":
+          - img "Card 1"
+        - button "Card 2":
+          - img "Card 2"
+        - button "Card 3":
+          - img "Card 3"
+        - button "Card 4":
+          - img "Card 4"
         - button "Close"
       `);
   });
