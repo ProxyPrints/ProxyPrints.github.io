@@ -132,6 +132,38 @@ patterns (backtick-adjacent underscores/asterisks in particular).
 formatter. Verify by re-running the hook and confirming zero further
 diff. See [[lessons.md]] for the specific patterns found so far.
 
+## A Playwright test hangs on a stuck loading spinner / blank `src=""` image, and the same test passes in an isolated worktree
+
+**Symptom**: a Playwright test times out with `<div class="spinner-border"> ... subtree intercepts pointer events` blocking a click on a card image,
+and `page.getByAltText(...)` resolves to an `<img src="">` that never
+finishes loading — reproducible several times in a row against the
+session's long-running `next dev` server on port 3000, for a test file
+that has nothing to do with your actual diff.
+
+**Cause**: a `next dev` process that has been alive for a long time (many
+hours, dozens of Playwright runs, repeated file edits triggering fast
+refresh) accumulates state that isn't reproducible in a freshly-started
+server — confirmed by swapping `frontend/src` between a branch and
+`master` **on the same live server** (both failed identically) versus
+running the identical test in a brand-new `git worktree` with its own
+freshly-started `next dev` on a different port (passed 30/30, twice each,
+both `master` and the branch). The failure tracks the **server process's
+age/history**, not the source code. Likely candidates: stale webpack HMR
+module chunks, or accumulated fetch/image-cache pollution from earlier
+test runs' mocked network state leaking across the dev server's lifetime
+— not confirmed further since the worktree test was decisive enough to
+stop investigating.
+
+**Fix**: before concluding a test failure is a real regression, reproduce
+it in a **fresh, isolated `git worktree`** with its own newly-started dev
+server on a different port (the same technique used for before/after
+screenshots — see [[lessons.md]]'s worktree-dev-server-collision entry),
+not just by editing files in place on the session's existing long-running
+server. If the isolated run passes, restart the main session's dev server
+(`kill` the old `next dev`/`next-server` PIDs, start fresh) rather than
+trusting further results from the stale one. Don't spend time root-causing
+the exact HMR/cache mechanism unless it recurs after this fix.
+
 ## `npx prettier --write` reformats far more of a frontend file than you touched (trailing commas, wrapped ternaries appearing everywhere)
 
 **Symptom**: running `npx prettier --write` on a file you made one small,
