@@ -208,6 +208,43 @@ command line. Use `sudo env GIT_SHA=$SHA docker compose build ...` or
 visibility, never the staleness guard itself), but silently wrong if
 unfixed.
 
+## Frontend ships an API shape change before the backend redeploys ("undefined cards"-class bugs)
+
+**Symptom**: a page renders a literal `undefined` where a number/value
+should be (e.g. "undefined cards"), immediately after merging a PR that
+changes an API response shape — with no code regression in the PR's own
+tests, which all pass.
+
+**Cause**: the frontend (GitHub Pages) and backend (persistent
+`django`/`worker` containers) deploy on separate pipelines. Pages
+auto-ships on merge/push to `master`; the backend only picks up a merged
+change once someone explicitly redeploys the persistent containers
+(`docker compose up -d django worker`). A frontend-only merge that
+changes an API response's shape is live on Pages within minutes, but the
+backend can lag by hours or longer if nothing triggers a redeploy —
+"stale but schema-compatible" is false the moment a shape change merges;
+that assumption only holds for the deploy-skew window *before* the shape
+actually changed, not after.
+
+**Fix**: (a) merging an API-shape-changing PR isn't "done" — it isn't
+complete until the persistent containers are explicitly redeployed to
+match; track that as a first-class follow-up, not an implicit side effect
+of the merge. (b) independent of (a), any frontend consumer of a
+versioned/typed API response should defensively handle the previous shape
+at runtime — TypeScript's compile-time cast can't catch a live shape
+mismatch against whatever the backend is actually serving right now.
+
+**Incident**: 2026-07-16/17, questionFeed's `remainingEstimate` field
+changed from a plain `number` to a `QuestionFeedCounts` object (#29).
+Pages shipped the new frontend immediately; the persistent backend
+containers were still serving the old plain-number shape. `QuestionFeed.tsx`'s headline read `counts.total` on what was actually a
+raw number at runtime, rendering the literal string "undefined cards" in
+production. Fixed on the frontend side with a runtime shape guard
+(`normalizeQuestionFeedCounts()`, #34) that degrades gracefully to the
+old copy when it detects the legacy shape — worth keeping permanently,
+since every future backend deploy has the same skew window, not just this
+one incident.
+
 ## A quicktype-generated frontend type is "missing" a field
 
 **Symptom**: a `PrintingCandidate`/`Tag`/etc. TypeScript type (generated
