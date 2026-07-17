@@ -307,7 +307,9 @@ run completed 2026-07-16/17 (`run_id=20260716T193408-6613a1a6`,
 165,980 candidates, 43,426 votes, 26.2% invocation hit rate, 0/43,426
 gate verification) and the pre-existing 300+300 validation and no-match
 autopsy numbers in `docs/features/printing-tags.md`. One open item
-flagged inline in §2a (79+162 vs. 300 pair-count discrepancy) needs
-resolving before this is final. Not linked from any other doc's index
-yet — add to `docs/features/catalog-completion-plan.md`'s Part 6 status
-and this repo's docs index once cleared.
+flagged inline in §2a (both harvested-pair categories have an
+unexplained ~10-20% shortfall between harvest count and analyzed count,
+checked against source data and not resolvable from what's recorded)
+needs resolving before this is final. Not linked from any other doc's
+index yet — add to `docs/features/catalog-completion-plan.md`'s Part 6
+status and this repo's docs index once cleared.
