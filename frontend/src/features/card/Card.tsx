@@ -69,6 +69,49 @@ const OutlinedBSCardSubtitle = styled(BSCard.Subtitle)`
   }
 `;
 
+// Replaces the old solid-black error_404*.png assets, which read as a harsh black square at
+// grid scale against the card's own #4e5d6c placeholder background - matching that background
+// here instead makes a failed fetch (a real production path - dead Drive links) look like a
+// designed empty state rather than a rendering glitch.
+const ErrorPlaceholder = styled.div`
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  background: #4e5d6c;
+  color: rgba(255, 255, 255, 0.75);
+  text-align: center;
+  padding: 0.5rem;
+
+  i {
+    font-size: 1.75rem;
+  }
+
+  span {
+    font-size: 0.8rem;
+  }
+`;
+
+// A card image fetch that's still pending after SlowLoadHintDelayMS gets a small "still
+// loading" hint alongside the spinner - an indefinite spinner with no feedback and no
+// timeout is indistinguishable from a genuinely stuck fetch.
+const SlowLoadHintDelayMS = 6_000;
+
+const SlowLoadHint = styled.div`
+  position: absolute;
+  bottom: 8px;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  text-align: center;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.85);
+`;
+
 const CardIcon = styled(Icon)`
   width: auto;
   height: auto;
@@ -263,12 +306,22 @@ function CardImage({
     imageState,
   } = useImageSrc(cardDocument, small);
 
-  // if loading from fallback fails, display a 404 error image
-  const errorImageSrc = small ? "/error_404.png" : "/error_404_med.png";
-
   // a few other computed constants
   const imageAlt = cardDocument.name ?? "Unnamed Card";
   const showSpinner = imageIsLoading && !hidden;
+
+  const [showSlowLoadHint, setShowSlowLoadHint] = useState<boolean>(false);
+  useEffect(() => {
+    if (!showSpinner) {
+      setShowSlowLoadHint(false);
+      return;
+    }
+    const timer = setTimeout(
+      () => setShowSlowLoadHint(true),
+      SlowLoadHintDelayMS
+    );
+    return () => clearTimeout(timer);
+  }, [showSpinner, cardDocument.identifier]);
 
   const isFavorite = useAppSelector((state: RootState) =>
     selectIsFavoriteRender(
@@ -288,7 +341,16 @@ function CardImage({
 
   return (
     <>
-      {showSpinner && <Spinner zIndex={2} />}
+      {showSpinner && (
+        <>
+          <Spinner zIndex={2} />
+          {showSlowLoadHint && (
+            <SlowLoadHint data-testid="card-image-slow-load-hint">
+              Still loading&hellip;
+            </SlowLoadHint>
+          )}
+        </>
+      )}
       {imageSrc != null &&
         (hidden ? (
           <HiddenImage
@@ -304,14 +366,10 @@ function CardImage({
         ) : (
           <>
             {imageState === "errored" ? (
-              <VisibleImage
-                ref={imageRef}
-                className="card-img card-img-fade-in"
-                loading="lazy"
-                src={errorImageSrc}
-                alt={""}
-                fill={true}
-              />
+              <ErrorPlaceholder data-testid="card-image-error-placeholder">
+                <i className="bi bi-exclamation-triangle" aria-hidden="true" />
+                <span>Image unavailable</span>
+              </ErrorPlaceholder>
             ) : (
               <>
                 {isFavorite && small && (
@@ -488,12 +546,31 @@ export function Card({
   const BSCardSubtitle: typeof BSCard.Subtitle =
     nameOnClick != null ? OutlinedBSCardSubtitle : BSCard.Subtitle;
 
+  // BSCard renders a plain, non-interactive <div> - clicking it (via cardOnClick, e.g. to
+  // select this card's image) was previously mouse-only, with no way to reach it by Tab or
+  // activate it with Enter/Space. Only made focusable/keyboard-activatable when it's actually
+  // clickable - a card with no cardOnClick (e.g. the What's New page) shouldn't pretend to be
+  // a button. The single real cardOnClick call site (CardResultSet.tsx) ignores its event
+  // argument entirely, so re-invoking it from a keydown handler is safe.
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (cardOnClick == null) {
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      cardOnClick(event as unknown as React.MouseEvent<HTMLElement>);
+    }
+  };
+
   //# endregion
 
   return (
     <BSCard
       className={`mpccard ${highlight ? "mpccard-highlight" : "mpccard-hover"}`}
       onClick={cardOnClick}
+      onKeyDown={cardOnClick != null ? handleKeyDown : undefined}
+      tabIndex={cardOnClick != null ? 0 : undefined}
+      role={cardOnClick != null ? "button" : undefined}
       style={{ contentVisibility: "auto" }}
       {...getCardDataAttributes(maybeCardDocument)}
     >

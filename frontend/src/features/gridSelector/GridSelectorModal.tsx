@@ -38,8 +38,15 @@ import {
   selectSearchSettings,
 } from "@/store/slices/searchSettingsSlice";
 import { selectSourceDocuments } from "@/store/slices/sourceDocumentsSlice";
+import { selectJumpToVersionVisible } from "@/store/slices/viewSettingsSlice";
 
 const HeightDelta = 200;
+
+// Below Bootstrap's `sm` breakpoint, the filters column and results column split 6/6 -
+// defaulting filters closed under that width leaves the results column full-width on a phone
+// instead of squeezed into half the screen. Purely an initial default - still user-toggleable
+// via the Filters button either way.
+const SmallViewportFiltersBreakpointPx = 576;
 
 interface GridSelectorProps {
   title?: string;
@@ -80,13 +87,23 @@ export function GridSelectorModal({
     selectCardDocumentsByIdentifiers(state, imageIdentifiers)
   );
   const sourceDocuments = useAppSelector(selectSourceDocuments);
+  const jumpToVersionVisible = useAppSelector(selectJumpToVersionVisible);
 
   //# endregion
 
   //# region state
 
-  const [settingsVisible, setSettingsVisible] = useState<boolean>(true);
+  const [settingsVisible, setSettingsVisible] = useState<boolean>(
+    () =>
+      typeof window === "undefined" ||
+      window.innerWidth >= SmallViewportFiltersBreakpointPx
+  );
   const focusRef = useRef<HTMLInputElement>(null);
+  // Fallback autofocus target for when the Jump to Version section (which focusRef normally
+  // targets) is collapsed - focusing a collapsed-but-still-mounted input silently does
+  // nothing in a real browser (it's not "visible" per focus-eligibility rules), which used to
+  // leave focus stuck on the dialog container with no visible indication it had moved at all.
+  const settingsToggleRef = useRef<HTMLButtonElement>(null);
 
   const [filterSettings, setFilterSettings] = useState<FilterSettings>(
     globalSearchSettings.filterSettings
@@ -248,8 +265,10 @@ export function GridSelectorModal({
       scrollable
       show={show}
       onEntered={() => {
-        if (focusRef.current) {
+        if (jumpToVersionVisible && focusRef.current) {
           focusRef.current.focus();
+        } else {
+          settingsToggleRef.current?.focus();
         }
       }}
       onHide={handleClose}
@@ -257,9 +276,10 @@ export function GridSelectorModal({
       data-testid={testId}
     >
       <Modal.Header closeButton>
-        <div className="d-flex align-items-center gap-2">
+        <div className="d-flex align-items-center gap-2 flex-wrap">
           <Modal.Title>{modalTitle}</Modal.Title>
           <Button
+            ref={settingsToggleRef}
             variant="outline-primary"
             size="sm"
             onClick={() => setSettingsVisible((v) => !v)}
