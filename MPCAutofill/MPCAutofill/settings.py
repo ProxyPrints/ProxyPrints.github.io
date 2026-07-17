@@ -75,8 +75,16 @@ VOTE_PRIVILEGED_WEIGHT = env.float("VOTE_PRIVILEGED_WEIGHT", default=PRINTING_TA
 # alongside the weights above.
 VOTE_FEDERATED_WEIGHT = env.float("VOTE_FEDERATED_WEIGHT", default=1.0)
 # django-ratelimit rate string (see cardpicker.views.post_submit_printing_tag), keyed by the
-# client-generated anonymous ID (IP as a fallback if that header is somehow missing).
-PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="20/h")
+# client-generated anonymous ID (IP as a fallback if that header is somehow missing). Shared
+# across printing-tag/artist-vote/tag-vote submission (_printing_tag_rate_limit_key/_rate are
+# reused across all three @ratelimit call sites in views.py) - one budget for a session's whole
+# voting activity, not per-endpoint. Raised from 20/h to 300/h on 2026-07-17 after a real user
+# tripped the old limit in ~7 minutes of genuine rapid tagging - the pilot's own confirmation-
+# economy work (85k one-tap questions) makes fast legitimate voting the desired behavior now,
+# not something to throttle. 300/h = one tap/12s sustained, still a real wall against naive
+# flooding; Sybil defense was never resting on this limit anyway - machine-evidence cross-checks
+# and cohort revocation (docs/theory.md's addendum) are the actual layer for that.
+PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="300/h")
 # same mechanism for the card report button (see cardpicker.views.post_report_card).
 CARD_REPORT_RATE = env("CARD_REPORT_RATE", default="10/d")
 
@@ -300,6 +308,33 @@ EMAIL_HOST_PASSWORD = env("DJANGO_GMAIL_PASSWORD", default="")
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 DEFAULT_FROM_EMAIL = "default from email"
+
+# Logging - closes a real gap found 2026-07-17 diagnosing a live incident (turned out to be a
+# 429, not a 500 - nginx's access log ended up being the actual evidence, not django's). Every
+# view in cardpicker.views IS already wrapped in ErrorWrappers.to_json, whose own bare
+# `except Exception: logger.exception(...)` was, verified empirically, already visible via
+# Python's logging.lastResort fallback (stderr, which docker logs captures) even before this
+# change - so this isn't "every exception was invisible." What WAS invisible: anything escaping
+# that decorator entirely (middleware, ASGI/WSGI-level errors, a future view that forgets the
+# decorator) - those route through Django's own exception-to-response machinery, which logs to
+# django.request, wired by Django's own DEFAULT_LOGGING to mail_admins ONLY when DEBUG=False,
+# never console. console here is additive, not a replacement - mail_admins/ADMINS above stays
+# wired as a second channel.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+        "mail_admins": {"class": "django.utils.log.AdminEmailHandler", "level": "ERROR"},
+    },
+    "loggers": {
+        "django.request": {
+            "handlers": ["console", "mail_admins"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+    },
+}
 
 # Database update settings
 DEFAULT_CARDBACK_FOLDER_PATH = env("DEFAULT_CARDBACK_FOLDER_PATH", default="Chilli_Axe's MTG Renders / 12. Cardbacks")
