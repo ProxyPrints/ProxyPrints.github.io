@@ -650,6 +650,7 @@ export interface SubmitArtistVoteRequest {
   artistName?: null | string;
   identifier: string;
   isUnknown: boolean;
+  voteSurface?: null | string;
 }
 
 export interface SubmitPrintingTagRequest {
@@ -657,6 +658,7 @@ export interface SubmitPrintingTagRequest {
   identifier: string;
   isNoMatch: boolean;
   printingIdentifier?: null | string;
+  voteSurface?: null | string;
 }
 
 export interface SubmitTagVoteRequest {
@@ -664,6 +666,7 @@ export interface SubmitTagVoteRequest {
   identifier: string;
   polarity: number;
   tagName: string;
+  voteSurface?: null | string;
 }
 
 export interface TagConsensusRequest {
@@ -2430,6 +2433,11 @@ const typeMap: any = {
       { json: "artistName", js: "artistName", typ: u(undefined, u(null, "")) },
       { json: "identifier", js: "identifier", typ: "" },
       { json: "isUnknown", js: "isUnknown", typ: true },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
     ],
     false
   ),
@@ -2443,6 +2451,11 @@ const typeMap: any = {
         js: "printingIdentifier",
         typ: u(undefined, u(null, "")),
       },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
     ],
     false
   ),
@@ -2452,6 +2465,11 @@ const typeMap: any = {
       { json: "identifier", js: "identifier", typ: "" },
       { json: "polarity", js: "polarity", typ: 0 },
       { json: "tagName", js: "tagName", typ: "" },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
     ],
     false
   ),

@@ -6,7 +6,8 @@
     "identifier": { "type": "string" },
     "tagName": { "type": "string" },
     "polarity": { "type": "integer" },
-    "anonymousId": { "type": "string" }
+    "anonymousId": { "type": "string" },
+    "voteSurface": { "type": ["string", "null"] }
   },
   "required": ["identifier", "tagName", "polarity", "anonymousId"],
   "additionalProperties": false
