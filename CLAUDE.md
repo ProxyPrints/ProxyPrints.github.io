@@ -60,6 +60,29 @@ only) for deployment, hosting, and domain specifics.
   sequences merges. No Docker, live DB/ES, or secrets are available — use
   mocks (MSW) for tests.
 
+## Reporting convention (all sessions)
+
+Every response that reports work (hold points, completions, status
+updates, blocker reports) is ONE fenced plain-text code block, fully
+self-contained — written for a reader who has NOT seen the session and
+receives the block verbatim with zero surrounding context.
+
+The block contains, in order:
+
+1. TASK: name + branch(es) + PR/commit refs
+2. WHAT SHIPPED: per numbered item of the instruction executed
+3. DEVIATIONS from spec, each with reasoning (or "none")
+4. VERIFICATION: what ran with results, what was deferred and why
+5. OPEN ITEMS / DECISIONS NEEDED: numbered, answerable
+6. LIVE STATE: anything running, deployed, pushed, or left behind
+
+Rules: NO prose outside the block — no preamble, no postscript; the
+block is the entire deliverable. Never reference session context ("as
+discussed above") without restating the fact inside the block. Blocked/
+partial work reports in the same structure ("WHAT SHIPPED: nothing —
+blocked at step N because X"). Applies to every hold point, completion,
+status update, and blocker report.
+
 ## docs/ index
 
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — symptom-first
