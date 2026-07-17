@@ -76,8 +76,8 @@ export default defineConfig({
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
     env: {
-      NEXT_PUBLIC_IMAGE_WORKER_URL: "https://cdn.mpcautofill.com",
-      NEXT_PUBLIC_IMAGE_BUCKET_URL: "https://img.mpcautofill.com",
+      NEXT_PUBLIC_IMAGE_WORKER_URL: "https://cdn.proxyprints.ca",
+      NEXT_PUBLIC_IMAGE_BUCKET_URL: "https://img.proxyprints.ca",
     },
   },
 });
