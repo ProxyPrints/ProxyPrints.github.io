@@ -2251,6 +2251,34 @@ class TestContentPhashBackfill:
         assert still_null.content_phash == 7  # newly hashed
 
 
+class TestBackfillCommandCLI:
+    """Closes a real gap: every other test in this file (and TestContentPhashBackfill above)
+    calls run_content_phash_backfill() directly as a function, never through the actual CLI
+    parser - so a real bug (local_backfill_content_phash.py redefining --skip-checks, which
+    Django's BaseCommand already provides natively, an argparse.ArgumentError: conflicting
+    option string) shipped silently and only surfaced live, on the real invocation, after the
+    full-catalog pilot completed and this command was actually run for the first time
+    (2026-07-17). call_command() exercises the real add_arguments()/parser path these other
+    tests never touch."""
+
+    def test_skip_checks_flag_does_not_conflict_with_djangos_own(self, db, monkeypatch):
+        from django.core.management import call_command
+
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: 1)
+        # would raise argparse.ArgumentError before this fix - reaching here at all is the test.
+        call_command("local_backfill_content_phash", "--skip-checks", "--limit=0")
+
+    def test_real_cli_invocation_with_no_flags_at_all(self, db, monkeypatch):
+        from django.core.management import call_command
+
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: 1)
+        call_command("local_backfill_content_phash", "--limit=0")
+
+
 class TestPipelinedBackfillOutOfOrder:
     """Part 2 (docs/features/catalog-completion-plan.md): the pipelined backfill's sliding
     fetch window means completion order isn't submission order once more than one worker

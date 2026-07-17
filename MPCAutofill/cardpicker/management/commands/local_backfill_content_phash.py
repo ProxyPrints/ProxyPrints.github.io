@@ -69,13 +69,14 @@ class Command(BaseCommand):
             help="Lower this process's CPU scheduling priority (default: on).",
         )
         parser.add_argument("--no-nice", action="store_false", dest="nice")
-        parser.add_argument(
-            "--skip-checks",
-            action="store_true",
-            default=False,
-            help="Passed through to Django's own --skip-checks (unattended-run convention "
-            "matching local_identify_printing_tags).",
-        )
+        # --skip-checks is deliberately NOT defined here - Django's BaseCommand already adds it
+        # natively (every management command gets it for free, same as local_identify_printing_
+        # tags relies on without redefining it). Redefining it here collided with Django's own
+        # option of the same name (argparse.ArgumentError: conflicting option string), a bug that
+        # shipped silently because every test exercising this command called
+        # run_content_phash_backfill() directly as a function, never through the real CLI parser
+        # (call_command()/the actual `manage.py` entrypoint) - see TestBackfillCommandCLI below,
+        # added specifically to close that gap.
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         dry_run = kwargs["dry_run"]
