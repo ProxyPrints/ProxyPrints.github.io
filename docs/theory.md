@@ -1,12 +1,11 @@
 # Theory note: the printing-identification pipeline as candidate-constrained decoding
 
-**STATUS: DRAFT / HOLD.** Written 2026-07-17 per the catalog-completion
-plan's Part 6, gated on the full-catalog run's final report existing (it
-does — see the numbers below). Not to be treated as finished or
-authoritative until the owner reviews it. Written for an external reader
-— this also doubles as the technical annex for a future federation
-pitch (see `docs/federation-v1.md`), so it avoids repo-internal jargon
-where a general term exists.
+**STATUS: Reviewed and approved by the owner, 2026-07-17.** Written per
+the catalog-completion plan's Part 6, gated on the full-catalog run's
+final report existing. Written for an external reader — this also
+doubles as the technical annex for a future federation pitch (see
+`docs/federation-v1.md`), so it avoids repo-internal jargon where a
+general term exists.
 
 ## 1. The model: decoding over a closed codebook
 
@@ -56,9 +55,12 @@ first-class, durable outcome, not a silently-dropped case.
 ## 2. False-accept bound, calibrated from real data
 
 Any decoder like this can fail in exactly one dangerous direction: it
-converges on a candidate that's _wrong_, not just abstains. Three
-independent pieces of real, measured evidence bound how often that
-actually happens in this system, from smallest to largest scale:
+converges on a candidate that's _wrong_, not just abstains. §2a and §2c
+below are direct, measured evidence bounding how often that actually
+happens in this system, from smallest to largest scale. §2b is a
+different but related property — that the pipeline's abstentions are
+themselves genuine (the engine isn't quietly discarding evidence it
+could have used), not a false-accept measurement in its own right.
 
 **a. The 300+300 harvested-pair validation** (`docs/features/printing-tags.md`,
 "Validation against real production data") — 300 real pairs of distinct
@@ -93,15 +95,25 @@ on the accounted-for cases (241 and 269 respectively), consistent with
 that — but the reconciliation itself is still open and belongs on the
 owner's desk, not resolved by assumption here.)_
 
-**b. The no-match autopsy** (`docs/features/printing-tags.md`, "No-match
-autopsy") — of 176 real OCR `parsed-but-no-match` cases, only 2/176
-(1.1%) were genuinely-missing printings (no `CanonicalCard` row exists
-at all for the parsed set+number); the remaining 127/176 (72.2%) were
-true unsalvageable OCR garbage. Zero of the 176 were cases where OCR
-_confidently converged on the wrong candidate_ — every failure in this
-audited sample was an honest abstention (no match found), not a false
-accept. This is the closest thing to a direct, hand-audited false-accept
-measurement the pipeline has, and it found zero in this sample.
+**b. The no-match autopsy verifies abstentions are genuine, not a
+false-accept measurement** (`docs/features/printing-tags.md`, "No-match
+autopsy") — this sample is conditioned on abstention by construction:
+all 176 cases are ones where OCR already declined to answer, so by
+definition none of them can be a false accept (the engine confidently
+converging on the wrong candidate) — that failure mode can only show up
+in a sample of cases where the engine _did_ commit to an answer, which
+is what §2a and §2c measure. What this sample verifies instead: that
+the abstentions were the right call, not evidence quietly discarded.
+The full partition of the 176 real OCR `parsed-but-no-match` cases:
+47/176 (26.7%) were parser-bug-recoverable — two real, since-fixed
+parsing bugs (see the autopsy's build history), the fix behind the
+pilot's 25.7%→41.3% projected OCR yield improvement. Of the remaining
+129, 2/176 (1.1% of the full 176) were genuinely-missing printings (no
+`CanonicalCard` row exists at all for the parsed set+number), and
+127/176 (72.2%) were true unsalvageable OCR garbage with no recoverable
+signal. The pipeline's actual false-accept evidence is §2a's 269
+different-printing pairs (zero within the clustering threshold, minimum
+observed distance 6) and §2c's structural gate below.
 
 **c. The full-catalog run's own gate**, at the scale that matters most:
 **every one of the 43,426 machine votes cast (165,980 candidates
@@ -147,10 +159,14 @@ general: (1) the "different entity" class isn't diffuse — it's the
 finite, enumerable rest of `C(n)`, so the likelihood ratio collapses to
 "is there exactly one candidate whose evidence beats every other
 candidate's, by a margin," not a continuous probability estimate over an
-open population; (2) each channel is treated independently and
-conjunctively (OCR converges XOR phash converges XOR fallback narrows to
-one) rather than fused into one joint score — closer to an ensemble of
-independent decoders voting than a single Fellegi-Sunter linkage score.
+open population; (2) each channel runs independently rather than being
+fused into one joint score — closer to an ensemble of independent
+decoders than a single Fellegi-Sunter linkage score. This is not an
+exclusive-or between the channels: multiple engines converging on the
+same candidate is redundant confirmation, not a conflict to arbitrate,
+and when engines genuinely contradict each other (the frame-mismatch
+case above) the response is to withhold the vote, not to force a pick
+between them.
 
 **tmikonen's population-relative threshold** (`docs/features/printing-tags.md`,
 "Prior-art read") is the closer visual-hashing precedent: rather than a
@@ -302,14 +318,16 @@ protocol.
 
 ## Status
 
-**DRAFT — HOLD for owner review.** Calibrated against the full-catalog
-run completed 2026-07-16/17 (`run_id=20260716T193408-6613a1a6`,
-165,980 candidates, 43,426 votes, 26.2% invocation hit rate, 0/43,426
-gate verification) and the pre-existing 300+300 validation and no-match
-autopsy numbers in `docs/features/printing-tags.md`. One open item
-flagged inline in §2a (both harvested-pair categories have an
-unexplained ~10-20% shortfall between harvest count and analyzed count,
-checked against source data and not resolvable from what's recorded)
-needs resolving before this is final. Not linked from any other doc's
-index yet — add to `docs/features/catalog-completion-plan.md`'s Part 6
-status and this repo's docs index once cleared.
+**Reviewed and approved by the owner, 2026-07-17**, with 3 edits
+(the §2b false-accept/abstention-verification reframe and arithmetic
+correction, and §3's XOR-framing correction) applied above. Calibrated
+against the full-catalog run completed 2026-07-16/17
+(`run_id=20260716T193408-6613a1a6`, 165,980 candidates, 43,426 votes,
+26.2% invocation hit rate, 0/43,426 gate verification) and the
+pre-existing 300+300 validation and no-match autopsy numbers in
+`docs/features/printing-tags.md`. The §2a pair-count shortfall (both
+harvested-pair categories have an unexplained ~10-20% gap between
+harvest count and analyzed count, checked against source data and not
+resolvable from what's recorded) is an **accepted documented
+limitation** — calibration on the accounted-for cases (241/269) is
+correct as-is, no harvest re-run planned.
