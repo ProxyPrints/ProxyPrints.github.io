@@ -350,6 +350,22 @@ large pool - a pre-pass, a warm-up cache fill, a one-time backfill scan - needs 
 (even a bare `print(f"... {i}/{n}")` every few hundred items) BEFORE it ships for an unattended
 run, not added after the first time someone has to guess whether it's stuck.
 
+## A Playwright `.focus()` call doesn't match `:focus-visible` after a prior mouse interaction
+
+Chromium tracks whether the last user-input modality was mouse or keyboard,
+and a plain `locator.focus()` (script-driven) only matches the
+`:focus-visible` pseudo-class while that modality is keyboard. Any test flow
+that clicks something first (a search button, an import submit — anything a
+realistic setup step does before you get to the element under test) flips
+the modality to mouse, so `getComputedStyle(el).outlineStyle` reads `"none"`
+even though the CSS rule is correct and a real keyboard user would see the
+ring. Fix: `await page.keyboard.press("Tab")` once before `.focus()` to
+re-establish keyboard modality — it doesn't need to actually tab onto the
+target element, only to register a keyboard event before the script-focus
+call. Symptom to watch for: a focus-visible assertion that fails 100% of the
+time in a test with any prior `.click()`, but passes if you focus the
+element as the very first page interaction.
+
 ## A resumed fork can mistake the parent's inherited history for its own continuing task
 
 A background fork given a narrow, explicit directive ("investigate X, do NOT touch Y, report

@@ -6,7 +6,15 @@ interface OverflowColProps {
   scrollable?: boolean;
 }
 
-export const OverflowCol = styled(Col)<OverflowColProps>`
+// Col isn't a native DOM tag, so Emotion forwards every prop to it by default (including
+// these two component-only ones) - Col then spreads its own unrecognised props onto the
+// underlying <div>, producing a "React does not recognize the heightDelta prop" console
+// warning on every page that renders one. shouldForwardProp keeps the public heightDelta/
+// scrollable prop names as-is (no call-site changes needed at any of this component's many
+// usages) while stopping them at this boundary.
+export const OverflowCol = styled(Col, {
+  shouldForwardProp: (prop) => prop !== "heightDelta" && prop !== "scrollable",
+})<OverflowColProps>`
   position: relative;
   // define height twice - first as a fallback for older browser compatibility,
   // then using dvh to account for the ios address bar

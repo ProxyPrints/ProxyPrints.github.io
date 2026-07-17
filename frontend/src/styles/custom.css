@@ -81,10 +81,19 @@
   height: 38px;
 }
 
+/* min-width/min-height (rather than relying on padding around the icon glyph) guarantees a
+   comfortable ~40-44px touch target regardless of how wide the icon glyph itself renders;
+   flex centring keeps the glyph in the middle of that box. top/left shift negative by the
+   same amount the box grew past the icon so it stays visually anchored in its original spot. */
 .card-select {
   position: absolute;
-  top: 10px;
-  left: 5px;
+  top: -2px;
+  left: -7px;
+  min-width: 40px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background-color: transparent;
   background-repeat: no-repeat;
   border: none;
@@ -97,8 +106,13 @@
 
 .remove {
   position: absolute;
-  top: 10px;
-  right: 5px;
+  top: -2px;
+  right: -7px;
+  min-width: 40px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background-color: transparent;
   background-repeat: no-repeat;
   border: none;
@@ -107,6 +121,15 @@
   outline: none;
   color: white;
   font-size: 1.3em;
+}
+
+/* outline: none above suppresses the browser default focus ring with no replacement - these
+   are real, tab-reachable buttons (card selection, card removal), so keyboard focus needs to
+   stay visible. */
+.card-select:focus-visible,
+.remove:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 1px;
 }
 
 .card-context-menu {

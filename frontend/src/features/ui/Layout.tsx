@@ -3,7 +3,6 @@ import { Queue } from "async-await-queue";
 import React, { useEffect, useReducer } from "react";
 import { PropsWithChildren } from "react";
 import Container from "react-bootstrap/Container";
-import SSRProvider from "react-bootstrap/SSRProvider";
 import { Provider } from "react-redux";
 
 import { ContentMaxWidth, NavbarHeight } from "@/common/constants";
@@ -95,12 +94,8 @@ export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
 
 export default function Layout({ children }: PropsWithChildren) {
   return (
-    <>
-      <SSRProvider>
-        <OverscrollProvider store={store}>
-          <LayoutWithoutReduxProvider>{children}</LayoutWithoutReduxProvider>
-        </OverscrollProvider>
-      </SSRProvider>
-    </>
+    <OverscrollProvider store={store}>
+      <LayoutWithoutReduxProvider>{children}</LayoutWithoutReduxProvider>
+    </OverscrollProvider>
   );
 }

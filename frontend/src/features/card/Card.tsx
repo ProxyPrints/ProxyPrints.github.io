@@ -6,7 +6,6 @@
  */
 
 import styled from "@emotion/styled";
-import { OnLoadingComplete } from "next/dist/shared/lib/get-img-props";
 import Image from "next/image";
 import React, {
   memo,
@@ -45,7 +44,16 @@ const HiddenImage = styled(Image)`
   opacity: 0;
 `;
 
-const VisibleImage = styled(Image)<{
+// next/image's <Image> forwards unrecognised props straight onto the underlying <img>, so
+// these component-only props (used only for this styled-component's own CSS interpolation)
+// need filtering at this boundary - otherwise React logs a "does not recognize the ... prop"
+// console warning for each one, on every card image rendered anywhere in the app.
+const VisibleImage = styled(Image, {
+  shouldForwardProp: (prop) =>
+    prop !== "imageIsLoading" &&
+    prop !== "showDetailedViewOnClick" &&
+    prop !== "zIndex",
+})<{
   imageIsLoading?: boolean;
   showDetailedViewOnClick?: boolean;
   zIndex?: number;
@@ -173,7 +181,7 @@ export const useImageSrc = (
   small: boolean
 ): {
   imageSrc: string | undefined;
-  onLoadingComplete: OnLoadingComplete;
+  onLoad: React.ReactEventHandler<HTMLImageElement>;
   onError: React.ReactEventHandler<HTMLImageElement>;
   imageIsLoading: boolean;
   imageRef: Ref<HTMLImageElement>;
@@ -192,7 +200,7 @@ export const useImageSrc = (
 
   /**
    * Ensure that the small thumbnail fades in each time the selected image changes.
-   * Next.js seems to not fire `onLoadingComplete` when opening a page with a cached image.
+   * Next.js seems to not fire `onLoad` when opening a page with a cached image.
    * This implementation was retrieved from https://stackoverflow.com/a/59809184
    */
   useEffect(() => {
@@ -203,7 +211,7 @@ export const useImageSrc = (
     );
   }, [cardDocument.identifier]);
 
-  const onLoadingComplete: OnLoadingComplete = (img) => {
+  const onLoad: React.ReactEventHandler<HTMLImageElement> = () => {
     if (imageState === "loading-from-bucket") {
       setImageState("loaded-from-bucket");
     } else if (imageState === "loading-from-fallback") {
@@ -225,7 +233,7 @@ export const useImageSrc = (
   if (localFileImageSrc !== undefined) {
     return {
       imageSrc: localFileImageSrc,
-      onLoadingComplete,
+      onLoad,
       onError,
       imageIsLoading,
       imageRef,
@@ -265,7 +273,7 @@ export const useImageSrc = (
 
   return {
     imageSrc,
-    onLoadingComplete,
+    onLoad,
     onError,
     imageIsLoading,
     imageRef,
@@ -281,6 +289,11 @@ interface CardImageProps {
   /** The `SearchQuery` specified when searching for this card - used to detect whether
    * `cardDocument` was matched to a specific printing via community tags. */
   searchQuery?: SearchQuery | undefined;
+  /** Hints this specific image as the page's LCP element (next/image's `priority` prop) -
+   * defaults to false, since almost every render of this shared component is one of many
+   * cards in a grid, where eager-loading every image would be actively harmful. Only ever
+   * pass true for a genuinely above-the-fold, singular hero-style usage. */
+  priority?: boolean;
 }
 
 function CardImage({
@@ -289,6 +302,7 @@ function CardImage({
   small,
   showDetailedViewOnClick,
   searchQuery,
+  priority = false,
 }: CardImageProps) {
   const dispatch = useAppDispatch();
   const handleShowDetailedView = () => {
@@ -297,14 +311,8 @@ function CardImage({
     }
   };
 
-  const {
-    imageSrc,
-    onLoadingComplete,
-    onError,
-    imageIsLoading,
-    imageRef,
-    imageState,
-  } = useImageSrc(cardDocument, small);
+  const { imageSrc, onLoad, onError, imageIsLoading, imageRef, imageState } =
+    useImageSrc(cardDocument, small);
 
   // a few other computed constants
   const imageAlt = cardDocument.name ?? "Unnamed Card";
@@ -356,9 +364,10 @@ function CardImage({
           <HiddenImage
             ref={imageRef}
             className="card-img"
-            loading="lazy"
+            loading={priority ? undefined : "lazy"}
+            priority={priority}
             src={imageSrc}
-            onLoadingComplete={onLoadingComplete}
+            onLoad={onLoad}
             onErrorCapture={onError}
             alt={imageAlt}
             fill={true}
@@ -393,11 +402,12 @@ function CardImage({
                 <VisibleImage
                   ref={imageRef}
                   className="card-img card-img-fade-in"
-                  loading="lazy"
+                  loading={priority ? undefined : "lazy"}
+                  priority={priority}
                   imageIsLoading={imageIsLoading}
                   showDetailedViewOnClick={showDetailedViewOnClick}
                   src={imageSrc}
-                  onLoadingComplete={onLoadingComplete}
+                  onLoad={onLoad}
                   onErrorCapture={onError}
                   onClick={handleShowDetailedView}
                   alt={imageAlt}

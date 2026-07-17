@@ -124,7 +124,11 @@ const CardGridContextMenu = ({
   };
   return (
     <Dropdown className="card-context-menu" align="end">
-      <Dropdown.Toggle variant="" data-testid="more-select-options">
+      <Dropdown.Toggle
+        variant=""
+        aria-label="More options"
+        data-testid="more-select-options"
+      >
         <i className="bi bi-three-dots" />
       </Dropdown.Toggle>
       <Dropdown.Menu>
