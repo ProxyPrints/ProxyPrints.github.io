@@ -412,4 +412,125 @@ describe("QuestionFeed", () => {
     expect(headline.textContent).toBe("Still need help with: 3 cards");
     expect(headline.textContent).not.toMatch(/undefined/);
   });
+
+  it("shows the rate-limit banner (not a toast) when a printing vote is rejected with 429", async () => {
+    server.use(questionFeedOnce());
+    server.use(submitTagVoteResolvesToApply);
+    server.use(
+      http.post(buildRoute("2/submitPrintingTag/"), () =>
+        HttpResponse.json(
+          {
+            name: "Rate limited",
+            message: "Too many printing tag submissions - please slow down.",
+          },
+          { status: 429 }
+        )
+      )
+    );
+    const store = renderFeed();
+    await revealCard();
+
+    // the "No match" button stays disabled until a chip is explicitly set - see the dedicated
+    // test for that behavior above
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
+    const noMatchButton = await screen.findByTestId("question-feed-no-match");
+    await waitFor(() => expect(noMatchButton).not.toBeDisabled());
+    fireEvent.click(noMatchButton);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("question-feed-rate-limited")).toBeDefined()
+    );
+    expect(
+      screen.getByTestId("question-feed-rate-limited").textContent
+    ).toMatch(/take a short breather/i);
+    expect(Object.values(store.getState().toasts.notifications)).toHaveLength(
+      0
+    );
+  });
+
+  it("surfaces the backend's own message in a toast for a non-429 printing vote failure", async () => {
+    server.use(questionFeedOnce());
+    server.use(submitTagVoteResolvesToApply);
+    server.use(
+      http.post(buildRoute("2/submitPrintingTag/"), () =>
+        HttpResponse.json(
+          {
+            name: "Bad Request",
+            message: "This card has already been resolved.",
+          },
+          { status: 400 }
+        )
+      )
+    );
+    const store = renderFeed();
+    await revealCard();
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
+    const noMatchButton = await screen.findByTestId("question-feed-no-match");
+    await waitFor(() => expect(noMatchButton).not.toBeDisabled());
+    fireEvent.click(noMatchButton);
+
+    await waitFor(() => {
+      const notifications = Object.values(
+        store.getState().toasts.notifications
+      );
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].name).toBe("Bad Request");
+      expect(notifications[0].message).toBe(
+        "This card has already been resolved."
+      );
+    });
+    expect(screen.queryByTestId("question-feed-rate-limited")).toBeNull();
+  });
+
+  it("clears a stale rate-limit banner once the next item loads", async () => {
+    let feedFetchCount = 0;
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              card: {
+                ...identifyPrintingItem.card,
+                identifier: `card-${feedFetchCount}`,
+              },
+            },
+            remainingEstimate: {
+              total: 2,
+              confirmable: 0,
+              contested: 0,
+              fresh: 2,
+            },
+          },
+          { status: 200 }
+        );
+      })
+    );
+    server.use(submitTagVoteResolvesToApply);
+    server.use(
+      http.post(buildRoute("2/submitPrintingTag/"), () =>
+        HttpResponse.json(
+          { name: "Rate limited", message: "slow down" },
+          { status: 429 }
+        )
+      )
+    );
+    renderFeed();
+    await revealCard();
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
+    const noMatchButton = await screen.findByTestId("question-feed-no-match");
+    await waitFor(() => expect(noMatchButton).not.toBeDisabled());
+    fireEvent.click(noMatchButton);
+    await waitFor(() =>
+      expect(screen.getByTestId("question-feed-rate-limited")).toBeDefined()
+    );
+
+    // Skip advances to a new item even while rate-limited (only vote submission is affected)
+    fireEvent.click(screen.getByText("Skip"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("question-feed-rate-limited")).toBeNull()
+    );
+  });
 });

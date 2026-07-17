@@ -436,7 +436,12 @@ export async function APISubmitPrintingTag(
     if (rawResponse.status === 200 && content.voteTally != null) {
       return content as PrintingConsensusResponse;
     }
-    throw { name: content.name, message: content.message };
+    // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
   });
 }
 
@@ -503,7 +508,12 @@ export async function APISubmitArtistVote(
     if (rawResponse.status === 200 && content.voteTally != null) {
       return content as ArtistConsensusResponse;
     }
-    throw { name: content.name, message: content.message };
+    // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
   });
 }
 
@@ -547,7 +557,12 @@ export async function APISubmitTagVote(
     if (rawResponse.status === 200 && content.tally != null) {
       return content as TagConsensusResponse["tags"][number];
     }
-    throw { name: content.name, message: content.message };
+    // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
   });
 }
 

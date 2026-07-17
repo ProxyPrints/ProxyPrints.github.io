@@ -12,6 +12,7 @@ import Col from "react-bootstrap/Col";
 import Form from "react-bootstrap/Form";
 import Row from "react-bootstrap/Row";
 
+import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import {
   ArtistConsensusResponse,
@@ -39,12 +40,20 @@ interface ArtistVotePickerProps {
    * printing. Omitted or null: today's unconditional-picker behavior is unchanged.
    */
   confidentlyKnownArtistName?: string | null;
+  /** Called instead of the usual error toast when a submission is rejected with 429 - lets a
+   * funnel-style caller (QuestionFeed.tsx) show its own inline "take a breather" state rather
+   * than a scary red toast for what's an expected, honest condition in a fast one-tap flow.
+   * Omitted: unchanged behavior, a rate-limit still shows as a regular (message-surfacing)
+   * error toast - the right default for this component's other caller (AttributeVotingPanel,
+   * the card-detail-modal voting surface), which isn't part of that funnel. */
+  onRateLimited?: () => void;
 }
 
 export function ArtistVotePicker({
   backendURL,
   cardIdentifier,
   confidentlyKnownArtistName,
+  onRateLimited,
 }: ArtistVotePickerProps) {
   const dispatch = useAppDispatch();
 
@@ -99,19 +108,22 @@ export function ArtistVotePicker({
           ])
         );
       })
-      .catch(() =>
+      .catch((error) => {
+        if (isRateLimited(error) && onRateLimited) {
+          onRateLimited();
+          return;
+        }
         dispatch(
           setNotification([
             Math.random().toString(),
-            {
+            errorToNotification(error, {
               name: "Vote failed",
               message:
                 "Something went wrong submitting your vote - please try again.",
-              level: "error",
-            },
+            }),
           ])
-        )
-      )
+        );
+      })
       .finally(() => setSubmitting(false));
   };
 

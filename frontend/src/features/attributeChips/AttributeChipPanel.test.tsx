@@ -5,7 +5,7 @@ import { Provider } from "react-redux";
 
 import { localBackendURL } from "@/common/test-constants";
 import { server } from "@/mocks/server";
-import { setupStore } from "@/store/store";
+import { AppStore, setupStore } from "@/store/store";
 
 import { AttributeChipPanel, initialChipStates } from "./AttributeChipPanel";
 
@@ -14,11 +14,19 @@ function buildRoute(path: string): string {
 }
 
 // a thin controlled wrapper - mirrors how QuestionFeed.tsx actually owns chipStates, so the
-// component under test exercises the same "lifted state" contract its real caller relies on
-function Wrapper({ onSubmitted }: { onSubmitted?: (tagName: string) => void }) {
+// component under test exercises the same "lifted state" contract its real caller relies on.
+// `store` is a prop (rather than created internally) so a test that needs to inspect toast
+// state afterwards can hold onto the same instance the component dispatches into.
+function Wrapper({
+  store,
+  onRateLimited,
+}: {
+  store: AppStore;
+  onRateLimited?: () => void;
+}) {
   const [states, setStates] = React.useState(initialChipStates());
   return (
-    <Provider store={setupStore()}>
+    <Provider store={store}>
       <AttributeChipPanel
         backendURL={localBackendURL}
         cardIdentifier="card-1"
@@ -26,6 +34,7 @@ function Wrapper({ onSubmitted }: { onSubmitted?: (tagName: string) => void }) {
         chipStates={states}
         onChipStatesChange={setStates}
         cardSlot={<div data-testid="card-slot-stub">card</div>}
+        onRateLimited={onRateLimited}
       />
     </Provider>
   );
@@ -50,7 +59,7 @@ describe("AttributeChipPanel", () => {
         );
       })
     );
-    render(<Wrapper />);
+    render(<Wrapper store={setupStore()} />);
 
     const chip = screen.getByTestId("attribute-chip-Full Art");
     expect(chip.getAttribute("data-chip-state")).toBe("untouched");
@@ -97,7 +106,7 @@ describe("AttributeChipPanel", () => {
         );
       })
     );
-    render(<Wrapper />);
+    render(<Wrapper store={setupStore()} />);
 
     fireEvent.click(screen.getByTestId("attribute-chip-Black Border"));
     await waitFor(() => expect(submittedTagNames).toEqual(["Black Border"]));
@@ -115,7 +124,7 @@ describe("AttributeChipPanel", () => {
         HttpResponse.json({ name: "Error", message: "failed" }, { status: 500 })
       )
     );
-    render(<Wrapper />);
+    render(<Wrapper store={setupStore()} />);
 
     fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
     await waitFor(() =>
@@ -125,5 +134,73 @@ describe("AttributeChipPanel", () => {
           .getAttribute("data-chip-state")
       ).toBe("untouched")
     );
+  });
+
+  it("calls onRateLimited (not a toast) on a 429, while still reverting the optimistic state", async () => {
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), () =>
+        HttpResponse.json(
+          {
+            name: "Rate limited",
+            message: "Too many tag vote submissions - please slow down.",
+          },
+          { status: 429 }
+        )
+      )
+    );
+    const store = setupStore();
+    let rateLimitedCallCount = 0;
+    render(
+      <Wrapper
+        store={store}
+        onRateLimited={() => {
+          rateLimitedCallCount += 1;
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
+    await waitFor(() => expect(rateLimitedCallCount).toBe(1));
+
+    expect(
+      screen
+        .getByTestId("attribute-chip-Full Art")
+        .getAttribute("data-chip-state")
+    ).toBe("untouched");
+    expect(Object.values(store.getState().toasts.notifications)).toHaveLength(
+      0
+    );
+  });
+
+  it("falls back to a toast (not onRateLimited) for a non-429 failure, even when onRateLimited is provided", async () => {
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), () =>
+        HttpResponse.json(
+          { name: "Bad Request", message: "Unknown tag" },
+          { status: 400 }
+        )
+      )
+    );
+    const store = setupStore();
+    let rateLimitedCallCount = 0;
+    render(
+      <Wrapper
+        store={store}
+        onRateLimited={() => {
+          rateLimitedCallCount += 1;
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
+    await waitFor(() => {
+      const notifications = Object.values(
+        store.getState().toasts.notifications
+      );
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].name).toBe("Bad Request");
+      expect(notifications[0].message).toBe("Unknown tag");
+    });
+    expect(rateLimitedCallCount).toBe(0);
   });
 });

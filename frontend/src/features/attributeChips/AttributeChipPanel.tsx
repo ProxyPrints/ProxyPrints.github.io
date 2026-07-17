@@ -12,6 +12,7 @@
 import styled from "@emotion/styled";
 import React, { useState } from "react";
 
+import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch } from "@/common/types";
@@ -121,6 +122,11 @@ interface AttributeChipPanelProps {
    * around it - passed in rather than owned here so QuestionFeed.tsx keeps sole ownership of
    * the reveal-animation state machine (revealed/onAnimationEnd) that slot's contents depend on. */
   cardSlot: React.ReactNode;
+  /** Called instead of the usual error toast when a submission is rejected with 429 - this
+   * component has only one caller (QuestionFeed.tsx), so this is effectively always provided,
+   * but stays optional to match the same safe-default convention as the other funnel
+   * components (see ArtistVotePicker.tsx's identical prop for the full rationale). */
+  onRateLimited?: () => void;
 }
 
 export function AttributeChipPanel({
@@ -130,6 +136,7 @@ export function AttributeChipPanel({
   chipStates,
   onChipStatesChange,
   cardSlot,
+  onRateLimited,
 }: AttributeChipPanelProps) {
   const dispatch = useAppDispatch();
   const getTagDisplayName = useTagDisplayName();
@@ -171,22 +178,26 @@ export function AttributeChipPanel({
           [tagName]: response.netPolarity,
         }));
       })
-      .catch(() => {
-        // revert both the explicit state and the optimistic fill on failure
+      .catch((error) => {
+        // revert both the explicit state and the optimistic fill on failure - the vote
+        // genuinely wasn't recorded regardless of which branch below fires
         onChipStatesChange({ ...chipStates, [tagName]: previousState });
         setConfidence((previous) => ({
           ...previous,
           [tagName]: previousConfidence,
         }));
+        if (isRateLimited(error) && onRateLimited) {
+          onRateLimited();
+          return;
+        }
         dispatch(
           setNotification([
             Math.random().toString(),
-            {
+            errorToNotification(error, {
               name: "Vote failed",
               message:
                 "Something went wrong submitting your tag - please try again.",
-              level: "error",
-            },
+            }),
           ])
         );
       })

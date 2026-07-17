@@ -13,11 +13,13 @@
  */
 
 import React, { useEffect, useState } from "react";
+import Alert from "react-bootstrap/Alert";
 import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
+import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getPrintingCandidateDataAttributes } from "@/common/cardDom";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import {
@@ -113,6 +115,11 @@ export function QuestionFeed() {
   );
   const [followUp, setFollowUp] = useState<FollowUp>("none");
   const [fetchToken, setFetchToken] = useState<number>(0);
+  // A 429 from any vote-casting call below (printing, tag, artist) sets this instead of firing
+  // the usual error toast - see the banner rendered near the top of the item below. In a
+  // one-tap funnel, a rate-limit pause is an expected, honest condition, not a failure, so it
+  // gets a persistent inline notice rather than a transient, alarm-toned toast.
+  const [rateLimited, setRateLimited] = useState<boolean>(false);
 
   const { ref: cardPanelRef, top: stickyTop } = useStickyTop([
     item?.card.identifier,
@@ -147,6 +154,7 @@ export function QuestionFeed() {
     setChipStates(initialChipStates());
     setFollowUp("none");
     setSelectedCandidateId(null);
+    setRateLimited(false);
   }, [item?.card.identifier, item?.type]);
 
   const advance = () => {
@@ -154,18 +162,22 @@ export function QuestionFeed() {
     fetchNext();
   };
 
-  const reportVoteFailed = () =>
+  const reportVoteFailed = (error: unknown) => {
+    if (isRateLimited(error)) {
+      setRateLimited(true);
+      return;
+    }
     dispatch(
       setNotification([
         Math.random().toString(),
-        {
+        errorToNotification(error, {
           name: "Vote failed",
           message:
             "Something went wrong submitting your vote - please try again.",
-          level: "error",
-        },
+        }),
       ])
     );
+  };
 
   // Selecting a candidate casts the printing vote plus one positive CardTagVote per
   // standalone attribute the candidate itself carries true - see the design doc's "Auto-tag
@@ -332,6 +344,7 @@ export function QuestionFeed() {
         chipStates={chipStates}
         onChipStatesChange={setChipStates}
         cardSlot={cardImage}
+        onRateLimited={() => setRateLimited(true)}
       />
     </CardPanel>
   );
@@ -363,6 +376,22 @@ export function QuestionFeed() {
         <p className="text-muted" data-testid="question-feed-flavor-text">
           {flavorText}
         </p>
+      )}
+      {rateLimited && (
+        // Persistent (not a self-dismissing toast) and dismissible - a rate-limit pause is an
+        // expected, honest condition in a one-tap funnel, not a failure, so it gets its own
+        // calm inline notice instead of competing with the transient error/success toast
+        // stream. The backend's 429 response doesn't include a retry-after value, so this
+        // deliberately doesn't promise a specific wait time - Skip and browsing the current
+        // item both still work while this is shown; only vote submission is affected.
+        <Alert
+          variant="warning"
+          dismissible
+          onClose={() => setRateLimited(false)}
+          data-testid="question-feed-rate-limited"
+        >
+          You&apos;re on fire &mdash; take a short breather before voting again.
+        </Alert>
       )}
       <div data-testid="question-feed-current-item">
         <Row className="g-4">
@@ -541,6 +570,7 @@ export function QuestionFeed() {
                           backendURL={backendURL}
                           cardIdentifier={item.card.identifier}
                           onDone={advance}
+                          onRateLimited={() => setRateLimited(true)}
                         />
                       </div>
                     )}
@@ -586,6 +616,7 @@ export function QuestionFeed() {
                       confidentlyKnownArtistName={
                         item.confidentlyKnownArtistName
                       }
+                      onRateLimited={() => setRateLimited(true)}
                     />
                     <div className="mt-3">
                       <Button variant="outline-secondary" onClick={skip}>
@@ -600,6 +631,7 @@ export function QuestionFeed() {
                     cardIdentifier={item.card.identifier}
                     tagName={item.tagName}
                     onAnswered={advance}
+                    onRateLimited={() => setRateLimited(true)}
                   />
                 )}
               </Col>
