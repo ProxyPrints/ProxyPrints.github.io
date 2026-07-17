@@ -47,6 +47,10 @@ interface ArtistVotePickerProps {
    * error toast - the right default for this component's other caller (AttributeVotingPanel,
    * the card-detail-modal voting surface), which isn't part of that funnel. */
   onRateLimited?: () => void;
+  /** Which UI surface cast this vote - see APISubmitPrintingTag's identical param for the
+   * full rationale. Omitted (this component's other caller, AttributeVotingPanel): unchanged
+   * behavior, no voteSurface sent. */
+  voteSurface?: string;
 }
 
 export function ArtistVotePicker({
@@ -54,6 +58,7 @@ export function ArtistVotePicker({
   cardIdentifier,
   confidentlyKnownArtistName,
   onRateLimited,
+  voteSurface,
 }: ArtistVotePickerProps) {
   const dispatch = useAppDispatch();
 
@@ -93,7 +98,8 @@ export function ArtistVotePicker({
       cardIdentifier,
       getOrCreateAnonymousId(),
       artistName,
-      isUnknown
+      isUnknown,
+      voteSurface
     )
       .then((response) => {
         setConsensus(response);

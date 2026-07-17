@@ -246,7 +246,8 @@ export function QuestionFeed() {
       item.card.identifier,
       anonymousId,
       candidate?.identifier,
-      isNoMatch
+      isNoMatch,
+      "question-feed"
     )
       .then(() => {
         if (candidate != null) {
@@ -258,7 +259,9 @@ export function QuestionFeed() {
                 item.card.identifier,
                 anonymousId,
                 chip.tagName,
-                1
+                1,
+                "same-origin",
+                "question-feed"
               )
             )
           ).catch(() => undefined); // best-effort - a failed auto-tag shouldn't block advancing
@@ -306,7 +309,8 @@ export function QuestionFeed() {
       item.card.identifier,
       anonymousId,
       undefined,
-      true
+      true,
+      "question-feed"
     )
       .then(() => {
         APISubmitTagVote(
@@ -314,7 +318,9 @@ export function QuestionFeed() {
           item.card.identifier,
           anonymousId,
           "custom-art",
-          1
+          1,
+          "same-origin",
+          "question-feed"
         ).catch(() => undefined);
         setFlavorText(
           "Logged as custom / alternate art - thanks! Moving on..."
@@ -364,7 +370,9 @@ export function QuestionFeed() {
           item.card.identifier,
           anonymousId,
           tagName,
-          1
+          1,
+          "same-origin",
+          "question-feed"
         )
       )
     )
@@ -911,6 +919,7 @@ export function QuestionFeed() {
                         item.confidentlyKnownArtistName
                       }
                       onRateLimited={() => setRateLimited(true)}
+                      voteSurface="question-feed"
                     />
                     <div className="mt-3">
                       <Button variant="outline-secondary" onClick={skip}>

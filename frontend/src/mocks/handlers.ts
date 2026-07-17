@@ -399,6 +399,31 @@ export const searchResultsResolvedPrintingMatch = http.post(
     )
 );
 
+// Same shape as searchResultsResolvedPrintingMatch, but the card ISN'T yet Resolved -
+// cardDocument8 already carries a matching canonicalCard (xyz/001) with
+// printingTagStatus: Unresolved, so this is the "imported with a canonical printing ID, not
+// yet human-confirmed" case Level 0's deckbuilder-confirmation affordance gates on (see
+// DeckbuilderConfirmAffordance.tsx). Two results (not one, unlike
+// searchResultsResolvedPrintingMatch) so CardSlot's own grid-selector-modal gate
+// (searchResultsForQuery.length > 1) actually opens for the NO path's test coverage.
+export const searchResultsUnresolvedCanonicalImport = http.post(
+  buildRoute("3/editorSearch/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [computeSearchQueryHashKey({
+            query: "card 8",
+            cardType: CardType.Card,
+            expansionCode: "XYZ",
+            collectorNumber: "001",
+          })]: [cardDocument8.identifier, cardDocument9.identifier],
+        },
+      },
+      { status: 200 }
+    )
+);
+
 export const searchResultsFourResults = http.post(
   buildRoute("3/editorSearch/"),
   () =>

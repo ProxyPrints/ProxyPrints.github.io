@@ -57,7 +57,8 @@ export function QueueTagQuestion({
       getOrCreateAnonymousId(),
       tagName,
       polarity,
-      credentials
+      credentials,
+      "question-feed"
     )
       .then(() => onAnswered())
       .catch((error) => {
