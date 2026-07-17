@@ -11,6 +11,8 @@ selected card's name actually produced, never a bulk backfill of the full 113k-r
 
 import logging
 import os
+import threading
+import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from io import BytesIO
@@ -169,6 +171,38 @@ class BackfillResult:
 # rate-limited regardless of local thread count.
 DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES = 2
 
+# 2026-07-17 addendum: the Worker's IMAGE_FULL_TIER_RATE_LIMITER binding above was confirmed -
+# via direct read of cardpicker.image_cdn_fetch.get_worker_image_url (hardcodes the "full" tier
+# URL regardless of dpi, so this backfill's small-dpi fetches take the identical uncached path
+# as the pilot's own) and image-cdn/src/handler/image.ts's "full" case (unconditional
+# fetchWithRateLimit call, no cache short-circuit) - to NOT be enforcing its configured 3 req/sec
+# ceiling at this backfill's real bulk-fetch volume (observed ~10.5/s sustained, zero 429s in the
+# log). See docs/troubleshooting.md. The ceiling's original purpose (protecting the shared lh4
+# endpoint live PDF export/bulk download also depend on) is unchanged, so client-side pacing is
+# now the only layer actually holding it.
+DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC = 3.0
+
+
+class _RateLimiter:
+    """Strict minimum-interval pacer - not a token bucket, no burst allowance, since the goal is
+    holding a steady <= rate ceiling (see DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC above), not
+    permitting bursts. One instance is shared across every worker thread; acquire() blocks the
+    calling thread until its own turn, so the ceiling holds regardless of how many threads are
+    trying to fetch at once."""
+
+    def __init__(self, rate_per_sec: float) -> None:
+        self._interval = 1.0 / rate_per_sec
+        self._lock = threading.Lock()
+        self._next_allowed = 0.0
+
+    def acquire(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            wait_time = max(0.0, self._next_allowed - now)
+            self._next_allowed = max(now, self._next_allowed) + self._interval
+        if wait_time > 0:
+            time.sleep(wait_time)
+
 
 def run_content_phash_backfill(
     dry_run: bool = False,
@@ -178,6 +212,7 @@ def run_content_phash_backfill(
     nice: bool = True,
     progress_every: int = 1000,
     queue_depth_batches: int = DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES,
+    rate_limit_per_sec: Optional[float] = None,
 ) -> BackfillResult:
     """
     One-time backfill (docs/features/printing-tags.md, 2026-07-16): hashes every existing Card
@@ -212,6 +247,12 @@ def run_content_phash_backfill(
     test_local_identify_printing_tags.py for the explicit proof. A kill/crash loses at most the
     in-flight window (`batch_size * queue_depth_batches` cards, already-persisted batches are
     safe) - the same NULL-filter checkpoint discipline covers it on the next invocation.
+
+    `rate_limit_per_sec` (2026-07-17 addendum, see DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC and
+    _RateLimiter above): None (the default here) disables pacing entirely - every test in this
+    module relies on that to stay fast. The management command passes the real ceiling
+    explicitly. Gated at the fetch call itself (inside the per-card worker function), not at
+    submission, so it holds regardless of `workers`/`batch_size` tuning.
     """
     if nice:
         try:
@@ -236,6 +277,12 @@ def run_content_phash_backfill(
     processed = 0
     to_persist: list[Card] = []
     window_size = max(batch_size * queue_depth_batches, workers)
+    limiter = _RateLimiter(rate_limit_per_sec) if rate_limit_per_sec else None
+
+    def _fetch_one(card: Card) -> Optional[int]:
+        if limiter is not None:
+            limiter.acquire()
+        return compute_content_phash_for_card(card)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         pending: dict["Future[Optional[int]]", Card] = {}
@@ -244,7 +291,7 @@ def run_content_phash_backfill(
         def submit_next() -> None:
             card = next(card_iter, None)
             if card is not None:
-                pending[executor.submit(compute_content_phash_for_card, card)] = card
+                pending[executor.submit(_fetch_one, card)] = card
 
         for _ in range(window_size):
             submit_next()
@@ -331,6 +378,7 @@ __all__ = [
     "DEFAULT_BACKFILL_BATCH_SIZE",
     "DEFAULT_BACKFILL_WORKERS",
     "DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES",
+    "DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC",
     "PhashMatch",
     "BackfillResult",
     "get_or_compute_canonical_hash",
