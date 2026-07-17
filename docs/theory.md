@@ -63,21 +63,35 @@ actually happens in this system, from smallest to largest scale:
 **a. The 300+300 harvested-pair validation** (`docs/features/printing-tags.md`,
 "Validation against real production data") — 300 real pairs of distinct
 `Card` rows the live run's own engines voted for the _same_ printing,
-partitioned by an independent ground truth (full-resolution phash
-distance, which is a stricter, orthogonal check than "voted the same"):
-79 were true duplicate uploads (100% correctly landed within the
-clustering distance threshold, zero false splits); 162 were different
-photos of the genuinely same printing (correctly did not cluster as
-"same upload" in the large majority — 11.7% coincidentally landed within
-threshold anyway, but since the underlying printing really is the same,
-this degrades precision of a _secondary_ clustering heuristic, not
-correctness of the printing vote itself). Separately, 269 pairs voted
-for _different_ printings (the false-merge check): **zero** landed
-within the clustering threshold — minimum observed distance 6, clear of
-the cutoff. _(Note for review: the 79+162 partition sums to 241 of the
-300 same-printing pairs, not 300 — the source section doesn't explain
-the remaining 59; flagging rather than inventing a reason. Worth
-resolving before this is called final.)_
+plus 300 pairs voted for _different_ printings (the false-merge check),
+harvested via a read-only query against the live production DB. The
+same-printing pairs were further partitioned by an independent ground
+truth (full-resolution phash distance, which is a stricter, orthogonal
+check than "voted the same"): 79 were true duplicate uploads (100%
+correctly landed within the clustering distance threshold, zero false
+splits); 162 were different photos of the genuinely same printing
+(correctly did not cluster as "same upload" in the large majority —
+11.7% coincidentally landed within threshold anyway, but since the
+underlying printing really is the same, this degrades precision of a
+_secondary_ clustering heuristic, not correctness of the printing vote
+itself). Of the different-printing pairs, 269 were analyzed: **zero**
+landed within the clustering threshold — minimum observed distance 6,
+clear of the cutoff.
+
+_(Note for review, checked against source data before writing this,
+not inferred: the doc's own 79+162 partition accounts for 241 of the
+300 same-printing pairs (59 unaccounted), and its 269 accounts for the
+300 different-printing pairs (31 unaccounted) — the same shortfall
+pattern in both categories, which is itself a clue (a shared filtering
+step — e.g. a pair where one card lacked a computable full-resolution
+hash — dropped some fraction of both harvests before analysis), but
+neither `docs/features/printing-tags.md` nor the same-day journal entry
+(`journal/2026-07-16-hash-at-ingest.md`) states what that step was or
+which pairs it dropped. Checked both sources directly rather than
+guessing. The false-accept-bound conclusions above are calibrated only
+on the accounted-for cases (241 and 269 respectively), consistent with
+that — but the reconciliation itself is still open and belongs on the
+owner's desk, not resolved by assumption here.)_
 
 **b. The no-match autopsy** (`docs/features/printing-tags.md`, "No-match
 autopsy") — of 176 real OCR `parsed-but-no-match` cases, only 2/176
