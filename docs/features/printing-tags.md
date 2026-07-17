@@ -152,6 +152,38 @@ printings, artists, tags, and moderation from one screen.
   consumer).
 - Candidate buttons carry the card DOM API's data attributes — see
   [[card-dom-api.md]].
+- **Confirmation-flow UX pass** (frontend-polish package, PR-A,
+  2026-07-17), presentation/interaction only — none of it touches
+  `question_feed.py` or tier ordering:
+  - A genuine `GET 2/questionFeed/` fetch failure now renders a distinct
+    `question-feed-error` state (a "something went wrong" message plus a
+    retry button) instead of being folded into the same `caughtUp` state
+    as a real empty queue — the old code made a backend outage look
+    exactly like "you've finished," so a user could walk away thinking
+    there was nothing left to do.
+  - The candidate-type layout (`confirm_suggestion`/`identify_printing`)
+    now puts the card being asked about first in DOM order via Bootstrap's
+    `order`/`order-md-*` utilities — at `md` and up this is a no-op (same
+    candidates-left/card-right arrangement as before), but at mobile
+    widths, where the two columns stack, the mystery card used to render
+    _after_ every answer option, so a voter had to scroll past all the
+    candidates before seeing what they were even being asked about.
+  - Tapping a candidate now shows a small spinner on that specific
+    candidate's own art box while the vote submits, instead of uniformly
+    dimming every button — previously there was no way to tell, under any
+    real latency, whether the button you tapped actually registered.
+  - Candidate-type items now show a small badge ("Suggested match" for
+    `confirm_suggestion`, "Needs identification" for `identify_printing`)
+    above the candidate grid.
+- **Known schema gap surfaced by the badge above, not fixed here**: tier 2
+  (contested) and tier 4 (fresh) — `_tier_2_contested`/`_tier_4_fresh` in
+  `question_feed.py` — both call `_identify_printing_item`, producing the
+  exact same `type: "identify_printing"` payload shape with no field
+  distinguishing one from the other. The frontend badge above can only
+  tell confirmable apart from everything else; a true three-way
+  confirmable/contested/fresh split would need a new field on
+  `QuestionFeedItem` (a schema + `question_feed.py` change), which is
+  outside this pass's presentation-only scope.
 
 ## Key files (Stages 1–7; Stage 8+ files are in [[catalog-completion-plan.md]])
 

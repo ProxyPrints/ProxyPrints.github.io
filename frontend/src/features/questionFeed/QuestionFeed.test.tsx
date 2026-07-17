@@ -269,6 +269,130 @@ describe("QuestionFeed", () => {
     expect(autoTagCallCount).toBe(0);
   });
 
+  it("shows a distinct error state (not 'all caught up') on a fetch failure, with a working retry", async () => {
+    let callCount = 0;
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        callCount += 1;
+        return callCount === 1
+          ? HttpResponse.json(
+              { name: "Backend Error", message: "boom" },
+              { status: 500 }
+            )
+          : HttpResponse.json(
+              {
+                item: identifyPrintingItem,
+                remainingEstimate: {
+                  total: 1,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 1,
+                },
+              },
+              { status: 200 }
+            );
+      })
+    );
+    renderFeed();
+
+    expect(await screen.findByTestId("question-feed-error")).toBeVisible();
+    expect(screen.queryByTestId("question-feed-empty")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "You're all caught up - no cards left to work on right now!"
+      )
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("question-feed-retry"));
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("question-feed-current-item")
+      ).toBeInTheDocument()
+    );
+    expect(callCount).toBe(2);
+  });
+
+  it("badges a confirm_suggestion item as a suggested match", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              type: "confirm_suggestion",
+              suggestedPrinting: identifyPrintingItem.candidates[0],
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    expect(
+      await screen.findByTestId("question-feed-tier-badge")
+    ).toHaveTextContent("Suggested match");
+  });
+
+  it("badges a fresh/contested identify_printing item as needing identification", async () => {
+    server.use(questionFeedOnce());
+    renderFeed();
+    await revealCard();
+
+    expect(
+      await screen.findByTestId("question-feed-tier-badge")
+    ).toHaveTextContent("Needs identification");
+  });
+
+  it("shows a submitting indicator only on the tapped candidate, not the others or 'No match'", async () => {
+    server.use(questionFeedOnce());
+    let resolveSubmit: () => void = () => undefined;
+    const submitPromise = new Promise<void>((resolve) => {
+      resolveSubmit = resolve;
+    });
+    server.use(
+      http.post(buildRoute("2/submitPrintingTag/"), async () => {
+        await submitPromise;
+        return HttpResponse.json(
+          { resolvedPrinting: null, isNoMatch: false, voteTally: [] },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+    await revealCard();
+
+    const tappedCandidate = await screen.findByAltText("xyz 42");
+    fireEvent.click(tappedCandidate);
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("question-feed-candidate-submitting-printing-2")
+      ).toBeInTheDocument()
+    );
+    expect(
+      screen.queryByTestId("question-feed-candidate-submitting-printing-1")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("question-feed-no-match-submitting")
+    ).not.toBeInTheDocument();
+
+    resolveSubmit();
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("question-feed-candidate-submitting-printing-2")
+      ).not.toBeInTheDocument()
+    );
+  });
+
   it("degrades gracefully instead of showing 'undefined cards' when the backend still returns the legacy remainingEstimate:number shape", async () => {
     // regression test - frontend and backend deploy independently, so this frontend build can
     // briefly be live against a not-yet-deployed backend still returning a plain number here
