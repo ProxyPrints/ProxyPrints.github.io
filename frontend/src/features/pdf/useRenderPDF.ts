@@ -5,6 +5,7 @@ import { pdfRenderService } from "@/features/pdf/pdfRenderService";
 
 import { useClientSearchContext } from "../clientSearch/clientSearchContext";
 import { PDFProps } from "./PDF";
+import { ImageFetchFailure } from "./pdfImage";
 
 export const useRenderPDF = ({
   cardSelectionMode,
@@ -43,15 +44,14 @@ export const useRenderPDF = ({
   scmOffsetAngleDeg,
 }: Omit<PDFProps, "fileHandles">) => {
   const { clientSearchService } = useClientSearchContext();
-  const {
-    value: url,
-    loading,
-    error,
-  } = useAsync(async () => {
+  const { value, loading, error } = useAsync(async (): Promise<{
+    url: string;
+    failures: Array<ImageFetchFailure>;
+  }> => {
     const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
       cardDocumentsByIdentifier
     );
-    const blob = await pdfRenderService.renderPDFInWorker({
+    const { blob, failures } = await pdfRenderService.renderPDFInWorker({
       cardSelectionMode,
       pageSize,
       pageWidth,
@@ -88,7 +88,7 @@ export const useRenderPDF = ({
       scmOffsetAngleDeg,
       fileHandles,
     });
-    return URL.createObjectURL(blob);
+    return { url: URL.createObjectURL(blob), failures };
   }, [
     cardSelectionMode,
     pageSize,
@@ -125,6 +125,14 @@ export const useRenderPDF = ({
     scmOffsetAngleDeg,
   ]);
 
-  useEffect(() => (url ? () => URL.revokeObjectURL(url) : undefined), [url]);
-  return { url, loading, error };
+  useEffect(
+    () => (value?.url ? () => URL.revokeObjectURL(value.url) : undefined),
+    [value?.url]
+  );
+  return {
+    url: value?.url,
+    failures: value?.failures ?? [],
+    loading,
+    error,
+  };
 };

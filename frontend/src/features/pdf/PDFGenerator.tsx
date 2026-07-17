@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import React from "react";
+import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Container from "react-bootstrap/Container";
@@ -29,6 +30,10 @@ import {
   PDFProps,
 } from "@/features/pdf/PDF";
 import { PDFCanvasPreview } from "@/features/pdf/PDFCanvasPreview";
+import {
+  dedupeFailuresByIdentifier,
+  ImageFetchFailure,
+} from "@/features/pdf/pdfImage";
 import { pdfRenderService } from "@/features/pdf/pdfRenderService";
 import {
   BORDERLESS_STUDIO_EXPANSION_MM,
@@ -50,6 +55,36 @@ import { AppDispatch } from "@/store/store";
 import { useClientSearchContext } from "../clientSearch/clientSearchContext";
 import { useRenderPDF } from "./useRenderPDF";
 
+/**
+ * @react-pdf/renderer silently skips a card image it can't fetch rather than
+ * failing the whole render (see pdfImage.ts) - so a successful render can
+ * still contain blank cards. Confirming with the user before committing to
+ * the download/upload is the only point this is still cheaply recoverable:
+ * once the file is saved, a blank card is easy to miss until it's already
+ * been sent off to print.
+ */
+const confirmDespiteImageFailures = (
+  failures: Array<ImageFetchFailure>
+): boolean => {
+  const shown = failures.slice(0, 10).map((failure) => `• ${failure.label}`);
+  const remainder =
+    failures.length > shown.length
+      ? [`…and ${failures.length - shown.length} more`]
+      : [];
+  return window.confirm(
+    [
+      `${failures.length} card image${
+        failures.length === 1 ? "" : "s"
+      } couldn't be loaded and will be blank:`,
+      "",
+      ...shown,
+      ...remainder,
+      "",
+      "Continue anyway?",
+    ].join("\n")
+  );
+};
+
 const downloadPDF = async (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
@@ -68,12 +103,28 @@ const downloadPDF = async (
       },
     ])
   );
-  return pdfRenderService
-    .renderPDF({ ...props, fileHandles })
-    .then((blob) =>
-      downloadFile(blob, undefined, "cards.pdf", clientSearchService)
-    )
-    .then(() => true);
+  const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
+    ...props,
+    fileHandles,
+  });
+  const failures = dedupeFailuresByIdentifier(rawFailures);
+  if (failures.length > 0 && !confirmDespiteImageFailures(failures)) {
+    dispatch(
+      setNotification([
+        Math.random().toString(),
+        {
+          name: "Download Cancelled",
+          message: `${failures.length} card image${
+            failures.length === 1 ? "" : "s"
+          } failed to load - PDF was not downloaded.`,
+          level: "warning",
+        },
+      ])
+    );
+    return false;
+  }
+  await downloadFile(blob, undefined, "cards.pdf", clientSearchService);
+  return true;
 };
 
 const useDownloadPDF = (
@@ -114,7 +165,26 @@ const saveToDrivePDF = async (
       },
     ])
   );
-  const blob = await pdfRenderService.renderPDF({ ...props, fileHandles });
+  const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
+    ...props,
+    fileHandles,
+  });
+  const failures = dedupeFailuresByIdentifier(rawFailures);
+  if (failures.length > 0 && !confirmDespiteImageFailures(failures)) {
+    dispatch(
+      setNotification([
+        Math.random().toString(),
+        {
+          name: "Save Cancelled",
+          message: `${failures.length} card image${
+            failures.length === 1 ? "" : "s"
+          } failed to load - PDF was not saved.`,
+          level: "warning",
+        },
+      ])
+    );
+    return false;
+  }
   const token = await requestGoogleDriveWriteToken(
     process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID as string
   );
@@ -970,7 +1040,13 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     equalityFn,
   });
 
-  const { url, loading, error } = useRenderPDF(debouncedPDFProps);
+  const {
+    url,
+    failures: rawFailures,
+    loading,
+    error,
+  } = useRenderPDF(debouncedPDFProps);
+  const failures = dedupeFailuresByIdentifier(rawFailures);
 
   const showSpinner = debouncedState.isPending() || loading;
 
@@ -1161,6 +1237,27 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
         <Col lg={9} md={8} sm={7} xs={6} style={{ position: "relative" }}>
           {showSpinner && (
             <Spinner size={6} zIndex={3} positionAbsolute={true} />
+          )}
+          {!showSpinner && error != null && (
+            <Alert
+              variant="danger"
+              className="m-2"
+              data-testid="pdf-preview-error"
+            >
+              Couldn&apos;t generate a preview:{" "}
+              {error instanceof Error ? error.message : String(error)}
+            </Alert>
+          )}
+          {!showSpinner && error == null && failures.length > 0 && (
+            <Alert
+              variant="warning"
+              className="m-2"
+              data-testid="pdf-preview-image-failures"
+            >
+              {failures.length} card image{failures.length === 1 ? "" : "s"}{" "}
+              couldn&apos;t be loaded and will appear blank:{" "}
+              {failures.map((failure) => failure.label).join(", ")}
+            </Alert>
           )}
           <Blurrable
             disabled={showSpinner}
