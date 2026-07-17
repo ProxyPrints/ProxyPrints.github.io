@@ -688,5 +688,12 @@ over a closed codebook.
   from `verify_no_machine_only_resolutions` run against the whole
   resolved-card pool.
 - Parts 2 and 3 proceed now that #27 is merged. Part 4 after HOLD #B.
-  Part 5 after HOLD #C. Part 6 last, gated on the full run's own
-  completion.
+  Part 5 after HOLD #C.
+- Part 6: **merged** — `docs/theory.md`, reviewed and approved by the
+  owner 2026-07-17 (3 edits: §2b's false-accept/abstention-verification
+  reframe + arithmetic fix, §3's XOR-framing correction). Calibrated
+  against the full-catalog run's real numbers (43,426 votes, 26.2%
+  invocation hit rate, 0/43,426 gate). Sequencing after backfill
+  completes: Part 3's volume check against real `content_phash` + the
+  6,379 scan-logged frame-mismatches, then Part 4 HOLD #B, then Part 5
+  HOLD #C.

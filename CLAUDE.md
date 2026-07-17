@@ -116,3 +116,7 @@ status update, and blocker report.
   Upstreaming workflow in `docs/infrastructure.md`).
 - [`docs/federation-v1.md`](docs/federation-v1.md) — federation verdict
   exchange format v1 (spec, implementation pending).
+- [`docs/theory.md`](docs/theory.md) — the printing-identification
+  pipeline as candidate-constrained decoding: false-accept bound,
+  prior-art comparison, soundness mechanisms, Sybil/Dawid-Skene
+  addendum. Doubles as the federation pitch's technical annex.
