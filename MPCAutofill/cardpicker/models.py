@@ -607,6 +607,17 @@ class AbstractWeightedVote(models.Model):
     # --run-id <id>) without touching any other invocation's votes under the same anonymous_id.
     # Indexed since the purge command filters on it directly.
     run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    # Which UI surface cast this vote (e.g. "deckbuilder-confirm", "question-feed") - client-
+    # supplied, optional, persisted verbatim with no server-side vocabulary enforced here (the
+    # frontend owns what surface names exist; a new surface needs no backend change to start
+    # sending it). Never affects consensus weighting or resolution today - purely an evidence-
+    # source label. Exists for future per-surface reliability estimation (docs/theory.md's
+    # Dawid-Skene addendum): a deckbuilder-confirm ("is this the right art?", already-selected
+    # context) and a cold question-feed vote (no prior context) are different evidence channels
+    # with plausibly different reliability, and this field is what would let that be measured
+    # rather than assumed. Optional and ignore-if-absent on every submission endpoint - an old
+    # frontend build that's never heard of this field keeps working unchanged, NULL here.
+    vote_surface = models.CharField(max_length=64, null=True, blank=True)
 
     class Meta:
         abstract = True

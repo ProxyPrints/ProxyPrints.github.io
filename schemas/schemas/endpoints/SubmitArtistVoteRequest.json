@@ -6,7 +6,8 @@
     "identifier": { "type": "string" },
     "artistName": { "type": ["string", "null"] },
     "isUnknown": { "type": "boolean" },
-    "anonymousId": { "type": "string" }
+    "anonymousId": { "type": "string" },
+    "voteSurface": { "type": ["string", "null"] }
   },
   "required": ["identifier", "isUnknown", "anonymousId"],
   "additionalProperties": false

@@ -398,3 +398,41 @@ class TestPostSubmitArtistVote:
 
         assert first.status_code == 200
         assert second.status_code == 429
+
+    def test_vote_surface_is_persisted_verbatim_when_sent(self, client, django_settings):
+        card = CardFactory()
+        artist = CanonicalArtistFactory()
+
+        client.post(
+            reverse(views.post_submit_artist_vote),
+            {
+                "identifier": card.identifier,
+                "artistName": artist.name,
+                "isUnknown": False,
+                "anonymousId": "anon-1",
+                "voteSurface": "question-feed",
+            },
+            content_type="application/json",
+        )
+
+        vote = CardArtistVote.objects.get(card=card, anonymous_id="anon-1")
+        assert vote.vote_surface == "question-feed"
+
+    def test_vote_surface_is_null_when_omitted_old_client_unaffected(self, client, django_settings):
+        card = CardFactory()
+        artist = CanonicalArtistFactory()
+
+        response = client.post(
+            reverse(views.post_submit_artist_vote),
+            {
+                "identifier": card.identifier,
+                "artistName": artist.name,
+                "isUnknown": False,
+                "anonymousId": "anon-1",
+            },
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        vote = CardArtistVote.objects.get(card=card, anonymous_id="anon-1")
+        assert vote.vote_surface is None
