@@ -9,6 +9,7 @@
 import React, { useState } from "react";
 import Button from "react-bootstrap/Button";
 
+import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch } from "@/common/types";
@@ -26,6 +27,11 @@ interface QueueTagQuestionProps {
    * QuestionFeed.tsx), which reuses this exact component rather than forking a moderator-only
    * variant. Defaults to "same-origin" - unchanged behavior for every pre-existing caller. */
   credentials?: RequestCredentials;
+  /** Called instead of the usual error toast when a submission is rejected with 429 - see
+   * ArtistVotePicker.tsx's identical prop for the full rationale. This component has only one
+   * caller today (QuestionFeed.tsx), so this is effectively always provided, but stays optional
+   * to match the same safe-default convention as the other funnel components. */
+  onRateLimited?: () => void;
 }
 
 const APPLY = 1;
@@ -37,6 +43,7 @@ export function QueueTagQuestion({
   tagName,
   onAnswered,
   credentials = "same-origin",
+  onRateLimited,
 }: QueueTagQuestionProps) {
   const dispatch = useAppDispatch();
   const getTagDisplayName = useTagDisplayName();
@@ -53,19 +60,22 @@ export function QueueTagQuestion({
       credentials
     )
       .then(() => onAnswered())
-      .catch(() =>
+      .catch((error) => {
+        if (isRateLimited(error) && onRateLimited) {
+          onRateLimited();
+          return;
+        }
         dispatch(
           setNotification([
             Math.random().toString(),
-            {
+            errorToNotification(error, {
               name: "Vote failed",
               message:
                 "Something went wrong submitting your vote - please try again.",
-              level: "error",
-            },
+            }),
           ])
-        )
-      )
+        );
+      })
       .finally(() => setSubmitting(false));
   };
 

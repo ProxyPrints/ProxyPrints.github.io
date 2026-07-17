@@ -20,6 +20,7 @@ import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
+import { errorToNotification } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { ModerationQueueItem } from "@/common/schema_types";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
@@ -97,16 +98,14 @@ export function ReportsPanel() {
         "include" // attach the moderator session so this vote is privileged
       );
       advance();
-    } catch (error: any) {
+    } catch (error) {
       dispatch(
         setNotification([
           Math.random().toString(),
-          {
-            name: error?.name ?? "Vote failed",
-            message:
-              error?.message ?? "Something went wrong - please try again.",
-            level: "error",
-          },
+          errorToNotification(error, {
+            name: "Vote failed",
+            message: "Something went wrong - please try again.",
+          }),
         ])
       );
     } finally {

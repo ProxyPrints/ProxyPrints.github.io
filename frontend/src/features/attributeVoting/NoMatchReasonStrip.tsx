@@ -30,6 +30,7 @@ import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
+import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch } from "@/common/types";
@@ -53,12 +54,18 @@ interface NoMatchReasonStripProps {
   cardIdentifier: string;
   /** Called once a reason has been submitted, or the user skips. */
   onDone: () => void;
+  /** Called instead of the usual error toast when a submission is rejected with 429 - see
+   * ArtistVotePicker.tsx's identical prop for the full rationale. This component has only one
+   * caller today (QuestionFeed.tsx), so this is effectively always provided, but stays optional
+   * to match the same safe-default convention as the other funnel components. */
+  onRateLimited?: () => void;
 }
 
 export function NoMatchReasonStrip({
   backendURL,
   cardIdentifier,
   onDone,
+  onRateLimited,
 }: NoMatchReasonStripProps) {
   const dispatch = useAppDispatch();
   const getTagDisplayName = useTagDisplayName();
@@ -82,19 +89,22 @@ export function NoMatchReasonStrip({
       APPLY
     )
       .then(() => onDone())
-      .catch(() =>
+      .catch((error) => {
+        if (isRateLimited(error) && onRateLimited) {
+          onRateLimited();
+          return;
+        }
         dispatch(
           setNotification([
             Math.random().toString(),
-            {
+            errorToNotification(error, {
               name: "Vote failed",
               message:
                 "Something went wrong submitting your vote - please try again.",
-              level: "error",
-            },
+            }),
           ])
-        )
-      )
+        );
+      })
       .finally(() => setSubmittingTagName(null));
   };
 
