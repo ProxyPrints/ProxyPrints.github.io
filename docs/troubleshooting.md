@@ -223,7 +223,7 @@ change once someone explicitly redeploys the persistent containers
 changes an API response's shape is live on Pages within minutes, but the
 backend can lag by hours or longer if nothing triggers a redeploy —
 "stale but schema-compatible" is false the moment a shape change merges;
-that assumption only holds for the deploy-skew window *before* the shape
+that assumption only holds for the deploy-skew window _before_ the shape
 actually changed, not after.
 
 **Fix**: (a) merging an API-shape-changing PR isn't "done" — it isn't
