@@ -13,8 +13,8 @@ import { importText, loadPageWithDefaultBackend } from "./test-utils";
 
 // Matches the domains configured via NEXT_PUBLIC_IMAGE_WORKER_URL /
 // NEXT_PUBLIC_IMAGE_BUCKET_URL in playwright.config.ts's webServer env.
-const IMAGE_WORKER_URL_PATTERN = /^https:\/\/cdn\.mpcautofill\.com\//;
-const IMAGE_BUCKET_URL_PATTERN = /^https:\/\/img\.mpcautofill\.com\//;
+const IMAGE_WORKER_URL_PATTERN = /^https:\/\/cdn\.proxyprints\.ca\//;
+const IMAGE_BUCKET_URL_PATTERN = /^https:\/\/img\.proxyprints\.ca\//;
 
 const oneCardHandlers = [
   cardDocumentsOneResult,

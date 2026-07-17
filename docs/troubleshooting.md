@@ -384,3 +384,80 @@ if Cloudflare dashboard/API access becomes available later, revisit
 whether the binding itself needs a support ticket or config change.
 
 **Refs**: `docs/features/image-cdn.md`, `docs/features/catalog-completion-plan.md`'s Part 2 section.
+
+## A cloud-sandbox Playwright run fails ~24-29 specs that all pass locally with real network
+
+**Symptom**: a batch of otherwise-unrelated Playwright specs
+(`AddCardToFavorites`, `ArtistVotePicker`, `PrintingTagPicker`,
+`TagVotePicker`, `ReportCard`, `Toasts`, `CardDetailedViewModal.visual`,
+intermittently `New.visual`) fails together, every time, in a given
+cloud/agentic dev sandbox — never a partial subset, never a different
+failure signature — while GitHub Actions CI passes the same specs
+cleanly on the same code.
+
+**Cause**: the sandbox environment these specs were authored in has no
+real network egress to the image-CDN domains
+(`cdn.proxyprints.ca`/`img.proxyprints.ca`) the app fetches card images
+from — every card image fails to load regardless of the diff under
+test, producing a consistent, diff-independent failure signature. One
+representative failure traced directly to a `getByAltText` call timing
+out waiting on a real image load (see PR #35's body for the full
+investigation). Confirmed as the correct diagnosis, not just a
+plausible guess: re-ran this exact bucket (26 specs including all of
+the above) on 2026-07-17 from this box, with a real dev server pointed
+at real `NEXT_PUBLIC_IMAGE_WORKER_URL`/`NEXT_PUBLIC_IMAGE_BUCKET_URL`
+values and genuine outbound network access — all 26 passed. GitHub
+Actions CI runners have real egress too, which is why this bucket has
+never shown up there.
+
+**Fix**: there is nothing to fix in application code — this is an
+environment property, not a bug. Don't chase these failures as
+regressions when they show up in a sandbox; don't add sandbox-specific
+skips or mocks to work around it either, since that would silently
+weaken the tests everywhere. To get a genuine real-image signal from
+this kind of environment, either run against a real dev server with
+real CDN env vars and real egress (this box, or any environment with
+outbound network access), or trust GitHub Actions CI's own run.
+
+**Refs**: PR #35's body (root-cause investigation), PRs #36/#37/#41
+(reference back to #35 rather than re-investigating).
+
+## A worktree merge silently loses its merge state / a push produces a single-parent commit with the right content but the wrong git history
+
+**Symptom**: after resolving a real merge conflict in a git worktree
+(a directory whose own `.git` is a _file_ pointing at the real gitdir,
+not a directory) and pushing the result, GitHub still reports the PR
+as `CONFLICTING`/`DIRTY` even though the pushed commit's file content
+is verifiably correct (a direct `git diff` against the target branch
+shows exactly the expected changes, nothing missing).
+
+**Cause**: writing directly to `.git/MERGE_HEAD` (e.g. via
+`git rev-parse origin/master > .git/MERGE_HEAD`, intending to manually
+restore merge state so the next `git commit` produces a real 2-parent
+merge commit) silently fails in a worktree, because `.git` there is a
+file containing a `gitdir: <path>` pointer, not a directory — the
+shell redirect (`>`) can't write into it, and by default that failure
+doesn't stop the rest of the command chain. The following `git commit`
+still succeeds, but as an ordinary single-parent commit (parent = the
+branch's own prior tip), not a merge commit. The tree/content is
+correct — it came from a real 3-way merge whose resolution was
+preserved via a stash — but the commit graph no longer shows the
+target branch as an ancestor, so GitHub's mergeability check performs
+its own fresh 3-way merge attempt against the current base and
+re-encounters the original conflict.
+
+**Fix**: check `git log -1 --format="%P" <commit>` after any commit
+you expect to be a real merge — it should list two parent SHAs. If it
+lists only one where two were expected, the tree is still salvageable
+(assuming a real merge actually happened first, e.g. via `git merge`,
+and you have the resulting SHA or a stash of it): rebuild a correct
+2-parent commit directly with
+`git commit-tree <tree-sha> -p <parent1> -p <parent2> -m "..."`, reusing
+the already-verified tree rather than re-doing the merge. Verify with
+the same `%P` check before pushing. If the flawed single-parent commit
+was already pushed, this requires a force-push to replace it — treat
+that with the same care as any other force-push (fresh, explicit
+confirmation first), even though the tree content itself is unchanged.
+
+**Refs**: none yet — first occurrence, 2026-07-17, during the
+frontend-package PR #41 conflict resolution.
