@@ -272,21 +272,40 @@ zero `429`/rate-limit-rejection lines anywhere in the job's own log,
 for an extended period (50+ minutes observed) — not a brief burst.
 
 **Cause**: the Worker's `IMAGE_FULL_TIER_RATE_LIMITER` binding
-(`image-cdn/wrangler.toml`, `simple = { limit: 30, period: 10 }` = 3
-req/sec) is not enforcing its configured ceiling at this volume.
-Confirmed at the application-code level, not inferred from throughput
-alone: `cardpicker/image_cdn_fetch.py`'s `get_worker_image_url` always
-builds the `/images/google_drive/full/...` URL regardless of `dpi`
-(there is no small/large-tier path for this caller), and
-`image-cdn/src/handler/image.ts`'s `"full"` case has no cache
-short-circuit — every request unconditionally calls
-`fetchWithRateLimit(env.IMAGE_FULL_TIER_RATE_LIMITER, ...)`. So the
-limiter genuinely should be gating every request; it demonstrably isn't
-at bulk volume. Root cause on Cloudflare's side (the Rate Limiting
-binding's enforcement isn't guaranteed perfectly atomic/global — a
-documented characteristic of the product at scale) could not be
-confirmed further in this environment: `wrangler` here requires Node
-22+ (box has 20.20.2) and `CLOUDFLARE_API_TOKEN`/dashboard access is
+(`image-cdn/wrangler.toml`, `namespace_id = "1002"`,
+`simple = { limit = 30, period = 10 }` = 3 req/sec — config confirmed
+directly from the repo file, the Cloudflare dashboard exposes the
+binding's existence/namespace but not its configured limit/period) is
+not enforcing its configured ceiling at this volume. Two specific
+application-level bug hypotheses were checked and both **ruled out**
+by direct code read, not left as open guesses:
+
+1. Routing bypass — confirmed as a real, separate cause (see above):
+   `get_worker_image_url` always builds the `/images/google_drive/full/...`
+   URL regardless of `dpi`, and the Worker's `"full"` case has no cache
+   short-circuit, so every request does unconditionally reach
+   `fetchWithRateLimit`.
+2. Per-key scoping — checked 2026-07-17, **not the cause**: every
+   caller of `fetchWithRateLimit` against this specific limiter was
+   enumerated (`grep -rn "fetchWithRateLimit\|\.limit(" image-cdn/src/`
+   — exactly one call site exists, `image-cdn/src/handler/image.ts:45`)
+   and its key argument is the literal string
+   `"global-image-full-tier-rate-limit"` — a fixed, shared constant,
+   not a per-URL/per-card value. Inside `fetchWithRateLimit` itself
+   (`image-cdn/src/utils.ts:17`, `limiter.limit({ key })`), the same
+   `key` parameter is reused across every retry attempt in the loop
+   too. So every full-tier request, across every retry, genuinely
+   shares one counter — a fresh-counter-per-image bug would explain
+   the symptom, but the code does not have that bug.
+
+With both application-level hypotheses ruled out and the dashboard
+confirming the binding itself exists at the right namespace with (per
+the repo config) the right limit/period, the remaining explanation is
+Cloudflare's Rate Limiting binding not enforcing atomically/globally at
+this request volume — a documented characteristic of the product at
+scale, but not confirmable further in this environment: `wrangler`
+here requires Node 22+ (box has 20.20.2) and full
+`CLOUDFLARE_API_TOKEN`/dashboard request-analytics access is
 unavailable.
 
 **Fix (working control, 2026-07-17)**: client-side pacing at the fetch
@@ -298,6 +317,10 @@ thread) plus `DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC`, wired through
 (default matches the Worker's own configured-but-non-enforcing 3/sec).
 Any other bulk caller of the image CDN's full tier should assume the
 same and add its own client-side pacing — don't rely on the Worker
-binding alone at bulk volume.
+binding alone at bulk volume. No Worker-side code fix is queued for
+this specific gap (the key-scoping fix that would normally follow this
+kind of diagnosis doesn't apply here — the key was already correct);
+if Cloudflare dashboard/API access becomes available later, revisit
+whether the binding itself needs a support ticket or config change.
 
 **Refs**: `docs/features/image-cdn.md`, `docs/features/catalog-completion-plan.md`'s Part 2 section.
