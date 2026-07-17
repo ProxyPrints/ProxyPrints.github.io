@@ -28,7 +28,7 @@ from typing import Iterable, Literal, Optional, cast
 
 from PIL import Image
 
-from django.db.models import QuerySet
+from django.db.models import Count, QuerySet
 from django.utils import timezone
 
 from cardpicker import (
@@ -274,17 +274,56 @@ def compute_covered_printing_pks() -> set[int]:
     return set(via_confirmed) | set(via_resolved_inference)
 
 
-def _coverage_priority_key(selected: SelectedCard, covered_printing_pks: set[int]) -> tuple[int, int, int, int, int]:
-    """Addendum item 1's full ordering, verbatim: (1) names with zero covered printings first,
-    (2) descending count of uncovered printings, (3) demand rank within tier (item 3), (4) fewer
-    candidates first, (5) pk for determinism. Fully REPLACES the old "multi-candidate names
-    first" primary split (see select_candidates) - coverage gap is now the primary driver, not a
-    secondary refinement on top of it."""
+# Part 3 addendum, abstention-aware ordering (2026-07-17, built during the content_phash
+# backfill's grind - see docs/features/catalog-completion-plan.md's Part 3 section): task #109's
+# "coverage-gap ordering front-loads unmatchable [high-candidate-count] names" finding, upgraded
+# from a static heuristic (the earlier token-exclusion fix) into an evidence-based one, using the
+# durable scan-log data Part 3 now accumulates across restarts. Interim - Part 4 (LANDS,
+# artist-decomposed identification) supersedes this for genuinely over-cap names with a real fix
+# rather than a demotion once it ships.
+HARD_NAME_MIN_ATTEMPTS = 5
+
+
+def _compute_hard_names(anonymous_id: str, min_attempts: int = HARD_NAME_MIN_ATTEMPTS) -> frozenset[str]:
+    """A name qualifies as "proven hard" for THIS anonymous_id/engine when it has >= min_attempts
+    distinct cards with a non-rescannable scan-log row (a genuine, repeatable negative conclusion
+    - not a transient/re-scannable one) and ZERO distinct cards with a vote, both all-time (every
+    run_id ever, not just the current invocation) - real accumulating signal, not a per-run
+    guess. A single real vote disqualifies the name immediately and permanently re-qualifies it
+    for full-priority ordering on the very next queue build, regardless of how many prior
+    attempts abstained - one success is proof the name isn't structurally unmatchable, even if it
+    usually is."""
+    scanned_counts = dict(
+        CardScanLog.objects.filter(anonymous_id=anonymous_id)
+        .exclude(skip_reason__in=RESCANNABLE_SKIP_REASONS)
+        .values("card__name")
+        .annotate(n=Count("card_id", distinct=True))
+        .values_list("card__name", "n")
+    )
+    voted_names = set(
+        CardPrintingTag.objects.filter(anonymous_id=anonymous_id).values_list("card__name", flat=True).distinct()
+    )
+    return frozenset(
+        name for name, attempts in scanned_counts.items() if attempts >= min_attempts and name not in voted_names
+    )
+
+
+def _coverage_priority_key(
+    selected: SelectedCard, covered_printing_pks: set[int], hard_names: frozenset[str] = frozenset()
+) -> tuple[int, int, int, int, int, int]:
+    """Addendum item 1's full ordering, verbatim, with one new LEADING dimension ahead of it
+    (abstention-aware ordering, above): (0) proven-hard names demoted to the back, (1) among the
+    rest, names with zero covered printings first, (2) descending count of uncovered printings,
+    (3) demand rank within tier (item 3), (4) fewer candidates first, (5) pk for determinism.
+    Demotion, not exclusion: a proven-hard name's candidates stay reachable if this invocation's
+    queue is otherwise exhausted, they just sort after every non-demoted candidate - never
+    permanently lost the way a hard exclusion would be."""
     candidates = selected.candidates
     total = len(candidates)
     covered = sum(1 for c in candidates if c.pk in covered_printing_pks)
     uncovered = total - covered
     return (
+        1 if selected.card.name in hard_names else 0,  # (0) proven-hard names sort last
         0 if uncovered == total else 1,  # (1) zero-covered first
         -uncovered,  # (2) descending uncovered count within each of the two tiers above
         _demand_rank_for_candidates(candidates),  # (3) ascending edhrec_rank = more popular first
@@ -307,6 +346,7 @@ def select_candidates(
     index = index or CandidateNameIndex()
     covered_printing_pks = covered_printing_pks if covered_printing_pks is not None else compute_covered_printing_pks()
     anonymous_id = OCR_ANONYMOUS_ID if engine == "ocr" else PHASH_ANONYMOUS_ID
+    hard_names = _compute_hard_names(anonymous_id)
     selected: list[SelectedCard] = []
     for card in (
         _eligible_base_queryset(anonymous_id, exclude_source_pks)
@@ -319,7 +359,17 @@ def select_candidates(
         if not candidates:
             continue
         selected.append(SelectedCard(card=card, candidates=candidates))
-    selected.sort(key=lambda s: _coverage_priority_key(s, covered_printing_pks))
+    selected.sort(key=lambda s: _coverage_priority_key(s, covered_printing_pks, hard_names))
+
+    if hard_names:
+        demoted = [s for s in selected if s.card.name in hard_names]
+        demoted_names = {s.card.name for s in demoted}
+        print(
+            f"[{anonymous_id}] abstention-aware ordering: {len(demoted_names)} names / "
+            f"{len(demoted)} candidates demoted to the back of this invocation's queue "
+            f"(>= {HARD_NAME_MIN_ATTEMPTS} attempts, 0 votes, all-time)."
+        )
+
     return selected
 
 
@@ -709,6 +759,17 @@ def run_pilot(
         e: select_candidates(e, index, exclude_source_pks_by_engine.get(e), covered_printing_pks_before)[:limit]
         for e in engines_to_run
     }
+    # Abstention-aware ordering (Part 3 addendum): one aggregate line alongside this invocation's
+    # other startup context (run_id, git_sha - see the management command), combining every
+    # engine's own per-engine demotion print (inside select_candidates) into a single total.
+    total_hard_candidates = sum(
+        1
+        for e in engines_to_run
+        for s in selected_by_engine[e]
+        if s.card.name in _compute_hard_names(OCR_ANONYMOUS_ID if e == "ocr" else PHASH_ANONYMOUS_ID)
+    )
+    if total_hard_candidates:
+        print(f"run_id={run_id} abstention-aware ordering demoted {total_hard_candidates} candidates total this run.")
     for e in engines_to_run:
         anonymous_id = OCR_ANONYMOUS_ID if e == "ocr" else PHASH_ANONYMOUS_ID
         results[e].skipped_below_resolution_floor = count_below_resolution_floor(

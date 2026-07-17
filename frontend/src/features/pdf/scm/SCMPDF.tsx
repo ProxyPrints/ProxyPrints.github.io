@@ -43,6 +43,7 @@ export interface SCMPDFProps {
   imageDPI: number | undefined;
   jpgQuality: number;
   fileHandles: { [identifier: string]: FileSystemFileHandle };
+  reportImageFailure?: (identifier: string, label: string) => void;
 }
 
 interface CardPair {
@@ -74,6 +75,7 @@ const SCMCard = ({
   imageDPI,
   jpgQuality,
   fileHandles,
+  reportImageFailure,
 }: {
   cardDocument: CardDocument;
   x: number;
@@ -85,6 +87,7 @@ const SCMCard = ({
   imageDPI: number | undefined;
   jpgQuality: number;
   fileHandles: { [identifier: string]: FileSystemFileHandle };
+  reportImageFailure?: (identifier: string, label: string) => void;
 }) => {
   const boxW = cardWidthMM + 2 * SCM_BLEED_MM;
   const boxH = cardHeightMM + 2 * SCM_BLEED_MM;
@@ -107,15 +110,20 @@ const SCMCard = ({
       }}
     >
       <Image
-        src={async () =>
-          getPDFImageURL(
-            cardDocument,
-            imageQuality,
-            imageDPI,
-            jpgQuality,
-            fileHandles
-          )
-        }
+        src={async () => {
+          try {
+            return await getPDFImageURL(
+              cardDocument,
+              imageQuality,
+              imageDPI,
+              jpgQuality,
+              fileHandles
+            );
+          } catch {
+            reportImageFailure?.(cardDocument.identifier, cardDocument.name);
+            return undefined;
+          }
+        }}
         style={
           {
             position: "absolute" as const,
@@ -167,6 +175,7 @@ const PageContent = ({
     imageDPI: number | undefined;
     jpgQuality: number;
     fileHandles: { [identifier: string]: FileSystemFileHandle };
+    reportImageFailure?: (identifier: string, label: string) => void;
   };
 }) => {
   const { cols, rows, slotsMM, cardWidthMM, cardHeightMM, orientation } =
@@ -250,6 +259,7 @@ export const SCMPDF = (props: SCMPDFProps) => {
     imageDPI: props.imageDPI,
     jpgQuality: props.jpgQuality,
     fileHandles: props.fileHandles,
+    reportImageFailure: props.reportImageFailure,
   };
 
   const offsetActive =

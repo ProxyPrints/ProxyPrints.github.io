@@ -536,6 +536,29 @@ individually safe either way, but the sequencing discipline is kept
 uniform rather than case-by-case judgment calls about which migrations
 are "safe enough" to bend the rule for.
 
+### Abstention-aware ordering (built 2026-07-17, during the backfill's grind)
+
+Task #109's finding ("coverage-gap ordering front-loads unmatchable
+names") upgraded from a static heuristic to an evidence-based one, now
+that the scan-log above gives it something durable to query. A name
+qualifies as **proven hard** for a given engine when it has `>= 5`
+distinct cards with a non-rescannable scan-log row (`HARD_NAME_MIN_ATTEMPTS`
+in `local_identify_printing_tags.py`) and zero distinct cards with a vote,
+both all-time across every `run_id`. `_coverage_priority_key` gets one new
+leading tuple dimension ahead of item 1's existing ordering: proven-hard
+names sort last. This is a **demotion, not an exclusion** — a hard name's
+candidates stay reachable if the rest of the queue is exhausted, they just
+sort after everything else. A single real vote disqualifies the name
+immediately and re-qualifies it for full-priority ordering on the very
+next queue build, no restart needed. Per-engine demotion counts are
+logged at queue build (`select_candidates`) and as one aggregate line in
+`run_pilot`'s own startup block.
+
+Interim — Part 4 (LANDS, artist-decomposed identification) supersedes
+this for genuinely over-cap names with a real fix rather than a demotion,
+once it ships. Takes effect at the next natural restart; the running
+pilot wasn't stopped for this.
+
 ---
 
 ## Part 4 — LANDS (artist-decomposed identification)
@@ -665,5 +688,12 @@ over a closed codebook.
   from `verify_no_machine_only_resolutions` run against the whole
   resolved-card pool.
 - Parts 2 and 3 proceed now that #27 is merged. Part 4 after HOLD #B.
-  Part 5 after HOLD #C. Part 6 last, gated on the full run's own
-  completion.
+  Part 5 after HOLD #C.
+- Part 6: **merged** — `docs/theory.md`, reviewed and approved by the
+  owner 2026-07-17 (3 edits: §2b's false-accept/abstention-verification
+  reframe + arithmetic fix, §3's XOR-framing correction). Calibrated
+  against the full-catalog run's real numbers (43,426 votes, 26.2%
+  invocation hit rate, 0/43,426 gate). Sequencing after backfill
+  completes: Part 3's volume check against real `content_phash` + the
+  6,379 scan-logged frame-mismatches, then Part 4 HOLD #B, then Part 5
+  HOLD #C.
