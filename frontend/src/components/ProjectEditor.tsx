@@ -103,18 +103,22 @@ const ChooseArtPanel = ({
           lg={8}
           md={8}
           sm={6}
-          xs={6}
+          xs={12}
           data-testid="left-panel"
           heightDelta={RibbonHeight + NavPillButtonHeight + NavbarHeight}
         >
           <CardGrid />
         </OverflowCol>
+        {/* xs=12 (below the sm breakpoint) stacks this panel under the card grid instead of
+            splitting the screen 50/50 with it - at that width the settings sidebar was
+            squeezing every control (e.g. the cardstock dropdown) into an unreadably narrow
+            column. sm/md/lg keep the existing side-by-side split unchanged. */}
         <OverflowCol
           data-testid="right-panel"
           lg={4}
           md={4}
           sm={6}
-          xs={6}
+          xs={12}
           style={{ zIndex: 1 }}
           className="px-2"
           heightDelta={RibbonHeight + NavPillButtonHeight + NavbarHeight}

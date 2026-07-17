@@ -132,6 +132,34 @@ patterns (backtick-adjacent underscores/asterisks in particular).
 formatter. Verify by re-running the hook and confirming zero further
 diff. See [[lessons.md]] for the specific patterns found so far.
 
+## `npx prettier --write` reformats far more of a frontend file than you touched (trailing commas, wrapped ternaries appearing everywhere)
+
+**Symptom**: running `npx prettier --write` on a file you made one small,
+targeted edit to produces a diff spanning dozens of unrelated pre-existing
+lines — trailing commas added to multi-line function calls, ternary
+expressions gaining parentheses, multi-value CSS properties reformatted
+onto separate lines — none of which you changed.
+
+**Cause**: `frontend/`'s actual formatting contract is prettier **2.7.1**,
+pinned via `.pre-commit-config.yaml`'s `pre-commit/mirrors-prettier` hook
+(`rev: "v2.7.1"`) — not via `frontend/package.json`, which doesn't list
+`prettier` as a direct dependency at all. `frontend/node_modules/.bin/prettier`
+resolves to whatever transitive version `package-lock.json` happens to pin
+(confirmed 3.7.4 on `master` as of 2026-07-17) — a different major version
+with different defaults (`trailingComma: "all"` vs `"es5"`, plus 3.x's
+wrapped-ternary and multi-value-transition formatting changes). Since none
+of `frontend/`'s actual source files are formatted to 3.x's rules, running
+the wrong binary against any file reformats every pre-existing line it
+touches, not just your edit.
+
+**Fix**: always run `npx --yes prettier@2.7.1 --write <files>` explicitly
+in a sandbox without pre-commit installed — never bare `npx prettier` or
+`node_modules/.bin/prettier`. Verify with `npx prettier@2.7.1 --version`
+prints `2.7.1` before trusting a diff as edit-scoped. If a diff already
+shows this kind of unrelated mass reformatting, it's a signal to check the
+prettier version immediately, not to assume the file was simply
+out-of-date.
+
 ## Worker-thread DB queries silently miss data / "too many clients already"
 
 **Symptom**: either (a) a test using a `ThreadPoolExecutor` for a DB query
@@ -223,7 +251,7 @@ change once someone explicitly redeploys the persistent containers
 changes an API response's shape is live on Pages within minutes, but the
 backend can lag by hours or longer if nothing triggers a redeploy —
 "stale but schema-compatible" is false the moment a shape change merges;
-that assumption only holds for the deploy-skew window *before* the shape
+that assumption only holds for the deploy-skew window _before_ the shape
 actually changed, not after.
 
 **Fix**: (a) merging an API-shape-changing PR isn't "done" — it isn't

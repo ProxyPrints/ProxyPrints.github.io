@@ -334,6 +334,10 @@ export function DynamicLogo() {
                         hidden={false}
                         small={true}
                         showDetailedViewOnClick={remoteBackendConfigured}
+                        // This animated logo is the home page's LCP candidate - only the
+                        // first card position needs the eager-load hint, not every one of
+                        // the several cards cycling through it.
+                        priority={index === 0}
                       />
                     </MemoizedCardProportionWrapper>
                   </WrapperElement>

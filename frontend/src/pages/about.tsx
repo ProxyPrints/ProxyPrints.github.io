@@ -63,6 +63,7 @@ export default function About() {
         >
           <img
             src="https://contrib.rocks/image?repo=chilli-axe/mpc-autofill&columns=8"
+            alt="Project contributors"
             style={{ maxWidth: 100 + "%" }}
           />
         </a>
