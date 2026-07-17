@@ -88,6 +88,8 @@ only) for deployment, hosting, and domain specifics.
   generic `data-card-*` attributes + `mpc:card-selected` event.
 - [`docs/features/google-drive-connect.md`](docs/features/google-drive-connect.md)
   — Google Drive picker, Local Folder, and Save-PDF-to-Drive.
+- [`docs/features/grid-selector.md`](docs/features/grid-selector.md) —
+  the card-version-picker modal + `Card.tsx`'s image loading/error states.
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
   Upstreaming workflow in `docs/infrastructure.md`).

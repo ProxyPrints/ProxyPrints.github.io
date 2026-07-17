@@ -191,6 +191,7 @@ node_modules/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+frontend/tests/survey-tmp/
 docker/nginx/certs/
 docker/django/env.txt
 *.bak
