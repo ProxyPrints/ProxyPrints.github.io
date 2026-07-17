@@ -71,6 +71,26 @@ import { setNotification } from "@/store/slices/toastsSlice";
 
 type FollowUp = "none" | "no-match-reason";
 
+// Frontend and backend deploy independently (GitHub Pages vs. a separate Django API) - there's
+// a real window where this frontend build can be live against a not-yet-deployed backend still
+// returning the old `remainingEstimate: number` shape. TypeScript's `as QuestionFeedResponse`
+// cast in api.ts can't catch that at runtime, so `counts` here is trusted-but-unverified -
+// without this guard, `counts.confirmable`/`counts.total` on a raw number both resolve to
+// `undefined`, rendering the literal string "undefined cards" instead of degrading gracefully.
+function normalizeQuestionFeedCounts(
+  raw: QuestionFeedCounts | number | null | undefined
+): QuestionFeedCounts | null {
+  if (raw == null) {
+    return null;
+  }
+  if (typeof raw === "number") {
+    // legacy shape - no tier breakdown available, so confirmable/contested fall back to 0
+    // (never show a false "quick confirmations ready" headline) and fresh mirrors total.
+    return { total: raw, confirmable: 0, contested: 0, fresh: raw };
+  }
+  return raw;
+}
+
 export function QuestionFeed() {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
@@ -104,7 +124,7 @@ export function QuestionFeed() {
     APIGetQuestionFeed(backendURL, getOrCreateAnonymousId())
       .then((response) => {
         setItem(response.item ?? null);
-        setCounts(response.remainingEstimate);
+        setCounts(normalizeQuestionFeedCounts(response.remainingEstimate));
         setCaughtUp(response.item == null);
       })
       .catch(() => {

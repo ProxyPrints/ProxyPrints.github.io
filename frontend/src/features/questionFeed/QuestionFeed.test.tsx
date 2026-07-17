@@ -268,4 +268,24 @@ describe("QuestionFeed", () => {
     );
     expect(autoTagCallCount).toBe(0);
   });
+
+  it("degrades gracefully instead of showing 'undefined cards' when the backend still returns the legacy remainingEstimate:number shape", async () => {
+    // regression test - frontend and backend deploy independently, so this frontend build can
+    // briefly be live against a not-yet-deployed backend still returning a plain number here
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          { item: identifyPrintingItem, remainingEstimate: 3 },
+          { status: 200 }
+        )
+      )
+    );
+    server.use(submitTagVoteResolvesToApply);
+    renderFeed();
+    await revealCard();
+
+    const headline = await screen.findByTestId("question-feed-headline");
+    expect(headline.textContent).toBe("Still need help with: 3 cards");
+    expect(headline.textContent).not.toMatch(/undefined/);
+  });
 });
