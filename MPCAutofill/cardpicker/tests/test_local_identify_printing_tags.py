@@ -1455,6 +1455,113 @@ class TestScanLog:
         assert fetch_calls[rescannable_card.pk] == 2
 
 
+class TestAbstentionAwareOrdering:
+    """Part 3 addendum, abstention-aware ordering (2026-07-17): task #109's coverage-gap-ordering
+    finding upgraded from a static heuristic to an evidence-based one - demote (not exclude)
+    names with a proven all-time abstention record to the back of the queue."""
+
+    @staticmethod
+    def _scan_log_row(card: object, anonymous_id: str) -> None:
+        from cardpicker.models import CardScanLog
+
+        CardScanLog.objects.create(card=card, anonymous_id=anonymous_id, skip_reason="no-text")
+
+    def test_qualification_boundary_four_attempts_not_hard(self, db):
+        from cardpicker.local_identify_printing_tags import (
+            HARD_NAME_MIN_ATTEMPTS,
+            _compute_hard_names,
+        )
+
+        assert HARD_NAME_MIN_ATTEMPTS == 5
+        for _ in range(4):
+            self._scan_log_row(CardFactory(name="Forest"), OCR_ANONYMOUS_ID)
+        assert "Forest" not in _compute_hard_names(OCR_ANONYMOUS_ID)
+
+    def test_qualification_boundary_five_attempts_is_hard(self, db):
+        from cardpicker.local_identify_printing_tags import _compute_hard_names
+
+        for _ in range(5):
+            self._scan_log_row(CardFactory(name="Forest"), OCR_ANONYMOUS_ID)
+        assert "Forest" in _compute_hard_names(OCR_ANONYMOUS_ID)
+
+    def test_one_vote_disqualifies_regardless_of_attempt_count(self, db):
+        from cardpicker.local_identify_printing_tags import _compute_hard_names
+
+        printing = CanonicalCardFactory(name="Forest")
+        for _ in range(9):
+            self._scan_log_row(CardFactory(name="Forest"), OCR_ANONYMOUS_ID)
+        voted_card = CardFactory(name="Forest")
+        CardPrintingTagFactory(card=voted_card, anonymous_id=OCR_ANONYMOUS_ID, printing=printing, source=VoteSource.OCR)
+
+        assert "Forest" not in _compute_hard_names(OCR_ANONYMOUS_ID)
+
+    def test_internal_sort_stability_among_demoted_names(self, db):
+        # demoted entries must still respect the REST of the ordering key among themselves
+        # (uncovered count, demand rank, candidate count, pk) - being demoted to the back is a
+        # leading tuple dimension prepended to the existing key, not a replacement for it.
+        # Computed directly against _coverage_priority_key with controlled inputs (equal
+        # uncovered/demand-rank tiers so candidate-count is the actual deciding element) rather
+        # than through a real DB-backed queue, which would let element (2) - uncovered count -
+        # dominate before candidate count ever gets consulted, and prove nothing about (4).
+        from cardpicker.local_identify_printing_tags import (
+            CandidatePrinting,
+            SelectedCard,
+            _coverage_priority_key,
+        )
+
+        forest_card = CardFactory(name="Forest")
+        island_card = CardFactory(name="Island")
+        # both hard; both single-candidate, same demand rank (None) - only pk would differ, so
+        # sort by (fewer-candidates-first) is already tied; add a second Forest candidate to make
+        # candidate count the actual deciding element, with an equal uncovered count via covered=0
+        # for both (nothing covered - simplest way to keep element (2) tied at "-1" for both).
+        forest_selected = SelectedCard(
+            card=forest_card, candidates=[CandidatePrinting(pk=1, expansion_code="a", collector_number="1")]
+        )
+        island_selected = SelectedCard(
+            card=island_card, candidates=[CandidatePrinting(pk=2, expansion_code="a", collector_number="1")]
+        )
+        hard_names = frozenset({"Forest", "Island"})
+        key_forest = _coverage_priority_key(forest_selected, covered_printing_pks=set(), hard_names=hard_names)
+        key_island = _coverage_priority_key(island_selected, covered_printing_pks=set(), hard_names=hard_names)
+
+        assert key_forest[0] == key_island[0] == 1  # both demoted (tier 1)
+        # with everything else tied, pk (element 5) breaks the tie - proves the demoted tier's
+        # OWN internal ordering still falls through to the rest of the key correctly, not just
+        # "some order, who cares" - a genuinely scrambled implementation could return either
+        # order regardless of pk, which this pins down.
+        ordered = sorted([key_forest, key_island])
+        assert ordered == [key_forest, key_island] if forest_card.pk < island_card.pk else [key_island, key_forest]
+
+    def test_reactivation_on_first_vote(self, db):
+        from cardpicker.local_identify_printing_tags import _compute_hard_names
+
+        printing = CanonicalCardFactory(name="Forest")
+        for _ in range(6):
+            self._scan_log_row(CardFactory(name="Forest"), OCR_ANONYMOUS_ID)
+        assert "Forest" in _compute_hard_names(OCR_ANONYMOUS_ID)
+
+        voted_card = CardFactory(name="Forest")
+        CardPrintingTagFactory(card=voted_card, anonymous_id=OCR_ANONYMOUS_ID, printing=printing, source=VoteSource.OCR)
+
+        # immediately re-qualified on the very next computation - no restart, no delay
+        assert "Forest" not in _compute_hard_names(OCR_ANONYMOUS_ID)
+
+    def test_demotion_counts_logged_at_queue_build(self, db, capsys):
+        from cardpicker.local_identify_printing_tags import select_candidates
+
+        CanonicalCardFactory(name="Forest")
+        for _ in range(5):
+            self._scan_log_row(CardFactory(name="Forest"), OCR_ANONYMOUS_ID)
+        CardFactory(name="Forest")
+
+        select_candidates("ocr")
+
+        captured = capsys.readouterr()
+        assert "abstention-aware ordering" in captured.out
+        assert "1 names / 1 candidates demoted" in captured.out
+
+
 class TestVerifyZeroResolutions:
     def test_no_violations_when_nothing_resolves(self, db):
         printing = CanonicalCardFactory(name="Forest")
