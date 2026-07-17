@@ -146,7 +146,14 @@ printings, artists, tags, and moderation from one screen.
   (Border Color, Frame Style) are frontend-only styling/filtering
   concerns — the vote write path treats every chip independently.
   Picking a printing candidate auto-casts one positive vote per
-  standalone attribute the candidate carries true.
+  attribute the candidate itself derives — every standalone boolean,
+  plus whichever exclusion-group chip actually matches
+  (`getAutoTagChips`; PrintingCandidate carries `borderColor`/`frame`
+  directly, so a group value is exactly as derivable as the standalone
+  ones). `getOpenExclusionGroups` flags the rarer case where a
+  candidate's own value falls outside the taxonomy entirely (e.g.
+  `borderColor: "borderless"` isn't Black/White/Silver) — that's what
+  gates Level 3 below.
 - `frontend/src/common/tagDisplayNames.ts` — shared `name -> displayName`
   lookup, built off the already-cached tags query (no new fetch per
   consumer).
@@ -175,6 +182,43 @@ printings, artists, tags, and moderation from one screen.
   - Candidate-type items now show a small badge ("Suggested match" for
     `confirm_suggestion`, "Needs identification" for `identify_printing`)
     above the candidate grid.
+- **Mobile funnel redesign** (frontend-polish package, PR-E follow-on),
+  again presentation/interaction only — `question_feed.py`/tier ordering
+  untouched. Real-device evidence (3 screenshots, `proxyprints.ca/whatsthat`)
+  found the old always-on chip ring wedging the ~90px card thumbnail
+  between two flanking chip columns and burying it below a full screen of
+  chips before the question was even visible; see the held funnel-proposal
+  artifact (linked from PR #47's body) for the full findings/mocks this
+  implements. `QuestionFeed.tsx`'s candidate branch now runs three stages
+  instead of one grid screen:
+  - **Level 1** — `confirm_suggestion` items with a `suggestedPrinting`
+    land here: the suggested printing alone, YES / NOT SURE / NO / SKIP,
+    no grid. YES casts the same vote Level 2's tap does; NOT SURE and NO
+    both drop to Level 2 with no vote cast (per the state diagram, they're
+    intentionally identical transitions — "an honest skip beats a coerced
+    guess"). `identify_printing` items (and `confirm_suggestion` items
+    without a `suggestedPrinting`) skip Level 1 entirely.
+  - **Level 2** — the candidate grid. The attribute-chip ring is now an
+    opt-in, collapsed-by-default "Filter by attribute" disclosure instead
+    of always-on chrome — selecting a candidate ignores filter state
+    entirely (filters are navigation, never votes). Two classified exits
+    sit below the grid: "None of these" (unchanged, still followed by
+    `NoMatchReasonStrip`) and "Art matches, not an official printing" (one
+    tap: an `isNoMatch` printing vote plus a positive `custom-art` tag
+    vote, reusing `reason_tags.py`'s existing seeded tag — no reason strip,
+    since the tap already said why). The old gate that disabled "No
+    match" until a chip was explicitly set is gone — it existed only to
+    force a description before a now-superseded flow, and directly
+    conflicted with the filter panel defaulting to collapsed.
+  - **Level 3** — conditional, not a standard stage. Selecting a candidate
+    auto-tags everything derivable from it (see above); Level 3 only
+    renders when `getOpenExclusionGroups` finds a genuinely open group,
+    presenting just that group as a real single-select lock (picking one
+    deselects its alternates) — distinct from Level 2's filter panel, which
+    keeps the usual independent tri-state cycling. With the current
+    taxonomy this is a real but infrequent case (an out-of-taxonomy
+    `borderColor`/`frame` value), not a hypothetical one — see
+    `printingCandidate2`'s test fixture (`borderColor: "borderless"`).
 - **Known schema gap surfaced by the badge above, not fixed here**: tier 2
   (contested) and tier 4 (fresh) — `_tier_2_contested`/`_tier_4_fresh` in
   `question_feed.py` — both call `_identify_printing_item`, producing the

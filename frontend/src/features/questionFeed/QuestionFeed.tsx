@@ -6,6 +6,28 @@
  * questionFeed section and journal/2026-07-14-queue-question-feed-design.md for the full
  * design writeup (chip taxonomy grounding, layout rationale, starvation-risk tradeoff).
  *
+ * Candidate-type items (confirm_suggestion / identify_printing) now run through three stages
+ * instead of one grid screen - see the funnel proposal artifact (PR-E's HOLD) for the mocks
+ * and state diagram this implements:
+ *   Level 1 - a single suggested printing, YES / NOT SURE / NO / SKIP, no grid. Only reached
+ *     for confirm_suggestion items that actually carry a suggestedPrinting.
+ *   Level 2 - the candidate grid (identify_printing lands here directly; confirm_suggestion
+ *     lands here on NOT SURE/NO). The attribute-chip ring is now an opt-in, collapsed-by-
+ *     default "Filter by attribute" disclosure rather than always-on chrome around the card -
+ *     picking a candidate ignores filter state entirely (filters are navigation, never
+ *     votes). Two classified exits sit below the grid: "None of these" (unchanged - still
+ *     followed by the reason strip) and "Art matches, not an official printing" (a single
+ *     pre-classified tap: isNoMatch printing vote + a positive custom-art tag vote, no reason
+ *     strip since the tap already said why).
+ *   Level 3 - conditional. Selecting a candidate auto-casts a positive tag vote for every
+ *     attribute chip the candidate's own data derives (see attributeChips.ts's
+ *     getAutoTagChips) - most of the time that's everything, and the feed advances straight
+ *     to the next card. Level 3 only renders when a genuinely open question survives (an
+ *     exclusion group whose candidate value doesn't match any of that group's chips - see
+ *     getOpenExclusionGroups), presenting just those groups as a real single-select lock
+ *     (picking one deselects its alternates), distinct from Level 2's filter panel, which
+ *     keeps the funnel's usual independent tri-state cycling.
+ *
  * Re-composition, not a rewrite: the sticky starburst card panel, reveal animation, and
  * candidate-grid mechanics are the exact same code as the old PrintingTagQueue, now shared
  * via cardPanel.tsx. ArtistVotePicker and QueueTagQuestion are reused directly for their
@@ -32,13 +54,15 @@ import { SetIcon } from "@/components/SetIcon";
 import { Spinner } from "@/components/Spinner";
 import {
   AttributeChipPanel,
-  hasAnyExplicitChip,
   initialChipStates,
 } from "@/features/attributeChips/AttributeChipPanel";
 import {
   ChipVoteState,
+  EXCLUSION_GROUPS,
+  ExclusionGroup,
   filterCandidatesByChipStates,
-  STANDALONE_CHIPS,
+  getAutoTagChips,
+  getOpenExclusionGroups,
 } from "@/features/attributeChips/attributeChips";
 import { ArtistVotePicker } from "@/features/attributeVoting/ArtistVotePicker";
 import { NoMatchReasonStrip } from "@/features/attributeVoting/NoMatchReasonStrip";
@@ -73,6 +97,7 @@ import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 
 type FollowUp = "none" | "no-match-reason";
+type CandidateStage = "level1" | "level2" | "level3";
 
 // Frontend and backend deploy independently (GitHub Pages vs. a separate Django API) - there's
 // a real window where this frontend build can be live against a not-yet-deployed backend still
@@ -92,6 +117,12 @@ function normalizeQuestionFeedCounts(
     return { total: raw, confirmable: 0, contested: 0, fresh: raw };
   }
   return raw;
+}
+
+function initialStage(item: QuestionFeedItem | null): CandidateStage {
+  return item?.type === "confirm_suggestion" && item?.suggestedPrinting != null
+    ? "level1"
+    : "level2";
 }
 
 export function QuestionFeed() {
@@ -120,6 +151,17 @@ export function QuestionFeed() {
   // one-tap funnel, a rate-limit pause is an expected, honest condition, not a failure, so it
   // gets a persistent inline notice rather than a transient, alarm-toned toast.
   const [rateLimited, setRateLimited] = useState<boolean>(false);
+
+  const [stage, setStage] = useState<CandidateStage>("level2");
+  // Collapsed by default (decision: chip-as-filter survives on Level 2, but off-path for the
+  // common case - see the held funnel proposal's open-decisions section). Selecting a
+  // candidate below ignores this entirely; it only ever narrows which tiles are shown.
+  const [filterExpanded, setFilterExpanded] = useState<boolean>(false);
+  // Level 3 only ever asks about groups an already-selected candidate left open - keyed by
+  // tagName, but only ever contains chips from getOpenExclusionGroups(pendingCandidate).
+  const [level3ChipStates, setLevel3ChipStates] = useState<
+    Record<string, ChipVoteState>
+  >({});
 
   const { ref: cardPanelRef, top: stickyTop } = useStickyTop([
     item?.card.identifier,
@@ -155,6 +197,10 @@ export function QuestionFeed() {
     setFollowUp("none");
     setSelectedCandidateId(null);
     setRateLimited(false);
+    setFilterExpanded(false);
+    setLevel3ChipStates({});
+    setStage(initialStage(item));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item?.card.identifier, item?.type]);
 
   const advance = () => {
@@ -179,12 +225,12 @@ export function QuestionFeed() {
     );
   };
 
-  // Selecting a candidate casts the printing vote plus one positive CardTagVote per
-  // standalone attribute the candidate itself carries true - see the design doc's "Auto-tag
-  // on selection" section for why this only covers the standalone chips (border/frame
-  // exclusion groups aren't auto-derivable in v1). PrintingConfirmStrip is deliberately not
-  // rendered anywhere in this flow - everything it used to manually confirm is now auto-cast
-  // here instead.
+  // Selecting a candidate casts the printing vote plus one positive CardTagVote per attribute
+  // the candidate itself carries true - standalone booleans and whichever exclusion-group chip
+  // actually matches (see attributeChips.ts's getAutoTagChips / Finding 2). If that leaves a
+  // group genuinely undecided (the candidate's own value doesn't match any of that group's
+  // chips - getOpenExclusionGroups), Level 3 renders to ask just about that; otherwise the
+  // feed advances straight to the next card.
   const selectCandidate = (
     candidate: PrintingCandidate | undefined,
     isNoMatch: boolean
@@ -204,9 +250,7 @@ export function QuestionFeed() {
     )
       .then(() => {
         if (candidate != null) {
-          const autoTagChips = STANDALONE_CHIPS.filter((chip) =>
-            chip.matches(candidate)
-          );
+          const autoTagChips = getAutoTagChips(candidate);
           Promise.all(
             autoTagChips.map((chip) =>
               APISubmitTagVote(
@@ -221,6 +265,20 @@ export function QuestionFeed() {
         }
         if (isNoMatch) {
           setFollowUp("no-match-reason");
+        } else if (candidate != null) {
+          const openGroups = getOpenExclusionGroups(candidate);
+          if (openGroups.length > 0) {
+            setLevel3ChipStates(
+              Object.fromEntries(
+                openGroups.flatMap((group) =>
+                  group.chips.map((chip) => [chip.tagName, "untouched"])
+                )
+              )
+            );
+            setStage("level3");
+          } else {
+            advance();
+          }
         } else {
           advance();
         }
@@ -230,6 +288,89 @@ export function QuestionFeed() {
         setSubmitting(false);
         setSelectedCandidateId(null);
       });
+  };
+
+  // The pre-classified exit for "this is real art, just not an official printing" - one tap
+  // instead of "None of these" -> the reason strip, since the tap already told us why (see
+  // reason_tags.py's existing seeded "custom-art" tag - no new endpoint). Shares the funnel's
+  // usual flavor-text slot for a brief, specific confirmation instead of the generic copy.
+  const classifyAsCustomArt = () => {
+    if (backendURL == null || item == null) {
+      return;
+    }
+    setSubmitting(true);
+    setSelectedCandidateId("custom-art");
+    const anonymousId = getOrCreateAnonymousId();
+    APISubmitPrintingTag(
+      backendURL,
+      item.card.identifier,
+      anonymousId,
+      undefined,
+      true
+    )
+      .then(() => {
+        APISubmitTagVote(
+          backendURL,
+          item.card.identifier,
+          anonymousId,
+          "custom-art",
+          1
+        ).catch(() => undefined);
+        setFlavorText(
+          "Logged as custom / alternate art - thanks! Moving on..."
+        );
+        fetchNext();
+      })
+      .catch(reportVoteFailed)
+      .finally(() => {
+        setSubmitting(false);
+        setSelectedCandidateId(null);
+      });
+  };
+
+  // Real single-select lock (decision: scoped to Level 3 only) - picking one option in a group
+  // resets any other member of the same group back to untouched, unlike the funnel's usual
+  // independent tri-state cycling that Level 2's optional filter panel keeps.
+  const tapLevel3Chip = (group: ExclusionGroup, tagName: string) => {
+    setLevel3ChipStates((previous) => {
+      const next = { ...previous };
+      group.chips.forEach((chip) => {
+        next[chip.tagName] = "untouched";
+      });
+      next[tagName] =
+        previous[tagName] === "positive" ? "untouched" : "positive";
+      return next;
+    });
+  };
+
+  const confirmLevel3 = () => {
+    if (backendURL == null || item == null) {
+      advance();
+      return;
+    }
+    const anonymousId = getOrCreateAnonymousId();
+    const picked = Object.entries(level3ChipStates).filter(
+      ([, state]) => state === "positive"
+    );
+    if (picked.length === 0) {
+      advance();
+      return;
+    }
+    setSubmitting(true);
+    Promise.all(
+      picked.map(([tagName]) =>
+        APISubmitTagVote(
+          backendURL,
+          item.card.identifier,
+          anonymousId,
+          tagName,
+          1
+        )
+      )
+    )
+      .then(() => advance())
+      .catch(reportVoteFailed)
+      .finally(() => setSubmitting(false));
   };
 
   const skip = () => advance();
@@ -285,14 +426,14 @@ export function QuestionFeed() {
     chipStates
   );
   const hiddenCount = allCandidates.length - visibleCandidates.length;
-  const noMatchDisabled = !hasAnyExplicitChip(chipStates);
 
   // BurstSvg renders alongside (not inside) RevealWrapper deliberately - RevealWrapper has
   // overflow: hidden (it clips the silhouette-reveal animation to the card's own box), which
   // would also clip the burst's intentional bleed if it were a descendant instead of a
   // sibling. Both size themselves against whichever positioned ancestor contains them -
-  // AttributeChipPanel's CardArea now, so the burst centers on and scales with the card's own
-  // rendered width specifically, not the wider ring (card + flanking chip columns) around it.
+  // AttributeChipPanel's CardArea when the filter panel is expanded, CardPanel directly
+  // otherwise - so the burst centers on and scales with the card's own rendered width
+  // specifically, not a wider ring around it.
   const cardImage = (
     <>
       <BurstSvg viewBox={STARBURST_VIEWBOX}>
@@ -324,19 +465,27 @@ export function QuestionFeed() {
     </>
   );
 
-  // The card renders dead center with chips forming a ring around it (AttributeChipPanel's
-  // ChipRing grid) rather than stacked above it - the starburst behind the whole assembly is
-  // purely decorative (pointer-events: none throughout), so it never competes with any of
-  // this for clicks regardless of how it visually bleeds.
-  const cardPanel = (
+  // Plain sticky panel, no chip ring - the default for Level 1 and for Level 2 while its
+  // filter disclosure is collapsed (i.e. the common case). Real device evidence (the funnel
+  // proposal's evidence section) found the always-on chip ring wedging the thumbnail between
+  // two flanking chip columns and burying the card beneath a full screen of chips before it
+  // was even visible - this is what that fix looks like at the call site.
+  const plainCardPanel = (
     <CardPanel
       ref={cardPanelRef}
       style={stickyTop != null ? { top: stickyTop } : undefined}
     >
-      {/* cardPanel is only ever rendered from the isCandidateType branch below - the
-          artist/tag branch renders its own plain image directly, uninvolved with chips or the
-          starburst. BurstSvg now lives inside `cardImage` itself (see above), not here, so it
-          sizes against the card's own box rather than this whole ring. */}
+      {cardImage}
+    </CardPanel>
+  );
+
+  // The chip-ring version, only mounted when Level 2's "Filter by attribute" disclosure is
+  // open - same AttributeChipPanel as before, just no longer unconditional chrome.
+  const filterCardPanel = (
+    <CardPanel
+      ref={cardPanelRef}
+      style={stickyTop != null ? { top: stickyTop } : undefined}
+    >
       <AttributeChipPanel
         backendURL={backendURL}
         cardIdentifier={item.card.identifier}
@@ -396,35 +545,24 @@ export function QuestionFeed() {
       <div data-testid="question-feed-current-item">
         <Row className="g-4">
           {isCandidateType ? (
-            <>
-              {/* order-2/order-md-1 (here) + order-1/order-md-2 (the card panel column
-                  below) put the card being asked about first on mobile, where the two
-                  columns stack - previously the candidate grid rendered above the card
-                  itself, so a mobile voter had to scroll past every answer option before
-                  seeing what they were even answering about. Desktop's side-by-side order
-                  (candidates left, card right) is unaffected. */}
-              <Col xs={12} md={5} className="order-2 order-md-1">
-                {!revealed ? (
-                  <div className="text-center py-4">
-                    <Spinner size={2} />
-                  </div>
-                ) : (
-                  <>
-                    <Badge
-                      bg={
-                        item.type === "confirm_suggestion"
-                          ? "info"
-                          : "secondary"
-                      }
-                      data-testid="question-feed-tier-badge"
-                      className="mb-2"
-                    >
-                      {item.type === "confirm_suggestion"
-                        ? "Suggested match"
-                        : "Needs identification"}
-                    </Badge>
-                    {item.type === "confirm_suggestion" &&
-                      item.suggestedPrinting != null && (
+            stage === "level1" && item.suggestedPrinting != null ? (
+              <Col xs={12} data-testid="question-feed-level1">
+                <div className="mx-auto" style={{ maxWidth: 320 }}>
+                  {plainCardPanel}
+                  {!revealed ? (
+                    <div className="text-center py-4">
+                      <Spinner size={2} />
+                    </div>
+                  ) : (
+                    <>
+                      <div className="text-center">
+                        <Badge
+                          bg="info"
+                          data-testid="question-feed-tier-badge"
+                          className="my-2"
+                        >
+                          Suggested match
+                        </Badge>
                         <p data-testid="question-feed-suggestion-prompt">
                           Is it this one?{" "}
                           <SetIcon
@@ -433,177 +571,333 @@ export function QuestionFeed() {
                           {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
                           {item.suggestedPrinting.collectorNumber}
                         </p>
-                      )}
-                    {hiddenCount > 0 && (
-                      <p
-                        className="text-muted small"
-                        data-testid="question-feed-hidden-count"
-                      >
-                        {hiddenCount} hidden by your tags -{" "}
-                        <a
-                          href="#"
-                          data-testid="question-feed-clear-filters"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            setChipStates(initialChipStates());
-                          }}
-                        >
-                          clear
-                        </a>
-                      </p>
-                    )}
-                    <Row className="g-2" xs={3} md={4}>
-                      <Col>
-                        <CandidateButton
-                          variant="outline-secondary"
-                          className="w-100 p-1 border-0"
-                          disabled={submitting || noMatchDisabled}
-                          title={
-                            noMatchDisabled
-                              ? "Describe what you see first"
-                              : undefined
-                          }
-                          onClick={() => selectCandidate(undefined, true)}
-                          data-testid="question-feed-no-match"
-                        >
-                          <HoverBurst
-                            className="hover-burst"
-                            viewBox={STARBURST_VIEWBOX}
-                          >
-                            <polygon
-                              points={STARBURST_OUTER_FRAMES[starburstFrame]}
-                              fill={STARBURST_OUTER_COLOR}
-                            />
-                            <polygon
-                              points={STARBURST_INNER_FRAMES[starburstFrame]}
-                              fill={STARBURST_INNER_COLOR}
-                            />
-                          </HoverBurst>
-                          <ArtPlaceholder>
-                            {submitting && selectedCandidateId === "no-match" && (
-                              <div data-testid="question-feed-no-match-submitting">
-                                <Spinner
-                                  size={1.5}
-                                  zIndex={2}
-                                  positionAbsolute
-                                />
-                              </div>
-                            )}
-                          </ArtPlaceholder>
-                          <div>No match</div>
-                        </CandidateButton>
-                      </Col>
-                      {visibleCandidates.map((candidate) => (
-                        <Col key={candidate.identifier}>
-                          <CandidateButton
-                            variant="outline-secondary"
-                            className={`w-100 p-1 border-0${
-                              item.type === "confirm_suggestion" &&
-                              item.suggestedPrinting?.identifier ===
-                                candidate.identifier
-                                ? " highlighted"
-                                : ""
-                            }`}
-                            disabled={submitting}
-                            onClick={() => selectCandidate(candidate, false)}
-                            {...getPrintingCandidateDataAttributes(
-                              item.card.name,
-                              candidate
-                            )}
-                          >
-                            <HoverBurst
-                              className="hover-burst"
-                              viewBox={STARBURST_VIEWBOX}
-                            >
-                              <polygon
-                                points={STARBURST_OUTER_FRAMES[starburstFrame]}
-                                fill={STARBURST_OUTER_COLOR}
-                              />
-                              <polygon
-                                points={STARBURST_INNER_FRAMES[starburstFrame]}
-                                fill={STARBURST_INNER_COLOR}
-                              />
-                            </HoverBurst>
-                            <ArtPlaceholder>
-                              <ZoomableThumbnail>
-                                <img
-                                  src={candidate.mediumThumbnailUrl}
-                                  alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
-                                />
-                              </ZoomableThumbnail>
-                              {/* Tied to this specific candidate's identifier, not just
-                                  `submitting` - the old dimmed-all-buttons treatment gave no
-                                  way to tell which of several candidates you actually tapped
-                                  under any real latency. */}
-                              {submitting &&
-                                selectedCandidateId ===
-                                  candidate.identifier && (
-                                  <div
-                                    data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
-                                  >
-                                    <Spinner
-                                      size={1.5}
-                                      zIndex={2}
-                                      positionAbsolute
-                                    />
-                                  </div>
-                                )}
-                            </ArtPlaceholder>
-                            <div>
-                              <SetIcon
-                                expansionCode={candidate.expansionCode}
-                              />{" "}
-                              {candidate.expansionCode.toUpperCase()}{" "}
-                              {candidate.collectorNumber}
-                            </div>
-                            <div className="text-muted small">
-                              {candidate.artist}
-                            </div>
-                          </CandidateButton>
-                        </Col>
-                      ))}
-                    </Row>
-                    {followUp === "no-match-reason" && (
-                      <div className="mt-3">
-                        <hr />
-                        <NoMatchReasonStrip
-                          backendURL={backendURL}
-                          cardIdentifier={item.card.identifier}
-                          onDone={advance}
-                          onRateLimited={() => setRateLimited(true)}
-                        />
                       </div>
-                    )}
-                    <div className="mt-3 d-flex gap-2">
-                      <Button
-                        variant="outline-secondary"
-                        disabled={submitting}
-                        onClick={skip}
-                      >
-                        Skip
-                      </Button>
-                    </div>
-                  </>
-                )}
+                      <div className="d-flex flex-column gap-2">
+                        <Button
+                          variant="success"
+                          disabled={submitting}
+                          onClick={() =>
+                            item.suggestedPrinting != null &&
+                            selectCandidate(item.suggestedPrinting, false)
+                          }
+                          data-testid="question-feed-level1-yes"
+                        >
+                          {submitting ? <Spinner size={1} /> : "Yes, that's it"}
+                        </Button>
+                        <Button
+                          variant="outline-secondary"
+                          disabled={submitting}
+                          onClick={() => setStage("level2")}
+                          data-testid="question-feed-level1-not-sure"
+                        >
+                          Not sure
+                        </Button>
+                        <Button
+                          variant="outline-danger"
+                          disabled={submitting}
+                          onClick={() => setStage("level2")}
+                          data-testid="question-feed-level1-no"
+                        >
+                          No
+                        </Button>
+                        <Button
+                          variant="link"
+                          disabled={submitting}
+                          onClick={skip}
+                          data-testid="question-feed-level1-skip"
+                        >
+                          Skip
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </div>
               </Col>
-              {/* position + a non-auto z-index together give this column its own local
-                  stacking context, containing CardPanel's z-index: -1 (see cardPanel.tsx) so
-                  it can't escape and render the whole panel - chips included - unclickable
-                  behind this sibling column at the hit-testing layer. position: relative
-                  alone does NOT establish a stacking context - see
-                  docs/features/printing-tags.md's Stage 7 section for the full story.
-                  order-1/order-md-2 (see the candidates column above for the full
-                  rationale) - unrelated to the stacking-context fix above, just reusing the
-                  same style prop's neighbouring className. */}
+            ) : stage === "level3" ? (
               <Col
                 xs={12}
                 md={7}
-                className="order-1 order-md-2"
-                style={{ position: "relative", zIndex: 0 }}
+                className="mx-auto"
+                data-testid="question-feed-level3"
               >
-                {cardPanel}
+                <div className="d-flex align-items-center gap-2 mb-2">
+                  <img
+                    src={item.card.mediumThumbnailUrl}
+                    alt={item.card.name}
+                    style={{ width: 48, aspectRatio: CARD_ASPECT_RATIO }}
+                  />
+                  <div>{item.card.name}</div>
+                </div>
+                <p className="text-muted small">
+                  Anything else you can tell us about this printing?
+                </p>
+                {EXCLUSION_GROUPS.filter((group) =>
+                  group.chips.some((chip) => chip.tagName in level3ChipStates)
+                ).map((group) => (
+                  <div key={group.id} className="mb-3">
+                    <div className="text-muted small mb-1">{group.label}</div>
+                    <div className="d-flex flex-wrap gap-2">
+                      {group.chips.map((chip) => {
+                        const state =
+                          level3ChipStates[chip.tagName] ?? "untouched";
+                        return (
+                          <Button
+                            key={chip.tagName}
+                            size="sm"
+                            variant={
+                              state === "positive"
+                                ? "primary"
+                                : "outline-secondary"
+                            }
+                            onClick={() => tapLevel3Chip(group, chip.tagName)}
+                            data-testid={`question-feed-level3-chip-${chip.tagName}`}
+                          >
+                            {chip.label}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                <div className="mt-3 d-flex gap-2">
+                  <Button
+                    variant="primary"
+                    disabled={submitting}
+                    onClick={confirmLevel3}
+                    data-testid="question-feed-level3-confirm"
+                  >
+                    Confirm &amp; continue
+                  </Button>
+                  <Button
+                    variant="outline-secondary"
+                    disabled={submitting}
+                    onClick={() => advance()}
+                    data-testid="question-feed-level3-skip"
+                  >
+                    Skip this question
+                  </Button>
+                </div>
               </Col>
-            </>
+            ) : (
+              <>
+                {/* Level 2. order-2/order-md-1 (here) + order-1/order-md-2 (the card panel
+                    column below) put the card being asked about first on mobile, where the
+                    two columns stack - previously the candidate grid rendered above the card
+                    itself, so a mobile voter had to scroll past every answer option before
+                    seeing what they were even answering about. Desktop's side-by-side order
+                    (candidates left, card right) is unaffected. */}
+                <Col xs={12} md={5} className="order-2 order-md-1">
+                  {!revealed ? (
+                    <div className="text-center py-4">
+                      <Spinner size={2} />
+                    </div>
+                  ) : (
+                    <>
+                      <Badge
+                        bg={
+                          item.type === "confirm_suggestion"
+                            ? "info"
+                            : "secondary"
+                        }
+                        data-testid="question-feed-tier-badge"
+                        className="mb-2"
+                      >
+                        {item.type === "confirm_suggestion"
+                          ? "Suggested match"
+                          : "Needs identification"}
+                      </Badge>
+                      {item.type === "confirm_suggestion" &&
+                        item.suggestedPrinting != null && (
+                          <p data-testid="question-feed-suggestion-prompt">
+                            Which of these is it?{" "}
+                            <SetIcon
+                              expansionCode={
+                                item.suggestedPrinting.expansionCode
+                              }
+                            />{" "}
+                            {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                            {item.suggestedPrinting.collectorNumber} was
+                            suggested
+                          </p>
+                        )}
+                      <div className="mb-2">
+                        <Button
+                          variant="link"
+                          className="p-0"
+                          onClick={() =>
+                            setFilterExpanded((previous) => !previous)
+                          }
+                          data-testid="question-feed-filter-toggle"
+                        >
+                          {filterExpanded
+                            ? "Hide filters"
+                            : "Filter by attribute"}
+                        </Button>
+                      </div>
+                      {hiddenCount > 0 && (
+                        <p
+                          className="text-muted small"
+                          data-testid="question-feed-hidden-count"
+                        >
+                          {hiddenCount} hidden by your tags -{" "}
+                          <a
+                            href="#"
+                            data-testid="question-feed-clear-filters"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              setChipStates(initialChipStates());
+                            }}
+                          >
+                            clear
+                          </a>
+                        </p>
+                      )}
+                      <Row className="g-2" xs={3} md={4}>
+                        {visibleCandidates.map((candidate) => (
+                          <Col key={candidate.identifier}>
+                            <CandidateButton
+                              variant="outline-secondary"
+                              className={`w-100 p-1 border-0${
+                                item.type === "confirm_suggestion" &&
+                                item.suggestedPrinting?.identifier ===
+                                  candidate.identifier
+                                  ? " highlighted"
+                                  : ""
+                              }`}
+                              disabled={submitting}
+                              onClick={() => selectCandidate(candidate, false)}
+                              {...getPrintingCandidateDataAttributes(
+                                item.card.name,
+                                candidate
+                              )}
+                            >
+                              <HoverBurst
+                                className="hover-burst"
+                                viewBox={STARBURST_VIEWBOX}
+                              >
+                                <polygon
+                                  points={
+                                    STARBURST_OUTER_FRAMES[starburstFrame]
+                                  }
+                                  fill={STARBURST_OUTER_COLOR}
+                                />
+                                <polygon
+                                  points={
+                                    STARBURST_INNER_FRAMES[starburstFrame]
+                                  }
+                                  fill={STARBURST_INNER_COLOR}
+                                />
+                              </HoverBurst>
+                              <ArtPlaceholder>
+                                <ZoomableThumbnail>
+                                  <img
+                                    src={candidate.mediumThumbnailUrl}
+                                    alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                                  />
+                                </ZoomableThumbnail>
+                                {/* Tied to this specific candidate's identifier, not just
+                                    `submitting` - the old dimmed-all-buttons treatment gave no
+                                    way to tell which of several candidates you actually tapped
+                                    under any real latency. */}
+                                {submitting &&
+                                  selectedCandidateId ===
+                                    candidate.identifier && (
+                                    <div
+                                      data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
+                                    >
+                                      <Spinner
+                                        size={1.5}
+                                        zIndex={2}
+                                        positionAbsolute
+                                      />
+                                    </div>
+                                  )}
+                              </ArtPlaceholder>
+                              <div>
+                                <SetIcon
+                                  expansionCode={candidate.expansionCode}
+                                />{" "}
+                                {candidate.expansionCode.toUpperCase()}{" "}
+                                {candidate.collectorNumber}
+                              </div>
+                              <div className="text-muted small">
+                                {candidate.artist}
+                              </div>
+                            </CandidateButton>
+                          </Col>
+                        ))}
+                      </Row>
+                      {followUp === "no-match-reason" && (
+                        <div className="mt-3">
+                          <hr />
+                          <NoMatchReasonStrip
+                            backendURL={backendURL}
+                            cardIdentifier={item.card.identifier}
+                            onDone={advance}
+                            onRateLimited={() => setRateLimited(true)}
+                          />
+                        </div>
+                      )}
+                      {followUp === "none" && (
+                        <div className="mt-3 d-flex flex-column gap-2">
+                          <Button
+                            variant="outline-secondary"
+                            disabled={submitting}
+                            onClick={() => selectCandidate(undefined, true)}
+                            data-testid="question-feed-no-match"
+                          >
+                            {submitting &&
+                            selectedCandidateId === "no-match" ? (
+                              <Spinner size={1} />
+                            ) : (
+                              "None of these"
+                            )}
+                          </Button>
+                          <Button
+                            variant="outline-secondary"
+                            disabled={submitting}
+                            onClick={classifyAsCustomArt}
+                            data-testid="question-feed-custom-art"
+                          >
+                            {submitting &&
+                            selectedCandidateId === "custom-art" ? (
+                              <Spinner size={1} />
+                            ) : (
+                              "\u{1F3A8} Art matches, not an official printing"
+                            )}
+                          </Button>
+                          <Button
+                            variant="outline-secondary"
+                            disabled={submitting}
+                            onClick={skip}
+                            data-testid="question-feed-skip"
+                          >
+                            Skip
+                          </Button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </Col>
+                {/* position + a non-auto z-index together give this column its own local
+                    stacking context, containing CardPanel's z-index: -1 (see cardPanel.tsx) so
+                    it can't escape and render the whole panel - chips included - unclickable
+                    behind this sibling column at the hit-testing layer. position: relative
+                    alone does NOT establish a stacking context - see
+                    docs/features/printing-tags.md's Stage 7 section for the full story.
+                    order-1/order-md-2 (see the candidates column above for the full
+                    rationale) - unrelated to the stacking-context fix above, just reusing the
+                    same style prop's neighbouring className. */}
+                <Col
+                  xs={12}
+                  md={7}
+                  className="order-1 order-md-2"
+                  style={{ position: "relative", zIndex: 0 }}
+                >
+                  {filterExpanded ? filterCardPanel : plainCardPanel}
+                </Col>
+              </>
+            )
           ) : (
             <>
               <Col xs={12} md={7}>

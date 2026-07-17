@@ -173,3 +173,31 @@ export function filterCandidatesByChipStates<T extends PrintingCandidate>(
     })
   );
 }
+
+/**
+ * Every chip auto-derivable from a selected candidate - standalone attributes plus whichever
+ * exclusion-group chip actually matches (Finding 2: PrintingCandidate carries borderColor/
+ * frame directly, so a group value is just as derivable as the standalone booleans). Cast as
+ * positive tag votes on selection - see QuestionFeed.tsx's selectCandidate.
+ */
+export function getAutoTagChips(
+  candidate: PrintingCandidate
+): AttributeChipDef[] {
+  return ALL_ATTRIBUTE_CHIPS.filter((chip) => chip.matches(candidate));
+}
+
+/**
+ * An exclusion group is "open" for a candidate when none of its chips match it - e.g.
+ * borderColor "borderless" or "gold" fall outside the Black/White/Silver taxonomy (see
+ * printingCandidate2's fixture, borderColor: "borderless"). Standalone chips are never open:
+ * their underlying fields are plain booleans, so a definite "false" is itself a complete
+ * derived answer, not an unknown one. Drives Level 3's conditional render in QuestionFeed.tsx
+ * - most candidates leave nothing open and skip straight past it.
+ */
+export function getOpenExclusionGroups(
+  candidate: PrintingCandidate
+): ExclusionGroup[] {
+  return EXCLUSION_GROUPS.filter(
+    (group) => !group.chips.some((chip) => chip.matches(candidate))
+  );
+}

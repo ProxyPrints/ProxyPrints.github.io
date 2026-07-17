@@ -33,6 +33,11 @@ function renderFeed() {
 async function revealCard() {
   const overlay = await screen.findByTestId("question-feed-reveal-overlay");
   fireEvent.animationEnd(overlay);
+  await waitFor(() =>
+    expect(
+      screen.queryByTestId("question-feed-reveal-overlay")
+    ).not.toBeInTheDocument()
+  );
 }
 
 const identifyPrintingItem = {
@@ -95,25 +100,30 @@ function questionFeedOnce() {
 }
 
 describe("QuestionFeed", () => {
-  it("disables the No match button until a chip is explicitly set, then enables it", async () => {
+  it("the attribute-chip filter is collapsed by default, and 'None of these' works without touching it", async () => {
     server.use(questionFeedOnce());
-    server.use(submitTagVoteResolvesToApply);
     renderFeed();
     await revealCard();
 
+    expect(
+      screen.queryByTestId("attribute-chip-panel")
+    ).not.toBeInTheDocument();
     const noMatchButton = await screen.findByTestId("question-feed-no-match");
-    expect(noMatchButton).toBeDisabled();
+    expect(noMatchButton).not.toBeDisabled();
 
-    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
-    await waitFor(() => expect(noMatchButton).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId("question-feed-filter-toggle"));
+    expect(
+      await screen.findByTestId("attribute-chip-Full Art")
+    ).toBeInTheDocument();
   });
 
-  it("clicking No match while disabled never calls submitPrintingTag", async () => {
+  it("clicking 'None of these' submits a no-match printing vote", async () => {
     server.use(questionFeedOnce());
-    let submitCalled = false;
+    let submittedIsNoMatch: boolean | undefined;
     server.use(
-      http.post(buildRoute("2/submitPrintingTag/"), () => {
-        submitCalled = true;
+      http.post(buildRoute("2/submitPrintingTag/"), async ({ request }) => {
+        const body = (await request.json()) as { isNoMatch?: boolean };
+        submittedIsNoMatch = body.isNoMatch;
         return HttpResponse.json(
           { resolvedPrinting: null, isNoMatch: true, voteTally: [] },
           { status: 200 }
@@ -123,13 +133,11 @@ describe("QuestionFeed", () => {
     renderFeed();
     await revealCard();
 
-    const noMatchButton = await screen.findByTestId("question-feed-no-match");
-    fireEvent.click(noMatchButton);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(submitCalled).toBe(false);
+    fireEvent.click(await screen.findByTestId("question-feed-no-match"));
+    await waitFor(() => expect(submittedIsNoMatch).toBe(true));
   });
 
-  it("selecting a candidate auto-casts positive CardTagVotes for its own standalone attributes only", async () => {
+  it("selecting a candidate auto-casts positive CardTagVotes for every attribute it derives, standalone plus matched exclusion-group values", async () => {
     // first GET serves the item, every subsequent GET (post-advance) reports caught-up - a
     // second `server.use` for the same route would just override the first one outright
     // (MSW's handler stack is LIFO), so both states have to live in one handler.
@@ -198,13 +206,20 @@ describe("QuestionFeed", () => {
 
     await waitFor(() =>
       expect(autoTagCalls.map((call) => call.tagName).sort()).toEqual(
-        ["Borderless", "Full Art", "Showcase"].sort()
+        ["Borderless", "Full Art", "Modern Border", "Showcase"].sort()
       )
+    );
+    // printing-2's borderColor is "borderless" - outside the Black/White/Silver taxonomy, so
+    // no Border Color chip auto-fires for it (see attributeChips.test.ts's
+    // getOpenExclusionGroups coverage - this is exactly what routes the feed to Level 3
+    // instead of advancing, covered separately in QuestionFeedLevels.spec.ts).
+    expect(autoTagCalls.map((call) => call.tagName)).not.toContain(
+      "Black Border"
     );
     expect(autoTagCalls.every((call) => call.polarity === 1)).toBe(true);
   });
 
-  it("selecting a candidate with no true attributes casts zero auto-tag votes", async () => {
+  it("selecting a candidate derives only its matched exclusion-group chips when every standalone attribute is false", async () => {
     let feedFetchCount = 0;
     server.use(
       http.get(buildRoute("2/questionFeed/"), () => {
@@ -243,12 +258,18 @@ describe("QuestionFeed", () => {
         )
       )
     );
-    let autoTagCallCount = 0;
+    const autoTagCalls: string[] = [];
     server.use(
-      http.post(buildRoute("2/submitTagVote/"), () => {
-        autoTagCallCount += 1;
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as { tagName: string };
+        autoTagCalls.push(body.tagName);
         return HttpResponse.json(
-          { tagName: "x", resolvedPolarity: 1, netPolarity: 1, tally: [] },
+          {
+            tagName: body.tagName,
+            resolvedPolarity: 1,
+            netPolarity: 1,
+            tally: [],
+          },
           { status: 200 }
         );
       })
@@ -259,6 +280,9 @@ describe("QuestionFeed", () => {
     const candidateButton = await screen.findByAltText("abc 1");
     fireEvent.click(candidateButton);
 
+    // printing-1's border color and frame both match a taxonomy chip, so nothing is left
+    // open - the feed advances straight to caught-up (no Level 3) once the two matched
+    // exclusion-group votes are cast.
     await waitFor(() =>
       expect(
         screen.getByText(
@@ -266,7 +290,9 @@ describe("QuestionFeed", () => {
         )
       ).toBeDefined()
     );
-    expect(autoTagCallCount).toBe(0);
+    expect(autoTagCalls.sort()).toEqual(
+      ["Black Border", "Modern Border"].sort()
+    );
   });
 
   it("shows a distinct error state (not 'all caught up') on a fetch failure, with a working retry", async () => {
@@ -430,11 +456,7 @@ describe("QuestionFeed", () => {
     const store = renderFeed();
     await revealCard();
 
-    // the "No match" button stays disabled until a chip is explicitly set - see the dedicated
-    // test for that behavior above
-    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
     const noMatchButton = await screen.findByTestId("question-feed-no-match");
-    await waitFor(() => expect(noMatchButton).not.toBeDisabled());
     fireEvent.click(noMatchButton);
 
     await waitFor(() =>
@@ -465,9 +487,7 @@ describe("QuestionFeed", () => {
     const store = renderFeed();
     await revealCard();
 
-    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
     const noMatchButton = await screen.findByTestId("question-feed-no-match");
-    await waitFor(() => expect(noMatchButton).not.toBeDisabled());
     fireEvent.click(noMatchButton);
 
     await waitFor(() => {
@@ -519,9 +539,7 @@ describe("QuestionFeed", () => {
     );
     renderFeed();
     await revealCard();
-    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
     const noMatchButton = await screen.findByTestId("question-feed-no-match");
-    await waitFor(() => expect(noMatchButton).not.toBeDisabled());
     fireEvent.click(noMatchButton);
     await waitFor(() =>
       expect(screen.getByTestId("question-feed-rate-limited")).toBeDefined()
