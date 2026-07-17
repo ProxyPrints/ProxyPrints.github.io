@@ -8,6 +8,7 @@ import {
   CornerRadiusMM,
 } from "@/common/constants";
 import { CardDocument, SlotProjectMembers } from "@/common/types";
+import { computeLayout } from "@/features/pdf/layout";
 import { getPDFImageURL, PDFImageQuality } from "@/features/pdf/pdfImage";
 import {
   ScmPaperSize,
@@ -104,86 +105,34 @@ const getPageSizeMM = (
   }
 };
 
-const calculateCardContainerDimension = (
-  pageSizeMM: number,
-  cardSizeMM: number,
-  bleedEdgeMM: number,
-  cardSpacingMM: number,
-  pageMarginStartMM: number,
-  pageMarginEndMM: number
-) => {
-  const maxWidth = pageSizeMM - (pageMarginStartMM + pageMarginEndMM);
-  const calculateContainerWidth = (cardsFitted: number) =>
-    // adding a small buffer of 0.1 mm as I observed some weird wrapping behaviour from react-pdf without this
-    cardsFitted * (cardSizeMM + 2 * bleedEdgeMM) +
-    (cardsFitted - 1) * cardSpacingMM +
-    0.1;
-  let cardsFitted = 1;
-  while (true) {
-    const containerWidth = calculateContainerWidth(cardsFitted);
-    if (containerWidth < maxWidth) {
-      cardsFitted++;
-    } else {
-      return calculateContainerWidth(Math.max(1, cardsFitted - 1));
-    }
-  }
-};
-
-const calculateCardContainerWidth = (
+// Thin wrapper over the shared computeLayout() - was previously two independently-tuned
+// algorithms (a greedy container-fit loop, and a separate division-based cards-per-row/col
+// re-derivation) at each of this file's three call sites; see layout.ts's module comment.
+const layoutForPage = (
   pageWidthMM: number,
-  bleedEdgeMM: number,
-  cardSpacingColMM: number,
-  pageMarginLeftMM: number,
-  pageMarginRightMM: number
-) =>
-  calculateCardContainerDimension(
-    pageWidthMM,
-    CardWidthMM,
-    bleedEdgeMM,
-    cardSpacingColMM,
-    pageMarginLeftMM,
-    pageMarginRightMM
-  );
-
-const calculateCardContainerHeight = (
   pageHeightMM: number,
   bleedEdgeMM: number,
   cardSpacingRowMM: number,
+  cardSpacingColMM: number,
   pageMarginTopMM: number,
-  pageMarginBottomMM: number
+  pageMarginBottomMM: number,
+  pageMarginLeftMM: number,
+  pageMarginRightMM: number
 ) =>
-  calculateCardContainerDimension(
+  computeLayout(
+    pageWidthMM,
     pageHeightMM,
+    CardWidthMM,
     CardHeightMM,
     bleedEdgeMM,
-    cardSpacingRowMM,
-    pageMarginTopMM,
-    pageMarginBottomMM
+    {
+      top: pageMarginTopMM,
+      bottom: pageMarginBottomMM,
+      left: pageMarginLeftMM,
+      right: pageMarginRightMM,
+    },
+    { row: cardSpacingRowMM, col: cardSpacingColMM }
   );
-
-const getCardsPerRow = (
-  containerWidthMM: number,
-  bleedEdgeMM: number,
-  cardSpacingColMM: number
-) => {
-  const cardSlotWidth = CardWidthMM + 2 * bleedEdgeMM;
-  return Math.round(
-    (containerWidthMM - 0.1 + cardSpacingColMM) /
-      (cardSlotWidth + cardSpacingColMM)
-  );
-};
-
-const getCardsPerCol = (
-  containerHeightMM: number,
-  bleedEdgeMM: number,
-  cardSpacingRowMM: number
-) => {
-  const cardSlotHeight = CardHeightMM + 2 * bleedEdgeMM;
-  return Math.round(
-    (containerHeightMM - 0.1 + cardSpacingRowMM) /
-      (cardSlotHeight + cardSpacingRowMM)
-  );
-};
 
 export const PageSize = {
   A4: "A4",
@@ -602,30 +551,16 @@ const PageCutLines = ({
   const size = getPageSizeMM(pageSize, pageWidth, pageHeight);
   const lengthMM = Math.max(size.width, size.height);
 
-  const containerWidth = calculateCardContainerWidth(
+  const { cardsPerRow, cardsPerCol } = layoutForPage(
     size.width,
-    bleedEdgeMM,
-    cardSpacingColMM,
-    pageMarginLeftMM,
-    pageMarginRightMM
-  );
-  const cardsPerRow = getCardsPerRow(
-    containerWidth,
-    bleedEdgeMM,
-    cardSpacingColMM
-  );
-
-  const containerHeight = calculateCardContainerHeight(
     size.height,
     bleedEdgeMM,
     cardSpacingRowMM,
+    cardSpacingColMM,
     pageMarginTopMM,
-    pageMarginBottomMM
-  );
-  const cardsPerCol = getCardsPerCol(
-    containerHeight,
-    bleedEdgeMM,
-    cardSpacingRowMM
+    pageMarginBottomMM,
+    pageMarginLeftMM,
+    pageMarginRightMM
   );
 
   return (
@@ -703,31 +638,21 @@ const CardGrid = ({
     pageMarginBottomMM,
   } = usePDFContext();
 
-  const containerWidth = calculateCardContainerWidth(
+  const {
+    containerWidthMM: containerWidth,
+    containerHeightMM: containerHeight,
+    cardsPerRow,
+    cardsPerCol,
+  } = layoutForPage(
     pageWidthMM,
-    bleedEdgeMM,
-    cardSpacingColMM,
-    pageMarginLeftMM,
-    pageMarginRightMM
-  );
-
-  const cardsPerRow = getCardsPerRow(
-    containerWidth,
-    bleedEdgeMM,
-    cardSpacingColMM
-  );
-
-  const containerHeight = calculateCardContainerHeight(
     pageHeightMM,
     bleedEdgeMM,
     cardSpacingRowMM,
+    cardSpacingColMM,
     pageMarginTopMM,
-    pageMarginBottomMM
-  );
-  const cardsPerCol = getCardsPerCol(
-    containerHeight,
-    bleedEdgeMM,
-    cardSpacingRowMM
+    pageMarginBottomMM,
+    pageMarginLeftMM,
+    pageMarginRightMM
   );
 
   return (
@@ -949,23 +874,18 @@ export const PDF = (props: PDFProps) => {
 
   const size = getPageSizeMM(props.pageSize, props.pageWidth, props.pageHeight);
 
-  const containerWidth = calculateCardContainerWidth(
+  const { cardsPerRow, cardsPerCol } = layoutForPage(
     size.width,
-    props.bleedEdgeMM,
-    props.cardSpacingColMM,
-    props.pageMarginLeftMM,
-    props.pageMarginRightMM
-  );
-  const containerHeight = calculateCardContainerHeight(
     size.height,
     props.bleedEdgeMM,
     props.cardSpacingRowMM,
+    props.cardSpacingColMM,
     props.pageMarginTopMM,
-    props.pageMarginBottomMM
+    props.pageMarginBottomMM,
+    props.pageMarginLeftMM,
+    props.pageMarginRightMM
   );
-  const cardsPerPage =
-    getCardsPerRow(containerWidth, props.bleedEdgeMM, props.cardSpacingColMM) *
-    getCardsPerCol(containerHeight, props.bleedEdgeMM, props.cardSpacingRowMM);
+  const cardsPerPage = cardsPerRow * cardsPerCol;
 
   const cardDocumentSets = CardSelectionModeToPaginator[
     props.cardSelectionMode
