@@ -461,3 +461,49 @@ confirmation first), even though the tree content itself is unchanged.
 
 **Refs**: none yet — first occurrence, 2026-07-17, during the
 frontend-package PR #41 conflict resolution.
+
+## User reports "Vote failed" / a generic tag-submission error — check nginx access logs for 429s first
+
+**Symptom**: a real user reports a vote/tag submission failing with a
+generic frontend toast ("Vote failed" / "Something went wrong
+submitting your tag - please try again.") and `docker logs mpcautofill_django` shows nothing around the reported time.
+
+**Cause**: the empty django logs are a red herring, not evidence of a
+missing traceback — check `docker logs mpcautofill_nginx` for the
+actual HTTP status first. In the one confirmed case so far (2026-07-17,
+`Changeling Outcast` border/frame chips), the real cause was a `429`
+from `cardpicker.views.post_submit_tag_vote`'s rate limit (a real user
+voting quickly enough to trip it), not a `500` — the backend behaved
+exactly as designed (a clean, well-shaped JSON error, checked before
+any request-body parsing or vote-casting) and there was never an
+exception to log anywhere. The generic toast is a separate, real
+frontend bug: `frontend/src/store/api.ts`'s `APISubmitTagVote` already
+throws `{name, message}` parsed from the backend's response body on
+any non-200, but every caller (`AttributeChipPanel.tsx` confirmed;
+likely also `QueueTagQuestion.tsx`/`TagVotePicker.tsx`/
+`ArtistVotePicker.tsx`/`NoMatchReasonStrip.tsx`/`PrintingTagPicker.tsx`
+— same generic-string pattern, not yet individually confirmed) uses a
+bare `.catch(() => {...})` that discards the thrown error and shows a
+hardcoded generic message regardless of what actually failed.
+
+**Shared rate-limit detail**: `post_submit_tag_vote`,
+`post_submit_printing_tag`, and the artist-vote submission view all
+share one `@ratelimit(...)` budget (`_printing_tag_rate_limit_key`/
+`_printing_tag_rate_limit_rate` in `views.py`, keyed by the
+client-generated `anonymousId`) — `PRINTING_TAG_SUBMISSION_RATE`
+(`settings.py`, 300/h as of 2026-07-17, was 20/h) covers a session's
+whole voting activity across all three endpoints, not a per-endpoint
+budget. A user mixing tag/printing/artist votes rapidly can trip it
+faster than "N tag votes alone" would suggest.
+
+**Fix**: for the rate-limit class of failure specifically, nothing to
+fix server-side once the rate is sane for real usage (raised to 300/h
+alongside this entry — see `settings.py`'s own comment for the full
+reasoning). The frontend's swallowed-error-message bug is still open —
+fixing it means changing each bare `.catch(() => {...})` to
+`.catch((err) => {...})` and surfacing `err.message` instead of the
+hardcoded string, so a 429 actually reads "Too many tag vote
+submissions - please slow down" instead of a generic failure.
+
+**Refs**: `MPCAutofill/MPCAutofill/settings.py` (rate + LOGGING
+comments), `frontend/src/store/api.ts`'s `APISubmitTagVote`.
