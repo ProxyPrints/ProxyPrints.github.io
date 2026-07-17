@@ -250,6 +250,12 @@ export interface PDFProps {
   imageDPI: number | undefined;
   jpgQuality: number;
   fileHandles: { [identifier: string]: FileSystemFileHandle };
+  // Called (by pdf.worker.ts, which supplies this internally - not by any
+  // caller of the public PDF render hooks) once per card image that couldn't
+  // be fetched, so the worker can report which cards ended up blank instead
+  // of that failure being silently invisible. Optional so existing render
+  // props unrelated to failure tracking don't need to know about it.
+  reportImageFailure?: (identifier: string, label: string) => void;
   // SCM (Silhouette Card Maker) mode. When scmMode is true, the standard
   // parametric layout above is ignored in favour of an SCM-template-compatible
   // layout with registration marks (see scm/SCMPDF.tsx).
@@ -455,6 +461,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
     imageDPI,
     jpgQuality,
     fileHandles,
+    reportImageFailure,
   } = usePDFContext();
   const height = CardHeightMM + 2 * bleedEdgeMM;
   const heightProportion = (CardHeightMM + 2 * BleedEdgeMM) / height;
@@ -472,15 +479,20 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
       }}
     >
       <Image
-        src={async () =>
-          getPDFImageURL(
-            cardDocument,
-            imageQuality,
-            imageDPI,
-            jpgQuality,
-            fileHandles
-          )
-        }
+        src={async () => {
+          try {
+            return await getPDFImageURL(
+              cardDocument,
+              imageQuality,
+              imageDPI,
+              jpgQuality,
+              fileHandles
+            );
+          } catch {
+            reportImageFailure?.(cardDocument.identifier, cardDocument.name);
+            return undefined;
+          }
+        }}
         style={
           {
             width: width + "mm",
@@ -930,6 +942,7 @@ export const PDF = (props: PDFProps) => {
         imageDPI={props.imageDPI}
         jpgQuality={props.jpgQuality}
         fileHandles={props.fileHandles}
+        reportImageFailure={props.reportImageFailure}
       />
     );
   }
