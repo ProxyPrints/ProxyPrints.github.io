@@ -45,3 +45,6 @@ node_modules/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# throwaway specs for one-off UX/screenshot surveys (never committed)
+/tests/survey-tmp/
