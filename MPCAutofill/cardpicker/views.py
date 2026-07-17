@@ -894,6 +894,7 @@ def post_submit_printing_tag(request: HttpRequest) -> HttpResponse:
             anonymous_id=req.anonymousId,
             source=VoteSource.USER,
             user=_requesting_user(request),
+            vote_surface=req.voteSurface,
         )
         resolved = resolve_and_persist_printing(card)
 
@@ -1018,6 +1019,7 @@ def post_submit_artist_vote(request: HttpRequest) -> HttpResponse:
             anonymous_id=req.anonymousId,
             source=VoteSource.USER,
             user=_requesting_user(request),
+            vote_surface=req.voteSurface,
         )
         resolved = resolve_and_persist_artist(card)
 
@@ -1092,7 +1094,12 @@ def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
         )
 
     _cast_tag_vote_and_resolve(
-        card=card, tag=tag, anonymous_id=req.anonymousId, polarity=req.polarity, user=_requesting_user(request)
+        card=card,
+        tag=tag,
+        anonymous_id=req.anonymousId,
+        polarity=req.polarity,
+        user=_requesting_user(request),
+        vote_surface=req.voteSurface,
     )
     return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
 
@@ -1107,11 +1114,15 @@ def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
 RETRACT_POLARITY = 0
 
 
-def _cast_tag_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str, polarity: int, user: Optional[User]) -> None:
+def _cast_tag_vote_and_resolve(
+    card: Card, tag: Tag, anonymous_id: str, polarity: int, user: Optional[User], vote_surface: Optional[str] = None
+) -> None:
     """
     The one write path for a tag vote - shared verbatim between `post_submit_tag_vote` and
     `post_report_card` (a report on a tag-mapped reason IS a tag vote plus an audit row), so
     the two entry points can never drift on how a vote lands or when consensus recomputes.
+    `vote_surface` defaults to None for `post_report_card`'s call site - report-driven votes
+    aren't a "surface" a person consciously chose to vote from in the same sense.
     """
     with transaction.atomic():
         if polarity == RETRACT_POLARITY:
@@ -1123,7 +1134,12 @@ def _cast_tag_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str, polarity
                 card=card,
                 tag=tag,
                 anonymous_id=anonymous_id,
-                defaults={"polarity": polarity, "source": VoteSource.USER, "user": user},
+                defaults={
+                    "polarity": polarity,
+                    "source": VoteSource.USER,
+                    "user": user,
+                    "vote_surface": vote_surface,
+                },
             )
         resolve_and_persist_tag_votes(card)
 

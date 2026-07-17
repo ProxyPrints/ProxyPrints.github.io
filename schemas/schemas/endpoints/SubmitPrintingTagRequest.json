@@ -6,7 +6,8 @@
     "identifier": { "type": "string" },
     "printingIdentifier": { "type": ["string", "null"] },
     "isNoMatch": { "type": "boolean" },
-    "anonymousId": { "type": "string" }
+    "anonymousId": { "type": "string" },
+    "voteSurface": { "type": ["string", "null"] }
   },
   "required": ["identifier", "isNoMatch", "anonymousId"],
   "additionalProperties": false

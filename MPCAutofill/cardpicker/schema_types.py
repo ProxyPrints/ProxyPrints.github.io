@@ -1794,6 +1794,7 @@ class SubmitArtistVoteRequest(BaseModel):
     identifier: str
     isUnknown: bool
     artistName: Optional[str] = None
+    voteSurface: Optional[str] = None
 
     @staticmethod
     def from_dict(obj: Any) -> "SubmitArtistVoteRequest":
@@ -1802,7 +1803,8 @@ class SubmitArtistVoteRequest(BaseModel):
         identifier = from_str(obj.get("identifier"))
         isUnknown = from_bool(obj.get("isUnknown"))
         artistName = from_union([from_none, from_str], obj.get("artistName"))
-        return SubmitArtistVoteRequest(anonymousId, identifier, isUnknown, artistName)
+        voteSurface = from_union([from_none, from_str], obj.get("voteSurface"))
+        return SubmitArtistVoteRequest(anonymousId, identifier, isUnknown, artistName, voteSurface)
 
     def to_dict(self) -> dict:
         result: dict = {}
@@ -1811,6 +1813,8 @@ class SubmitArtistVoteRequest(BaseModel):
         result["isUnknown"] = from_bool(self.isUnknown)
         if self.artistName is not None:
             result["artistName"] = from_union([from_none, from_str], self.artistName)
+        if self.voteSurface is not None:
+            result["voteSurface"] = from_union([from_none, from_str], self.voteSurface)
         return result
 
 
@@ -1819,6 +1823,7 @@ class SubmitPrintingTagRequest(BaseModel):
     identifier: str
     isNoMatch: bool
     printingIdentifier: Optional[str] = None
+    voteSurface: Optional[str] = None
 
     @staticmethod
     def from_dict(obj: Any) -> "SubmitPrintingTagRequest":
@@ -1827,7 +1832,8 @@ class SubmitPrintingTagRequest(BaseModel):
         identifier = from_str(obj.get("identifier"))
         isNoMatch = from_bool(obj.get("isNoMatch"))
         printingIdentifier = from_union([from_none, from_str], obj.get("printingIdentifier"))
-        return SubmitPrintingTagRequest(anonymousId, identifier, isNoMatch, printingIdentifier)
+        voteSurface = from_union([from_none, from_str], obj.get("voteSurface"))
+        return SubmitPrintingTagRequest(anonymousId, identifier, isNoMatch, printingIdentifier, voteSurface)
 
     def to_dict(self) -> dict:
         result: dict = {}
@@ -1836,6 +1842,8 @@ class SubmitPrintingTagRequest(BaseModel):
         result["isNoMatch"] = from_bool(self.isNoMatch)
         if self.printingIdentifier is not None:
             result["printingIdentifier"] = from_union([from_none, from_str], self.printingIdentifier)
+        if self.voteSurface is not None:
+            result["voteSurface"] = from_union([from_none, from_str], self.voteSurface)
         return result
 
 
@@ -1844,6 +1852,7 @@ class SubmitTagVoteRequest(BaseModel):
     identifier: str
     polarity: int
     tagName: str
+    voteSurface: Optional[str] = None
 
     @staticmethod
     def from_dict(obj: Any) -> "SubmitTagVoteRequest":
@@ -1852,7 +1861,8 @@ class SubmitTagVoteRequest(BaseModel):
         identifier = from_str(obj.get("identifier"))
         polarity = from_int(obj.get("polarity"))
         tagName = from_str(obj.get("tagName"))
-        return SubmitTagVoteRequest(anonymousId, identifier, polarity, tagName)
+        voteSurface = from_union([from_none, from_str], obj.get("voteSurface"))
+        return SubmitTagVoteRequest(anonymousId, identifier, polarity, tagName, voteSurface)
 
     def to_dict(self) -> dict:
         result: dict = {}
@@ -1860,6 +1870,8 @@ class SubmitTagVoteRequest(BaseModel):
         result["identifier"] = from_str(self.identifier)
         result["polarity"] = from_int(self.polarity)
         result["tagName"] = from_str(self.tagName)
+        if self.voteSurface is not None:
+            result["voteSurface"] = from_union([from_none, from_str], self.voteSurface)
         return result
 
 
