@@ -13,6 +13,7 @@
  */
 
 import React, { useEffect, useState } from "react";
+import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
@@ -100,9 +101,13 @@ export function QuestionFeed() {
   const [counts, setCounts] = useState<QuestionFeedCounts | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [caughtUp, setCaughtUp] = useState<boolean>(false);
+  const [fetchError, setFetchError] = useState<boolean>(false);
   const [flavorText, setFlavorText] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
+    null
+  );
   const [chipStates, setChipStates] = useState<Record<string, ChipVoteState>>(
     initialChipStates()
   );
@@ -121,6 +126,7 @@ export function QuestionFeed() {
       return;
     }
     setLoading(true);
+    setFetchError(false);
     APIGetQuestionFeed(backendURL, getOrCreateAnonymousId())
       .then((response) => {
         setItem(response.item ?? null);
@@ -129,7 +135,7 @@ export function QuestionFeed() {
       })
       .catch(() => {
         setItem(null);
-        setCaughtUp(true);
+        setFetchError(true);
       })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -140,6 +146,7 @@ export function QuestionFeed() {
     setRevealed(false);
     setChipStates(initialChipStates());
     setFollowUp("none");
+    setSelectedCandidateId(null);
   }, [item?.card.identifier, item?.type]);
 
   const advance = () => {
@@ -174,6 +181,7 @@ export function QuestionFeed() {
       return;
     }
     setSubmitting(true);
+    setSelectedCandidateId(candidate?.identifier ?? "no-match");
     const anonymousId = getOrCreateAnonymousId();
     APISubmitPrintingTag(
       backendURL,
@@ -206,7 +214,10 @@ export function QuestionFeed() {
         }
       })
       .catch(reportVoteFailed)
-      .finally(() => setSubmitting(false));
+      .finally(() => {
+        setSubmitting(false);
+        setSelectedCandidateId(null);
+      });
   };
 
   const skip = () => advance();
@@ -215,6 +226,26 @@ export function QuestionFeed() {
     return (
       <div className="text-center py-4" data-testid="question-feed-loading">
         <Spinner size={2} />
+      </div>
+    );
+  }
+
+  // A fetch failure (backend outage, network error) is distinct from a genuine "no cards
+  // left" empty state - the old code treated both identically, so an outage looked exactly
+  // like being caught up and a user could walk away thinking they'd finished the queue.
+  if (fetchError) {
+    return (
+      <div data-testid="question-feed-error">
+        <p className="text-danger">
+          Something went wrong loading the next question.
+        </p>
+        <Button
+          variant="outline-secondary"
+          onClick={fetchNext}
+          data-testid="question-feed-retry"
+        >
+          Try again
+        </Button>
       </div>
     );
   }
@@ -337,13 +368,32 @@ export function QuestionFeed() {
         <Row className="g-4">
           {isCandidateType ? (
             <>
-              <Col xs={12} md={5}>
+              {/* order-2/order-md-1 (here) + order-1/order-md-2 (the card panel column
+                  below) put the card being asked about first on mobile, where the two
+                  columns stack - previously the candidate grid rendered above the card
+                  itself, so a mobile voter had to scroll past every answer option before
+                  seeing what they were even answering about. Desktop's side-by-side order
+                  (candidates left, card right) is unaffected. */}
+              <Col xs={12} md={5} className="order-2 order-md-1">
                 {!revealed ? (
                   <div className="text-center py-4">
                     <Spinner size={2} />
                   </div>
                 ) : (
                   <>
+                    <Badge
+                      bg={
+                        item.type === "confirm_suggestion"
+                          ? "info"
+                          : "secondary"
+                      }
+                      data-testid="question-feed-tier-badge"
+                      className="mb-2"
+                    >
+                      {item.type === "confirm_suggestion"
+                        ? "Suggested match"
+                        : "Needs identification"}
+                    </Badge>
                     {item.type === "confirm_suggestion" &&
                       item.suggestedPrinting != null && (
                         <p data-testid="question-feed-suggestion-prompt">
@@ -400,7 +450,17 @@ export function QuestionFeed() {
                               fill={STARBURST_INNER_COLOR}
                             />
                           </HoverBurst>
-                          <ArtPlaceholder />
+                          <ArtPlaceholder>
+                            {submitting && selectedCandidateId === "no-match" && (
+                              <div data-testid="question-feed-no-match-submitting">
+                                <Spinner
+                                  size={1.5}
+                                  zIndex={2}
+                                  positionAbsolute
+                                />
+                              </div>
+                            )}
+                          </ArtPlaceholder>
                           <div>No match</div>
                         </CandidateButton>
                       </Col>
@@ -442,6 +502,23 @@ export function QuestionFeed() {
                                   alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
                                 />
                               </ZoomableThumbnail>
+                              {/* Tied to this specific candidate's identifier, not just
+                                  `submitting` - the old dimmed-all-buttons treatment gave no
+                                  way to tell which of several candidates you actually tapped
+                                  under any real latency. */}
+                              {submitting &&
+                                selectedCandidateId ===
+                                  candidate.identifier && (
+                                  <div
+                                    data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
+                                  >
+                                    <Spinner
+                                      size={1.5}
+                                      zIndex={2}
+                                      positionAbsolute
+                                    />
+                                  </div>
+                                )}
                             </ArtPlaceholder>
                             <div>
                               <SetIcon
@@ -484,8 +561,16 @@ export function QuestionFeed() {
                   it can't escape and render the whole panel - chips included - unclickable
                   behind this sibling column at the hit-testing layer. position: relative
                   alone does NOT establish a stacking context - see
-                  docs/features/printing-tags.md's Stage 7 section for the full story. */}
-              <Col xs={12} md={7} style={{ position: "relative", zIndex: 0 }}>
+                  docs/features/printing-tags.md's Stage 7 section for the full story.
+                  order-1/order-md-2 (see the candidates column above for the full
+                  rationale) - unrelated to the stacking-context fix above, just reusing the
+                  same style prop's neighbouring className. */}
+              <Col
+                xs={12}
+                md={7}
+                className="order-1 order-md-2"
+                style={{ position: "relative", zIndex: 0 }}
+              >
                 {cardPanel}
               </Col>
             </>
