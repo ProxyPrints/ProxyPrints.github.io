@@ -2386,6 +2386,104 @@ class TestBackfillCommandCLI:
         call_command("local_backfill_content_phash", "--limit=0")
 
 
+class TestBackfillRateLimiting:
+    """2026-07-17 addendum (docs/features/catalog-completion-plan.md): the Worker's own
+    IMAGE_FULL_TIER_RATE_LIMITER binding was confirmed - via direct code read, not inference - to
+    not enforce its configured 3 req/sec ceiling at this backfill's real bulk-fetch volume (see
+    docs/troubleshooting.md). Client-side pacing at the fetch call is now the only layer actually
+    holding it."""
+
+    def test_rate_limiter_enforces_minimum_interval(self):
+        import time
+
+        from cardpicker.local_phash import _RateLimiter
+
+        # 20/sec = 50ms interval - fast enough to keep the test quick, slow enough to reliably
+        # measure without flaking on scheduler jitter.
+        limiter = _RateLimiter(rate_per_sec=20)
+        start = time.monotonic()
+        for _ in range(4):
+            limiter.acquire()
+        elapsed = time.monotonic() - start
+
+        assert elapsed >= 3 * 0.05 - 0.01  # 3 intervals between 4 calls, small tolerance
+
+    def test_disabled_by_default_never_calls_sleep(self, db, monkeypatch):
+        # proves the None default (what every other test in this file relies on to stay fast)
+        # introduces zero pacing - a regression here would silently slow down the whole suite.
+        import time
+
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: 1)
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(time, "sleep", lambda s: sleep_calls.append(s))
+        CardFactory(name="Forest", content_phash=None)
+
+        run_content_phash_backfill(nice=False)
+
+        assert sleep_calls == []
+
+    def test_enabled_paces_the_fetch_call_even_with_a_wide_worker_pool(self, db, monkeypatch):
+        # workers=4 lets all 4 cards' fetches start concurrently if nothing gates them - proving
+        # pacing still holds here proves it's a real shared ceiling, not a per-worker throttle a
+        # wide enough pool could route around.
+        import time
+
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(
+            module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: card.pk
+        )
+        for i in range(4):
+            CardFactory(name=f"Card {i}", content_phash=None)
+
+        start = time.monotonic()
+        result = run_content_phash_backfill(nice=False, workers=4, rate_limit_per_sec=20)
+        elapsed = time.monotonic() - start
+
+        assert result.hashed == 4
+        assert elapsed >= 3 * 0.05 - 0.01
+
+    def test_zero_rate_limit_disables_pacing(self, db, monkeypatch):
+        # the CLI's documented escape hatch ("pass 0 to disable") - 0 is falsy, same code path
+        # as the None default.
+        import time
+
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: 1)
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(time, "sleep", lambda s: sleep_calls.append(s))
+        CardFactory(name="Forest", content_phash=None)
+
+        run_content_phash_backfill(nice=False, rate_limit_per_sec=0)
+
+        assert sleep_calls == []
+
+    def test_command_wires_rate_limit_flag_through(self, db, monkeypatch, capsys):
+        from django.core.management import call_command
+
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: 1)
+        call_command("local_backfill_content_phash", "--skip-checks", "--limit=0", "--rate-limit-per-sec=7.5")
+        captured = capsys.readouterr()
+
+        assert "rate_limit_per_sec=7.5" in captured.out
+
+    def test_command_defaults_to_the_documented_ceiling(self, db, monkeypatch, capsys):
+        from django.core.management import call_command
+
+        import cardpicker.local_phash as module
+
+        monkeypatch.setattr(module, "compute_content_phash_for_card", lambda card, dpi=module.INGEST_HASH_FETCH_DPI: 1)
+        call_command("local_backfill_content_phash", "--skip-checks", "--limit=0")
+        captured = capsys.readouterr()
+
+        assert f"rate_limit_per_sec={module.DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC}" in captured.out
+
+
 class TestPipelinedBackfillOutOfOrder:
     """Part 2 (docs/features/catalog-completion-plan.md): the pipelined backfill's sliding
     fetch window means completion order isn't submission order once more than one worker

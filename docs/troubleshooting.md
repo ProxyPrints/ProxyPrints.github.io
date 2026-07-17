@@ -262,3 +262,42 @@ real change.
 
 **Recurred 3+ times**: see [[features/printing-tags.md]]'s build history
 and `journal/2026-07-14-tag-taxonomy-followup.md`.
+
+## Bulk fetch through image-cdn runs faster than the configured rate limit, zero 429s
+
+**Symptom**: a bulk fetch job against the image CDN (e.g. the
+`content_phash` backfill) sustains a throughput well above the
+configured ceiling (observed ~10.5/s against a configured 3/s), with
+zero `429`/rate-limit-rejection lines anywhere in the job's own log,
+for an extended period (50+ minutes observed) — not a brief burst.
+
+**Cause**: the Worker's `IMAGE_FULL_TIER_RATE_LIMITER` binding
+(`image-cdn/wrangler.toml`, `simple = { limit: 30, period: 10 }` = 3
+req/sec) is not enforcing its configured ceiling at this volume.
+Confirmed at the application-code level, not inferred from throughput
+alone: `cardpicker/image_cdn_fetch.py`'s `get_worker_image_url` always
+builds the `/images/google_drive/full/...` URL regardless of `dpi`
+(there is no small/large-tier path for this caller), and
+`image-cdn/src/handler/image.ts`'s `"full"` case has no cache
+short-circuit — every request unconditionally calls
+`fetchWithRateLimit(env.IMAGE_FULL_TIER_RATE_LIMITER, ...)`. So the
+limiter genuinely should be gating every request; it demonstrably isn't
+at bulk volume. Root cause on Cloudflare's side (the Rate Limiting
+binding's enforcement isn't guaranteed perfectly atomic/global — a
+documented characteristic of the product at scale) could not be
+confirmed further in this environment: `wrangler` here requires Node
+22+ (box has 20.20.2) and `CLOUDFLARE_API_TOKEN`/dashboard access is
+unavailable.
+
+**Fix (working control, 2026-07-17)**: client-side pacing at the fetch
+call itself — `cardpicker/local_phash.py`'s `_RateLimiter` (a strict
+minimum-interval pacer, not a token bucket, shared across every worker
+thread) plus `DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC`, wired through
+`run_content_phash_backfill`'s `rate_limit_per_sec` param and the
+`local_backfill_content_phash` command's `--rate-limit-per-sec` flag
+(default matches the Worker's own configured-but-non-enforcing 3/sec).
+Any other bulk caller of the image CDN's full tier should assume the
+same and add its own client-side pacing — don't rely on the Worker
+binding alone at bulk volume.
+
+**Refs**: `docs/features/image-cdn.md`, `docs/features/catalog-completion-plan.md`'s Part 2 section.

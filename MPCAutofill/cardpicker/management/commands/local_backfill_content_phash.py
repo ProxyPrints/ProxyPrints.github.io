@@ -4,6 +4,7 @@ from django.core.management.base import BaseCommand
 
 from cardpicker.local_phash import (
     DEFAULT_BACKFILL_BATCH_SIZE,
+    DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC,
     DEFAULT_BACKFILL_WORKERS,
     DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES,
     run_content_phash_backfill,
@@ -63,6 +64,17 @@ class Command(BaseCommand):
             "Default: no limit, process the entire backlog.",
         )
         parser.add_argument(
+            "--rate-limit-per-sec",
+            type=float,
+            default=DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC,
+            help="Client-side pacing at the fetch call itself (2026-07-17 addendum) - the "
+            "Worker's own IMAGE_FULL_TIER_RATE_LIMITER binding was confirmed not to enforce its "
+            "configured ceiling at this backfill's real bulk-fetch volume (see "
+            "docs/troubleshooting.md), so this is currently the only layer actually holding it. "
+            f"Default: {DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC}/sec, matching the Worker's own "
+            "configured (but non-enforcing) ceiling. Pass 0 to disable pacing entirely.",
+        )
+        parser.add_argument(
             "--nice",
             action="store_true",
             default=True,
@@ -85,12 +97,13 @@ class Command(BaseCommand):
         queue_depth_batches = kwargs["queue_depth_batches"]
         limit = kwargs["limit"]
         nice = kwargs["nice"]
+        rate_limit_per_sec = kwargs["rate_limit_per_sec"]
 
         mode = "DRY RUN" if dry_run else "WRITE"
         print(
             f"[{mode}] local_backfill_content_phash --batch-size={batch_size} "
             f"--workers={workers} --queue-depth-batches={queue_depth_batches} "
-            f"--limit={limit} --nice={nice}"
+            f"--limit={limit} --nice={nice} rate_limit_per_sec={rate_limit_per_sec}"
         )
 
         result = run_content_phash_backfill(
@@ -100,6 +113,7 @@ class Command(BaseCommand):
             queue_depth_batches=queue_depth_batches,
             limit=limit,
             nice=nice,
+            rate_limit_per_sec=rate_limit_per_sec,
         )
 
         print(
