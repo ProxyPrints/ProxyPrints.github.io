@@ -14,6 +14,26 @@ export interface ImageFetchFailure {
 }
 
 /**
+ * The same card can appear in more than one slot in a render (e.g. as both
+ * a front and a back), producing one ImageFetchFailure per failed slot. For
+ * a human-facing message ("which cards will be blank?") that's noise - the
+ * user needs to know which cards, not how many slots - so callers building
+ * a message from a raw failures list should dedupe by identifier first.
+ */
+export const dedupeFailuresByIdentifier = (
+  failures: Array<ImageFetchFailure>
+): Array<ImageFetchFailure> => {
+  const seen = new Set<string>();
+  return failures.filter((failure) => {
+    if (seen.has(failure.identifier)) {
+      return false;
+    }
+    seen.add(failure.identifier);
+    return true;
+  });
+};
+
+/**
  * Fetch a URL's body and hand it back as a blob: URL. Unlike passing the
  * plain remote URL straight to @react-pdf/renderer's <Image> (which fetches
  * it internally and silently skips the image on failure, with no way for

@@ -30,7 +30,10 @@ import {
   PDFProps,
 } from "@/features/pdf/PDF";
 import { PDFCanvasPreview } from "@/features/pdf/PDFCanvasPreview";
-import { ImageFetchFailure } from "@/features/pdf/pdfImage";
+import {
+  dedupeFailuresByIdentifier,
+  ImageFetchFailure,
+} from "@/features/pdf/pdfImage";
 import { pdfRenderService } from "@/features/pdf/pdfRenderService";
 import {
   BORDERLESS_STUDIO_EXPANSION_MM,
@@ -100,17 +103,20 @@ const downloadPDF = async (
       },
     ])
   );
-  const { blob, failures } = await pdfRenderService.renderPDF({
+  const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
     ...props,
     fileHandles,
   });
+  const failures = dedupeFailuresByIdentifier(rawFailures);
   if (failures.length > 0 && !confirmDespiteImageFailures(failures)) {
     dispatch(
       setNotification([
         Math.random().toString(),
         {
           name: "Download Cancelled",
-          message: `${failures.length} card image(s) failed to load - PDF was not downloaded.`,
+          message: `${failures.length} card image${
+            failures.length === 1 ? "" : "s"
+          } failed to load - PDF was not downloaded.`,
           level: "warning",
         },
       ])
@@ -159,17 +165,20 @@ const saveToDrivePDF = async (
       },
     ])
   );
-  const { blob, failures } = await pdfRenderService.renderPDF({
+  const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
     ...props,
     fileHandles,
   });
+  const failures = dedupeFailuresByIdentifier(rawFailures);
   if (failures.length > 0 && !confirmDespiteImageFailures(failures)) {
     dispatch(
       setNotification([
         Math.random().toString(),
         {
           name: "Save Cancelled",
-          message: `${failures.length} card image(s) failed to load - PDF was not saved.`,
+          message: `${failures.length} card image${
+            failures.length === 1 ? "" : "s"
+          } failed to load - PDF was not saved.`,
           level: "warning",
         },
       ])
@@ -1031,7 +1040,13 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     equalityFn,
   });
 
-  const { url, failures, loading, error } = useRenderPDF(debouncedPDFProps);
+  const {
+    url,
+    failures: rawFailures,
+    loading,
+    error,
+  } = useRenderPDF(debouncedPDFProps);
+  const failures = dedupeFailuresByIdentifier(rawFailures);
 
   const showSpinner = debouncedState.isPending() || loading;
 
