@@ -259,7 +259,14 @@ a non-additive migration (rename, type change, NOT NULL backfill): stop
 the long-running job first and restart it after the deploy, or apply the
 migration manually from an old-code container before recreating anything.
 Check `entrypoint.sh` (or equivalent) before assuming deploy and migrate
-are actually separable. (`8c957aa5`, 2026-07-16.)
+are actually separable. (`8c957aa5`, 2026-07-16.) Even when Fix 2's
+own condition holds (strictly additive), starting `django` and `worker`
+together (`docker compose up -d django worker`) still races their two
+entrypoint migrate steps against each other — observed once, 2026-07-17,
+as one container crashing on `column ... already exists` before
+self-healing via `restart: unless-stopped`; harmless for an additive
+migration, but worth knowing the crash-then-recover blip is expected,
+not a new problem.
 
 **Related gotcha, same incident**: `GIT_SHA=$(git rev-parse --short HEAD) sudo docker compose build ...` bakes `unknown` instead of the real SHA —
 `sudo` doesn't preserve environment variables set before it on the same
