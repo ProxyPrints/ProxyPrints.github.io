@@ -64,8 +64,18 @@ this fixed and its follow-on hardening. Fixed by `eaece1fd` (#18,
   (~1GB each). See [[lessons.md]] for the general `du` gotcha. Net effect: a
   rebuild that previously spent 25+ minutes uploading a ~2GB context now
   uploads single-digit megabytes and finishes in ~5 minutes.
-- Postgres/ES ports are bound to `127.0.0.1` deliberately — they were
-  internet-exposed at one point.
+- Postgres/ES: `docker-compose.yml` (dev, base file) publishes
+  `127.0.0.1:5432`/`127.0.0.1:9200` deliberately — they were
+  internet-exposed at one point. `docker-compose.prod.yml` OVERRIDES both
+  to `ports: []` — a fresh `docker compose -f docker-compose.prod.yml up`
+  publishes neither port to the host at all. The containers actually
+  running on this box (as of 2026-07-18) still answer on
+  `127.0.0.1:5432`/`127.0.0.1:9200` regardless — they predate the `ports: []` override and haven't been recreated since (Docker doesn't
+  retroactively apply a compose-file port change to an already-running
+  container). Don't rely on this from a fresh script: if postgres/
+  elasticsearch are ever recreated (version bump, `--force-recreate`,
+  etc.) under the current prod compose file, host-port access silently
+  disappears.
 - **After `docker compose up -d django worker` (or any command that
   recreates the `django` container), also restart `nginx`** — see
   [[troubleshooting.md]] ("nginx 502s everything after a django container
