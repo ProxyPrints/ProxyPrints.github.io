@@ -193,7 +193,12 @@ const RailWrapper = styled.div`
 
 interface RailProps {
   selectedSlotRef: SelectedSlotRef | null;
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument };
+  // CardDocument | undefined, not just CardDocument: useCardDocumentsByIdentifier's own return
+  // type (cardDocumentsSlice.ts) is deliberately widened to include undefined - a project
+  // member's CardDocument may not have been fetched yet, and the missing annotation used to
+  // hide that from tsc entirely (see that file's own comment, task #135). Every actual field
+  // access below already goes through `?.`, so this is a type-only fix - no behavior change.
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined };
 }
 
 const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
