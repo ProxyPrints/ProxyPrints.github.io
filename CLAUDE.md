@@ -83,6 +83,10 @@ partial work reports in the same structure ("WHAT SHIPPED: nothing —
 blocked at step N because X"). Applies to every hold point, completion,
 status update, and blocker report.
 
+Reports are committed verbatim to `docs/reports/<date>-<task>.md` on the
+`report-relay` branch; the chat message accompanying it carries only the
+branch name, file path, and a one-line summary of what the report covers.
+
 ## docs/ index
 
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — symptom-first
