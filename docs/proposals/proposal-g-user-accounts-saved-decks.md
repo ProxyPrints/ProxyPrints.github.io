@@ -689,6 +689,20 @@ without waiting for a session to end.
   server, so a share link's server-side request never carries key material.
   Expanded into a full design below (see "PR-5, post-v1: per-deck share
   links").
+- **Deck roaming** (cross-instance blob sync, explicitly out of scope for
+  now): syncing a user's saved decks automatically between two different
+  instances is **ZK-compatible in principle** — only ciphertext would ever
+  travel between instances, never key material, so it wouldn't violate
+  anything this amendment establishes. It is nonetheless a **full protocol**
+  in its own right — instance discovery, per-instance consent, surfacing
+  (not silently resolving) conflicts between two instances' copies of the
+  same deck, and propagating deletions across instances — and is explicitly
+  out of scope until federation ([`../federation-v1.md`](../federation-v1.md))
+  has real peers to sync between. Manual export/import (PR-6, above) is the
+  supported cross-instance path today; PR-6's `revision`/`modifiedAt` fields
+  exist in part to make that manual path safe (a user can tell which copy
+  is newer) without committing to any of automatic sync's unsolved protocol
+  questions.
 - **WebAuthn passkey PRF** as an **optional additional** unwrap method
   someday — it would wrap the same master key a passphrase (or recovery
   key) does, not a separate one. Withdrawn as the primary/only mechanism;
@@ -799,6 +813,19 @@ rather than something a later PR would need to retrofit or patch around.
   fork, or a completely independent reimplementation, could read a user's
   exported bundle without needing this codebase at all. The format _is_
   the portability contract, not an implementation detail.
+- **Revision tracking**: the encrypted payload itself (not the outer
+  wire-format envelope — private, like everything else inside it) gains
+  two fields per deck: `revision` (an integer, incremented on every save)
+  and `modifiedAt` (a timestamp). Bumps `formatVersion` like any other
+  envelope change (PR-6/PR-7's shared versioning rule). Purpose: makes an
+  export/import round-trip **self-describing** — comparing an imported
+  bundle's `revision`/`modifiedAt` against the server's current copy of
+  that same deck answers "is this bundle older or newer than what's
+  already saved" without needing any server-side comparison (the server
+  never sees either field's plaintext value either). This also seeds any
+  future cross-instance sync (see "Deck roaming" below) with
+  conflict-detection for free, at the cost of two small fields added now
+  rather than retrofitted later.
 - **Standalone decrypt tool** (the trust anchor for this whole promise,
   mirroring the federation reference-hash tool's role for that feature): a
   tiny, single-file, dependency-minimal script — bundle in, passphrase (or
