@@ -1,5 +1,5 @@
 As of: 2026-07-18
-What this is: Proposal B — export-time per-side bleed normalization. APPROVED spec, recovered after a courier loss (it previously existed only as a chat artifact, never committed — this file is that gap fixed). Core algorithm + real-render wiring shipped this pass (see "Shipped vs. not yet built" below); the prior-resolution batch fetch, manual-override UI + persistence, and preview badge remain. Implementation notes and any contradictions found against real code are appended at the bottom rather than edited into the spec text above them, so the approved spec stays a verbatim record of what was approved.
+What this is: Proposal B — export-time per-side bleed normalization. APPROVED spec, recovered after a courier loss (it previously existed only as a chat artifact, never committed — this file is that gap fixed). Core algorithm + real-render wiring shipped this pass, and the prior-resolution batch fetch has since shipped as PR-1 (see "Shipped vs. not yet built" below); the manual-override UI + persistence and preview badge remain. Implementation notes and any contradictions found against real code are appended at the bottom rather than edited into the spec text above them, so the approved spec stays a verbatim record of what was approved.
 
 ## Approved spec (verbatim)
 

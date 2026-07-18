@@ -402,7 +402,7 @@ and live-traffic-fairness control, not a cost control, so the WAIT sequencing ab
 
 ---
 
-## Part 3 — Shared evidence-recovery module (built, HOLD #P3 — write pass pending)
+## Part 3 — Shared evidence-recovery module (write pass complete, merged 2026-07-18)
 
 Insight: artist is a property of the ARTWORK, not the printing — art-
 identity evidence supports artist votes even where printing votes are
@@ -561,7 +561,7 @@ pilot wasn't stopped for this.
 
 ---
 
-## Part 4 — LANDS (artist-decomposed identification)
+## Part 4 — LANDS (artist-decomposed identification) (confirmed unstarted 2026-07-18; HOLD #B prep queued)
 
 Target pool: unresolved basic lands (Plains/Island/Swamp/Mountain/Forest/
 Wastes + Snow-Covered) OR any name whose candidate count exceeded the
@@ -758,8 +758,9 @@ over a closed codebook.
     this is _recovering_ an already-successful match, not matching
     cold), then run against the full OCR+fallback population
     (~5,773 cards after phash-priority dedup) in the background —
-    see the follow-up entry below for the completed numbers. d=0
-    sibling propagation: 987 votes would cast (see the corrected number
+    **completed 2026-07-18, see the write-pass entry below for the real
+    numbers** (4,804/4,804 OCR recovered, 590/595 fallback recovered).
+    d=0 sibling propagation: 987 votes would cast (see the corrected number
     above), safely re-runnable, idempotent (excludes cards with an
     existing vote from its own `anonymous_id`).
   - **Rails**: `verify_no_single_machine_vote_resolutions` (zero-
@@ -789,9 +790,17 @@ over a closed codebook.
     introduced by Part 3 (identical for every existing artist machine vote,
     not just these) — flagged here for whoever next touches
     question_feed's artist tier, not fixed as part of this work.
-  - **HOLD #P3 stands**: no vote has been written to the live database
-    by this pass. The write pass (`--write`) runs only after explicit
-    go-ahead.
+  - **HOLD #P3 cleared, write pass complete** (2026-07-18,
+    `run_id=20260718T145157-a12b1387`): 13,275 real votes now live
+    (7,131 `CardArtistVote` + 6,144 `CardTagVote`) — phash 750 recovered
+    → 1,500 combined votes, d=0 siblings 987 artist votes, OCR
+    4,804/4,804 recovered, fallback 590/595 recovered, OCR+fallback
+    combined → 10,788 votes. All hard bounds passed (phash exactly 750,
+    siblings exactly 987, OCR+fallback within the ≤11,546-vote ceiling).
+    Zero-resolution assertion re-run at full population (not just the
+    command's own 14-card sample gate): 0/7,124 violations — no card
+    resolved on machine-only votes anywhere in the run. Full detail:
+    [`docs/reports/2026-07-18-part3-write-pass-complete.md`](../reports/2026-07-18-part3-write-pass-complete.md).
   - Item 1's 15 permanent `content_phash` backfill failures: scattered
     across 6 distinct community Drive sources (CompC ×1,
     Hathwellcrisping ×4, LePoulpe_Dec_2023 ×2, RustyShackleford ×6,
