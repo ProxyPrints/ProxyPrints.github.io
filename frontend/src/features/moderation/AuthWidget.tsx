@@ -1,9 +1,18 @@
 /**
- * Discord login/logout links for moderators (docs/features/moderation.md), rendered on the
- * vote-queue page. Ordinary voters never need this - the whole widget renders nothing unless
- * the backend reports Discord auth is configured (and also on any whoami error, so pointing
- * the frontend at a third-party backend without credentialed CORS degrades to exactly the
- * pre-moderation UI rather than surfacing an error).
+ * Sign-in/sign-out links, mounted in the navbar on every page (see
+ * docs/proposals/proposal-g-user-accounts-saved-decks.md decision 6 - relocated here from
+ * the /whatsthat-only mount it used to have, back when only moderators needed it, see
+ * docs/features/moderation.md). Ordinary voters never see anything if the backend hasn't
+ * configured Discord auth - the whole widget renders nothing unless the backend reports it's
+ * enabled (and also on any whoami error, so pointing the frontend at a third-party backend
+ * without credentialed CORS degrades to exactly today's UI rather than surfacing an error).
+ *
+ * The button reads "Sign in" (benefit-framed via its title tooltip), not "Sign in with
+ * Discord" - Discord is presented as the *method*, surfaced at the auth step itself (allauth's
+ * own login/consent redirect), never baked into the label. Ships Discord-only in v1; the
+ * label is deliberately provider-agnostic so a second provider (see docs/proposals/
+ * proposal-g-user-accounts-saved-decks.md §1's provider mechanism note) is a backend-only
+ * change later, not a copy change here too.
  *
  * The links round-trip: they point at the backend's allauth routes with
  * `?next=<current frontend URL>`, which the backend's account adapter validates against the
@@ -88,7 +97,7 @@ export function AuthWidget() {
 
   const next = `?next=${encodeURIComponent(currentHref)}`;
   return whoami.data.authenticated ? (
-    <StatusRow className="small" data-testid="auth-widget">
+    <StatusRow className="small m-0" data-testid="auth-widget">
       <span>
         Signed in as <b>{whoami.data.username}</b>
         {whoami.data.moderator && " (moderator)"}
@@ -101,14 +110,13 @@ export function AuthWidget() {
       </a>
     </StatusRow>
   ) : (
-    <p className="small" data-testid="auth-widget">
-      <DiscordButton
-        href={`${backendURL}${whoami.data.loginUrl}${next}`}
-        data-testid="auth-widget-login"
-      >
-        <DiscordIcon />
-        Log in with Discord
-      </DiscordButton>
-    </p>
+    <DiscordButton
+      href={`${backendURL}${whoami.data.loginUrl}${next}`}
+      title="Sign in to save decks & track your confirmations"
+      data-testid="auth-widget-login"
+    >
+      <DiscordIcon />
+      Sign in
+    </DiscordButton>
   );
 }
