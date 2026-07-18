@@ -27,6 +27,7 @@ import { downloadFile, useDoFileDownload } from "@/features/download/download";
 import { requestGoogleDriveWriteToken } from "@/features/googleDrive/googleDriveAuth";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { GoogleDriveService } from "@/features/googleDrive/GoogleDriveService";
+import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
 import { computeLayout } from "@/features/pdf/layout";
 import {
   PagePreview,
@@ -57,6 +58,7 @@ import {
   scmTemplateName,
   ScmVariant,
 } from "@/features/pdf/scm/scmLayout";
+import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
   selectProjectCardback,
@@ -101,7 +103,8 @@ const confirmDespiteImageFailures = (
 const downloadPDF = async (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
-  dispatch: AppDispatch
+  dispatch: AppDispatch,
+  backendURL: string | null
 ): Promise<boolean> => {
   const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
     props.cardDocumentsByIdentifier
@@ -116,9 +119,21 @@ const downloadPDF = async (
       },
     ])
   );
+  // Proposal B PR-1: resolved here (main thread, has cookie access for the CSRF header) rather
+  // than inside pdf.worker.ts, which can't fetch this itself - see bleedPriorResolution.ts's
+  // module comment. Skipped entirely (bleedPriors stays undefined) when no remote backend is
+  // configured - PDFCardImage already defaults a missing entry to the safe "unresolved" fallback.
+  const bleedPriors =
+    backendURL != null
+      ? await resolveBleedPriors(
+          backendURL,
+          Object.keys(props.cardDocumentsByIdentifier)
+        )
+      : undefined;
   const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
     ...props,
     fileHandles,
+    bleedPriors,
   });
   const failures = dedupeFailuresByIdentifier(rawFailures);
   if (failures.length > 0 && !confirmDespiteImageFailures(failures)) {
@@ -144,7 +159,8 @@ const useDownloadPDF = (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
-  setIsDownloading: (newState: boolean) => void
+  setIsDownloading: (newState: boolean) => void,
+  backendURL: string | null
 ) => {
   const doFileDownload = useDoFileDownload();
   return () =>
@@ -154,7 +170,7 @@ const useDownloadPDF = (
           "pdf",
           "cards.pdf",
           (): Promise<boolean> =>
-            downloadPDF(props, clientSearchService, dispatch)
+            downloadPDF(props, clientSearchService, dispatch, backendURL)
         )
       )
       .finally(() => setIsDownloading(false));
@@ -163,7 +179,8 @@ const useDownloadPDF = (
 const saveToDrivePDF = async (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
-  dispatch: AppDispatch
+  dispatch: AppDispatch,
+  backendURL: string | null
 ): Promise<boolean> => {
   const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
     props.cardDocumentsByIdentifier
@@ -178,9 +195,18 @@ const saveToDrivePDF = async (
       },
     ])
   );
+  // See downloadPDF's identical step for why this runs here, not inside the worker.
+  const bleedPriors =
+    backendURL != null
+      ? await resolveBleedPriors(
+          backendURL,
+          Object.keys(props.cardDocumentsByIdentifier)
+        )
+      : undefined;
   const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
     ...props,
     fileHandles,
+    bleedPriors,
   });
   const failures = dedupeFailuresByIdentifier(rawFailures);
   if (failures.length > 0 && !confirmDespiteImageFailures(failures)) {
@@ -223,11 +249,14 @@ const useSaveToDrivePDF = (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
-  setIsSavingToDrive: (newState: boolean) => void
+  setIsSavingToDrive: (newState: boolean) => void,
+  backendURL: string | null
 ) => {
   return () =>
     Promise.resolve(setIsSavingToDrive(true))
-      .then(() => saveToDrivePDF(props, clientSearchService, dispatch))
+      .then(() =>
+        saveToDrivePDF(props, clientSearchService, dispatch, backendURL)
+      )
       .catch((reason) =>
         dispatch(
           setNotification([
@@ -991,6 +1020,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
   const { clientSearchService } = useClientSearchContext();
   const projectMembers = useAppSelector(selectProjectMembers);
   const projectCardback = useAppSelector(selectProjectCardback);
+  const backendURL = useAppSelector(selectRemoteBackendURL);
 
   const [pageSize, setPageSize] = useState<keyof typeof PageSize>(PageSize.A4);
   const [pageWidth, setPageWidth] = useState<number | undefined>(undefined);
@@ -1123,14 +1153,16 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     fullResolutionPDFProps,
     clientSearchService,
     dispatch,
-    setIsDownloading
+    setIsDownloading,
+    backendURL
   );
 
   const saveToDrive = useSaveToDrivePDF(
     fullResolutionPDFProps,
     clientSearchService,
     dispatch,
-    setIsSavingToDrive
+    setIsSavingToDrive,
+    backendURL
   );
 
   return (

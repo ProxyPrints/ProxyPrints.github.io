@@ -34,9 +34,10 @@ Core: at PDF export, for each card (full-res bitmap already in hand): MEASURE ac
 
 **Shipped, tested, wired into the real render path** (`frontend/src/features/pdf/bleedNormalize.ts` + `.test.ts`, `bleedExtension.ts` + `.test.ts`, `pdfImage.ts`'s `getPDFImageBlob` split + tests, `PDF.tsx`'s `PDFCardImage`): the full measure → resolve-plan → crop/extend → encode pipeline, all three `ManualOverride` modes, the effective-dpi derivation (source dpi vs. a lower requested `imageDPI`), all 6 required synthetic fixtures plus 2 manual-override tests plus 4 geometry tests plus 4 `pdfImage` tests (26 new tests total, all passing; zero regressions in the pre-existing suite). Every named constant (`PROBE_COUNT`, `RGB_DISTANCE_THRESHOLD`, `IQR_AMBIGUITY_FRACTION`, `OVERSIZED_MULTIPLE`) carries its calibration caveat comment per the spec.
 
+**PR-1 (this pass) — shipped**: the main-thread batch resolution of `bleedPriors` via `APIGetTagConsensus`, bounded concurrency (`frontend/src/common/concurrencyLimit.ts`'s `mapWithConcurrencyLimit`, a general-purpose worker-pool utility - not GoogleDriveService's own private `Semaphore`, to keep this PR's review surface to new files only; default concurrency 6, matching that class's own default), per-card failure tolerance (a single failed lookup degrades to `"unresolved"`, never fails the whole batch), wired into `PDFGenerator.tsx`'s `downloadPDF`/`saveToDrivePDF` (resolved once per export, before the render call, skipped entirely when no remote backend is configured). 13 new tests (6 for the concurrency utility, 7 for the resolution logic itself). Verified against the real render path too: `tests/PDFGenerator.spec.ts`'s full suite (which has no `tagConsensus` mock at all) still passes at the same timing as before this PR, confirming an unmocked/failing lookup degrades gracefully rather than hanging or failing the export.
+
 **Not yet built** (concrete next steps, not silently dropped):
-1. `PDFGenerator.tsx`'s main-thread batch resolution of `bleedPriors` via `APIGetTagConsensus` - until this exists, every card's ambiguous sides use the safe "unresolved" default (extend full target) rather than a real machine-vote lean.
-2. The manual-override UI (Auto / Force bleed / Force trimmed per card) in the export panel, and its `projectSlice` persistence.
-3. The WYSIWYG preview badge ("bleed will be generated") in `PagePreview.tsx`.
-4. The XML optional field for a persisted override, if/when the UI above lands (flagged per the owner's own instruction, not built).
-5. The merge-time server-side calibration pass (~20-30 real catalog images) for the four named constants above.
+1. The manual-override UI (Auto / Force bleed / Force trimmed per card) in the export panel, and its `projectSlice` persistence (Proposal B PR-2).
+2. The WYSIWYG preview badge ("bleed will be generated") in `PagePreview.tsx` (Proposal B PR-3).
+3. The XML optional field for a persisted override, if/when PR-2's UI lands (flagged per the owner's own instruction, not built).
+4. The merge-time server-side calibration pass (~20-30 real catalog images) for the four named measurement constants.
