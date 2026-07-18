@@ -480,16 +480,20 @@ and states its source lives at `kclipsto/proxies-at-home`. That claimed
 source repo does **not** resolve (`api.github.com/repos/kclipsto/proxies-at-home`
 404s, and the `kclipsto` account's only other public repo is an unrelated
 issue tracker) — so `Akurosia`'s fork, not `kclipsto`'s repo, is what was
-actually readable for this finding. **License is genuinely unclear, not
-confidently MIT**: the README's own "Key Details" section states "License:
-MIT," but `package.json`'s `license` field says `"ISC"` (very plausibly
-just npm-init boilerplate, not a deliberate choice), there is no `LICENSE`/
-`LICENSE.md`/`COPYING` file anywhere in the repo root, and GitHub's own
-license-detection API returns `null` for it. Naming it here without a
-confirmed license would repeat the exact mistake this doc already corrected
-above for `alex-taxiera/proxy-print` — so it's named as a real, working
-integration, not folded into "MIT-lineage" until an owner of that repo
-clarifies or a `LICENSE` file actually lands. What's confirmed by reading
+actually readable for this finding. **License: stated MIT** (README, as of
+commit `2a5826788ff7c1827b73c6042d0b4b5d1a4e8340`, 2026-02-22; `package.json`
+states `"ISC"` — near-equivalent permissive) — **no `LICENSE` file present**.[^akurosia-license]
+Naming it here credits the stated permissive intent while being precise
+about the one real gap, rather than either asserting a confirmed MIT (which
+this doc already corrected once, for `alex-taxiera/proxy-print`, and
+shouldn't repeat the opposite mistake of) or omitting the project entirely
+over a missing file. **Practical rule, unchanged**: the design _patterns_
+this section already describes may be referenced freely, as with any public
+codebase; actual code reuse from the fork's post-`acoreyj` additions waits
+on either a `LICENSE` file landing or the operator's own word — the
+eventual first-contact outreach (§8) can raise this directly and
+constructively, not as a blocker to naming the project now. What's
+confirmed by reading
 its actual source (`client/src/helpers/mpcXmlExport.ts`,
 `mpcAutofillApi.ts`, `importParsers.ts`): it already calls a real
 MPC-Autofill-style search backend (`POST /api/mpcfill/search` and
@@ -572,3 +576,17 @@ license-ambiguity finding on the `Akurosia`/`kclipsto` fork means that
 contact would need to clarify licensing before any code changes hands in
 either direction. Gated accordingly in the project ledger — this is a
 design note recording intent, not a build authorized by this doc.
+
+[^akurosia-license]:
+    Rationale for citing a SHA-pinned "stated MIT" rather
+    than either asserting a confirmed license or omitting the project: the
+    README's own words are the maintainer's clearly expressed permissive
+    intent, and pinning the commit means this doc's claim can't silently
+    drift if the README changes later — it's a snapshot of what was said,
+    not a live claim about what's true today. `package.json`'s `"ISC"` is
+    treated as near-equivalent permissive (both are short, notice-preserving
+    permissive licenses) rather than a contradiction worth withholding
+    attribution over. The one actual gap — no `LICENSE` file, so nothing
+    here is a legally reliable grant — stays a gap, not something this
+    footnote resolves; it's exactly what a future first-contact outreach
+    (§8) is for.
