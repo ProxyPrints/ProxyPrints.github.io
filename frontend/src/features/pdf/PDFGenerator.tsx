@@ -10,7 +10,12 @@ import Row from "react-bootstrap/Row";
 import Toggle from "react-bootstrap-toggle";
 import { useDebounce } from "use-debounce";
 
-import { BleedEdgeMM, ToggleButtonHeight } from "@/common/constants";
+import {
+  BleedEdgeMM,
+  CardHeightMM,
+  CardWidthMM,
+  ToggleButtonHeight,
+} from "@/common/constants";
 import { StyledDropdownTreeSelect } from "@/common/StyledDropdownTreeSelect";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
@@ -22,10 +27,18 @@ import { downloadFile, useDoFileDownload } from "@/features/download/download";
 import { requestGoogleDriveWriteToken } from "@/features/googleDrive/googleDriveAuth";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { GoogleDriveService } from "@/features/googleDrive/GoogleDriveService";
+import { computeLayout } from "@/features/pdf/layout";
+import {
+  PagePreview,
+  PagePreviewSlotContent,
+} from "@/features/pdf/PagePreview";
 import {
   CardSelectionMode,
+  CardSelectionModeToPaginator,
+  chunk,
   CutLinePlacement,
   CutLineShape,
+  getPageSizeMM,
   PageSize,
   PDFProps,
 } from "@/features/pdf/PDF";
@@ -1053,6 +1066,52 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
   const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
 
+  // "Fast" (the default) skips @react-pdf/renderer + pdf.js entirely - just computeLayout()
+  // and plain DOM/CSS, updated instantly (no debounce, no spinner, no canvas) from the
+  // existing small-tier thumbnail URLs already in memory. "Exact" is the pre-existing
+  // pdf.js-rendered canvas preview, a real (debounced) PDF render - useful for confirming cut
+  // lines/bleed exactly as they'll print, at the cost of the heavier render pipeline.
+  const [previewMode, setPreviewMode] = useState<"fast" | "exact">("fast");
+  const fastPreviewSize = getPageSizeMM(pageSize, pageWidth, pageHeight);
+  const fastPreviewMargins = {
+    top: pageMarginTopMM ?? 0,
+    bottom: pageMarginBottomMM ?? 0,
+    left: pageMarginLeftMM ?? 0,
+    right: pageMarginRightMM ?? 0,
+  };
+  const fastPreviewSpacing = {
+    row: cardSpacingRowMM ?? 0,
+    col: cardSpacingColMM ?? 0,
+  };
+  const fastPreviewLayout = computeLayout(
+    fastPreviewSize.width,
+    fastPreviewSize.height,
+    CardWidthMM,
+    CardHeightMM,
+    bleedEdgeMM ?? 0,
+    fastPreviewMargins,
+    fastPreviewSpacing
+  );
+  const fastPreviewCardsPerPage =
+    fastPreviewLayout.cardsPerRow * fastPreviewLayout.cardsPerCol;
+  // Reuses the PDF generator's own pagination functions (not a reimplementation) so the fast
+  // preview's page-1 card selection always matches what the real PDF would generate first.
+  const fastPreviewCardSets = CardSelectionModeToPaginator[cardSelectionMode](
+    projectMembers,
+    cardDocumentsByIdentifier,
+    projectCardback,
+    fastPreviewCardsPerPage
+  );
+  const fastPreviewFirstPage =
+    fastPreviewCardSets.flatMap((set) =>
+      chunk(set, fastPreviewCardsPerPage)
+    )[0] ?? [];
+  const fastPreviewSlots: Array<PagePreviewSlotContent> =
+    fastPreviewFirstPage.map((doc) => ({
+      imageUrl: doc?.smallThumbnailUrl,
+      name: doc?.name ?? "",
+    }));
+
   const fullResolutionPDFProps = {
     ...debouncedPDFProps,
     imageQuality: "full-resolution" as const,
@@ -1235,9 +1294,28 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
           )}
         </OverflowCol>
         <Col lg={9} md={8} sm={7} xs={6} style={{ position: "relative" }}>
-          {showSpinner && (
-            <Spinner size={6} zIndex={3} positionAbsolute={true} />
+          {!scmMode && (
+            <div className="d-flex justify-content-end mb-2">
+              <Button
+                size="sm"
+                variant="outline-secondary"
+                data-testid="preview-mode-toggle"
+                onClick={() =>
+                  setPreviewMode(previewMode === "fast" ? "exact" : "fast")
+                }
+              >
+                {previewMode === "fast"
+                  ? "Switch to exact PDF preview"
+                  : "Switch to fast preview"}
+              </Button>
+            </div>
           )}
+          {/* Image-fetch-failure/error detection comes from the real (debounced)
+              @react-pdf/renderer render via useRenderPDF, which runs unconditionally
+              regardless of which preview is on screen - these warnings stay visible in fast
+              mode too, not just exact mode, since generating a PDF full of silently-blank
+              cards is exactly the mistake this warns against, independent of which preview
+              the user happened to be looking at. */}
           {!showSpinner && error != null && (
             <Alert
               variant="danger"
@@ -1259,12 +1337,30 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
               {failures.map((failure) => failure.label).join(", ")}
             </Alert>
           )}
-          <Blurrable
-            disabled={showSpinner}
-            style={{ height: 100 + "%", overflowY: "hidden" }}
-          >
-            <PDFCanvasPreview url={url} />
-          </Blurrable>
+          {!scmMode && previewMode === "fast" ? (
+            <PagePreview
+              pageWidthMM={fastPreviewSize.width}
+              pageHeightMM={fastPreviewSize.height}
+              bleedEdgeMM={bleedEdgeMM ?? 0}
+              margins={fastPreviewMargins}
+              spacing={fastPreviewSpacing}
+              slots={fastPreviewSlots}
+              showCutLines={drawCardCutLines}
+              maxWidthPx={480}
+            />
+          ) : (
+            <>
+              {showSpinner && (
+                <Spinner size={6} zIndex={3} positionAbsolute={true} />
+              )}
+              <Blurrable
+                disabled={showSpinner}
+                style={{ height: 100 + "%", overflowY: "hidden" }}
+              >
+                <PDFCanvasPreview url={url} />
+              </Blurrable>
+            </>
+          )}
         </Col>
       </Row>
     </Container>

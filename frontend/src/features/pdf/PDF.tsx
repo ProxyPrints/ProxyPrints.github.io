@@ -84,7 +84,9 @@ const SIZES: { [key: string]: { width: number; height: number } } = {
 
 const pdfPointsToMM = (pdfPoints: number) => (pdfPoints / 72) * 25.4;
 
-const getPageSizeMM = (
+// Exported so the WYSIWYG page preview (PagePreview.tsx) can resolve the same page-size table
+// (Letter/A4/.../CUSTOM) the PDF generator itself uses, rather than duplicating this lookup.
+export const getPageSizeMM = (
   pageSize: keyof typeof PageSize,
   pageWidth: number | undefined,
   pageHeight: number | undefined
@@ -749,7 +751,9 @@ const CardGrid = ({
   );
 };
 
-const chunk = <T,>(arr: Array<T>, size: number): Array<Array<T>> => {
+// Exported so PagePreview's container (PDFGenerator.tsx) can select the same page-1 card set
+// the real PDF would generate, without duplicating pagination logic.
+export const chunk = <T,>(arr: Array<T>, size: number): Array<Array<T>> => {
   const result: Array<Array<T>> = [];
   for (let i = 0; i < arr.length; i += size) {
     result.push(arr.slice(i, i + size));
@@ -835,7 +839,8 @@ const paginateFrontsAndBacks = (
   ).flat();
 };
 
-const CardSelectionModeToPaginator: {
+// See the `chunk` export comment above - same reason.
+export const CardSelectionModeToPaginator: {
   [cardSelectionMode in keyof typeof CardSelectionMode]: (
     projectMembers: Array<SlotProjectMembers>,
     cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
