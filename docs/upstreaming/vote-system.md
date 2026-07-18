@@ -165,7 +165,7 @@ Checked every commit in §1 for: literal `ProxyPrints`/`proxyprints.ca`/
 (secrets, `drives.csv`, `docker/.env` contents, Cloudflare/image-cdn
 credentials). **None found** in any vote-system commit - this feature was
 built without touching branding or secrets files. Specifically checked
-`MPCAutofill/settings.py`'s diffs in commits #1, #2, #6, #17 (the ones that
+`MPCAutofill/MPCAutofill/settings.py`'s diffs in commits #1, #2, #6, #17 (the ones that
 add settings) against the file's existing `proxyprints.ca` CORS-origin
 lines (`settings.py:128-129`, added independently, unrelated to this
 feature) - confirmed no proximity/entanglement, these commits only append

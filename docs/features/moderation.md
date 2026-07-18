@@ -278,7 +278,7 @@ for low-res / incorrect-info yet).
 
 Two more gaps found live during the first production OAuth attempt
 (2026-07-15), both now baked into the checked-in `docker/nginx/nginx.conf`
-and `MPCAutofill/settings.py` so a fresh checkout gets them automatically —
+and `MPCAutofill/MPCAutofill/settings.py` so a fresh checkout gets them automatically —
 documented here so the reasoning survives if either file is ever touched:
 
 - **Missing `/accounts/` proxy route.** `nginx.conf` only had `location`
@@ -315,7 +315,7 @@ documented here so the reasoning survives if either file is ever touched:
   (report review deliberately absent - see "Moderation tab" above),
   `cardpicker/views.py` (whoami / reportCard / moderationQueue /
   moderationDrives / moderationDriveCards / moderationRemoveCard /
-  moderationRemoveDrive), `accounts/adapter.py`, `MPCAutofill/settings.py`.
+  moderationRemoveDrive), `accounts/adapter.py`, `MPCAutofill/MPCAutofill/settings.py`.
 - Frontend: `features/reporting/ReportCardPanel.tsx`,
   `features/moderation/AuthWidget.tsx` (Discord-branded login button) +
   `ModerationTab.tsx` (Reports/Drives sub-tab switcher) + `ReportsPanel.tsx`

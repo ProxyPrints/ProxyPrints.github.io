@@ -12,6 +12,11 @@ The methodology and the systems it governs.
 
 - [`overview.md`](overview.md) — what this fork is, how it relates to
   upstream, and where everything else in this list fits.
+- [`documentation-process.md`](documentation-process.md) — the standing
+  system this very directory runs on: docs/ as source of truth, the wiki
+  as a generated view of it, mechanical lint vs. the quarterly judgment
+  pass, and how upstream's own wiki is tracked (linked + attributed,
+  never mirrored).
 - [`theory.md`](theory.md) — the printing-identification pipeline as
   candidate-constrained decoding: false-accept bound, prior-art comparison,
   soundness mechanisms. Written for an external reader; doubles as the
@@ -25,6 +30,9 @@ The methodology and the systems it governs.
   extraction manifest for upstreaming to `chilli-axe/mpc-autofill`; also
   the clearest single write-up of how that system is built, commit by
   commit.
+- [`upstreaming/upstream-wiki-drift.md`](upstreaming/upstream-wiki-drift.md)
+  — weekly, automated, detection-only tracking of what's changed on
+  chilli-axe/mpc-autofill's own wiki since we last looked.
 - [`features/printing-tags.md`](features/printing-tags.md) — the "What's
   That Card?" printing-consensus tagging system and vote-queue funnel,
   backend + frontend. Stages 1–7 are the current-state reference; Stage 8
@@ -41,6 +49,18 @@ The methodology and the systems it governs.
 - [`features/card-dom-api.md`](features/card-dom-api.md) — generic
   `data-card-*` attributes + `mpc:card-selected` event for external
   tooling/testing/accessibility.
+- [`features/pdf-generator.md`](features/pdf-generator.md) — PDF export
+  tab: eager-WASM/preview/image-rendering bug fixes.
+- [`features/print-export-page.md`](features/print-export-page.md) — the
+  "Print!" export page's ordering tabs and flag icons.
+- [`features/google-drive-connect.md`](features/google-drive-connect.md) —
+  Google Drive picker, Local Folder, and Save-PDF-to-Drive.
+- [`features/grid-selector.md`](features/grid-selector.md) — the
+  card-version-picker modal + `Card.tsx`'s image loading/error states.
+- [`features/image-cdn.md`](features/image-cdn.md) — the Worker + R2
+  bucket image CDN.
+- [`features/local-file-source.md`](features/local-file-source.md) —
+  backend `LOCAL_FILE` catalog source type.
 
 ## Operating it
 
@@ -67,11 +87,15 @@ One-word status per doc; see each file for the full survey/spec.
 Not every shipped proposal-lettered feature has a survey doc here — some
 (e.g. Proposal A, Proposal D) went straight from idea to shipped PR without
 a separate written spec. This list is only the ones that got a dedicated
-doc.
+doc. Like Records, this bucket is never published to the wiki — a HOLD
+spec isn't real yet and shouldn't read as if it is.
 
 ## Records
 
-Point-in-time findings and relayed work products, not living reference.
+Point-in-time findings and relayed work products, not living reference —
+and, per [`documentation-process.md`](documentation-process.md), never
+published to the wiki (the wiki is a generated view of "Understanding the
+system" + "Operating it" only).
 
 - **`audits/`** — not yet on this branch. `docs/audits/ui-content-audit.md`
   (12 UI content-accuracy findings, HOLD) exists on the unmerged

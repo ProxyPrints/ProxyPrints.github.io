@@ -35,7 +35,7 @@ printings, artists, tags, and moderation from one screen.
   — weighted-vote formula, weight by source (user 1, admin
   `PRINTING_TAG_ADMIN_WEIGHT` default 5, AI/deduction/OCR
   `PRINTING_TAG_AI_WEIGHT` default 0.5; settings in
-  `MPCAutofill/settings.py`). `PRINTING_TAG_MIN_VOTES` compares against
+  `MPCAutofill/MPCAutofill/settings.py`). `PRINTING_TAG_MIN_VOTES` compares against
   _summed weight_, not row count. A winning group also needs
   `PRINTING_TAG_MIN_SHARE` (default 0.6) of total weight **and** at least
   one non-AI vote — `vote_consensus.is_human_backed_source()` is the one
@@ -1581,7 +1581,7 @@ implied by this OCR fix and was not built.
   pattern as reCAPTCHA/Mechanical-Turk gold-standard questions. Known
   limitation before this is worth building: `anonymous_id` is a
   client-generated, trivially rotatable value
-  (`frontend/src/common/anonymousId.ts`) with no persisted identity —
+  (`frontend/src/common/cookies.ts`) with no persisted identity —
   a trust score raises the cost of poisoning (a fresh ID needed per
   abuse attempt) but doesn't stop a determined actor, so it's a speed
   bump, not a hard Sybil defense. Also a genuinely new subsystem, not a

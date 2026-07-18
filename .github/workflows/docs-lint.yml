@@ -1,0 +1,39 @@
+name: Docs lint
+
+# Mechanical checks over docs/: internal link resolution (both [[wiki-link]]
+# and markdown [text](path) styles) and backtick-quoted repo-path
+# existence. Annotates failures inline (::error file=...,line=...::) —
+# NEVER auto-fixes anything, and never touches doc content.
+#
+# KNOWN LIMITATION, stated plainly rather than buried: this can only catch
+# BROKEN links/paths. It cannot tell a stale STATUS CLAIM ("not yet built"
+# for something now shipped, a date stamp that's drifted, a claim
+# contradicted by a sibling doc) from a true one — that class of rot is
+# exactly what the quarterly judgment coherence pass exists for; see
+# docs/documentation-process.md. This workflow and that pass are
+# deliberately two different tools for two different problems.
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/scripts/docs_lint.py"
+      - ".github/workflows/docs-lint.yml"
+  schedule:
+    # Weekly, independent of any PR — catches rot introduced by a change
+    # OUTSIDE docs/ (e.g. a component move that a doc's path reference
+    # didn't follow), which a docs/**-scoped PR trigger alone would miss.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint docs/ (links + path references)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run docs lint
+        run: python3 .github/scripts/docs_lint.py
