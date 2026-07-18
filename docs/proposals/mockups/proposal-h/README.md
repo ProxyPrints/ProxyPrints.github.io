@@ -19,13 +19,13 @@ Open any file directly in a browser — `file:///path/to/this/directory/desktop.
 `file://` stylesheet loading. All five pages load the same
 `shared.css`; keep it alongside them.
 
-| File | Breakpoint | What it shows |
-| --- | --- | --- |
-| [`desktop.html`](desktop.html) | 1920×1080 | Sheet + persistent 400px rail, both fully inline; slot 18 selected, rail showing all 7 instruments |
-| [`laptop.html`](laptop.html) | 1366×768 | Rail narrowed to 350px; toolbar's paper/bleed/guides controls collapsed into one "Print Settings" popover trigger |
-| [`tablet.html`](tablet.html) | 768–992 (rendered at 900) | Two states in one file: default (rail closed, edge handle only) and open (rail as a 340px right-side off-canvas drawer) |
-| [`mobile.html`](mobile.html) | <768 (rendered at 390) | Default view — sheet only, single column, compact toolbar |
-| [`mobile-rail-open.html`](mobile-rail-open.html) | <768 (rendered at 390) | Slot selected — rail as a full bottom-sheet/overlay in plain document flow (no `position: fixed`/`sticky`), all 7 instruments stacked vertically |
+| File                                             | Breakpoint                | What it shows                                                                                                                                    |
+| ------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`desktop.html`](desktop.html)                   | 1920×1080                 | Sheet + persistent 400px rail, both fully inline; slot 18 selected, rail showing all 7 instruments                                               |
+| [`laptop.html`](laptop.html)                     | 1366×768                  | Rail narrowed to 350px; toolbar's paper/bleed/guides controls collapsed into one "Print Settings" popover trigger                                |
+| [`tablet.html`](tablet.html)                     | 768–992 (rendered at 900) | Two states in one file: default (rail closed, edge handle only) and open (rail as a 340px right-side off-canvas drawer)                          |
+| [`mobile.html`](mobile.html)                     | <768 (rendered at 390)    | Default view — sheet only, single column, compact toolbar                                                                                        |
+| [`mobile-rail-open.html`](mobile-rail-open.html) | <768 (rendered at 390)    | Slot selected — rail as a full bottom-sheet/overlay in plain document flow (no `position: fixed`/`sticky`), all 7 instruments stacked vertically |
 
 ## Palette
 

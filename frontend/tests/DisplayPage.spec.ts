@@ -40,7 +40,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await loadPageWithDefaultBackend(page, "display");
     await expect(page.getByTestId("display-empty-state")).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "Head to the editor" }),
+      page.getByRole("link", { name: "Head to the editor" })
     ).toBeVisible();
   });
 
@@ -55,7 +55,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     await expect(page.getByTestId("display-page-indicator")).toContainText(
-      "Page 1 of 1",
+      "Page 1 of 1"
     );
     // A4 landscape at the default bleed edge greedy-fits to 4 columns x 2 rows - see the
     // design doc's §1 for the computeLayout() math this matches.
@@ -83,10 +83,10 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // Choose Image is open by default; the other four sections start collapsed - per the
     // owner's accordion amendment (design doc §2).
     await expect(
-      page.getByText("The candidate/version picker", { exact: false }),
+      page.getByText("The candidate/version picker", { exact: false })
     ).toBeVisible();
     await expect(
-      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false }),
+      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
     ).not.toBeVisible();
   });
 
@@ -102,7 +102,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     await page.getByRole("heading", { name: "Attributes" }).click();
     await expect(
-      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false }),
+      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
     ).toBeVisible();
   });
 
@@ -122,17 +122,17 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await slots.first().click();
     await page.getByRole("heading", { name: "Attributes" }).click();
     await expect(
-      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false }),
+      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
     ).toBeVisible();
 
     // Selecting the other real slot swaps the rail's whole subtree - Attributes should be back
     // to collapsed, not still expanded from the last slot.
     await slots.nth(1).click();
     await expect(
-      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false }),
+      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
     ).not.toBeVisible();
     await expect(
-      page.getByText("The candidate/version picker", { exact: false }),
+      page.getByText("The candidate/version picker", { exact: false })
     ).toBeVisible();
   });
 
@@ -162,7 +162,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     const guidesToggle = page.getByLabel("Guides");
     await expect(guidesToggle).toBeChecked();
     await expect(
-      page.getByTestId("page-preview-cut-line").first(),
+      page.getByTestId("page-preview-cut-line").first()
     ).toBeVisible();
 
     await guidesToggle.uncheck();

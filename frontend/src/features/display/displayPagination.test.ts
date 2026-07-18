@@ -5,7 +5,7 @@ import { paginateSlotsForDisplay } from "./displayPagination";
 
 const makeMember = (
   id: string,
-  selectedImage?: string,
+  selectedImage?: string
 ): SlotProjectMembers => ({
   id,
   front: {

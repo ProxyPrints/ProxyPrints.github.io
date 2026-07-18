@@ -203,7 +203,7 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
   const projectMember = useAppSelector((state) =>
     selectedSlotRef != null
       ? selectProjectMember(state, selectedSlotRef.face, selectedSlotRef.slot)
-      : undefined,
+      : undefined
   );
 
   if (selectedSlotRef == null) {
@@ -313,7 +313,7 @@ export function DisplayPage() {
   const cardDocumentsByIdentifier = useCardDocumentsByIdentifier();
 
   const [settings, setSettings] = useState<DisplaySheetSettings>(
-    DEFAULT_SHEET_SETTINGS,
+    DEFAULT_SHEET_SETTINGS
   );
   const [pageIndex, setPageIndex] = useState(0);
   const [selectedSlotRef, setSelectedSlotRef] =
@@ -345,15 +345,15 @@ export function DisplayPage() {
         CardHeightMM,
         settings.bleedEdgeMM,
         margins,
-        spacing,
+        spacing
       ),
-    [sheetWidthMM, sheetHeightMM, settings.bleedEdgeMM, margins, spacing],
+    [sheetWidthMM, sheetHeightMM, settings.bleedEdgeMM, margins, spacing]
   );
   const cardsPerPage = layout.cardsPerRow * layout.cardsPerCol;
 
   const pages = useMemo(
     () => paginateSlotsForDisplay(projectMembers, cardsPerPage),
-    [projectMembers, cardsPerPage],
+    [projectMembers, cardsPerPage]
   );
   const pageCount = Math.max(pages.length, 1);
   const clampedPageIndex = Math.min(pageIndex, pageCount - 1);
@@ -385,7 +385,7 @@ export function DisplayPage() {
   const selectedSlotIndexOnPage =
     selectedSlotRef != null && selectedSlotRef.face === activeFace
       ? currentPageEntries.findIndex(
-          (entry) => entry.slot === selectedSlotRef.slot,
+          (entry) => entry.slot === selectedSlotRef.slot
         )
       : -1;
 
