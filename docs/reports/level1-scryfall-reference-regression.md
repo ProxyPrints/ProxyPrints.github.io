@@ -6,8 +6,7 @@ Branch: `claude/level1-reference-image-fix` (based on `master`)
 
 **(a) How the old implementation rendered the reference**: `frontend/src/features/printingTags/PrintingTagQueue.tsx`
 (deleted in commit `9d71851`, "Queue redesign frontend") showed a Scryfall render for every
-printing candidate in its grid, no gating, no exceptions - a plain `<img
-src={candidate.mediumThumbnailUrl} alt="..." />` inside an `ArtPlaceholder`/`ZoomableThumbnail`
+printing candidate in its grid, no gating, no exceptions - a plain `<img src={candidate.mediumThumbnailUrl} alt="..." />` inside an `ArtPlaceholder`/`ZoomableThumbnail`
 wrapper (hover-zoom, mystery-card placeholder backdrop). `mediumThumbnailUrl` is a field the
 `PrintingCandidate` API response already carries - no special URL construction, just the field
 straight into `<img src>`.
