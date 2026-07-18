@@ -39,6 +39,7 @@ FAILS rather than shipping a page with a link nobody can follow.
 Exits 0 whether or not anything changed; the calling workflow decides
 whether to commit based on `git status --porcelain` in the wiki dir.
 """
+
 import json
 import re
 import sys
@@ -150,7 +151,13 @@ def transform_links(repo_root: Path, source_rel: str, text: str, repo_to_wiki: d
 
 
 def write_page(
-    wiki_dir: Path, wiki_name: str, source_path: Path, source_rel: str, repo_root: Path, repo_to_wiki: dict, errors: list[str]
+    wiki_dir: Path,
+    wiki_name: str,
+    source_path: Path,
+    source_rel: str,
+    repo_root: Path,
+    repo_to_wiki: dict,
+    errors: list[str],
 ) -> None:
     body = source_path.read_text()
     transformed = transform_links(repo_root, source_rel, body, repo_to_wiki, errors)
@@ -173,7 +180,9 @@ def write_pointer_page(wiki_dir: Path, wiki_name: str, points_to: str, note: str
     (wiki_dir / f"{wiki_name}.md").write_text(content)
 
 
-def build_home_and_sidebar(repo_root: Path, wiki_dir: Path, mapping: dict, repo_to_wiki: dict, errors: list[str]) -> None:
+def build_home_and_sidebar(
+    repo_root: Path, wiki_dir: Path, mapping: dict, repo_to_wiki: dict, errors: list[str]
+) -> None:
     intro_raw = (repo_root / "docs" / "wiki-home-intro.md").read_text().rstrip() + "\n"
     intro = transform_links(repo_root, "docs/wiki-home-intro.md", intro_raw, repo_to_wiki, errors)
 
@@ -254,11 +263,13 @@ def main() -> int:
     if errors:
         for err in errors:
             print(f"::error::{err}")
-        print(f"\n{len(errors)} link-resolution error(s) - failing the publish. "
-              f"docs_lint.py cannot catch this class of break (it only checks links "
-              f"resolve inside docs/ itself, not what they become after this script's "
-              f"wiki-name/blob-URL rewrite) - fix the source link or add the missing "
-              f"page to wiki-publish-map.json.")
+        print(
+            f"\n{len(errors)} link-resolution error(s) - failing the publish. "
+            f"docs_lint.py cannot catch this class of break (it only checks links "
+            f"resolve inside docs/ itself, not what they become after this script's "
+            f"wiki-name/blob-URL rewrite) - fix the source link or add the missing "
+            f"page to wiki-publish-map.json."
+        )
         return 1
 
     # Prune generated pages whose source left the mapping. Never touch a
