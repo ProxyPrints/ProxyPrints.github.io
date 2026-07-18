@@ -2,10 +2,10 @@ As of: 2026-07-18
 What this is: survey + HOLD proposal for opening the existing Discord login to
 ordinary users and letting any logged-in user save/load named decks
 server-side.
-HOLD — build not started. Proposal G; queue position, nav placement, sharing,
-deck cap, LocalFile handling, and auth framing all confirmed (see Decisions).
-The authed vote-tier weighting (§7) is scoped but deliberately gated as its
-own later, separate build — not part of this HOLD's core scope.
+HOLD — build not started. **Spec CLOSED: no open decisions remain** (see
+Decisions). Proposal G builds at its queued slot. §7 (authed vote tier) is
+fully specified but remains a deliberately separate, later build — not part
+of this HOLD's core scope.
 
 ## Context — prior art outside this codebase
 
@@ -200,17 +200,29 @@ than resurrecting them — two different "saved deck" concepts on the
 backend would be a confusing, permanent wart.
 
 ```python
+class SavedDeckKind(models.TextChoices):
+    DECK = "deck"
+    SNAPSHOT = "snapshot"
+
+
 class SavedDeck(models.Model):
     key = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     owner = models.ForeignKey(to=User, on_delete=models.CASCADE, related_name="saved_decks")
     name = models.CharField(max_length=100)
     state = models.JSONField(default=dict, blank=True)
+    kind = models.CharField(max_length=20, choices=SavedDeckKind.choices, default=SavedDeckKind.DECK)
     is_public = models.BooleanField(default=False)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["owner", "name"], name="saveddeck_owner_name_unique")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner", "name"],
+                condition=models.Q(kind=SavedDeckKind.DECK),
+                name="saveddeck_owner_name_unique_for_decks",
+            )
+        ]
 ```
 
 - **`on_delete=CASCADE`, not `SET_NULL`** — deliberately the opposite of
@@ -231,12 +243,14 @@ class SavedDeck(models.Model):
 - **Per-user cap — resolved**: a generous, configurable soft cap (env-driven
   setting, default `100` decks/user, same `env(..., default=...)` idiom as
   `MODERATORS_GROUP_NAME`/`CARD_REPORT_RATE`) enforced in `2/saveDeck/`'s
-  create path only (rename/update never blocked by it). This is purely an
-  abuse guard, not a storage concern — at 15–35 KB/deck even 100 decks/user
-  is negligible — so it exists to stop a runaway script from becoming a
-  moderation problem, not to manage disk. At-cap create attempts return a
-  friendly, specific error ("You've reached the 100 saved deck limit —
-  delete an old one to save a new one") rather than a generic 400.
+  create path only (rename/update never blocked by it), **counting only
+  `kind=DECK` rows** — snapshot rows are entirely outside this cap (see the
+  auto-snapshot bullet below for why). This is purely an abuse guard, not a
+  storage concern — at 15–35 KB/deck even 100 decks/user is negligible — so
+  it exists to stop a runaway script from becoming a moderation problem, not
+  to manage disk. At-cap create attempts return a friendly, specific error
+  ("You've reached the 100 saved deck limit — delete an old one to save a
+  new one") rather than a generic 400.
 - **`LocalFile`-sourced slots — resolved (warn, never block)**: `state`
   marks any slot whose `selectedImage` came from a `LocalFile` source with a
   `deviceLocal: true` flag at save time (a data convention within the
@@ -245,6 +259,26 @@ class SavedDeck(models.Model):
   device — re-pick" placeholder instead of attempting (and failing) to
   resolve the image, rather than showing a broken tile. See §4 for the
   save-time warning and §2 for the underlying gap this addresses.
+- **Auto-snapshots — resolved: outside the deck cap, their own 5-slot FIFO
+  ring per user, distinguishable in the model.** The `kind` field (above)
+  is exactly this distinction: `2/saveDeck/`'s load-flow-triggered
+  auto-snapshot calls (§4) pass `kind: "snapshot"` instead of the default
+  `"deck"`. Rationale for keeping snapshots off the 100-deck cap entirely:
+  the load-flow's safety guarantee ("skipping the snapshot is not an
+  available choice for a logged-in user," §4) must be unblockable by quota
+  — a user sitting at their 100-deck cap must still be able to load another
+  saved deck safely — and a snapshot must never silently eat into the
+  allowance the user thinks of as *their decks*. Enforcement: after any
+  snapshot insert, `2/saveDeck/` prunes that owner's `kind=SNAPSHOT` rows
+  down to the 5 most recently created (plain `created_at`-ordered delete of
+  the rest) — a fixed, non-configurable ring, not a setting, since it's an
+  implementation safety valve rather than a user-facing quota. The
+  `UniqueConstraint` above is scoped to `kind=DECK` specifically so
+  auto-generated snapshot names (e.g. two "Backup — {date}" saves on the
+  same day) can never collide with each other or block the ring from
+  filling. On "My Decks" (§4), snapshots render in their own collapsed
+  group, separate from ordinary decks — visible and manageable, but never
+  confused with something the user explicitly named and saved.
 
 **Endpoints** (mirrors the existing `2/<verb>/` convention; auth is `request.user.is_authenticated`,
 which is a strictly weaker version of the existing `require_moderator` decorator
@@ -254,8 +288,8 @@ every other session-consuming endpoint today):
 
 | Endpoint | Method | Body | Behaviour |
 |---|---|---|---|
-| `2/savedDecks/` | GET | — | List `{key, name, createdAt, updatedAt, approxSizeBytes}` for `request.user`, newest-updated first |
-| `2/saveDeck/` | POST | `{key: string\|null, name, state}` | Upsert: `key: null` creates; existing `key` updates in place if owned by `request.user`, else 403. Name-uniqueness constraint means a rename-into-collision 400s with a clear message, surfaced client-side |
+| `2/savedDecks/` | GET | — | List `{key, name, kind, createdAt, updatedAt, approxSizeBytes}` for `request.user`, newest-updated first (client groups by `kind` for the collapsed snapshot section) |
+| `2/saveDeck/` | POST | `{key: string\|null, name, state, kind?: "deck"\|"snapshot"}` | Upsert: `key: null` creates; existing `key` updates in place if owned by `request.user`, else 403. `kind` defaults to `"deck"`; `"snapshot"` skips the 100-deck cap check and instead prunes the owner's snapshots to the newest 5 after insert. Name-uniqueness (scoped to `kind="deck"`) means a rename-into-collision 400s with a clear message, surfaced client-side |
 | `2/loadDeck/` | POST | `{key}` | Returns `{name, state, createdAt, updatedAt}`; 403/404 if not owned |
 | `2/renameDeck/` | POST | `{key, name}` | 403 if not owned; 400 on name collision |
 | `2/deleteDeck/` | POST | `{key}` | Hard delete, 403 if not owned |
@@ -338,7 +372,11 @@ from/saved as, or is simply non-empty with no prior save at all.
     default). Skipping the snapshot is not an available choice for a
     logged-in user. Only once the snapshot completes does the requested
     deck load in.
-  - Both snapshot paths reuse `2/saveDeck/` verbatim (§3) — no new endpoint.
+  - Both snapshot paths call `2/saveDeck/` with `kind: "snapshot"` (§3) —
+    no new endpoint. Snapshots sit in their own 5-per-user FIFO ring
+    entirely outside the 100-deck cap (§3), so this safety step can never
+    be blocked by quota, and never eats into the user's own named-deck
+    allowance.
 - **Editor dirty + logged out** → today's existing confirm-overwrite
   warning, unchanged (there's nowhere to snapshot *to* without an account).
   This asymmetry — logged-in users never lose work to a load, logged-out
@@ -346,7 +384,10 @@ from/saved as, or is simply non-empty with no prior save at all.
   incentive, not an oversight to fix later.
 - **Load entry point**: one tap from the "My Decks" page — an **"Open in
   editor"** action per row, which runs the flow above and then navigates to
-  `/editor`.
+  `/editor`. Snapshots (`kind="snapshot"`) render in their own collapsed
+  group on that page, separate from ordinary named decks (§3) — visible and
+  loadable the same way, never confused with something the user explicitly
+  saved.
 - **Reverse breadcrumb**: the editor's action cluster (next to "Save")
   shows which saved deck, if any, the current editor content represents —
   e.g. "Editing: {deck name}" when loaded from/last saved as a specific
@@ -354,10 +395,8 @@ from/saved as, or is simply non-empty with no prior save at all.
   rename, so it's always an accurate answer to "is this one of my saved
   decks, and which."
 
-Not designed here: the exact prompt component/copy, and whether
-"Backup — {date}" auto-snapshots should count against the 100-deck soft cap
-(§3/decision 4) — leaning yes, a snapshot is an ordinary `SavedDeck` row —
-but not decided in this pass (see Decisions).
+Not designed here: the exact prompt component/copy (the snapshot cap/kind
+question from earlier rounds is resolved — see §3's auto-snapshot bullet).
 
 ## 5. Noted, not designed
 
@@ -424,21 +463,24 @@ distinction. It is deliberately a **separate, later build** from §3's
 saved-decks endpoints — its own migration and consensus-math change, own PR,
 own review — not bundled with this HOLD's core scope.
 
-**Proposed tiers** (mirrors the existing three-tier shape already implicit
-in the consensus model — `source`/`is_privileged`/`privileged_weight`,
+**Proposed tiers — resolved** (mirrors the existing three-tier shape already
+implicit in the consensus model — `source`/`is_privileged`/`privileged_weight`,
 `cardpicker/moderation.py`):
 - anonymous: **1.0** (today's implicit baseline for an ordinary USER-source
   vote, unchanged)
-- authenticated, not moderator: **~1.5–2.0** — exact value is an owner call
-  at doc review, not resolved here; the range, not a single number, is what
-  this doc commits to
+- authenticated, not moderator: **1.5** — a fixed constant for v1, returned
+  by `authed_vote_weight()` below. Headroom to **2.0** is explicitly
+  reserved, not used yet: the range surfaced in the prior round was the
+  ceiling for the *future* account-standing extension (age/history/
+  Dawid-Skene-style estimate) mentioned next, not a hint that 1.5 is
+  provisional — 1.5 is the shipped value until that extension exists.
 - moderator: **5.0** (matches the existing `VOTE_PRIVILEGED_WEIGHT` default,
   `docs/features/moderation.md:91-94`)
 
 **One derivation function**: `authed_vote_weight(user)` (proposed alongside
-`is_moderator`/`privileged_weight` in `cardpicker/moderation.py`) returns the
-constant tier value above today, but is designed as the single hook point
-for anything richer later — account age, saved-deck count, vote history.
+`is_moderator`/`privileged_weight` in `cardpicker/moderation.py`) returns
+**1.5** as a constant today, but is designed as the single hook point for
+anything richer later — account age, saved-deck count, vote history.
 Explicitly named as the **Dawid-Skene per-source-reliability hook**:
 `docs/theory.md:292-299` already frames this whole pipeline as treating
 "every source... as having some unknown, per-source reliability" and
@@ -447,29 +489,45 @@ one) are fixed/hand-set, and `authed_vote_weight()` is exactly where a
 future *estimated* (not hand-set) per-user reliability would plug in without
 restructuring the surrounding consensus math.
 
-**Resolution-gate analysis — tradeoffs presented, nothing decided**: does an
-anonymous solo vote still get to resolve a machine suggestion once an authed
-tier exists?
-- **Status quo**: any single vote clearing today's weight/share/human-backed
-  thresholds resolves, anonymous or not — unchanged. Zero new risk, but the
-  authed tier becomes purely a tie-breaker weight among disagreeing voters,
-  never a gate on anything.
-- **Authed-required**: a winning consensus with no authenticated (or better)
-  vote in the winning group parks `pending_approval`, reusing
+**Resolution gate — resolved for v1: status quo, made config-switchable by
+requirement.** Anonymous confirmations keep exactly today's behavior: any
+single vote clearing the existing weight/share/human-backed thresholds
+resolves, authenticated or not — the authed tier is a tie-breaker weight
+among disagreeing voters this round, not a gate on anything. The two
+alternatives considered (both rejected for v1, not deleted from the record):
+- **Authed-required** — a winning consensus with no authenticated (or
+  better) vote in the winning group parks `pending_approval`, reusing
   `require_privileged`'s existing `PENDING_PRIVILEGED` sentinel mechanism
   verbatim but with an "authenticated" bar instead of "moderator." Same code
-  shape as the existing sensitive-tag gate (reuse, not new machinery), but a
-  far bigger behavior change — it touches every ordinary vote, not just
-  sensitive tags — and needs its own abuse-model thinking first (see Sybil
-  note below) before it's safe to flip.
-- **Anonymous-below-threshold**: anonymous votes keep weight 1.0 and can
+  shape as the existing sensitive-tag gate, but a far bigger behavior
+  change — it touches every ordinary vote, not just sensitive tags.
+- **Anonymous-below-threshold** — anonymous votes keep weight 1.0 and can
   still resolve alone, but the resolution gets flagged e.g.
   "resolved-by-anonymous-only" for visibility/audit (a candidate future
   `docs/proposals/proposal-f-public-stats-page.md`-style aggregate) without
   blocking anything — a soft signal, not a gate.
 
-This doc takes no position among the three — flagged as the single biggest
-open question this section raises (see Decisions).
+**Required implementation constraint**: the gate mode and both tier weights
+must route through `authed_vote_weight()` plus Django settings — an
+env-driven flag mirroring `VOTE_PRIVILEGED_WEIGHT`'s idiom, e.g.
+`AUTHED_VOTE_GATE_MODE` (`"status_quo"` / `"authed_required"` /
+`"anonymous_below_threshold"`, default `"status_quo"`) and
+`AUTHED_VOTE_WEIGHT` (default `1.5`) — never hand-coded branches scattered
+through the consensus resolvers. This makes a future switch to either
+rejected alternative a **settings/config change, not a migration or code
+restructure**: the `PENDING_PRIVILEGED`-shaped machinery for
+`authed_required` should exist in code, gated off by default, exactly the
+way `require_privileged`'s parameter already defaults off for standard tags
+today (§1).
+
+**Revisit triggers** (not a schedule — conditions, not a date): (a) real
+resolution volume once ordinary users are actually logging in in numbers —
+today's status-quo choice is made with zero usage data, and should be
+checked against what actually happens once saved decks ship and login
+becomes common; (b) an observed manipulation attempt exploiting the
+anonymous path specifically — the Sybil-honesty note below already assumes
+this is *possible*; an actual instance, not a hypothetical one, is the
+trigger to escalate the gate mode via the settings switch above.
 
 **Cast-time recording, not resolution-time**: unlike `is_moderator` (checked
 at resolution/request time, so revoking a moderator retroactively
@@ -500,13 +558,13 @@ a cohort turns out to be bad.
 
 | Piece | Estimate | Why |
 |---|---|---|
-| `SavedDeck` model + migration | Small | One additive migration, no data backfill |
-| `require_authenticated` decorator + 5 endpoints | Small–Medium | Near-boilerplate CRUD; closely mirrors `require_moderator`/the moderation views' existing shape, no consensus logic needed |
-| Backend tests | Small–Medium | Mirrors `test_moderation_views.py`'s ownership/403 pattern (owner-only access is the only real logic to test) |
+| `SavedDeck` model + migration (incl. `kind` field + conditional unique constraint) | Small | One additive migration, no data backfill |
+| `require_authenticated` decorator + 5 endpoints (incl. cap check scoped to `kind=DECK` + snapshot FIFO pruning) | Small–Medium | Near-boilerplate CRUD; closely mirrors `require_moderator`/the moderation views' existing shape, no consensus logic needed |
+| Backend tests | Small–Medium | Mirrors `test_moderation_views.py`'s ownership/403 pattern, plus the FIFO-pruning and cap-scoping behavior |
 | Navbar login relocation + "Sign in" copy change | Small | `AuthWidget` already exists and works; mount-point + label change, not new UI |
-| "My Decks" top-level nav entry + page | Medium | New nav item + new page/panel + RTK Query endpoints (list/rename/delete/open-in-editor) — promoted out of the Import dropdown per §4's revised placement |
+| "My Decks" top-level nav entry + page (decks + collapsed snapshot group) | Medium | New nav item + new page/panel + RTK Query endpoints (list/rename/delete/open-in-editor) — promoted out of the Import dropdown per §4's revised placement |
 | Save UX (action-cluster button + name prompt + local-file warning) | Small–Medium | New modal-ish prompt beside the existing Download controls, gated on whoami's authenticated flag |
-| Load-into-editor safety flow (auto-snapshot + reverse breadcrumb) | Small–Medium | New logic layered on the load path; snapshot creation reuses `2/saveDeck/` verbatim, no new endpoint |
+| Load-into-editor safety flow (auto-snapshot + reverse breadcrumb) | Small–Medium | New logic layered on the load path; snapshot creation calls `2/saveDeck/` with `kind: "snapshot"`, no new endpoint |
 | Anonymous→login adopt-prompt toast | Small | Reuses existing `Toasts` system |
 | Frontend↔backend state-shape schema validation | Small | Extends the existing quicktype `Convert`/schema pattern already used for `localStorage` |
 
@@ -537,9 +595,8 @@ with the saved-decks build.
 4. **Per-user deck count — resolved.** Yes, a cap: a generous, configurable
    soft cap, default **100 decks/user**, purely as an abuse guard (not
    storage-driven — the 15–35 KB/deck math above stands), with a friendly
-   at-cap message rather than a bare 400. See §3 for the enforcement point.
-   Whether auto-snapshots from §4's load flow count against this cap is
-   still open (leaning yes, not decided).
+   at-cap message rather than a bare 400. Counts only `kind=DECK` rows (see
+   decision 7) — see §3 for the enforcement point.
 5. **`LocalFile`-sourced slots — resolved.** Warn at save, never block —
    the proposed tradeoff is accepted as-is. Additionally: mark such slots
    `deviceLocal: true` in the stored state so a load on another device shows
@@ -551,13 +608,31 @@ with the saved-decks build.
    not in the label. Ships Discord-only in v1; provider-agnostic by design
    (allauth's own multi-provider mechanism, §1); Google noted as the v1.1
    provider candidate, not built here.
+7. **Auto-snapshots — resolved.** Outside the 100-deck cap entirely, in
+   their own 5-per-user FIFO ring (oldest auto-pruned on each new snapshot),
+   distinguished from ordinary decks by the model's new `kind` field
+   (`SavedDeckKind.DECK`/`SNAPSHOT`). Rationale: the load-flow's safety
+   snapshot (§4) must be unblockable by quota, and must never eat into the
+   allowance a user thinks of as *their decks*. Snapshots list in their own
+   collapsed group under "My Decks." See §3's auto-snapshot bullet and §4's
+   load-into-editor flow for the concrete mechanism.
+8. **Resolution gate (§7) — resolved for v1: status quo.** Anonymous
+   confirmations retain today's exact gate behavior; the authed tier (see
+   decision 9) is a tie-breaker weight this round, not a gate. Required so
+   this doesn't calcify: the gate mode and both tier weights route through
+   `authed_vote_weight()` plus settings (`AUTHED_VOTE_GATE_MODE`,
+   `AUTHED_VOTE_WEIGHT`), so switching to `authed_required` or
+   `anonymous_below_threshold` later is a config change, not a migration.
+   Revisit triggers (conditions, not a schedule): real resolution volume
+   once ordinary users are logging in at scale, or an *observed*
+   manipulation attempt exploiting the anonymous path (not a hypothetical
+   one). See §7 for the full tradeoff analysis kept on record.
+9. **Authed vote weight (§7) — resolved: 1.5, constant.** Returned by
+   `authed_vote_weight()` as a fixed value for v1. Headroom to 2.0 is
+   reserved for the future account-standing extension (age/history/
+   Dawid-Skene-style estimate), not a sign 1.5 is provisional.
 
-**Still genuinely open** (deliberately undecided, not oversights):
-- §7's resolution-gate choice — status quo vs. authed-required vs.
-  anonymous-below-threshold — is presented with tradeoffs and left
-  unresolved on purpose; it's the single biggest open question this spec
-  raises.
-- §7's exact authed-tier weight value (range given: ~1.5–2.0) is an owner
-  call at doc review, not fixed here.
-- Whether load-flow auto-snapshots (§4) count against the 100-deck cap
-  (§3/decision 4) — leaning yes, not decided.
+**Spec status: CLOSED.** All nine decisions above are resolved; no open
+items remain in this document. §7 (authed vote tier) is fully specified but
+stays a separate, later build from the saved-decks core (own migration, own
+PR, own review) — it does not block Proposal G building at its queued slot.
