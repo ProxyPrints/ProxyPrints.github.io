@@ -570,3 +570,30 @@ z-index/stacking-context bug, not "there's a JS exception on this page." **Alway
 `page.on('pageerror')`) before assuming a pointer-interception failure is a CSS/layout problem** -
 in dev mode, Next's own error overlay is frequently the actual "invisible" thing eating the click,
 and it's a much faster diagnosis than auditing z-index stacking contexts by hand.
+
+## A feature-flagged page's dev-server test suite passing proves nothing about its production build
+
+Proposal H's `/display` route (behind `NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED`) had a full green
+Playwright suite against `next dev` and still failed `npm run build` in production the moment the
+flag actually flipped true in a real deploy (`deploy-frontend.yml` run #107) - a `tsc` type error
+(`Card | undefined` not assignable to `Card`) that plain `npx tsc --noEmit` on the feature branch
+never caught either. Two independent causes stacked: (1) `next dev`'s Playwright run never
+prerenders every route through the production compiler the way `next build`'s static export does
+
+- a type error only reachable via the real build pipeline is invisible to dev-mode testing no
+  matter how thorough; (2) the type error itself only existed once the feature branch merged
+  alongside an unrelated same-day PR that correctly widened `useCardDocumentsByIdentifier()`'s
+  return type to include `undefined` (fixing a real crash, task #135) - a cross-PR interaction, not
+  a bug in either PR alone, so neither branch's own pre-merge CI could have caught it in isolation.
+  Diagnosis trap avoided here: don't trust a clean local repro build at face value - confirm it's
+  actually running against the SAME commit the real CI run failed on (`git log -1`), and regenerate
+  any gitignored build-time artifacts (this repo's `frontend/src/common/generated/` keyrune assets,
+  produced by `npm install`'s postinstall, not committed) before concluding a build error doesn't
+  reproduce - a stale/incomplete local environment can silently "fix" a real failure with an
+  unrelated false negative.
+
+**New standing verification bar**: any flag-gated page must pass a real production build with the
+flag ON - `NEXT_PUBLIC_<FLAG>=true npx next build` (or the equivalent for whatever flag var) -
+before its PR ships, in addition to (not instead of) `tsc --noEmit`, the Jest suite, and Playwright
+against `next dev`. Add this to the pre-push checklist for every future PR touching a flagged
+route, not just this one's remaining build-out.
