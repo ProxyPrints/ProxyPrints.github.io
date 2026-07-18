@@ -232,13 +232,16 @@ unmerged-branch status).
 
 ### Reference implementation
 
-Build tracked separately from this spec doc (own PR, own review) —
-see `federation-hash-tool/` at the repo root once it lands. What
-follows is the interface contract that build must satisfy; treat this
-section as the spec, the tool's own README as the how-to-use-it docs. A
-single-file script (no package publish needed for v1 — a
-`pip install`-able package is a nice-to-have once there's real external
-usage to justify the packaging overhead, not a v1 requirement):
+**Built** — `federation-hash-tool/` at the repo root, separate PR (#97),
+own review, currently pending merge alongside this one. Verified
+byte-for-byte identical against this fork's real backend implementation
+before that PR was opened (not assumed from matching this section's
+prose), and guarded going forward by a permanent CI parity test on the
+backend side rather than a one-time check. Treat this section as the
+interface contract that build satisfies; the tool's own `readme.md` is
+the how-to-use-it docs. A single-file script (no package publish needed
+for v1 — a `pip install`-able package is a nice-to-have once there's real
+external usage to justify the packaging overhead, not a v1 requirement):
 
 - **Interface**: `hash_folder(path) -> dict[filename, content_phash_hex]`
   as the core function; a CLI wrapper (`python hash_my_cards.py
