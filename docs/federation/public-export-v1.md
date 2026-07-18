@@ -151,19 +151,48 @@ that differs in crop region or fetch size will silently produce
 different hashes and never match anything. This is the single highest-
 leverage precision requirement in this whole spec.
 
-### The exact recipe (from `MPCAutofill/cardpicker/local_phash.py`, current code)
+### The exact recipe (from `MPCAutofill/cardpicker/local_phash.py`/`local_fallback.py`, current code)
 
-1. **Crop to the art region only**, as a fraction of the full card
-   image: `(left, top, right, bottom) = (0.07, 0.10, 0.93, 0.58)` — not
-   the whole card. This box is deliberately crude (a fixed fraction, not
-   a real frame-aware detector — modern-frame-tuned, not
-   era-specific) and that crudeness is a *feature* for interoperability
-   purposes: it's cheap for any consumer to reimplement exactly, in any
-   language, with zero MTG-frame-detection logic of their own.
-2. **Compute `imagehash.phash`** (Python `imagehash` package,
+**Correction, added when this recipe was actually implemented**: the
+original draft of this section described only a fixed crop box and
+omitted a real step our own code performs before every hash — a
+faithful reimplementation needs it too, or a consumer's hashes won't
+match ours for the ~2.5% of images that are trimmed rather than
+bleed-inclusive (see step 1 below). Caught while building the reference
+tool against `compute_content_phash_for_card`'s actual call chain, not
+assumed correct from this doc's own earlier description.
+
+1. **Classify the image as `"bleed"` or `"trimmed"`** by aspect ratio,
+   before cropping anything. Compare `width / height` against two
+   reference ratios derived from a standard 63×88mm MTG card trim size
+   plus a 3.175mm (⅛") bleed margin per edge: `TRIM_ASPECT_RATIO =
+   63 / 88`, `BLEED_ASPECT_RATIO = (63 + 2×3.175) / (88 + 2×3.175)`.
+   Whichever reference ratio the image's actual ratio is closer to
+   wins, **unless neither is within 0.03** — then abstain (`None`):
+   genuinely ambiguous, not a forced guess. ~97.5% of real card images
+   are bleed-inclusive; this step exists for the ~2.5% minority that
+   aren't.
+2. **Crop to the art region**, as a fraction of the full image:
+   `(left, top, right, bottom) = (0.07, 0.10, 0.93, 0.58)` for a
+   `"bleed"` or ambiguous (`None`) image — used as-is, no remapping.
+   This box is deliberately crude (a fixed fraction, not a real
+   frame-aware detector) and that crudeness is a *feature* for
+   interoperability: cheap for any consumer to reimplement exactly, in
+   any language, with zero MTG-frame-detection logic of their own.
+   **For a `"trimmed"` image**, the same four fractions must first be
+   rescaled to the trimmed image's own coordinate space (the box was
+   tuned against bleed-inclusive images, so used unchanged it lands in
+   the wrong place once the bleed margin's pixels no longer exist):
+   `left'/right' = clamp01((left/right − wf) / (1 − 2×wf))`,
+   `top'/bottom' = clamp01((top/bottom − hf) / (1 − 2×hf))`, where
+   `wf = 3.175 / (63 + 2×3.175)` and `hf = 3.175 / (88 + 2×3.175)` — the
+   bleed margin's fraction of the full bleed-inclusive image's
+   width/height respectively, derived from the same reference geometry
+   as step 1, not a separate guess.
+3. **Compute `imagehash.phash`** (Python `imagehash` package,
    `hash_size=8` — the library's own default) on the cropped region.
    64 bits out.
-3. **Fetch size doesn't need to match exactly** — phash's own internal
+4. **Fetch size doesn't need to match exactly** — phash's own internal
    downsample to 32×32 grayscale before its DCT means anything
    comfortably above that resolution converges to the same hash; this
    fork's own ingest pipeline uses a deliberately small fetch (140px
@@ -171,8 +200,12 @@ leverage precision requirement in this whole spec.
    consumer hashing their own already-downloaded, full-resolution image
    is fine and should NOT downscale first — the algorithm does that
    internally.
-4. **Encode as a 16-hex-char string** (see §1's field note — not the
-   internal signed-int DB representation).
+5. **Encode as a 16-hex-char string** — `imagehash.ImageHash`'s own
+   `str()` conversion already produces exactly this; there's no need to
+   reach for the internal signed two's-complement integer
+   `Card.content_phash` is stored as (that's a DB-storage detail
+   specific to this fork's Postgres schema, not part of the interchange
+   format — see §1's field note).
 
 ### Distance semantics — empirically tuned, not textbook, and said so
 
@@ -197,11 +230,13 @@ upstream-readiness audit's own Tier 5 entry on this same engine makes
 the identical pilot-status caveat — see §7's note on that doc's
 unmerged-branch status).
 
-### Reference implementation — specified here, not built here
+### Reference implementation
 
-Per this doc's HOLD status, no code ships with this spec — what follows
-is precise enough that building it later is mechanical, not a design
-exercise. A single-file script (no package publish needed for v1 — a
+Build tracked separately from this spec doc (own PR, own review) —
+see `federation-hash-tool/` at the repo root once it lands. What
+follows is the interface contract that build must satisfy; treat this
+section as the spec, the tool's own README as the how-to-use-it docs. A
+single-file script (no package publish needed for v1 — a
 `pip install`-able package is a nice-to-have once there's real external
 usage to justify the packaging overhead, not a v1 requirement):
 
@@ -214,12 +249,13 @@ usage to justify the packaging overhead, not a v1 requirement):
   fork's own backend dependencies (`MPCAutofill/requirements.txt`), so
   nothing new to vet license-wise; deliberately no Django/DB/network
   dependency so it runs standalone outside this fork's own stack.
-- **Must implement**: exactly the crop box, `hash_size=8`, and hex
-  encoding above — nothing else. The distance-matching/threshold logic
-  belongs in the CLI wrapper's join step, not the hashing function
-  itself (keep the hash function pure and trivially portable to a
-  non-Python reimplementation later, since "the recipe" in this section
-  is really the spec, not this particular script).
+- **Must implement**: exactly the bleed-classification step, crop box
+  (with its trimmed-image remapping), `hash_size=8`, and hex encoding
+  above — nothing else. The distance-matching/threshold logic belongs
+  in the CLI wrapper's join step, not the hashing function itself
+  (keep the hash function pure and trivially portable to a non-Python
+  reimplementation later, since "the recipe" in this section is really
+  the spec, not this particular script).
 - **License**: MIT, matching `acoreyj/proxies-at-home`'s own license
   (see §6) — this tooling exists specifically to make consumption cheap
   for external MIT-licensed tools; encumbering it with a stricter
