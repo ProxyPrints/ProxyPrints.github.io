@@ -1,6 +1,6 @@
 # Printing-aware card tagging ("What's That Card?" vote queue)
 
-_Current-state reference, as of 2026-07-16._ Full stage-by-stage build
+_Current-state reference, as of 2026-07-17._ Full stage-by-stage build
 history (Stages 1–7 below): `git log e4eb6cb3 -- docs/features/printing-tags.md`
 and earlier commits — that SHA is the last commit before this file was
 rewritten from a linear changelog into this reference.
@@ -35,7 +35,7 @@ printings, artists, tags, and moderation from one screen.
   — weighted-vote formula, weight by source (user 1, admin
   `PRINTING_TAG_ADMIN_WEIGHT` default 5, AI/deduction/OCR
   `PRINTING_TAG_AI_WEIGHT` default 0.5; settings in
-  `MPCAutofill/settings.py`). `PRINTING_TAG_MIN_VOTES` compares against
+  `MPCAutofill/MPCAutofill/settings.py`). `PRINTING_TAG_MIN_VOTES` compares against
   _summed weight_, not row count. A winning group also needs
   `PRINTING_TAG_MIN_SHARE` (default 0.6) of total weight **and** at least
   one non-AI vote — `vote_consensus.is_human_backed_source()` is the one
@@ -1498,7 +1498,7 @@ unrelated to the OCR token-position bug above. Two separate fixes, not
 one parser fix arriving twice - the D2.5 deterministic tier is **not**
 implied by this OCR fix and was not built.
 
-## Key files
+## Key files (Stage 8 era, historical)
 
 - Backend: `cardpicker/printing_consensus.py`,
   `cardpicker/printing_metadata_import.py`,
@@ -1533,7 +1533,7 @@ implied by this OCR fix and was not built.
   `get_baked_git_sha`), `cardpicker/management/commands/purge_machine_votes.py`,
   migration `0061_pilotrunledger_cardartistvote_run_id_and_more.py`
 
-## Known gaps
+## Known gaps (Stage 8 era, historical)
 
 - The Stage 7 layout (starburst/card/chip-ring composition) was hand-tuned
   via iterative screenshot review, not built against a real design system -
@@ -1563,8 +1563,8 @@ implied by this OCR fix and was not built.
   feedback.
 - Stage numbering: Stage 4 (no-match reason tags, merged as PR #12),
   Stage 5 (tag identity/presentation decoupling via `Tag.display_name`,
-  merged as PR #14), and Stage 6 (this document's current stage —
-  deductive printing-tag backfill) reflect three concurrently-developed
+  merged as PR #14), and Stage 6 (deductive printing-tag backfill) reflect
+  three concurrently-developed
   branches sharing this one doc file, numbered in landing order to avoid
   collisions.
 - **Future work: anonymous_id trust scoring via honeypot questions**
@@ -1581,7 +1581,7 @@ implied by this OCR fix and was not built.
   pattern as reCAPTCHA/Mechanical-Turk gold-standard questions. Known
   limitation before this is worth building: `anonymous_id` is a
   client-generated, trivially rotatable value
-  (`frontend/src/common/anonymousId.ts`) with no persisted identity —
+  (`frontend/src/common/cookies.ts`) with no persisted identity —
   a trust score raises the cost of poisoning (a fresh ID needed per
   abuse attempt) but doesn't stop a determined actor, so it's a speed
   bump, not a hard Sybil defense. Also a genuinely new subsystem, not a
@@ -1722,8 +1722,9 @@ federation, deferred), item 5 (questionFeed ordering mirror, separate follow-up 
 Scryfall's own token detection), task #111 (unrelated CI noise in the thumbnail-refresh
 trigger), PR #19's disposition (owner's convenience).
 
-**Full-catalog run: not yet fired.** This report is the synthesizing deliverable requested
-before that authorization - awaiting explicit owner go-ahead.
+**Full-catalog run: since fired and completed** (see `catalog-completion-plan.md`'s Status
+section for final numbers). This report was the synthesizing deliverable requested before
+that authorization.
 
 ## Two fast-follows, built after HOLD #2 (2026-07-16)
 

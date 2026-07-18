@@ -9,8 +9,13 @@
         "type": "array",
         "items": { "type": "string" }
       }
+    },
+    "degradedQueries": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Hash keys (matching `results`' own keys) of queries whose printing-specific search (expansion_code and/or collector_number) found zero hits under that filter and were retried without it. Absence from this list means either the query carried no printing filter at all, or the filter found real hits - exact-match behaviour when hits exist is completely unaffected by this field."
     }
   },
-  "required": ["results"],
+  "required": ["results", "degradedQueries"],
   "additionalProperties": false
 }

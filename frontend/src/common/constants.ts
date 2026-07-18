@@ -15,6 +15,22 @@ export const NotMPCURL = "https://www.notmpc.com";
 export const PringlePrints = "PringlePrints";
 export const PringlePrintsURL = "https://pringleprints.ca";
 
+// The desktop tool itself isn't a ProxyPrints-specific build - it's chilli-axe/mpc-autofill's
+// own upstream project, unmodified in this fork (confirmed: no ProxyPrints-specific strings
+// anywhere under desktop-tool/, and it never talks to our backend at all - it's a browser-
+// automation tool driving MakePlayingCards.com directly from local files, so there's no
+// backend-API coupling to diverge on). It reads the XML this site exports, and XML 2.0's
+// additions are structurally invisible to its 1.0-era parser (see downloadXML.ts's header
+// comment for the full compat evidence), so upstream's own releases work here as-is. Every
+// link/button pointing at it should say so honestly rather than implying it's ours.
+export const UpstreamDesktopTool = "the upstream mpc-autofill desktop tool";
+export const UpstreamDesktopToolReleasesURL =
+  "https://github.com/chilli-axe/mpc-autofill/releases/latest/";
+export const UpstreamDesktopToolWikiURL =
+  "https://github.com/chilli-axe/mpc-autofill/wiki/Desktop-Tool";
+export const UpstreamDesktopToolSourceURL =
+  "https://github.com/chilli-axe/mpc-autofill/tree/master/desktop-tool/";
+
 export const Card: CardType = CardTypeSchema.Card;
 export const Cardback: CardType = CardTypeSchema.Cardback;
 export const Token: CardType = CardTypeSchema.Token;

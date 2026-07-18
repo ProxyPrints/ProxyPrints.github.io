@@ -1,0 +1,65 @@
+{
+  "//": "Curated mapping from docs/ source files to wiki pages. Hand-maintained — the publish workflow (.github/workflows/docs-wiki-publish.yml) does NOT parse docs/README.md's prose; update this file whenever docs/README.md's own audience groups change. Groups mirror docs/README.md exactly. docs/proposals/ (drafts/HOLD specs), docs/reports/, and docs/audits/ are deliberately excluded from wiki publication. Renaming a published doc updates this file's 'wiki' value in the SAME PR as the rename — prefer stable wiki names once picked; wiki URLs have no redirects, so a rename here breaks every existing link to the old page name.",
+  "groups": [
+    {
+      "title": "Understanding the system",
+      "pages": [
+        { "source": "docs/overview.md", "wiki": "Overview" },
+        { "source": "docs/theory.md", "wiki": "Theory" },
+        { "source": "docs/federation-v1.md", "wiki": "Federation-v1" },
+        { "source": "docs/upstreaming/vote-system.md", "wiki": "Vote-System" },
+        { "source": "docs/features/printing-tags.md", "wiki": "Printing-Tags" },
+        {
+          "source": "docs/features/catalog-completion-plan.md",
+          "wiki": "Catalog-Completion-Plan"
+        },
+        { "source": "docs/features/moderation.md", "wiki": "Moderation" },
+        { "source": "docs/features/card-dom-api.md", "wiki": "Card-DOM-API" },
+        { "source": "docs/features/pdf-generator.md", "wiki": "PDF-Generator" },
+        {
+          "source": "docs/features/print-export-page.md",
+          "wiki": "Print-Export-Page"
+        },
+        {
+          "source": "docs/features/google-drive-connect.md",
+          "wiki": "Google-Drive-Connect"
+        },
+        { "source": "docs/features/grid-selector.md", "wiki": "Grid-Selector" },
+        { "source": "docs/features/image-cdn.md", "wiki": "Image-CDN" },
+        {
+          "source": "docs/features/local-file-source.md",
+          "wiki": "Local-File-Source"
+        }
+      ]
+    },
+    {
+      "title": "Using it",
+      "pages": [
+        {
+          "source": "docs/user-guide.md",
+          "wiki": "User-Guide"
+        },
+        {
+          "source": "docs/self-hosting.md",
+          "wiki": "Instance-Admin-Guide"
+        }
+      ]
+    },
+    {
+      "title": "Operating it",
+      "pages": [
+        { "source": "docs/infrastructure.md", "wiki": "Infrastructure" },
+        { "source": "docs/troubleshooting.md", "wiki": "Troubleshooting" },
+        { "source": "docs/lessons.md", "wiki": "Lessons" }
+      ]
+    }
+  ],
+  "pointer_pages": [
+    {
+      "wiki": "Research-and-Proofs",
+      "points_to": "Theory",
+      "note": "This page used to describe the printing-identification methodology write-up as forthcoming. It shipped as docs/theory.md — folded to a pointer rather than kept as a stale placeholder."
+    }
+  ],
+  "legacy_pages": []
+}

@@ -1,0 +1,91 @@
+name: Publish docs to wiki
+
+# Regenerates the GitHub wiki from docs/, per the curated mapping in
+# .github/wiki-publish-map.json. The wiki is a GENERATED VIEW of docs/ —
+# never hand-edit a page this workflow manages; edit the docs/ source
+# instead and this workflow will regenerate the page on the next push.
+#
+# docs/reports/, docs/audits/, and docs/proposals/ (drafts/HOLD specs) are
+# deliberately excluded from the mapping and never published here.
+#
+# Pages NOT listed in the mapping (see "legacy_pages") are never touched —
+# .github/scripts/publish_wiki.py only ever deletes a page it can prove it
+# generated (by checking for that page's own "GENERATED PAGE" marker), so
+# hand-maintained wiki content is safe from this workflow by construction,
+# not by convention alone.
+#
+# REQUIRES a repo secret named WIKI_PUSH_TOKEN. The default
+# GITHUB_TOKEN CANNOT push to a repo's wiki (wikis are a separate git
+# repo with their own auth requirements that the default Actions token's
+# permissions don't cover) — this is a GitHub platform limitation, not a
+# missing `permissions:` line.
+#
+# Setting it up (owner action required, one-time):
+#   1. Create a CLASSIC personal access token (Settings → Developer
+#      settings → Personal access tokens → Tokens (classic)). Do NOT use
+#      a fine-grained token — fine-grained PATs have historically had no
+#      wiki support at all, so a fine-grained token will silently fail to
+#      push here.
+#   2. Scope: `public_repo` is enough if this repository is public (it
+#      is, as of this writing — a GitHub Pages user/org site). Use the
+#      broader `repo` scope only if that ever changes.
+#   3. Add it to this repo's Settings → Secrets and variables → Actions
+#      as a secret named exactly `WIKI_PUSH_TOKEN`.
+#   4. While there: this repo's ladder-CI workflows (upstream branch
+#      verification / drift monitor, on a sibling branch as of this
+#      writing) also need `GOOGLE_DRIVE_API_KEY` and `MOXFIELD_SECRET`
+#      configured to reach real parity with upstream's own CI — worth
+#      doing in the same settings visit if they aren't set already.
+#
+# Until WIKI_PUSH_TOKEN exists, this workflow fails fast with a clear
+# ::error:: annotation instead of a confusing git-auth failure, and never
+# attempts a push.
+
+on:
+  push:
+    branches: ["master"]
+    paths:
+      - "docs/**"
+      - ".github/wiki-publish-map.json"
+      - ".github/scripts/publish_wiki.py"
+      - ".github/workflows/docs-wiki-publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Regenerate wiki from docs/
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check WIKI_PUSH_TOKEN is configured
+        run: |
+          if [ -z "${{ secrets.WIKI_PUSH_TOKEN }}" ]; then
+            echo "::error::WIKI_PUSH_TOKEN secret is not set. This workflow cannot push to the wiki without it — see this file's own header comment for setup steps (a CLASSIC PAT with public_repo scope, added as a repo secret named WIKI_PUSH_TOKEN). Nothing was pushed."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          path: repo
+
+      - name: Clone wiki
+        run: |
+          git clone "https://x-access-token:${{ secrets.WIKI_PUSH_TOKEN }}@github.com/${{ github.repository }}.wiki.git" wiki
+
+      - name: Regenerate wiki pages from docs/
+        run: python3 repo/.github/scripts/publish_wiki.py repo wiki
+
+      - name: Commit and push if anything changed
+        working-directory: wiki
+        run: |
+          git config user.name "ProxyPrints Docs Bot"
+          git config user.email "docs-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No wiki changes to publish."
+            exit 0
+          fi
+          git commit -m "Regenerate from docs/ (${{ github.sha }})"
+          git push origin HEAD:master

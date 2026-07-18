@@ -25,6 +25,10 @@ only) for deployment, hosting, and domain specifics.
   `docs/troubleshooting.md` before the task closes (grep it first before
   re-deriving a fix — recurring blockers live there, not buried in a
   changelog).
+- **Policy text dates**: any change to on-site policy text (Privacy
+  Policy, Terms, etc. in `frontend/src/pages/about.tsx` and similar) must
+  update that page's own "Last updated" date in the same change — it's
+  hardcoded, not derived, so it goes stale silently otherwise.
 - **Wiki maintenance**: task-end check — did this change what a USER sees
   or what an ADMIN does? If yes: server sessions update the wiki page in
   the same task; cloud sessions add "wiki: `<page>` needs `<change>`" to
@@ -83,7 +87,22 @@ partial work reports in the same structure ("WHAT SHIPPED: nothing —
 blocked at step N because X"). Applies to every hold point, completion,
 status update, and blocker report.
 
+For any report longer than ~10 lines, or whenever normal message
+delivery has been unreliable: commit the fenced block to a
+`docs/reports/<date>-<topic>.md` file on a short-lived, **per-session
+uniquely-suffixed** branch (never the bare `report-relay` — it's
+retired; two independent sessions collided on it with no push
+conflict to warn either one), push, and reply with only the branch
+name, file path, and one header line. See [[docs/lessons.md]] for the
+collision this prevents.
+
 ## docs/ index
+
+This is a flat working index for Claude Code sessions. For an
+audience-grouped map (including `docs/proposals/`, `docs/audits/`,
+`docs/reports/`) see [`docs/README.md`](docs/README.md); for a cold
+external reader's orientation to the whole fork, see
+[`docs/overview.md`](docs/overview.md).
 
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — symptom-first
   index of recurring blockers (grep your error text here first, before
@@ -105,6 +124,9 @@ status update, and blocker report.
   — the "Print!" export page's ordering tabs and flag icons.
 - [`docs/features/printing-tags.md`](docs/features/printing-tags.md) — the
   "What's That Card?" printing-consensus tagging system, backend + frontend.
+- [`docs/features/moderation.md`](docs/features/moderation.md) — Discord
+  OAuth login, the `Moderators` group gate, sensitive-tag approval queue,
+  card reports.
 - [`docs/features/local-file-source.md`](docs/features/local-file-source.md)
   — backend `LOCAL_FILE` catalog source type.
 - [`docs/features/card-dom-api.md`](docs/features/card-dom-api.md) —
@@ -116,9 +138,15 @@ status update, and blocker report.
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
   Upstreaming workflow in `docs/infrastructure.md`).
+- [`docs/upstreaming/upstream-wiki-drift.md`](docs/upstreaming/upstream-wiki-drift.md)
+  — weekly automated tracking of changes to chilli-axe/mpc-autofill's own
+  wiki (detection only, never copied in).
 - [`docs/federation-v1.md`](docs/federation-v1.md) — federation verdict
   exchange format v1 (spec, implementation pending).
 - [`docs/theory.md`](docs/theory.md) — the printing-identification
   pipeline as candidate-constrained decoding: false-accept bound,
   prior-art comparison, soundness mechanisms, Sybil/Dawid-Skene
   addendum. Doubles as the federation pitch's technical annex.
+- [`docs/documentation-process.md`](docs/documentation-process.md) — docs/
+  as source of truth, the wiki as a generated view of it, mechanical lint
+  vs. the quarterly judgment pass, upstream wiki tracking.

@@ -1802,6 +1802,8 @@
 # name: TestPostEditorSearchResults.test_complex_search
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -1827,6 +1829,8 @@
 # name: TestPostEditorSearchResults.test_filter_by_collector_number
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -1839,8 +1843,12 @@
 # name: TestPostEditorSearchResults.test_filter_by_collector_number_no_results
   dict({
     'json': dict({
+      'degradedQueries': list([
+        'key1',
+      ]),
       'results': dict({
         'key1': list([
+          '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
         ]),
       }),
     }),
@@ -1850,6 +1858,8 @@
 # name: TestPostEditorSearchResults.test_filter_by_expansion_code
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -1862,6 +1872,8 @@
 # name: TestPostEditorSearchResults.test_filter_by_expansion_code_and_collector_number
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -1874,8 +1886,12 @@
 # name: TestPostEditorSearchResults.test_filter_by_expansion_code_no_results
   dict({
     'json': dict({
+      'degradedQueries': list([
+        'key1',
+      ]),
       'results': dict({
         'key1': list([
+          '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
         ]),
       }),
     }),
@@ -1885,6 +1901,8 @@
 # name: TestPostEditorSearchResults.test_fuzzy_search
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -1898,6 +1916,8 @@
 # name: TestPostEditorSearchResults.test_get_multiple_rows_filtered_includes_one_tag
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -1911,6 +1931,8 @@
 # name: TestPostEditorSearchResults.test_get_multiple_rows_filtered_includes_one_tag_and_excludes_another
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -1923,6 +1945,8 @@
 # name: TestPostEditorSearchResults.test_get_multiple_rows_filtered_includes_two_tags
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -1936,6 +1960,8 @@
 # name: TestPostEditorSearchResults.test_get_multiple_rows_filtered_two_languages
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -1949,6 +1975,8 @@
 # name: TestPostEditorSearchResults.test_get_one_row_filtered_excludes_one_tag
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -1961,6 +1989,8 @@
 # name: TestPostEditorSearchResults.test_get_one_row_filtered_includes_one_tag
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1dxSLHtw-VwwE09pZCA8OA6LbuWRZPEoU',
@@ -1973,6 +2003,8 @@
 # name: TestPostEditorSearchResults.test_get_one_row_filtered_one_language
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -1995,6 +2027,8 @@
 # name: TestPostEditorSearchResults.test_maximum_dpi_yielding_no_search_results
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
         ]),
@@ -2006,6 +2040,8 @@
 # name: TestPostEditorSearchResults.test_maximum_size_yielding_fewer_search_results
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1dxSLHtw-VwwE09pZCA8OA6LbuWRZPEoU',
@@ -2018,6 +2054,8 @@
 # name: TestPostEditorSearchResults.test_minimum_dpi_yielding_fewer_search_results
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2030,8 +2068,28 @@
 # name: TestPostEditorSearchResults.test_minimum_dpi_yielding_no_search_results
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
+        ]),
+      }),
+    }),
+    'status_code': 200,
+  })
+# ---
+# name: TestPostEditorSearchResults.test_only_the_actually_degraded_query_is_flagged_among_several
+  dict({
+    'json': dict({
+      'degradedQueries': list([
+        'key2',
+      ]),
+      'results': dict({
+        'key1': list([
+          '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
+        ]),
+        'key2': list([
+          '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
         ]),
       }),
     }),
@@ -2041,6 +2099,8 @@
 # name: TestPostEditorSearchResults.test_page_equal_to_max_size
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -2067,6 +2127,8 @@
 # name: TestPostEditorSearchResults.test_priority_ordering_in_search_results
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1IDtqSjJ4Yo45AnNA4SplOiN7ewibifMa',
@@ -2324,6 +2386,8 @@
 # name: TestPostEditorSearchResults.test_search_for_card_with_versions_from_two_sources
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2337,6 +2401,8 @@
 # name: TestPostEditorSearchResults.test_search_for_card_with_versions_from_two_sources_under_reversed_search_order
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1dxSLHtw-VwwE09pZCA8OA6LbuWRZPEoU',
@@ -2350,6 +2416,8 @@
 # name: TestPostEditorSearchResults.test_search_for_card_with_versions_from_two_sources_with_all_sources_disabled
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
         ]),
@@ -2361,6 +2429,8 @@
 # name: TestPostEditorSearchResults.test_search_for_card_with_versions_from_two_sources_with_one_source_disabled
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2373,6 +2443,8 @@
 # name: TestPostEditorSearchResults.test_search_for_single_card
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -2385,6 +2457,8 @@
 # name: TestPostEditorSearchResults.test_search_for_single_cardback
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1oigI6wz0zA--pNMuExKTs40kBNH6VRP_',
@@ -2397,6 +2471,8 @@
 # name: TestPostEditorSearchResults.test_search_for_single_token
   dict({
     'json': dict({
+      'degradedQueries': list([
+      ]),
       'results': dict({
         'key1': list([
           '1V5E0avDmNyEUuFfYwx3nA05aj-1HY0rA',

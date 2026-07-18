@@ -117,6 +117,17 @@ function normalizeQuestionFeedCounts(
     // (never show a false "quick confirmations ready" headline) and fresh mirrors total.
     return { total: raw, confirmable: 0, contested: 0, fresh: raw };
   }
+  // `total === fresh` is expected for the legacy number shape above (fresh is forced to mirror
+  // total there), but for a genuine object-shaped response it would mean every card in the
+  // catalog is still "fresh" - vanishingly unlikely in practice, and far more likely a sign that
+  // this build is talking to a backend that hasn't finished rolling out the fresh/total split.
+  // Never shown to the user (the subcounts line dropped `fresh` entirely - see the audit note
+  // above the render) - this is purely a version-skew signal for whoever reads the console.
+  if (raw.total === raw.fresh) {
+    console.warn(
+      "QuestionFeed: counts.total === counts.fresh on a non-legacy response - possible backend/frontend version skew."
+    );
+  }
   return raw;
 }
 
@@ -546,8 +557,7 @@ export function QuestionFeed() {
                 }`}
           </p>
           <p className="text-muted small" data-testid="question-feed-subcounts">
-            {counts.total} total &middot; {counts.contested} contested &middot;{" "}
-            {counts.fresh} fresh
+            {counts.total} in catalog &middot; {counts.contested} contested
           </p>
         </>
       )}

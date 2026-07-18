@@ -165,7 +165,7 @@ Checked every commit in §1 for: literal `ProxyPrints`/`proxyprints.ca`/
 (secrets, `drives.csv`, `docker/.env` contents, Cloudflare/image-cdn
 credentials). **None found** in any vote-system commit - this feature was
 built without touching branding or secrets files. Specifically checked
-`MPCAutofill/settings.py`'s diffs in commits #1, #2, #6, #17 (the ones that
+`MPCAutofill/MPCAutofill/settings.py`'s diffs in commits #1, #2, #6, #17 (the ones that
 add settings) against the file's existing `proxyprints.ca` CORS-origin
 lines (`settings.py:128-129`, added independently, unrelated to this
 feature) - confirmed no proximity/entanglement, these commits only append
@@ -233,9 +233,12 @@ Two things worth flagging even though they aren't hard violations:
 
 As of this writing (2026-07-13), `upstream/master` is still exactly at the
 fork point (`3c717d2a`, merge-base with our `master` shows **0 commits**
-upstream is ahead) - unchanged since the 2026-07-11 check already recorded
-in CLAUDE.md. This can change at any time between now and whenever this
-manifest is actually acted on. **Before cutting the extraction branch**:
+upstream is ahead) - unchanged since a 2026-07-11 check. (That check is no
+longer recorded in CLAUDE.md — CLAUDE.md is orientation-only and this kind
+of point-in-time fact doesn't belong there; re-verify live rather than
+chasing the old pointer.) This can change at any time between now and
+whenever this manifest is actually acted on. **Before cutting the
+extraction branch**:
 
 ```
 git fetch upstream master
