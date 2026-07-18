@@ -15,7 +15,7 @@ export function wrapIndex(index: number, count: number): number {
  * one out of that module lets a lightweight consumer test it without that cost. PDF.tsx
  * re-exports this so its own existing importers are unaffected.
  */
-export const chunk = <T,>(arr: Array<T>, size: number): Array<Array<T>> => {
+export const chunk = <T>(arr: Array<T>, size: number): Array<Array<T>> => {
   const result: Array<Array<T>> = [];
   for (let i = 0; i < arr.length; i += size) {
     result.push(arr.slice(i, i + size));
@@ -28,7 +28,7 @@ export const chunk = <T,>(arr: Array<T>, size: number): Array<Array<T>> => {
  */
 export function imageSizeToMBString(
   size: number,
-  numDecimalPlaces: number
+  numDecimalPlaces: number,
 ): string {
   const roundFactor = 10 ** numDecimalPlaces;
   let sizeMB = size / 1000000;
@@ -59,7 +59,7 @@ export function stringifySearchQuery(searchQuery: SearchQuery): string {
 }
 
 export function getSourceRowsFromSourceSettings(
-  sourceSettings: SourceSettings
+  sourceSettings: SourceSettings,
 ): Array<SourceRow> {
   return (sourceSettings.sources ?? []).map((item) => [
     Number(item[0]),

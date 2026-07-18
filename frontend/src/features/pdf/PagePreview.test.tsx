@@ -27,7 +27,7 @@ describe("PagePreview", () => {
         ]}
         showCutLines={false}
         maxWidthPx={400}
-      />
+      />,
     );
 
     const slotEls = screen.getAllByTestId("page-preview-slot");
@@ -52,7 +52,7 @@ describe("PagePreview", () => {
         ]}
         showCutLines={false}
         maxWidthPx={400}
-      />
+      />,
     );
 
     const images = screen.getAllByRole("img");
@@ -71,7 +71,7 @@ describe("PagePreview", () => {
         slots={[]}
         showCutLines={false}
         maxWidthPx={400}
-      />
+      />,
     );
 
     expect(screen.getAllByTestId("page-preview-slot")).toHaveLength(9);
@@ -89,7 +89,7 @@ describe("PagePreview", () => {
         slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
         showCutLines={false}
         maxWidthPx={400}
-      />
+      />,
     );
     expect(screen.queryAllByTestId("page-preview-cut-line")).toHaveLength(0);
 
@@ -103,7 +103,7 @@ describe("PagePreview", () => {
         slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
         showCutLines={true}
         maxWidthPx={400}
-      />
+      />,
     );
     const cutLines = screen.getAllByTestId("page-preview-cut-line");
     expect(cutLines.length).toBeGreaterThan(0);
@@ -120,7 +120,7 @@ describe("PagePreview", () => {
         slots={[]}
         showCutLines={false}
         maxWidthPx={321}
-      />
+      />,
     );
     const wrapper = screen.getByTestId("page-preview");
     expect(wrapper).toHaveStyle({ width: "321px" });
@@ -137,7 +137,7 @@ describe("PagePreview", () => {
         slots={[]}
         showCutLines={false}
         maxWidthPx={400}
-      />
+      />,
     );
     const initialCount = screen.getAllByTestId("page-preview-slot").length;
 
@@ -151,7 +151,7 @@ describe("PagePreview", () => {
         slots={[]}
         showCutLines={false}
         maxWidthPx={400}
-      />
+      />,
     );
     const spacedCount = screen.getAllByTestId("page-preview-slot").length;
     expect(spacedCount).toBeLessThan(initialCount);
@@ -168,7 +168,7 @@ describe("PagePreview", () => {
         slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
         showCutLines={false}
         maxWidthPx={400}
-      />
+      />,
     );
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     await userEvent.click(screen.getAllByTestId("page-preview-slot")[0]);
@@ -190,7 +190,7 @@ describe("PagePreview", () => {
         showCutLines={false}
         maxWidthPx={400}
         onSlotClick={onSlotClick}
-      />
+      />,
     );
     const slotEls = screen.getAllByTestId("page-preview-slot");
     await userEvent.click(slotEls[1]);
@@ -213,7 +213,7 @@ describe("PagePreview", () => {
         maxWidthPx={400}
         onSlotClick={() => {}}
         selectedSlotIndex={1}
-      />
+      />,
     );
     const slotEls = screen.getAllByTestId("page-preview-slot");
     expect(slotEls[0]).toHaveAttribute("aria-pressed", "false");
@@ -231,7 +231,7 @@ describe("PagePreview", () => {
         slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
         showCutLines={false}
         maxWidthPx={400}
-      />
+      />,
     );
     const image = screen.getByRole("img");
     expect(image).toHaveAttribute("loading", "lazy");

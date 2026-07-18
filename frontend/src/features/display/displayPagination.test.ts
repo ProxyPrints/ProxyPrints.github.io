@@ -3,7 +3,10 @@ import { SlotProjectMembers } from "@/common/types";
 
 import { paginateSlotsForDisplay } from "./displayPagination";
 
-const makeMember = (id: string, selectedImage?: string): SlotProjectMembers => ({
+const makeMember = (
+  id: string,
+  selectedImage?: string,
+): SlotProjectMembers => ({
   id,
   front: {
     query: { cardType: Card, query: id },

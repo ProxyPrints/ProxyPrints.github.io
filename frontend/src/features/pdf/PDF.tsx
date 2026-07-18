@@ -97,7 +97,7 @@ const pdfPointsToMM = (pdfPoints: number) => (pdfPoints / 72) * 25.4;
 export const getPageSizeMM = (
   pageSize: keyof typeof PageSize,
   pageWidth: number | undefined,
-  pageHeight: number | undefined
+  pageHeight: number | undefined,
 ) => {
   if (
     pageSize === "CUSTOM" &&
@@ -127,7 +127,7 @@ const layoutForPage = (
   pageMarginTopMM: number,
   pageMarginBottomMM: number,
   pageMarginLeftMM: number,
-  pageMarginRightMM: number
+  pageMarginRightMM: number,
 ) =>
   computeLayout(
     pageWidthMM,
@@ -141,7 +141,7 @@ const layoutForPage = (
       left: pageMarginLeftMM,
       right: pageMarginRightMM,
     },
-    { row: cardSpacingRowMM, col: cardSpacingColMM }
+    { row: cardSpacingRowMM, col: cardSpacingColMM },
   );
 
 export const PageSize = {
@@ -434,7 +434,7 @@ const CutLineCorner = ({
 // (scm/SCMPDF.tsx) is untouched - out of scope for this pass, see the proposal doc.
 const isBleedNormalizationEligible = (
   cardDocument: CardDocument,
-  imageQuality: PDFImageQuality
+  imageQuality: PDFImageQuality,
 ): boolean =>
   imageQuality === "full-resolution" &&
   (cardDocument.sourceType === SourceType.GoogleDrive ||
@@ -461,7 +461,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
   const radius = roundCorners ? CornerRadiusMM : 0;
   const bleedNormalized = isBleedNormalizationEligible(
     cardDocument,
-    imageQuality
+    imageQuality,
   );
   // Bleed-normalized output is already synthesized at exactly the target bleed box (see
   // normalizeCardBleed) - the old proportion-based rescale below exists specifically to fix up
@@ -494,7 +494,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
                 cardDocument,
                 imageDPI,
                 jpgQuality,
-                fileHandles
+                fileHandles,
               );
               // cardDocument.dpi is the source's own recorded resolution, but a lower imageDPI
               // setting can make the Worker serve a downscaled image below that - if so, the
@@ -515,7 +515,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
                 effectiveDpi,
                 bleedEdgeMM,
                 prior,
-                manualOverride
+                manualOverride,
               );
               return URL.createObjectURL(normalized);
             }
@@ -524,7 +524,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
               imageQuality,
               imageDPI,
               jpgQuality,
-              fileHandles
+              fileHandles,
             );
           } catch {
             reportImageFailure?.(cardDocument.identifier, cardDocument.name);
@@ -651,7 +651,7 @@ const PageCutLines = ({
     pageMarginTopMM,
     pageMarginBottomMM,
     pageMarginLeftMM,
-    pageMarginRightMM
+    pageMarginRightMM,
   );
 
   return (
@@ -743,7 +743,7 @@ const CardGrid = ({
     pageMarginTopMM,
     pageMarginBottomMM,
     pageMarginLeftMM,
-    pageMarginRightMM
+    pageMarginRightMM,
   );
 
   return (
@@ -779,7 +779,7 @@ const CardGrid = ({
                     colIndex={colIndex}
                     rowIndex={rowIndex}
                   />
-                ))
+                )),
             )}
         </View>
       )}
@@ -808,7 +808,7 @@ const CardGrid = ({
                 minHeight: CardHeightMM + 2 * bleedEdgeMM + "mm",
               }}
             />
-          )
+          ),
         )}
       </View>
 
@@ -848,7 +848,7 @@ const paginateFrontsAndDistinctBacks = (
   projectMembers: Array<SlotProjectMembers>,
   cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
   projectCardback: string | undefined,
-  cardsPerPage: number
+  cardsPerPage: number,
 ): Array<Array<CardDocument>> => [
   projectMembers.flatMap((member) => {
     const front =
@@ -868,13 +868,13 @@ const paginateFrontsOnly = (
   projectMembers: Array<SlotProjectMembers>,
   cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
   projectCardback: string | undefined,
-  cardsPerPage: number
+  cardsPerPage: number,
 ): Array<Array<CardDocument>> => [
   projectMembers
     .map((member) =>
       member.front?.selectedImage !== undefined
         ? cardDocumentsByIdentifier[member.front.selectedImage]
-        : undefined
+        : undefined,
     )
     .filter((d): d is CardDocument => d !== undefined),
 ];
@@ -883,13 +883,13 @@ const paginateBacksOnly = (
   projectMembers: Array<SlotProjectMembers>,
   cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
   projectCardback: string | undefined,
-  cardsPerPage: number
+  cardsPerPage: number,
 ): Array<Array<CardDocument>> => [
   projectMembers
     .map((member) =>
       member.back?.selectedImage !== undefined
         ? cardDocumentsByIdentifier[member.back.selectedImage]
-        : undefined
+        : undefined,
     )
     .filter((d): d is CardDocument => d !== undefined),
 ];
@@ -898,27 +898,27 @@ const paginateFrontsAndBacks = (
   projectMembers: Array<SlotProjectMembers>,
   cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
   projectCardback: string | undefined,
-  cardsPerPage: number
+  cardsPerPage: number,
 ): Array<Array<CardDocument>> => {
   const fronts = paginateFrontsOnly(
     projectMembers,
     cardDocumentsByIdentifier,
     projectCardback,
-    cardsPerPage
+    cardsPerPage,
   )[0];
   const backs = paginateBacksOnly(
     projectMembers,
     cardDocumentsByIdentifier,
     projectCardback,
-    cardsPerPage
+    cardsPerPage,
   )[0];
   const frontPages = chunk(fronts, cardsPerPage);
   const backPages = chunk(backs, cardsPerPage);
   const maxPages = Math.max(frontPages.length, backPages.length);
   return Array.from({ length: maxPages }, (_, i) =>
     [frontPages[i], backPages[i]].filter(
-      (page): page is Array<CardDocument> => page !== undefined
-    )
+      (page): page is Array<CardDocument> => page !== undefined,
+    ),
   ).flat();
 };
 
@@ -928,7 +928,7 @@ export const CardSelectionModeToPaginator: {
     projectMembers: Array<SlotProjectMembers>,
     cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
     projectCardback: string | undefined,
-    cardsPerPage: number
+    cardsPerPage: number,
   ) => Array<Array<CardDocument>>;
 } = {
   frontsAndDistinctBacks: paginateFrontsAndDistinctBacks,
@@ -972,7 +972,7 @@ export const PDF = (props: PDFProps) => {
     props.pageMarginTopMM,
     props.pageMarginBottomMM,
     props.pageMarginLeftMM,
-    props.pageMarginRightMM
+    props.pageMarginRightMM,
   );
   const cardsPerPage = cardsPerRow * cardsPerCol;
 
@@ -982,7 +982,7 @@ export const PDF = (props: PDFProps) => {
     props.projectMembers,
     props.cardDocumentsByIdentifier,
     props.projectCardback,
-    cardsPerPage
+    cardsPerPage,
   );
   const pages = cardDocumentSets.flatMap((set) => chunk(set, cardsPerPage));
 

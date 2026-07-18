@@ -28,11 +28,19 @@ import {
   CardWidthMM,
   Front,
 } from "@/common/constants";
-import { CardDocument, Faces, useAppDispatch, useAppSelector } from "@/common/types";
+import {
+  CardDocument,
+  Faces,
+  useAppDispatch,
+  useAppSelector,
+} from "@/common/types";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { computeLayout } from "@/features/pdf/layout";
-import { PagePreview, PagePreviewSlotContent } from "@/features/pdf/PagePreview";
+import {
+  PagePreview,
+  PagePreviewSlotContent,
+} from "@/features/pdf/PagePreview";
 import { getPageSizeMM, PageSize } from "@/features/pdf/PDF";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
@@ -41,7 +49,10 @@ import {
   selectProjectMember,
   selectProjectMembers,
 } from "@/store/slices/projectSlice";
-import { selectFrontsVisible, toggleFaces } from "@/store/slices/viewSettingsSlice";
+import {
+  selectFrontsVisible,
+  toggleFaces,
+} from "@/store/slices/viewSettingsSlice";
 
 //# region local, page-only settings state
 //
@@ -124,13 +135,22 @@ interface RailHeaderProps {
   printingBadge: string | undefined;
 }
 
-const RailHeader = ({ face, slot, cardName, printingBadge }: RailHeaderProps) => (
+const RailHeader = ({
+  face,
+  slot,
+  cardName,
+  printingBadge,
+}: RailHeaderProps) => (
   <div className="p-2 border-bottom" data-testid="display-rail-header">
     <div className="fw-bold">
       Slot {slot + 1}{" "}
       <span className="text-muted text-uppercase small ms-1">{face}</span>
     </div>
-    <div>{cardName ?? <span className="text-muted fst-italic">No art selected yet</span>}</div>
+    <div>
+      {cardName ?? (
+        <span className="text-muted fst-italic">No art selected yet</span>
+      )}
+    </div>
     {printingBadge != null && (
       <span
         className="badge bg-secondary mt-1"
@@ -183,7 +203,7 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
   const projectMember = useAppSelector((state) =>
     selectedSlotRef != null
       ? selectProjectMember(state, selectedSlotRef.face, selectedSlotRef.slot)
-      : undefined
+      : undefined,
   );
 
   if (selectedSlotRef == null) {
@@ -242,8 +262,8 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
         onToggle={onToggle}
       >
         <Stub>
-          Attribute chips (AttributeChipPanel) land here in Step 2&apos;s
-          third instrument-parity PR.
+          Attribute chips (AttributeChipPanel) land here in Step 2&apos;s third
+          instrument-parity PR.
         </Stub>
       </RailSection>
       <RailSection
@@ -253,9 +273,9 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
         onToggle={onToggle}
       >
         <Stub>
-          Per-card bleed override — blocked on Proposal B PR-2 (its
-          Auto/Force bleed/Force trimmed control + projectSlice persistence
-          haven&apos;t shipped yet); this section ships once that lands.
+          Per-card bleed override — blocked on Proposal B PR-2 (its Auto/Force
+          bleed/Force trimmed control + projectSlice persistence haven&apos;t
+          shipped yet); this section ships once that lands.
         </Stub>
       </RailSection>
       <RailSection
@@ -293,7 +313,7 @@ export function DisplayPage() {
   const cardDocumentsByIdentifier = useCardDocumentsByIdentifier();
 
   const [settings, setSettings] = useState<DisplaySheetSettings>(
-    DEFAULT_SHEET_SETTINGS
+    DEFAULT_SHEET_SETTINGS,
   );
   const [pageIndex, setPageIndex] = useState(0);
   const [selectedSlotRef, setSelectedSlotRef] =
@@ -325,15 +345,15 @@ export function DisplayPage() {
         CardHeightMM,
         settings.bleedEdgeMM,
         margins,
-        spacing
+        spacing,
       ),
-    [sheetWidthMM, sheetHeightMM, settings.bleedEdgeMM, margins, spacing]
+    [sheetWidthMM, sheetHeightMM, settings.bleedEdgeMM, margins, spacing],
   );
   const cardsPerPage = layout.cardsPerRow * layout.cardsPerCol;
 
   const pages = useMemo(
     () => paginateSlotsForDisplay(projectMembers, cardsPerPage),
-    [projectMembers, cardsPerPage]
+    [projectMembers, cardsPerPage],
   );
   const pageCount = Math.max(pages.length, 1);
   const clampedPageIndex = Math.min(pageIndex, pageCount - 1);
@@ -342,8 +362,8 @@ export function DisplayPage() {
   // Only this one page's slots ever get resolved to thumbnail URLs and handed to
   // PagePreview - the performance rule from the design doc ("render only the current sheet
   // page"). `pages` above is cheap index bookkeeping, not image work.
-  const currentPageSlots: Array<PagePreviewSlotContent> = currentPageEntries.map(
-    (entry) => {
+  const currentPageSlots: Array<PagePreviewSlotContent> =
+    currentPageEntries.map((entry) => {
       const projectMember = entry.member[activeFace];
       const identifier = projectMember?.selectedImage;
       const cardDocument =
@@ -352,8 +372,7 @@ export function DisplayPage() {
         imageUrl: cardDocument?.mediumThumbnailUrl,
         name: cardDocument?.name ?? `Slot ${entry.slot + 1}`,
       };
-    }
-  );
+    });
 
   const handleSlotClick = (indexOnPage: number) => {
     const entry = currentPageEntries[indexOnPage];
@@ -366,7 +385,7 @@ export function DisplayPage() {
   const selectedSlotIndexOnPage =
     selectedSlotRef != null && selectedSlotRef.face === activeFace
       ? currentPageEntries.findIndex(
-          (entry) => entry.slot === selectedSlotRef.slot
+          (entry) => entry.slot === selectedSlotRef.slot,
         )
       : -1;
 
@@ -375,8 +394,8 @@ export function DisplayPage() {
       <div className="text-center p-5" data-testid="display-empty-state">
         <p>Your project is empty at the moment.</p>
         <p>
-          <Link href="/editor">Head to the editor</Link> to add cards, then
-          come back here.
+          <Link href="/editor">Head to the editor</Link> to add cards, then come
+          back here.
         </p>
       </div>
     );
@@ -404,9 +423,7 @@ export function DisplayPage() {
           <Button
             size="sm"
             variant="outline-secondary"
-            onClick={() =>
-              setPageIndex((i) => Math.min(pageCount - 1, i + 1))
-            }
+            onClick={() => setPageIndex((i) => Math.min(pageCount - 1, i + 1))}
             disabled={clampedPageIndex >= pageCount - 1}
             aria-label="Next page"
           >

@@ -86,7 +86,7 @@ export function PagePreview({
         CardHeightMM,
         bleedEdgeMM,
         margins,
-        spacing
+        spacing,
       ),
     // deliberately depend on each primitive field, not the margins/spacing objects themselves -
     // callers (e.g. PDFGenerator) construct a fresh { top, bottom, left, right } object every
@@ -102,7 +102,7 @@ export function PagePreview({
       margins.right,
       spacing.row,
       spacing.col,
-    ]
+    ],
   );
 
   const scale = maxWidthPx / (pageWidthMM * CSS_PX_PER_MM);
@@ -131,8 +131,7 @@ export function PagePreview({
       >
         {layout.slots.map((slot, index) => {
           const content = slots[index];
-          const isSelected =
-            onSlotClick != null && selectedSlotIndex === index;
+          const isSelected = onSlotClick != null && selectedSlotIndex === index;
           return (
             <div
               key={index}

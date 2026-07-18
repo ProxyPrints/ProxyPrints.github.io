@@ -24,7 +24,7 @@ export interface DisplaySlotEntry {
 
 export function paginateSlotsForDisplay(
   projectMembers: Array<SlotProjectMembers>,
-  cardsPerPage: number
+  cardsPerPage: number,
 ): Array<Array<DisplaySlotEntry>> {
   if (cardsPerPage <= 0) {
     return [];
@@ -33,7 +33,7 @@ export function paginateSlotsForDisplay(
     (member, slot) => ({
       slot,
       member,
-    })
+    }),
   );
   return chunk(entries, cardsPerPage);
 }
