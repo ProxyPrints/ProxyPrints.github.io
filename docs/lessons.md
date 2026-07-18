@@ -504,18 +504,17 @@ adopting the same convention independently can't collide (a fixed default like a
 `pdfRenderService.ts` added a method that called `this.worker.onImageProgress(cb)` - `cb` a plain
 JS function - across the comlink `Remote<PDFWorker>` boundary into `pdf.worker.ts`. Comlink's
 default RPC transfer is a structured-clone `postMessage`, and a bare function isn't
-structured-clone-able: this throws `DataCloneError: Failed to execute 'postMessage' on 'Worker':
-... could not be cloned` the instant the call actually fires - not at compile time (TypeScript
+structured-clone-able: this throws `DataCloneError: Failed to execute 'postMessage' on 'Worker': ... could not be cloned` the instant the call actually fires - not at compile time (TypeScript
 has no way to know), not synchronously at the call site either (the throw happens inside a
 promise chain comlink builds internally). Fix: wrap the callback in `Comlink.proxy(cb)` before
-passing it - comlink's own documented mechanism for passing a *live, callable* remote reference
+passing it - comlink's own documented mechanism for passing a _live, callable_ remote reference
 instead of clonable data, backed by its own internal `MessagePort`. A pre-existing, structurally
 identical `onProgress(cb: typeof console.info)` method on the same worker interface has this same
 latent bug, undetected only because nothing in the codebase actually calls it.
 
 **The Playwright false positive this produced is worth its own note**: the thrown error surfaced
 as Next.js dev mode's full-screen `<nextjs-portal>` "Unhandled Runtime Error" overlay, rendered
-*on top of* (not instead of) the real in-app Modal this session had just built to replace
+_on top of_ (not instead of) the real in-app Modal this session had just built to replace
 `window.confirm()` - Playwright's `toBeVisible()` on the Modal's own locator still reported true
 (the Modal element genuinely is visible, CSS-wise, underneath the overlay), so the assertion the
 test led with passed cleanly. The failure only surfaced two steps later, as a `.click()` timing

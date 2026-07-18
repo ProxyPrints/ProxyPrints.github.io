@@ -85,14 +85,14 @@ as blank in the confirm dialog. Root cause: the image-CDN Worker's full-resoluti
 ONE global 3-req/s rate limiter across every caller (see [[image-cdn.md]]'s "What it does"
 section), enforced server-side with its own internal retry/backoff - but nothing on the CLIENT
 paced how many concurrent full-resolution fetches it fired at once.
-`@react-pdf/renderer`'s own internal scheduler resolves every card's `<Image src={async () =>
-...}>` callback with its own concurrency, entirely outside this codebase's control - a large
+`@react-pdf/renderer`'s own internal scheduler resolves every card's `<Image src={async () => ...}>` callback with its own concurrency, entirely outside this codebase's control - a large
 export could trigger dozens of simultaneous fetches, each independently exhausting its own
 server-side retry budget under that contention and coming back as a permanent per-card failure.
 
 **Fix** (`pdfImage.ts`'s `fetchFullResolutionImageAsBlob`, used by both `getPDFImageURL`'s and
 `getPDFImageBlob`'s full-resolution branches - the risk applies to any full-resolution export,
 not just Proposal B's bleed-normalized cards):
+
 - A shared `Semaphore` (`common/semaphore.ts`, new - a plain acquire/release concurrency gate for
   gating an unbounded stream of ad-hoc calls from a scheduler this codebase doesn't control,
   distinct from `concurrencyLimit.ts`'s `mapWithConcurrencyLimit`, which needs a known, finite

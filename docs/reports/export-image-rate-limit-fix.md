@@ -29,8 +29,7 @@ result.
    `fetchAsBlob` (a single `fetch`, no retry, throw on non-`ok`) was called
    directly by both `getPDFImageURL`'s full-resolution branch and the newer
    `getPDFImageBlob`, with zero coordination between concurrent card fetches.
-   `@react-pdf/renderer` resolves every card's `<Image src={async () =>
-   ...}>` callback using its own internal scheduler, which this codebase
+   `@react-pdf/renderer` resolves every card's `<Image src={async () => ...}>` callback using its own internal scheduler, which this codebase
    doesn't control — on a large export, dozens of full-resolution fetches
    fire near-simultaneously, each independently fighting for the shared 3/s
    slot with only the server's fixed 5-retry budget to save it. Under that
@@ -63,8 +62,7 @@ that list.
   scheduler produces an unbounded stream of ad-hoc calls arriving over time
   that this codebase doesn't control. 4 tests (concurrency ceiling under
   real contention, FIFO ordering, blocking/release behaviour).
-- `pdfImage.ts` gets a module-level `fullResolutionFetchSemaphore =
-  new Semaphore(FULL_RESOLUTION_FETCH_CONCURRENCY = 3)` — matched to the
+- `pdfImage.ts` gets a module-level `fullResolutionFetchSemaphore = new Semaphore(FULL_RESOLUTION_FETCH_CONCURRENCY = 3)` — matched to the
   Worker's own 3 req/s ceiling — and a new
   `fetchFullResolutionImageAsBlob(url)` that:
   - acquires a semaphore slot before fetching, releases it in `finally`
@@ -100,8 +98,7 @@ Mirrors the existing `reportImageFailure` plumbing exactly, end to end:
 - `pdfRenderService.ts`: new `onImageProgress(cb)` wrapper. **Must** wrap
   `cb` in `Comlink.proxy(cb)` — see the real bug found below.
 - `PDFGenerator.tsx`: registers the callback right before
-  `renderPDF`/`renderPDFInWorker`, renders `Fetching images: {completed} of
-  ~{total}` (`data-testid="pdf-image-fetch-progress"`) while downloading or
+  `renderPDF`/`renderPDFInWorker`, renders `Fetching images: {completed} of ~{total}` (`data-testid="pdf-image-fetch-progress"`) while downloading or
   saving to Drive, clears on completion.
 
 Wall-clock honesty: at 3 req/s, a 500-card export is ~3+ minutes of pure
@@ -120,8 +117,7 @@ which would turn the failure safeguard off with no visible indication.
   `-cancel`, `-continue`) listing up to 10 failed card names ("…and N
   more"), asking "Continue anyway?"
 - `downloadPDF`/`saveToDrivePDF` (plain async functions outside the
-  component tree) bridge to it via a `ConfirmDespiteFailures = (failures) =>
-  Promise<boolean>` type and a `pendingFailureConfirm` state holding
+  component tree) bridge to it via a `ConfirmDespiteFailures = (failures) => Promise<boolean>` type and a `pendingFailureConfirm` state holding
   `{ failures, resolve }`, resolved when the user clicks Cancel/Continue.
 - Only cards that fail **after** the client-side retries in fix #1 reach
   this dialog at all — transient 429/5xx blips are now absorbed before the
