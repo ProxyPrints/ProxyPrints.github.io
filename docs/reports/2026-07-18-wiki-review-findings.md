@@ -119,15 +119,42 @@ docs/ after every edit. `npx prettier@2.7.1 --check` clean across every
 touched Markdown file (docs/README.md needed one `--write` pass for
 table-column realignment after adding two rows, reverified clean).
 publish_wiki.py re-tested against real cloned wiki data after the
-branch restart to confirm nothing was lost in the stash/pop. No live
-wiki-publish run yet — that fires automatically on merge; verification
-of the live Catalog-Completion-Plan page is the next step once #79 merges.
+branch restart to confirm nothing was lost in the stash/pop.
 
-OPEN ITEMS / DECISIONS NEEDED: none blocking.
+CI on PR #79 caught two real gaps before merge, both fixed in a follow-up
+commit: `black` (repo's pinned rev 22.8.0, never run locally — only
+`py_compile` had been checked) wanted to reformat `publish_wiki.py`
+(cosmetic only, no semantic diff); and the "Formatting and static type
+checking" job runs `pre-commit run --all-files` against the WHOLE repo,
+not just the diff, which surfaced a pre-existing prettier drift in
+`docs/reports/cache-transition-resilience.md` (introduced by #75,
+unrelated to this PR's own content) — swept in the same commit since it
+was blocking this PR's own CI, matching the established pattern of prior
+sessions sweeping unrelated formatting drift (`3a1dc35e`, `22edf6f5`).
+Both checks green after that commit; PR #79 merged (squash commit
+`55fd367a`).
 
-LIVE STATE: branch claude/wiki-review-findings pushed to origin, PR #79
-open against master. On merge, docs-wiki-publish.yml fires automatically
-(this PR touches docs/**) — will verify the Catalog-Completion-Plan wiki
-page shows both the fixed links and the updated Part 3 status once
-merged, and report back with the live page URL.
+POST-MERGE LIVE VERIFICATION (done): `docs-wiki-publish.yml` fired
+automatically on the merge commit and completed successfully (run
+29656356767, wiki repo commit `11a1ef6` "Regenerate from docs/
+(55fd367a...)"). Cloned the live wiki repo and confirmed directly:
+- `Catalog-Completion-Plan.md`'s `[[../troubleshooting.md]]` now renders
+  as `[Troubleshooting](Troubleshooting)` (previously the dead mangled
+  slug) and `[[printing-tags.md]]` as `[Printing-Tags](Printing-Tags)`
+  (previously the raw-filename-cased link) — both target pages
+  (`Troubleshooting.md`, `Printing-Tags.md`) genuinely exist in the wiki.
+- Part 3's heading reads "write pass complete, merged 2026-07-18"; the
+  Status section shows the full `run_id=20260718T145157-a12b1387`
+  write-pass entry with the report link correctly rendered as an
+  absolute GitHub blob URL (docs/reports/ is deliberately unpublished to
+  the wiki, so this is the intended fallback, not a bug).
+- Part 4's heading shows "(confirmed unstarted 2026-07-18; HOLD #B prep
+  queued)".
+
+OPEN ITEMS / DECISIONS NEEDED: none.
+
+LIVE STATE: PR #79 merged to master (squash commit `55fd367a`). Live wiki
+page: https://github.com/ProxyPrints/ProxyPrints.github.io/wiki/Catalog-Completion-Plan
+— confirmed showing both the fixed links and the updated Part 3/Part 4
+status, per the direct clone check above. Task complete.
 ```
