@@ -41,3 +41,5 @@ Core: at PDF export, for each card (full-res bitmap already in hand): MEASURE ac
 2. The WYSIWYG preview badge ("bleed will be generated") in `PagePreview.tsx` (Proposal B PR-3).
 3. The XML optional field for a persisted override, if/when PR-2's UI lands (flagged per the owner's own instruction, not built).
 4. The merge-time server-side calibration pass (~20-30 real catalog images) for the four named measurement constants.
+
+**Tracked, not building**: PR-1's batch resolution issues one `POST 2/tagConsensus/` per unique card in the export (bounded to 6 concurrent) - for the owner's own large project this is ~517 requests per export. Acceptable for v1 (bounded concurrency + per-card failure tolerance keep this from being a real problem today); a batch-consensus endpoint (one request, many identifiers) is the eventual answer if this ever actually hurts in practice, but isn't worth building speculatively ahead of evidence it's needed.
