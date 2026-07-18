@@ -85,15 +85,23 @@ export function CryptoSessionProvider({ children }: PropsWithChildren) {
   const [saveCryptoProfile] = useSaveCryptoProfileMutation();
   const [masterKey, setMasterKey] = useState<CryptoKey | null>(null);
 
-  const status: CryptoSessionStatus = !isAuthenticated
-    ? "anonymous"
-    : masterKey != null
-    ? "unlocked"
-    : cryptoProfileQuery.data == null
-    ? "loading"
-    : cryptoProfileQuery.data.exists
-    ? "locked"
-    : "no-profile";
+  // whoami itself hasn't resolved yet - "anonymous" would be premature here, since we don't
+  // yet know whether this is actually an authenticated session (see cryptoSession.test.tsx's
+  // regression test for what goes wrong if this case is folded into the "anonymous" branch
+  // below: a real click can slip through and unlock/save-profile against a still-undefined
+  // crypto profile before the authenticated check has even settled).
+  const status: CryptoSessionStatus =
+    whoami.data == null
+      ? "loading"
+      : !isAuthenticated
+      ? "anonymous"
+      : masterKey != null
+      ? "unlocked"
+      : cryptoProfileQuery.data == null
+      ? "loading"
+      : cryptoProfileQuery.data.exists
+      ? "locked"
+      : "no-profile";
 
   const createProfile = useCallback(
     async (passphrase: string): Promise<string> => {

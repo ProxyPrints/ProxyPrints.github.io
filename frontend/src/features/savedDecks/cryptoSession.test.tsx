@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import React, { useState } from "react";
 import { Provider } from "react-redux";
 
@@ -13,75 +13,16 @@ import {
   CryptoSessionProvider,
   useCryptoSession,
 } from "@/features/savedDecks/cryptoSession";
+import {
+  existingProfileHandler,
+  noProfileHandler,
+  saveCryptoProfileHandler,
+} from "@/features/savedDecks/cryptoTestHandlers";
 import { whoamiAnonymous, whoamiSignedInNotModerator } from "@/mocks/handlers";
 import { server } from "@/mocks/server";
 import { setupStore } from "@/store/store";
 
 const TEST_ITERATIONS = 100;
-
-function buildRoute(path: string): string {
-  return `${localBackendURL}/${path}`;
-}
-
-function noProfileHandler() {
-  return http.get(buildRoute("2/cryptoProfile/"), () =>
-    HttpResponse.json(
-      {
-        exists: false,
-        salt: null,
-        kdfIterations: null,
-        passphraseWrappedMasterKey: null,
-        passphraseWrappedMasterKeyNonce: null,
-        recoveryWrappedMasterKey: null,
-        recoveryWrappedMasterKeyNonce: null,
-      },
-      { status: 200 }
-    )
-  );
-}
-
-function existingProfileHandler(profile: {
-  salt: Uint8Array<ArrayBuffer>;
-  iterations: number;
-  passphraseWrapped: {
-    wrapped: Uint8Array<ArrayBuffer>;
-    nonce: Uint8Array<ArrayBuffer>;
-  };
-  recoveryWrapped: {
-    wrapped: Uint8Array<ArrayBuffer>;
-    nonce: Uint8Array<ArrayBuffer>;
-  };
-}) {
-  return http.get(buildRoute("2/cryptoProfile/"), () =>
-    HttpResponse.json(
-      {
-        exists: true,
-        salt: bytesToBase64(profile.salt),
-        kdfIterations: profile.iterations,
-        passphraseWrappedMasterKey: bytesToBase64(
-          profile.passphraseWrapped.wrapped
-        ),
-        passphraseWrappedMasterKeyNonce: bytesToBase64(
-          profile.passphraseWrapped.nonce
-        ),
-        recoveryWrappedMasterKey: bytesToBase64(
-          profile.recoveryWrapped.wrapped
-        ),
-        recoveryWrappedMasterKeyNonce: bytesToBase64(
-          profile.recoveryWrapped.nonce
-        ),
-      },
-      { status: 200 }
-    )
-  );
-}
-
-function saveCryptoProfileHandler(onSave: (body: any) => void) {
-  return http.post(buildRoute("2/saveCryptoProfile/"), async ({ request }) => {
-    onSave(await request.json());
-    return HttpResponse.json({ saved: true }, { status: 200 });
-  });
-}
 
 function Harness() {
   const session = useCryptoSession();
@@ -162,6 +103,32 @@ test("anonymous session never reaches past the anonymous status", async () => {
   server.use(whoamiAnonymous);
   renderHarness();
 
+  await waitFor(() =>
+    expect(screen.getByTestId("status")).toHaveTextContent("anonymous")
+  );
+});
+
+// Regression test: status used to fall through to "anonymous" whenever isAuthenticated was
+// false, which was also true for the instant before whoami itself had resolved at all - a real
+// click could slip through a "not yet locked, so it must be unlockable" UI check during that
+// window. Status must report "loading" until whoami itself settles, distinct from "anonymous".
+test("status is loading (not anonymous) while whoami itself is still in flight", async () => {
+  server.use(
+    http.get(`${localBackendURL}/2/whoami/`, async () => {
+      await delay(50);
+      return HttpResponse.json({
+        authenticated: false,
+        username: null,
+        moderator: false,
+        discordEnabled: true,
+        loginUrl: "/accounts/discord/login/",
+        logoutUrl: null,
+      });
+    })
+  );
+  renderHarness();
+
+  expect(screen.getByTestId("status")).toHaveTextContent("loading");
   await waitFor(() =>
     expect(screen.getByTestId("status")).toHaveTextContent("anonymous")
   );
