@@ -1,7 +1,7 @@
 """
 Tests for cardpicker.management.commands.purge_machine_votes (docs/features/
 catalog-completion-plan.md's Part 1). Uses the real default consensus weights
-(settings.PRINTING_TAG_MIN_VOTES=2, PRINTING_TAG_AI_WEIGHT=0.5, USER vote weight 1.0 -
+(settings.PRINTING_TAG_MIN_VOTES=2, PRINTING_TAG_MACHINE_WEIGHT=0.5, USER vote weight 1.0 -
 confirmed live in vote_consensus._SOURCE_WEIGHTS) rather than overriding them, so the
 arithmetic in these tests matches what a real purge would actually do in production.
 """

@@ -786,7 +786,7 @@ over a closed codebook.
     artist question sees zero hint of the machine's guess, even
     though the vote is correctly weighted and participates in
     consensus. This is a **pre-existing question_feed gap**, not
-    introduced by Part 3 (identical for every existing artist AI vote,
+    introduced by Part 3 (identical for every existing artist machine vote,
     not just these) — flagged here for whoever next touches
     question_feed's artist tier, not fixed as part of this work.
   - **HOLD #P3 stands**: no vote has been written to the live database

@@ -92,8 +92,8 @@ function PrintingQueueOrDefault() {
             <p>
               Test your Magic: the Gathering knowledge! One card at a time, help
               identify which real-world printing, artist, or descriptor tag each
-              card image depicts - contested and AI-suggested cards come first,
-              since they need your eyes the most.
+              card image depicts - contested and machine-suggested cards come
+              first, since they need your eyes the most.
             </p>
           </IntroText>
           <AuthWidget />
