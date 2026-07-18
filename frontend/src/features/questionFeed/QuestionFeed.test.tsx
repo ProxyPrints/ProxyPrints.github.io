@@ -551,4 +551,84 @@ describe("QuestionFeed", () => {
       expect(screen.queryByTestId("question-feed-rate-limited")).toBeNull()
     );
   });
+
+  it("resets stale chip filter state when the next item shares the same card identifier and type", async () => {
+    // Real-device regression guard: chipStates/revealed/etc used to reset via a separate
+    // useEffect keyed on [item?.card.identifier, item?.type] - which silently skips the reset
+    // whenever two consecutive feed items share both values (the same card can carry more than
+    // one pending question, or the same question can be re-served). A chip left "positive" from
+    // the previous item then filters the new item's candidates against an unrelated attribute,
+    // which can hide every candidate in the grid until the user happens to touch a chip
+    // themselves (the only other thing that ever updates chipStates). This item's card
+    // identifier and type are IDENTICAL between the two fetches on purpose, to reproduce that
+    // exact condition.
+    let feedFetchCount = 0;
+    const itemOneCandidates = identifyPrintingItem.candidates; // printing-1 (fullArt: false), printing-2 (fullArt: true)
+    const itemTwoCandidates = [
+      {
+        ...identifyPrintingItem.candidates[0],
+        identifier: "printing-3",
+        expansionCode: "def",
+        collectorNumber: "3",
+        fullArt: false,
+      },
+      {
+        ...identifyPrintingItem.candidates[0],
+        identifier: "printing-4",
+        expansionCode: "ghi",
+        collectorNumber: "4",
+        fullArt: false,
+      },
+    ];
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              candidates:
+                feedFetchCount === 1 ? itemOneCandidates : itemTwoCandidates,
+            },
+            remainingEstimate: {
+              total: 2,
+              confirmable: 0,
+              contested: 0,
+              fresh: 2,
+            },
+          },
+          { status: 200 }
+        );
+      })
+    );
+    server.use(submitTagVoteResolvesToApply);
+    renderFeed();
+    await revealCard();
+
+    // expand the filter and set "Full Art" positive - narrows item 1's grid to printing-2 only
+    fireEvent.click(screen.getByTestId("question-feed-filter-toggle"));
+    fireEvent.click(await screen.findByTestId("attribute-chip-Full Art"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("attribute-chip-Full Art")).toHaveAttribute(
+        "data-chip-state",
+        "positive"
+      )
+    );
+    await waitFor(() =>
+      expect(screen.queryByAltText("abc 1")).not.toBeInTheDocument()
+    ); // printing-1, filtered out
+    expect(screen.getByAltText("xyz 42")).toBeInTheDocument(); // printing-2, matches
+
+    fireEvent.click(screen.getByTestId("question-feed-skip"));
+    await revealCard();
+
+    // both of item 2's candidates are fullArt: false - if the stale "Full Art: positive" state
+    // survived, neither would render, reproducing the reported empty-grid symptom.
+    expect(await screen.findByAltText("def 3")).toBeInTheDocument();
+    expect(screen.getByAltText("ghi 4")).toBeInTheDocument();
+    // the filter panel itself resets closed too, same as any other fresh item
+    expect(
+      screen.queryByTestId("attribute-chip-panel")
+    ).not.toBeInTheDocument();
+  });
 });

@@ -54,11 +54,11 @@ export const RevealOverlay = styled.div`
 `;
 
 // The card, and the starburst behind it, stay glued to the viewport as the page scrolls
-// (position: sticky) rather than scrolling away with the rest of the page. "top" is set via
-// inline style (see useStickyTop below) to wherever the panel naturally rendered when it
-// first mounted, rather than a fixed offset - so it pins at its own original location on
-// the page and never visibly jumps to a different spot once scrolling starts, it just stops
-// moving exactly where it already was.
+// (position: sticky) rather than scrolling away with the rest of the page - **desktop only,
+// see the mobile override below**. "top" is set via inline style (see useStickyTop below) to
+// wherever the panel naturally rendered when it first mounted, rather than a fixed offset -
+// so it pins at its own original location on the page and never visibly jumps to a different
+// spot once scrolling starts, it just stops moving exactly where it already was.
 //
 // z-index: -1 here (not just on BurstSvg) is deliberate and easy to get backwards: a sticky
 // element always establishes its own stacking context, and *any* positioned descendant -
@@ -69,30 +69,42 @@ export const RevealOverlay = styled.div`
 // Card?" heading and the candidate grid's plain text/borders, hiding them. Pushing
 // CardPanel itself to a negative stack level is what actually fixes that (giving BurstSvg
 // alone a negative z-index only reorders it against its own siblings *inside* CardPanel,
-// it can't reach past the sticky boundary). The two columns never overlap horizontally at
-// any breakpoint this page uses (side-by-side on desktop, stacked full-width on mobile), so
-// this can't accidentally bury the actual card art behind the candidate grid - only the
-// burst's intentional bleed into that space is affected.
+// it can't reach past the sticky boundary).
+//
+// MOBILE OVERRIDE (layout reconciliation pass): real-device evidence (a phone, not this
+// sandbox's Chromium, which never reproduces this) showed sticky-plus-negative-z-index
+// compositing incorrectly below the `md` breakpoint - the sticky card's reserved layout-flow
+// box and its actual pinned visual position diverge once the page scrolls, leaving a blank
+// gap where the card "should" be and letting the candidates/answer controls below it in the
+// DOM paint underneath/inside the card's own box instead of cleanly below it. This is the
+// same mechanism Level 1's StaticCardPanel (below) was built to avoid entirely - Level 2 kept
+// sticky because desktop's side-by-side two-column layout genuinely benefits from it and
+// never showed the bug, but mobile's stacked single-column layout gets nothing from sticky
+// (there's no side-by-side candidate list to stay pinned beside) and inherits the same
+// cross-engine compositing risk Level 1 had. `position: static` below `md` removes the
+// sticky/negative-stacking mechanism entirely on the widths where it broke, while `md` and up
+// keeps the original desktop behavior unchanged. The `768px` threshold matches Bootstrap's own
+// `md` breakpoint, the same one this page's `Col md={...}` two-column layout switches on.
 export const CardPanel = styled.div`
-  position: sticky;
-  top: 0;
-  z-index: -1;
+  position: static;
+  z-index: auto;
+
+  @media (min-width: 768px) {
+    position: sticky;
+    top: 0;
+    z-index: -1;
+  }
 `;
 
 // Level 1's compact single-card confirmation screen (QuestionFeed.tsx) has no long scrollable
-// candidate list to keep the card pinned against while scrolling past - unlike Level 2's
-// two-column layout, which is what CardPanel's sticky-plus-negative-z-index mechanism above
-// exists for. Real-device evidence (a phone, not this sandbox's Chromium) showed that same
-// mechanism compositing incorrectly for Level 1's simpler flow: the sticky card's reserved
-// layout-flow box and its actual pinned visual position diverge once the page scrolls even a
-// little, leaving a gap where the card "should" be and letting the answer buttons that follow
-// it in the DOM paint underneath/inside the card's own box instead of cleanly below it -
-// nested sticky-plus-negative-z-index stacking contexts are a known cross-engine compositing
-// risk this sandbox's Chromium doesn't reproduce. `position: relative` still gives
+// candidate list to keep the card pinned against while scrolling past, at any viewport width -
+// unlike Level 2's two-column layout, which is what CardPanel's desktop-only sticky-plus-
+// negative-z-index mechanism above exists for. `position: relative` still gives
 // BurstSvg/RevealOverlay the positioned containing block they anchor themselves to (identical
-// visual result to CardPanel for that part), but with no sticky and no negative z-index,
-// there's nothing to detach from its own reserved space or to invert paint order against its
-// siblings - the whole thing just stays one ordinary block in normal document flow.
+// visual result to CardPanel for that part), but with no sticky and no negative z-index at any
+// width, there's nothing to detach from its own reserved space or to invert paint order
+// against its siblings - the whole thing just stays one ordinary block in normal document flow,
+// unconditionally.
 export const StaticCardPanel = styled.div`
   position: relative;
 `;
