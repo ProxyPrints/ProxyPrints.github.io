@@ -2,8 +2,15 @@ As of: 2026-07-18
 What this is: survey + HOLD proposal for opening the existing Discord login to
 ordinary users and letting any logged-in user save/load named decks
 server-side.
-HOLD — build not started. Provisional letter/queue slot (see Open decisions
-§1) — no visibility into a full approved proposal order from this session.
+HOLD — build not started. Spec complete: Proposal G, queue position and all
+open decisions confirmed (see Open decisions).
+
+## Context — prior art outside this codebase
+
+Proxxied's framing is the precedent this proposal matches: "start free,
+optionally sign in to save projects across devices — no account required."
+Login here is the same shape — never a gate on using the editor, purely an
+opt-in path to persistence across sessions/devices for users who want it.
 
 ## Summary
 
@@ -207,6 +214,23 @@ class SavedDeck(models.Model):
   `Project` TypeScript type and the legacy backend `Project` model — using
   "Project" again here would have created a third meaning for the same word
   in one codebase.
+- **Per-user cap — resolved**: a generous, configurable soft cap (env-driven
+  setting, default `100` decks/user, same `env(..., default=...)` idiom as
+  `MODERATORS_GROUP_NAME`/`CARD_REPORT_RATE`) enforced in `2/saveDeck/`'s
+  create path only (rename/update never blocked by it). This is purely an
+  abuse guard, not a storage concern — at 15–35 KB/deck even 100 decks/user
+  is negligible — so it exists to stop a runaway script from becoming a
+  moderation problem, not to manage disk. At-cap create attempts return a
+  friendly, specific error ("You've reached the 100 saved deck limit —
+  delete an old one to save a new one") rather than a generic 400.
+- **`LocalFile`-sourced slots — resolved (warn, never block)**: `state`
+  marks any slot whose `selectedImage` came from a `LocalFile` source with a
+  `deviceLocal: true` flag at save time (a data convention within the
+  existing JSONField, not a schema/column change). On load, a slot flagged
+  `deviceLocal` renders an honest "this slot's image lived on the original
+  device — re-pick" placeholder instead of attempting (and failing) to
+  resolve the image, rather than showing a broken tile. See §4 for the
+  save-time warning and §2 for the underlying gap this addresses.
 
 **Endpoints** (mirrors the existing `2/<verb>/` convention; auth is `request.user.is_authenticated`,
 which is a strictly weaker version of the existing `require_moderator` decorator
@@ -236,22 +260,31 @@ in `Layout.tsx` and rendered on every page including `/editor`, so this is a
 one-line relocation, not a new component, and immediately makes login visible
 everywhere instead of only on `/whatsthat`.
 
+**Save/load placement — resolved**: "My Decks" / Load folds into the
+existing `Import.tsx` dropdown for v1 (loading a saved deck is a form of
+import; keeps nav clutter down). "Save deck" lives in the editor's action
+cluster near the existing Download controls, not in the Export dropdown —
+and is rendered **only when the whoami query reports an authenticated
+session**; a logged-out user sees nothing new in that cluster at all (no
+disabled/greyed "Save" teasing a feature they can't use — the affordance
+simply isn't there until they log in via the navbar widget).
+
 **Save/load UX — propose explicit, not autosave**: every existing project
 action (Export XML, Export PDF, Import CSV/XML/Text/URL) is an explicit,
 user-triggered menu action, not automatic — autosave would be the first
 background-write pattern in this frontend and introduces real edge cases for
 free (debounce vs. rename races, "did I mean to overwrite my last save"
 surprise, extra traffic on every keystroke-adjacent mutation). Concretely:
-- **Save**: a new entry in the existing `Export.tsx` dropdown ("Save to My
-  Decks"), prompting for a name (pre-filled with the current deck's name if
-  loaded from one) and calling `2/saveDeck/`. If the in-memory project
+- **Save**: prompts for a name (pre-filled with the current deck's name if
+  loaded from one) and calls `2/saveDeck/`. If the in-memory project
   contains any `LocalFile`-sourced slots, show a one-time inline warning
   ("N cards from local files won't be restorable on another device") —
-  informational, not blocking.
-- **Load**: a new "My Decks" modal (same idiom as `ImportXML`'s existing
-  modal-based import flow), listing `2/savedDecks/` results with
-  load/rename/delete actions per row, reachable from a new nav or Import-menu
-  entry (exact placement is an open decision, §Open decisions).
+  informational, not blocking — and stamps those slots `deviceLocal: true`
+  in the saved `state` (see §3) so a later load elsewhere can render an
+  honest re-pick placeholder instead of a broken tile.
+- **Load**: a new "My Decks" entry/panel inside the existing `Import.tsx`
+  dropdown (same idiom as `ImportXML`'s existing modal-based import flow),
+  listing `2/savedDecks/` results with load/rename/delete actions per row.
 - **Anonymous → login handoff**: on a `whoami` transition from unauthenticated
   to authenticated while the in-memory `Project` is non-empty, surface a
   one-time toast (reusing the existing `Toasts` system) offering "Save your
@@ -332,33 +365,38 @@ rather than leaving it split across two changes.
 | `require_authenticated` decorator + 5 endpoints | Small–Medium | Near-boilerplate CRUD; closely mirrors `require_moderator`/the moderation views' existing shape, no consensus logic needed |
 | Backend tests | Small–Medium | Mirrors `test_moderation_views.py`'s ownership/403 pattern (owner-only access is the only real logic to test) |
 | Navbar login relocation | Small | `AuthWidget` already exists and works; this is a mount-point change, not new UI |
-| Save UX (dropdown entry + name prompt + local-file warning) | Small–Medium | New modal-ish prompt, reuses `Export.tsx`'s existing dropdown pattern |
-| Load UX ("My Decks" modal + list/rename/delete) | Medium | New modal, new RTK Query endpoints, closest existing analog is `ImportXML`'s modal but with list/manage actions added |
+| Save UX (action-cluster button + name prompt + local-file warning) | Small–Medium | New modal-ish prompt beside the existing Download controls, gated on whoami's authenticated flag |
+| Load UX ("My Decks" entry in Import dropdown + list/rename/delete) | Medium | New panel + RTK Query endpoints, closest existing analog is `ImportXML`'s modal but with list/manage actions added |
 | Anonymous→login adopt-prompt toast | Small | Reuses existing `Toasts` system |
 | Frontend↔backend state-shape schema validation | Small | Extends the existing quicktype `Convert`/schema pattern already used for `localStorage` |
 
 Overall: **backend Small–Medium, frontend Medium.**
 
-## Open decisions
+## Decisions (all five resolved — spec complete)
 
-1. **Proposal letter/queue slot** — named this doc `proposal-g-*` continuing
-   the `A`/`D`/`F` sequence visible in git history, but this session has no
-   visibility into a full approved proposal order (only `docs/proposals/proposal-f-public-stats-page.md`
-   exists on disk, noting it's "queued after Proposal E" — that ordering
-   record itself isn't in a file this session can read). Confirm/reassign
-   the letter and queue position.
-2. **Where "Load"/"My Decks" lives** — proposed folding it into the existing
-   Import dropdown to avoid new nav chrome, but a feature meant to persist
-   across real sessions might deserve its own nav entry/page instead (closer
-   to how `/whatsthat` gets a full page rather than a menu item). Not
-   resolved here.
-3. **Sharing** — the brief is private-by-default and this proposal reserves
-   `is_public` but designs no sharing endpoint/UI at all. Confirm whether
-   that's wanted on any timeline, since it changes whether `is_public` needs
-   a companion "public decks" list endpoint eventually.
-4. **Per-user deck count** — no cap proposed. At 15–35 KB/deck this is not
-   storage-driven, but an unbounded "My Decks" list is a UX question (e.g. a
-   soft warning past some count) — not designed here.
-5. **`LocalFile`-sourced slots in a saved deck** — proposed a save-time
-   warning (not a block) per §4; confirm that's the right tradeoff versus,
-   e.g., excluding those slots from the save entirely.
+1. **Proposal letter/queue slot — resolved.** This is **Proposal G**. Build
+   order: after the current unified queue's small items land (E-1, E-2, the
+   Level-2 grid fix, the audit pass, GIS error UX) and Proposal B's in-flight
+   work finishes — G then builds **ahead of** C, E-3, and F, since it's
+   user-facing value and those are polish. Backend (model + endpoints) is
+   its own first PR; frontend is a second PR after that merges.
+2. **Where "Load"/"My Decks" lives — resolved.** Folds into the existing
+   Import dropdown for v1 (low nav clutter; loading is itself a form of
+   import). "Save deck" lives in the editor's action cluster near Download,
+   visible only when logged in — logged-out users see nothing new there.
+   See §4 for the full placement writeup.
+3. **Sharing — resolved.** `is_public` stays reserved in the schema,
+   undesigned. No sharing ships in v1; unlisted share-links are the
+   v1.1 candidate, to be revisited after the owner's legal consult — deck
+   sharing has a materially different exposure profile than private
+   storage, so it's deliberately not bundled into this pass.
+4. **Per-user deck count — resolved.** Yes, a cap: a generous, configurable
+   soft cap, default **100 decks/user**, purely as an abuse guard (not
+   storage-driven — the 15–35 KB/deck math above stands), with a friendly
+   at-cap message rather than a bare 400. See §3 for the enforcement point.
+5. **`LocalFile`-sourced slots — resolved.** Warn at save, never block —
+   the proposed tradeoff is accepted as-is. Additionally: mark such slots
+   `deviceLocal: true` in the stored state so a load on another device shows
+   an honest "this slot's image lived on the original device — re-pick"
+   placeholder instead of a broken tile. See §3 (model) and §4 (UX) for the
+   concrete mechanism.
