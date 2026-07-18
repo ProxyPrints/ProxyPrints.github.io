@@ -133,20 +133,40 @@ printings, artists, tags, and moderation from one screen.
 - `starburstShape.ts` — seeded PRNG (mulberry32) generates the animated
   starburst background, 5 precomputed frames per layer; skipped under
   `prefers-reduced-motion` (checked once via `matchMedia`).
-- `cardPanel.tsx` — `position: sticky` (via `useStickyTop`, not a hardcoded
-  navbar constant), full-bleeds to the viewport. Needs its own local
-  stacking context (`position: relative` **and** an explicit non-`auto`
-  `z-index`, together) on its wrapping `Col` — `position: relative` alone
-  does not establish one, and the card's own `z-index: -1` otherwise
-  escapes all the way to the page root and makes its interactive content
-  unclickable at the hit-testing layer. `StaticCardPanel` (same file) is
-  the non-sticky variant used by Level 1 only (below) — `position:
-  relative`, no `z-index`, plain document flow throughout. Real-device
-  evidence (not reproducible in this sandbox's Chromium) found `CardPanel`'s
-  sticky-plus-negative-z-index mechanism, correctly scoped for Level 2's
-  long-scrolling two-column layout, compositing incorrectly on a real
-  phone when reused for Level 1's short single-screen flow — the answer
-  controls painted overlapping the card instead of cleanly below it.
+- `cardPanel.tsx` — `position: sticky` **at `md` (768px) and up only**
+  (via `useStickyTop`, not a hardcoded navbar constant), full-bleeds to the
+  viewport; `position: static` below `md`. Needs its own local stacking
+  context (`position: relative` **and** an explicit non-`auto` `z-index`,
+  together) on its wrapping `Col` — `position: relative` alone does not
+  establish one, and the card's own `z-index: -1` otherwise escapes all
+  the way to the page root and makes its interactive content unclickable
+  at the hit-testing layer (this containment only matters at `md`+, where
+  sticky is still active). `StaticCardPanel` (same file) is the
+  unconditionally-non-sticky variant used by Level 1 — `position:
+  relative`, no `z-index`, plain document flow at every width.
+  Real-device evidence (not reproducible in this sandbox's Chromium)
+  found `CardPanel`'s sticky-plus-negative-z-index mechanism compositing
+  incorrectly on a real phone below `md` — first diagnosed and fixed for
+  Level 1 alone, but the same mechanism was still active, unchanged, on
+  Level 2 (the funnel's dominant, default screen), so the real-device
+  overlap/blank-gap symptom persisted after that fix shipped. `CardPanel`
+  itself is now responsive — sticky only survives at `md`+, where desktop's
+  side-by-side two-column layout genuinely benefits from it and never
+  exhibited the bug; below `md`, mobile's stacked single-column layout
+  gets nothing from sticky (no side-by-side content to stay pinned
+  beside) and now renders in plain document flow like Level 1 always did.
+- Chip-ring era layout reconciliation: `AttributeChipPanel.tsx`'s
+  `ChipRing` (the PR #21-era 3-column ring — chips flanking the card left/
+  right, reachable via Level 2's opt-in "Filter by attribute" disclosure)
+  had no responsive behavior at all — its flanking columns were always
+  `auto`-sized to their own chip content while the card's own column was
+  the only flexible one, so at narrow widths the card was squeezed
+  narrower to make room for the chip columns rather than the chips
+  reflowing. Below `sm` (576px) the ring now collapses to a single
+  vertical stack (top chips, then the card at its own full natural width,
+  then the two exclusion groups below it as ordinary flowing rows) instead
+  of forming a ring at all — the ring visual survives only at widths wide
+  enough to contain it without squeezing the card.
 - `frontend/src/features/attributeChips/` — tri-state chips
   (untouched → positive → negative), fill color renders weighted net
   polarity (`tag_consensus.get_tag_net_polarity`). Two exclusion groups

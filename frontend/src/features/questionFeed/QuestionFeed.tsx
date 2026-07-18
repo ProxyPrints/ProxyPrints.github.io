@@ -484,6 +484,7 @@ export function QuestionFeed() {
     <CardPanel
       ref={cardPanelRef}
       style={stickyTop != null ? { top: stickyTop } : undefined}
+      data-testid="question-feed-card-panel"
     >
       {cardImage}
     </CardPanel>
@@ -506,6 +507,7 @@ export function QuestionFeed() {
     <CardPanel
       ref={cardPanelRef}
       style={stickyTop != null ? { top: stickyTop } : undefined}
+      data-testid="question-feed-card-panel"
     >
       <AttributeChipPanel
         backendURL={backendURL}
