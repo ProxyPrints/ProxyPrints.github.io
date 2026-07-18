@@ -15,6 +15,7 @@ import {
   UpstreamDesktopTool,
   UpstreamDesktopToolReleasesURL,
 } from "@/common/constants";
+import { isUnifiedDisplayPageEnabled } from "@/common/featureFlags";
 import DisableSSR from "@/components/DisableSSR";
 import { RightPaddedIcon } from "@/components/icon";
 import { BackendConfig } from "@/features/backend/BackendConfig";
@@ -86,6 +87,16 @@ export default function ProjectNavbar() {
                   eventKey="/editor"
                 >
                   Editor
+                </Nav.Link>
+              )}
+              {anyBackendConfigured && isUnifiedDisplayPageEnabled() && (
+                <Nav.Link
+                  as={Link}
+                  href="/display"
+                  active={router.route === "/display"}
+                  eventKey="/display"
+                >
+                  Display (beta)
                 </Nav.Link>
               )}
               {remoteBackendConfigured && (

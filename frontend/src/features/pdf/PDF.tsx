@@ -9,6 +9,7 @@ import {
 } from "@/common/constants";
 import { SourceType } from "@/common/schema_types";
 import { CardDocument, SlotProjectMembers } from "@/common/types";
+import { chunk } from "@/common/utils";
 import { normalizeCardBleed } from "@/features/pdf/bleedExtension";
 import { BleedPrior, ManualOverride } from "@/features/pdf/bleedNormalize";
 import { computeLayout } from "@/features/pdf/layout";
@@ -839,15 +840,9 @@ const CardGrid = ({
   );
 };
 
-// Exported so PagePreview's container (PDFGenerator.tsx) can select the same page-1 card set
-// the real PDF would generate, without duplicating pagination logic.
-export const chunk = <T,>(arr: Array<T>, size: number): Array<Array<T>> => {
-  const result: Array<Array<T>> = [];
-  for (let i = 0; i < arr.length; i += size) {
-    result.push(arr.slice(i, i + size));
-  }
-  return result;
-};
+// Re-exported for existing importers (PDFGenerator.tsx, SCMPDF.tsx) - the implementation
+// itself now lives in common/utils.ts; see that module's own comment for why.
+export { chunk };
 
 const paginateFrontsAndDistinctBacks = (
   projectMembers: Array<SlotProjectMembers>,

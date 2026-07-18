@@ -55,6 +55,14 @@ export interface PagePreviewProps {
   showCutLines: boolean;
   /** Width, in real CSS px, of the preview panel this scales down to fit. */
   maxWidthPx: number;
+  /** Proposal H (docs/proposals/proposal-h-unified-display-page.md): when provided, each slot
+   * becomes clickable and calls back with its row-major index - the unified display page's own
+   * slot-select interaction. Omitted by existing callers (PDFGenerator's fast preview), which
+   * stay non-interactive with zero behavior change. */
+  onSlotClick?: (index: number) => void;
+  /** Row-major index of the slot to render with a selected outline. Ignored when onSlotClick
+   * isn't provided. */
+  selectedSlotIndex?: number;
 }
 
 export function PagePreview({
@@ -66,6 +74,8 @@ export function PagePreview({
   slots,
   showCutLines,
   maxWidthPx,
+  onSlotClick,
+  selectedSlotIndex,
 }: PagePreviewProps) {
   const layout = useMemo(
     () =>
@@ -121,10 +131,18 @@ export function PagePreview({
       >
         {layout.slots.map((slot, index) => {
           const content = slots[index];
+          const isSelected =
+            onSlotClick != null && selectedSlotIndex === index;
           return (
             <div
               key={index}
               data-testid="page-preview-slot"
+              onClick={
+                onSlotClick != null ? () => onSlotClick(index) : undefined
+              }
+              role={onSlotClick != null ? "button" : undefined}
+              aria-label={onSlotClick != null ? content?.name : undefined}
+              aria-pressed={onSlotClick != null ? isSelected : undefined}
               style={{
                 position: "absolute",
                 left: slot.xMM + "mm",
@@ -133,17 +151,23 @@ export function PagePreview({
                 height: slotHeightMM + "mm",
                 overflow: "hidden",
                 background: "#d9d9d9",
+                cursor: onSlotClick != null ? "pointer" : undefined,
+                outline: isSelected ? "3px solid #df691a" : undefined,
+                outlineOffset: isSelected ? "-3px" : undefined,
               }}
             >
               {content?.imageUrl != null && (
                 <img
                   src={content.imageUrl}
                   alt={content.name}
+                  loading="lazy"
+                  decoding="async"
                   style={{
                     width: "100%",
                     height: "100%",
                     objectFit: "cover",
                     display: "block",
+                    pointerEvents: "none",
                   }}
                 />
               )}
