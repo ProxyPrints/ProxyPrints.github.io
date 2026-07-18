@@ -143,6 +143,10 @@ external reader's orientation to the whole fork, see
   wiki (detection only, never copied in).
 - [`docs/federation-v1.md`](docs/federation-v1.md) — federation verdict
   exchange format v1 (spec, implementation pending).
+- [`docs/federation/public-export-v1.md`](docs/federation/public-export-v1.md)
+  — HOLD spec: publish-first federation export (signed verdict JSONL, no
+  peer required), consumable by mpc-autofill forks and MIT-lineage proxy
+  tools. Owner review pending; see `docs/README.md`'s Plans & proposals.
 - [`docs/theory.md`](docs/theory.md) — the printing-identification
   pipeline as candidate-constrained decoding: false-accept bound,
   prior-art comparison, soundness mechanisms, Sybil/Dawid-Skene
