@@ -603,6 +603,26 @@ export function QuestionFeed() {
                         >
                           Suggested match
                         </Badge>
+                        {/* The Scryfall reference render for the suggested printing - dropped
+                            when Level 1 was introduced (a regression, not an intentional
+                            text-only design; every other stage still shows one per candidate).
+                            Restored using the exact same mechanism Level 2's grid already uses
+                            correctly: mediumThumbnailUrl straight into a plain <img>, no new URL
+                            construction. */}
+                        <div
+                          className="mx-auto mb-2"
+                          style={{ maxWidth: 160 }}
+                          data-testid="question-feed-level1-reference-image"
+                        >
+                          <ArtPlaceholder>
+                            <ZoomableThumbnail>
+                              <img
+                                src={item.suggestedPrinting.mediumThumbnailUrl}
+                                alt={`${item.suggestedPrinting.expansionCode} ${item.suggestedPrinting.collectorNumber}`}
+                              />
+                            </ZoomableThumbnail>
+                          </ArtPlaceholder>
+                        </div>
                         <p data-testid="question-feed-suggestion-prompt">
                           Is it this one?{" "}
                           <SetIcon

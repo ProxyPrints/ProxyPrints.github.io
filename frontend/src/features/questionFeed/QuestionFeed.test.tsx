@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import React from "react";
 import { Provider } from "react-redux";
@@ -366,6 +372,39 @@ describe("QuestionFeed", () => {
     expect(
       await screen.findByTestId("question-feed-tier-badge")
     ).toHaveTextContent("Suggested match");
+  });
+
+  it("shows the suggested printing's own reference image on Level 1 (regression: dropped when Level 1 was introduced in #49)", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              type: "confirm_suggestion",
+              suggestedPrinting: identifyPrintingItem.candidates[0],
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    const referenceImage = within(
+      await screen.findByTestId("question-feed-level1-reference-image")
+    ).getByRole("img");
+    expect(referenceImage).toHaveAttribute(
+      "src",
+      identifyPrintingItem.candidates[0].mediumThumbnailUrl
+    );
   });
 
   it("badges a fresh/contested identify_printing item as needing identification", async () => {
