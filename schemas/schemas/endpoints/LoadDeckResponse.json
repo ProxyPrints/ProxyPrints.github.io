@@ -1,0 +1,24 @@
+{
+  "title": "Load Deck Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": { "type": "string", "enum": ["deck", "snapshot"] },
+    "ciphertext": { "type": "string" },
+    "ciphertextNonce": { "type": "string" },
+    "wrappedDek": { "type": "string" },
+    "wrappedDekNonce": { "type": "string" },
+    "createdAt": { "type": "string" },
+    "updatedAt": { "type": "string" }
+  },
+  "required": [
+    "kind",
+    "ciphertext",
+    "ciphertextNonce",
+    "wrappedDek",
+    "wrappedDekNonce",
+    "createdAt",
+    "updatedAt"
+  ],
+  "additionalProperties": false
+}

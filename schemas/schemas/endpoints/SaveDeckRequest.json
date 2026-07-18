@@ -1,0 +1,21 @@
+{
+  "title": "Save Deck Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "key": { "type": ["string", "null"] },
+    "kind": { "type": "string", "enum": ["deck", "snapshot"] },
+    "ciphertext": { "type": "string" },
+    "ciphertextNonce": { "type": "string" },
+    "wrappedDek": { "type": "string" },
+    "wrappedDekNonce": { "type": "string" }
+  },
+  "required": [
+    "key",
+    "ciphertext",
+    "ciphertextNonce",
+    "wrappedDek",
+    "wrappedDekNonce"
+  ],
+  "additionalProperties": false
+}

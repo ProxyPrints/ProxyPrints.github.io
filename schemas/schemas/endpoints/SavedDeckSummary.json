@@ -1,0 +1,26 @@
+{
+  "title": "Saved Deck Summary",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "key": { "type": "string" },
+    "kind": { "type": "string", "enum": ["deck", "snapshot"] },
+    "ciphertext": { "type": "string" },
+    "ciphertextNonce": { "type": "string" },
+    "wrappedDek": { "type": "string" },
+    "wrappedDekNonce": { "type": "string" },
+    "createdAt": { "type": "string" },
+    "updatedAt": { "type": "string" }
+  },
+  "required": [
+    "key",
+    "kind",
+    "ciphertext",
+    "ciphertextNonce",
+    "wrappedDek",
+    "wrappedDekNonce",
+    "createdAt",
+    "updatedAt"
+  ],
+  "additionalProperties": false
+}
