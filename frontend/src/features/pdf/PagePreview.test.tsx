@@ -157,6 +157,77 @@ describe("PagePreview", () => {
   });
 });
 
+describe("PagePreview - bleed badge (Proposal B PR-3)", () => {
+  it("renders the hedged badge when willGenerateBleed is true", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+            willGenerateBleed: true,
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    expect(screen.getByTestId("page-preview-bleed-badge")).toHaveTextContent(
+      "Bleed will be generated"
+    );
+  });
+
+  it("renders no badge when willGenerateBleed is false", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+            willGenerateBleed: false,
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    expect(
+      screen.queryByTestId("page-preview-bleed-badge")
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders no badge when willGenerateBleed is omitted (signal not yet available)", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    expect(
+      screen.queryByTestId("page-preview-bleed-badge")
+    ).not.toBeInTheDocument();
+  });
+});
+
 // Sanity: the card constants this component relies on (via computeLayout) are the same ones
 // PDF.tsx itself uses, so a preview slot's box size always matches a generated PDF's.
 describe("PagePreview - card constants", () => {

@@ -431,6 +431,22 @@ calls at the very top of each component in the suspect render tree (starting fro
 binary-search how far the tree actually renders before going silent - the last log line reached
 pinpoints the synchronous throw's rough location even when nothing else in the stack reports it.
 
+## `page.reload()` (and a same-URL `page.goto()` waiting on `"load"`) hangs past the Playwright test timeout in this app
+
+Discovered writing a reload-persistence test for Proposal B PR-2 (full report:
+`docs/reports/proposal-b-pr2-bleed-override-ui.md`) - no test anywhere else in this suite
+reloads or renavigates a page mid-test, so there was no existing precedent to check first.
+`page.reload()` alone hung past the 30s test timeout waiting for the `"load"` event; a plain
+`page.goto()` back to the same URL hit the identical hang. This app's webworkers (client-search,
+PDF-render) appear not to settle a second `"load"` event cleanly within one Playwright page
+lifecycle - not investigated further since a workaround exists and the root cause is outside
+this repo's own code (Next.js/webworker/browser interaction, not app logic). Fix: navigate with
+`{ waitUntil: "domcontentloaded" }` instead of the default `"load"` - the DOM (and this app's
+React tree) is fully interactive well before whatever blocks a second `"load"` resolves, and a
+normal `page.getByText(...)` wait for real UI content afterward is sufficient to confirm the page
+is actually ready. Any future test that needs a real mid-test reload/renavigation should use this
+pattern from the start rather than rediscovering the hang.
+
 ## A stacked PR's base branch gets deleted out from under it when the parent merges (squash-and-delete)
 
 If PR B is opened against PR A's branch (a stack) and PR A is later squash-merged with
@@ -528,3 +544,29 @@ it outright preserved the real edge cases it still catches (a solid-background f
 degenerate scan) while removing it from the one thing it was structurally unable to do reliably.
 See `docs/proposals/proposal-b-bleed-normalization.md`'s "Owner design decision" section and
 `bleedNormalize.ts`'s own module comment for the full resolution order.
+
+## Passing a plain callback through comlink's Remote proxy throws DataCloneError - and the failure disguises itself as a false-positive Playwright "element is visible" result
+
+`pdfRenderService.ts` added a method that called `this.worker.onImageProgress(cb)` - `cb` a plain
+JS function - across the comlink `Remote<PDFWorker>` boundary into `pdf.worker.ts`. Comlink's
+default RPC transfer is a structured-clone `postMessage`, and a bare function isn't
+structured-clone-able: this throws `DataCloneError: Failed to execute 'postMessage' on 'Worker': ... could not be cloned` the instant the call actually fires - not at compile time (TypeScript
+has no way to know), not synchronously at the call site either (the throw happens inside a
+promise chain comlink builds internally). Fix: wrap the callback in `Comlink.proxy(cb)` before
+passing it - comlink's own documented mechanism for passing a _live, callable_ remote reference
+instead of clonable data, backed by its own internal `MessagePort`. A pre-existing, structurally
+identical `onProgress(cb: typeof console.info)` method on the same worker interface has this same
+latent bug, undetected only because nothing in the codebase actually calls it.
+
+**The Playwright false positive this produced is worth its own note**: the thrown error surfaced
+as Next.js dev mode's full-screen `<nextjs-portal>` "Unhandled Runtime Error" overlay, rendered
+_on top of_ (not instead of) the real in-app Modal this session had just built to replace
+`window.confirm()` - Playwright's `toBeVisible()` on the Modal's own locator still reported true
+(the Modal element genuinely is visible, CSS-wise, underneath the overlay), so the assertion the
+test led with passed cleanly. The failure only surfaced two steps later, as a `.click()` timing
+out with `<nextjs-portal> intercepts pointer events` - which reads exactly like an unrelated
+z-index/stacking-context bug, not "there's a JS exception on this page." **Always check for a
+`dialog "Unhandled Runtime Error"` node in a failing test's saved `error-context.md` (or
+`page.on('pageerror')`) before assuming a pointer-interception failure is a CSS/layout problem** -
+in dev mode, Next's own error overlay is frequently the actual "invisible" thing eating the click,
+and it's a much faster diagnosis than auditing z-index stacking contexts by hand.

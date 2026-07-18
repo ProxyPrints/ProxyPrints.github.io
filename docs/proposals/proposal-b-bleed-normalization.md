@@ -36,11 +36,34 @@ Core: at PDF export, for each card (full-res bitmap already in hand): MEASURE ac
 
 **PR-1 (this pass) — shipped**: the main-thread batch resolution of `bleedPriors` via `APIGetTagConsensus`, bounded concurrency (`frontend/src/common/concurrencyLimit.ts`'s `mapWithConcurrencyLimit`, a general-purpose worker-pool utility - not GoogleDriveService's own private `Semaphore`, to keep this PR's review surface to new files only; default concurrency 6, matching that class's own default), per-card failure tolerance (a single failed lookup degrades to `"unresolved"`, never fails the whole batch), wired into `PDFGenerator.tsx`'s `downloadPDF`/`saveToDrivePDF` (resolved once per export, before the render call, skipped entirely when no remote backend is configured). 13 new tests (6 for the concurrency utility, 7 for the resolution logic itself). Verified against the real render path too: `tests/PDFGenerator.spec.ts`'s full suite (which has no `tagConsensus` mock at all) still passes at the same timing as before this PR, confirming an unmocked/failing lookup degrades gracefully rather than hanging or failing the export.
 
+**PR-2 (this pass) — shipped**: the per-card manual-override UI (a new "Bleed Overrides" collapsible section in the PDF export panel, `PDFGenerator.tsx`, listing every project card bleed normalization can actually apply to - full-resolution Google Drive/local-file sources, matching `PDF.tsx`'s own `isBleedNormalizationEligible` - with an Auto/Force bleed/Force trimmed select per card) and its persistence (decision 4: survives reload, via a new `manualOverrides: {[identifier]: ManualOverride}` field on `projectSlice`'s `Project` state, a new `getLocalStorageManualOverrides`/`setLocalStorageManualOverrides` pair in `common/cookies.ts`, and a `listenerMiddleware.ts` listener that writes to localStorage on every change - all three mirroring `favoritesSlice`'s existing pattern exactly, since no persistence mechanism previously existed anywhere in `projectSlice`). Loaded back into Redux on app mount in `Layout.tsx`, same place favorites already load. The override is keyed by card identifier, independent of project membership, so it survives even though the rest of the open project (which cards are in the deck) doesn't itself persist across reload today - a pre-existing, unrelated gap, not something this PR touches. 13 new tests (7 reducer/selector, 6 localStorage round-trip) plus one real-browser Playwright test that sets an override, confirms it round-trips through `localStorage`, reloads the page via a fresh navigation, and confirms the override is still selected - genuine end-to-end confirmation of decision 4, not just a unit-test assertion.
+
+**PR-3 (this pass) — shipped**: the hedged WYSIWYG preview badge ("Bleed will be generated") on
+`PagePreview.tsx`'s fast/CSS preview, per the audit's suggestion-vs-confirmed vocabulary - never
+framed as a confirmed fact, since the real per-side measurement only happens at export. A new pure
+`willLikelyGenerateBleed(prior, manualOverride)` in `bleedNormalize.ts` mirrors
+`resolveBleedPlan`'s manualOverride/prior precedence (override wins outright when set; otherwise
+prior "bleed" hedges toward no synthetic generation, "trimmed"/"unresolved" hedge toward
+generation) minus the per-side measurement branch, since no real measurement is available to the
+cheap CSS preview - the closest available stand-in for "the measurement where available" is PR-2's
+manual override, the one signal that's both already resolved synchronously and fully determines
+the real outcome the same way a measurement would. `PDFGenerator.tsx` resolves `bleedPriors` for
+just the currently-visible preview page's eligible cards (debounced 500ms, reusing PR-1's
+`resolveBleedPriors`) and combines it with PR-2's `manualOverrides` per card; the badge only
+renders once a real signal exists (an override, or a resolved prior) - no provisional guess that
+would flicker wrong-then-right as the fetch resolves. **Proposal B is now complete end to end**
+per the approved spec (measurement, extension, priors, manual override + persistence, preview
+badge, tests, docs) - only the flagged (not built) XML field remains, out of scope for this build.
+The merge-time calibration pass (originally also listed here as remaining) has since run - see
+below.
+
 **Not yet built** (concrete next steps, not silently dropped):
 
-1. The manual-override UI (Auto / Force bleed / Force trimmed per card) in the export panel, and its `projectSlice` persistence (Proposal B PR-2).
-2. The WYSIWYG preview badge ("bleed will be generated") in `PagePreview.tsx` (Proposal B PR-3).
-3. The XML optional field for a persisted override, if/when PR-2's UI lands (flagged per the owner's own instruction, not built).
+1. The XML optional field for a persisted override (flagged per the owner's own instruction, not built - see "Tracked, not building (XML)" below for detail).
+
+**Tracked, not building**: PR-1's batch resolution issues one `POST 2/tagConsensus/` per unique card in the export (bounded to 6 concurrent) - for the owner's own large project this is ~517 requests per export. Acceptable for v1 (bounded concurrency + per-card failure tolerance keep this from being a real problem today); a batch-consensus endpoint (one request, many identifiers) is the eventual answer if this ever actually hurts in practice, but isn't worth building speculatively ahead of evidence it's needed.
+
+**Tracked, not building (XML)**: PR-2's `manualOverrides` map lives in `projectSlice`/localStorage, keyed by card identifier - it is NOT written into or read back from the project's XML export/import (`ExportXML.tsx`/`ImportXML.tsx`), so an override does not currently "ride through" an XML round-trip to a different browser/machine the way decision 4's phrasing anticipated it eventually might. Flagging per the owner's explicit instruction rather than building it speculatively: this would need a new optional per-member (or per-identifier, at the document root) field in the XML 2.0 schema, e.g. `<bleedOverride>force-bleed</bleedOverride>`, plus corresponding read/write logic in both files. Not required for decision 4's actual "must survive reload" requirement, which PR-2 already satisfies via localStorage on the same browser/profile.
 
 **Merge-time calibration pass (2026-07-18) — run, findings documented, constants unchanged**: 30 real catalog images measured against the shipped algorithm; full data and per-image numbers in `docs/reports/2026-07-18-bleed-calibration-134.md`. Result summary and the "why not just tune OVERSIZED_MULTIPLE" reasoning now live directly on the four constants in `bleedNormalize.ts` (read that comment block first). Short version: a real, reproducible measurement bias was found (real bled cards measure ~2x their true bleed depth, because the card's own border is often the same flat color as the synthetic bleed extension and the probe can't distinguish them) but no single one of the 4 constants cleanly fixes it without becoming an unreviewed `resolveBleedPlan` behavior change - see the next item.
 
