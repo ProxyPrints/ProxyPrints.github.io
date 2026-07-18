@@ -108,6 +108,13 @@ cannot decrypt, by design, not by policy.
   bundle (no unlock required to export), a versioned public format, and a
   standalone decrypt tool as the trust anchor for "if this site vanishes
   tomorrow, your decks are still yours." Nothing built.
+- **PR-7, art provenance**: per-slot provenance (`driveId`, `sourceName`,
+  `sourceType`, optional `contentPhash`, `indexedBy`) in a future
+  `deckPayload` version, so an un-indexed slot renders a direct-from-drive
+  thumbnail instead of breaking. Deliberately never flows into the
+  federation verdict export ([`../federation-v1.md`](../federation-v1.md))
+  — that stays conclusions-only, no drive IDs or image routes. Nothing
+  built.
 
 ## Owner-only / legal
 

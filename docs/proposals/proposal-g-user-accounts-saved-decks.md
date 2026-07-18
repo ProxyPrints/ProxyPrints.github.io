@@ -10,9 +10,9 @@ recreated after #88's stacked-PR base-deletion auto-close — see
 docs/lessons.md), the client-side ZK crypto module (#89), and the frontend
 UI wiring (#93). **Spec CLOSED: no open decisions remain** (see Decisions).
 §7 (authed vote tier) is fully specified but remains a deliberately separate,
-later build — not part of this HOLD's core scope. PR-5 (share links) and
-PR-6 (deck portability) are design-only, post-v1 addenda — nothing built
-for either yet.
+later build — not part of this HOLD's core scope. PR-5 (share links),
+PR-6 (deck portability), and PR-7 (art provenance) are design-only,
+post-v1 addenda — nothing built for any of them yet.
 
 ## Context — prior art outside this codebase
 
@@ -698,6 +698,11 @@ without waiting for a session to end.
   formalization of what the zero-knowledge, server-unbound design already
   implies rather than a new capability. Expanded into a full design below
   (see "PR-6, post-v1: deck portability").
+- **Art provenance** — recording per-slot where a selected card image came
+  from, so un-indexed slots can still render (from the source drive
+  directly) instead of breaking, with a clear hard line against that data
+  ever entering the federation verdict export. Expanded into a full design
+  below (see "PR-7: art provenance").
 
 ### PR-5, post-v1: per-deck share links (design only — owner-directed addendum, 2026-07-18; nothing built here)
 
@@ -818,6 +823,73 @@ rather than something a later PR would need to retrofit or patch around.
   could, even if only in principle, gate access to a user's own data), and
   directly contradict the zero-knowledge trust story this entire amendment
   is built on. Rejected outright, not just deprioritized.
+
+### PR-7: art provenance (design only — owner-directed addendum, 2026-07-18; nothing built here)
+
+Records, per slot, where a selected card image actually came from — so a
+deck payload stays a faithful, self-contained record of what the user
+picked even when the slot's source card isn't (or is no longer) indexed in
+this instance's own catalog. **Design only in this pass**, same as PR-5/6:
+this section specifies a later PR; nothing here is built by any of the 5
+already-merged Proposal G PRs.
+
+- **`deckPayload` v-next**: each slot gains an optional provenance record —
+  `{driveId, sourceName, sourceType, contentPhash?, indexedBy}`, where
+  `indexedBy` is the origin URL of the catalog instance that indexed this
+  card (may differ from the instance the user is currently using, in a
+  federated future). `contentPhash` is optional since not every source
+  type computes one. Adding this bumps `formatVersion` (PR-6's own
+  versioning rule: any format change is a version bump, added now while
+  it's one field, not deferred until it's a breaking one) — existing
+  encrypted payloads at the current version remain valid and readable;
+  nothing about this requires migrating already-saved decks.
+- **Un-indexed-slot rendering**: if a slot's provenance exists but the
+  `driveId` isn't present in this instance's own catalog (or the whole
+  provenance record is present but the instance never indexed that source
+  at all), the client fetches a thumbnail **directly from the source
+  drive**, client-side, and renders it with a "not in this catalog — shown
+  from source drive" badge plus an "indexed at `<origin>` →" link back to
+  wherever it _is_ indexed.
+- **Moderation-bypass rationale (stated explicitly, not left implicit)**:
+  this direct-drive fetch deliberately bypasses this instance's own
+  catalog/moderation pipeline (the same pipeline [`moderation.md`](../features/moderation.md)
+  describes) for that one thumbnail. Justified because it is the user's
+  own private data (a card slot inside their own encrypted, already-saved
+  deck), the fetch happens entirely client-side (this server never proxies,
+  serves, or caches the image), and nothing about it publishes the image
+  anywhere this instance's moderation surfaces would ever show it. This is
+  a narrow, deliberate exception scoped to "rendering a user's own saved
+  choice back to them," not a general moderation bypass.
+- **XML 2.0 export**: gains three optional, backwards-compatible
+  attributes — `sourceName`, `indexedBy`, `contentPhash` — on the existing
+  per-card element. Backwards-compatible because they're optional: any
+  existing XML 2.0 consumer that doesn't know about them simply ignores
+  them. Purpose: enables any third-party consumer to join a phash against
+  federation verdict data ([`../federation-v1.md`](../federation-v1.md))
+  without needing anything from this codebase beyond the exported file
+  itself. Specced here; built later, in the frontend export lane (not
+  bundled with the saved-decks PRs).
+- **Hard line (stated in-doc, not just implied)**: provenance data **never
+  enters the federation verdict export** ([`../federation-v1.md`](../federation-v1.md)).
+  That export carries conclusions only (printing/artist/tag consensus
+  verdicts) — no drive IDs, no image routes, nothing that identifies where
+  a specific user's card image came from. Provenance is a per-user,
+  per-deck rendering convenience; it must never leak into the
+  cross-instance verdict-exchange format, which is deliberately scoped to
+  consensus outcomes and nothing else.
+- **XML import, any version**: importing an XML file (2.0 or earlier) that
+  references un-indexed drive IDs still leaves those slots **viewable** —
+  the same client-side direct-drive rendering as above (public files only;
+  the "not in this catalog" badge + "indexed at `<origin>` →" link appear
+  only when 2.0-or-later provenance attributes are actually present in the
+  imported file, since earlier XML versions carry no `indexedBy` to link
+  to).
+- **Web PDF export of un-indexed slots is explicitly OUT of scope for
+  PR-7.** The v1 answer is: the slot is viewable in the editor, with
+  guidance to print it via the desktop tool instead. A direct-drive-fetch
+  fallback for the web PDF exporter itself is a separate, tracked posture
+  decision — not resolved here, and not assumed as a foregone conclusion
+  just because viewing works.
 
 ### Consequences (written honestly)
 
