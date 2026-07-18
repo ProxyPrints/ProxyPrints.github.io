@@ -77,6 +77,7 @@ import {
   randomFlavorText,
   RevealOverlay,
   RevealWrapper,
+  StaticCardPanel,
   useStarburstFrame,
   useStickyTop,
   ZoomableThumbnail,
@@ -473,11 +474,12 @@ export function QuestionFeed() {
     </>
   );
 
-  // Plain sticky panel, no chip ring - the default for Level 1 and for Level 2 while its
-  // filter disclosure is collapsed (i.e. the common case). Real device evidence (the funnel
-  // proposal's evidence section) found the always-on chip ring wedging the thumbnail between
-  // two flanking chip columns and burying the card beneath a full screen of chips before it
-  // was even visible - this is what that fix looks like at the call site.
+  // Plain sticky panel, no chip ring - Level 2's default while its filter disclosure is
+  // collapsed (i.e. the common case). Real device evidence (the funnel proposal's evidence
+  // section) found the always-on chip ring wedging the thumbnail between two flanking chip
+  // columns and burying the card beneath a full screen of chips before it was even visible -
+  // this is what that fix looks like at the call site. Level 1 uses level1CardPanel below
+  // instead, not this - see StaticCardPanel's comment in cardPanel.tsx for why.
   const plainCardPanel = (
     <CardPanel
       ref={cardPanelRef}
@@ -485,6 +487,17 @@ export function QuestionFeed() {
     >
       {cardImage}
     </CardPanel>
+  );
+
+  // Level 1 only - see StaticCardPanel's own comment (cardPanel.tsx) for why this compact
+  // single-card screen deliberately doesn't reuse the sticky plainCardPanel above. Carries its
+  // own test id (distinct from the card <img> itself) so a layout regression test can assert
+  // against the card's full box - art plus name caption - not just the image, since the
+  // real-device bug this guards against overlapped the caption too, not only the artwork.
+  const level1CardPanel = (
+    <StaticCardPanel data-testid="question-feed-level1-card-panel">
+      {cardImage}
+    </StaticCardPanel>
   );
 
   // The chip-ring version, only mounted when Level 2's "Filter by attribute" disclosure is
@@ -556,7 +569,7 @@ export function QuestionFeed() {
             stage === "level1" && item.suggestedPrinting != null ? (
               <Col xs={12} data-testid="question-feed-level1">
                 <div className="mx-auto" style={{ maxWidth: 320 }}>
-                  {plainCardPanel}
+                  {level1CardPanel}
                   {!revealed ? (
                     <div className="text-center py-4">
                       <Spinner size={2} />
