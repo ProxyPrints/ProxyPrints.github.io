@@ -268,6 +268,30 @@ should be read as "a repeatable seeding step," not literally
 `migrations.RunPython`, when the target table has DB-wide list-all
 consumers).
 
+## A deterministic "Card Details" modal-open timeout is sandbox-environmental, not a real regression
+
+`openDetailedView`-style test helpers (`getByAltText(name).click()` then
+`expect(getByText("Card Details")).toBeVisible()`) can fail with a hard 5s
+timeout in a Claude Code cloud sandbox specifically — reproduced
+identically and deterministically (not flaky/intermittent) across
+`PrintingTagPicker.spec.ts`, `TagVotePicker.spec.ts`, and
+`visual/CardDetailedViewModal.visual.spec.ts`, including on unmodified
+`master` and in isolated `--workers=1` runs, while every other Playwright
+spec in the same run (including specs that also drive
+`GridSelectorModal`/`CanonicalCardFilter`) passes cleanly. All three
+failing specs share nothing but that one click-to-open helper, so the
+common factor is the sandbox's headless Chromium (launched via
+`executablePath: /opt/pw-browsers/chromium`, since the pinned Playwright
+version's own browser download is unavailable there — see the CLAUDE.md
+environment note) failing to register this specific modal-open
+interaction, not application code. Before spending time root-causing a
+change against this failure, first check whether it reproduces
+identically with the change reverted/stashed — if so, it's this sandbox
+quirk, not a regression, and isn't worth chasing further there. Not
+related to MSW/network state either — `loadPageWithDefaultBackend` points
+at a fake `127.0.0.1:8000` backend URL fully intercepted by mocks, so this
+has no relationship to whether any real backend is up or restarting.
+
 ## A call-count-based MSW mock breaks under React 18 Strict Mode's dev-time double-invoke
 
 A Playwright mock like "return item X on the first `GET`, then a
