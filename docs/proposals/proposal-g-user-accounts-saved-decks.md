@@ -600,10 +600,17 @@ approved text), superseded by everything below.
   is stored alongside it so a future default increase never invalidates an
   existing user's derivation). The passphrase and every key derived from it
   **never leave the browser**.
-- Each deck gets its own random **DEK** (AES-256-GCM). The DEK is wrapped by
-  the passphrase-derived master key. A passphrase change re-wraps every
-  deck's DEK; it never re-encrypts deck bodies — the DEK itself doesn't
-  change, only what wraps it.
+- The **master key** is a separate, randomly-generated key (not the PBKDF2
+  output itself) — generated exactly once, at first save, and never
+  regenerated afterwards. The passphrase-derived key's only job is to
+  **wrap** this master key (see "Recovery key" below for the second,
+  independent way to wrap the same master key). Each deck gets its own
+  random **DEK** (AES-256-GCM), wrapped by the master key at the time that
+  deck is created. Because the master key never changes, **a passphrase
+  change re-wraps only the one master key** (a single small ciphertext,
+  stored on the user's crypto profile) under a freshly-derived
+  passphrase key — it never touches any individual deck's DEK, and never
+  re-encrypts any deck body.
 - The **entire** deck payload is encrypted, **including the title** — there
   is no plaintext deck name anywhere server-side. Each server-side record
   is: opaque ciphertext + wrapped DEK + nonces (one for the payload's
@@ -676,11 +683,74 @@ without waiting for a session to end.
 - **Deck sharing**, if it ships, uses a **key-in-URL-fragment** scheme — the
   DEK travels in the fragment (`#...`), which browsers never send to the
   server, so a share link's server-side request never carries key material.
+  Expanded into a full design below (see "PR-5, post-v1: per-deck share
+  links").
 - **WebAuthn passkey PRF** as an **optional additional** unwrap method
   someday — it would wrap the same master key a passphrase (or recovery
   key) does, not a separate one. Withdrawn as the primary/only mechanism;
   no survey needed now, since the passphrase + recovery-key design alone
   satisfies the goal.
+
+### PR-5, post-v1: per-deck share links (design only — owner-directed addendum, 2026-07-18; nothing built here)
+
+Expands the "Deck sharing" future-work bullet above into a full design.
+**Design only in this pass** — this section describes a later, separate
+PR (PR-5); nothing here is built by the PRs in this amendment's own
+sequencing (schema, sign-in relocation, API, crypto module, frontend
+wiring). A new `SavedDeckShare` table (or equivalent) is additive to §3's
+schema and does not require changing `SavedDeck`/`UserCryptoProfile` as
+already specified above — shares reference an existing deck by id and
+carry their own wrapped-key blob, so this doesn't preclude anything
+already built in PR-1's schema.
+
+- **Share creation (client-side)**: the owner picks one of their decks; the
+  client generates a fresh random 256-bit `shareKey`, unwraps that deck's
+  existing DEK (via the owner's already-unlocked master key), and
+  re-wraps that same DEK with the new `shareKey` — a second, independent
+  wrapping of the deck's DEK, alongside the owner's own master-key-wrapped
+  copy. The client `POST`s a share record: `{shareId, deckRef, wrappedDEK_by_shareKey, wrapNonce, created, optional expiry}`. The
+  `shareKey` itself goes **only** into the share link's URL fragment —
+  `/shared/<shareId>#<shareKey-base64url>` — never in the path, query
+  string, or request body, so it never reaches the server. The server
+  stores one more opaque wrapped blob and learns nothing about the deck's
+  contents or the owner's own keys.
+- **Recipient flow (no account needed)**: opening the link, the client
+  fetches ciphertext + the share's wrapped DEK by `shareId` alone (an
+  unauthenticated, read-only lookup), unwraps the DEK using the fragment's
+  `shareKey`, and decrypts locally. Render is read-only — a recipient
+  never gets a wrapped-by-master-key copy, only the share-scoped one, so
+  they can never derive the owner's master key or reach any of the
+  owner's other decks.
+- **Revocation**: the owner can list their own active shares per deck
+  (`shareId`s + creation dates — metadata only, same honesty standard as
+  the rest of this schema). Revoking a share is a `DELETE` of that share
+  record — the link is dead for all future fetches immediately. A
+  **paranoid option**, offered per-revoke as a checkbox, additionally
+  rotates the deck's DEK: generate a fresh DEK, re-encrypt that one deck's
+  ciphertext with it, and re-wrap the new DEK for the owner's own
+  passphrase and recovery-key slots (any other still-active shares on that
+  deck would need re-issuing too, since they wrap the old DEK — the UI
+  must surface this rather than silently breaking other shares). This
+  makes even already-captured key material for that share permanently
+  useless. Honest limit, stated plainly in-product: revocation (with or
+  without rotation) cannot recall content a recipient already viewed and
+  saved elsewhere — true of every link-based sharing system, not a gap
+  specific to this design.
+- **Properties**: the master key never leaves its existing wrap chain (it
+  is never itself shared or derivable from a share); shares are
+  inherently per-deck, since they wrap that deck's DEK specifically, never
+  the master key; a deck can have multiple independent, individually
+  revocable shares outstanding at once; each `shareKey` is freshly random,
+  **not** derived from the master key or from any other share's key, so
+  leaking one share's key reveals nothing about the master key, the
+  owner's other decks, or any other share.
+- **Tests** (written now as the spec's requirement for PR-5, to implement
+  when that PR is built): share round-trip (create → fetch by
+  `shareId` + fragment key → decrypt correctly); a revoked share's fetch
+  fails (or 404s) for all subsequent attempts; rotation-on-revoke renders
+  a previously-captured `shareKey` unable to decrypt the rotated
+  ciphertext; a leaked `shareKey` cannot decrypt or unwrap anything for
+  any _other_ deck, shared or not.
 
 ### Consequences (written honestly)
 
@@ -706,10 +776,11 @@ without waiting for a session to end.
 
 Encrypt/decrypt round-trip; wrong passphrase fails to unwrap; ciphertext
 tamper → AES-GCM authentication failure (not a silent garbage decrypt);
-passphrase change re-wraps every DEK correctly without touching deck
-bodies; recovery-key round-trip (forget passphrase → recover via the
-recovery key → set a new passphrase); both passphrase and recovery key
-lost → the account-reset flow deletes cleanly and a fresh pair issues
+passphrase change re-wraps the master key correctly without touching any
+deck's DEK or ciphertext (the master key itself never changes — see "Key
+design" above); recovery-key round-trip (forget passphrase → recover via
+the recovery key → set a new passphrase); both passphrase and recovery
+key lost → the account-reset flow deletes cleanly and a fresh pair issues
 correctly on next save; a recovery key generated _before_ a later
 passphrase change still unwraps the master key correctly (proving the
 recovery slot is independent of passphrase-derived state).
@@ -721,11 +792,12 @@ encryption passphrase, the user's recovery key, and every key derived from
 either, exist only in the user's browser (or the user's own safekeeping,
 for the recovery key) and are never transmitted or stored server-side in
 recoverable form. The server retains only: the owning account's identifier,
-an opaque encrypted blob per deck, two wrapped copies of that deck's
-encryption key (one recoverable with the passphrase, one recoverable with
-the user's own recovery key — neither readable by us), a per-user random
-salt and iteration count (not secret; strengthens key derivation), and
-ordinary created/updated timestamps. A user can delete any saved deck — or,
+an opaque encrypted blob per deck plus that deck's own wrapped encryption
+key, two wrapped copies of the user's single master key (one recoverable
+with the passphrase, one recoverable with the user's own recovery key —
+neither readable by us), a per-user random salt and iteration count (not
+secret; strengthens key derivation), and ordinary created/updated
+timestamps. A user can delete any saved deck — or,
 once account deletion ships, their entire account — at any time,
 immediately and permanently. If both the passphrase and the recovery key
 are lost, the affected decks are permanently unrecoverable by design; the

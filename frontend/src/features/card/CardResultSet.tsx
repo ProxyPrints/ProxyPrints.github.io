@@ -170,7 +170,7 @@ function FacetedCards({
         favoriteItems.push([identifier, originalIndex]);
       }
 
-      const cardDocument: CardDocument | null = cardDocuments[identifier];
+      const cardDocument: CardDocument | undefined = cardDocuments[identifier];
       if (cardDocument != null) {
         const facet = facetByCallable(cardDocument);
         if (facet === undefined) {

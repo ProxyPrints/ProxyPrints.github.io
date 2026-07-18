@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Proposal H — Mobile (&lt;768, default)</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { width: 390px; }
+  .sheet-region { padding: 14px; }
+  .sheet { max-width: 100%; }
+  .toolbar.condensed { flex-wrap: wrap; height: auto; padding: 8px 10px; gap: 6px; }
+  .toolbar .deck-name { font-size: 13px; max-width: 120px; }
+</style>
+</head>
+<body>
+<div class="page-frame">
+  <span class="frame-label">mobile &lt;768 — default (sheet only; single column, no sticky anywhere per docs/lessons.md)</span>
+
+  <div class="toolbar condensed">
+    <span class="deck-name">Standard Cube</span>
+    <div class="pager">
+      <button>◀</button>
+      <span class="annotate">3/13</span>
+      <button>▶</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn-icon" title="More">⋮</button>
+  </div>
+
+  <div class="sheet-region">
+    <div class="sheet">
+      <div class="slot"><span class="slot-num">17</span></div>
+      <div class="slot"><span class="slot-num">18</span><span class="slot-badge">SET 142</span></div>
+      <div class="slot"><span class="slot-num">19</span></div>
+      <div class="slot"><span class="slot-num">20</span><span class="slot-badge degraded">SET 07</span></div>
+      <div class="slot"><span class="slot-num">21</span></div>
+      <div class="slot"><span class="slot-num">22</span></div>
+      <div class="slot"><span class="slot-num">23</span></div>
+      <div class="slot"><span class="slot-num">24</span></div>
+    </div>
+    <p class="annotate">Tap any slot to open the rail as a full bottom-sheet overlay — see mobile-rail-open.html.
+    "⋮" holds the rest of the print settings (paper/bleed/guides/Generate PDF) off the compact bar.</p>
+  </div>
+</div>
+</body>
+</html>

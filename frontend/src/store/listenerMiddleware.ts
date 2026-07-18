@@ -8,6 +8,7 @@ import { Back, Front, QueryTags } from "@/common/constants";
 import {
   getLocalStorageSearchSettings,
   setLocalStorageFavorites,
+  setLocalStorageManualOverrides,
 } from "@/common/cookies";
 import { computeSearchQueryHashKey } from "@/common/processing";
 import { Faces } from "@/common/types";
@@ -36,6 +37,8 @@ import {
   addMembers,
   bulkRemovePrintingFilter,
   selectProjectCardback,
+  setAllManualOverrides,
+  setManualOverride,
   setQueries,
   setSelectedCardback,
   setSelectedImages,
@@ -354,6 +357,18 @@ startAppListening({
   effect: async (action, { getState }) => {
     const state = getState();
     setLocalStorageFavorites(state.favorites.favoriteRenders);
+  },
+});
+
+startAppListening({
+  matcher: isAnyOf(setManualOverride, setAllManualOverrides),
+  /**
+   * Save PDF export bleed overrides to localStorage whenever they change (Proposal B PR-2,
+   * decision 4 - must survive reload).
+   */
+  effect: async (action, { getState }) => {
+    const state = getState();
+    setLocalStorageManualOverrides(state.project.manualOverrides);
   },
 });
 

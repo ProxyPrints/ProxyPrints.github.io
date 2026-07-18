@@ -15,6 +15,7 @@ import {
   UpstreamDesktopTool,
   UpstreamDesktopToolReleasesURL,
 } from "@/common/constants";
+import { isUnifiedDisplayPageEnabled } from "@/common/featureFlags";
 import DisableSSR from "@/components/DisableSSR";
 import { RightPaddedIcon } from "@/components/icon";
 import { BackendConfig } from "@/features/backend/BackendConfig";
@@ -22,6 +23,7 @@ import {
   DownloadManager,
   OpenDownloadManagerButton,
 } from "@/features/download/DownloadManager";
+import { AuthWidget } from "@/features/moderation/AuthWidget";
 import {
   useAnyBackendConfigured,
   useProjectName,
@@ -88,6 +90,16 @@ export default function ProjectNavbar() {
                   Editor
                 </Nav.Link>
               )}
+              {anyBackendConfigured && isUnifiedDisplayPageEnabled() && (
+                <Nav.Link
+                  as={Link}
+                  href="/display"
+                  active={router.route === "/display"}
+                  eventKey="/display"
+                >
+                  Display (beta)
+                </Nav.Link>
+              )}
               {remoteBackendConfigured && (
                 <Nav.Link
                   as={Link}
@@ -136,7 +148,12 @@ export default function ProjectNavbar() {
                 Download
               </Nav.Link>
             </Nav>
-            <Nav className="ms-auto d-flex">
+            <Nav className="ms-auto d-flex align-items-center">
+              {remoteBackendConfigured && (
+                <Nav.Link className="m-0 py-0" eventKey="auth">
+                  <AuthWidget />
+                </Nav.Link>
+              )}
               <Nav.Link className="m-0 py-0" eventKey="download-manager">
                 <OpenDownloadManagerButton
                   handleClick={handleShowDownloadManager}

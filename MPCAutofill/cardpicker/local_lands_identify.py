@@ -70,6 +70,19 @@ from cardpicker.local_identify_printing_tags import (
 )
 from cardpicker.models import CanonicalCard, CardPrintingTag, VoteSource
 
+# "=s800" tier addendum (task #130's tier-routing idea, applied here first): OCR only needs to
+# read small collector-line/artist-credit text, not print resolution - fetching at the normal
+# DEFAULT_FETCH_DPI=250 (~925px tall, image-cdn/src/url.ts's height = dpi * 1110 / 300) spends
+# real bandwidth against the shared CDN rate limiter for detail OCR never uses. 800px is the
+# target; solving the same formula for dpi (dpi = height * 300 / 1110) gives ~216, rounded up to
+# the nearest 10 (the Worker's own hard requirement - see get_worker_image_url's docstring) to
+# 220 so the actual fetched height (814px) clears 800 rather than falling just short. Also stays
+# comfortably above RESOLUTION_FLOOR_DPI (200, local_identify_printing_tags.py) - the empirically
+# -validated floor below which OCR yield measurably degrades - so this is a real bandwidth saving,
+# not a yield regression. phash needs no fetch tier at all here: this module's phash step matches
+# against already-ingested content_phash/image_hash, never re-fetching an image for it.
+OCR_FETCH_DPI = 220
+
 # Separate from every other engine's anonymous_id (OCR_ANONYMOUS_ID, PHASH_ANONYMOUS_ID,
 # RESIDUAL_CLASSIFY_ANONYMOUS_ID, ART_HASH_ARTIST_ANONYMOUS_ID) - this is a genuinely distinct
 # evidence source (artist-narrowed phash, never attempted by any other engine) and must be
@@ -282,7 +295,7 @@ def run_lands_identify(
             continue
 
         result.fetch_attempted += 1
-        image = fetch_card_image(card)
+        image = fetch_card_image(card, dpi=OCR_FETCH_DPI)
         if image is None:
             result.outcomes.append(
                 LandIdentifyOutcome(
@@ -375,6 +388,7 @@ def run_lands_identify(
 
 
 __all__ = [
+    "OCR_FETCH_DPI",
     "LANDS_ANONYMOUS_ID",
     "BASIC_LAND_NAMES",
     "LANDS_SINGLETON_CONFIDENCE",

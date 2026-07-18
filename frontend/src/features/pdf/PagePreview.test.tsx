@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import React from "react";
 
 import { CardHeightMM, CardWidthMM } from "@/common/constants";
@@ -154,6 +155,158 @@ describe("PagePreview", () => {
     );
     const spacedCount = screen.getAllByTestId("page-preview-slot").length;
     expect(spacedCount).toBeLessThan(initialCount);
+  });
+
+  it("is non-interactive by default - no click role, click is a no-op", async () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    await userEvent.click(screen.getAllByTestId("page-preview-slot")[0]);
+  });
+
+  it("calls onSlotClick with the clicked slot's row-major index when provided", async () => {
+    const onSlotClick = jest.fn();
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          { imageUrl: "https://example.com/1.png", name: "Card 1" },
+          { imageUrl: "https://example.com/2.png", name: "Card 2" },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+        onSlotClick={onSlotClick}
+      />
+    );
+    const slotEls = screen.getAllByTestId("page-preview-slot");
+    await userEvent.click(slotEls[1]);
+    expect(onSlotClick).toHaveBeenCalledWith(1);
+  });
+
+  it("marks only the selected slot as pressed", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          { imageUrl: "https://example.com/1.png", name: "Card 1" },
+          { imageUrl: "https://example.com/2.png", name: "Card 2" },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+        onSlotClick={() => {}}
+        selectedSlotIndex={1}
+      />
+    );
+    const slotEls = screen.getAllByTestId("page-preview-slot");
+    expect(slotEls[0]).toHaveAttribute("aria-pressed", "false");
+    expect(slotEls[1]).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("lazy-loads slot images", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    const image = screen.getByRole("img");
+    expect(image).toHaveAttribute("loading", "lazy");
+    expect(image).toHaveAttribute("decoding", "async");
+  });
+});
+
+describe("PagePreview - bleed badge (Proposal B PR-3)", () => {
+  it("renders the hedged badge when willGenerateBleed is true", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+            willGenerateBleed: true,
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    expect(screen.getByTestId("page-preview-bleed-badge")).toHaveTextContent(
+      "Bleed will be generated"
+    );
+  });
+
+  it("renders no badge when willGenerateBleed is false", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+            willGenerateBleed: false,
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    expect(
+      screen.queryByTestId("page-preview-bleed-badge")
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders no badge when willGenerateBleed is omitted (signal not yet available)", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    expect(
+      screen.queryByTestId("page-preview-bleed-badge")
+    ).not.toBeInTheDocument();
   });
 });
 
