@@ -63,6 +63,9 @@ The methodology and the systems it governs.
   bucket image CDN.
 - [`features/local-file-source.md`](features/local-file-source.md) —
   backend `LOCAL_FILE` catalog source type.
+- [`features/saved-decks.md`](features/saved-decks.md) — zero-knowledge
+  user accounts + server-side saved decks: the crypto design, backend
+  endpoints, frontend wiring, and the still-design-only PR-5/PR-6 addenda.
 
 ## Using it
 
