@@ -12,3 +12,7 @@ EXPLORE_SEARCH_MAX_PAGE_SIZE = 100
 
 MAX_SIZE_MB = 30
 NSFW = "NSFW"
+
+# docs/proposals/proposal-g-user-accounts-saved-decks.md decision 7 - a fixed FIFO ring size,
+# deliberately NOT a setting (it's an implementation safety valve, not a user-facing quota).
+SAVED_DECK_SNAPSHOT_RING_SIZE = 5

@@ -98,6 +98,11 @@ CARD_REPORT_RATE = env("CARD_REPORT_RATE", default="10/d")
 # not a storage concern (a deck is ~15-35 KB) - stops a runaway script from becoming a
 # moderation problem, not a disk-management knob.
 SAVED_DECK_MAX_PER_USER = env.int("SAVED_DECK_MAX_PER_USER", default=100)
+# zero-knowledge encryption (see the proposal's §8 amendment) - a defensive floor against a
+# buggy/malicious client persisting a weak PBKDF2 iteration count into UserCryptoProfile. The
+# spec's own floor is 600,000; this is a settings knob only so it can be raised later without a
+# code change, never lowered below what's already been accepted from real users.
+SAVED_DECK_MIN_KDF_ITERATIONS = env.int("SAVED_DECK_MIN_KDF_ITERATIONS", default=600_000)
 
 # Fuzzy tag-matching confidence thresholds. See cardpicker.tags.Tags.match_tag_fuzzy.
 TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD = env.float("TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD", default=0.92)

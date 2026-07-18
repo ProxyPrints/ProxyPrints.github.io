@@ -1,0 +1,10 @@
+{
+  "title": "Reset Saved Decks Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "deletedDeckCount": { "type": "integer" }
+  },
+  "required": ["deletedDeckCount"],
+  "additionalProperties": false
+}
