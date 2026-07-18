@@ -683,11 +683,74 @@ without waiting for a session to end.
 - **Deck sharing**, if it ships, uses a **key-in-URL-fragment** scheme — the
   DEK travels in the fragment (`#...`), which browsers never send to the
   server, so a share link's server-side request never carries key material.
+  Expanded into a full design below (see "PR-5, post-v1: per-deck share
+  links").
 - **WebAuthn passkey PRF** as an **optional additional** unwrap method
   someday — it would wrap the same master key a passphrase (or recovery
   key) does, not a separate one. Withdrawn as the primary/only mechanism;
   no survey needed now, since the passphrase + recovery-key design alone
   satisfies the goal.
+
+### PR-5, post-v1: per-deck share links (design only — owner-directed addendum, 2026-07-18; nothing built here)
+
+Expands the "Deck sharing" future-work bullet above into a full design.
+**Design only in this pass** — this section describes a later, separate
+PR (PR-5); nothing here is built by the PRs in this amendment's own
+sequencing (schema, sign-in relocation, API, crypto module, frontend
+wiring). A new `SavedDeckShare` table (or equivalent) is additive to §3's
+schema and does not require changing `SavedDeck`/`UserCryptoProfile` as
+already specified above — shares reference an existing deck by id and
+carry their own wrapped-key blob, so this doesn't preclude anything
+already built in PR-1's schema.
+
+- **Share creation (client-side)**: the owner picks one of their decks; the
+  client generates a fresh random 256-bit `shareKey`, unwraps that deck's
+  existing DEK (via the owner's already-unlocked master key), and
+  re-wraps that same DEK with the new `shareKey` — a second, independent
+  wrapping of the deck's DEK, alongside the owner's own master-key-wrapped
+  copy. The client `POST`s a share record: `{shareId, deckRef, wrappedDEK_by_shareKey, wrapNonce, created, optional expiry}`. The
+  `shareKey` itself goes **only** into the share link's URL fragment —
+  `/shared/<shareId>#<shareKey-base64url>` — never in the path, query
+  string, or request body, so it never reaches the server. The server
+  stores one more opaque wrapped blob and learns nothing about the deck's
+  contents or the owner's own keys.
+- **Recipient flow (no account needed)**: opening the link, the client
+  fetches ciphertext + the share's wrapped DEK by `shareId` alone (an
+  unauthenticated, read-only lookup), unwraps the DEK using the fragment's
+  `shareKey`, and decrypts locally. Render is read-only — a recipient
+  never gets a wrapped-by-master-key copy, only the share-scoped one, so
+  they can never derive the owner's master key or reach any of the
+  owner's other decks.
+- **Revocation**: the owner can list their own active shares per deck
+  (`shareId`s + creation dates — metadata only, same honesty standard as
+  the rest of this schema). Revoking a share is a `DELETE` of that share
+  record — the link is dead for all future fetches immediately. A
+  **paranoid option**, offered per-revoke as a checkbox, additionally
+  rotates the deck's DEK: generate a fresh DEK, re-encrypt that one deck's
+  ciphertext with it, and re-wrap the new DEK for the owner's own
+  passphrase and recovery-key slots (any other still-active shares on that
+  deck would need re-issuing too, since they wrap the old DEK — the UI
+  must surface this rather than silently breaking other shares). This
+  makes even already-captured key material for that share permanently
+  useless. Honest limit, stated plainly in-product: revocation (with or
+  without rotation) cannot recall content a recipient already viewed and
+  saved elsewhere — true of every link-based sharing system, not a gap
+  specific to this design.
+- **Properties**: the master key never leaves its existing wrap chain (it
+  is never itself shared or derivable from a share); shares are
+  inherently per-deck, since they wrap that deck's DEK specifically, never
+  the master key; a deck can have multiple independent, individually
+  revocable shares outstanding at once; each `shareKey` is freshly random,
+  **not** derived from the master key or from any other share's key, so
+  leaking one share's key reveals nothing about the master key, the
+  owner's other decks, or any other share.
+- **Tests** (written now as the spec's requirement for PR-5, to implement
+  when that PR is built): share round-trip (create → fetch by
+  `shareId` + fragment key → decrypt correctly); a revoked share's fetch
+  fails (or 404s) for all subsequent attempts; rotation-on-revoke renders
+  a previously-captured `shareKey` unable to decrypt the rotated
+  ciphertext; a leaked `shareKey` cannot decrypt or unwrap anything for
+  any _other_ deck, shared or not.
 
 ### Consequences (written honestly)
 
