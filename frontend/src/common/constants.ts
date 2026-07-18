@@ -94,7 +94,15 @@ export enum QueryTags {
   BackendSpecific = "backendSpecific",
   SearchResults = "searchResults",
   SampleCards = "sampleCards",
+  SavedDecks = "savedDecks",
+  CryptoProfile = "cryptoProfile",
 }
+
+// docs/proposals/proposal-g-user-accounts-saved-decks.md §8 - matches the backend's
+// SAVED_DECK_MIN_KDF_ITERATIONS default (MPCAutofill/MPCAutofill/settings.py) as the iteration
+// count used for every NEW crypto profile this client creates. The backend independently
+// enforces its own floor server-side regardless of what a client sends.
+export const SavedDeckKdfIterations = 600_000;
 
 export const S27: Cardstock = "(S27) Smooth";
 export const S30: Cardstock = "(S30) Standard Smooth";

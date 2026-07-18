@@ -80,14 +80,78 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(railHeader).toContainText("Slot 1");
     await expect(railHeader).toContainText("front");
 
-    // Choose Image is open by default; the other four sections start collapsed - per the
-    // owner's accordion amendment (design doc §2).
-    await expect(
-      page.getByText("The candidate/version picker", { exact: false })
-    ).toBeVisible();
+    // Compressed view (viewSettingsSlice's real, hardcoded default) renders only the bare card
+    // image - no per-card "Option N" text - so toggle it off first, same precedent as
+    // CardSlot.spec.ts's own version-picker test.
+    await page.getByText("Compressed").click();
+
+    // Choose Image is open by default (real candidate grid, wired in PR 2a); the other four
+    // sections start collapsed - per the owner's accordion amendment (design doc §2).
+    await expect(page.getByText("Option 1")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Filters/ })).toBeVisible();
     await expect(
       page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
     ).not.toBeVisible();
+  });
+
+  test("selecting a candidate image in Choose Image updates the sheet's slot immediately", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "my search query");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+
+    const sheetSlot = page.getByTestId("page-preview-slot").first();
+    await sheetSlot.click();
+    // Compressed view (the default) hides "Option N" text entirely - see the previous test.
+    await page.getByText("Compressed").click();
+    // searchResultsThreeResults (mocks/handlers.ts) resolves "my search query" to
+    // [cardDocument1, cardDocument2, cardDocument3] in that order - Option 1 is cardDocument1.
+    await page.getByText("Option 2").click();
+
+    await expect(sheetSlot.locator("img")).toHaveAttribute("alt", "Card 2");
+    // The rail's own header (identity text) reflects the same real-time selection - same Redux
+    // state, same render path, not a separate source of truth.
+    await expect(page.getByTestId("display-rail-header")).toContainText(
+      "Card 2"
+    );
+  });
+
+  test("the embedded Choose Image section has no OverflowCol-style forced scroll region (would double-scroll inside the rail)", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "my search query");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+    // Compressed view (the default) hides "Option N" text entirely - see the earlier tests.
+    await page.getByText("Compressed").click();
+
+    const candidateCard = page.getByText("Option 1");
+    await expect(candidateCard).toBeVisible();
+    // GridSelectorResults' "modal" variant wraps this in an OverflowCol, which sets
+    // overflow-y: scroll unconditionally - a second, competing scroll region nested inside the
+    // rail's own already-scrolling container (see DisplayPage.tsx's RailWrapper). The "embedded"
+    // variant must render a plain Col instead, with no ancestor up to the rail itself forcing
+    // its own scroll.
+    const hasNestedScrollAncestor = await candidateCard.evaluate((el) => {
+      let node: HTMLElement | null = el.parentElement;
+      while (node != null) {
+        if (getComputedStyle(node).overflowY === "scroll") {
+          return true;
+        }
+        if (node.dataset.testid === "display-rail") {
+          break;
+        }
+        node = node.parentElement;
+      }
+      return false;
+    });
+    expect(hasNestedScrollAncestor).toBe(false);
   });
 
   test("clicking a collapsed section's header expands it", async ({
@@ -100,7 +164,9 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.getByRole("link", { name: "Display (beta)" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
-    await page.getByRole("heading", { name: "Attributes" }).click();
+    await page
+      .getByRole("heading", { name: "Attributes", exact: true })
+      .click();
     await expect(
       page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
     ).toBeVisible();
@@ -120,7 +186,13 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     const slots = page.getByTestId("page-preview-slot");
     await slots.first().click();
-    await page.getByRole("heading", { name: "Attributes" }).click();
+    // Compressed view (the default) hides "Option N" text entirely - see the earlier tests.
+    // This is a global view setting, not slot-specific state, so toggling it once here holds
+    // for the rest of the test (including after selecting the second slot below).
+    await page.getByText("Compressed").click();
+    await page
+      .getByRole("heading", { name: "Attributes", exact: true })
+      .click();
     await expect(
       page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
     ).toBeVisible();
@@ -131,9 +203,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(
       page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
     ).not.toBeVisible();
-    await expect(
-      page.getByText("The candidate/version picker", { exact: false })
-    ).toBeVisible();
+    await expect(page.getByText("Option 1")).toBeVisible();
   });
 
   test("the Fronts/Backs toggle button reflects the shared frontsVisible view setting", async ({
