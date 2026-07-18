@@ -179,9 +179,29 @@ export function QuestionFeed() {
     setFetchError(false);
     APIGetQuestionFeed(backendURL, getOrCreateAnonymousId())
       .then((response) => {
-        setItem(response.item ?? null);
+        const newItem = response.item ?? null;
+        setItem(newItem);
         setCounts(normalizeQuestionFeedCounts(response.remainingEstimate));
-        setCaughtUp(response.item == null);
+        setCaughtUp(newItem == null);
+        // Reset per-question local state in the SAME update as the new item, rather than a
+        // separate effect keyed on item?.card.identifier/type. Two consecutive feed items can
+        // legitimately share both (e.g. the same card can carry more than one pending question
+        // type, or the same question can be re-served) - a dependency-array-keyed effect skips
+        // the reset entirely when neither value changes, silently carrying stale chipStates
+        // (and revealed/selectedCandidateId/etc) over from the previous card. That's exactly
+        // what produced the real-device symptom of the candidate grid rendering empty (chip
+        // states left over from a previous card filtering out every candidate of the new one)
+        // until the user tapped a chip - the only other thing that ever updated chipStates,
+        // which incidentally "fixed" it by replacing the stale filter. Resetting here instead
+        // makes the reset unconditional on every new item, with no dependency array to miss.
+        setRevealed(false);
+        setChipStates(initialChipStates());
+        setFollowUp("none");
+        setSelectedCandidateId(null);
+        setRateLimited(false);
+        setFilterExpanded(false);
+        setLevel3ChipStates({});
+        setStage(initialStage(newItem));
       })
       .catch(() => {
         setItem(null);
@@ -190,19 +210,6 @@ export function QuestionFeed() {
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, fetchToken]);
-
-  // reset per-question local state whenever a new item lands
-  useEffect(() => {
-    setRevealed(false);
-    setChipStates(initialChipStates());
-    setFollowUp("none");
-    setSelectedCandidateId(null);
-    setRateLimited(false);
-    setFilterExpanded(false);
-    setLevel3ChipStates({});
-    setStage(initialStage(item));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item?.card.identifier, item?.type]);
 
   const advance = () => {
     setFlavorText(randomFlavorText());

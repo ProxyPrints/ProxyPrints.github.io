@@ -130,6 +130,19 @@ printings, artists, tags, and moderation from one screen.
   `PrintingTagQueue.tsx`/`GenericVoteQueue.tsx`/`ModerationQueue.tsx` tab
   switcher was deleted, its mechanics extracted into `cardPanel.tsx` and
   reused directly.
+- **Per-question local state (`chipStates`/`revealed`/`filterExpanded`/etc)
+  resets inside the same `.then()` as `setItem(...)`**, not via a separate
+  `useEffect` keyed on `[item?.card.identifier, item?.type]` — that
+  dependency array silently skips the reset whenever two consecutive feed
+  items share both values (the same card can carry more than one pending
+  question, or the same question can be re-served), leaving a chip left
+  "positive" from the previous card filtering the new card's candidate
+  grid against an unrelated attribute — observed as the grid rendering
+  empty until the user happened to touch a chip themselves (the only
+  other thing that ever updated `chipStates`). Resetting unconditionally
+  alongside `setItem` removes the dependency array (and the class of bug
+  it enables) entirely, rather than trying to compute a "definitely always
+  changes" key.
 - `starburstShape.ts` — seeded PRNG (mulberry32) generates the animated
   starburst background, 5 precomputed frames per layer; skipped under
   `prefers-reduced-motion` (checked once via `matchMedia`).
