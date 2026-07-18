@@ -561,32 +561,66 @@ pilot wasn't stopped for this.
 
 ---
 
-## Part 4 — LANDS (artist-decomposed identification) (confirmed unstarted 2026-07-18; HOLD #B prep queued)
+## Part 4 — LANDS (artist-decomposed identification) (module built 2026-07-18; HOLD #B still open — real volume-check numbers not yet run)
 
 Target pool: unresolved basic lands (Plains/Island/Swamp/Mountain/Forest/
 Wastes + Snow-Covered) OR any name whose candidate count exceeded the
 phash cap (`PHASH_MAX_CANDIDATES`).
 
-1. Collector-line OCR as normal (confirm the cap never applied to OCR —
-   text validation is free at any N; verify against `select_candidates`/
-   `run_ocr_for_card`, don't assume).
-2. Where OCR fails: artist OCR (already extracted in the fallback pass's
-   stored JSON per-card audit data, deliberately unwritten as a vote since
-   the pilot's start — confirm this via `local_fallback.py`'s
-   `extract_artist_name`/`match_artist`, currently used only to _narrow_
-   printing candidates during pass-2, never to vote) → `difflib` ratio
-   ≥0.8 against the NAME'S OWN candidates' artists only (not the whole
-   artist table).
+1. Collector-line OCR as normal — **confirmed**: `run_ocr_for_card`
+   iterates `local_ocr.validate_against_candidates` unconditionally, no
+   `len(candidates)` check anywhere. A card still unresolved and in this
+   pool has already had a real, uncapped OCR attempt fail.
+2. Where OCR fails: artist OCR, reusing `local_fallback.py`'s
+   `detect_illus_anchor`/`extract_artist_name`/`match_artist` verbatim
+   (already existed, already used to _narrow_ candidates during pass-2 —
+   confirmed never previously used to cast a vote; this module is the
+   first caller that votes on their output directly) → `difflib` ratio
+   ≥0.8 (`ARTIST_FUZZY_MATCH_THRESHOLD`, unchanged) against the NAME'S
+   OWN candidates' artists only.
 3. Artist match → filter candidates to that artist's printings → phash
-   within the filtered set (reuse the `CanonicalCard.image_hash` cache;
-   filtered sets should sit under the cap — report the real distribution,
-   don't assume it does). Unique winner with the standard margin →
-   printing vote: confidence 0.85 (artist+art agree), 0.8 (art-within-
-   artist, weaker signal). Ambiguous → skip, counted.
+   within the filtered set (`local_phash.get_or_compute_canonical_hash` +
+   `find_best_match`, same mechanism Part 3's frame-mismatch recovery
+   already uses). Unique winner with the standard margin → printing
+   vote. **Confidence split, owner-clarified 2026-07-18** (the spec
+   text's "artist+art agree" vs "art-within-artist" phrasing was
+   genuinely ambiguous on its own): 0.85 when the artist match ALONE
+   already narrows to exactly one candidate and phash on that singleton
+   clears the standard acceptance distance (two independent channels
+   agreeing); 0.8 when the artist match narrows to multiple candidates
+   and phash breaks the tie among them (one deciding channel, scoped by
+   the artist filter). Any phash failure/ambiguity in either case →
+   skip, counted — never trusted as a coin-flip. Full reasoning lives in
+   `local_lands_identify.py`'s module docstring, next to the code it
+   governs.
 
-**HOLD #B — volume check before running the pool**: land-pool size,
-artist-extraction rate on a 300-card sample, per-name candidate counts
-pre/post artist filtering. Report before building further.
+**Built**: `cardpicker/local_lands_identify.py` (the module — target-pool
+query, the 3-step pipeline, `dry_run`/`run_id`/ledger rails matching
+Part 3's exact shape) + `management/commands/local_lands_identify.py`
+(`--write`/`--run-id`/`--sample-size` [default 300, per HOLD #B]/
+`--fetch-budget` [default 0], staleness guard, `PilotRunLedger` lifecycle,
+`verify_zero_resolutions` gate after any real write) +
+`tests/test_local_lands_identify.py` (16 tests, synthetic fixtures, no
+network — passing). Verified end-to-end against the real pytest suite
+(862 passed, 130/130 snapshots, only the pre-existing known-bucket
+failures — moxfield ×2, `test_sources.py` fixture-path ×2, unrelated to
+this module) and the real `pre-commit` hook set (ruff/isort/black/
+mypy/prettier all clean).
+
+**HOLD #B — still open**: the actual volume-check numbers (land-pool
+size, artist-extraction rate on a 300-card sample, per-name candidate
+counts pre/post artist filter) require running
+`manage.py local_lands_identify` (dry-run, the default) against the real
+production database — this session does not have that access (direct
+DB/host-venv access was denied by the same classifier mechanism that
+blocked Docker build/compose access earlier this same session; per that
+established pattern, not re-attempted a fourth way here). The command is
+built, tested, and ready — `--fetch-budget 0` gets `land_pool_size` +
+`per_name_candidate_counts` (pre-filter) with zero network cost as a
+first, instant read of pool shape; the full HOLD #B report (including
+the artist-extraction rate, which needs real fetches) needs someone with
+production DB access to run the default invocation and report the
+output. Nothing writes without an explicit `--write`.
 
 ---
 
