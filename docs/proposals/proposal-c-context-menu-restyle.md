@@ -1,5 +1,5 @@
 As of: 2026-07-18
-What this is: Proposal C — (a) a right-click/long-press context menu on editor card slots, (b) a solid-color utilitarian restyle direction. Part (a) is APPROVED (4 decisions below) and built this pass. Part (b)'s direction is still HOLD pending its own token-build PR, per the owner's explicit "Part (b)'s first increment follows as its own PR."
+What this is: Proposal C — (a) a right-click/long-press context menu on editor card slots, (b) a solid-color utilitarian restyle direction. Part (a) is APPROVED (4 decisions below) and built this pass. Part (b) is **SUPERSEDED by Proposal H** (`docs/proposals/proposal-h-unified-display-page.md`) — the unified display page absorbs the restyle direction; see Part (b)'s own section below for detail. Part (b) never left HOLD before being superseded.
 
 ## Part (a) — context menu
 
@@ -37,9 +37,11 @@ Same five items as the table above, in the same order the existing dropdown alre
 
 ## Part (b) — solid-color utilitarian restyle direction
 
+**SUPERSEDED by Proposal H** (`docs/proposals/proposal-h-unified-display-page.md`) — the unified display page absorbs this restyle direction; the section below is kept as a historical record of the direction as it stood before Proposal H, not an active plan. Do not build against it.
+
 ### Current baseline
 
-`frontend/src/styles/styles.scss` uses Bootswatch's **Superhero** theme (a dark theme with soft shadows/gradients on cards, buttons, and dropdowns) with one custom override (`$primary: #4c9be8`, a mid blue). This is the ONLY theme customization in the codebase today — everything else is stock Superhero + stock Bootstrap component imports. A "solid-color utilitarian" direction, inspired by Proxxied's aesthetic per the approved scope, is a genuine visual shift from Superhero's own soft/gradient default, not a small tweak.
+`frontend/src/styles/styles.scss` uses Bootswatch's **Superhero** theme (a dark theme with soft shadows/gradients on cards, buttons, and dropdowns) with one custom override (`$primary: #4c9be8`, a mid blue). This is the ONLY theme customization in the codebase today — everything else is stock Superhero + stock Bootstrap component imports. A "solid-color utilitarian" direction, inspired by comparable community proxy tools' aesthetics per the approved scope, is a genuine visual shift from Superhero's own soft/gradient default, not a small tweak.
 
 ### Direction proposal (tokens, not a build)
 

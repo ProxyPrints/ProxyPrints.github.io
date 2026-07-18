@@ -12,10 +12,11 @@ later build — not part of this HOLD's core scope.
 
 ## Context — prior art outside this codebase
 
-Proxxied's framing is the precedent this proposal matches: "start free,
-optionally sign in to save projects across devices — no account required."
-Login here is the same shape — never a gate on using the editor, purely an
-opt-in path to persistence across sessions/devices for users who want it.
+A comparable proxy-editor tool's framing is the precedent this proposal
+matches: "start free, optionally sign in to save projects across devices —
+no account required." Login here is the same shape — never a gate on using
+the editor, purely an opt-in path to persistence across sessions/devices for
+users who want it.
 
 ## Summary
 

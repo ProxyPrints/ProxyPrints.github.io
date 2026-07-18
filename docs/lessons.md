@@ -597,3 +597,58 @@ flag ON - `NEXT_PUBLIC_<FLAG>=true npx next build` (or the equivalent for whatev
 before its PR ships, in addition to (not instead of) `tsc --noEmit`, the Jest suite, and Playwright
 against `next dev`. Add this to the pre-push checklist for every future PR touching a flagged
 route, not just this one's remaining build-out.
+
+## A value carried "verbatim" out of its old context can silently stop meaning what it meant
+
+Two independent instances, same underlying failure mode: something copied forward unchanged from
+a prior implementation, that was only ever correct _relative to_ a context which then changed
+without it.
+
+**Instance 1 (numeric constant, PR #91)**: `BurstSvg`'s `width: 140%` in `cardPanel.tsx` was sized
+relative to `CardPanel`'s own rendered width, tuned back when the card column was `Col md={4}`
+(33% of the row) in the pre-redesign `PrintingTagQueue.tsx`. The "Queue redesign" widened the card
+column to `Col md={7}` (58% of the row) and carried the `140%` constant forward unchanged - it was
+never wrong in isolation, only relative to a column width that had since roughly doubled, so the
+burst grew large enough to visually collide with the page's own heading and stats text. Nothing
+about `140%` looks suspicious on its own; the bug is only visible by knowing what it was originally
+tuned against.
+
+**Instance 2 (rendered element, PR #78)**: see "A rewrite that 'extracts X verbatim' can still
+silently drop an element the old component rendered" above - `PrintingTagQueue.tsx`'s "candidate-
+grid mechanics extracted verbatim" commit message was true for the grid mechanics themselves, but
+Level 1's later from-scratch confirmation prompt (PR #49) never carried the per-candidate reference
+image over at all, because nothing about "verbatim" flagged that the image was part of what needed
+preserving.
+
+**The lesson, generalized**: a value (a percentage, a pixel offset, a copied element, a duplicated
+handler) that was only ever correct _because of_ some other piece of context - a sibling's size, a
+parent's behavior, an assumption baked in at the point it was written - does not carry a warning
+label forward when it's copied, inherited, or left alone while everything around it changes. Two
+concrete checks this suggests for any future redesign/rewrite: (1) grep the component being resized
+or replaced for percentage/relative values and ask "relative to what, and did that reference just
+change"; (2) before trusting a commit message's "extracted/carried verbatim," diff what the OLD
+component actually rendered/computed against the NEW one, element for element and value for value,
+rather than trusting the claim.
+
+## Bootswatch Superhero hardcodes some component colors as literal properties, not CSS custom-property references
+
+`--bs-primary`/other Bootstrap custom-property overrides do not reliably reach every component
+under Superhero (this fork's Bootswatch theme, `frontend/src/styles/styles.scss`) - some components
+read the custom property correctly (`.btn-link`'s color, links via `--bs-link-color-rgb`), but
+Superhero's own compiled SCSS hardcodes a _literal_ `background-color` directly on `.btn-primary`
+(and other `$theme-colors`-loop components), at the same specificity as Bootstrap's own
+`var(--bs-btn-bg)`-based rule and later in the compiled source order - it wins the cascade
+regardless of what the custom property resolves to. Found in PR #91 (`/whatsthat`'s accent-color
+swap) by comparing the _computed_ `--bs-btn-bg` value (correctly overridden) against the actually-
+rendered `background-color` on a live element (still the old theme color) - the custom-property
+value being right proved nothing about what actually painted.
+
+**The check this implies**: when overriding a themed Bootstrap component's color via CSS custom
+properties, verify the browser's _computed_ `background-color`/`border-color`/etc. on a live
+rendered element, not just that the custom property itself resolved to the intended value - a
+custom-property override can silently no-op wherever the compiled theme hardcodes the literal
+property instead of referencing the variable. Fix is direct: set the literal property
+(`background-color`, `border-color`) alongside the custom properties for any component this affects — specificity alone wins the cascade, no `!important` needed. `.btn-link` was NOT affected in PR
+#91 (bootswatch's hardcoding loop only covers `$theme-colors`, not the link variant) — the
+hardcoding is per-component, not theme-wide, so check each component actually touched rather than
+assuming the pattern is universal or absent.

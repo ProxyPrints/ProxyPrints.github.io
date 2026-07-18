@@ -139,7 +139,9 @@ language, per the amendment):
   page must preserve. Nothing here replaces that model; it's the floor
   the unified page still has to satisfy.
 - **`acoreyj/proxies-at-home`** (MIT) and its own credited lineage
-  **`alex-taxiera/proxy-print`** (MIT) — reusable, generically-described
+  **`alex-taxiera/proxy-print`** (AGPL-3.0 — corrected here; verified
+  directly against its GitHub license metadata, not assumed MIT because
+  the project it's credited from is) — reusable, generically-described
   patterns, used here as: (a) a three-region page anatomy (deck input,
   a live paginated print-sheet grid as the visual center, a settings
   panel) rather than a wizard of separate steps; (b) grouping per-card
@@ -147,7 +149,9 @@ language, per the amendment):
   than scattering them across the grid; (c) keeping global print/export
   settings in one panel separate from per-card controls. No code,
   markup, or copy was copied from either project — pattern shapes only,
-  attributed here per their MIT license.
+  attributed here per each project's own actual license (MIT for the
+  first, AGPL-3.0 for the second — not the same license, don't conflate
+  them).
 
 Two further generic patterns (not tied to any single named project,
 each independently reachable from first principles and common in
