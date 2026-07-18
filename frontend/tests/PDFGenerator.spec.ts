@@ -273,9 +273,9 @@ test.describe("PDFGenerator - bleed preview badge (Proposal B PR-3)", () => {
     );
 
     await addCardAndOpenPDFTab(page);
-    await expect(
-      page.getByTestId("page-preview-bleed-badge")
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("page-preview-bleed-badge")).toBeVisible({
+      timeout: 15_000,
+    });
 
     await page.getByText("Bleed Overrides").click();
     await page

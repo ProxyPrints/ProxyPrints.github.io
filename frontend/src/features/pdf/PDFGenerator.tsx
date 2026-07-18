@@ -1007,10 +1007,17 @@ const BleedOverrideSettings = ({
   const eligibleCards = useMemo(
     () =>
       Object.entries(cardDocumentsByIdentifier)
+        // cardDocumentsByIdentifier is keyed by every project member identifier, including ones
+        // whose CardDocument hasn't finished loading into the store yet (selectCardDocumentsByIdentifiers
+        // maps a not-yet-fetched identifier to undefined) - the fast preview's own eligibility
+        // filter (fastPreviewEligibleIdentifiers, below) already guards against this; this one
+        // didn't, and crashed on `cardDocument.sourceType` the instant this panel rendered before
+        // every card had loaded (task #135 - see docs/lessons.md).
         .filter(
           ([, cardDocument]) =>
-            cardDocument.sourceType === SourceType.GoogleDrive ||
-            cardDocument.sourceType === SourceType.LocalFile
+            cardDocument != null &&
+            (cardDocument.sourceType === SourceType.GoogleDrive ||
+              cardDocument.sourceType === SourceType.LocalFile)
         )
         .sort(([, a], [, b]) => a.name.localeCompare(b.name)),
     [cardDocumentsByIdentifier]
