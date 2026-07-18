@@ -103,7 +103,7 @@ One-word status per doc; see each file for the full survey/spec.
 | [`proposals/proposal-f-public-stats-page.md`](proposals/proposal-f-public-stats-page.md) — public `/stats` transparency page                                                                                 | HOLD     |
 | [`proposals/proposal-g-user-accounts-saved-decks.md`](proposals/proposal-g-user-accounts-saved-decks.md) — user accounts + saved decks via Discord OAuth                                                     | HOLD     |
 | [`proposals/proposal-h-unified-display-page.md`](proposals/proposal-h-unified-display-page.md) — one page merging the "Choose Art" editor and PDF export into a live print-sheet preview + card-details rail | HOLD     |
-| [`federation/public-export-v1.md`](federation/public-export-v1.md) — publish-first federation: signed verdict export consumable by mpc-autofill forks and the MIT-lineage proxy tools, no peer required     | HOLD     |
+| [`federation/public-export-v1.md`](federation/public-export-v1.md) — publish-first federation: signed verdict export consumable by mpc-autofill forks and the MIT-lineage proxy tools, no peer required      | HOLD     |
 
 Not every shipped proposal-lettered feature has a survey doc here — some
 (e.g. Proposal A, Proposal D) went straight from idea to shipped PR without

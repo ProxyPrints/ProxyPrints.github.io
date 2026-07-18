@@ -30,7 +30,7 @@ file, a real peer able to verify and read it — with **zero
 catalog-integrity risk** on our side: nothing a bad or buggy peer
 publishes can ever reach our own `Card`/vote tables, because we never
 import. Consuming is a strictly later, separate decision, gated on both
-having a peer worth trusting *and* fixing the gate issue documented
+having a peer worth trusting _and_ fixing the gate issue documented
 below — not before either.
 
 **Expected onboarding path for any new participant: subscriber-first.**
@@ -51,7 +51,7 @@ beyond what signing itself needs), and a display badge surfacing "N peer
 instances agree" — is deliberately dependency-free: no vote system, no
 consensus engine, no moderation stack required. Any mpc-autofill instance
 could subscribe to a verdict feed and show peer-agreement badges without
-adopting anything else this fork has built. That makes it the *only*
+adopting anything else this fork has built. That makes it the _only_
 plausibly upstream-shaped piece of the whole federation program —
 everything on the publisher side assumes the vote/consensus/moderation
 stack this fork built that upstream doesn't have. Tracked as a deferred
@@ -124,8 +124,7 @@ that exists to prove the format against.
 ## Known gate issue (tracked, not built)
 
 **The bug**: `cardpicker/vote_consensus.py`'s `is_human_backed_source()`
-checks membership in `_MACHINE_DERIVED_SOURCES = {VoteSource.DEDUCTION,
-VoteSource.OCR}` — `VoteSource.FEDERATED` is *not* in that set, so
+checks membership in `_MACHINE_DERIVED_SOURCES = {VoteSource.DEDUCTION, VoteSource.OCR}` — `VoteSource.FEDERATED` is _not_ in that set, so
 `is_human_backed_source(VoteSource.FEDERATED)` returns `True` today
 (verified directly against current code at `vote_consensus.py:31`,
 2026-07-19 — not just asserted). If federation import is ever built by

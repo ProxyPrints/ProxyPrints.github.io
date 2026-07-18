@@ -29,7 +29,7 @@ imagines pairwise peer relationships (per-peer pinned keys, no open
 enrollment). This program is different in kind — **publish-first,
 no-peer-required federation**: one signed, versioned, publicly-fetchable
 file anyone can consume without ever registering with us or exchanging
-keys out-of-band. The peer model isn't wrong, it's just a *later*
+keys out-of-band. The peer model isn't wrong, it's just a _later_
 capability (mutual, bidirectional trust) this doesn't need to wait for.
 Anyone — a fork, an unrelated MIT-licensed tool, a hobbyist script — can
 start consuming the moment this ships.
@@ -39,7 +39,7 @@ start consuming the moment this ships.
 **The hard line, stated once, applies everywhere in this doc**: **never
 images. Never image URLs to third-party storage** (not our R2 bucket,
 not a Google Drive link, nothing). What's published is exclusively
-*conclusions about* an image a consumer already has — keyed by a hash of
+_conclusions about_ an image a consumer already has — keyed by a hash of
 that image's content, never by a fetchable pointer to it. This isn't a
 performance choice, it's the entire reason this can be publish-first
 with zero catalog-integrity or takedown-liability risk: nothing this
@@ -85,11 +85,11 @@ Notes on each field, and open questions flagged inline:
   already expects on the Python side and is trivially parseable in any
   other language without 64-bit-signed-integer bit-twiddling. **Open
   question**: should this key on `CanonicalCard`-level identity instead
-  (one record per printing) with `content_phash` as an *array* of known
+  (one record per printing) with `content_phash` as an _array_ of known
   hashes for that printing, rather than one record per observed image?
   Real MTG printings have multiple photographed copies in our own
   catalog already (different scan angles/lighting/generations) that
-  could each independently phash-match a consumer's image for the *same*
+  could each independently phash-match a consumer's image for the _same_
   printing — a one-record-per-hash shape means a consumer might need to
   check several records to find their match; a one-record-per-printing
   shape with an array avoids that at the cost of a less trivial dedup
@@ -103,7 +103,7 @@ Notes on each field, and open questions flagged inline:
   (we already have both on every resolved `CanonicalCard`) and removes
   any need for a consumer to cross-reference Scryfall themselves just to
   join on our export.
-- **`attributes`** — only the attribute *classes* this fork actually
+- **`attributes`** — only the attribute _classes_ this fork actually
   resolves consensus on: `border_color`/`frame` (from
   `CanonicalPrintingMetadata`, already Scryfall-sourced, high
   confidence — arguably shouldn't even need a "verdict" since it's
@@ -116,7 +116,7 @@ Notes on each field, and open questions flagged inline:
   "omit, never emit empty" convention, see `docs/features/card-dom-api.md`).
 - **`basis`** — `human_confirmed` is redundant with §1's "human-confirmed
   only" gate (every record in this export is `true`, by construction —
-  see below) but included anyway so a consumer never has to *trust* that
+  see below) but included anyway so a consumer never has to _trust_ that
   gate blindly; it's a self-describing, independently-checkable field on
   every record. `vote_weight`/`human_votes` are advisory context, not
   something a consumer needs to re-derive our own consensus math from.
@@ -138,7 +138,7 @@ haven't yet been confirmed by a human vote) **stay home**, full stop, no
 "confidence score" export tier for them in v1. This isn't a technical
 limitation, it's a brand decision stated plainly: what a consumer gets
 from this export is exactly the thing `docs/theory.md` argues this
-fork's whole identification pipeline is *for* — evidence that's been
+fork's whole identification pipeline is _for_ — evidence that's been
 through a human-backed consensus gate, not raw model output dressed up
 as ground truth. A consumer importing this data is importing our
 review's outcome, not our review's inputs.
@@ -165,8 +165,7 @@ assumed correct from this doc's own earlier description.
 1. **Classify the image as `"bleed"` or `"trimmed"`** by aspect ratio,
    before cropping anything. Compare `width / height` against two
    reference ratios derived from a standard 63×88mm MTG card trim size
-   plus a 3.175mm (⅛") bleed margin per edge: `TRIM_ASPECT_RATIO =
-   63 / 88`, `BLEED_ASPECT_RATIO = (63 + 2×3.175) / (88 + 2×3.175)`.
+   plus a 3.175mm (⅛") bleed margin per edge: `TRIM_ASPECT_RATIO = 63 / 88`, `BLEED_ASPECT_RATIO = (63 + 2×3.175) / (88 + 2×3.175)`.
    Whichever reference ratio the image's actual ratio is closer to
    wins, **unless neither is within 0.03** — then abstain (`None`):
    genuinely ambiguous, not a forced guess. ~97.5% of real card images
@@ -176,7 +175,7 @@ assumed correct from this doc's own earlier description.
    `(left, top, right, bottom) = (0.07, 0.10, 0.93, 0.58)` for a
    `"bleed"` or ambiguous (`None`) image — used as-is, no remapping.
    This box is deliberately crude (a fixed fraction, not a real
-   frame-aware detector) and that crudeness is a *feature* for
+   frame-aware detector) and that crudeness is a _feature_ for
    interoperability: cheap for any consumer to reimplement exactly, in
    any language, with zero MTG-frame-detection logic of their own.
    **For a `"trimmed"` image**, the same four fractions must first be
@@ -209,14 +208,14 @@ assumed correct from this doc's own earlier description.
 
 ### Distance semantics — empirically tuned, not textbook, and said so
 
-**Match threshold: Hamming distance ≤ 20.** This is *not* the commonly-
+**Match threshold: Hamming distance ≤ 20.** This is _not_ the commonly-
 quoted "under 10" imagehash convention (that assumes well-aligned,
 full-card crops; this fork's crude art-only crop needs a looser bound).
 Tuned against real production distances measured 2026-07-15 across ~26
 real multi-candidate cards internally: genuinely-different printings'
 minimum observed distance never fell below 14, and un-normalized
 reprints sharing identical official art cluster within a few points of
-each other (correctly, since they *should* often be visually
+each other (correctly, since they _should_ often be visually
 indistinguishable at this crop/hash resolution — phash alone can't
 disambiguate two printings that used the same official art asset; that
 disambiguation has to come from other signal, e.g. `set`/
@@ -244,8 +243,7 @@ for v1 — a `pip install`-able package is a nice-to-have once there's real
 external usage to justify the packaging overhead, not a v1 requirement):
 
 - **Interface**: `hash_folder(path) -> dict[filename, content_phash_hex]`
-  as the core function; a CLI wrapper (`python hash_my_cards.py
-  ./my_scans/`) that also accepts `--export-url` to fetch the current
+  as the core function; a CLI wrapper (`python hash_my_cards.py ./my_scans/`) that also accepts `--export-url` to fetch the current
   export and print matches directly, so "hash your folder, join against
   the export" is genuinely one command, not a two-step manual join.
 - **Dependencies**: `Pillow` + `imagehash` only — both are already this
@@ -285,7 +283,7 @@ a binary.
   GitHub Actions or any repo.
 - **Key publication**: the public key committed in-repo (a new
   `public-key.txt` alongside this doc, or similar — exact filename not
-  worth deciding until this HOLD is actually approved) *and* displayed
+  worth deciding until this HOLD is actually approved) _and_ displayed
   on the site itself (About page or a dedicated `/federation` route) —
   two independent channels, so a consumer who only trusts one of
   {git history, live site} still has a
@@ -338,7 +336,7 @@ option, since either "fits our infra" per this doc's own §4 framing.
   - **A ledger row per run** — timestamp, record count, file hashes,
     signature status — mirroring `PilotRunLedger`'s own shape, not a
     new concept.
-  - **Dry-run default** — the command computes and reports what *would*
+  - **Dry-run default** — the command computes and reports what _would_
     publish (record count, diff size vs. last publish) without actually
     writing/signing/uploading unless passed an explicit `--publish`
     flag, matching this fork's existing "never a destructive default"
@@ -359,7 +357,7 @@ dedication) would have maximized adoption breadth — any consumer, no
 attribution or share-alike obligation, nothing requiring a downstream
 user to credit ProxyPrints or contribute anything back. ODbL trades some
 of that breadth for **reciprocity**, deliberately: consumers may use the
-verdicts freely, but a publicly redistributed database *built on* this
+verdicts freely, but a publicly redistributed database _built on_ this
 export must be shared back openly, under the same terms. The owner chose
 this posture on purpose — accepting some consumer friction (a license a
 casual adopter has to actually read once) in exchange for a growing,
@@ -385,15 +383,14 @@ who's only ever worked with permissive code licenses.
   requirement (see (c)), not a share-alike one. Your application's
   source code is never encumbered by this license, regardless of how
   you built it or whether it's open-source at all.
-- **(b) Share-alike applies only to *publicly redistributed* derivative
-  *databases*.** If you take this export, transform or merge it into
+- **(b) Share-alike applies only to _publicly redistributed_ derivative
+  _databases_.** If you take this export, transform or merge it into
   your own dataset, and **publish that dataset** for others to consume,
   the resulting database must be shared under ODbL too. If you use the
   data privately, internally, or only ever expose it through an
   application's produced works (see (a)), there is no share-alike
   obligation at all — internal use is completely unencumbered.
-- **(c) Attribution format**: `Contains data from ProxyPrints.ca, made
-  available under ODbL` plus a link to the export's landing page (§4).
+- **(c) Attribution format**: `Contains data from ProxyPrints.ca, made available under ODbL` plus a link to the export's landing page (§4).
   Any reasonably prominent placement — an about/credits page, a footer,
   a README for a redistributed dataset — satisfies it; ODbL doesn't
   mandate a specific location or format beyond "reasonably calculated to
@@ -417,7 +414,7 @@ compatibility question neither license was written with the other in
 mind for — the produced-works exception in (a) above still applies
 regardless (an AGPL-licensed tool displaying results from this data is
 still just producing a produced work), but a maintainer folding the
-*data itself* into their own bundled database should read (b) carefully
+_data itself_ into their own bundled database should read (b) carefully
 before assuming AGPL's own copyleft and ODbL's share-alike compose
 cleanly.
 
@@ -428,7 +425,7 @@ cleanly.
 A sibling fork operator (running their own mpc-autofill-family instance,
 with or without this fork's own vote/consensus stack) fetches
 `export-full.jsonl`, verifies its signature (§3), and for each record
-whose `content_phash` matches an image already in *their* catalog
+whose `content_phash` matches an image already in _their_ catalog
 (computed with the §2 reference tooling against their own images),
 imports the verdict — **as a suggestion into their own review gate**,
 never a resolution that bypasses it. This is exactly
@@ -439,8 +436,8 @@ not yet fixed) matters before anyone actually builds import: a federated
 verdict must never singlehandedly clear a human-backed gate on the
 importing side, only ever contribute weight toward it. This story is
 the whole reason that gate-issue fix is a real prerequisite for
-*consumption*, not just a nice-to-have — but note it's **not** a
-prerequisite for *this* program (§0/§7: v1 is publish-only, no
+_consumption_, not just a nice-to-have — but note it's **not** a
+prerequisite for _this_ program (§0/§7: v1 is publish-only, no
 consumption happens on our side at all).
 
 ### (b) An MIT-lineage client-side tool auto-suggests printing + bleed
@@ -468,7 +465,7 @@ its own card-identification method (no Scryfall/set-collector/hash
 mention found in the fetched content), so its consumer story here is
 necessarily more speculative than (b)'s `proxies-at-home` example — the
 export's own `scryfall_id`/`set`+`collector_number` fields (§1) are
-still the right join keys to offer it *if* it adds printing-specific
+still the right join keys to offer it _if_ it adds printing-specific
 identification later, but this doc shouldn't claim more concrete
 knowledge of its internals than was actually verified. Both projects are
 real, both are worth naming, but only one is actually MIT — §5's license
@@ -485,8 +482,8 @@ Stated plainly so nothing here gets read as more than it is:
   deferred, precondition-gated entry on the upstream-readiness audit's
   own extraction ladder (Tier 6 there, on a sibling unmerged branch as
   of this writing) exactly where it already sits — this program doesn't
-  change that gate, it's the *publish* half maturing while the
-  *subscribe* half stays untouched.
+  change that gate, it's the _publish_ half maturing while the
+  _subscribe_ half stays untouched.
 - **No per-peer trust configuration.** There's no peer registry, no
   pinned per-instance public key exchange, no enrollment step of any
   kind — the entire point of publish-first federation (§0) is that none
@@ -494,7 +491,7 @@ Stated plainly so nothing here gets read as more than it is:
   key-pinning model is real and still the right design for eventual
   bidirectional federation; it's just not what this program builds.
 - **No verdict ingestion, anywhere, in either direction.** Nothing this
-  program builds reads a verdict *in* — not from a peer, not from a
+  program builds reads a verdict _in_ — not from a peer, not from a
   consumer, not from anything. Every artifact in §§1–4 is write-only
   from this fork's perspective.
 
