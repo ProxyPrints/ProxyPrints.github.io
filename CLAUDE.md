@@ -120,7 +120,11 @@ status update, and blocker report.
 - [`docs/upstreaming/readiness-audit.md`](docs/upstreaming/readiness-audit.md)
   — full fork-vs-upstream diff decomposed into feature chunks, dependency
   graph, the upstream-value/extraction-ease ladder, and the branch
-  architecture proposal.
+  architecture proposal. Phase 2 status (which branches are actually cut)
+  lives at the top of this file.
+- [`docs/upstreaming/drafts/`](docs/upstreaming/drafts/) — draft PR
+  descriptions for cut-but-not-sent `upstream-*` branches, one file per
+  branch, never opened without the owner sending it personally.
 - [`docs/upstreaming/conventions.md`](docs/upstreaming/conventions.md) —
   one-page checklist any `upstream-fix-*`/`upstream-feat-*` branch must
   satisfy, mined from our merged PR #467 and upstream's own recent PRs.

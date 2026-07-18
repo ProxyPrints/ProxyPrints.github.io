@@ -6,6 +6,32 @@ one self-contained chunk at a time, without ever sending an omnibus.
 upstream's repo. Phase 2 (cutting actual branches) happens only after the
 owner picks specific chunks off the ladder below.
 
+## Phase 2 status (owner decision, 2026-07-18)
+
+Upstreaming continues at **minimal investment** — this audit satisfies
+`docs/infrastructure.md`'s check-in requirement, and the frontend-direction
+question (whether chilli-axe is actually dropping the Node.js frontend)
+goes to the maintainer directly via a P.S. on an unrelated upcoming
+message, rather than being speculated on here. Full Phase-2 scope waits
+on that answer.
+
+**One branch cut now, as pattern-proof**: `upstream-feat-local-file-source`
+(Tier 1 #2 below), chosen for best survival odds if the frontend answer
+turns out to matter — it's 100% backend, no frontend surface at all.
+Pushed to `origin` (this fork) at commit `93874645`, cut from
+`upstream/master` at `c3d10253`. Pre-commit (ruff/isort/black/mypy) green
+in the extracted context; test coverage hand-verified where the sandbox's
+missing Docker/Postgres/ES made the real test suite uncollectable. Draft
+PR description at
+[`drafts/upstream-feat-local-file-source.md`](drafts/upstream-feat-local-file-source.md).
+**Not opened anywhere** — sits ready until the owner sends it.
+
+**Card DOM API (Tier 1 #1) and the dead-image/error-states pairing
+(Tier 1 #4+#5) are deferred**, not dropped — next up once the frontend
+question is answered, since both are frontend chunks and their value
+depends on there still being a Node.js frontend for upstream to accept
+changes into.
+
 ## 0. Method and ground truth
 
 `git diff upstream/master origin/master` (two-dot, tree-level) is the
@@ -423,13 +449,14 @@ touch the same files a fork extraction would. Realistic cadence: check
 immediately before cutting a new branch, and again immediately before
 opening/updating a PR for one already cut — not a standing sync job.
 
-## 8. What Phase 2 should draw from
+## 8. What Phase 2 drew from — decided, see top of doc
 
-Not a decision — the owner picks. But if asked to name 2–3 with the best
-value-to-risk ratio for a first cut: **Card DOM API** (already flagged
-pending, zero deps, zero risk), **`LOCAL_FILE` source type** (fills
-upstream's own stub, most self-contained backend chunk in the diff), and
-either **PDF dead-image blocking** (best "why this matters" story — a
-real silent-data-loss bug) or **Card image error/loading states** (pairs
-naturally with it as the two halves of dead-link handling, could
-plausibly go up as one combined PR the way #441/#442 did).
+Superseded by the owner's actual 2026-07-18 decision, recorded at the top
+of this document ("Phase 2 status"): one branch cut
+(`upstream-feat-local-file-source`), Card DOM API and the dead-image/
+error-states pairing deferred pending the maintainer's frontend-direction
+answer. The original pre-decision reasoning (`LOCAL_FILE` source's
+zero-dependency, backend-only shape gave it the best survival odds
+regardless of how that answer lands) is preserved here since it's why
+that specific chunk was picked first among Tier 1's near-equally-ready
+options.

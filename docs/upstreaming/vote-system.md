@@ -1,5 +1,9 @@
 # Extraction manifest: the vote system (printing / artist / tag consensus)
 
+**Historical scope only, accurate through 2026-07-13** — see
+[`readiness-audit.md`](readiness-audit.md) for the current map of the
+full fork-vs-upstream diff (this feature plus everything since).
+
 Companion to CLAUDE.md's "Upstreaming to chilli-axe/mpc-autofill" section,
 which describes the general worktree/cherry-pick workflow (cut a branch from
 `upstream/master`, cherry-pick specific commits, diff against `upstream/master`
