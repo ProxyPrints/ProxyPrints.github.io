@@ -33,7 +33,6 @@ import {
   ImportSitesResponse,
   Info,
   InfoResponse,
-  Kind as VoteQueueKind,
   Language,
   LanguagesResponse,
   ModerationDriveCardsResponse,
@@ -59,6 +58,7 @@ import {
   Tag,
   TagConsensusResponse,
   TagsResponse,
+  VoteQueueRequestKind as VoteQueueKind,
   VoteQueueResponse,
   WhoamiResponse,
 } from "@/common/schema_types";

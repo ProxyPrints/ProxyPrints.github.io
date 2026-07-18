@@ -3,6 +3,8 @@ import "@testing-library/jest-dom";
 // Polyfill "window.fetch" used in the React component.
 import "whatwg-fetch";
 
+import { webcrypto } from "node:crypto";
+
 import { loadEnvConfig } from "@next/env";
 import { configure as configureDom } from "@testing-library/dom";
 import { configure as configureReact } from "@testing-library/react";
@@ -11,6 +13,17 @@ import { configure as configureReact } from "@testing-library/react";
 import Ping from "ping.js";
 
 import { server } from "@/mocks/server";
+
+// jsdom's `crypto` only implements getRandomValues, not the full SubtleCrypto API - Node's own
+// WebCrypto implementation is spec-compliant (the same API surface real browsers implement),
+// so it's a safe like-for-like polyfill for savedDeckCrypto.ts's tests
+// (docs/proposals/proposal-g-user-accounts-saved-decks.md §8).
+if (typeof globalThis.crypto?.subtle === "undefined") {
+  Object.defineProperty(globalThis, "crypto", {
+    value: webcrypto,
+    configurable: true,
+  });
+}
 
 configureReact({ asyncUtilTimeout: 10_000 });
 configureDom({ asyncUtilTimeout: 10_000 });
