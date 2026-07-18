@@ -4,11 +4,15 @@ ordinary users and letting any logged-in user save/load named decks
 server-side, encrypted client-side so the server operator cannot read deck
 contents (see the zero-knowledge amendment below, decision 10 — this
 supersedes §2/§3's originally-specified plaintext storage model).
-**BUILDING** — build in progress (PR1/schema #85, PR2/sign-in relocation #86
-opened; the ZK amendment lands in a schema revision to #85 before it merges,
-then PRs 3-4). **Spec CLOSED: no open decisions remain** (see Decisions).
+**BUILT AND MERGED** — all 5 sequenced PRs landed on master: schema+backend
+(#85), sign-in relocation (#86), the opaque-blob saved-decks API (#94,
+recreated after #88's stacked-PR base-deletion auto-close — see
+docs/lessons.md), the client-side ZK crypto module (#89), and the frontend
+UI wiring (#93). **Spec CLOSED: no open decisions remain** (see Decisions).
 §7 (authed vote tier) is fully specified but remains a deliberately separate,
-later build — not part of this HOLD's core scope.
+later build — not part of this HOLD's core scope. PR-5 (share links) and
+PR-6 (deck portability) are design-only, post-v1 addenda — nothing built
+for either yet.
 
 ## Context — prior art outside this codebase
 
@@ -690,6 +694,10 @@ without waiting for a session to end.
   key) does, not a separate one. Withdrawn as the primary/only mechanism;
   no survey needed now, since the passphrase + recovery-key design alone
   satisfies the goal.
+- **Deck portability** (export/import, a standalone decrypt tool) as a
+  formalization of what the zero-knowledge, server-unbound design already
+  implies rather than a new capability. Expanded into a full design below
+  (see "PR-6, post-v1: deck portability").
 
 ### PR-5, post-v1: per-deck share links (design only — owner-directed addendum, 2026-07-18; nothing built here)
 
@@ -752,6 +760,65 @@ already built in PR-1's schema.
   ciphertext; a leaked `shareKey` cannot decrypt or unwrap anything for
   any _other_ deck, shared or not.
 
+### PR-6, post-v1: deck portability (design only — owner-directed addendum, 2026-07-18; nothing built here)
+
+Formalizes what the ZK envelope already implies rather than adding new
+capability: the crypto is deliberately **server-unbound** — no key
+material anywhere in the wrap chain is held by, or derived from, anything
+the server controls (Discord identity is identity-only; see "Key design"
+above). Portability is a direct consequence of that design, embraced here
+rather than something a later PR would need to retrofit or patch around.
+
+- **Export**: an "Export my decks" action downloads the user's complete
+  encrypted bundle — every `SavedDeck` row's ciphertext + wrapped DEK +
+  nonces, both wrapped-master-key slots (passphrase and recovery) + their
+  nonces, the salt and iteration count, and a `formatVersion` field — as
+  one JSON file. Requires **no unlock**: it's the same opaque bytes the
+  server already holds, so a user who has forgotten their passphrase can
+  still export (they may remember it later, or still hold the recovery
+  key; their data shouldn't be hostage to this site's own UI state).
+- **Import**: accepts a previously-exported bundle on this instance or any
+  compatible one (see "Format" below). Decryption happens entirely
+  client-side, same passphrase-or-recovery-key flow as ever — the import
+  step itself never needs server involvement beyond the ordinary
+  `saveDeck`/`saveCryptoProfile` calls to persist what it decrypts.
+  **Conflict rule for a same-instance re-import**: always import-as-new
+  (each imported deck lands as its own row, snapshot-like), never silently
+  overwrite an existing deck by matching key or name — there is no
+  server-visible name to match against anyway (§8's Consequences), and
+  overwriting would risk destroying newer data with a stale export.
+- **Format**: the envelope is versioned from day one — every record
+  carries `formatVersion` (starting at `1`) so a later format change
+  never breaks reading an older export. The format itself is documented
+  **publicly** in this spec (not just in code) specifically so that a
+  fork, or a completely independent reimplementation, could read a user's
+  exported bundle without needing this codebase at all. The format _is_
+  the portability contract, not an implementation detail.
+- **Standalone decrypt tool** (the trust anchor for this whole promise,
+  mirroring the federation reference-hash tool's role for that feature): a
+  tiny, single-file, dependency-minimal script — bundle in, passphrase (or
+  recovery key) in, plaintext decks out — that a user can run **without
+  this site, this codebase, or any server existing at all**. This is what
+  makes "if this site vanishes tomorrow, your decks are still yours" a
+  verifiable claim rather than a slogan. Specified now; built alongside
+  PR-6.
+- **Honest limits** (stated plainly, in-product and here): an exported
+  bundle is offline-attackable — an attacker with the file can attempt
+  unlimited offline passphrase guesses, so the bundle's real protection is
+  passphrase strength plus PBKDF2 at ≥600,000 iterations. This is **not a
+  new exposure** introduced by export — it's identical to what a server
+  breach already exposes today (the server already stores exactly these
+  same bytes); export just makes the existing exposure available to the
+  user too, on purpose.
+- **Explicitly rejected**: any form of server-bound key material (e.g. a
+  server-held wrapping key, or tying decryption to a live session) to
+  "simplify" export/import. That would introduce a new catastrophic-loss
+  mode (the server becomes a single point of failure for data that's
+  supposed to survive it), create hostage dynamics (the server operator
+  could, even if only in principle, gate access to a user's own data), and
+  directly contradict the zero-knowledge trust story this entire amendment
+  is built on. Rejected outright, not just deprioritized.
+
 ### Consequences (written honestly)
 
 - No server-side deck-derived feature is possible, ever: no deck search, no
@@ -803,7 +870,10 @@ immediately and permanently. If both the passphrase and the recovery key
 are lost, the affected decks are permanently unrecoverable by design; the
 server operator has no admin-side decryption or escrow path and cannot
 assist beyond a destructive account reset that deletes the unreadable data
-and lets the user start fresh."_
+and lets the user start fresh. Users may export their complete encrypted
+data at any time (see PR-6, post-v1); the export format is public,
+documented in this spec, so the user's data remains usable independent of
+this site or its operator."_
 
 ## Effort estimate
 
