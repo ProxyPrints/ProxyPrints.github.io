@@ -140,8 +140,7 @@ printings, artists, tags, and moderation from one screen.
   does not establish one, and the card's own `z-index: -1` otherwise
   escapes all the way to the page root and makes its interactive content
   unclickable at the hit-testing layer. `StaticCardPanel` (same file) is
-  the non-sticky variant used by Level 1 only (below) — `position:
-  relative`, no `z-index`, plain document flow throughout. Real-device
+  the non-sticky variant used by Level 1 only (below) — `position: relative`, no `z-index`, plain document flow throughout. Real-device
   evidence (not reproducible in this sandbox's Chromium) found `CardPanel`'s
   sticky-plus-negative-z-index mechanism, correctly scoped for Level 2's
   long-scrolling two-column layout, compositing incorrectly on a real
@@ -237,8 +236,7 @@ printings, artists, tags, and moderation from one screen.
   outside this pass's presentation-only scope.
 - **Level 0 — in-context deckbuilder confirmation** (frontend-polish
   package, second funnel PR), a different surface entirely from the
-  `/whatsthat` funnel above: `frontend/src/features/card/
-  DeckbuilderConfirmAffordance.tsx`, mounted from `CardSlot.tsx` right
+  `/whatsthat` funnel above: `frontend/src/features/card/ DeckbuilderConfirmAffordance.tsx`, mounted from `CardSlot.tsx` right
   after the card image. Shows a small, inert badge under a slot whose
   search query names a specific printing (`expansionCode`/
   `collectorNumber`) that isn't yet the human-resolved consensus for the
