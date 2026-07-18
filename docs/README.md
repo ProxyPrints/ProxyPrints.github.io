@@ -119,8 +119,4 @@ system" + "Using it" + "Operating it" only).
   build pass (PRs #64/#65). Not this pass's to merge — will appear here
   once #56 lands.
 - [`reports/`](reports/README.md) — the report-relay convention (see that
-  directory's own README). No reports have merged to this branch yet: the
-  convention and its first files live on the `report-relay`/`report-relay-2`
-  branches and are expected to land in a docs batch soon. The README is
-  written now so the directory has its orientation in place before that
-  merge.
+  directory's own README, which indexes every report currently merged).
