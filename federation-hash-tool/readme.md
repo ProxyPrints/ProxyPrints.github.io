@@ -34,7 +34,7 @@ a94fb36da358460d  Adanto the First Fort.png
 b418d65e4c6f9195  Huntmaster of the Fells.jpg
 ```
 
-Hash a folder *and* join against a published export in one command:
+Hash a folder _and_ join against a published export in one command:
 
 ```
 python hash_my_cards.py ./my_scans/ --export-url https://cdn.proxyprints.ca/federation/export-full.jsonl
