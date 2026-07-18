@@ -5,13 +5,26 @@
  */
 
 import {
+  base64ToBytes,
+  bytesToBase64,
+  createDeckKey,
+  decryptDeckPayload,
+  encryptDeckPayload,
+  unlockDeckKey,
+  WrappedKey,
+} from "@/common/savedDeckCrypto";
+import {
+  LoadDeckResponseKind,
+  SavedDeckSummary,
+  SourceType,
+} from "@/common/schema_types";
+import {
   CardDocuments,
   FinishSettingsState,
   Project,
   ProjectMember,
   SlotProjectMembers,
 } from "@/common/types";
-import { SourceType } from "@/common/schema_types";
 
 export const DECK_PAYLOAD_VERSION = 1;
 
@@ -146,5 +159,72 @@ export function projectFromDeckPayload(payload: DeckPayloadV1): {
     },
     finishSettings: payload.finishSettings,
     name: payload.name,
+  };
+}
+
+/** The base64 wire-format fields every save-deck request/response shares. */
+export interface EncryptedDeckFields {
+  ciphertext: string;
+  ciphertextNonce: string;
+  wrappedDek: string;
+  wrappedDekNonce: string;
+}
+
+/**
+ * Encrypts a payload for the wire, under a FRESH per-save DEK - simpler than tracking and
+ * reusing an existing deck's DEK across updates, and the server has no preference either way
+ * (post_save_deck just overwrites whatever ciphertext/wrappedDek it's given, create or update).
+ */
+export async function encryptDeckPayloadForSave(
+  payload: DeckPayloadV1,
+  masterKey: CryptoKey
+): Promise<EncryptedDeckFields> {
+  const { dek, wrappedDek } = await createDeckKey(masterKey);
+  const { ciphertext, nonce } = await encryptDeckPayload(
+    serializeDeckPayload(payload),
+    dek
+  );
+  return {
+    ciphertext: bytesToBase64(ciphertext),
+    ciphertextNonce: bytesToBase64(nonce),
+    wrappedDek: bytesToBase64(wrappedDek.wrapped),
+    wrappedDekNonce: bytesToBase64(wrappedDek.nonce),
+  };
+}
+
+export interface DecryptedSavedDeck {
+  key: string;
+  kind: LoadDeckResponseKind;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  payload: DeckPayloadV1;
+}
+
+/** Reverses encryptDeckPayloadForSave - unwraps the deck's DEK with the (already-unlocked)
+ * master key, then decrypts and parses its payload. Throws (AES-GCM auth failure) on a wrong
+ * master key or any tampered ciphertext/wrapped-DEK byte. */
+export async function decryptSavedDeckSummary(
+  summary: SavedDeckSummary,
+  masterKey: CryptoKey
+): Promise<DecryptedSavedDeck> {
+  const wrappedDek: WrappedKey = {
+    wrapped: base64ToBytes(summary.wrappedDek),
+    nonce: base64ToBytes(summary.wrappedDekNonce),
+  };
+  const dek = await unlockDeckKey(wrappedDek, masterKey);
+  const plaintext = await decryptDeckPayload(
+    base64ToBytes(summary.ciphertext),
+    base64ToBytes(summary.ciphertextNonce),
+    dek
+  );
+  const payload = parseDeckPayload(plaintext);
+  return {
+    key: summary.key,
+    kind: summary.kind,
+    name: payload.name,
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt,
+    payload,
   };
 }

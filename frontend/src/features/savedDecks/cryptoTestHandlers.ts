@@ -1,13 +1,19 @@
 /**
- * Shared MSW handler builders for tests exercising CryptoSessionProvider (directly, or via a
- * modal/page that consumes it) - kept in one place since cryptoSession.test.tsx,
- * PassphraseSetupModal.test.tsx, and UnlockModal.test.tsx all need the same three shapes.
+ * Shared MSW handler builders for tests exercising CryptoSessionProvider and the saved-deck
+ * endpoints (directly, or via a modal/page that consumes them) - kept in one place since
+ * cryptoSession.test.tsx, PassphraseSetupModal.test.tsx, UnlockModal.test.tsx, and
+ * MyDecksPage.test.tsx all need overlapping shapes.
  */
 
 import { http, HttpResponse } from "msw";
 
 import { bytesToBase64 } from "@/common/savedDeckCrypto";
+import { LoadDeckResponseKind, SavedDeckSummary } from "@/common/schema_types";
 import { localBackendURL } from "@/common/test-constants";
+import {
+  DeckPayloadV1,
+  encryptDeckPayloadForSave,
+} from "@/features/savedDecks/deckPayload";
 
 function buildRoute(path: string): string {
   return `${localBackendURL}/${path}`;
@@ -73,4 +79,43 @@ export function saveCryptoProfileHandler(onSave: (body: any) => void) {
     onSave(await request.json());
     return HttpResponse.json({ saved: true }, { status: 200 });
   });
+}
+
+export function getSavedDecksHandler(decks: Array<SavedDeckSummary>) {
+  return http.get(buildRoute("2/savedDecks/"), () =>
+    HttpResponse.json({ decks }, { status: 200 })
+  );
+}
+
+export function deleteDeckHandler(onDelete: (body: any) => void) {
+  return http.post(buildRoute("2/deleteDeck/"), async ({ request }) => {
+    onDelete(await request.json());
+    return HttpResponse.json({ deleted: true }, { status: 200 });
+  });
+}
+
+export function resetSavedDecksHandler(onReset: (body: any) => void) {
+  return http.post(buildRoute("2/resetSavedDecks/"), async ({ request }) => {
+    onReset(await request.json());
+    return HttpResponse.json({ deletedDeckCount: 0 }, { status: 200 });
+  });
+}
+
+export async function buildMockSavedDeckSummary(
+  key: string,
+  kind: "deck" | "snapshot",
+  payload: DeckPayloadV1,
+  masterKey: CryptoKey,
+  timestamps: { createdAt: string; updatedAt: string }
+): Promise<SavedDeckSummary> {
+  const encrypted = await encryptDeckPayloadForSave(payload, masterKey);
+  return {
+    key,
+    kind:
+      kind === "deck"
+        ? LoadDeckResponseKind.Deck
+        : LoadDeckResponseKind.Snapshot,
+    ...encrypted,
+    ...timestamps,
+  };
 }
