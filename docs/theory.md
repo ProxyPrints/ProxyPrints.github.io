@@ -254,6 +254,17 @@ cards:
 
 ## 6. Sybil/bad-actor unification (future work — nothing built)
 
+**Readiness re-checked 2026-07-18: still not ready.** Total vote rows
+now exceed 155,000, but that's almost entirely machine throughput from
+this pipeline's own trusted engines (`ocr`/`deduction`); real human
+participation is 4 distinct voters (largest single contribution: 22
+votes). The trigger below needs human-population volume or an observed
+attack, neither of which this represents — see
+`docs/reports/2026-07-18-dawid-skene-readiness-recheck.md` for the full
+numbers and reasoning. One exception: the cluster-consistency detector
+(third bullet below) isn't actually gated by human volume and could be
+built independently.
+
 Added as an addendum, not a build item: the identification machinery
 above already treats every vote — human or machine — as **noisy
 evidence to be weighed, never ground truth to be trusted outright**. That
