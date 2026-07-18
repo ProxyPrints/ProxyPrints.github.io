@@ -12,7 +12,7 @@ import Button from "react-bootstrap/Button";
 import ListGroup from "react-bootstrap/ListGroup";
 import Spinner from "react-bootstrap/Spinner";
 
-import { useAppDispatch } from "@/common/types";
+import { useAppDispatch, useAppSelector } from "@/common/types";
 import { RightPaddedIcon } from "@/components/icon";
 import { useCryptoSession } from "@/features/savedDecks/cryptoSession";
 import {
@@ -21,6 +21,8 @@ import {
   projectFromDeckPayload,
   serializeDeckPayload,
 } from "@/features/savedDecks/deckPayload";
+import { LoadSafetyModal } from "@/features/savedDecks/LoadSafetyModal";
+import { selectIsCurrentProjectDirty } from "@/features/savedDecks/selectors";
 import { UnlockModal } from "@/features/savedDecks/UnlockModal";
 import {
   useDeleteDeckMutation,
@@ -29,7 +31,7 @@ import {
   useResetSavedDecksMutation,
 } from "@/store/api";
 import { loadFinishSettings } from "@/store/slices/finishSettingsSlice";
-import { loadProject } from "@/store/slices/projectSlice";
+import { loadProject, selectIsProjectEmpty } from "@/store/slices/projectSlice";
 import { setCurrentSavedDeck } from "@/store/slices/savedDeckSessionSlice";
 
 function sortByUpdatedAtDescending(decks: Array<DecryptedSavedDeck>) {
@@ -82,11 +84,16 @@ export function MyDecksPage() {
   const [deleteDeck] = useDeleteDeckMutation();
   const [resetSavedDecks] = useResetSavedDecksMutation();
 
+  const isProjectEmpty = useAppSelector(selectIsProjectEmpty);
+  const isProjectDirty = useAppSelector(selectIsCurrentProjectDirty);
+
   const [decrypted, setDecrypted] = useState<Array<DecryptedSavedDeck>>([]);
   const [decrypting, setDecrypting] = useState(false);
   const [decryptError, setDecryptError] = useState<string | null>(null);
   const [showUnlock, setShowUnlock] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [pendingLoadDeck, setPendingLoadDeck] =
+    useState<DecryptedSavedDeck | null>(null);
 
   useEffect(() => {
     if (session.status === "locked") {
@@ -141,7 +148,7 @@ export function MyDecksPage() {
     [decrypted]
   );
 
-  const openInEditor = (deck: DecryptedSavedDeck) => {
+  const performLoad = (deck: DecryptedSavedDeck) => {
     const { project, finishSettings, name } = projectFromDeckPayload(
       deck.payload
     );
@@ -155,6 +162,17 @@ export function MyDecksPage() {
       })
     );
     router.push("/editor");
+  };
+
+  // Loss-proof by construction (frontend spec §4): an empty or clean editor loads immediately,
+  // but a dirty one always gets a safety copy saved first - never silently discarded, and never
+  // skippable for a logged-in user (this page requires being logged in to reach at all).
+  const openInEditor = (deck: DecryptedSavedDeck) => {
+    if (isProjectEmpty || !isProjectDirty) {
+      performLoad(deck);
+    } else {
+      setPendingLoadDeck(deck);
+    }
   };
 
   const handleDelete = (deck: DecryptedSavedDeck) => {
@@ -206,6 +224,17 @@ export function MyDecksPage() {
         show={showUnlock}
         onCancel={() => setShowUnlock(false)}
         onUnlocked={() => setShowUnlock(false)}
+      />
+      <LoadSafetyModal
+        show={pendingLoadDeck != null}
+        onCancel={() => setPendingLoadDeck(null)}
+        onSafetyCompleted={() => {
+          const deck = pendingLoadDeck;
+          setPendingLoadDeck(null);
+          if (deck != null) {
+            performLoad(deck);
+          }
+        }}
       />
       {session.status === "locked" && !showUnlock && (
         <p>
