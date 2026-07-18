@@ -228,10 +228,80 @@ body {
   font-style: italic;
 }
 
-.instrument {
+/* always-visible status header — outside the accordion, per the amendment: identity,
+   requested-printing badge, Confirm? affordance. Status, not a setting, so it never collapses. */
+.rail-header {
   border: 1px solid var(--border);
   padding: 10px;
   background: var(--panel-bg-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rail-header .card-identity {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.rail-header .card-identity .face-tag {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  margin-left: 6px;
+}
+
+/* accordion sections — AutofillCollapse's own visual language (Card.Header + chevron +
+   Collapse), same component the classic PDF-export panel's settings groups already use. */
+.accordion-section {
+  border: 1px solid var(--border);
+  background: var(--panel-bg-raised);
+}
+
+.accordion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: #4e5d6b;
+  cursor: pointer;
+  user-select: none;
+}
+
+.accordion-header h4 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.accordion-chevron {
+  font-size: 14px;
+  color: var(--text);
+  transition: transform 0.2s;
+}
+
+.accordion-section.expanded .accordion-chevron {
+  transform: rotate(90deg);
+}
+
+.accordion-section.collapsed .accordion-chevron {
+  transform: rotate(-90deg);
+}
+
+.accordion-body {
+  padding: 10px;
+}
+
+.accordion-section.collapsed .accordion-body {
+  display: none;
+}
+
+.instrument {
+  padding: 0;
 }
 
 .instrument h4 {
@@ -240,6 +310,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-muted);
+  display: none; /* title now lives in .accordion-header instead */
 }
 
 /* 1. candidate/version picker */

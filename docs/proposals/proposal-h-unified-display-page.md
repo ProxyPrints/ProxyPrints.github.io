@@ -198,6 +198,60 @@ the sheet to see its details" — rather than empty chrome. This is a new,
 small piece of UI (not an existing component); everything inside an
 *active* rail is 100% existing instruments per §5.
 
+**Rail internal structure — AMENDMENT: collapsible accordion sections,
+not a flat stack.** Once a slot is selected, the rail is not seven
+instruments stacked top to bottom at equal weight — it's a short
+always-visible status header followed by four collapsible sections,
+built from `AutofillCollapse` (`frontend/src/components/AutofillCollapse.tsx`),
+the same component the classic PDF-export panel already uses for its own
+settings groups (`PageSizeSettings`, `EdgeSettings`,
+`CutLinesSettings`, etc. in `PDFGenerator.tsx` — see §1/§5). Reusing it
+here is a restyle/relocation, not a new interaction pattern:
+
+```
+┌ RAIL ───────────────────────────────────────┐
+│ ALWAYS VISIBLE (status, not settings):       │
+│  • selected card's identity (name, face)     │
+│  • requested-printing badge ("<SET> <NUM>",  │
+│    degraded style when applicable)           │
+│  • Confirm? affordance, when applicable      │
+├───────────────────────────────────────────────┤
+│ ▾ Choose Image           (OPEN by default)    │  ← candidate/version picker
+├───────────────────────────────────────────────┤
+│ ▸ Attributes             (collapsed)          │  ← attribute chips
+├───────────────────────────────────────────────┤
+│ ▸ Print Options          (collapsed)          │  ← per-card bleed override
+├───────────────────────────────────────────────┤
+│ ▸ Artist                 (collapsed)          │  ← artist line
+├───────────────────────────────────────────────┤
+│ ▸ Slot Actions           (collapsed)          │  ← change/duplicate/delete
+└───────────────────────────────────────────────┘
+```
+
+Rationale for the always-visible/open/collapsed split: the three
+always-visible items are *status* the user needs to see the instant a
+slot is selected, with no click — they answer "what is this card and is
+it right," not "what do I want to change." Choose Image opens by
+default because picking the correct art is the single most common
+reason a slot gets selected in the first place (matches the existing
+funnel's own emphasis — see `DeckbuilderConfirmAffordance`'s NO path,
+which already jumps straight to the version picker). Attributes/Print
+Options/Artist/Slot Actions collapse by default because they're
+secondary, deliberate actions a user opens only when they specifically
+need them — an accordion, not a flat stack, is what keeps the rail from
+becoming a scroll-heavy wall of controls every time a slot is selected.
+Each section still lives inside the rail's own single
+`overflow-y: auto` scroll container (§3) — the accordion changes what's
+visible by default within that container, not the container itself. Only
+one behavioral nuance versus `AutofillCollapse`'s existing usage:
+every other caller in this codebase treats its sections as mutually
+exclusive-ish via manual `expanded` state per instance with no enforced
+single-open constraint, and the rail follows that same precedent —
+multiple sections can be open at once (e.g. Choose Image open while the
+user also expands Attributes), each section's `expanded` boolean is
+independent, matching how `PDFGenerator.tsx`'s own settings groups
+already behave.
+
 ## 3. Layout per breakpoint
 
 All measurements below assume Bootstrap 5's stock breakpoints (sm 576 /
@@ -302,10 +356,17 @@ on one page instead of two.
 ### 4.2 Slot select
 
 1. Click/tap a card on the sheet.
-2. ≥768px: the rail's content updates in place to that slot's full
-   instrument set (§5), replacing whatever was shown before — the rail
-   itself never closes/reopens, only its contents swap, matching the
-   "own-scroll, updates by hover/select" requirement.
+2. ≥768px: the rail's content updates in place to that slot's status
+   header + accordion (§2's amendment, §5), replacing whatever was shown
+   before — the rail itself never closes/reopens, only its contents
+   swap, matching the "own-scroll, updates by hover/select" requirement.
+   Each accordion section's expanded/collapsed state resets to its
+   documented default (Choose Image open, the rest collapsed) on every
+   new slot selection — an open Attributes section on slot 3 does not
+   stay open when the user selects slot 4; carrying per-slot section
+   state across selections is unnecessary complexity for a v1, given the
+   rail already re-grounds the user on a new card's identity every time
+   it swaps.
 3. Tablet width: the off-canvas drawer opens (if not already open) and
    shows the same content.
 4. <768px: the bottom-sheet/full overlay opens over the sheet view.
@@ -318,34 +379,37 @@ on one page instead of two.
 1. A slot whose search named a specific printing but whose selected
    image isn't yet the human-resolved consensus for that printing shows
    the existing "Confirm?" badge (`DeckbuilderConfirmAffordance`) — on
-   the sheet's own thumbnail at small scale, and expanded in the rail
-   once that slot is selected.
-2. Hover/tap the badge in the rail: the same `APIGetPrintingCandidates`
+   the sheet's own thumbnail at small scale, and in the rail's
+   always-visible header (not inside any accordion section) once that
+   slot is selected.
+2. Hover/tap the badge in the header: the same `APIGetPrintingCandidates`
    lookup fires, pinning a Scryfall-sourced reference thumbnail
    (`ComparePin`) above the candidate for comparison.
 3. Y: casts the same `APISubmitPrintingTag` vote as today, badge clears
    for that identifier for the rest of the session.
-4. N: same "pure navigation, no vote" behavior as today — opens the
-   candidate/version picker (§4.4) already scoped to this slot.
+4. N: same "pure navigation, no vote" behavior as today — expands (or
+   focuses, if already open) the **Choose Image** accordion section
+   (§4.4) already scoped to this slot.
 
-### 4.4 Printing switch (candidate/version picker)
+### 4.4 Printing switch (Choose Image accordion section)
 
-1. From the rail's slot actions (or directly from the requested-
-   printing badge's N path), open the version picker.
+1. From the rail's Slot Actions section (or directly from the
+   requested-printing badge's N path), open — or focus, if already
+   open — the **Choose Image** accordion section.
 2. Content is the existing `GridSelectorModal`'s result grid
    (`CardResultSet`) plus its filters (`GridSelectorFilters`, collapsed
    by default below `sm`) and `JumpToVersion` — organized as a
    thumbnail grid identified by set code + collector number, matching
    the existing modal's own labeling convention already (no new
    identification scheme to design).
-3. On ≥768px this renders **inside the rail itself** as its expanded
-   state (not a separate modal stacked on top of the rail) — the rail
-   already has the vertical space and its own scroll container; a
-   second overlapping modal-over-drawer would be the exact "gets cut
-   off, no independent scroll" failure the brief calls out to avoid,
-   just recreated one layer up. On <768px, given the bottom-sheet
+3. On ≥768px this renders **inside the rail's Choose Image section
+   body** (not a separate modal stacked on top of the rail) — the
+   section already has the vertical space and the rail's own scroll
+   container; a second overlapping modal-over-drawer would be the exact
+   "gets cut off, no independent scroll" failure the brief calls out to
+   avoid, just recreated one layer up. On <768px, given the bottom-sheet
    already occupies the full viewport, the picker simply becomes that
-   sheet's own content for the duration of the pick (still no second
+   section's content for the duration of the pick (still no second
    stacked overlay).
 4. Selecting an image dispatches the existing `setSelectedImages`
    action; the sheet's thumbnail for that slot updates immediately
@@ -379,13 +443,14 @@ on one page instead of two.
 | --- | --- | --- |
 | `PagePreview.tsx` + `layout.ts`'s `computeLayout()` | The sheet region, main surface | None — reused as-is, still fed small/mid-tier thumbnail URLs already resident in memory |
 | `CardSlot.tsx` (minus its own grid-selector modal chrome) | Individual sheet slots | Restyle only: slot dimensions/positioning already come from `PagePreview`'s own absolute-mm layout, not `CardSlot`'s current grid-flow CSS; the click target and per-slot Redux wiring (`selectedImage`, `toggleMemberSelection`, etc.) carry over unchanged |
-| `GridSelectorModal.tsx` + `GridSelectorFilters.tsx` + `JumpToVersion.tsx` | Rail's expanded "candidate/version picker" state (§4.4) | Props-level: rendered inline inside the rail's own scroll container instead of inside a `react-bootstrap` `Modal`; internal filter/search/debounce logic unchanged |
-| `DeckbuilderConfirmAffordance.tsx` | Rail, "Confirm affordance" instrument | None — same component, mounted once for the selected slot instead of once per visible grid slot |
-| `AttributeChipPanel.tsx` / `attributeChips.ts` | Rail, "Attribute chips" instrument | Props-level: currently composed around a `cardSlot` node for the question-feed's ring layout (`CardArea`); the rail mounts the same `ChipRing`/`TopArea`/`LeftArea`/`RightArea` styled parts directly in a vertical arrangement rather than around a centered card image — the tri-state cycling and vote-submission logic is unchanged |
-| Requested-printing badge (currently rendered inline per search-query display logic) | Rail, "Requested-printing badge" instrument | Restyle + a new degraded-state style variant keyed off `degradedQueries` (existing field, not new data) |
-| Manual bleed override (`ManualOverride`/`resolveBleedPlan` in `bleedNormalize.ts`) | Rail, "Per-card bleed override" instrument | **New UI** — the algorithm exists but the control and its persistence are explicitly not-yet-built per Proposal B's own status doc (§1); this design assigns it a rail slot but its build is Proposal B PR-2's scope, not this proposal's |
-| Artist line + support link | Rail, "Artist line" instrument | **New UI** — no existing "Art by `<Name>`" line or outbound support link was found in the current codebase (see §1); artist name itself is already available wherever `canonicalCard`/candidate metadata carries it (e.g. `ArtistVotePicker.tsx`'s own artist-name handling) — this is new presentational wiring over existing data, not a new data source |
-| `CardSlotMenuActions.ts` + `CardSlotContextMenu.tsx` (the shared 3-dot/right-click action list) | Rail, "Slot actions" instrument | None — same action list, rendered as a plain in-rail action row instead of a dropdown/context-menu overlay |
+| `AutofillCollapse.tsx` | Rail's section chrome — one instance per accordion section (Choose Image / Attributes / Print Options / Artist / Slot Actions) | None — same component `PDFGenerator.tsx`'s own settings groups already use (`PageSizeSettings`, `EdgeSettings`, etc.); each rail section is one more caller with its own local `expanded` boolean, defaults per §2's amendment |
+| `GridSelectorModal.tsx` + `GridSelectorFilters.tsx` + `JumpToVersion.tsx` | Rail's **Choose Image** accordion section (open by default), §4.4 | Props-level: rendered inline inside `AutofillCollapse`'s body instead of inside a `react-bootstrap` `Modal`; internal filter/search/debounce logic unchanged |
+| `DeckbuilderConfirmAffordance.tsx` | Rail's **always-visible header** (outside the accordion — status, not a setting) | None — same component, mounted once for the selected slot instead of once per visible grid slot |
+| `AttributeChipPanel.tsx` / `attributeChips.ts` | Rail's **Attributes** accordion section (collapsed by default) | Props-level: currently composed around a `cardSlot` node for the question-feed's ring layout (`CardArea`); the rail mounts the same `ChipRing`/`TopArea`/`LeftArea`/`RightArea` styled parts directly in a vertical arrangement inside the section body, rather than around a centered card image — the tri-state cycling and vote-submission logic is unchanged |
+| Requested-printing badge (currently rendered inline per search-query display logic) | Rail's **always-visible header** (outside the accordion — status, not a setting) | Restyle + a new degraded-state style variant keyed off `degradedQueries` (existing field, not new data) |
+| Manual bleed override (`ManualOverride`/`resolveBleedPlan` in `bleedNormalize.ts`) | Rail's **Print Options** accordion section (collapsed by default) | **New UI** — the algorithm exists but the control and its persistence are explicitly not-yet-built per Proposal B's own status doc (§1); this design assigns it a rail section but its build is Proposal B PR-2's scope, not this proposal's |
+| Artist line + support link | Rail's **Artist** accordion section (collapsed by default) | **New UI** — no existing "Art by `<Name>`" line or outbound support link was found in the current codebase (see §1); artist name itself is already available wherever `canonicalCard`/candidate metadata carries it (e.g. `ArtistVotePicker.tsx`'s own artist-name handling) — this is new presentational wiring over existing data, not a new data source |
+| `CardSlotMenuActions.ts` + `CardSlotContextMenu.tsx` (the shared 3-dot/right-click action list) | Rail's **Slot Actions** accordion section (collapsed by default) | None — same action list, rendered as a plain action list inside the section body instead of a dropdown/context-menu overlay |
 | `PDFGenerator.tsx`'s settings sub-components (`PageSizeSettings`, `CardSelectionSettings`, `CardQualitySettings`, `EdgeSettings`, `CutLinesSettings`, `SpacingAndMarginsSettings`, `SCMSettings`) | Top toolbar (popover-collapsed below `lg`) | Restyle/relocate only — same state, same `PDFProps` shape |
 | `downloadPDF`/`saveToDrivePDF`/`useDownloadPDF`/`useSaveToDrivePDF` | Top toolbar's Generate PDF / Save to Drive buttons | None |
 | Page pagination (today implicit in `PDFGenerator`'s `fastPreviewFirstPage`-only fast preview) | Top toolbar's "Page N of M ◀▶" | **New** — today's fast preview only ever renders the *first* page; this proposal's sheet needs real pagination across every page `CardSelectionModeToPaginator` produces, not just page 1 |

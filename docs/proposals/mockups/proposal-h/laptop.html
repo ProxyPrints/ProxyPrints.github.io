@@ -56,22 +56,9 @@
       <span class="rail-width-tag">350px (340–360px band)</span>
       <div class="rail-scroll">
 
-        <div class="instrument">
-          <h4>1. Candidate / version picker</h4>
-          <div class="filters-toggle">▸ Filters (sources, printings, artists, sort)</div>
-          <div class="candidate-grid">
-            <div class="cand active"><span class="cand-label">SET 142</span></div>
-            <div class="cand"><span class="cand-label">SET 089</span></div>
-            <div class="cand"><span class="cand-label">SET 007</span></div>
-          </div>
-          <div class="jump-row">
-            <input placeholder="Option # or identifier" />
-            <button>Jump</button>
-          </div>
-        </div>
-
-        <div class="instrument">
-          <h4>2. Confirm affordance</h4>
+        <div class="rail-header">
+          <div class="card-identity">Slot 18 <span class="face-tag">Front</span></div>
+          <span class="printing-badge">SET 142</span>
           <div class="confirm-row">
             <span class="confirm-badge">Confirm?</span>
             <div class="compare-pin"></div>
@@ -82,47 +69,91 @@
           </div>
         </div>
 
-        <div class="instrument">
-          <h4>3. Attribute chips</h4>
-          <div class="chip-ring">
-            <div class="chip-row">
-              <button class="chip lean-positive">Full Art</button>
-              <button class="chip">Showcase</button>
+        <div class="accordion-section expanded">
+          <div class="accordion-header">
+            <h4>Choose Image</h4>
+            <span class="accordion-chevron">◂</span>
+          </div>
+          <div class="accordion-body">
+            <div class="instrument">
+              <div class="filters-toggle">▸ Filters (sources, printings, artists, sort)</div>
+              <div class="candidate-grid">
+                <div class="cand active"><span class="cand-label">SET 142</span></div>
+                <div class="cand"><span class="cand-label">SET 089</span></div>
+                <div class="cand"><span class="cand-label">SET 007</span></div>
+              </div>
+              <div class="jump-row">
+                <input placeholder="Option # or identifier" />
+                <button>Jump</button>
+              </div>
             </div>
-            <div class="chip-row">
-              <button class="chip lean-positive">Black Border</button>
-              <button class="chip lean-negative">White Border</button>
+          </div>
+        </div>
+
+        <div class="accordion-section collapsed">
+          <div class="accordion-header">
+            <h4>Attributes</h4>
+            <span class="accordion-chevron">◂</span>
+          </div>
+          <div class="accordion-body">
+            <div class="instrument">
+              <div class="chip-ring">
+                <div class="chip-row">
+                  <button class="chip lean-positive">Full Art</button>
+                  <button class="chip">Showcase</button>
+                </div>
+                <div class="chip-row">
+                  <button class="chip lean-positive">Black Border</button>
+                  <button class="chip lean-negative">White Border</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
-        <div class="instrument">
-          <h4>4. Requested-printing badge</h4>
-          <span class="printing-badge">SET 142</span>
-        </div>
-
-        <div class="instrument">
-          <h4>5. Per-card bleed override</h4>
-          <div class="segmented">
-            <button class="active">Auto</button>
-            <button>Force bleed</button>
-            <button>Force trimmed</button>
+        <div class="accordion-section collapsed">
+          <div class="accordion-header">
+            <h4>Print Options</h4>
+            <span class="accordion-chevron">◂</span>
+          </div>
+          <div class="accordion-body">
+            <div class="instrument">
+              <div class="segmented">
+                <button class="active">Auto</button>
+                <button>Force bleed</button>
+                <button>Force trimmed</button>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="instrument">
-          <h4>6. Artist line</h4>
-          <div class="artist-line">
-            Art by <strong>J. Placeholder</strong> — <a href="#">support this artist</a>
+        <div class="accordion-section collapsed">
+          <div class="accordion-header">
+            <h4>Artist</h4>
+            <span class="accordion-chevron">◂</span>
+          </div>
+          <div class="accordion-body">
+            <div class="instrument">
+              <div class="artist-line">
+                Art by <strong>J. Placeholder</strong> — <a href="#">support this artist</a>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="instrument">
-          <h4>7. Slot actions</h4>
-          <div class="slot-actions">
-            <button>⟲ Change Query</button>
-            <button>⧉ Duplicate</button>
-            <button>⛒ Delete</button>
+        <div class="accordion-section collapsed">
+          <div class="accordion-header">
+            <h4>Slot Actions</h4>
+            <span class="accordion-chevron">◂</span>
+          </div>
+          <div class="accordion-body">
+            <div class="instrument">
+              <div class="slot-actions">
+                <button>⟲ Change Query</button>
+                <button>⧉ Duplicate</button>
+                <button>⛒ Delete</button>
+              </div>
+            </div>
           </div>
         </div>
 
