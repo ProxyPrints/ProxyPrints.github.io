@@ -1,13 +1,14 @@
 # Public federation export v1
 
-**Status: SPEC. HOLD for owner review before building.** This document is
-a draft to critique, not a build plan already in motion — every design
-choice below is open to correction, and §5 (license) is an explicit
-owner decision this doc only presents options for, doesn't make. Nothing
-in this spec has been implemented. Build (management command, signing,
-cron, tooling, publish) begins only after the owner approves this HOLD,
-and per this program's standing split, gets routed between this session
-and the server session at that point — not before.
+**Status: SPEC DECIDED. Spec-doc hold lifted; BUILD hold remains.**
+Owner review is complete — the license decision (§5, ODbL 1.0) is made,
+and this document now reflects that decision rather than presenting it
+as open. Nothing in this spec has been implemented yet, and nothing
+below should be read as already built. Build (management command,
+signing, cron, tooling, publish) begins only when the owner separately
+green-lights it, and per this program's standing split, gets routed
+between this session and the server session at that point — not before.
+The spec-doc itself, however, is ready to merge.
 
 ## 0. What this is, relative to `federation-v1.md`
 
@@ -305,47 +306,81 @@ option, since either "fits our infra" per this doc's own §4 framing.
     discipline (`purge_machine_votes`, `deductive_backfill_printing_tags`
     — every management command in this area defaults to safe/inert).
 
-## 5. License — OWNER DECISION, not made here
+## 5. License — DECIDED: ODbL 1.0
 
-The export **data's** license (distinct from the reference tooling's
-MIT license, §2 — those are separate decisions) needs to be picked
-before anything publishes. Two real options, presented with consequences
-for both named consumer ecosystems, not a recommendation:
+**The export data publishes under the Open Database License (ODbL)
+1.0.** Distinct from the reference tooling's MIT license (§2) — those
+are separate decisions about separate artifacts (code vs. data), and
+only the data license was open. Decided by the owner, 2026-07-18.
 
-- **CC0 (public domain dedication)**: maximal adoption — any consumer,
-  MIT-licensed or AGPL-licensed or fully proprietary, can use the data
-  with zero attribution or share-alike obligation. Consequence: nothing
-  requires a downstream consumer to credit ProxyPrints, contribute
-  improvements back, or even disclose they're using this data at all.
-  For the mpc-autofill-family consumer story (§6a), this is a
-  non-issue — sibling forks crediting each other is a social norm in
-  that community already, not something the license needs to enforce.
-  For the MIT-lineage consumer story (§6b), this maximizes how freely
-  e.g. `acoreyj/proxies-at-home` (MIT) could fold verdict data directly
-  into its own tool without any license-compatibility analysis at all.
-- **ODbL (Open Database License, share-alike for databases)**:
-  guarantees any consumer who builds a *derivative database* from this
-  export (not just an application that reads it) must release that
-  derivative under ODbL too, and must attribute ProxyPrints. Consequence:
-  meaningfully raises the bar for the MIT-lineage consumer story
-  specifically — a permissively-licensed tool folding ODbL data into its
-  own bundled dataset would need to think carefully about whether that
-  triggers ODbL's share-alike clause for that bundled artifact (ODbL's
-  share-alike is scoped to the *database*, not necessarily the whole
-  application, but this is exactly the kind of nuance that scares off
-  casual adoption from a small open-source tool maintainer who isn't a
-  lawyer). Note also `alex-taxiera/proxy-print` is itself **AGPL-3.0**
-  (verified directly against its GitHub license metadata for this doc,
-  2026-07-18 — not MIT, correcting this task's own framing; see §6b) —
-  ODbL-licensed data flowing into an AGPL-3.0 project raises its own
-  separate compatibility question neither license was written with the
-  other in mind for, that a share-alike-averse maintainer would have to
-  resolve before adopting at all.
+### Why ODbL over CC0
 
-**Recommendation left unstated deliberately** — flag, don't choose, per
-this task's own instruction. The practical tension in one sentence: CC0
-maximizes adoption breadth, ODbL maximizes attribution/reciprocity
-guarantees; which matters more is the owner's call, not a technical one.
+Both were real options at spec-draft time. CC0 (public domain
+dedication) would have maximized adoption breadth — any consumer, no
+attribution or share-alike obligation, nothing requiring a downstream
+user to credit ProxyPrints or contribute anything back. ODbL trades some
+of that breadth for **reciprocity**, deliberately: consumers may use the
+verdicts freely, but a publicly redistributed database *built on* this
+export must be shared back openly, under the same terms. The owner chose
+this posture on purpose — accepting some consumer friction (a license a
+casual adopter has to actually read once) in exchange for a growing,
+genuinely open commons rather than a one-way data donation. For the
+mpc-autofill-family consumer story (§6a), this changes nothing in
+practice — sibling forks sharing improvements back is already the norm
+there. For the MIT-lineage consumer story (§6b), this is the friction
+the owner is knowingly accepting: `acoreyj/proxies-at-home` (MIT) or a
+similar tool folding this data into its own bundled dataset needs to
+think about whether that triggers share-alike for that bundled artifact.
+The three clarifications below exist specifically to shrink that
+friction to its real, legal size — smaller than "ODbL" sounds to someone
+who's only ever worked with permissive code licenses.
+
+### What this actually means for a consumer (true under ODbL, stated plainly)
+
+- **(a) Using the data and displaying results in your own application
+  requires only attribution — never opening your code or your app.**
+  ODbL calls this a "produced work" (the output of using a database, as
+  opposed to the database itself): a proxy-generation tool that reads
+  this export and shows a user "this is Zendikar Rising #135" is
+  producing a produced work. Produced works carry only an attribution
+  requirement (see (c)), not a share-alike one. Your application's
+  source code is never encumbered by this license, regardless of how
+  you built it or whether it's open-source at all.
+- **(b) Share-alike applies only to *publicly redistributed* derivative
+  *databases*.** If you take this export, transform or merge it into
+  your own dataset, and **publish that dataset** for others to consume,
+  the resulting database must be shared under ODbL too. If you use the
+  data privately, internally, or only ever expose it through an
+  application's produced works (see (a)), there is no share-alike
+  obligation at all — internal use is completely unencumbered.
+- **(c) Attribution format**: `Contains data from ProxyPrints.ca, made
+  available under ODbL` plus a link to the export's landing page (§4).
+  Any reasonably prominent placement — an about/credits page, a footer,
+  a README for a redistributed dataset — satisfies it; ODbL doesn't
+  mandate a specific location or format beyond "reasonably calculated to
+  make the source of the Database attributable."
+
+### A non-legal note, alongside the license
+
+None of the above is a request — it's just what the license actually
+requires, stated plainly so it reads smaller than "ODbL" sounds. Beyond
+that: if you build something useful on top of this data, we'd
+genuinely welcome hearing about it or getting improvements back, even in
+places the license doesn't require it (a produced work, a private
+internal use) — that's an invitation, not a term.
+
+**Note on the named MIT-lineage projects**: `alex-taxiera/proxy-print`
+is itself **AGPL-3.0**, not MIT (verified directly against its GitHub
+license metadata for this doc, 2026-07-18 — correcting the original
+framing that grouped both named projects as "MIT lineage"; see §6b).
+ODbL-licensed data flowing into an AGPL-3.0 project raises its own
+compatibility question neither license was written with the other in
+mind for — the produced-works exception in (a) above still applies
+regardless (an AGPL-licensed tool displaying results from this data is
+still just producing a produced work), but a maintainer folding the
+*data itself* into their own bundled database should read (b) carefully
+before assuming AGPL's own copyleft and ODbL's share-alike compose
+cleanly.
 
 ## 6. Consumer stories
 
