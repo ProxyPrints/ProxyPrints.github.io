@@ -1,13 +1,15 @@
 /**
- * Proposal H, Step 1 (docs/proposals/proposal-h-unified-display-page.md) — the unified display
- * page's shell: a top toolbar, a live print-sheet preview (reusing PagePreview/computeLayout
- * from Proposal A - see PagePreview.tsx), slot selection, and the rail's always-visible status
- * header + accordion skeleton (AutofillCollapse, per the owner's accordion amendment). Real
- * components are wired where the data/logic already exists; every other accordion section
- * renders a labeled stub - see each section's own comment for which later PR fills it in, per
- * the design doc's §6 migration/sequencing plan.
+ * Proposal H (docs/proposals/proposal-h-unified-display-page.md) — the unified display page's
+ * shell: a top toolbar, a live print-sheet preview (reusing PagePreview/computeLayout from
+ * Proposal A - see PagePreview.tsx), slot selection, and the rail's always-visible status header
+ * + accordion (AutofillCollapse, per the owner's accordion amendment). Choose Image is wired to
+ * the real candidate/version picker (Step 2 PR 2a - see ChooseImageSection below, and
+ * useGridSelectorSearch.ts/GridSelectorResults.tsx, extracted from GridSelectorModal.tsx so both
+ * surfaces share one real search implementation). Every other accordion section still renders a
+ * labeled stub - see each section's own comment for which later PR fills it in, per the design
+ * doc's §6 migration/sequencing plan.
  *
- * Deliberately NOT built here (see the design doc + this task's relay report for the full
+ * Deliberately NOT built here (see the design doc + this task's relay reports for the full
  * reasoning): the tablet off-canvas drawer and mobile bottom-sheet overlay interaction patterns
  * (§3) - below `md` the rail stacks in plain document flow below the sheet, which is usable but
  * not yet the polished drawer/overlay the doc specifies; that's follow-up work, not silently
@@ -17,7 +19,7 @@
  */
 import styled from "@emotion/styled";
 import Link from "next/link";
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import Button from "react-bootstrap/Button";
 import Form from "react-bootstrap/Form";
 
@@ -31,11 +33,14 @@ import {
 import {
   CardDocument,
   Faces,
+  SearchQuery,
   useAppDispatch,
   useAppSelector,
 } from "@/common/types";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
+import { GridSelectorResults } from "@/features/gridSelector/GridSelectorResults";
+import { useGridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
 import { computeLayout } from "@/features/pdf/layout";
 import {
   PagePreview,
@@ -48,7 +53,9 @@ import {
   selectProjectCardback,
   selectProjectMember,
   selectProjectMembers,
+  setSelectedImages,
 } from "@/store/slices/projectSlice";
+import { selectSearchResultsForQueryOrDefault } from "@/store/slices/searchResultsSlice";
 import {
   selectFrontsVisible,
   toggleFaces,
@@ -168,6 +175,97 @@ const RailHeader = ({
 
 //# endregion
 
+//# region Choose Image section (PR 2a - the real candidate/version picker)
+
+interface ChooseImageSectionProps {
+  face: Faces;
+  slot: number;
+  query: SearchQuery | undefined;
+  selectedImage: string | undefined;
+}
+
+// Reuses the same real search/filter machinery GridSelectorModal itself now delegates to
+// (useGridSelectorSearch + GridSelectorResults, extracted in this PR) rather than a modal - the
+// design doc's §4.4 calls for this to render inline in the rail's own scroll container, not a
+// second overlapping dialog. Selecting an image dispatches the same setSelectedImages action
+// CardSlot.tsx's own grid selector uses, so the sheet's thumbnail for this slot updates
+// immediately (same Redux state, same PagePreview render path).
+const ChooseImageSection = ({
+  face,
+  slot,
+  query,
+  selectedImage,
+}: ChooseImageSectionProps) => {
+  const dispatch = useAppDispatch();
+  const searchResultsForQuery =
+    useAppSelector((state) =>
+      selectSearchResultsForQueryOrDefault(
+        state,
+        query?.query,
+        query?.cardType,
+        query?.expansionCode,
+        query?.collectorNumber,
+        face
+      )
+    ) ?? [];
+  const focusRef = useRef<HTMLInputElement>(null);
+  const search = useGridSelectorSearch({
+    imageIdentifiers: searchResultsForQuery,
+    active: true,
+  });
+
+  const onSelectImage = (identifier: string) => {
+    dispatch(
+      setSelectedImages({
+        slots: [[face, slot]],
+        selectedImage: identifier,
+        deselect: true,
+      })
+    );
+  };
+
+  if (searchResultsForQuery.length === 0) {
+    return (
+      <p className="text-muted small mb-0">
+        No candidate images found for this slot&apos;s query.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <div className="d-flex align-items-center gap-2 flex-wrap mb-2">
+        <span className="text-muted small">
+          {search.resultCount.toLocaleString()} result
+          {search.resultCount !== 1 ? "s" : ""}
+        </span>
+        <Button
+          variant="outline-primary"
+          size="sm"
+          onClick={() => search.setSettingsVisible((v) => !v)}
+        >
+          <i
+            className={`bi bi-chevron-${
+              search.settingsVisible ? "left" : "right"
+            }`}
+          />{" "}
+          Filters
+        </Button>
+      </div>
+      <GridSelectorResults
+        variant="embedded"
+        imageIdentifiers={searchResultsForQuery}
+        selectedImage={selectedImage}
+        onSelectImage={onSelectImage}
+        focusRef={focusRef}
+        search={search}
+      />
+    </>
+  );
+};
+
+//# endregion
+
 interface SelectedSlotRef {
   face: Faces;
   slot: number;
@@ -255,10 +353,12 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
         expandedSections={expandedSections}
         onToggle={onToggle}
       >
-        <Stub>
-          The candidate/version picker (GridSelectorModal) lands here in Step
-          2&apos;s first instrument-parity PR.
-        </Stub>
+        <ChooseImageSection
+          face={selectedSlotRef.face}
+          slot={selectedSlotRef.slot}
+          query={query}
+          selectedImage={selectedImage}
+        />
       </RailSection>
       <RailSection
         sectionKey="attributes"

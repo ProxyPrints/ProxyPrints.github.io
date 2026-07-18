@@ -23,6 +23,7 @@ import {
   DownloadManager,
   OpenDownloadManagerButton,
 } from "@/features/download/DownloadManager";
+import { AuthWidget } from "@/features/moderation/AuthWidget";
 import {
   useAnyBackendConfigured,
   useProjectName,
@@ -147,7 +148,12 @@ export default function ProjectNavbar() {
                 Download
               </Nav.Link>
             </Nav>
-            <Nav className="ms-auto d-flex">
+            <Nav className="ms-auto d-flex align-items-center">
+              {remoteBackendConfigured && (
+                <Nav.Link className="m-0 py-0" eventKey="auth">
+                  <AuthWidget />
+                </Nav.Link>
+              )}
               <Nav.Link className="m-0 py-0" eventKey="download-manager">
                 <OpenDownloadManagerButton
                   handleClick={handleShowDownloadManager}
