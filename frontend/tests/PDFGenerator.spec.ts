@@ -11,6 +11,7 @@ import {
   defaultHandlers,
   searchResultsOneResult,
   sourceDocumentsOneResult,
+  tagConsensusAppropriateBleedTrimmed,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
@@ -229,5 +230,60 @@ test.describe("PDFGenerator - manual bleed override (Proposal B PR-2)", () => {
     await expect(
       page.getByTestId(`bleed-override-select-${cardDocument1.identifier}`)
     ).toHaveValue("force-bleed");
+  });
+});
+
+test.describe("PDFGenerator - bleed preview badge (Proposal B PR-3)", () => {
+  test("shows the hedged badge once the appropriate-bleed prior resolves to 'trimmed'", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsOneResult,
+      sourceDocumentsOneResult,
+      searchResultsOneResult,
+      imageBucketSuccess,
+      imageWorkerSuccess,
+      tagConsensusAppropriateBleedTrimmed,
+      ...defaultHandlers
+    );
+
+    await addCardAndOpenPDFTab(page);
+
+    // The badge only renders once the prior fetch resolves (no provisional guess beforehand -
+    // see PDFGenerator.tsx's fastPreviewSlots comment), so this is a genuine wait on the real
+    // async round trip, not an instant assertion.
+    const badge = page.getByTestId("page-preview-bleed-badge");
+    await expect(badge).toBeVisible({ timeout: 15_000 });
+    await expect(badge).toHaveText("Bleed will be generated");
+  });
+
+  test("forcing 'Force bleed' hides the badge regardless of the resolved prior", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsOneResult,
+      sourceDocumentsOneResult,
+      searchResultsOneResult,
+      imageBucketSuccess,
+      imageWorkerSuccess,
+      tagConsensusAppropriateBleedTrimmed,
+      ...defaultHandlers
+    );
+
+    await addCardAndOpenPDFTab(page);
+    await expect(
+      page.getByTestId("page-preview-bleed-badge")
+    ).toBeVisible({ timeout: 15_000 });
+
+    await page.getByText("Bleed Overrides").click();
+    await page
+      .getByTestId(`bleed-override-select-${cardDocument1.identifier}`)
+      .selectOption("force-bleed");
+
+    await expect(
+      page.getByTestId("page-preview-bleed-badge")
+    ).not.toBeVisible();
   });
 });

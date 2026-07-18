@@ -38,10 +38,27 @@ Core: at PDF export, for each card (full-res bitmap already in hand): MEASURE ac
 
 **PR-2 (this pass) — shipped**: the per-card manual-override UI (a new "Bleed Overrides" collapsible section in the PDF export panel, `PDFGenerator.tsx`, listing every project card bleed normalization can actually apply to - full-resolution Google Drive/local-file sources, matching `PDF.tsx`'s own `isBleedNormalizationEligible` - with an Auto/Force bleed/Force trimmed select per card) and its persistence (decision 4: survives reload, via a new `manualOverrides: {[identifier]: ManualOverride}` field on `projectSlice`'s `Project` state, a new `getLocalStorageManualOverrides`/`setLocalStorageManualOverrides` pair in `common/cookies.ts`, and a `listenerMiddleware.ts` listener that writes to localStorage on every change - all three mirroring `favoritesSlice`'s existing pattern exactly, since no persistence mechanism previously existed anywhere in `projectSlice`). Loaded back into Redux on app mount in `Layout.tsx`, same place favorites already load. The override is keyed by card identifier, independent of project membership, so it survives even though the rest of the open project (which cards are in the deck) doesn't itself persist across reload today - a pre-existing, unrelated gap, not something this PR touches. 13 new tests (7 reducer/selector, 6 localStorage round-trip) plus one real-browser Playwright test that sets an override, confirms it round-trips through `localStorage`, reloads the page via a fresh navigation, and confirms the override is still selected - genuine end-to-end confirmation of decision 4, not just a unit-test assertion.
 
+**PR-3 (this pass) — shipped**: the hedged WYSIWYG preview badge ("Bleed will be generated") on
+`PagePreview.tsx`'s fast/CSS preview, per the audit's suggestion-vs-confirmed vocabulary - never
+framed as a confirmed fact, since the real per-side measurement only happens at export. A new pure
+`willLikelyGenerateBleed(prior, manualOverride)` in `bleedNormalize.ts` mirrors
+`resolveBleedPlan`'s manualOverride/prior precedence (override wins outright when set; otherwise
+prior "bleed" hedges toward no synthetic generation, "trimmed"/"unresolved" hedge toward
+generation) minus the per-side measurement branch, since no real measurement is available to the
+cheap CSS preview - the closest available stand-in for "the measurement where available" is PR-2's
+manual override, the one signal that's both already resolved synchronously and fully determines
+the real outcome the same way a measurement would. `PDFGenerator.tsx` resolves `bleedPriors` for
+just the currently-visible preview page's eligible cards (debounced 500ms, reusing PR-1's
+`resolveBleedPriors`) and combines it with PR-2's `manualOverrides` per card; the badge only
+renders once a real signal exists (an override, or a resolved prior) - no provisional guess that
+would flicker wrong-then-right as the fetch resolves. **Proposal B is now complete end to end**
+per the approved spec (measurement, extension, priors, manual override + persistence, preview
+badge, tests, docs) - only the merge-time calibration pass and the flagged (not built) XML field
+remain, both intentionally out of scope for this build.
+
 **Not yet built** (concrete next steps, not silently dropped):
-1. The WYSIWYG preview badge ("bleed will be generated") in `PagePreview.tsx` (Proposal B PR-3).
-2. The XML optional field for a persisted override (flagged per the owner's own instruction, not built - see "Tracked, not building" below for detail now that PR-2's UI exists to carry it).
-3. The merge-time server-side calibration pass (~20-30 real catalog images) for the four named measurement constants.
+1. The XML optional field for a persisted override (flagged per the owner's own instruction, not built - see "Tracked, not building" below for detail).
+2. The merge-time server-side calibration pass (~20-30 real catalog images) for the four named measurement constants.
 
 **Tracked, not building**: PR-1's batch resolution issues one `POST 2/tagConsensus/` per unique card in the export (bounded to 6 concurrent) - for the owner's own large project this is ~517 requests per export. Acceptable for v1 (bounded concurrency + per-card failure tolerance keep this from being a real problem today); a batch-consensus endpoint (one request, many identifiers) is the eventual answer if this ever actually hurts in practice, but isn't worth building speculatively ahead of evidence it's needed.
 

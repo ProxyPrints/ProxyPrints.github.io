@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import React from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
@@ -28,7 +28,11 @@ import { downloadFile, useDoFileDownload } from "@/features/download/download";
 import { requestGoogleDriveWriteToken } from "@/features/googleDrive/googleDriveAuth";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { GoogleDriveService } from "@/features/googleDrive/GoogleDriveService";
-import { ManualOverride } from "@/features/pdf/bleedNormalize";
+import {
+  BleedPrior,
+  ManualOverride,
+  willLikelyGenerateBleed,
+} from "@/features/pdf/bleedNormalize";
 import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
 import { computeLayout } from "@/features/pdf/layout";
 import {
@@ -1224,11 +1228,69 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     fastPreviewCardSets.flatMap((set) =>
       chunk(set, fastPreviewCardsPerPage)
     )[0] ?? [];
+
+  // Proposal B PR-3: the preview badge's own bleed-prior lookup, scoped to just the currently-
+  // visible fast-preview page (not the whole project) and only for sources bleed normalization
+  // can apply to - same eligibility filter as BleedOverrideSettings. Debounced (matching this
+  // component's own pdfProps debounce) so retyping a search query doesn't fire a fresh batch of
+  // requests on every keystroke.
+  const fastPreviewEligibleIdentifiers = fastPreviewFirstPage
+    .filter(
+      (doc) =>
+        doc != null &&
+        (doc.sourceType === SourceType.GoogleDrive ||
+          doc.sourceType === SourceType.LocalFile)
+    )
+    .map((doc) => doc!.identifier);
+  const [debouncedPreviewIdentifiers] = useDebounce(
+    fastPreviewEligibleIdentifiers,
+    500,
+    { equalityFn }
+  );
+  const [fastPreviewBleedPriors, setFastPreviewBleedPriors] = useState<{
+    [identifier: string]: BleedPrior;
+  }>({});
+  useEffect(() => {
+    let cancelled = false;
+    if (backendURL == null || debouncedPreviewIdentifiers.length === 0) {
+      setFastPreviewBleedPriors({});
+      return;
+    }
+    resolveBleedPriors(backendURL, debouncedPreviewIdentifiers).then(
+      (priors) => {
+        if (!cancelled) {
+          setFastPreviewBleedPriors(priors);
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [backendURL, debouncedPreviewIdentifiers]);
+
   const fastPreviewSlots: Array<PagePreviewSlotContent> =
-    fastPreviewFirstPage.map((doc) => ({
-      imageUrl: doc?.smallThumbnailUrl,
-      name: doc?.name ?? "",
-    }));
+    fastPreviewFirstPage.map((doc) => {
+      const eligible =
+        doc != null &&
+        (doc.sourceType === SourceType.GoogleDrive ||
+          doc.sourceType === SourceType.LocalFile);
+      const prior =
+        doc != null ? fastPreviewBleedPriors[doc.identifier] : undefined;
+      const override =
+        doc != null ? manualOverrides[doc.identifier] ?? "auto" : "auto";
+      // Only render the badge once there's a real signal to hedge on (an explicit override, or
+      // a resolved prior) - showing a provisional guess before either is available would flicker
+      // wrong-then-right as the prior fetch resolves.
+      const willGenerateBleed =
+        eligible && (override !== "auto" || prior != null)
+          ? willLikelyGenerateBleed(prior ?? "unresolved", override)
+          : undefined;
+      return {
+        imageUrl: doc?.smallThumbnailUrl,
+        name: doc?.name ?? "",
+        willGenerateBleed,
+      };
+    });
 
   const fullResolutionPDFProps = {
     ...debouncedPDFProps,
