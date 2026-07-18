@@ -11,7 +11,50 @@ from django.urls import reverse
 
 from cardpicker import views
 from cardpicker.tests.constants import Cards, DummyImportSite, Sources
-from cardpicker.tests.factories import SourceFactory, TagFactory
+from cardpicker.tests.factories import (
+    CanonicalArtistFactory,
+    CanonicalCardFactory,
+    CanonicalExpansionFactory,
+    CardFactory,
+    SourceFactory,
+    TagFactory,
+)
+
+# see test_local_identify_printing_tags.py's identical fixture for the full rationale -
+# factory.Sequence counters are process-global across the whole pytest run, so any test using
+# `populated_database` (function-scoped, recreates all_sources/all_cards fresh every call)
+# permanently shifts sequence-derived snapshot values for every test that runs after it in this
+# file (TestGetSampleCards, TestNewCardsFirstPages, TestNewCardsPage, TestPostExploreSearchResults
+# all hardcode artist names like "Artist 102"). Only the one new E-2 test below needs insulating -
+# existing tests in this file rely on the ambient cumulative count and must not be touched.
+#
+# Scoping this to a single test is non-trivial: `TestPostEditorSearchResults`'s own
+# `autouse_populated_database` (class-scoped autouse) always instantiates before a same-scope
+# fixture the test merely *requests* - by the time a normal requested fixture's body runs,
+# `populated_database` has already consumed its sequence numbers, so a naive capture-before/
+# restore-after fixture requested by the test is too late to see the true "before" value.
+# Module-level autouse fixtures instantiate before class-level autouse fixtures even at the same
+# effective (function) scope, so this is deliberately autouse=True at module level - but it is a
+# no-op for every test except the one named below, so it has zero effect on the rest of this file.
+_SHARED_FACTORIES = [
+    CardFactory,
+    SourceFactory,
+    CanonicalArtistFactory,
+    CanonicalExpansionFactory,
+    CanonicalCardFactory,
+]
+_SEQUENCE_INSULATED_TESTS = {"test_only_the_actually_degraded_query_is_flagged_among_several"}
+
+
+@pytest.fixture(autouse=True)
+def _preserve_shared_factory_sequences_for_insulated_tests(request):
+    if request.node.name not in _SEQUENCE_INSULATED_TESTS:
+        yield
+        return
+    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
+    yield
+    for f, n in before.items():
+        f.reset_sequence(n, force=True)
 
 
 def snapshot_response(response: Response, snapshot: SnapshotAssertion):
