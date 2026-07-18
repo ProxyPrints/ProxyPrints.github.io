@@ -21,6 +21,12 @@ own "as of" date before trusting anything in it as current.
 - `2026-07-18-merge-sweep-checkpoint-1.md` — merge-sweep checkpoint
   covering PRs #64/#65/#66/#67/#69 (recreated as #72 after a
   base-branch-deletion incident).
+- `2026-07-18-ai-to-machine-terminology.md` — "AI" → "machine"
+  terminology fix for OCR/phash/deduction vote sources, docs +
+  frontend + a backward-compatible settings rename.
+- `2026-07-18-wiki-review-findings.md` — publish-script link-rewrite
+  fix, Part 3 write-pass status update, and a targeted staleness
+  mini-pass across proposal docs and docs/README.md.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
