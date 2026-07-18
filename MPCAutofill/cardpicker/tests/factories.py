@@ -153,3 +153,15 @@ class CardReportFactory(factory.django.DjangoModelFactory):
     anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
     reason = models.CardReportReason.NSFW
     text = ""
+
+
+class SavedDeckFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.SavedDeck
+
+    # no SubFactory default - no UserFactory exists in this module (tests use the plain_user/
+    # moderator_user conftest fixtures instead), so `owner` must always be passed explicitly.
+    name = factory.Sequence(lambda n: f"Deck {n}")
+    state = factory.LazyFunction(dict)
+    kind = models.SavedDeckKind.DECK
+    is_public = False

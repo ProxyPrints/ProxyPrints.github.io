@@ -21,6 +21,7 @@ from .models import (
     PilotRunLedger,
     Project,
     ProjectMember,
+    SavedDeck,
     Source,
     Tag,
     TagAliasSuggestion,
@@ -219,6 +220,30 @@ class AdminTagAliasSuggestion(admin.ModelAdmin[TagAliasSuggestion]):
     ordering = ("-occurrence_count",)
     actions = ["accept_suggestions", "reject_suggestions"]
 
+    @admin.action(description="Accept selected suggestions (adds raw text as a tag alias)")
+    def accept_suggestions(self, request: HttpRequest, queryset: QuerySet[TagAliasSuggestion]) -> None:
+        for suggestion in queryset.select_related("suggested_tag"):
+            tag = suggestion.suggested_tag
+            if tag is not None and suggestion.raw_text not in tag.aliases:
+                tag.aliases = [*tag.aliases, suggestion.raw_text]
+                tag.save(update_fields=["aliases"])
+            suggestion.status = TagSuggestionStatus.ACCEPTED
+            suggestion.save(update_fields=["status"])
+
+    @admin.action(description="Reject selected suggestions (undoes any auto-applied alias)")
+    def reject_suggestions(self, request: HttpRequest, queryset: QuerySet[TagAliasSuggestion]) -> None:
+        for suggestion in queryset.select_related("suggested_tag"):
+            tag = suggestion.suggested_tag
+            if tag is not None and suggestion.status in (
+                TagSuggestionStatus.AUTO_ACCEPTED,
+                TagSuggestionStatus.ACCEPTED,
+            ):
+                if suggestion.raw_text in tag.aliases:
+                    tag.aliases = [alias for alias in tag.aliases if alias != suggestion.raw_text]
+                    tag.save(update_fields=["aliases"])
+            suggestion.status = TagSuggestionStatus.REJECTED
+            suggestion.save(update_fields=["status"])
+
 
 @admin.register(PilotRunLedger)
 class AdminPilotRunLedger(admin.ModelAdmin[PilotRunLedger]):
@@ -245,26 +270,10 @@ class AdminCardScanLog(admin.ModelAdmin[CardScanLog]):
     search_fields = ("run_id",)
     ordering = ("-scanned_at",)
 
-    @admin.action(description="Accept selected suggestions (adds raw text as a tag alias)")
-    def accept_suggestions(self, request: HttpRequest, queryset: QuerySet[TagAliasSuggestion]) -> None:
-        for suggestion in queryset.select_related("suggested_tag"):
-            tag = suggestion.suggested_tag
-            if tag is not None and suggestion.raw_text not in tag.aliases:
-                tag.aliases = [*tag.aliases, suggestion.raw_text]
-                tag.save(update_fields=["aliases"])
-            suggestion.status = TagSuggestionStatus.ACCEPTED
-            suggestion.save(update_fields=["status"])
 
-    @admin.action(description="Reject selected suggestions (undoes any auto-applied alias)")
-    def reject_suggestions(self, request: HttpRequest, queryset: QuerySet[TagAliasSuggestion]) -> None:
-        for suggestion in queryset.select_related("suggested_tag"):
-            tag = suggestion.suggested_tag
-            if tag is not None and suggestion.status in (
-                TagSuggestionStatus.AUTO_ACCEPTED,
-                TagSuggestionStatus.ACCEPTED,
-            ):
-                if suggestion.raw_text in tag.aliases:
-                    tag.aliases = [alias for alias in tag.aliases if alias != suggestion.raw_text]
-                    tag.save(update_fields=["aliases"])
-            suggestion.status = TagSuggestionStatus.REJECTED
-            suggestion.save(update_fields=["status"])
+@admin.register(SavedDeck)
+class AdminSavedDeck(admin.ModelAdmin[SavedDeck]):
+    list_display = ("name", "owner", "kind", "is_public", "created_at", "updated_at")
+    list_filter = ("kind", "is_public")
+    search_fields = ("name", "owner__username")
+    raw_id_fields = ["owner"]
