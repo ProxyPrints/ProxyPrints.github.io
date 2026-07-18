@@ -525,20 +525,20 @@ critically, root-caused it rather than stopping at "found a bug": sweeping
 `RGB_DISTANCE_THRESHOLD` across a 4x range (6 to 24) moved the sample median under 3% - ruling
 out "threshold too loose" as the cause before it could be mistaken for one. The real cause: a
 standard MTG card's own border is commonly a flat, uniform color, and the synthetic bleed
-extension sitting just outside it is *deliberately* colored to match the frame so a print
+extension sitting just outside it is _deliberately_ colored to match the frame so a print
 misalignment doesn't show a visible seam - meaning the probe's "uniform run = bleed" assumption
 can never distinguish bleed from border once both are the same color, **by the bleed extension's
 own design intent**. No amount of threshold tuning fixes a measurement whose blind spot is the
 feature's own success condition.
 
 **The lesson, generalized**: when a measurement's error turns out to be invariant across a wide
-sweep of its own tuning constants, stop tuning and ask whether the measurement's *core method* -
+sweep of its own tuning constants, stop tuning and ask whether the measurement's _core method_ -
 not its parameters - structurally cannot see the thing it's trying to see. Here, the fix wasn't a
 better threshold; it was picking an entirely different signal immune to the same confound. The
 source image's own pixel dimensions (checked against the standard trim/bleed aspect ratios, the
 same method the backend's already-validated `classify_bleed_edge` uses) carry the same
-information a color-run walk was trying to extract, but a card's *file dimensions* have no
-dependency on its *border color* - so the confound simply doesn't apply. Demoting the original
+information a color-run walk was trying to extract, but a card's _file dimensions_ have no
+dependency on its _border color_ - so the confound simply doesn't apply. Demoting the original
 measurement to an advisory role (ambiguity detection, an asymmetry flag) rather than discarding
 it outright preserved the real edge cases it still catches (a solid-background full-art card, a
 degenerate scan) while removing it from the one thing it was structurally unable to do reliably.
