@@ -1,7 +1,7 @@
 ```
 TASK: Wiki + docs automation (survey then build) — branch
 claude/wiki-docs-automation, commit be914cd8, pushed to origin. PR:
-https://github.com/ProxyPrints/ProxyPrints.github.io/pull/69 (open, base
+https://github.com/ProxyPrints/ProxyPrints.github.io/pull/70 (open, base
 master). This branch is based on the already-merged-in-spirit tip of
 claude/user-accounts-saved-decks-m8eyf5 (Proposal G + the earlier docs
 coherence pass), cut fresh so this task's own PR stays scoped to its own
@@ -208,7 +208,7 @@ OPEN ITEMS / DECISIONS NEEDED:
    from the prior session).
 
 LIVE STATE: branch claude/wiki-docs-automation pushed to origin at
-be914cd8 (workflows/docs) + this report's own commit on top. PR #69 open
+be914cd8 (workflows/docs) + this report's own commit on top. PR #70 open
 against master, not merged. Nothing pushes to the live wiki or to
 chilli-axe/mpc-autofill anywhere in this change — both new wiki-facing
 workflows are inert until WIKI_PUSH_TOKEN exists (publish) or the branch
