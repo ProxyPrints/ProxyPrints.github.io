@@ -11,6 +11,7 @@ import {
   getLocalStorageManualOverrides,
 } from "@/common/cookies";
 import { useAppDispatch } from "@/common/types";
+import { useChunkErrorRecovery } from "@/common/useChunkErrorRecovery";
 import { useBackendSetter } from "@/features/backend/useBackendSetter";
 import { ClientSearchContextProvider } from "@/features/clientSearch/clientSearchContext";
 import { clientSearchService } from "@/features/clientSearch/clientSearchService";
@@ -68,6 +69,7 @@ export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
   const downloadContext: DownloadContext = new Queue(10, 50);
   const [forceUpdateValue, forceUpdate] = useReducer((x: number) => x + 1, 0);
   useBackendSetter();
+  useChunkErrorRecovery();
   const dispatch = useAppDispatch();
 
   /**

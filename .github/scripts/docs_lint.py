@@ -33,10 +33,11 @@ DOCS_DIR = REPO_ROOT / "docs"
 # non-paths (globs, illustrative examples, etc.) — add here with a reason,
 # never by loosening the heuristic below.
 ALLOWLIST = {
-    "docs/audits/ui-content-audit.md": (
-        "exists on an unmerged branch (PR #56), deliberately not on this "
-        "branch yet — docs/README.md's Records section describes exactly "
-        "this, it isn't a broken reference"
+    "frontend/src/features/printingTags/PrintingTagQueue.tsx": (
+        "deleted in the 'Queue redesign frontend' commit (9d71851) — "
+        "docs/lessons.md and docs/reports/level1-scryfall-reference-"
+        "regression.md cite it deliberately as git archaeology, not a "
+        "live reference"
     ),
 }
 

@@ -402,7 +402,7 @@ and live-traffic-fairness control, not a cost control, so the WAIT sequencing ab
 
 ---
 
-## Part 3 — Shared evidence-recovery module (built, HOLD #P3 — write pass pending)
+## Part 3 — Shared evidence-recovery module (write pass complete, merged 2026-07-18)
 
 Insight: artist is a property of the ARTWORK, not the printing — art-
 identity evidence supports artist votes even where printing votes are
@@ -561,32 +561,66 @@ pilot wasn't stopped for this.
 
 ---
 
-## Part 4 — LANDS (artist-decomposed identification)
+## Part 4 — LANDS (artist-decomposed identification) (module built 2026-07-18; HOLD #B still open — real volume-check numbers not yet run)
 
 Target pool: unresolved basic lands (Plains/Island/Swamp/Mountain/Forest/
 Wastes + Snow-Covered) OR any name whose candidate count exceeded the
 phash cap (`PHASH_MAX_CANDIDATES`).
 
-1. Collector-line OCR as normal (confirm the cap never applied to OCR —
-   text validation is free at any N; verify against `select_candidates`/
-   `run_ocr_for_card`, don't assume).
-2. Where OCR fails: artist OCR (already extracted in the fallback pass's
-   stored JSON per-card audit data, deliberately unwritten as a vote since
-   the pilot's start — confirm this via `local_fallback.py`'s
-   `extract_artist_name`/`match_artist`, currently used only to _narrow_
-   printing candidates during pass-2, never to vote) → `difflib` ratio
-   ≥0.8 against the NAME'S OWN candidates' artists only (not the whole
-   artist table).
+1. Collector-line OCR as normal — **confirmed**: `run_ocr_for_card`
+   iterates `local_ocr.validate_against_candidates` unconditionally, no
+   `len(candidates)` check anywhere. A card still unresolved and in this
+   pool has already had a real, uncapped OCR attempt fail.
+2. Where OCR fails: artist OCR, reusing `local_fallback.py`'s
+   `detect_illus_anchor`/`extract_artist_name`/`match_artist` verbatim
+   (already existed, already used to _narrow_ candidates during pass-2 —
+   confirmed never previously used to cast a vote; this module is the
+   first caller that votes on their output directly) → `difflib` ratio
+   ≥0.8 (`ARTIST_FUZZY_MATCH_THRESHOLD`, unchanged) against the NAME'S
+   OWN candidates' artists only.
 3. Artist match → filter candidates to that artist's printings → phash
-   within the filtered set (reuse the `CanonicalCard.image_hash` cache;
-   filtered sets should sit under the cap — report the real distribution,
-   don't assume it does). Unique winner with the standard margin →
-   printing vote: confidence 0.85 (artist+art agree), 0.8 (art-within-
-   artist, weaker signal). Ambiguous → skip, counted.
+   within the filtered set (`local_phash.get_or_compute_canonical_hash` +
+   `find_best_match`, same mechanism Part 3's frame-mismatch recovery
+   already uses). Unique winner with the standard margin → printing
+   vote. **Confidence split, owner-clarified 2026-07-18** (the spec
+   text's "artist+art agree" vs "art-within-artist" phrasing was
+   genuinely ambiguous on its own): 0.85 when the artist match ALONE
+   already narrows to exactly one candidate and phash on that singleton
+   clears the standard acceptance distance (two independent channels
+   agreeing); 0.8 when the artist match narrows to multiple candidates
+   and phash breaks the tie among them (one deciding channel, scoped by
+   the artist filter). Any phash failure/ambiguity in either case →
+   skip, counted — never trusted as a coin-flip. Full reasoning lives in
+   `local_lands_identify.py`'s module docstring, next to the code it
+   governs.
 
-**HOLD #B — volume check before running the pool**: land-pool size,
-artist-extraction rate on a 300-card sample, per-name candidate counts
-pre/post artist filtering. Report before building further.
+**Built**: `cardpicker/local_lands_identify.py` (the module — target-pool
+query, the 3-step pipeline, `dry_run`/`run_id`/ledger rails matching
+Part 3's exact shape) + `management/commands/local_lands_identify.py`
+(`--write`/`--run-id`/`--sample-size` [default 300, per HOLD #B]/
+`--fetch-budget` [default 0], staleness guard, `PilotRunLedger` lifecycle,
+`verify_zero_resolutions` gate after any real write) +
+`tests/test_local_lands_identify.py` (16 tests, synthetic fixtures, no
+network — passing). Verified end-to-end against the real pytest suite
+(862 passed, 130/130 snapshots, only the pre-existing known-bucket
+failures — moxfield ×2, `test_sources.py` fixture-path ×2, unrelated to
+this module) and the real `pre-commit` hook set (ruff/isort/black/
+mypy/prettier all clean).
+
+**HOLD #B — still open**: the actual volume-check numbers (land-pool
+size, artist-extraction rate on a 300-card sample, per-name candidate
+counts pre/post artist filter) require running
+`manage.py local_lands_identify` (dry-run, the default) against the real
+production database — this session does not have that access (direct
+DB/host-venv access was denied by the same classifier mechanism that
+blocked Docker build/compose access earlier this same session; per that
+established pattern, not re-attempted a fourth way here). The command is
+built, tested, and ready — `--fetch-budget 0` gets `land_pool_size` +
+`per_name_candidate_counts` (pre-filter) with zero network cost as a
+first, instant read of pool shape; the full HOLD #B report (including
+the artist-extraction rate, which needs real fetches) needs someone with
+production DB access to run the default invocation and report the
+output. Nothing writes without an explicit `--write`.
 
 ---
 
@@ -758,8 +792,9 @@ over a closed codebook.
     this is _recovering_ an already-successful match, not matching
     cold), then run against the full OCR+fallback population
     (~5,773 cards after phash-priority dedup) in the background —
-    see the follow-up entry below for the completed numbers. d=0
-    sibling propagation: 987 votes would cast (see the corrected number
+    **completed 2026-07-18, see the write-pass entry below for the real
+    numbers** (4,804/4,804 OCR recovered, 590/595 fallback recovered).
+    d=0 sibling propagation: 987 votes would cast (see the corrected number
     above), safely re-runnable, idempotent (excludes cards with an
     existing vote from its own `anonymous_id`).
   - **Rails**: `verify_no_single_machine_vote_resolutions` (zero-
@@ -786,12 +821,20 @@ over a closed codebook.
     artist question sees zero hint of the machine's guess, even
     though the vote is correctly weighted and participates in
     consensus. This is a **pre-existing question_feed gap**, not
-    introduced by Part 3 (identical for every existing artist AI vote,
+    introduced by Part 3 (identical for every existing artist machine vote,
     not just these) — flagged here for whoever next touches
     question_feed's artist tier, not fixed as part of this work.
-  - **HOLD #P3 stands**: no vote has been written to the live database
-    by this pass. The write pass (`--write`) runs only after explicit
-    go-ahead.
+  - **HOLD #P3 cleared, write pass complete** (2026-07-18,
+    `run_id=20260718T145157-a12b1387`): 13,275 real votes now live
+    (7,131 `CardArtistVote` + 6,144 `CardTagVote`) — phash 750 recovered
+    → 1,500 combined votes, d=0 siblings 987 artist votes, OCR
+    4,804/4,804 recovered, fallback 590/595 recovered, OCR+fallback
+    combined → 10,788 votes. All hard bounds passed (phash exactly 750,
+    siblings exactly 987, OCR+fallback within the ≤11,546-vote ceiling).
+    Zero-resolution assertion re-run at full population (not just the
+    command's own 14-card sample gate): 0/7,124 violations — no card
+    resolved on machine-only votes anywhere in the run. Full detail:
+    [`docs/reports/2026-07-18-part3-write-pass-complete.md`](../reports/2026-07-18-part3-write-pass-complete.md).
   - Item 1's 15 permanent `content_phash` backfill failures: scattered
     across 6 distinct community Drive sources (CompC ×1,
     Hathwellcrisping ×4, LePoulpe_Dec_2023 ×2, RustyShackleford ×6,

@@ -94,7 +94,7 @@ ALTERED_FRAME_TAG_NAME = "altered-frame"
 
 # Confidence values per docs/features/catalog-completion-plan.md's Part 3 spec. NOTE: confidence
 # is stored for audit/display only - resolve_weighted_consensus's actual vote WEIGHT comes from
-# `source` alone (VoteSource.OCR -> settings.PRINTING_TAG_AI_WEIGHT, currently 0.5), not from
+# `source` alone (VoteSource.OCR -> settings.PRINTING_TAG_MACHINE_WEIGHT, currently 0.5), not from
 # this field, matching every other machine-cast vote in this codebase.
 FRAME_MISMATCH_ARTIST_CONFIDENCE = 0.8
 FRAME_MISMATCH_TAG_CONFIDENCE = 0.7

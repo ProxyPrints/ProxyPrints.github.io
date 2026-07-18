@@ -46,7 +46,7 @@ def verify_no_machine_only_resolutions(card_ids: list[int]) -> list[int]:
     The corrected post-purge invariant (docs/features/catalog-completion-plan.md's Part 1):
     the task's original literal framing - "assert statuses return to pre-run state" - is WRONG
     and would false-positive on the very first real purge. With the real default weights
-    (PRINTING_TAG_MIN_VOTES=2, PRINTING_TAG_AI_WEIGHT=0.5, human vote weight 1.0), 1 human vote
+    (PRINTING_TAG_MIN_VOTES=2, PRINTING_TAG_MACHINE_WEIGHT=0.5, human vote weight 1.0), 1 human vote
     + 2 agreeing machine votes sums to 2.0 and resolves; purging those 2 machine votes correctly
     drops the weight below threshold and the card LEGITIMATELY un-resolves - that's correct
     consensus recalculation, not a violation.

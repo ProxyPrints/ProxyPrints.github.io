@@ -41,6 +41,17 @@ test.describe("question feed - confirm_suggestion question type", () => {
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
     ).toHaveCount(0);
+
+    // Regression check (#49 dropped this): Level 1 still needs its own reference render of the
+    // suggested printing to compare against - "Is it this one?" is unanswerable from text alone.
+    const referenceImage = page
+      .getByTestId("question-feed-level1-reference-image")
+      .locator("img");
+    await expect(referenceImage).toBeVisible();
+    await expect(referenceImage).toHaveAttribute(
+      "src",
+      printingCandidate1.mediumThumbnailUrl
+    );
   });
 
   test("YES confirms the suggested printing directly, without visiting the grid", async ({

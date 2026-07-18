@@ -5,6 +5,7 @@ import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Container from "react-bootstrap/Container";
 import Form from "react-bootstrap/Form";
+import Modal from "react-bootstrap/Modal";
 import Row from "react-bootstrap/Row";
 // @ts-ignore: https://github.com/arnthor3/react-bootstrap-toggle/issues/21
 import Toggle from "react-bootstrap-toggle";
@@ -85,34 +86,24 @@ import { useRenderPDF } from "./useRenderPDF";
  * the download/upload is the only point this is still cheaply recoverable:
  * once the file is saved, a blank card is easy to miss until it's already
  * been sent off to print.
+ *
+ * An in-app modal (below, ImageFailureConfirmModal), not the native window.confirm() this used
+ * to be - a real incident's screenshot showed Firefox's own "allow notifications?" anti-spam
+ * chrome sitting right next to the confirm dialog, which can make a browser auto-suppress
+ * FUTURE window.confirm() calls on that origin without any visible warning - silently turning
+ * this safeguard off. An in-app modal can't be affected by that browser-level heuristic at all.
  */
-const confirmDespiteImageFailures = (
+type ConfirmDespiteFailures = (
   failures: Array<ImageFetchFailure>
-): boolean => {
-  const shown = failures.slice(0, 10).map((failure) => `• ${failure.label}`);
-  const remainder =
-    failures.length > shown.length
-      ? [`…and ${failures.length - shown.length} more`]
-      : [];
-  return window.confirm(
-    [
-      `${failures.length} card image${
-        failures.length === 1 ? "" : "s"
-      } couldn't be loaded and will be blank:`,
-      "",
-      ...shown,
-      ...remainder,
-      "",
-      "Continue anyway?",
-    ].join("\n")
-  );
-};
+) => Promise<boolean>;
 
 const downloadPDF = async (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
-  backendURL: string | null
+  backendURL: string | null,
+  setProgress: (progress: { completed: number; total: number } | null) => void,
+  confirmDespiteFailures: ConfirmDespiteFailures
 ): Promise<boolean> => {
   const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
     props.cardDocumentsByIdentifier
@@ -138,13 +129,21 @@ const downloadPDF = async (
           Object.keys(props.cardDocumentsByIdentifier)
         )
       : undefined;
+  // Registered before the render call, not after - see pdfRenderService.onImageProgress's own
+  // comment for why. A large export can take several minutes once full-resolution fetches are
+  // paced to the image CDN's shared rate limit (see pdfImage.ts) - this is what turns that wait
+  // into "fetching images: N/M" instead of a spinner that looks hung.
+  pdfRenderService.onImageProgress((completed, total) =>
+    setProgress({ completed, total })
+  );
   const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
     ...props,
     fileHandles,
     bleedPriors,
   });
+  setProgress(null);
   const failures = dedupeFailuresByIdentifier(rawFailures);
-  if (failures.length > 0 && !confirmDespiteImageFailures(failures)) {
+  if (failures.length > 0 && !(await confirmDespiteFailures(failures))) {
     dispatch(
       setNotification([
         Math.random().toString(),
@@ -168,7 +167,9 @@ const useDownloadPDF = (
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
   setIsDownloading: (newState: boolean) => void,
-  backendURL: string | null
+  backendURL: string | null,
+  setProgress: (progress: { completed: number; total: number } | null) => void,
+  confirmDespiteFailures: ConfirmDespiteFailures
 ) => {
   const doFileDownload = useDoFileDownload();
   return () =>
@@ -178,17 +179,29 @@ const useDownloadPDF = (
           "pdf",
           "cards.pdf",
           (): Promise<boolean> =>
-            downloadPDF(props, clientSearchService, dispatch, backendURL)
+            downloadPDF(
+              props,
+              clientSearchService,
+              dispatch,
+              backendURL,
+              setProgress,
+              confirmDespiteFailures
+            )
         )
       )
-      .finally(() => setIsDownloading(false));
+      .finally(() => {
+        setIsDownloading(false);
+        setProgress(null);
+      });
 };
 
 const saveToDrivePDF = async (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
-  backendURL: string | null
+  backendURL: string | null,
+  setProgress: (progress: { completed: number; total: number } | null) => void,
+  confirmDespiteFailures: ConfirmDespiteFailures
 ): Promise<boolean> => {
   const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
     props.cardDocumentsByIdentifier
@@ -211,13 +224,17 @@ const saveToDrivePDF = async (
           Object.keys(props.cardDocumentsByIdentifier)
         )
       : undefined;
+  pdfRenderService.onImageProgress((completed, total) =>
+    setProgress({ completed, total })
+  );
   const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
     ...props,
     fileHandles,
     bleedPriors,
   });
+  setProgress(null);
   const failures = dedupeFailuresByIdentifier(rawFailures);
-  if (failures.length > 0 && !confirmDespiteImageFailures(failures)) {
+  if (failures.length > 0 && !(await confirmDespiteFailures(failures))) {
     dispatch(
       setNotification([
         Math.random().toString(),
@@ -258,12 +275,21 @@ const useSaveToDrivePDF = (
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
   setIsSavingToDrive: (newState: boolean) => void,
-  backendURL: string | null
+  backendURL: string | null,
+  setProgress: (progress: { completed: number; total: number } | null) => void,
+  confirmDespiteFailures: ConfirmDespiteFailures
 ) => {
   return () =>
     Promise.resolve(setIsSavingToDrive(true))
       .then(() =>
-        saveToDrivePDF(props, clientSearchService, dispatch, backendURL)
+        saveToDrivePDF(
+          props,
+          clientSearchService,
+          dispatch,
+          backendURL,
+          setProgress,
+          confirmDespiteFailures
+        )
       )
       .catch((reason) =>
         dispatch(
@@ -278,7 +304,10 @@ const useSaveToDrivePDF = (
           ])
         )
       )
-      .finally(() => setIsSavingToDrive(false));
+      .finally(() => {
+        setIsSavingToDrive(false);
+        setProgress(null);
+      });
 };
 
 interface NumericFieldProps {
@@ -1073,6 +1102,68 @@ const BleedOverrideSettings = ({
   );
 };
 
+interface ImageFailureConfirmModalProps {
+  failures: Array<ImageFetchFailure> | null;
+  onCancel: () => void;
+  onContinue: () => void;
+}
+
+/** In-app replacement for window.confirm() - see the module comment above
+ * ConfirmDespiteFailures for why. `failures === null` means "nothing pending," rendered as a
+ * closed Modal rather than not rendering the component at all, so it can animate closed rather
+ * than vanishing abruptly. */
+const ImageFailureConfirmModal = ({
+  failures,
+  onCancel,
+  onContinue,
+}: ImageFailureConfirmModalProps) => {
+  const shown = (failures ?? []).slice(0, 10);
+  const remainder = (failures?.length ?? 0) - shown.length;
+  return (
+    <Modal
+      show={failures != null}
+      onHide={onCancel}
+      data-testid="image-failure-confirm-modal"
+    >
+      <Modal.Header closeButton>
+        <Modal.Title>Some card images couldn&apos;t be loaded</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        <p>
+          {failures?.length ?? 0} card image
+          {(failures?.length ?? 0) === 1 ? "" : "s"} couldn&apos;t be loaded and
+          will be blank:
+        </p>
+        <ul>
+          {shown.map((failure) => (
+            <li key={failure.identifier}>{failure.label}</li>
+          ))}
+        </ul>
+        {remainder > 0 && (
+          <p className="text-muted mb-0">…and {remainder} more</p>
+        )}
+        <p className="mt-3 mb-0">Continue anyway?</p>
+      </Modal.Body>
+      <Modal.Footer>
+        <Button
+          variant="outline-secondary"
+          onClick={onCancel}
+          data-testid="image-failure-confirm-cancel"
+        >
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          onClick={onContinue}
+          data-testid="image-failure-confirm-continue"
+        >
+          Continue anyway
+        </Button>
+      </Modal.Footer>
+    </Modal>
+  );
+};
+
 export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
   const dispatch = useAppDispatch();
   const [cardSpacingRowMM, setCardSpacingRowMM] = useState<number | undefined>(
@@ -1194,6 +1285,16 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
 
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
   const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
+  const [imageFetchProgress, setImageFetchProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
+  const [pendingFailureConfirm, setPendingFailureConfirm] = useState<{
+    failures: Array<ImageFetchFailure>;
+    resolve: (value: boolean) => void;
+  } | null>(null);
+  const confirmDespiteFailures: ConfirmDespiteFailures = (failures) =>
+    new Promise((resolve) => setPendingFailureConfirm({ failures, resolve }));
 
   // "Fast" (the default) skips @react-pdf/renderer + pdf.js entirely - just computeLayout()
   // and plain DOM/CSS, updated instantly (no debounce, no spinner, no canvas) from the
@@ -1311,7 +1412,9 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     clientSearchService,
     dispatch,
     setIsDownloading,
-    backendURL
+    backendURL,
+    setImageFetchProgress,
+    confirmDespiteFailures
   );
 
   const saveToDrive = useSaveToDrivePDF(
@@ -1319,7 +1422,9 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     clientSearchService,
     dispatch,
     setIsSavingToDrive,
-    backendURL
+    backendURL,
+    setImageFetchProgress,
+    confirmDespiteFailures
   );
 
   return (
@@ -1484,6 +1589,20 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
               </Button>
             </div>
           )}
+          {(isDownloading || isSavingToDrive) && imageFetchProgress != null && (
+            <p
+              className="text-muted text-center mt-2 mb-0"
+              style={{ fontSize: "0.85em" }}
+              data-testid="pdf-image-fetch-progress"
+            >
+              {/* Approximate, not exact - see pdf.worker.ts's own comment on why "total" can
+                    undercount a deck with duplicate cards. A large export paced to the image
+                    CDN's shared rate limit can take several minutes - this exists so that wait
+                    reads as "working," not "hung." */}
+              Fetching images: {imageFetchProgress.completed} of ~
+              {imageFetchProgress.total}
+            </p>
+          )}
         </OverflowCol>
         <Col lg={9} md={8} sm={7} xs={6} style={{ position: "relative" }}>
           {!scmMode && (
@@ -1555,6 +1674,17 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
           )}
         </Col>
       </Row>
+      <ImageFailureConfirmModal
+        failures={pendingFailureConfirm?.failures ?? null}
+        onCancel={() => {
+          pendingFailureConfirm?.resolve(false);
+          setPendingFailureConfirm(null);
+        }}
+        onContinue={() => {
+          pendingFailureConfirm?.resolve(true);
+          setPendingFailureConfirm(null);
+        }}
+      />
     </Container>
   );
 };
