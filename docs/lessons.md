@@ -291,6 +291,7 @@ quirk, not a regression, and isn't worth chasing further there. Not
 related to MSW/network state either — `loadPageWithDefaultBackend` points
 at a fake `127.0.0.1:8000` backend URL fully intercepted by mocks, so this
 has no relationship to whether any real backend is up or restarting.
+
 ## A call-count-based MSW mock breaks under React 18 Strict Mode's dev-time double-invoke
 
 A Playwright mock like "return item X on the first `GET`, then a
