@@ -560,4 +560,91 @@ test.describe("CardSlot", () => {
     // Should automatically deselect the invalid image and select the first result
     await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
   });
+
+  test.describe("right-click context menu (Proposal C part (a))", () => {
+    test("right-clicking a CardSlot opens the same actions as the 3-dot dropdown, positioned at the cursor", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsThreeResults,
+        sourceDocumentsOneResult,
+        searchResultsThreeResults,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(
+        page,
+        `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
+      );
+      await expect(page.getByText(cardDocument1.name)).toBeVisible();
+
+      const slot = page.getByTestId("front-slot0");
+      await slot.click({ button: "right" });
+
+      const contextMenu = page.getByTestId("card-slot-context-menu");
+      await expect(contextMenu).toBeVisible();
+      await expect(contextMenu.getByText("Change Query")).toBeVisible();
+      await expect(contextMenu.getByText("Duplicate")).toBeVisible();
+      await expect(contextMenu.getByText("Delete")).toBeVisible();
+    });
+
+    test("selecting Delete from the context menu deletes the slot, matching the 3-dot dropdown's own Delete", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsThreeResults,
+        sourceDocumentsOneResult,
+        searchResultsThreeResults,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(
+        page,
+        `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
+      );
+      await expect(page.getByText(cardDocument1.name)).toBeVisible();
+
+      await page.getByTestId("front-slot0").click({ button: "right" });
+      await page
+        .getByTestId("card-slot-context-menu")
+        .getByText("Delete")
+        .click();
+
+      await expectCardSlotToNotExist(page, 1);
+    });
+
+    test("clicking outside the context menu closes it without triggering an action", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsThreeResults,
+        sourceDocumentsOneResult,
+        searchResultsThreeResults,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(
+        page,
+        `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
+      );
+      await expect(page.getByText(cardDocument1.name)).toBeVisible();
+
+      await page.getByTestId("front-slot0").click({ button: "right" });
+      await expect(page.getByTestId("card-slot-context-menu")).toBeVisible();
+
+      // A plain left-click well away from the menu and the slot itself.
+      await page.mouse.click(5, 5);
+
+      await expect(
+        page.getByTestId("card-slot-context-menu")
+      ).not.toBeVisible();
+      await expectCardSlotToExist(page, 1);
+    });
+  });
 });

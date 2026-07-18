@@ -1,13 +1,18 @@
+from unittest.mock import patch
+
 from cardpicker.printing_consensus import ResolvedPrinting
 from cardpicker.schema_types import (
+    CardType,
     FilterSettings,
     SearchSettings,
     SearchTypeSettings,
     SourceSettings,
 )
+from cardpicker.search import search_functions
 from cardpicker.search.search_functions import (
     _passes_resolved_attribute_filters,
     _resolved_printing_match_tier,
+    retrieve_card_identifiers,
 )
 
 
@@ -132,3 +137,97 @@ class TestResolvedPrintingMatchTier:
         # both tier-0 matches keep their relative order (card-b before card-a, as in the input),
         # and both tier-2 unmatched cards likewise keep theirs
         assert result == ["card-b", "card-a", "unmatched-1", "unmatched-2"]
+
+
+class TestRetrieveCardIdentifiersDegradation:
+    """
+    E-2: a printing-specific search (expansion_code and/or collector_number supplied) that
+    finds zero hits under that hard filter retries once without it, flagging the response
+    `degraded` so the caller (and eventually the frontend) can say so honestly instead of
+    reporting an empty result for a card that exists under other printings. Exact-match
+    behaviour when hits DO exist under the filter must stay completely untouched by this -
+    `_retrieve_card_identifiers_once` is mocked directly (rather than hitting a real
+    Elasticsearch index) precisely so these tests assert only the retry/degrade decision,
+    never the underlying search/rerank logic those other test classes already cover.
+    """
+
+    def test_hits_found_under_the_filter_no_retry_no_degradation(self):
+        with patch.object(search_functions, "_retrieve_card_identifiers_once", return_value=["abc"]) as mock_once:
+            identifiers, degraded = retrieve_card_identifiers(
+                search_settings=make_search_settings(),
+                query="lightning bolt",
+                card_type=CardType.CARD,
+                expansion_code="2ED",
+                collector_number="162",
+            )
+        assert identifiers == ["abc"]
+        assert degraded is False
+        mock_once.assert_called_once()
+
+    def test_zero_hits_under_the_filter_retries_without_it_and_flags_degraded(self):
+        calls: list[tuple[str | None, str | None]] = []
+
+        def fake_once(
+            search_settings: SearchSettings,
+            query: str,
+            card_type: CardType,
+            expansion_code: str | None,
+            collector_number: str | None,
+        ) -> list[str]:
+            calls.append((expansion_code, collector_number))
+            return [] if expansion_code else ["fallback-id"]
+
+        with patch.object(search_functions, "_retrieve_card_identifiers_once", side_effect=fake_once):
+            identifiers, degraded = retrieve_card_identifiers(
+                search_settings=make_search_settings(),
+                query="lightning bolt",
+                card_type=CardType.CARD,
+                expansion_code="2ED",
+                collector_number="162",
+            )
+        assert identifiers == ["fallback-id"]
+        assert degraded is True
+        # exactly one filtered attempt, then exactly one unfiltered retry - never more
+        assert calls == [("2ED", "162"), (None, None)]
+
+    def test_zero_hits_with_no_printing_filter_supplied_never_retries(self):
+        # nothing to degrade from - a plain name search finding nothing is just "no results",
+        # not a printing-specific miss, so there must be no spurious second Elasticsearch hit.
+        with patch.object(search_functions, "_retrieve_card_identifiers_once", return_value=[]) as mock_once:
+            identifiers, degraded = retrieve_card_identifiers(
+                search_settings=make_search_settings(),
+                query="a card that does not exist",
+                card_type=CardType.CARD,
+                expansion_code=None,
+                collector_number=None,
+            )
+        assert identifiers == []
+        assert degraded is False
+        mock_once.assert_called_once()
+
+    def test_zero_hits_with_only_expansion_code_still_retries(self):
+        # collector_number alone can also be omitted while expansion_code is set (a decklist
+        # line naming just a set, no number) - either field alone must still trigger the retry.
+        calls: list[tuple[str | None, str | None]] = []
+
+        def fake_once(
+            search_settings: SearchSettings,
+            query: str,
+            card_type: CardType,
+            expansion_code: str | None,
+            collector_number: str | None,
+        ) -> list[str]:
+            calls.append((expansion_code, collector_number))
+            return [] if expansion_code else ["fallback-id"]
+
+        with patch.object(search_functions, "_retrieve_card_identifiers_once", side_effect=fake_once):
+            identifiers, degraded = retrieve_card_identifiers(
+                search_settings=make_search_settings(),
+                query="lightning bolt",
+                card_type=CardType.CARD,
+                expansion_code="2ED",
+                collector_number=None,
+            )
+        assert identifiers == ["fallback-id"]
+        assert degraded is True
+        assert calls == [("2ED", None), (None, None)]

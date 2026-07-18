@@ -383,3 +383,26 @@ work is not evidence it addressed its actual assignment - check the report again
 directive, not just its internal coherence; (2) if a narrowly-scoped fork's task will outlive a
 likely compaction boundary, the directive text itself needs to be re-assertable / distinguishable
 from parent history at a glance, since compaction can flatten that distinction away.
+
+## @react-pdf/renderer: a single-token `transform` value (e.g. `"none"`) hangs the whole render silently
+
+`@react-pdf/renderer`'s style processor (`@react-pdf/stylesheet`'s `processTransform` → `parse`
+→ `normalizeTransformOperation`) has a real bug: `parse()`'s own code comment says its
+single-token branch is "for `initial`/`inherit`/`unset`", but it actually fires for ANY
+one-word transform string, including the legitimate CSS keyword `"none"`. That branch returns a
+bare 2-element array (`[token, true]`) instead of the `{operation, value}` shape every other
+branch produces; `normalizeTransformOperation` destructures `{operation, value}` from it, gets
+`value: undefined`, and calls `.map()` on that - a `TypeError` thrown deep inside their custom
+(non-react-dom) reconciler's layout pass. That reconciler doesn't propagate the throw as a
+rejection anywhere observable - `pdf(<Doc/>).toBlob()` just hangs forever: no thrown exception,
+no `page.on('pageerror')`, no `page.on('console')` output, nothing to grep for. The only visible
+symptom is every render that depends on that promise (a download, a preview) timing out with no
+diagnostic trail - confirmed via a real Playwright suite (3 tests hung at a 60s timeout) plus a
+stashed before/after comparison proving no other change was responsible. Fix: never pass a
+single-token transform string (`"none"`, `"initial"`, etc.) - if no transform is needed, OMIT
+the `transform` key from the style object entirely (`undefined`, not `"none"`); `processTransform`
+has its own early-return for non-string values that sidesteps the broken parser. Diagnosis
+method that actually worked after `page.on(console/pageerror)` came up empty: add `console.log`
+calls at the very top of each component in the suspect render tree (starting from the root) to
+binary-search how far the tree actually renders before going silent - the last log line reached
+pinpoints the synchronous throw's rough location even when nothing else in the stack reports it.

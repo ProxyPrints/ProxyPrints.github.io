@@ -40,14 +40,19 @@ import { setNotification } from "@/store/slices/toastsSlice";
 // without the deck task ever feeling audited by a slow-to-update global state.
 const resolvedThisSession = new Set<string>();
 
+// Was a bare "?" circle with only a screen-reader aria-label explaining it - visually
+// indistinguishable from a generic help icon, and easy to miss as an actionable affordance
+// at a glance (audit finding: the intent needs to be readable, not just announced). "Confirm?"
+// is short enough to still sit unobtrusively in a deckbuilder slot's corner.
 const Badge = styled.button`
   border: 1px solid rgba(0, 0, 0, 0.25);
-  border-radius: 50%;
-  width: 1.4rem;
+  border-radius: 1rem;
   height: 1.4rem;
   line-height: 1;
-  padding: 0;
-  font-size: 0.75rem;
+  padding: 0 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
   background: rgba(13, 110, 253, 0.08);
   color: inherit;
 `;
@@ -240,7 +245,7 @@ export function DeckbuilderConfirmAffordance({
         onMouseLeave={() => setShowPin(false)}
         onClick={() => (showPin ? setShowPin(false) : triggerCompare())}
       >
-        ?
+        Confirm?
       </Badge>
       <Row>
         <YesNoButton
