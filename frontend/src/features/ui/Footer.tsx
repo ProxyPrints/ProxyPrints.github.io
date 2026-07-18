@@ -15,7 +15,7 @@ export default function Footer() {
       <hr />
       <footer className="page-footer font-small blue">
         <div className="footer-copyright text-center py-3">
-          Made with ♥️ by chilli_axe
+          ProxyPrints, forked from chilli_axe&apos;s mpc-autofill, made with ♥️
           <Spacer />•<Spacer />
           <a
             href="https://github.com/ProxyPrints/ProxyPrints.github.io"
