@@ -6,7 +6,6 @@ import Tab from "react-bootstrap/Tab";
 
 import { ContentMaxWidth, ProjectName } from "@/common/constants";
 import { NoBackendDefault } from "@/components/NoBackendDefault";
-import { AuthWidget } from "@/features/moderation/AuthWidget";
 import { ModerationTab } from "@/features/moderation/ModerationTab";
 import { STARBURST_BACKGROUND_COLOR } from "@/features/printingTags/starburstShape";
 import { QuestionFeed } from "@/features/questionFeed/QuestionFeed";
@@ -96,7 +95,6 @@ function PrintingQueueOrDefault() {
               first, since they need your eyes the most.
             </p>
           </IntroText>
-          <AuthWidget />
           {isModerator ? (
             <Tab.Container
               activeKey={activeTab}
