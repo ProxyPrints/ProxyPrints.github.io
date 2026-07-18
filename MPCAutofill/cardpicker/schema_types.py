@@ -873,16 +873,25 @@ class EditorSearchRequest(BaseModel):
 
 
 class EditorSearchResponse(BaseModel):
+    degradedQueries: List[str]
+    """Hash keys (matching `results`' own keys) of queries whose printing-specific search
+    (expansion_code and/or collector_number) found zero hits under that filter and were
+    retried without it. Absence from this list means either the query carried no printing
+    filter at all, or the filter found real hits - exact-match behaviour when hits exist is
+    completely unaffected by this field.
+    """
     results: Dict[str, List[str]]
 
     @staticmethod
     def from_dict(obj: Any) -> "EditorSearchResponse":
         assert isinstance(obj, dict)
+        degradedQueries = from_list(from_str, obj.get("degradedQueries"))
         results = from_dict(lambda x: from_list(from_str, x), obj.get("results"))
-        return EditorSearchResponse(results)
+        return EditorSearchResponse(degradedQueries, results)
 
     def to_dict(self) -> dict:
         result: dict = {}
+        result["degradedQueries"] = from_list(from_str, self.degradedQueries)
         result["results"] = from_dict(lambda x: from_list(from_str, x), self.results)
         return result
 

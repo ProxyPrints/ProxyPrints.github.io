@@ -198,13 +198,12 @@ def _resolved_printing_match_tier(
     return 2
 
 
-@elastic_connection
-def retrieve_card_identifiers(
+def _retrieve_card_identifiers_once(
     search_settings: SearchSettings,
     query: str,
     card_type: CardType,
-    expansion_code: str | None = None,
-    collector_number: str | None = None,
+    expansion_code: str | None,
+    collector_number: str | None,
 ) -> list[str]:
     hits_iterable = (
         get_search(
@@ -245,6 +244,31 @@ def retrieve_card_identifiers(
             )
 
     return identifiers
+
+
+@elastic_connection
+def retrieve_card_identifiers(
+    search_settings: SearchSettings,
+    query: str,
+    card_type: CardType,
+    expansion_code: str | None = None,
+    collector_number: str | None = None,
+) -> tuple[list[str], bool]:
+    """
+    Returns `(identifiers, degraded)`. `degraded` is True only when a printing-specific search
+    (`expansion_code` and/or `collector_number` supplied) found zero hits under that filter and
+    this function retried without it - e.g. a decklist paste carrying a specific set + collector
+    number for a printing nobody's uploaded an image for yet, even though the card exists under
+    other printings. Exact-match behaviour when hits DO exist under the filter is completely
+    unchanged by this - this is a zero-hit fallback only, never a boost/re-rank weakening (see
+    `_resolved_printing_match_tier`'s own docstring, which this doesn't touch).
+    """
+    identifiers = _retrieve_card_identifiers_once(search_settings, query, card_type, expansion_code, collector_number)
+    degraded = False
+    if not identifiers and (expansion_code or collector_number):
+        identifiers = _retrieve_card_identifiers_once(search_settings, query, card_type, None, None)
+        degraded = True
+    return identifiers, degraded
 
 
 def retrieve_cardback_identifiers(search_settings: SearchSettings) -> list[str]:
