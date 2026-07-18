@@ -2,7 +2,8 @@
 TASK: Terminology correction, "AI" -> "machine" for OCR/phash/deduction
 vote sources (owner-directed accuracy fix). Branch
 claude/ai-to-machine-terminology, commit ae5c0b28, pushed to origin.
-PR: (see reply for number/link — created immediately after this report).
+PR: https://github.com/ProxyPrints/ProxyPrints.github.io/pull/76 (open,
+base master).
 
 WHAT SHIPPED, per the four numbered items:
 
