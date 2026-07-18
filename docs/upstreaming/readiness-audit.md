@@ -327,6 +327,20 @@ engine / orchestration) and a re-validation pass against a different
 catalog's images before it's honestly presentable — not a Phase-2
 candidate.
 
+### Tier 6 — blocked on a precondition that doesn't exist yet
+
+**Federation verdict-exchange consumer component** (subscriber-side:
+verdict table, phash tooling, signature verification, agreement badge —
+`docs/federation-v1.md`). Not large or risky like Tier 5 — the opposite,
+actually: deliberately dependency-free, no vote/consensus/moderation
+stack required, the single most upstream-shaped idea in the whole
+federation program. It sits here instead of Tier 1 for a different
+reason than size or entanglement: there's no live peer to subscribe to
+yet, and this fork's own v1 posture is publisher-only (see
+`federation-v1.md`'s "Participation modes"), so there's nothing real to
+demo or extract against. Revisit once federation has an actual second
+instance on the other end — not before, and not on a schedule.
+
 ## 4. Candidates from the original brief — verified, corrected, or dropped
 
 - **questionFeed count semantics** — real (fixed `a0e2aa08`, backend
