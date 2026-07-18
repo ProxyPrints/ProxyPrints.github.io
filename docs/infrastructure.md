@@ -225,11 +225,12 @@ branch against `upstream/master` before pushing to confirm scope.
 
 Five PRs were opened this way (#463–467), all reviewed same-day by the
 upstream maintainer (ndepaola): #463 (lazy-load PDFGenerator) and #465
-(image-CDN CORS fix) are open; #464 (pdf.js canvas preview) and #466
-(bucket/worker thumbnail routing) were closed after the maintainer
-explained the existing behavior was deliberate design, not a bug; #467
-(frontend toSearchable "the"-stripping fix, completing backend PR #460)
-was opened 2026-07-13. All reviews so far have asked for hand-written PR
+(image-CDN CORS fix) are open (live-checked 2026-07-18, unchanged since);
+#464 (pdf.js canvas preview) and #466 (bucket/worker thumbnail routing)
+were closed after the maintainer explained the existing behavior was
+deliberate design, not a bug; #467 (frontend toSearchable "the"-stripping
+fix, completing backend PR #460) was opened 2026-07-13 and **merged
+2026-07-18**. All reviews so far have asked for hand-written PR
 descriptions going forward, not AI-generated ones — none of #463/#465/#467's
 PR bodies contain an AI-disclosure paragraph; the actual AI-assistance
 signal in this workflow is the Co-Authored-By trailer on the commit
@@ -284,7 +285,12 @@ that freeze the pre-rewrite commits permanently, independent of anything
 done to the branches themselves — GitHub creates these server-side and
 they can't be force-pushed over. A GitHub Support request to purge those
 refs was drafted for manual filing (requires being logged into the
-account).
+account). Status not independently verifiable from a cloud/API session
+(support-ticket state isn't exposed via `gh`/the GitHub API, and checking
+whether the refs themselves were actually purged would require someone
+logged into the account to attempt fetching them) — last confirmed status
+is whatever the owner reports directly, not re-verified here as of
+2026-07-18.
 
 **If this ever needs to be done again for a different file**: never run
 `git filter-repo` (or filter-branch/BFG) with no `--refs` scoping on a fork
