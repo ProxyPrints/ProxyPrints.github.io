@@ -50,6 +50,7 @@ import {
   QuestionFeedItem,
 } from "@/common/schema_types";
 import { useAppDispatch, useAppSelector } from "@/common/types";
+import { ArtistSupportLink } from "@/components/ArtistSupportLink";
 import { SetIcon } from "@/components/SetIcon";
 import { Spinner } from "@/components/Spinner";
 import {
@@ -158,6 +159,13 @@ export function QuestionFeed() {
   );
   const [followUp, setFollowUp] = useState<FollowUp>("none");
   const [fetchToken, setFetchToken] = useState<number>(0);
+  // Artist Support Links v1 - set once the user casts a real (non-"Unknown") artist vote on an
+  // "artist"-type item, via ArtistVotePicker's onArtistConfirmed below. Drives the post-answer
+  // "Art by <Name> - support them" banner (see the artist item's render block) - reset on every
+  // new item alongside the other per-question state, so it can't bleed into the next question.
+  const [confirmedArtistName, setConfirmedArtistName] = useState<
+    string | null
+  >(null);
   // A 429 from any vote-casting call below (printing, tag, artist) sets this instead of firing
   // the usual error toast - see the banner rendered near the top of the item below. In a
   // one-tap funnel, a rate-limit pause is an expected, honest condition, not a failure, so it
@@ -209,6 +217,7 @@ export function QuestionFeed() {
         setChipStates(initialChipStates());
         setFollowUp("none");
         setSelectedCandidateId(null);
+        setConfirmedArtistName(null);
         setRateLimited(false);
         setFilterExpanded(false);
         setLevel3ChipStates({});
@@ -972,7 +981,18 @@ export function QuestionFeed() {
                       }
                       onRateLimited={() => setRateLimited(true)}
                       voteSurface="question-feed"
+                      onArtistConfirmed={setConfirmedArtistName}
                     />
+                    {confirmedArtistName != null && (
+                      <div
+                        className="mt-2 text-muted small"
+                        data-testid="question-feed-artist-support"
+                      >
+                        <ArtistSupportLink artistName={confirmedArtistName}>
+                          Art by {confirmedArtistName} - support them
+                        </ArtistSupportLink>
+                      </div>
+                    )}
                     <div className="mt-3">
                       <Button variant="outline-secondary" onClick={skip}>
                         Skip
