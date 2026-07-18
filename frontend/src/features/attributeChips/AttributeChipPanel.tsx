@@ -63,40 +63,65 @@ const ChipRow = styled.div`
   justify-content: center;
 `;
 
-const ChipColumn = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  align-items: stretch;
-`;
-
 // A 3x3 grid with the card slot dead center and chips forming a ring around it - "top" holds
 // the standalone toggles, "left"/"right" hold the two exclusion groups (arbitrarily assigned;
 // nothing about a group is inherently left- or right-handed). Empty grid-template-columns
 // cells (corners, bottom) collapse via `auto` sizing rather than reserving dead space.
+//
+// MOBILE OVERRIDE (layout reconciliation pass): this grid has no responsive behavior below
+// `sm` - the ring's flanking left/right columns are `auto`-sized to their own chip content
+// (never allowed to shrink) while the card's own "card" column is the only flexible one
+// (`minmax(0, 1fr)`), so at narrow widths the card gets squeezed to whatever width is left
+// over after both chip columns claim theirs, rather than the chips reflowing around a
+// full-width card. Below `sm` this collapses to a single vertical stack (top chips, then the
+// card at its own full natural width, then left/right chips below it as ordinary flowing
+// rows) - the ring visual only survives at widths wide enough to contain it without
+// squeezing the card, per this pass's decision rule.
 const ChipRing = styled.div`
   display: grid;
   grid-template-areas:
-    ".    top   ."
-    "left card  right"
-    ".    .     .";
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: auto auto auto;
+    "top"
+    "card"
+    "left"
+    "right";
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.6rem;
   align-items: center;
   justify-items: center;
+
+  @media (min-width: 576px) {
+    grid-template-areas:
+      ".    top   ."
+      "left card  right"
+      ".    .     .";
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto;
+  }
 `;
 
 const TopArea = styled(ChipRow)`
   grid-area: top;
 `;
 
-const LeftArea = styled(ChipColumn)`
+// Row+wrap below `sm` (matching TopArea, since the ring hasn't formed yet and there's no
+// flanking column to stack vertically inside) - becomes a genuine vertical column only once
+// the ring itself forms at `sm` and up.
+const LeftArea = styled(ChipRow)`
   grid-area: left;
+
+  @media (min-width: 576px) {
+    flex-direction: column;
+    align-items: stretch;
+  }
 `;
 
-const RightArea = styled(ChipColumn)`
+const RightArea = styled(ChipRow)`
   grid-area: right;
+
+  @media (min-width: 576px) {
+    flex-direction: column;
+    align-items: stretch;
+  }
 `;
 
 // position: relative so an absolutely-positioned burst rendered as part of `cardSlot` (see
@@ -254,7 +279,7 @@ export function AttributeChipPanel({
           {leftGroup.chips.map((chip) => renderChip(chip.tagName, chip.label))}
         </LeftArea>
       )}
-      <CardArea>{cardSlot}</CardArea>
+      <CardArea data-testid="attribute-chip-card-area">{cardSlot}</CardArea>
       {rightGroup != null && (
         <RightArea>
           {rightGroup.chips.map((chip) => renderChip(chip.tagName, chip.label))}
