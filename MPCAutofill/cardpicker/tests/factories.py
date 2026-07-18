@@ -1,4 +1,5 @@
 import datetime as dt
+import os
 import uuid
 
 import factory
@@ -161,7 +162,24 @@ class SavedDeckFactory(factory.django.DjangoModelFactory):
 
     # no SubFactory default - no UserFactory exists in this module (tests use the plain_user/
     # moderator_user conftest fixtures instead), so `owner` must always be passed explicitly.
-    name = factory.Sequence(lambda n: f"Deck {n}")
-    state = factory.LazyFunction(dict)
+    # ciphertext/nonces/wrapped_dek are opaque to the backend (docs/proposals/proposal-g-
+    # user-accounts-saved-decks.md §8) - random bytes are exactly as valid here as a real
+    # client-produced blob, since nothing server-side ever inspects them.
     kind = models.SavedDeckKind.DECK
-    is_public = False
+    ciphertext = factory.LazyFunction(lambda: os.urandom(64))
+    ciphertext_nonce = factory.LazyFunction(lambda: os.urandom(12))
+    wrapped_dek = factory.LazyFunction(lambda: os.urandom(48))
+    wrapped_dek_nonce = factory.LazyFunction(lambda: os.urandom(12))
+
+
+class UserCryptoProfileFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.UserCryptoProfile
+
+    # no SubFactory default for `owner` - see SavedDeckFactory's note above.
+    salt = factory.LazyFunction(lambda: os.urandom(16))
+    kdf_iterations = 600_000
+    passphrase_wrapped_master_key = factory.LazyFunction(lambda: os.urandom(48))
+    passphrase_wrapped_master_key_nonce = factory.LazyFunction(lambda: os.urandom(12))
+    recovery_wrapped_master_key = factory.LazyFunction(lambda: os.urandom(48))
+    recovery_wrapped_master_key_nonce = factory.LazyFunction(lambda: os.urandom(12))

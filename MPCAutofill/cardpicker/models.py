@@ -1055,15 +1055,57 @@ class SavedDeckKind(models.TextChoices):
     SNAPSHOT = "snapshot"
 
 
+class UserCryptoProfile(models.Model):
+    """
+    Per-user zero-knowledge crypto parameters (docs/proposals/proposal-g-user-accounts-saved-decks.md
+    §8). Created at first save, alongside that first SavedDeck row. Everything stored here is
+    either public-safe (a salt/iteration-count strengthens key derivation - it isn't secret) or
+    itself opaque ciphertext (the two wrapped-master-key slots) - the server can retain all of
+    it forever without ever being able to derive or unwrap the actual master key.
+
+    TWO independent wrapped copies of the same master key: one wrapped by the user's
+    passphrase-derived key, one wrapped by their user-held recovery key. Both wrap the *same*
+    master key, so a passphrase change only re-wraps the passphrase slot (the recovery slot,
+    generated earlier, keeps unwrapping the same master key correctly - see §8's "Recovery key"
+    section). Losing both means every owned SavedDeck's ciphertext is permanently unreadable -
+    see §8's account-reset flow, which deletes rather than attempts recovery.
+    """
+
+    owner = models.OneToOneField(to=User, on_delete=models.CASCADE, related_name="saved_deck_crypto_profile")
+    # PBKDF2-SHA256 parameters. Not secret - salt defends against precomputation, not disclosure.
+    # iterations is stored per-profile (not read from a live setting) so raising the default
+    # later never invalidates an existing user's already-derived key.
+    salt = models.BinaryField()
+    kdf_iterations = models.PositiveIntegerField()
+    passphrase_wrapped_master_key = models.BinaryField()
+    passphrase_wrapped_master_key_nonce = models.BinaryField()
+    recovery_wrapped_master_key = models.BinaryField()
+    recovery_wrapped_master_key_nonce = models.BinaryField()
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"crypto profile for owner={self.owner_id}"
+
+
 class SavedDeck(models.Model):
     """
-    A user's saved editor project (docs/proposals/proposal-g-user-accounts-saved-decks.md).
-    Deliberately a fresh model, not a resurrection of the dead Project/ProjectMember pair above
-    (see the proposal's §3 "note on prior art" for why - a normalized per-card-row schema is a
-    poor match for the frontend's actual Redux project shape, and keeping a Django schema in
-    lockstep with every future frontend change is the wrong trade). `state` stores the frontend
-    Project's JSON shape verbatim (minus pure UI bookkeeping) - see the proposal's §2 for the
-    exact shape and why JSON, not XML, is canonical.
+    A user's saved editor project, encrypted client-side (docs/proposals/proposal-g-user-
+    accounts-saved-decks.md §8 - supersedes this model's originally-specified plaintext
+    `name`/`state` fields). Deliberately a fresh model, not a resurrection of the dead
+    Project/ProjectMember pair above (see the proposal's §3 "note on prior art" for why - a
+    normalized per-card-row schema is a poor match for the frontend's actual Redux project
+    shape, and keeping a Django schema in lockstep with every future frontend change is the
+    wrong trade).
+
+    `ciphertext` is the ENTIRE frontend Project shape, including the deck's own title - the
+    server never sees a plaintext name anywhere, and therefore cannot enforce name-uniqueness
+    (that becomes a client-side-only check - see §8's Consequences). `wrapped_dek` is this
+    deck's own AES-256-GCM key, wrapped by the owner's master key (see UserCryptoProfile) -
+    every deck has its own DEK so a passphrase change only ever re-wraps small key material,
+    never re-encrypts any deck body. There is no separate "salt reference" field: the owner FK
+    already identifies which UserCryptoProfile (and therefore which salt/iteration-count) this
+    row's wrapped_dek was wrapped under.
 
     Named "SavedDeck", not "Project", specifically to avoid a third meaning of "Project" in this
     codebase (the frontend's own Project TypeScript type, and the legacy backend Project model
@@ -1072,30 +1114,17 @@ class SavedDeck(models.Model):
 
     key = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     owner = models.ForeignKey(to=User, on_delete=models.CASCADE, related_name="saved_decks")
-    name = models.CharField(max_length=100)
-    # the frontend Project shape (members/cardback/finishSettings), opaque to the backend by
-    # design - see the proposal's §2 for the exact contents and the deliberate JSON-not-XML
-    # rationale. Local-file-sourced slots are marked `deviceLocal: true` within this blob at
-    # save time (a data convention, not a schema/column change - see the proposal's decision 5).
-    state = models.JSONField(default=dict, blank=True)
     kind = models.CharField(max_length=20, choices=SavedDeckKind.choices, default=SavedDeckKind.DECK)
-    # reserved, undesigned - see the proposal's decision 3. No sharing surface exists yet; kept
-    # so a future read-only share link is additive, not a schema change.
-    is_public = models.BooleanField(default=False)
+    # opaque to the backend by design - never decrypted, inspected, or searched server-side.
+    ciphertext = models.BinaryField()
+    ciphertext_nonce = models.BinaryField()
+    wrapped_dek = models.BinaryField()
+    wrapped_dek_nonce = models.BinaryField()
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["owner", "name"],
-                condition=models.Q(kind=SavedDeckKind.DECK),
-                name="saveddeck_owner_name_unique_for_decks",
-            )
-        ]
-
     def __str__(self) -> str:
-        return f"{self.name} ({self.kind}): owner={self.owner_id}"
+        return f"SavedDeck {self.key} ({self.kind}): owner={self.owner_id}"
 
 
 __all__ = [
@@ -1118,4 +1147,5 @@ __all__ = [
     "CardScanLog",
     "SavedDeckKind",
     "SavedDeck",
+    "UserCryptoProfile",
 ]

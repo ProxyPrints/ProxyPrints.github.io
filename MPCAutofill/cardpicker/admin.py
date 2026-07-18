@@ -26,6 +26,7 @@ from .models import (
     Tag,
     TagAliasSuggestion,
     TagSuggestionStatus,
+    UserCryptoProfile,
 )
 from .printing_consensus import get_contested_card_ids
 from .sources.update_database import update_database
@@ -273,7 +274,16 @@ class AdminCardScanLog(admin.ModelAdmin[CardScanLog]):
 
 @admin.register(SavedDeck)
 class AdminSavedDeck(admin.ModelAdmin[SavedDeck]):
-    list_display = ("name", "owner", "kind", "is_public", "created_at", "updated_at")
-    list_filter = ("kind", "is_public")
-    search_fields = ("name", "owner__username")
+    # no `name`/content column - ciphertext is opaque to the backend by design, see the model's
+    # own docstring (docs/proposals/proposal-g-user-accounts-saved-decks.md §8)
+    list_display = ("key", "owner", "kind", "created_at", "updated_at")
+    list_filter = ("kind",)
+    search_fields = ("owner__username",)
+    raw_id_fields = ["owner"]
+
+
+@admin.register(UserCryptoProfile)
+class AdminUserCryptoProfile(admin.ModelAdmin[UserCryptoProfile]):
+    list_display = ("owner", "kdf_iterations", "created_at", "updated_at")
+    search_fields = ("owner__username",)
     raw_id_fields = ["owner"]
