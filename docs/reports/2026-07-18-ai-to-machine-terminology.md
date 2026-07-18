@@ -140,11 +140,20 @@ OPEN ITEMS / DECISIONS NEEDED: none blocking. The flagged broader-sweep
 candidate above is the only follow-up worth a decision, and it's
 explicitly optional/future, not gating this PR.
 
-LIVE STATE: branch claude/ai-to-machine-terminology pushed to origin at
-ae5c0b28. PR to be opened immediately after this report merges into the
-same branch. On merge, docs/**'s change to theory.md/printing-tags.md/
-catalog-completion-plan.md will fire docs-wiki-publish.yml automatically
-(per the standing pipeline) — the Theory wiki page should show SS4's
-correction post-publish; verification of that is the next step once this
-merges.
+POST-MERGE VERIFICATION (done): PR #76 merged (squash commit `0c7cf8ed`,
+merged_at 2026-07-18T17:56:21Z). `docs-wiki-publish.yml` fired
+automatically on that commit (wiki repo commit `b7e7ca4`, "Regenerate
+from docs/ (0c7cf8ed...)"). Cloned the live wiki repo and confirmed
+directly: Theory.md's SS4 ("Soundness mechanisms") reads "machine
+weight 0.5 by default" (not "AI weight"); the Dawid-Skene subsection's
+`PRINTING_TAG_AI_WEIGHT` citation carries the "a legacy name — it
+weights machine-derived sources: OCR and deduction; no generative AI is
+involved" gloss plus the note that it's now `PRINTING_TAG_MACHINE_WEIGHT`
+in settings.py with the old name kept as a backward-compatible env
+fallback. No new review comments on the PR since merge.
+
+LIVE STATE: PR #76 merged to master (squash commit `0c7cf8ed`). Live
+wiki page: https://github.com/ProxyPrints/ProxyPrints.github.io/wiki/Theory
+— confirmed showing SS4's corrected text and the settings-rename gloss,
+per the direct clone check above. Lane closed.
 ```
