@@ -1083,6 +1083,27 @@ export const tagConsensusTwoUnresolvedTags = http.post(
     )
 );
 
+// Proposal B PR-3: a clearly-negative "appropriate-bleed" lean, resolved via
+// resolveSingleBleedPrior to prior "trimmed" - the fallback case (extend the full target),
+// which willLikelyGenerateBleed maps to "the preview badge should show".
+export const tagConsensusAppropriateBleedTrimmed = http.post(
+  buildRoute("2/tagConsensus/"),
+  () =>
+    HttpResponse.json(
+      {
+        tags: [
+          {
+            tagName: "appropriate-bleed",
+            resolvedPolarity: -1,
+            netPolarity: -3,
+            tally: [],
+          },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
 export const submitTagVoteResolvesToApply = http.post(
   buildRoute("2/submitTagVote/"),
   () =>

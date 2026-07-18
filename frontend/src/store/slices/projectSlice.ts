@@ -23,6 +23,7 @@ import {
   SlotProjectMembers,
   Slots,
 } from "@/common/types";
+import { ManualOverride } from "@/features/pdf/bleedNormalize";
 import { getCardSizesByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import { selectActiveFace } from "@/store/slices/viewSettingsSlice";
 import { RootState } from "@/store/store";
@@ -34,6 +35,7 @@ const initialState: Project = {
   nextMemberId: 0,
   cardback: null,
   mostRecentlySelectedSlot: null,
+  manualOverrides: {},
 };
 
 export const projectSlice = createAppSlice({
@@ -337,6 +339,32 @@ export const projectSlice = createAppSlice({
         ...state.members.slice(slot + 1),
       ];
     },
+    /**
+     * Set (or clear, via "auto") a card's manual bleed-normalization override for PDF export.
+     * "auto" deletes the entry rather than storing it explicitly - keeps the persisted map
+     * limited to cards the user actually overrode, mirroring favoritesSlice's
+     * delete-when-empty convention.
+     */
+    setManualOverride: (
+      state,
+      action: PayloadAction<{ identifier: string; override: ManualOverride }>
+    ) => {
+      const { identifier, override } = action.payload;
+      if (override === "auto") {
+        delete state.manualOverrides[identifier];
+      } else {
+        state.manualOverrides[identifier] = override;
+      }
+    },
+    /**
+     * Set all manual overrides at once (e.g. when loading from localStorage).
+     */
+    setAllManualOverrides: (
+      state,
+      action: PayloadAction<Project["manualOverrides"]>
+    ) => {
+      state.manualOverrides = action.payload;
+    },
   },
 });
 
@@ -355,6 +383,8 @@ export const {
   deleteSlots,
   moveSlot,
   duplicateSlot,
+  setManualOverride,
+  setAllManualOverrides,
 } = projectSlice.actions;
 
 export default projectSlice.reducer;
@@ -596,5 +626,16 @@ export const selectAnySelectedImagesFilteredOnPrinting = createSelector(
 
 export const selectProjectCardback = (state: RootState): string | undefined =>
   state.project.cardback ?? undefined;
+
+export const selectManualOverrides = (
+  state: RootState
+): Project["manualOverrides"] => state.project.manualOverrides;
+
+export const selectManualOverride = createSelector(
+  (state: RootState, identifier: string) => state.project.manualOverrides,
+  (state: RootState, identifier: string) => identifier,
+  (manualOverrides, identifier): ManualOverride =>
+    manualOverrides[identifier] ?? "auto"
+);
 
 //# endregion

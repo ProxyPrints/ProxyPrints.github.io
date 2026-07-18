@@ -37,6 +37,13 @@ export interface PagePreviewSlotContent {
   /** Rendered as the slot's accessible name; also shown as a fallback label when imageUrl is
    * undefined. */
   name: string;
+  /** Proposal B PR-3's hedged preview badge - "bleed will be generated", never confirmed-fact
+   * framing, since the real per-side measurement only happens at export (see this file's own
+   * module comment). Precomputed by the caller (`willLikelyGenerateBleed` in bleedNormalize.ts)
+   * rather than derived here, so this component stays a dumb renderer with no knowledge of the
+   * bleed-normalization algorithm itself. `undefined` renders no badge (bleed normalization
+   * doesn't apply to this card, or its signal hasn't resolved yet - never guess). */
+  willGenerateBleed?: boolean;
 }
 
 export interface PagePreviewProps {
@@ -160,6 +167,26 @@ export function PagePreview({
                     pointerEvents: "none",
                   }}
                 />
+              )}
+              {content?.willGenerateBleed === true && (
+                <div
+                  data-testid="page-preview-bleed-badge"
+                  style={{
+                    position: "absolute",
+                    left: "1mm",
+                    top: "1mm",
+                    padding: "0.5mm 1.5mm",
+                    fontSize: "2.2mm",
+                    lineHeight: 1.2,
+                    color: "white",
+                    background: "rgba(0, 0, 0, 0.65)",
+                    borderRadius: "1mm",
+                    pointerEvents: "none",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Bleed will be generated
+                </div>
               )}
             </div>
           );

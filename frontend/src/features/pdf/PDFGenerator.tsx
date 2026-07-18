@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import React from "react";
 import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
@@ -17,8 +17,9 @@ import {
   CardWidthMM,
   ToggleButtonHeight,
 } from "@/common/constants";
+import { SourceType } from "@/common/schema_types";
 import { StyledDropdownTreeSelect } from "@/common/StyledDropdownTreeSelect";
-import { useAppDispatch, useAppSelector } from "@/common/types";
+import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { Blurrable } from "@/components/Blurrable";
 import { OverflowCol } from "@/components/OverflowCol";
@@ -28,6 +29,11 @@ import { downloadFile, useDoFileDownload } from "@/features/download/download";
 import { requestGoogleDriveWriteToken } from "@/features/googleDrive/googleDriveAuth";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { GoogleDriveService } from "@/features/googleDrive/GoogleDriveService";
+import {
+  BleedPrior,
+  ManualOverride,
+  willLikelyGenerateBleed,
+} from "@/features/pdf/bleedNormalize";
 import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
 import { computeLayout } from "@/features/pdf/layout";
 import {
@@ -62,8 +68,10 @@ import {
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
+  selectManualOverrides,
   selectProjectCardback,
   selectProjectMembers,
+  setManualOverride,
 } from "@/store/slices/projectSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 import { AppDispatch } from "@/store/store";
@@ -1005,6 +1013,95 @@ const SCMSettings = ({
   );
 };
 
+interface BleedOverrideSettingsProps {
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument };
+}
+
+/**
+ * Proposal B PR-2: per-card manual override (Auto / Force bleed / Force trimmed) for the
+ * export-time bleed measurement. Only lists cards bleed normalization can actually apply to
+ * (see PDF.tsx's isBleedNormalizationEligible - full-resolution Google Drive/local-file images
+ * only) so an override control never sits next to a card it would silently do nothing for.
+ * Reads/writes projectSlice directly (decision 4: persists in project state, not local
+ * component state) rather than taking value/setValue props like this file's other settings
+ * sections.
+ */
+const BleedOverrideSettings = ({
+  cardDocumentsByIdentifier,
+}: BleedOverrideSettingsProps) => {
+  const [expanded, setExpanded] = useState<boolean>(false);
+  const dispatch = useAppDispatch();
+  const manualOverrides = useAppSelector(selectManualOverrides);
+
+  const eligibleCards = useMemo(
+    () =>
+      Object.entries(cardDocumentsByIdentifier)
+        // cardDocumentsByIdentifier is keyed by every project member identifier, including ones
+        // whose CardDocument hasn't finished loading into the store yet (selectCardDocumentsByIdentifiers
+        // maps a not-yet-fetched identifier to undefined) - the fast preview's own eligibility
+        // filter (fastPreviewEligibleIdentifiers, below) already guards against this; this one
+        // didn't, and crashed on `cardDocument.sourceType` the instant this panel rendered before
+        // every card had loaded (task #135 - see docs/lessons.md).
+        .filter(
+          ([, cardDocument]) =>
+            cardDocument != null &&
+            (cardDocument.sourceType === SourceType.GoogleDrive ||
+              cardDocument.sourceType === SourceType.LocalFile)
+        )
+        .sort(([, a], [, b]) => a.name.localeCompare(b.name)),
+    [cardDocumentsByIdentifier]
+  );
+
+  return (
+    <AutofillCollapse
+      expanded={expanded}
+      onClick={() => setExpanded(!expanded)}
+      zIndex={9}
+      title="Bleed Overrides"
+    >
+      <Container className="p-2">
+        <p className="text-muted" style={{ fontSize: "0.85em" }}>
+          Bleed is measured automatically per card at export. Override a card
+          below if the automatic measurement gets it wrong.
+        </p>
+        {eligibleCards.length === 0 ? (
+          <p className="text-muted mb-0" style={{ fontSize: "0.85em" }}>
+            No cards in this project support bleed normalization yet (Google
+            Drive / local-file sources only).
+          </p>
+        ) : (
+          eligibleCards.map(([identifier, cardDocument]) => (
+            <Row key={identifier} className="align-items-center mb-1">
+              <Col xs={7} className="text-truncate" title={cardDocument.name}>
+                {cardDocument.name}
+              </Col>
+              <Col xs={5}>
+                <Form.Select
+                  size="sm"
+                  data-testid={`bleed-override-select-${identifier}`}
+                  value={manualOverrides[identifier] ?? "auto"}
+                  onChange={(event) =>
+                    dispatch(
+                      setManualOverride({
+                        identifier,
+                        override: event.target.value as ManualOverride,
+                      })
+                    )
+                  }
+                >
+                  <option value="auto">Auto</option>
+                  <option value="force-bleed">Force bleed</option>
+                  <option value="force-trimmed">Force trimmed</option>
+                </Form.Select>
+              </Col>
+            </Row>
+          ))
+        )}
+      </Container>
+    </AutofillCollapse>
+  );
+};
+
 interface ImageFailureConfirmModalProps {
   failures: Array<ImageFetchFailure> | null;
   onCancel: () => void;
@@ -1112,6 +1209,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
   const projectMembers = useAppSelector(selectProjectMembers);
   const projectCardback = useAppSelector(selectProjectCardback);
   const backendURL = useAppSelector(selectRemoteBackendURL);
+  const manualOverrides = useAppSelector(selectManualOverrides);
 
   const [pageSize, setPageSize] = useState<keyof typeof PageSize>(PageSize.A4);
   const [pageWidth, setPageWidth] = useState<number | undefined>(undefined);
@@ -1157,6 +1255,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     cardDocumentsByIdentifier: cardDocumentsByIdentifier,
     projectMembers: projectMembers,
     projectCardback: projectCardback,
+    bleedOverrides: manualOverrides,
     scmMode: scmMode,
     scmPaperSize: scmPaperSize,
     scmVariant: scmVariant,
@@ -1237,11 +1336,69 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     fastPreviewCardSets.flatMap((set) =>
       chunk(set, fastPreviewCardsPerPage)
     )[0] ?? [];
+
+  // Proposal B PR-3: the preview badge's own bleed-prior lookup, scoped to just the currently-
+  // visible fast-preview page (not the whole project) and only for sources bleed normalization
+  // can apply to - same eligibility filter as BleedOverrideSettings. Debounced (matching this
+  // component's own pdfProps debounce) so retyping a search query doesn't fire a fresh batch of
+  // requests on every keystroke.
+  const fastPreviewEligibleIdentifiers = fastPreviewFirstPage
+    .filter(
+      (doc) =>
+        doc != null &&
+        (doc.sourceType === SourceType.GoogleDrive ||
+          doc.sourceType === SourceType.LocalFile)
+    )
+    .map((doc) => doc!.identifier);
+  const [debouncedPreviewIdentifiers] = useDebounce(
+    fastPreviewEligibleIdentifiers,
+    500,
+    { equalityFn }
+  );
+  const [fastPreviewBleedPriors, setFastPreviewBleedPriors] = useState<{
+    [identifier: string]: BleedPrior;
+  }>({});
+  useEffect(() => {
+    let cancelled = false;
+    if (backendURL == null || debouncedPreviewIdentifiers.length === 0) {
+      setFastPreviewBleedPriors({});
+      return;
+    }
+    resolveBleedPriors(backendURL, debouncedPreviewIdentifiers).then(
+      (priors) => {
+        if (!cancelled) {
+          setFastPreviewBleedPriors(priors);
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [backendURL, debouncedPreviewIdentifiers]);
+
   const fastPreviewSlots: Array<PagePreviewSlotContent> =
-    fastPreviewFirstPage.map((doc) => ({
-      imageUrl: doc?.smallThumbnailUrl,
-      name: doc?.name ?? "",
-    }));
+    fastPreviewFirstPage.map((doc) => {
+      const eligible =
+        doc != null &&
+        (doc.sourceType === SourceType.GoogleDrive ||
+          doc.sourceType === SourceType.LocalFile);
+      const prior =
+        doc != null ? fastPreviewBleedPriors[doc.identifier] : undefined;
+      const override =
+        doc != null ? manualOverrides[doc.identifier] ?? "auto" : "auto";
+      // Only render the badge once there's a real signal to hedge on (an explicit override, or
+      // a resolved prior) - showing a provisional guess before either is available would flicker
+      // wrong-then-right as the prior fetch resolves.
+      const willGenerateBleed =
+        eligible && (override !== "auto" || prior != null)
+          ? willLikelyGenerateBleed(prior ?? "unresolved", override)
+          : undefined;
+      return {
+        imageUrl: doc?.smallThumbnailUrl,
+        name: doc?.name ?? "",
+        willGenerateBleed,
+      };
+    });
 
   const fullResolutionPDFProps = {
     ...debouncedPDFProps,
@@ -1405,6 +1562,9 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
                 setPageMarginLeftMM={setPageMarginLeftMM}
                 pageMarginRightMM={pageMarginRightMM}
                 setPageMarginRightMM={setPageMarginRightMM}
+              />
+              <BleedOverrideSettings
+                cardDocumentsByIdentifier={cardDocumentsByIdentifier}
               />
             </>
           )}

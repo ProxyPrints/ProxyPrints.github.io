@@ -6,7 +6,10 @@ import Container from "react-bootstrap/Container";
 import { Provider } from "react-redux";
 
 import { ContentMaxWidth, NavbarHeight } from "@/common/constants";
-import { getLocalStorageFavorites } from "@/common/cookies";
+import {
+  getLocalStorageFavorites,
+  getLocalStorageManualOverrides,
+} from "@/common/cookies";
 import { useAppDispatch } from "@/common/types";
 import { useChunkErrorRecovery } from "@/common/useChunkErrorRecovery";
 import { useBackendSetter } from "@/features/backend/useBackendSetter";
@@ -21,6 +24,7 @@ import { pdfRenderService } from "@/features/pdf/pdfRenderService";
 import { Toasts } from "@/features/toasts/Toasts";
 import ProjectNavbar from "@/features/ui/Navbar";
 import { setAllFavoriteRenders } from "@/store/slices/favoritesSlice";
+import { setAllManualOverrides } from "@/store/slices/projectSlice";
 import store from "@/store/store";
 
 const OverscrollProvider = styled(Provider)`
@@ -75,6 +79,10 @@ export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
     const favorites = getLocalStorageFavorites();
     if (Object.keys(favorites).length > 0) {
       dispatch(setAllFavoriteRenders(favorites));
+    }
+    const manualOverrides = getLocalStorageManualOverrides();
+    if (Object.keys(manualOverrides).length > 0) {
+      dispatch(setAllManualOverrides(manualOverrides));
     }
     clientSearchService.initialiseWorker();
     pdfRenderService.initialiseWorker();

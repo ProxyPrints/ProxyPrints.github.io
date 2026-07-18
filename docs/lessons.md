@@ -431,6 +431,22 @@ calls at the very top of each component in the suspect render tree (starting fro
 binary-search how far the tree actually renders before going silent - the last log line reached
 pinpoints the synchronous throw's rough location even when nothing else in the stack reports it.
 
+## `page.reload()` (and a same-URL `page.goto()` waiting on `"load"`) hangs past the Playwright test timeout in this app
+
+Discovered writing a reload-persistence test for Proposal B PR-2 (full report:
+`docs/reports/proposal-b-pr2-bleed-override-ui.md`) - no test anywhere else in this suite
+reloads or renavigates a page mid-test, so there was no existing precedent to check first.
+`page.reload()` alone hung past the 30s test timeout waiting for the `"load"` event; a plain
+`page.goto()` back to the same URL hit the identical hang. This app's webworkers (client-search,
+PDF-render) appear not to settle a second `"load"` event cleanly within one Playwright page
+lifecycle - not investigated further since a workaround exists and the root cause is outside
+this repo's own code (Next.js/webworker/browser interaction, not app logic). Fix: navigate with
+`{ waitUntil: "domcontentloaded" }` instead of the default `"load"` - the DOM (and this app's
+React tree) is fully interactive well before whatever blocks a second `"load"` resolves, and a
+normal `page.getByText(...)` wait for real UI content afterward is sufficient to confirm the page
+is actually ready. Any future test that needs a real mid-test reload/renavigation should use this
+pattern from the start rather than rediscovering the hang.
+
 ## A stacked PR's base branch gets deleted out from under it when the parent merges (squash-and-delete)
 
 If PR B is opened against PR A's branch (a stack) and PR A is later squash-merged with

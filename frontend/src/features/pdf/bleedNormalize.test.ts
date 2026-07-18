@@ -5,6 +5,7 @@ import {
   OVERSIZED_MULTIPLE,
   PixelBuffer,
   resolveBleedPlan,
+  willLikelyGenerateBleed,
 } from "@/features/pdf/bleedNormalize";
 
 const WIDTH = 200;
@@ -197,5 +198,33 @@ describe("measureCardBleedPx + resolveBleedPlan (Proposal B, 6 synthetic fixture
     for (const side of BLEED_SIDES) {
       expect(plan[side]).toBe(TARGET_BLEED_PX);
     }
+  });
+});
+
+describe("willLikelyGenerateBleed (Proposal B PR-3's preview badge hedge)", () => {
+  it("prior 'bleed', auto: assumes no synthetic bleed will be generated", () => {
+    expect(willLikelyGenerateBleed("bleed", "auto")).toBe(false);
+  });
+
+  it("prior 'trimmed', auto: assumes bleed will be generated", () => {
+    expect(willLikelyGenerateBleed("trimmed", "auto")).toBe(true);
+  });
+
+  it("prior 'unresolved', auto: assumes bleed will be generated (same fallback as 'trimmed')", () => {
+    expect(willLikelyGenerateBleed("unresolved", "auto")).toBe(true);
+  });
+
+  it("force-bleed wins outright regardless of prior", () => {
+    expect(willLikelyGenerateBleed("trimmed", "force-bleed")).toBe(false);
+    expect(willLikelyGenerateBleed("unresolved", "force-bleed")).toBe(false);
+  });
+
+  it("force-trimmed wins outright regardless of prior", () => {
+    expect(willLikelyGenerateBleed("bleed", "force-trimmed")).toBe(true);
+  });
+
+  it("defaults manualOverride to 'auto' when omitted", () => {
+    expect(willLikelyGenerateBleed("bleed")).toBe(false);
+    expect(willLikelyGenerateBleed("trimmed")).toBe(true);
   });
 });

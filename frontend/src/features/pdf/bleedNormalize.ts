@@ -322,3 +322,27 @@ export function resolveBleedPlan(
     })
   ) as BleedPlan;
 }
+
+/**
+ * Cheap, preview-only hedge for whether export is EXPECTED to synthesize bleed for this card
+ * (Proposal B PR-3's badge, "bleed will be generated"). Deliberately does NOT run the real
+ * per-side probe measurement - the WYSIWYG preview (Proposal A) is a cheap CSS approximation on
+ * small thumbnails, not a full-resolution decode, so no real CardMeasurement is available to it
+ * (see the approved spec's own "PREVIEW INTERACTION" line: real edge-extension happens ONLY at
+ * export). This mirrors resolveBleedPlan's manualOverride/prior precedence exactly, minus the
+ * per-side measurement branch, since a manual override is the one signal that's both already
+ * resolved synchronously (no network, no canvas) AND fully determines the outcome the same way a
+ * real measurement would - the closest available stand-in for "the measurement where available".
+ */
+export function willLikelyGenerateBleed(
+  prior: BleedPrior,
+  manualOverride: ManualOverride = "auto"
+): boolean {
+  if (manualOverride === "force-bleed") {
+    return false;
+  }
+  if (manualOverride === "force-trimmed") {
+    return true;
+  }
+  return prior !== "bleed";
+}
