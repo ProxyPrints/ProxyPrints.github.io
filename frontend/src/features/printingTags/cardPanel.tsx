@@ -159,7 +159,7 @@ export const BurstSvg = styled.svg`
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 140%;
+  width: 55%;
   aspect-ratio: 1;
   transform: translate(-50%, -50%);
   z-index: -1;

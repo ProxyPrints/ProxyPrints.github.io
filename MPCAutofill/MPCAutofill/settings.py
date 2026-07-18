@@ -92,6 +92,18 @@ PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="300/
 # same mechanism for the card report button (see cardpicker.views.post_report_card).
 CARD_REPORT_RATE = env("CARD_REPORT_RATE", default="10/d")
 
+# Saved decks (see docs/proposals/proposal-g-user-accounts-saved-decks.md, decision 4). A
+# generous, configurable soft cap on named decks (SavedDeckKind.DECK rows only - snapshot rows
+# are deliberately uncapped, see cardpicker.models.SavedDeck) per user. Purely an abuse guard,
+# not a storage concern (a deck is ~15-35 KB) - stops a runaway script from becoming a
+# moderation problem, not a disk-management knob.
+SAVED_DECK_MAX_PER_USER = env.int("SAVED_DECK_MAX_PER_USER", default=100)
+# zero-knowledge encryption (see the proposal's §8 amendment) - a defensive floor against a
+# buggy/malicious client persisting a weak PBKDF2 iteration count into UserCryptoProfile. The
+# spec's own floor is 600,000; this is a settings knob only so it can be raised later without a
+# code change, never lowered below what's already been accepted from real users.
+SAVED_DECK_MIN_KDF_ITERATIONS = env.int("SAVED_DECK_MIN_KDF_ITERATIONS", default=600_000)
+
 # Fuzzy tag-matching confidence thresholds. See cardpicker.tags.Tags.match_tag_fuzzy.
 TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD = env.float("TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD", default=0.92)
 TAG_MATCH_LOW_CONFIDENCE_THRESHOLD = env.float("TAG_MATCH_LOW_CONFIDENCE_THRESHOLD", default=0.6)
