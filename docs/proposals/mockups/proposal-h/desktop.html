@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Proposal H — Desktop (1920)</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { width: 1920px; }
+  .app-body { height: 936px; } /* 1080 - 64 toolbar - ~80 chrome for the mockup frame */
+  .sheet-region .annotate { margin-top: 10px; }
+  .rail { width: 400px; flex: 0 0 400px; position: sticky; top: 64px; height: 936px; }
+  /* Per docs/lessons.md's sticky/z-index entry: the rail's own PARENT gets
+     position:relative + an explicit non-auto z-index together, so the rail's
+     sticky stacking context can never escape upward and become un-hit-testable. */
+  .app-body { position: relative; z-index: 0; }
+  .rail-width-tag {
+    position: absolute;
+    top: -20px;
+    right: 0;
+    color: var(--annotate);
+    font-family: "Courier New", monospace;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="page-frame">
+  <span class="frame-label">desktop 1920×1080 — sheet + persistent rail, both fully inline</span>
+
+  <div class="toolbar">
+    <span class="deck-name">Standard Cube — 100 cards</span>
+    <div class="pager">
+      <button>◀</button>
+      <span class="annotate">Page 3 of 13</span>
+      <button>▶</button>
+    </div>
+    <span class="annotate">Paper: A4 landscape</span>
+    <span class="annotate">Bleed: 3.175mm</span>
+    <span class="annotate">Guides: On</span>
+    <div class="spacer"></div>
+    <button class="btn">Save to Drive</button>
+    <button class="btn primary">Generate PDF</button>
+  </div>
+
+  <div class="app-body">
+    <div class="sheet-region">
+      <div class="sheet">
+        <div class="slot"><span class="slot-num">17</span></div>
+        <div class="slot selected"><span class="slot-num">18</span><span class="slot-badge">SET 142</span></div>
+        <div class="slot"><span class="slot-num">19</span></div>
+        <div class="slot"><span class="slot-num">20</span><span class="slot-badge degraded">SET 07</span></div>
+        <div class="slot"><span class="slot-num">21</span></div>
+        <div class="slot"><span class="slot-num">22</span></div>
+        <div class="slot"><span class="slot-num">23</span></div>
+        <div class="slot"><span class="slot-num">24</span></div>
+      </div>
+      <p class="annotate">
+        4 columns × 2 rows default (A4 landscape, 5mm margins, 3.175mm bleed —
+        see design doc §1 for the computeLayout() math this comes from).
+        Card placeholders are 63:88 aspect. Slot 18 is selected → rail at right.
+      </p>
+    </div>
+
+    <div class="rail">
+      <span class="rail-width-tag">400px (380–420px band)</span>
+      <div class="rail-scroll">
+
+        <div class="instrument">
+          <h4>1. Candidate / version picker</h4>
+          <div class="filters-toggle">▸ Filters (sources, printings, artists, sort)</div>
+          <div class="candidate-grid">
+            <div class="cand active"><span class="cand-label">SET 142</span></div>
+            <div class="cand"><span class="cand-label">SET 089</span></div>
+            <div class="cand"><span class="cand-label">SET 007</span></div>
+            <div class="cand"><span class="cand-label">M21 231</span></div>
+            <div class="cand"><span class="cand-label">2XM 341</span></div>
+            <div class="cand"><span class="cand-label">PLST 12</span></div>
+          </div>
+          <div class="jump-row">
+            <input placeholder="Option # or identifier" />
+            <button>Jump</button>
+          </div>
+        </div>
+
+        <div class="instrument">
+          <h4>2. Confirm affordance</h4>
+          <div class="confirm-row">
+            <span class="confirm-badge">Confirm?</span>
+            <div class="compare-pin"></div>
+            <div class="yn-buttons">
+              <button class="yes">Y</button>
+              <button class="no">N</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="instrument">
+          <h4>3. Attribute chips</h4>
+          <div class="chip-ring">
+            <div class="chip-row">
+              <button class="chip lean-positive">Full Art</button>
+              <button class="chip">Showcase</button>
+              <button class="chip">Etched</button>
+            </div>
+            <div class="chip-row">
+              <button class="chip lean-positive">Black Border</button>
+              <button class="chip lean-negative">White Border</button>
+              <button class="chip lean-negative">Silver Border</button>
+            </div>
+            <div class="chip-row">
+              <button class="chip">Old Border</button>
+              <button class="chip lean-positive">Modern Border</button>
+              <button class="chip">Future Frame</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="instrument">
+          <h4>4. Requested-printing badge</h4>
+          <span class="printing-badge">SET 142</span>
+        </div>
+
+        <div class="instrument">
+          <h4>5. Per-card bleed override</h4>
+          <div class="segmented">
+            <button class="active">Auto</button>
+            <button>Force bleed</button>
+            <button>Force trimmed</button>
+          </div>
+        </div>
+
+        <div class="instrument">
+          <h4>6. Artist line</h4>
+          <div class="artist-line">
+            Art by <strong>J. Placeholder</strong> — <a href="#">support this artist</a>
+          </div>
+        </div>
+
+        <div class="instrument">
+          <h4>7. Slot actions</h4>
+          <div class="slot-actions">
+            <button>⟲ Change Query</button>
+            <button>⧉ Duplicate</button>
+            <button>⛒ Delete</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

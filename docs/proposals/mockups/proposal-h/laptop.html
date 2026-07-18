@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Proposal H — Laptop (1366)</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { width: 1366px; }
+  .app-body { height: 700px; position: relative; z-index: 0; }
+  .rail { width: 350px; flex: 0 0 350px; position: sticky; top: 64px; height: 700px; }
+  .rail-width-tag {
+    position: absolute;
+    top: -20px;
+    right: 0;
+    color: var(--annotate);
+    font-family: "Courier New", monospace;
+    font-size: 12px;
+  }
+  .sheet { max-width: 760px; }
+</style>
+</head>
+<body>
+<div class="page-frame">
+  <span class="frame-label">laptop 1366×768 — rail narrows to 340–360px; toolbar's print settings collapse into one popover trigger</span>
+
+  <div class="toolbar">
+    <span class="deck-name">Standard Cube — 100 cards</span>
+    <div class="pager">
+      <button>◀</button>
+      <span class="annotate">Page 3 of 13</span>
+      <button>▶</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn">⚙ Print Settings</button>
+    <span class="annotate">(paper / bleed / guides — one popover, not 3 inline groups)</span>
+    <button class="btn">Save to Drive</button>
+    <button class="btn primary">Generate PDF</button>
+  </div>
+
+  <div class="app-body">
+    <div class="sheet-region">
+      <div class="sheet">
+        <div class="slot"><span class="slot-num">17</span></div>
+        <div class="slot selected"><span class="slot-num">18</span><span class="slot-badge">SET 142</span></div>
+        <div class="slot"><span class="slot-num">19</span></div>
+        <div class="slot"><span class="slot-num">20</span><span class="slot-badge degraded">SET 07</span></div>
+        <div class="slot"><span class="slot-num">21</span></div>
+        <div class="slot"><span class="slot-num">22</span></div>
+        <div class="slot"><span class="slot-num">23</span></div>
+        <div class="slot"><span class="slot-num">24</span></div>
+      </div>
+      <p class="annotate">Same 4×2 sheet, narrower render width than desktop — still comfortably legible.</p>
+    </div>
+
+    <div class="rail">
+      <span class="rail-width-tag">350px (340–360px band)</span>
+      <div class="rail-scroll">
+
+        <div class="instrument">
+          <h4>1. Candidate / version picker</h4>
+          <div class="filters-toggle">▸ Filters (sources, printings, artists, sort)</div>
+          <div class="candidate-grid">
+            <div class="cand active"><span class="cand-label">SET 142</span></div>
+            <div class="cand"><span class="cand-label">SET 089</span></div>
+            <div class="cand"><span class="cand-label">SET 007</span></div>
+          </div>
+          <div class="jump-row">
+            <input placeholder="Option # or identifier" />
+            <button>Jump</button>
+          </div>
+        </div>
+
+        <div class="instrument">
+          <h4>2. Confirm affordance</h4>
+          <div class="confirm-row">
+            <span class="confirm-badge">Confirm?</span>
+            <div class="compare-pin"></div>
+            <div class="yn-buttons">
+              <button class="yes">Y</button>
+              <button class="no">N</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="instrument">
+          <h4>3. Attribute chips</h4>
+          <div class="chip-ring">
+            <div class="chip-row">
+              <button class="chip lean-positive">Full Art</button>
+              <button class="chip">Showcase</button>
+            </div>
+            <div class="chip-row">
+              <button class="chip lean-positive">Black Border</button>
+              <button class="chip lean-negative">White Border</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="instrument">
+          <h4>4. Requested-printing badge</h4>
+          <span class="printing-badge">SET 142</span>
+        </div>
+
+        <div class="instrument">
+          <h4>5. Per-card bleed override</h4>
+          <div class="segmented">
+            <button class="active">Auto</button>
+            <button>Force bleed</button>
+            <button>Force trimmed</button>
+          </div>
+        </div>
+
+        <div class="instrument">
+          <h4>6. Artist line</h4>
+          <div class="artist-line">
+            Art by <strong>J. Placeholder</strong> — <a href="#">support this artist</a>
+          </div>
+        </div>
+
+        <div class="instrument">
+          <h4>7. Slot actions</h4>
+          <div class="slot-actions">
+            <button>⟲ Change Query</button>
+            <button>⧉ Duplicate</button>
+            <button>⛒ Delete</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
