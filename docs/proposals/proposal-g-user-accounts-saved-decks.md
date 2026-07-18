@@ -600,10 +600,17 @@ approved text), superseded by everything below.
   is stored alongside it so a future default increase never invalidates an
   existing user's derivation). The passphrase and every key derived from it
   **never leave the browser**.
-- Each deck gets its own random **DEK** (AES-256-GCM). The DEK is wrapped by
-  the passphrase-derived master key. A passphrase change re-wraps every
-  deck's DEK; it never re-encrypts deck bodies — the DEK itself doesn't
-  change, only what wraps it.
+- The **master key** is a separate, randomly-generated key (not the PBKDF2
+  output itself) — generated exactly once, at first save, and never
+  regenerated afterwards. The passphrase-derived key's only job is to
+  **wrap** this master key (see "Recovery key" below for the second,
+  independent way to wrap the same master key). Each deck gets its own
+  random **DEK** (AES-256-GCM), wrapped by the master key at the time that
+  deck is created. Because the master key never changes, **a passphrase
+  change re-wraps only the one master key** (a single small ciphertext,
+  stored on the user's crypto profile) under a freshly-derived
+  passphrase key — it never touches any individual deck's DEK, and never
+  re-encrypts any deck body.
 - The **entire** deck payload is encrypted, **including the title** — there
   is no plaintext deck name anywhere server-side. Each server-side record
   is: opaque ciphertext + wrapped DEK + nonces (one for the payload's
@@ -706,10 +713,11 @@ without waiting for a session to end.
 
 Encrypt/decrypt round-trip; wrong passphrase fails to unwrap; ciphertext
 tamper → AES-GCM authentication failure (not a silent garbage decrypt);
-passphrase change re-wraps every DEK correctly without touching deck
-bodies; recovery-key round-trip (forget passphrase → recover via the
-recovery key → set a new passphrase); both passphrase and recovery key
-lost → the account-reset flow deletes cleanly and a fresh pair issues
+passphrase change re-wraps the master key correctly without touching any
+deck's DEK or ciphertext (the master key itself never changes — see "Key
+design" above); recovery-key round-trip (forget passphrase → recover via
+the recovery key → set a new passphrase); both passphrase and recovery
+key lost → the account-reset flow deletes cleanly and a fresh pair issues
 correctly on next save; a recovery key generated _before_ a later
 passphrase change still unwraps the master key correctly (proving the
 recovery slot is independent of passphrase-derived state).
@@ -721,11 +729,12 @@ encryption passphrase, the user's recovery key, and every key derived from
 either, exist only in the user's browser (or the user's own safekeeping,
 for the recovery key) and are never transmitted or stored server-side in
 recoverable form. The server retains only: the owning account's identifier,
-an opaque encrypted blob per deck, two wrapped copies of that deck's
-encryption key (one recoverable with the passphrase, one recoverable with
-the user's own recovery key — neither readable by us), a per-user random
-salt and iteration count (not secret; strengthens key derivation), and
-ordinary created/updated timestamps. A user can delete any saved deck — or,
+an opaque encrypted blob per deck plus that deck's own wrapped encryption
+key, two wrapped copies of the user's single master key (one recoverable
+with the passphrase, one recoverable with the user's own recovery key —
+neither readable by us), a per-user random salt and iteration count (not
+secret; strengthens key derivation), and ordinary created/updated
+timestamps. A user can delete any saved deck — or,
 once account deletion ships, their entire account — at any time,
 immediately and permanently. If both the passphrase and the recovery key
 are lost, the affected decks are permanently unrecoverable by design; the
