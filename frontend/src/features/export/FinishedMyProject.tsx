@@ -13,6 +13,10 @@ import {
   NavbarHeight,
   NavPillButtonHeight,
   NavUnderlineButtonHeight,
+  UpstreamDesktopTool,
+  UpstreamDesktopToolReleasesURL,
+  UpstreamDesktopToolSourceURL,
+  UpstreamDesktopToolWikiURL,
 } from "@/common/constants";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { Coffee } from "@/components/Coffee";
@@ -24,7 +28,6 @@ import { OverflowCol } from "@/components/OverflowCol";
 import { PringlePrintsLink } from "@/components/PringlePrintsLink";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { useLocalFilesDirectoryHandle } from "@/features/clientSearch/clientSearchHooks";
-import { useDownloadDesktopTool } from "@/features/download/downloadDesktopTool";
 import { useDownloadXML } from "@/features/download/downloadXML";
 import { useProjectName } from "@/store/slices/backendSlice";
 import { showModal } from "@/store/slices/modalsSlice";
@@ -133,11 +136,9 @@ const RunDesktopToolInstructions = () => {
       )}
       <p>
         It&apos;ll ask you a few questions when it starts up, then you get to
-        sit back and watch the magic happen. Check out our wiki{" "}
-        <a
-          href="https://github.com/chilli-axe/mpc-autofill/wiki/Desktop-Tool"
-          target="_blank"
-        >
+        sit back and watch the magic happen. Check out {UpstreamDesktopTool}
+        &apos;s wiki{" "}
+        <a href={UpstreamDesktopToolWikiURL} target="_blank">
           here
         </a>{" "}
         for more detailed instructions.
@@ -174,26 +175,26 @@ function ProjectDownload() {
   );
 }
 
-type Platform = "windows" | "macos-intel" | "macos-arm" | "linux";
-
+// These used to auto-download a per-platform ZIP from download.mpcautofill.com via an
+// in-app fetch - that domain isn't owned by this fork's infrastructure and the deploy job
+// that was meant to route it always fails (see docs/infrastructure.md), so it never actually
+// worked. Rather than guess at a direct per-platform GitHub release asset URL we can't verify
+// from here, every platform button now links straight to the upstream project's own releases
+// page, where the real, current asset names are always correct because GitHub is serving them
+// directly - honest and unbreakable, at the cost of one extra click to pick the right file.
 function PlatformDownload({
-  platform,
   platformName,
   icon,
 }: {
-  platform: Platform;
   platformName: string;
   icon: string;
 }) {
-  const assetURL = `https://download.mpcautofill.com/?platform=${platform}`;
-  const downloadDesktopTool = useDownloadDesktopTool();
   return (
     <>
       <DownloadButton>
         <DownloadButtonLink
-          onClick={() =>
-            downloadDesktopTool(new URL(assetURL), `autofill-${platform}.zip`)
-          }
+          href={UpstreamDesktopToolReleasesURL}
+          target="_blank"
         >
           <h1 className={`bi bi-${icon}`}></h1>
           <h4>{platformName}</h4>
@@ -209,57 +210,28 @@ function DesktopToolDownload() {
     <>
       <MobileStatus />
       <p>
-        Download the desktop tool for your platform. If you&apos;d rather
-        download the source code instead, you can find it{" "}
-        <a
-          href="https://github.com/chilli-axe/mpc-autofill/tree/master/desktop-tool/"
-          target="_blank"
-        >
+        Download {UpstreamDesktopTool} for your platform below - it reads the
+        XML file from step 1 and drives <MakePlayingCardsLink /> for you. If
+        you&apos;d rather download the source code instead, you can find it{" "}
+        <a href={UpstreamDesktopToolSourceURL} target="_blank">
           here
         </a>
         !
       </p>
       <Row gap={2}>
         <Col sm={3}>
-          <PlatformDownload
-            platformName="Windows"
-            platform="windows"
-            icon="windows"
-          />
+          <PlatformDownload platformName="Windows" icon="windows" />
         </Col>
         <Col sm={3}>
-          <PlatformDownload
-            platformName="macOS — Intel"
-            platform="macos-intel"
-            icon="apple"
-          />
+          <PlatformDownload platformName="macOS — Intel" icon="apple" />
         </Col>
         <Col sm={3}>
-          <PlatformDownload
-            platformName="macOS — ARM"
-            platform="macos-arm"
-            icon="apple"
-          />
+          <PlatformDownload platformName="macOS — ARM" icon="apple" />
         </Col>
         <Col sm={3}>
-          <PlatformDownload
-            platformName="Linux"
-            platform="linux"
-            icon="ubuntu"
-          />
+          <PlatformDownload platformName="Linux" icon="ubuntu" />
         </Col>
       </Row>
-      <Alert variant="info" className="text-center">
-        <b>Having trouble with the above buttons?</b> Grab it directly from
-        GitHub{" "}
-        <a
-          href="https://github.com/chilli-axe/mpc-autofill/releases/latest/"
-          target="_blank"
-        >
-          here
-        </a>
-        !
-      </Alert>
     </>
   );
 }
@@ -310,6 +282,10 @@ const NotMPCInstructions = () => {
         Nice work! There are three simple steps for turning your project into an
         order with <NotMPCLink />.
       </h5>
+      <p className="text-muted small text-center">
+        Steps current as of July 2026 &mdash; confirm at <NotMPCLink /> before
+        ordering.
+      </p>
       <BigOL>
         <BigLI className="py-3">
           <h3>Export Your Card Images</h3>
@@ -356,6 +332,10 @@ const PringlePrintsInstructions = () => {
         Nice work! There are three simple steps for turning your project into an
         order with <PringlePrintsLink />.
       </h5>
+      <p className="text-muted small text-center">
+        Steps and pricing current as of July 2026 &mdash; confirm at{" "}
+        <PringlePrintsLink /> before ordering.
+      </p>
       <BigOL>
         <BigLI className="py-3">
           <h3>Prepare Your Print File</h3>

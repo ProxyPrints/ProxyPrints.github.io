@@ -231,6 +231,19 @@ export function AttributeChipPanel({
       .finally(() => setSubmittingTagName(null));
   };
 
+  // The chip's fill color is a *lean*, not a verdict - it renders the tag's current weighted
+  // net polarity across community + machine votes (see the header comment), which can be
+  // wrong, and is never treated as confirmed anywhere else in this funnel (see the
+  // "Suggested match" vs. a real confirmation distinction in QuestionFeed.tsx). An untouched
+  // chip with a strong fill could otherwise read as "the system has already confirmed this" -
+  // this tooltip and the legend below it exist to head that misreading off explicitly.
+  const leanTooltip = (netPolarity: number): string | null => {
+    if (netPolarity === 0) return null;
+    const percent = Math.round(Math.abs(netPolarity) * 100);
+    const direction = netPolarity > 0 ? "yes" : "no";
+    return `Community + machine votes lean ${direction} (${percent}%) - not confirmed`;
+  };
+
   const renderChip = (tagName: string, label: string) => {
     const explicitState = chipStates[tagName] ?? "untouched";
     const group = findExclusionGroup(tagName);
@@ -242,6 +255,13 @@ export function AttributeChipPanel({
           sibling.tagName !== tagName &&
           (chipStates[sibling.tagName] ?? "untouched") === "positive"
       );
+    const lean = leanTooltip(confidence[tagName] ?? 0);
+    const title =
+      explicitState === "positive"
+        ? "Yes"
+        : explicitState === "negative"
+        ? "No"
+        : lean ?? "Tap to describe what you see";
     return (
       <Chip
         key={tagName}
@@ -252,13 +272,7 @@ export function AttributeChipPanel({
         onClick={() => tap(tagName)}
         data-testid={`attribute-chip-${tagName}`}
         data-chip-state={explicitState}
-        title={
-          explicitState === "positive"
-            ? "Yes"
-            : explicitState === "negative"
-            ? "No"
-            : "Tap to describe what you see"
-        }
+        title={title}
       >
         {getTagDisplayName(label)}
       </Chip>
@@ -269,23 +283,42 @@ export function AttributeChipPanel({
   // arbitrary but fixed assignment, not a semantic left/right meaning for either group.
   const [leftGroup, rightGroup] = EXCLUSION_GROUPS;
 
+  // Only shown once a chip actually has a lean to explain - a panel with nothing but
+  // untouched, zero-signal chips has nothing for the legend to clarify yet.
+  const hasLean = Object.values(confidence).some((value) => value !== 0);
+
   return (
-    <ChipRing data-testid="attribute-chip-panel">
-      <TopArea>
-        {STANDALONE_CHIPS.map((chip) => renderChip(chip.tagName, chip.label))}
-      </TopArea>
-      {leftGroup != null && (
-        <LeftArea>
-          {leftGroup.chips.map((chip) => renderChip(chip.tagName, chip.label))}
-        </LeftArea>
+    <>
+      {hasLean && (
+        <p
+          className="text-muted small text-center mb-2"
+          data-testid="attribute-chip-legend"
+        >
+          Chip color shows how community + machine votes lean - not a confirmed
+          fact.
+        </p>
       )}
-      <CardArea data-testid="attribute-chip-card-area">{cardSlot}</CardArea>
-      {rightGroup != null && (
-        <RightArea>
-          {rightGroup.chips.map((chip) => renderChip(chip.tagName, chip.label))}
-        </RightArea>
-      )}
-    </ChipRing>
+      <ChipRing data-testid="attribute-chip-panel">
+        <TopArea>
+          {STANDALONE_CHIPS.map((chip) => renderChip(chip.tagName, chip.label))}
+        </TopArea>
+        {leftGroup != null && (
+          <LeftArea>
+            {leftGroup.chips.map((chip) =>
+              renderChip(chip.tagName, chip.label)
+            )}
+          </LeftArea>
+        )}
+        <CardArea data-testid="attribute-chip-card-area">{cardSlot}</CardArea>
+        {rightGroup != null && (
+          <RightArea>
+            {rightGroup.chips.map((chip) =>
+              renderChip(chip.tagName, chip.label)
+            )}
+          </RightArea>
+        )}
+      </ChipRing>
+    </>
   );
 }
 
