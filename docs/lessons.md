@@ -498,3 +498,33 @@ convention's bare name - a numeric/date/session-id suffix, chosen so two concurr
 adopting the same convention independently can't collide (a fixed default like a bare
 `report-relay` is exactly the thing every session will reach for identically). The bare
 `report-relay` name itself is now retired for this reason - always suffix.
+
+## Color-run measurement cannot see frame-colored bleed - the invisibility is the feature's own design goal
+
+Proposal B's original probe-based bleed measurement (`bleedNormalize.ts`, walk a uniform-color
+run inward from each edge) shipped with real synthetic-fixture coverage but only a "starting
+guess" calibration caveat on its constants. Task #134's real-image calibration pass (30 catalog
+images, `docs/reports/2026-07-18-bleed-calibration-134.md`) found a ~2x measurement bias and,
+critically, root-caused it rather than stopping at "found a bug": sweeping
+`RGB_DISTANCE_THRESHOLD` across a 4x range (6 to 24) moved the sample median under 3% - ruling
+out "threshold too loose" as the cause before it could be mistaken for one. The real cause: a
+standard MTG card's own border is commonly a flat, uniform color, and the synthetic bleed
+extension sitting just outside it is *deliberately* colored to match the frame so a print
+misalignment doesn't show a visible seam - meaning the probe's "uniform run = bleed" assumption
+can never distinguish bleed from border once both are the same color, **by the bleed extension's
+own design intent**. No amount of threshold tuning fixes a measurement whose blind spot is the
+feature's own success condition.
+
+**The lesson, generalized**: when a measurement's error turns out to be invariant across a wide
+sweep of its own tuning constants, stop tuning and ask whether the measurement's *core method* -
+not its parameters - structurally cannot see the thing it's trying to see. Here, the fix wasn't a
+better threshold; it was picking an entirely different signal immune to the same confound. The
+source image's own pixel dimensions (checked against the standard trim/bleed aspect ratios, the
+same method the backend's already-validated `classify_bleed_edge` uses) carry the same
+information a color-run walk was trying to extract, but a card's *file dimensions* have no
+dependency on its *border color* - so the confound simply doesn't apply. Demoting the original
+measurement to an advisory role (ambiguity detection, an asymmetry flag) rather than discarding
+it outright preserved the real edge cases it still catches (a solid-background full-art card, a
+degenerate scan) while removing it from the one thing it was structurally unable to do reliably.
+See `docs/proposals/proposal-b-bleed-normalization.md`'s "Owner design decision" section and
+`bleedNormalize.ts`'s own module comment for the full resolution order.

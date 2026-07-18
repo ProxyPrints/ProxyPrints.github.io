@@ -4,6 +4,16 @@
  * canvas/DOM (mirrors layout.ts's split from PDF.tsx) so the algorithm is unit-testable without
  * a browser. bleedExtension.ts consumes a BleedPlan from here and does the actual pixel work.
  *
+ * PLAN INPUT HIERARCHY (task #134, 2026-07-18 - see CALIBRATION PASS comment below for why):
+ * the PRIMARY signal is the source image's own pixel dimensions, classified against the
+ * standard trim/bleed aspect ratios (classifyBleedAspectRatio) - a card's frame color has no
+ * bearing on its own file dimensions, so this is unaffected by the confound that broke the
+ * probe walk. The probe walk (measureCardBleedPx, next paragraph) is demoted to two advisory
+ * roles with ZERO trim authority: per-side ambiguity detection (still forces that side to the
+ * prior/manual-override fallback, unchanged from before) and detectBleedAsymmetry's manual-
+ * review flag (informational only, never alters the resolved plan). See resolveBleedPlan's own
+ * doc comment for the full resolution order.
+ *
  * Measurement walks ~PROBE_COUNT evenly-spaced probe lines inward from each of the four edges,
  * looking for where the edge's own uniform-color run ends - that run is presumed bleed margin
  * (real print-prep bleed is typically a flat color extension or a smooth gradient near the
@@ -12,6 +22,8 @@
  * borderless full-art card, a corner symbol); IQR spread across probes catches the case where
  * probes disagree enough that the median itself shouldn't be trusted.
  */
+
+import { CardHeightMM, CardWidthMM } from "@/common/constants";
 
 /** RGBA pixel data + dimensions - structurally compatible with a real ImageData (so a caller
  * can pass one directly) but declared independently so tests can build synthetic fixtures
@@ -83,6 +95,20 @@ export const BLEED_SIDES: BleedSide[] = ["top", "bottom", "left", "right"];
 // constants were (a real 40-source pass before shipping) - this pass ran, found a real issue, and
 // left them as starting guesses pending the design follow-up above, which is a different state
 // from "unvalidated" or "validated."
+//
+// SUPERSEDED (2026-07-18, same day, task #134's design follow-up): the "production risk" flagged
+// above is fixed - resolveBleedPlan no longer trusts the probe walk to drive trim/extend
+// decisions at all. Root cause (a card's own border being the same flat color as its bleed
+// margin) is structural to color-run measurement - it's not a threshold or constant this
+// measurement approach could ever tune its way out of, because the invisibility IS the bleed
+// extension doing its job (seamless with the frame, by design). The fix instead promotes the
+// source image's own pixel dimensions to the PRIMARY signal (classifyBleedAspectRatio +
+// dimensionDerivedBleedMM, below) - a card's file dimensions carry the same trim/bleed math
+// regardless of border color, so they don't share the probe walk's confound. The four constants
+// below still govern the probe walk's remaining advisory roles (per-side ambiguity fallback,
+// detectBleedAsymmetry's manual-review flag) but no longer reach the plan's arithmetic directly.
+// See resolveBleedPlan's own doc comment for the full resolution order, and
+// docs/reports/2026-07-18-bleed-calibration-134.md for the measurement bias this responds to.
 export const PROBE_COUNT = 20;
 /** Euclidean RGB distance (0-441, sqrt(255^2*3)) above which two pixels are "different enough"
  * to mark the end of a uniform bleed-margin run. */
@@ -93,6 +119,61 @@ export const IQR_AMBIGUITY_FRACTION = 0.5;
 /** A measured depth more than this multiple of the target bleed is treated as bad DPI metadata
  * rather than a real oversized bleed margin, per the approved spec. */
 export const OVERSIZED_MULTIPLE = 3;
+
+/** Starting guess, not itself calibrated the way the four constants above were (task #134's
+ * calibration pass measured absolute per-side depth against a fixed target, not cross-side
+ * spread) - flagged for a future pass the same way the original four were shipped. */
+export const ASYMMETRY_FLAG_THRESHOLD_MM = 2;
+
+// -------------------------------------------------------------------------------------------
+// Dimension-derived bleed classification (task #134's PRIMARY plan-resolution signal - see the
+// module comment above). Mirrors the backend's already-validated aspect-ratio classification
+// exactly: same reference geometry (63x88mm trim, 3.175mm/side standard bleed convention), same
+// 0.03 tolerance, same "abstain past both known ratios" shape (MPCAutofill/cardpicker/
+// local_fallback.py's classify_bleed_edge/TRIM_ASPECT_RATIO/BLEED_ASPECT_RATIO) - validated
+// there against a real 40-source sample (bleed cluster 0.7325-0.7393 vs theoretical 0.7350, the
+// one trimmed example at 0.7163 vs theoretical 0.7159: a clean, well-separated bimodal signal
+// with nothing observed in the gap between clusters). Geometric and DPI-independent: a source
+// image's raw pixel dimensions encode the same trim/bleed math regardless of resolution or
+// whether the card's own border reads as a normal frame or borderless full-art - exactly why
+// this is trustworthy where the probe walk (frame-color confound) isn't.
+// -------------------------------------------------------------------------------------------
+
+/** Not the same value as a caller's chosen output bleedEdgeMM target (which can be anything,
+ * including 0) - this is the fixed standard bleed convention baked into BLEED_ASPECT_RATIO
+ * itself, matching the backend's _BLEED_MARGIN_MM exactly. */
+const STANDARD_BLEED_MARGIN_MM = 3.175;
+
+export const TRIM_ASPECT_RATIO = CardWidthMM / CardHeightMM;
+export const BLEED_ASPECT_RATIO =
+  (CardWidthMM + 2 * STANDARD_BLEED_MARGIN_MM) /
+  (CardHeightMM + 2 * STANDARD_BLEED_MARGIN_MM);
+/** Ratio units (unitless), not mm - how far a source's aspect ratio may sit from both known
+ * reference ratios before it's treated as ambiguous rather than misclassified. */
+export const ASPECT_CLASSIFICATION_TOLERANCE = 0.03;
+
+export type BleedAspectClassification = "bleed" | "trimmed" | "abstain";
+
+/** Classifies a source image's own pixel dimensions against the standard trim/bleed aspect
+ * ratios. "abstain" covers both a genuinely non-standard image (a token, a double-faced
+ * composite scan, a corrupted fetch) and the degenerate height===0 case - both fall back to the
+ * prior/manual-override chain in resolveBleedPlan, the same as an ambiguous probe measurement
+ * always has. */
+export function classifyBleedAspectRatio(
+  widthPx: number,
+  heightPx: number
+): BleedAspectClassification {
+  if (heightPx === 0) {
+    return "abstain";
+  }
+  const ratio = widthPx / heightPx;
+  const distToTrim = Math.abs(ratio - TRIM_ASPECT_RATIO);
+  const distToBleed = Math.abs(ratio - BLEED_ASPECT_RATIO);
+  if (Math.min(distToTrim, distToBleed) > ASPECT_CLASSIFICATION_TOLERANCE) {
+    return "abstain";
+  }
+  return distToBleed < distToTrim ? "bleed" : "trimmed";
+}
 
 /** Bounds how far a single probe walks inward, both to bound cost and to give "the whole
  * scanned depth was uniform" (a degenerate, ambiguous result) a concrete meaning. Scaled to the
@@ -260,6 +341,48 @@ export function measureCardBleedPx(
 export const pxToMM = (px: number, dpi: number): number => (px * 25.4) / dpi;
 export const mmToPx = (mm: number, dpi: number): number => (mm * dpi) / 25.4;
 
+/** The per-side bleed depth implied directly by the source's own pixel dimensions against the
+ * standard 63x88mm trim size, split evenly between opposing sides - a source is never bled more
+ * on one physical side than its opposite (only where the trim/content sits WITHIN that bleed
+ * can shift, which is exactly the per-side independence the probe walk was chasing and
+ * confounding on - see the module comment). Can come out negative (the source is narrower/
+ * shorter than the bare trim size) when dpi metadata is wrong - resolveBleedPlan's oversized
+ * guard catches that, not this function. */
+function dimensionDerivedBleedMM(
+  sourceWidthPx: number,
+  sourceHeightPx: number,
+  dpi: number
+): Record<BleedSide, number> {
+  const widthExcessPx = sourceWidthPx - mmToPx(CardWidthMM, dpi);
+  const heightExcessPx = sourceHeightPx - mmToPx(CardHeightMM, dpi);
+  const perSideWidthMM = pxToMM(widthExcessPx / 2, dpi);
+  const perSideHeightMM = pxToMM(heightExcessPx / 2, dpi);
+  return {
+    left: perSideWidthMM,
+    right: perSideWidthMM,
+    top: perSideHeightMM,
+    bottom: perSideHeightMM,
+  };
+}
+
+/** Advisory only - a probe-measured spread across the four sides wider than thresholdMM marks
+ * the card worth a human's manual-override look (task #134's calibration found e.g. Evil Twin's
+ * top/left/right ~5.5mm vs bottom ~9.2mm, a ~3.7mm spread never explained - see the calibration
+ * report's "Bottom-edge asymmetry" section), but never changes the resolved plan itself - probes
+ * have zero trim authority post-#134 (see resolveBleedPlan). No UI consumer wired yet; exported
+ * for one, the same way E-2's degradedQueries flag shipped ahead of its first consumer. */
+export function detectBleedAsymmetry(
+  measurement: CardMeasurement,
+  dpi: number,
+  thresholdMM: number = ASYMMETRY_FLAG_THRESHOLD_MM
+): boolean {
+  const depthsMM = BLEED_SIDES.map((side) =>
+    pxToMM(measurement[side].depthPx, dpi)
+  );
+  const spreadMM = Math.max(...depthsMM) - Math.min(...depthsMM);
+  return spreadMM > thresholdMM;
+}
+
 /** The appropriate-bleed machine-vote lean for a card, read via APIGetTagConsensus (the same
  * per-card confidence-fill path the attribute chips use - see store/api.ts, already exists, no
  * new endpoint). "unresolved" covers both "no vote at all" and "a vote exists but doesn't lean
@@ -284,16 +407,35 @@ function priorAdjustmentMM(prior: BleedPrior, targetBleedMM: number): number {
  * Resolves the final per-side plan. manualOverride, when not "auto", wins outright for every
  * side (force-bleed treats the source as if it already exactly matches the target on all four
  * sides - today's pre-Proposal-B behavior for that card; force-trimmed treats it as having no
- * real bleed at all, synthesizing the full target on all four sides). In "auto" mode, each side
- * resolves independently: a confident (non-ambiguous, non-oversized) measurement wins; an
- * ambiguous or implausibly-oversized (>OVERSIZED_MULTIPLE x target) measurement falls back to
- * the prior.
+ * real bleed at all, synthesizing the full target on all four sides).
+ *
+ * In "auto" mode (task #134, superseding the original probe-driven design - see the module
+ * comment and the CALIBRATION PASS comment above PROBE_COUNT): the PRIMARY signal is the
+ * source's own pixel dimensions, classified against the standard trim/bleed aspect ratios
+ * (classifyBleedAspectRatio, same method + constants as the backend's classify_bleed_edge). A
+ * non-abstain classification means the image's raw dimensions are trustworthy evidence of how
+ * much real bleed margin it already carries (dimensionDerivedBleedMM) - that's what actually
+ * resolves the plan now. The probe walk (measureCardBleedPx) is demoted to advisory-only, ZERO
+ * trim authority: a per-side ambiguous flag still forces that side to the prior fallback
+ * (preserves the original degenerate/full-art handling - e.g. a solid-color card back or
+ * full-bleed art proxy, where probes read the whole scan depth as one uniform run, regardless
+ * of what the aspect classification says). detectBleedAsymmetry, exported separately, flags a
+ * card for manual review without altering this function's output at all. An abstain
+ * classification (image aspect ratio isn't close to either reference - a token, a double-faced
+ * composite scan, a corrupted fetch) falls back to the prior/manualOverride chain exactly as an
+ * ambiguous probe measurement always has. The OVERSIZED_MULTIPLE bad-DPI guard still applies,
+ * now against the dimension-derived measurement instead of the probe one - checked in both
+ * directions, since a dimension-derived value can come out implausibly negative (DPI metadata
+ * overstated, inflating the trim-px subtracted from the source's real dimensions) in a way a
+ * probe run length (always >= 0) never could.
  */
 export function resolveBleedPlan(
   measurement: CardMeasurement,
   dpi: number,
   targetBleedMM: number,
   prior: BleedPrior,
+  sourceWidthPx: number,
+  sourceHeightPx: number,
   manualOverride: ManualOverride = "auto"
 ): BleedPlan {
   if (manualOverride === "force-bleed") {
@@ -308,12 +450,25 @@ export function resolveBleedPlan(
   }
 
   const fallbackMM = priorAdjustmentMM(prior, targetBleedMM);
+  const classification = classifyBleedAspectRatio(
+    sourceWidthPx,
+    sourceHeightPx
+  );
+  const dimensionMM =
+    classification === "abstain"
+      ? null
+      : dimensionDerivedBleedMM(sourceWidthPx, sourceHeightPx, dpi);
+
   return Object.fromEntries(
     BLEED_SIDES.map((side) => {
-      const { depthPx, ambiguous } = measurement[side];
-      const measuredMM = pxToMM(depthPx, dpi);
-      const oversized = measuredMM > targetBleedMM * OVERSIZED_MULTIPLE;
-      if (ambiguous || oversized) {
+      const { ambiguous } = measurement[side];
+      if (ambiguous || dimensionMM === null) {
+        return [side, fallbackMM];
+      }
+      const measuredMM = dimensionMM[side];
+      const oversized =
+        Math.abs(measuredMM) > targetBleedMM * OVERSIZED_MULTIPLE;
+      if (oversized) {
         return [side, fallbackMM];
       }
       // Positive when the source falls short of the target (extend); negative when it
