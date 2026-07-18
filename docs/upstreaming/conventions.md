@@ -113,6 +113,13 @@ closes upstream, delete the `origin` copy — both workflows discover
 branches by name pattern alone, with no way to know a PR's status, so a
 stale branch just keeps getting harmlessly re-checked forever otherwise.
 
+**Back-absorption is a tracked task, not an assumption.** A fix born on
+an `upstream-fix-*` branch merging upstream doesn't mean *our* fork picked
+it up — author ≠ absorbed; check explicitly (cross-layer, not just the
+one file the PR touched) rather than assuming parity, the same discipline
+`upstream-fix-frontend-searchable-the`/#467's own absorption check
+required.
+
 ## Style notes from the wider PR sample
 
 - No enforced title prefix. PR titles are short descriptive noun phrases,

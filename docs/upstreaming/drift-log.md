@@ -19,7 +19,12 @@ automatically (it only reads branch existence, not PR status) — delete
 the `origin` branch once its PR resolves and it drops out of this table
 on its own. Until then it'll keep showing up here, harmlessly.
 
-Last run: 2026-07-18 (manual seed), upstream/master @ `c3d10253e581a1e4fc52b7c4efd9d150b00de026`
+Last run: 2026-07-18 18:27 UTC (manual freshness re-check, absorption-check
+task — see `docs/reports/` on `report-relay`), upstream/master @
+`c3d10253e581a1e4fc52b7c4efd9d150b00de026` — **unchanged** since the
+2026-07-18 seed: `upstream/master` has not moved (0 new commits, `git
+rev-list --count c3d10253..upstream/master` = 0). All six branches'
+figures re-verified identical to the seed; only this timestamp updated.
 
 | Branch | Applies clean onto upstream/master? | Upstream commits since fork point | Files upstream touched that this branch also touches | Last checked |
 | --- | --- | --- | --- | --- |
