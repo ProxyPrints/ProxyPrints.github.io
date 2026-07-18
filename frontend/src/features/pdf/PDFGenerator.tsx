@@ -1014,7 +1014,7 @@ const SCMSettings = ({
 };
 
 interface BleedOverrideSettingsProps {
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument };
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined };
 }
 
 /**
@@ -1043,10 +1043,10 @@ const BleedOverrideSettings = ({
         // didn't, and crashed on `cardDocument.sourceType` the instant this panel rendered before
         // every card had loaded (task #135 - see docs/lessons.md).
         .filter(
-          ([, cardDocument]) =>
-            cardDocument != null &&
-            (cardDocument.sourceType === SourceType.GoogleDrive ||
-              cardDocument.sourceType === SourceType.LocalFile)
+          (entry): entry is [string, CardDocument] =>
+            entry[1] != null &&
+            (entry[1].sourceType === SourceType.GoogleDrive ||
+              entry[1].sourceType === SourceType.LocalFile)
         )
         .sort(([, a], [, b]) => a.name.localeCompare(b.name)),
     [cardDocumentsByIdentifier]

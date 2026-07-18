@@ -33,7 +33,7 @@ export interface SCMPDFProps {
   scmOffsetXMM: number;
   scmOffsetYMM: number;
   scmOffsetAngleDeg: number;
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument };
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined };
   projectMembers: Array<{
     front: { selectedImage?: string } | null;
     back: { selectedImage?: string } | null;

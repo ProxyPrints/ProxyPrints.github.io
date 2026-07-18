@@ -178,7 +178,17 @@ export const selectCardDocumentsByIdentifiers = createSelector(
   (state: RootState, identifiers: Array<string>) => identifiers,
   (state: RootState, identifiers: Array<string>) =>
     state.cardDocuments.cardDocuments,
-  (identifiers, cardDocuments) =>
+  // Explicit return type, not inferred: identifiers is every PROJECT MEMBER identifier, which
+  // can include ones whose CardDocument hasn't been fetched into cardDocuments yet - without
+  // this annotation, TypeScript (no noUncheckedIndexedAccess in this project's tsconfig) infers
+  // `cardDocuments[identifier]` as always-CardDocument, silently hiding the real possibility of
+  // `undefined` from every caller's type-checker. A guardless BleedOverrideSettings crashed on
+  // exactly this (task #135); ExportImages.tsx had the same latent bug, unguarded, uncaught by
+  // tsc for the same reason. See docs/lessons.md.
+  (
+    identifiers,
+    cardDocuments
+  ): { [identifier: string]: CardDocument | undefined } =>
     Object.fromEntries(
       identifiers.map((identifier) => [identifier, cardDocuments[identifier]])
     )
@@ -207,7 +217,7 @@ export const selectCardSizesByIdentifier = createSelector(
 //# region hooks
 
 export function useCardDocumentsByIdentifier(): {
-  [identifier: string]: CardDocument;
+  [identifier: string]: CardDocument | undefined;
 } {
   const identifiers = Array.from(
     useAppSelector(selectProjectMemberIdentifiers)
