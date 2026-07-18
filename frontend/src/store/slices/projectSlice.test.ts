@@ -58,6 +58,7 @@ describe("selectQueriesWithoutSearchResults tests", () => {
       },
       searchResults: {
         searchResults: {},
+        degradedQueryHashKeys: [],
         status: "idle" as ThunkStatus,
         error: null,
       },
@@ -103,6 +104,7 @@ describe("selectQueriesWithoutSearchResults tests", () => {
       },
       searchResults: {
         searchResults: {},
+        degradedQueryHashKeys: [],
         status: "idle" as ThunkStatus,
         error: null,
       },
@@ -158,6 +160,7 @@ describe("selectQueriesWithoutSearchResults tests", () => {
       },
       searchResults: {
         searchResults: {},
+        degradedQueryHashKeys: [],
         status: "idle" as ThunkStatus,
         error: null,
       },
@@ -212,6 +215,7 @@ describe("selectQueriesWithoutSearchResults tests", () => {
             cardType: "CARD" as CardType,
           })]: [],
         },
+        degradedQueryHashKeys: [],
         status: "idle" as ThunkStatus,
         error: null,
       },
@@ -257,6 +261,7 @@ describe("selectQueriesWithoutSearchResults tests", () => {
       },
       searchResults: {
         searchResults: {},
+        degradedQueryHashKeys: [],
         status: "idle" as ThunkStatus,
         error: null,
       },
@@ -302,6 +307,7 @@ describe("selectQueriesWithoutSearchResults tests", () => {
       },
       searchResults: {
         searchResults: {},
+        degradedQueryHashKeys: [],
         status: "idle" as ThunkStatus,
         error: null,
       },
