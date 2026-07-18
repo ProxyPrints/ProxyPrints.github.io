@@ -596,6 +596,10 @@ with the saved-decks build.
    work finishes — G then builds **ahead of** C, E-3, and F, since it's
    user-facing value and those are polish. Backend (model + endpoints) is
    its own first PR; frontend is a second PR after that merges.
+   **Queue cleared, 2026-07-18**: all of the above have since merged (E-1
+   #61, E-2 #62, Level-2 grid fix #63, audit pass #64, GIS error UX #65,
+   Proposal B core #66 + PR-1 #72, Proposal C part (a) #67) — nothing
+   remains ahead of G in this build order.
 2. **Where "Load"/"My Decks" lives — resolved, round 2 supersedes round 1.**
    Round 1 proposed folding it into the Import dropdown; round 2 replaces
    that with a **top-level nav entry**, rendered only when logged in (the
