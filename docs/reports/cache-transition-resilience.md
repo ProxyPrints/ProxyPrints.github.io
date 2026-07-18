@@ -31,6 +31,7 @@ fresh document fetch with correct chunk references, not a code fix).
 `shouldAttemptReload`/`reloadOnceForChunkError`) + `frontend/src/common/useChunkErrorRecovery.ts`
 (the React hook wiring it to real browser events), mounted once in `Layout.tsx` alongside the
 existing app-init effect. Listens for:
+
 - `window.addEventListener("error", ...)` and `("unhandledrejection", ...)` - catches a chunk
   failure however it surfaces (thrown synchronously or as a rejected dynamic `import()`).
 - `router.events.on("routeChangeError", ...)` - Next.js's own client-side-navigation error event
@@ -43,6 +44,7 @@ doesn't fix it) can't loop forever - not a retry budget, just loop prevention.
 ### (b) Backend/source-server config persistence: NOT actually at risk - already tolerant everywhere it matters
 
 Checked every localStorage-backed piece of config in `common/cookies.ts`:
+
 - `getLocalStorageSearchSettings` - JSON-parsed via quicktype's `Convert`, wrapped in try/catch,
   falls back to `getDefaultSearchSettings` on any schema mismatch. Already tolerant.
 - `getLocalStorageFavorites` - `JSON.parse` + a manual shape check, falls back to `{}`. Already
@@ -97,19 +99,19 @@ transition state).
 ### A real testing dead-end worth flagging
 
 Two earlier approaches to this Playwright test failed for reasons unrelated to the fix itself:
-(1) triggering a *real* chunk-load failure via `page.route` aborting the dev-mode page bundle
+(1) triggering a _real_ chunk-load failure via `page.route` aborting the dev-mode page bundle
 during an actual `next/link` client-side navigation - abandoned because the app never advanced
 past a loading state, likely because Next dev mode's own HMR/error-overlay machinery intercepts
 this differently than a production build would, and dev-mode chunk-naming isn't something this
 test should be coupled to anyway. (2) stubbing `window.location.reload` via
 `Object.defineProperty(window.location, "reload", {...})` to observe it without a real navigation
+
 - silently ineffective (`Location` is a legacy platform object Chromium doesn't allow script to
-override that way), and the real reload it triggered destroyed the page's JS execution context
-before the test's follow-up assertion could run (`"Execution context was destroyed, most likely
-because of a navigation"`). The approach that worked: dispatch the synthetic error directly
-(bypassing real chunk-loading internals entirely) and intercept+abort the resulting reload's own
-network request via `page.route(page.url(), ...)` - this observes a genuinely real
-`location.reload()` call without ever letting the navigation complete.
+  override that way), and the real reload it triggered destroyed the page's JS execution context
+  before the test's follow-up assertion could run (`"Execution context was destroyed, most likely because of a navigation"`). The approach that worked: dispatch the synthetic error directly
+  (bypassing real chunk-loading internals entirely) and intercept+abort the resulting reload's own
+  network request via `page.route(page.url(), ...)` - this observes a genuinely real
+  `location.reload()` call without ever letting the navigation complete.
 
 ## Deviations
 
