@@ -420,6 +420,16 @@ question from earlier rounds is resolved — see §3's auto-snapshot bullet).
   weight tiers, the resolution-gate tradeoff analysis, cast-time recording,
   and the Sybil-honesty note. Still gated as a separate, later build from
   saved decks itself (§7's header).
+- **Proposal B's per-card bleed overrides are deliberately device-local, NOT
+  part of `SavedDeck` state**: `manualOverrides` (Auto/Force bleed/Force
+  trimmed) lives in `projectSlice` + a keyed-by-card-identifier localStorage
+  entry (`docs/proposals/proposal-b-bleed-normalization.md`), not the saved
+  project JSON — it describes an image-rendering property of a card
+  identifier, not a deck choice, so it doesn't travel with the deck the way
+  card selections do. Folding it into `SavedDeck.state` later is possible
+  (the shape is already a plain per-identifier map, trivial to embed) but
+  isn't planned — noted here so this proposal's eventual builder doesn't
+  re-derive the question.
 
 ## 6. Privacy
 
