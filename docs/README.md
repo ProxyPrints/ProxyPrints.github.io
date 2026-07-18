@@ -62,6 +62,21 @@ The methodology and the systems it governs.
 - [`features/local-file-source.md`](features/local-file-source.md) —
   backend `LOCAL_FILE` catalog source type.
 
+## Using it
+
+For an end user or a third party running their own instance — distinct
+from both the architecture docs above and this fork's own operations
+below.
+
+- [`user-guide.md`](user-guide.md) — searching, the "What's That Card?"
+  vote queue, exporting a print-ready PDF, saving a project. Migrated
+  from the wiki's own `User-Guide` page; still a skeleton (not all
+  sections written).
+- [`self-hosting.md`](self-hosting.md) — standing up and operating your
+  _own_ instance of this project (not specific to how ProxyPrints.ca
+  itself is hosted — see "Operating it" below for that). Migrated from
+  the wiki's own `Instance-Admin-Guide` page.
+
 ## Operating it
 
 Deployment, incidents, and cross-session lessons.
@@ -95,7 +110,7 @@ spec isn't real yet and shouldn't read as if it is.
 Point-in-time findings and relayed work products, not living reference —
 and, per [`documentation-process.md`](documentation-process.md), never
 published to the wiki (the wiki is a generated view of "Understanding the
-system" + "Operating it" only).
+system" + "Using it" + "Operating it" only).
 
 - **`audits/`** — not yet on this branch. `docs/audits/ui-content-audit.md`
   (12 UI content-accuracy findings, HOLD) exists on the unmerged

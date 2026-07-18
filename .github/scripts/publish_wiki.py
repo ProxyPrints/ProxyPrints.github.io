@@ -43,6 +43,21 @@ def write_page(wiki_dir: Path, wiki_name: str, source_path: Path, source_rel: st
     (wiki_dir / f"{wiki_name}.md").write_text(content)
 
 
+def write_pointer_page(wiki_dir: Path, wiki_name: str, points_to: str, note: str) -> None:
+    """
+    A stub page whose content has been folded into another page (e.g. a
+    once-standalone page superseded by a real docs/ write-up) — kept at
+    its existing name/URL (no wiki redirects exist) rather than deleted,
+    so nothing that links to it breaks.
+    """
+    content = (
+        generated_header(".github/wiki-publish-map.json (pointer_pages)")
+        + f"# {wiki_name.replace('-', ' ')}\n\n"
+        + f"This content now lives on the [{points_to}]({points_to}) page. {note}\n"
+    )
+    (wiki_dir / f"{wiki_name}.md").write_text(content)
+
+
 def build_home_and_sidebar(repo_root: Path, wiki_dir: Path, mapping: dict) -> None:
     intro = (repo_root / "docs" / "wiki-home-intro.md").read_text().rstrip() + "\n"
 
@@ -54,6 +69,14 @@ def build_home_and_sidebar(repo_root: Path, wiki_dir: Path, mapping: dict) -> No
         sidebar_lines.append(f"\n_{group['title']}_\n")
         for page in group["pages"]:
             home_lines.append(f"- [{page['wiki']}]({page['wiki']})")
+            sidebar_lines.append(f"- [{page['wiki']}]({page['wiki']})")
+
+    pointers = mapping.get("pointer_pages", [])
+    if pointers:
+        home_lines.append("\n### Folded into other pages\n")
+        sidebar_lines.append("\n_Folded into other pages_\n")
+        for page in pointers:
+            home_lines.append(f"- [{page['wiki']}]({page['wiki']}) → see [{page['points_to']}]({page['points_to']})")
             sidebar_lines.append(f"- [{page['wiki']}]({page['wiki']})")
 
     legacy = mapping.get("legacy_pages", [])
@@ -91,6 +114,15 @@ def main() -> int:
             write_page(wiki_dir, page["wiki"], source_path, source_rel)
             managed_names.add(page["wiki"])
             print(f"wrote {page['wiki']}.md <- {source_rel}")
+
+    for pointer in mapping.get("pointer_pages", []):
+        if pointer["points_to"] not in managed_names:
+            print(f"::error::pointer_pages entry {pointer['wiki']!r} points to "
+                  f"{pointer['points_to']!r}, which isn't a real published page")
+            return 1
+        write_pointer_page(wiki_dir, pointer["wiki"], pointer["points_to"], pointer["note"])
+        managed_names.add(pointer["wiki"])
+        print(f"wrote {pointer['wiki']}.md (pointer -> {pointer['points_to']})")
 
     build_home_and_sidebar(repo_root, wiki_dir, mapping)
     managed_names.update({"Home", "_Sidebar"})

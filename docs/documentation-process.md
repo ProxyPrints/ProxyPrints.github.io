@@ -23,23 +23,38 @@ the next regeneration, then silently vanishes — not a data-loss risk
 - **What's published**: exactly the files listed in
   [`.github/wiki-publish-map.json`](../.github/wiki-publish-map.json), a
   hand-curated mapping mirroring `docs/README.md`'s own audience groups
-  ("Understanding the system" / "Operating it"). Update the mapping file
-  whenever `docs/README.md`'s index changes — the publish workflow does
-  not parse `docs/README.md`'s prose, by design (parsing markdown
-  structure at runtime is fragile; a hand-maintained mapping is not).
+  ("Understanding the system" / "Using it" / "Operating it"). Update the
+  mapping file whenever `docs/README.md`'s index changes — the publish
+  workflow does not parse `docs/README.md`'s prose, by design (parsing
+  markdown structure at runtime is fragile; a hand-maintained mapping is
+  not).
+- **Renames update the mapping in the same PR.** If a published doc's
+  source path or its wiki page name changes, update
+  `wiki-publish-map.json` in that same PR — a wiki page's URL is its
+  identity, and **GitHub wikis have no redirects**: renaming a page in the
+  mapping doesn't move the old URL, it abandons it. Prefer a stable wiki
+  name once picked, even across a source-file rename or migration — e.g.
+  `docs/self-hosting.md` still publishes as the wiki's existing
+  `Instance-Admin-Guide` page (not a new `Self-Hosting` page) specifically
+  so nothing that already links to it breaks.
 - **What's excluded, always**: `docs/proposals/` (drafts/HOLD specs — not
   yet real, shouldn't read as if they are), `docs/reports/` (relayed
   session artifacts, not reference material), `docs/audits/` (point-in-time
   findings, same reasoning).
-- **Legacy pages**: a few wiki pages (`User-Guide`, `Instance-Admin-Guide`,
-  `Research-and-Proofs`, as of this writing) predate this system and have
-  no `docs/` source yet. They're listed in the mapping's `legacy_pages`
-  purely so they stay linked from the generated Home/Sidebar instead of
-  going dark — the publish workflow never touches them (it only ever
-  deletes a page it can prove it generated, by checking for that page's
-  own marker). Migrating them into `docs/` (or deciding to keep them
-  permanently hand-maintained) is a standing open item, not something this
-  system resolves on its own.
+- **`pointer_pages`**: a page whose content has fully moved elsewhere (e.g.
+  `Research-and-Proofs`, once its own placeholder, now superseded by
+  `docs/theory.md`) becomes a small generated stub linking to the page
+  that replaced it, rather than being deleted — same reasoning as the
+  rename rule above: the URL stays alive even though the content doesn't
+  live there anymore.
+- **`legacy_pages`**: any wiki page that predates this system and has no
+  `docs/` source yet goes here so it stays linked from the generated
+  Home/Sidebar instead of going dark. Empty as of this writing — the 3
+  pages that used to sit here (`User-Guide`, `Instance-Admin-Guide`,
+  `Research-and-Proofs`) are now either migrated into `docs/` (the first
+  two) or a `pointer_pages` entry (the third). The publish workflow never
+  touches a page outside all three lists — it only ever deletes a page it
+  can prove it generated, by checking for that page's own marker.
 - **Mechanism**: [`.github/workflows/docs-wiki-publish.yml`](../.github/workflows/docs-wiki-publish.yml)
   together with [`.github/scripts/publish_wiki.py`](../.github/scripts/publish_wiki.py).
   Requires a `WIKI_PUSH_TOKEN` repo secret (a classic PAT — GitHub wikis

@@ -1,5 +1,5 @@
 {
-  "//": "Curated mapping from docs/ source files to wiki pages. Hand-maintained — the publish workflow (.github/workflows/docs-wiki-publish.yml) does NOT parse docs/README.md's prose; update this file whenever docs/README.md's own audience groups change. Groups mirror docs/README.md exactly. docs/proposals/ (drafts/HOLD specs), docs/reports/, and docs/audits/ are deliberately excluded from wiki publication.",
+  "//": "Curated mapping from docs/ source files to wiki pages. Hand-maintained — the publish workflow (.github/workflows/docs-wiki-publish.yml) does NOT parse docs/README.md's prose; update this file whenever docs/README.md's own audience groups change. Groups mirror docs/README.md exactly. docs/proposals/ (drafts/HOLD specs), docs/reports/, and docs/audits/ are deliberately excluded from wiki publication. Renaming a published doc updates this file's 'wiki' value in the SAME PR as the rename — prefer stable wiki names once picked; wiki URLs have no redirects, so a rename here breaks every existing link to the old page name.",
   "groups": [
     {
       "title": "Understanding the system",
@@ -33,6 +33,19 @@
       ]
     },
     {
+      "title": "Using it",
+      "pages": [
+        {
+          "source": "docs/user-guide.md",
+          "wiki": "User-Guide"
+        },
+        {
+          "source": "docs/self-hosting.md",
+          "wiki": "Instance-Admin-Guide"
+        }
+      ]
+    },
+    {
       "title": "Operating it",
       "pages": [
         { "source": "docs/infrastructure.md", "wiki": "Infrastructure" },
@@ -41,18 +54,12 @@
       ]
     }
   ],
-  "legacy_pages": [
-    {
-      "wiki": "User-Guide",
-      "note": "End-user how-to guide (searching, vote queue, PDF export, saving a project). No docs/ source exists yet — docs/ today is developer/architecture-facing only. Pending an owner decision: migrate into docs/ (e.g. docs/user-guide.md) so it becomes generatable, or keep permanently hand-maintained."
-    },
-    {
-      "wiki": "Instance-Admin-Guide",
-      "note": "Generic self-hosting guide for a third party running their own instance of this fork's code — a different audience from docs/infrastructure.md (this fork's own ops). No docs/ source exists yet. Pending an owner decision: migrate into docs/ (e.g. docs/self-hosting.md), or keep permanently hand-maintained."
-    },
+  "pointer_pages": [
     {
       "wiki": "Research-and-Proofs",
-      "note": "Placeholder page describing planned coverage of the printing-identification methodology — that write-up now exists as docs/theory.md. Pending an owner decision: replace this page's content with a pointer to the Theory wiki page (generated from docs/theory.md), or keep as a distinct page for future non-theory.md research write-ups."
+      "points_to": "Theory",
+      "note": "This page used to describe the printing-identification methodology write-up as forthcoming. It shipped as docs/theory.md — folded to a pointer rather than kept as a stale placeholder."
     }
-  ]
+  ],
+  "legacy_pages": []
 }
