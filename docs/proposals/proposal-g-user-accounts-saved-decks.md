@@ -2,8 +2,10 @@ As of: 2026-07-18
 What this is: survey + HOLD proposal for opening the existing Discord login to
 ordinary users and letting any logged-in user save/load named decks
 server-side.
-HOLD — build not started. Spec complete: Proposal G, queue position and all
-open decisions confirmed (see Open decisions).
+HOLD — build not started. Proposal G; queue position, nav placement, sharing,
+deck cap, LocalFile handling, and auth framing all confirmed (see Decisions).
+The authed vote-tier weighting (§7) is scoped but deliberately gated as its
+own later, separate build — not part of this HOLD's core scope.
 
 ## Context — prior art outside this codebase
 
@@ -89,6 +91,18 @@ harmless to leave in) somewhere every user sees it, and gate nothing new
 server-side beyond "is this deck's owner the requesting session's user,"
 which is a much weaker check than `require_moderator` and can reuse its
 exact shape (see §3).
+
+**Provider mechanism, for the auth-framing decision in §4**: allauth's
+multi-provider support is already the mechanism `DISCORD_AUTH_ENABLED`
+exploits — `SOCIALACCOUNT_PROVIDERS` (`settings.py:173`) is a plain dict
+keyed by provider id (today just `"discord"`), and the provider app is only
+added to `INSTALLED_APPS` conditionally (`settings.py:171`). Adding a second
+provider (e.g. Google) is exactly one more dict key, one more conditional
+`INSTALLED_APPS` entry (`allauth.socialaccount.providers.google`), and one
+more `*_AUTH_ENABLED`-style flag mirroring `DISCORD_AUTH_ENABLED` — no new
+auth framework, no change to `whoami`'s shape beyond it already being
+provider-agnostic (`authenticated`/`username`/`moderator` don't care which
+provider signed the user in).
 
 ## 2. Project state survey
 
@@ -260,14 +274,28 @@ in `Layout.tsx` and rendered on every page including `/editor`, so this is a
 one-line relocation, not a new component, and immediately makes login visible
 everywhere instead of only on `/whatsthat`.
 
-**Save/load placement — resolved**: "My Decks" / Load folds into the
-existing `Import.tsx` dropdown for v1 (loading a saved deck is a form of
-import; keeps nav clutter down). "Save deck" lives in the editor's action
-cluster near the existing Download controls, not in the Export dropdown —
-and is rendered **only when the whoami query reports an authenticated
-session**; a logged-out user sees nothing new in that cluster at all (no
-disabled/greyed "Save" teasing a feature they can't use — the affordance
-simply isn't there until they log in via the navbar widget).
+**Auth framing — resolved**: the button reads **"Sign in"**, benefit-framed
+(e.g. "Sign in to save decks & track your confirmations"), not "Sign in with
+Discord" — Discord is presented as the *method*, surfaced at the auth step
+itself (allauth's own login/consent redirect), never baked into the label.
+This is a small `AuthWidget` copy change from today's Discord-branded button.
+Ships Discord-only in v1, designed provider-agnostically (see §1's provider
+mechanism note): Google is the noted v1.1 provider candidate, not built here.
+
+**Save/load placement — resolved, supersedes the round-1 fold-into-Import
+decision**: "My Decks" is a **top-level nav entry** in `ProjectNavbar`,
+alongside Editor/Explore/Contributions/What's That Card?
+(`features/ui/Navbar.tsx:78-135`) — rendered only when `whoami` reports an
+authenticated session; the logged-out nav is byte-identical to today's.
+Round 1 proposed folding "Load" into the Import dropdown instead; superseded
+because a feature meant to persist across real sessions reads better as its
+own destination (closer to how `/whatsthat` gets a full page) than as one
+more entry in a menu that's otherwise about one-shot imports into the
+*current* project. "Save deck" stays in the editor's action cluster near the
+existing Download controls, not in the Export dropdown — and is rendered
+**only when authenticated**; a logged-out user sees nothing new in that
+cluster at all (no disabled/greyed "Save" teasing a feature they can't use —
+the affordance simply isn't there until they log in via the navbar widget).
 
 **Save/load UX — propose explicit, not autosave**: every existing project
 action (Export XML, Export PDF, Import CSV/XML/Text/URL) is an explicit,
@@ -282,9 +310,6 @@ surprise, extra traffic on every keystroke-adjacent mutation). Concretely:
   informational, not blocking — and stamps those slots `deviceLocal: true`
   in the saved `state` (see §3) so a later load elsewhere can render an
   honest re-pick placeholder instead of a broken tile.
-- **Load**: a new "My Decks" entry/panel inside the existing `Import.tsx`
-  dropdown (same idiom as `ImportXML`'s existing modal-based import flow),
-  listing `2/savedDecks/` results with load/rename/delete actions per row.
 - **Anonymous → login handoff**: on a `whoami` transition from unauthenticated
   to authenticated while the in-memory `Project` is non-empty, surface a
   one-time toast (reusing the existing `Toasts` system) offering "Save your
@@ -293,6 +318,46 @@ surprise, extra traffic on every keystroke-adjacent mutation). Concretely:
   unprompted write would be a surprise. Declining leaves the in-memory
   project exactly as it was (nothing is lost either way — it's still live in
   Redux, just not yet persisted server-side).
+
+**Load-into-editor flow — loss-proof by construction, not by dialog**:
+loading a saved deck must never be able to silently discard the editor's
+current content. The safety property is structural — something is always
+preserved automatically — never a dialog a user can decline past. "Dirty"
+means the in-memory project differs from whatever it was last loaded
+from/saved as, or is simply non-empty with no prior save at all.
+- **Editor empty** → load immediately, no prompt.
+- **Editor dirty + logged in** → **auto-snapshot before loading,
+  unconditionally**:
+  - If the current content is itself an already-saved deck with unsaved
+    changes: prompt offers **"Update {existing deck name}"** vs. **"Save as
+    new snapshot"** — a choice of *where* the safety copy goes, not
+    *whether* it happens.
+  - If the current content was never saved: auto-snapshot it as
+    **"Backup — {date}"**, with an inline rename affordance (the only
+    prompt is ever "what do you want to call this," pre-filled with a sane
+    default). Skipping the snapshot is not an available choice for a
+    logged-in user. Only once the snapshot completes does the requested
+    deck load in.
+  - Both snapshot paths reuse `2/saveDeck/` verbatim (§3) — no new endpoint.
+- **Editor dirty + logged out** → today's existing confirm-overwrite
+  warning, unchanged (there's nowhere to snapshot *to* without an account).
+  This asymmetry — logged-in users never lose work to a load, logged-out
+  users get a plain "are you sure" — is a deliberate, natural sign-in
+  incentive, not an oversight to fix later.
+- **Load entry point**: one tap from the "My Decks" page — an **"Open in
+  editor"** action per row, which runs the flow above and then navigates to
+  `/editor`.
+- **Reverse breadcrumb**: the editor's action cluster (next to "Save")
+  shows which saved deck, if any, the current editor content represents —
+  e.g. "Editing: {deck name}" when loaded from/last saved as a specific
+  `SavedDeck`, or "Unsaved project" otherwise. Updates on every Save/Load/
+  rename, so it's always an accurate answer to "is this one of my saved
+  decks, and which."
+
+Not designed here: the exact prompt component/copy, and whether
+"Backup — {date}" auto-snapshots should count against the 100-deck soft cap
+(§3/decision 4) — leaning yes, a snapshot is an ordinary `SavedDeck` row —
+but not decided in this pass (see Decisions).
 
 ## 5. Noted, not designed
 
@@ -308,19 +373,11 @@ surprise, extra traffic on every keystroke-adjacent mutation). Concretely:
   does. Not designed here: it would need its own field in the stored state
   shape and a decision about whether dismissal state travels with XML export
   too (probably not — it's a UI aid, not deck content).
-- **Logged-in confirmations as a future `is_established` vote dimension**:
-  `docs/theory.md:287-290` already earmarks "trust tiers" as "one more
-  vote-tuple dimension alongside source and confidence," not a parallel trust
-  system. Once ordinary users routinely log in to save decks, an
-  authenticated (but non-moderator) vote becomes distinguishable from a
-  fully anonymous one for free — `AbstractWeightedVote.user` already exists
-  and is already nullable-and-populated wherever a session exists (per §1).
-  A future `is_established` boolint/weight nudge could reward votes cast by
-  an account with some history (e.g. N+ saved decks, or account age) without
-  touching the moderator-privilege gate at all — a separate axis, same
-  weighted-consensus machinery. Not designed here: needs its own threshold
-  and abuse-model thinking (freshly-created Discord accounts shouldn't get a
-  trust bump for free).
+- **Logged-in confirmations as a vote-weight dimension**: elevated out of
+  "noted, not designed" into its own full section this round — see §7 for
+  weight tiers, the resolution-gate tradeoff analysis, cast-time recording,
+  and the Sybil-honesty note. Still gated as a separate, later build from
+  saved decks itself (§7's header).
 
 ## 6. Privacy
 
@@ -357,6 +414,88 @@ retention and deletion" bolded-subhead pattern (`about.tsx:115-131`) —
 recommend covering the pre-existing Discord gap in the same policy update
 rather than leaving it split across two changes.
 
+## 7. Authed vote tier (new — build gated separately from saved decks)
+
+Once ordinary users log in to save decks, an authenticated-but-non-moderator
+vote is distinguishable from a fully anonymous one for free —
+`AbstractWeightedVote.user` already exists, nullable, populated whenever a
+session exists (§1). This section designs the weight consequence of that
+distinction. It is deliberately a **separate, later build** from §3's
+saved-decks endpoints — its own migration and consensus-math change, own PR,
+own review — not bundled with this HOLD's core scope.
+
+**Proposed tiers** (mirrors the existing three-tier shape already implicit
+in the consensus model — `source`/`is_privileged`/`privileged_weight`,
+`cardpicker/moderation.py`):
+- anonymous: **1.0** (today's implicit baseline for an ordinary USER-source
+  vote, unchanged)
+- authenticated, not moderator: **~1.5–2.0** — exact value is an owner call
+  at doc review, not resolved here; the range, not a single number, is what
+  this doc commits to
+- moderator: **5.0** (matches the existing `VOTE_PRIVILEGED_WEIGHT` default,
+  `docs/features/moderation.md:91-94`)
+
+**One derivation function**: `authed_vote_weight(user)` (proposed alongside
+`is_moderator`/`privileged_weight` in `cardpicker/moderation.py`) returns the
+constant tier value above today, but is designed as the single hook point
+for anything richer later — account age, saved-deck count, vote history.
+Explicitly named as the **Dawid-Skene per-source-reliability hook**:
+`docs/theory.md:292-299` already frames this whole pipeline as treating
+"every source... as having some unknown, per-source reliability" and
+estimating the true label jointly with it — today's weights (including this
+one) are fixed/hand-set, and `authed_vote_weight()` is exactly where a
+future *estimated* (not hand-set) per-user reliability would plug in without
+restructuring the surrounding consensus math.
+
+**Resolution-gate analysis — tradeoffs presented, nothing decided**: does an
+anonymous solo vote still get to resolve a machine suggestion once an authed
+tier exists?
+- **Status quo**: any single vote clearing today's weight/share/human-backed
+  thresholds resolves, anonymous or not — unchanged. Zero new risk, but the
+  authed tier becomes purely a tie-breaker weight among disagreeing voters,
+  never a gate on anything.
+- **Authed-required**: a winning consensus with no authenticated (or better)
+  vote in the winning group parks `pending_approval`, reusing
+  `require_privileged`'s existing `PENDING_PRIVILEGED` sentinel mechanism
+  verbatim but with an "authenticated" bar instead of "moderator." Same code
+  shape as the existing sensitive-tag gate (reuse, not new machinery), but a
+  far bigger behavior change — it touches every ordinary vote, not just
+  sensitive tags — and needs its own abuse-model thinking first (see Sybil
+  note below) before it's safe to flip.
+- **Anonymous-below-threshold**: anonymous votes keep weight 1.0 and can
+  still resolve alone, but the resolution gets flagged e.g.
+  "resolved-by-anonymous-only" for visibility/audit (a candidate future
+  `docs/proposals/proposal-f-public-stats-page.md`-style aggregate) without
+  blocking anything — a soft signal, not a gate.
+
+This doc takes no position among the three — flagged as the single biggest
+open question this section raises (see Decisions).
+
+**Cast-time recording, not resolution-time**: unlike `is_moderator` (checked
+at resolution/request time, so revoking a moderator retroactively
+de-privileges every past vote — §1, `docs/features/moderation.md:27-28`),
+the tier behind this weight should be **recorded on the vote at cast time**
+— a new field, e.g. `AbstractWeightedVote.account_tier`, alongside
+`user`/`source`/`vote_surface` — not recomputed later. Deliberate contrast:
+what the voter's authenticated status *was at the moment of voting* is the
+fact worth preserving, whereas moderator privilege is revocable authority
+that should retroactively apply or un-apply. Recomputing this one instead
+would let a since-deleted account's past votes silently reweight down over
+time, or let a promoted/demoted moderator's past *ordinary* votes silently
+reweight — both wrong for what this tier is meant to represent.
+
+**Sybil-honesty note**: Discord accounts are trivially mintable — no
+verification beyond `SOCIALACCOUNT_AUTO_SIGNUP` (§1). This tier is
+**convenience-trust** (distinguishing "bothered to log in" from "did not"),
+never identity-trust, and must not be treated as a Sybil defense on its own.
+Security continues to rest on the two mechanisms this pipeline already has:
+machine cross-checks (independent OCR/phash/deduction engines) and cohort
+revocation (`purge_machine_votes`'s existing `run_id`-scoped pattern,
+already noted in `docs/theory.md:279-286` as generalizing to a suspect
+*human* cohort scoped by a `created_at`/`anonymous_id` window). An
+authenticated tier changes vote weight; it never changes what happens once
+a cohort turns out to be bad.
+
 ## Effort estimate
 
 | Piece | Estimate | Why |
@@ -364,15 +503,19 @@ rather than leaving it split across two changes.
 | `SavedDeck` model + migration | Small | One additive migration, no data backfill |
 | `require_authenticated` decorator + 5 endpoints | Small–Medium | Near-boilerplate CRUD; closely mirrors `require_moderator`/the moderation views' existing shape, no consensus logic needed |
 | Backend tests | Small–Medium | Mirrors `test_moderation_views.py`'s ownership/403 pattern (owner-only access is the only real logic to test) |
-| Navbar login relocation | Small | `AuthWidget` already exists and works; this is a mount-point change, not new UI |
+| Navbar login relocation + "Sign in" copy change | Small | `AuthWidget` already exists and works; mount-point + label change, not new UI |
+| "My Decks" top-level nav entry + page | Medium | New nav item + new page/panel + RTK Query endpoints (list/rename/delete/open-in-editor) — promoted out of the Import dropdown per §4's revised placement |
 | Save UX (action-cluster button + name prompt + local-file warning) | Small–Medium | New modal-ish prompt beside the existing Download controls, gated on whoami's authenticated flag |
-| Load UX ("My Decks" entry in Import dropdown + list/rename/delete) | Medium | New panel + RTK Query endpoints, closest existing analog is `ImportXML`'s modal but with list/manage actions added |
+| Load-into-editor safety flow (auto-snapshot + reverse breadcrumb) | Small–Medium | New logic layered on the load path; snapshot creation reuses `2/saveDeck/` verbatim, no new endpoint |
 | Anonymous→login adopt-prompt toast | Small | Reuses existing `Toasts` system |
 | Frontend↔backend state-shape schema validation | Small | Extends the existing quicktype `Convert`/schema pattern already used for `localStorage` |
 
-Overall: **backend Small–Medium, frontend Medium.**
+Overall: **backend Small–Medium, frontend Medium.** §7 (authed vote tier) is
+deliberately excluded from this table — its own migration and consensus
+changes get scoped and estimated at its own, separate review, not bundled
+with the saved-decks build.
 
-## Decisions (all five resolved — spec complete)
+## Decisions
 
 1. **Proposal letter/queue slot — resolved.** This is **Proposal G**. Build
    order: after the current unified queue's small items land (E-1, E-2, the
@@ -380,11 +523,12 @@ Overall: **backend Small–Medium, frontend Medium.**
    work finishes — G then builds **ahead of** C, E-3, and F, since it's
    user-facing value and those are polish. Backend (model + endpoints) is
    its own first PR; frontend is a second PR after that merges.
-2. **Where "Load"/"My Decks" lives — resolved.** Folds into the existing
-   Import dropdown for v1 (low nav clutter; loading is itself a form of
-   import). "Save deck" lives in the editor's action cluster near Download,
-   visible only when logged in — logged-out users see nothing new there.
-   See §4 for the full placement writeup.
+2. **Where "Load"/"My Decks" lives — resolved, round 2 supersedes round 1.**
+   Round 1 proposed folding it into the Import dropdown; round 2 replaces
+   that with a **top-level nav entry**, rendered only when logged in (the
+   logged-out nav is unchanged). "Save deck" stays in the editor's action
+   cluster near Download, visible only when logged in. See §4 for the full
+   placement writeup and its load-into-editor flow.
 3. **Sharing — resolved.** `is_public` stays reserved in the schema,
    undesigned. No sharing ships in v1; unlisted share-links are the
    v1.1 candidate, to be revisited after the owner's legal consult — deck
@@ -394,9 +538,26 @@ Overall: **backend Small–Medium, frontend Medium.**
    soft cap, default **100 decks/user**, purely as an abuse guard (not
    storage-driven — the 15–35 KB/deck math above stands), with a friendly
    at-cap message rather than a bare 400. See §3 for the enforcement point.
+   Whether auto-snapshots from §4's load flow count against this cap is
+   still open (leaning yes, not decided).
 5. **`LocalFile`-sourced slots — resolved.** Warn at save, never block —
    the proposed tradeoff is accepted as-is. Additionally: mark such slots
    `deviceLocal: true` in the stored state so a load on another device shows
    an honest "this slot's image lived on the original device — re-pick"
    placeholder instead of a broken tile. See §3 (model) and §4 (UX) for the
    concrete mechanism.
+6. **Auth framing — resolved.** The login button reads "Sign in"
+   (benefit-framed), with Discord surfaced as the method at the auth step,
+   not in the label. Ships Discord-only in v1; provider-agnostic by design
+   (allauth's own multi-provider mechanism, §1); Google noted as the v1.1
+   provider candidate, not built here.
+
+**Still genuinely open** (deliberately undecided, not oversights):
+- §7's resolution-gate choice — status quo vs. authed-required vs.
+  anonymous-below-threshold — is presented with tradeoffs and left
+  unresolved on purpose; it's the single biggest open question this spec
+  raises.
+- §7's exact authed-tier weight value (range given: ~1.5–2.0) is an owner
+  call at doc review, not fixed here.
+- Whether load-flow auto-snapshots (§4) count against the 100-deck cap
+  (§3/decision 4) — leaning yes, not decided.
