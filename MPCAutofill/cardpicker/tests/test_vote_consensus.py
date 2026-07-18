@@ -106,6 +106,20 @@ class TestFederatedWeighting:
         assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) is None
 
 
+class TestMachineWeightRename:
+    """
+    PRINTING_TAG_AI_WEIGHT -> PRINTING_TAG_MACHINE_WEIGHT (terminology fix - the machine votes
+    are OCR/phash/deduction, classical algorithms, no AI/ML involved). Direct coverage that the
+    rename didn't change any actual weight: DEDUCTION and OCR still resolve to the same
+    configured value they always did, just read from the new setting name.
+    """
+
+    def test_deduction_and_ocr_use_the_machine_weight(self):
+        assert _SOURCE_WEIGHTS[VoteSource.DEDUCTION] == settings.PRINTING_TAG_MACHINE_WEIGHT
+        assert _SOURCE_WEIGHTS[VoteSource.OCR] == settings.PRINTING_TAG_MACHINE_WEIGHT
+        assert settings.PRINTING_TAG_MACHINE_WEIGHT == 0.5
+
+
 class TestFederatedModelFields:
     def test_federated_source_and_peer_round_trip(self, db):
         card = CardFactory()

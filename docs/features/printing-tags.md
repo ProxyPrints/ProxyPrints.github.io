@@ -33,14 +33,14 @@ printings, artists, tags, and moderation from one screen.
   directly to `CanonicalCard`.
 - **Consensus**: `cardpicker/printing_consensus.py::resolve_printing(card)`
   — weighted-vote formula, weight by source (user 1, admin
-  `PRINTING_TAG_ADMIN_WEIGHT` default 5, AI/deduction/OCR
-  `PRINTING_TAG_AI_WEIGHT` default 0.5; settings in
+  `PRINTING_TAG_ADMIN_WEIGHT` default 5, machine (deduction/OCR)
+  `PRINTING_TAG_MACHINE_WEIGHT` default 0.5; settings in
   `MPCAutofill/MPCAutofill/settings.py`). `PRINTING_TAG_MIN_VOTES` compares against
   _summed weight_, not row count. A winning group also needs
   `PRINTING_TAG_MIN_SHARE` (default 0.6) of total weight **and** at least
-  one non-AI vote — `vote_consensus.is_human_backed_source()` is the one
+  one non-machine vote — `vote_consensus.is_human_backed_source()` is the one
   place that knows which `VoteSource` values are machine-derived, so no
-  volume of AI-only votes can resolve a card alone.
+  volume of machine-only votes can resolve a card alone.
 - **Search consumption**: `printing_consensus.py::get_resolved_printings(identifiers)`
   is the single shared gate (`printing_tag_status == RESOLVED` only) that
   both the search re-rank (`search_functions.py::retrieve_card_identifiers`,
@@ -114,7 +114,7 @@ printings, artists, tags, and moderation from one screen.
   non-overlapping "cards needing review in any category" figure.
   `confirmable`/`contested`/`fresh` mirror the feed's own three tiers and
   are independent metrics, **not** a partition of `total` - a card can
-  count toward more than one bucket (e.g. AI-suggested-but-unconfirmed
+  count toward more than one bucket (e.g. machine-suggested-but-unconfirmed
   printing plus a still-fresh artist question). A fresh, untouched card
   defaults to `UNRESOLVED` on both `printing_tag_status` and
   `artist_vote_status` simultaneously, which is why a flat sum of the
@@ -1553,7 +1553,7 @@ implied by this OCR fix and was not built.
   server follow-up.
 - `netPolarity`'s optimistic client-side update (set to the tapped
   direction's extreme immediately, reconciled with the server's real
-  value once the response lands) isn't linear in vote count once AI/admin
+  value once the response lands) isn't linear in vote count once machine/admin
   weights are involved - can't fully verify the two never visibly diverge
   against MSW mocks alone.
 - Border Color's v1 chip set omits gold/yellow `border_color` values, and
@@ -1572,7 +1572,7 @@ implied by this OCR fix and was not built.
   serve a voter a card whose printing is already known with very high
   confidence — ideally an already-`RESOLVED` card (real human-backed
   consensus), Stage 6's D1 tier as a fallback pool (0 false positives
-  across 27,424 live cards, but still AI-derived, not independently
+  across 27,424 live cards, but still machine-derived, not independently
   human-verified, so using it as "trusted" ground truth to police other
   submissions has a circularity worth being honest about) — without
   telling the voter it's a check, and score their `anonymous_id` based on
