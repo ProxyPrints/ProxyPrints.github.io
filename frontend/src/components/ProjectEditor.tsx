@@ -29,6 +29,7 @@ import { ImportCSV } from "@/features/import/ImportCSV";
 import { ImportText } from "@/features/import/ImportText";
 import { ImportURL } from "@/features/import/ImportURL";
 import { ImportXML } from "@/features/import/ImportXML";
+import { SavedDeckPanel } from "@/features/savedDecks/SavedDeckPanel";
 import { SearchSettings } from "@/features/searchSettings/SearchSettings";
 import { Status } from "@/features/status/Status";
 import {
@@ -142,6 +143,7 @@ const ChooseArtPanel = ({
           <Row className="g-0 pt-2">
             <SearchSettings />
           </Row>
+          <SavedDeckPanel />
           <Row className="g-0 pt-2">
             <Col lg={7} md={12} sm={12} xs={12}>
               <Import />

@@ -21,6 +21,7 @@ import {
 } from "@/features/download/download";
 import { Modals } from "@/features/modals/Modals";
 import { pdfRenderService } from "@/features/pdf/pdfRenderService";
+import { CryptoSessionProvider } from "@/features/savedDecks/cryptoSession";
 import { Toasts } from "@/features/toasts/Toasts";
 import ProjectNavbar from "@/features/ui/Navbar";
 import { setAllFavoriteRenders } from "@/store/slices/favoritesSlice";
@@ -93,10 +94,12 @@ export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
       <ClientSearchContextProvider
         value={{ clientSearchService, forceUpdate, forceUpdateValue }}
       >
-        <Toasts />
-        <Modals />
-        <ProjectNavbar />
-        {children}
+        <CryptoSessionProvider>
+          <Toasts />
+          <Modals />
+          <ProjectNavbar />
+          {children}
+        </CryptoSessionProvider>
       </ClientSearchContextProvider>
     </DownloadContextProvider>
   );

@@ -7,6 +7,7 @@ import {
   decryptDeckPayload,
   encryptDeckPayload,
   generateRecoveryKey,
+  rewrapMasterKeyWithNewRecoveryKey,
   unlockDeckKey,
   unlockWithPassphrase,
   unlockWithRecoveryKey,
@@ -152,7 +153,7 @@ describe("recovery key", () => {
     ).rejects.toThrow();
   });
 
-  test("recovery flow: forget the passphrase, recover via the recovery key, set a new passphrase", async () => {
+  test("recovery flow: forget the passphrase, recover via the recovery key, set a new passphrase and a fresh recovery key", async () => {
     const profile = await createCryptoProfile(
       "original passphrase",
       TEST_ITERATIONS
@@ -164,13 +165,20 @@ describe("recovery key", () => {
       profile.recoveryWrapped
     );
 
-    // set a brand new passphrase
+    // set a brand new passphrase AND reissue a fresh recovery key - the addendum's recovery
+    // flow re-wraps BOTH slots, since the old recovery key has now actually been exercised
+    // (unlike an ordinary passphrase change, which leaves the recovery slot untouched - see
+    // the next describe block)
     const { salt: newSalt, passphraseWrapped: newPassphraseWrapped } =
       await changePassphrase(
         recoveredMasterKey,
         "brand new passphrase",
         TEST_ITERATIONS
       );
+    const {
+      recoveryKeyBytes: newRecoveryKeyBytes,
+      recoveryWrapped: newRecoveryWrapped,
+    } = await rewrapMasterKeyWithNewRecoveryKey(recoveredMasterKey);
 
     // the new passphrase now unlocks the SAME master key
     const unlockedAgain = await unlockWithPassphrase(
@@ -199,6 +207,28 @@ describe("recovery key", () => {
         TEST_ITERATIONS,
         newPassphraseWrapped
       )
+    ).rejects.toThrow();
+
+    // the NEW recovery key unwraps the same master key too
+    const unlockedViaNewRecoveryKey = await unlockWithRecoveryKey(
+      newRecoveryKeyBytes,
+      newRecoveryWrapped
+    );
+    const { ciphertext: c2, nonce: n2 } = await encryptDeckPayload(
+      "readable via the new recovery key too",
+      dek
+    );
+    expect(
+      await decryptDeckPayload(
+        c2,
+        n2,
+        await unlockDeckKey(wrappedDek, unlockedViaNewRecoveryKey)
+      )
+    ).toEqual("readable via the new recovery key too");
+
+    // the OLD recovery key must no longer unwrap the new recovery slot
+    await expect(
+      unlockWithRecoveryKey(profile.recoveryKeyBytes, newRecoveryWrapped)
     ).rejects.toThrow();
   });
 

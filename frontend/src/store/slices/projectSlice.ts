@@ -365,6 +365,22 @@ export const projectSlice = createAppSlice({
     ) => {
       state.manualOverrides = action.payload;
     },
+    /**
+     * Atomically replace the whole project - used when loading a saved deck
+     * (see features/savedDecks/deckPayload.ts's `projectFromDeckPayload`). Unlike every other
+     * reducer above, this doesn't merge into existing slots; it's the one place the project
+     * is wholesale swapped out from under the editor.
+     */
+    loadProject: (
+      state,
+      action: PayloadAction<Omit<Project, "mostRecentlySelectedSlot">>
+    ) => {
+      state.members = action.payload.members;
+      state.nextMemberId = action.payload.nextMemberId;
+      state.cardback = action.payload.cardback;
+      state.manualOverrides = action.payload.manualOverrides;
+      state.mostRecentlySelectedSlot = null;
+    },
   },
 });
 
@@ -385,6 +401,7 @@ export const {
   duplicateSlot,
   setManualOverride,
   setAllManualOverrides,
+  loadProject,
 } = projectSlice.actions;
 
 export default projectSlice.reducer;

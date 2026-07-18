@@ -24,7 +24,9 @@ The methodology and the systems it governs.
   2026-07-17.**
 - [`federation-v1.md`](federation-v1.md) — federation verdict exchange
   format v1 (spec; no implementation yet — instances would share resolved
-  consensus verdicts as signed JSON, never raw votes).
+  consensus verdicts as signed JSON, never raw votes). Companion HOLD
+  spec for the concrete publish-first artifact: see "Plans & proposals"
+  below.
 - [`upstreaming/vote-system.md`](upstreaming/vote-system.md) — the vote
   system (printing/artist/tag weighted consensus) as a cherry-pick
   extraction manifest for upstreaming to `chilli-axe/mpc-autofill`; also
@@ -101,6 +103,7 @@ One-word status per doc; see each file for the full survey/spec.
 | [`proposals/proposal-f-public-stats-page.md`](proposals/proposal-f-public-stats-page.md) — public `/stats` transparency page                                                                                 | HOLD     |
 | [`proposals/proposal-g-user-accounts-saved-decks.md`](proposals/proposal-g-user-accounts-saved-decks.md) — user accounts + saved decks via Discord OAuth                                                     | HOLD     |
 | [`proposals/proposal-h-unified-display-page.md`](proposals/proposal-h-unified-display-page.md) — one page merging the "Choose Art" editor and PDF export into a live print-sheet preview + card-details rail | HOLD     |
+| [`federation/public-export-v1.md`](federation/public-export-v1.md) — publish-first federation: signed verdict export consumable by mpc-autofill forks and the MIT-lineage proxy tools, no peer required      | HOLD     |
 
 Not every shipped proposal-lettered feature has a survey doc here — some
 (e.g. Proposal A, Proposal D) went straight from idea to shipped PR without

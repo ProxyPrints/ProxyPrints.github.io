@@ -686,7 +686,13 @@ over a closed codebook.
 6. **Sybil/bad-actor unification** (added 2026-07-16, future-work
    addendum — nothing built until there's an observed attack or real
    resolution volume; detectors ship as admin reports first, never
-   automatic enforcement): the identification machinery doubles as the
+   automatic enforcement. **Readiness re-checked 2026-07-18: still not
+   ready** — 155k+ vote rows now exist but almost all are this
+   pipeline's own machine throughput, not human-population volume;
+   real human voters number 4 distinct IDs. See
+   `docs/reports/2026-07-18-dawid-skene-readiness-recheck.md`. The
+   cluster-consistency detector below is the one exception not gated
+   by this): the identification machinery doubles as the
    integrity layer, because it already treats every vote as noisy
    evidence rather than ground truth.
    - Machine evidence as an independent witness: a planned, report-only
