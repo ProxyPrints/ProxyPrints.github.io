@@ -28,12 +28,15 @@ Recovery is priced very differently by engine (live census, 2026-07-18: 5,178 OC
   set-code text is never persisted anywhere, so recovery means one real CDN image fetch + a
   fresh `run_ocr_for_card` pass per card.
 
-- FALLBACK-flagged rows (anonymous_id=local-fallback-v1, ~9% of the census): explicitly OUT OF
-  SCOPE for this module. The fallback engine's border/artist/symbol evidence-combination logic
-  lives inline in `local_identify_printing_tags._compute_card`'s whole-pipeline flow, not as a
-  standalone single-card-callable function the way `run_ocr_for_card`/`run_phash_for_card` are -
-  extracting one would be a real refactor, not justified for the smallest slice of the census.
-  Stated here as a known gap, not silently dropped.
+- FALLBACK-flagged rows (anonymous_id=local-fallback-v1, ~9% of the census): NOT free, same
+  shape as OCR. CORRECTION (caught on a second read of local_fallback.py before this module
+  first shipped): `local_fallback.run_fallback_for_card` IS a standalone, single-card-callable
+  function (an initial claim that it was "inline in _compute_card's whole-pipeline flow, not
+  reusable" was wrong - it lives at local_fallback.py's own top level, exported in `__all__`).
+  Recovery means one real CDN image fetch + a fresh `run_fallback_for_card` pass (border+
+  artist+symbol evidence-combination, same as the live engine) per card - reuses
+  `ocr_raw_texts=[]` (no cached pass-1 OCR text to reuse in a recovery pass) and
+  `bleed_class=None`, the same simplification the OCR-refetch path makes.
 
 HOLD #P3 (docs/features/catalog-completion-plan.md): both `run_frame_mismatch_recovery` and
 `run_d0_sibling_artist_propagation` accept `dry_run` and compute+count everything (including
@@ -52,7 +55,7 @@ from django.db.models import Q
 from cardpicker import local_phash
 from cardpicker.artist_consensus import resolve_and_persist_artist
 from cardpicker.image_cdn_fetch import fetch_card_image
-from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID
+from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID, run_fallback_for_card
 from cardpicker.local_identify_printing_tags import (
     OCR_ANONYMOUS_ID,
     PHASH_ANONYMOUS_ID,
@@ -139,6 +142,25 @@ def recover_frame_mismatch_printing_via_ocr_refetch(
     return (result.vote.printing_pk if result.vote is not None else None), True
 
 
+def recover_frame_mismatch_printing_via_fallback_refetch(
+    card: Card, index: CandidateNameIndex
+) -> tuple[Optional[int], bool]:
+    """NOT free (see module docstring) - one real CDN fetch + a fresh run_fallback_for_card pass
+    per call (border+artist+symbol evidence-combination, same as the live engine). Returns
+    (recovered_printing_pk, fetch_attempted). Uses ocr_raw_texts=[] (no cached pass-1 OCR text
+    to reuse in a recovery pass) and bleed_class=None - the same simplification the OCR-refetch
+    path makes, not a full pipeline replay."""
+    candidates = index.candidates_for(card.name)
+    if not candidates:
+        return None, False
+    selected = SelectedCard(card=card, candidates=candidates)
+    image = fetch_card_image(card)
+    if image is None:
+        return None, True
+    outcome = run_fallback_for_card(selected, image, ocr_raw_texts=[])
+    return outcome.printing_pk, True
+
+
 @dataclass
 class FrameMismatchRecoveryOutcome:
     card_id: int
@@ -157,7 +179,8 @@ class FrameMismatchRecoveryResult:
     phash_recovered: int = 0
     ocr_refetch_attempted: int = 0
     ocr_refetch_recovered: int = 0
-    fallback_skipped_out_of_scope: int = 0
+    fallback_refetch_attempted: int = 0
+    fallback_refetch_recovered: int = 0
     unrecovered: int = 0
     artist_votes_written: int = 0
     tag_votes_written: int = 0
@@ -170,14 +193,15 @@ def run_frame_mismatch_recovery(
     run_id: Optional[str] = None,
     dry_run: bool = True,
     ocr_refetch_budget: int = 0,
+    fallback_refetch_budget: int = 0,
     audit_sample_size: int = 20,
 ) -> FrameMismatchRecoveryResult:
     """Part 3's dual-yield recovery pass. For every distinct card with a durable frame-mismatch
     CardScanLog row (RESCANNABLE_SKIP_REASONS deliberately keeps these eligible - see that
     constant's own docstring in local_identify_printing_tags.py: "Part 3's own dual-yield design
     needs to revisit these cards"), recover the matched-but-withheld printing P (phash: free;
-    OCR: costs one refetch each, bounded by ocr_refetch_budget; fallback: out of scope - see
-    module docstring) and, where recovered, would cast:
+    OCR/fallback: cost one refetch each, bounded by their own budgets - see module docstring)
+    and, where recovered, would cast:
       (a) CardArtistVote for P's artist, confidence 0.8
       (b) CardTagVote(altered-frame, APPLY), confidence 0.7
     both under anonymous_id=RESIDUAL_CLASSIFY_ANONYMOUS_ID + run_id, source=VoteSource.OCR
@@ -185,13 +209,12 @@ def run_frame_mismatch_recovery(
     (machine-cast, never a real UI surface - matches every other engine vote in this codebase).
 
     dry_run=True (the default - HOLD #P3): computes and counts everything above WITHOUT writing
-    any CardArtistVote/CardTagVote row. OCR-refetch network calls still happen up to
-    ocr_refetch_budget even in dry-run mode (real data collection to size expected yield, not a
-    vote write) - pass ocr_refetch_budget=0 to skip the OCR path entirely and get free-path-only
-    numbers.
+    any CardArtistVote/CardTagVote row. OCR/fallback-refetch network calls still happen up to
+    their own budgets even in dry-run mode (real data collection to size expected yield, not a
+    vote write) - pass budget=0 to skip a path entirely and get free-path-only numbers.
 
     A card flagged by more than one engine only needs recovering once - phash (free) takes
-    priority over OCR (costs a fetch) when both flagged the same card.
+    priority over OCR/fallback (both cost a fetch) when more than one flagged the same card.
     """
     run_id = run_id or generate_run_id()
     altered_frame_tag = Tag.objects.filter(name=ALTERED_FRAME_TAG_NAME).first()
@@ -289,8 +312,23 @@ def run_frame_mismatch_recovery(
         if len(result.outcomes) < audit_sample_size:
             result.outcomes.append(outcome)
 
-    result.fallback_skipped_out_of_scope = len(fallback_only_card_ids)
-    result.cards_considered += result.fallback_skipped_out_of_scope
+    fallback_budget_remaining = fallback_refetch_budget
+    for card in Card.objects.filter(pk__in=fallback_only_card_ids):
+        result.cards_considered += 1
+        if fallback_budget_remaining <= 0:
+            result.unrecovered += 1
+            continue
+        fallback_budget_remaining -= 1
+        result.fallback_refetch_attempted += 1
+        printing_pk, _fetched = recover_frame_mismatch_printing_via_fallback_refetch(card, index)
+        if printing_pk is not None:
+            result.fallback_refetch_recovered += 1
+            outcome = cast(card, printing_pk, "fallback-refetch")
+        else:
+            result.unrecovered += 1
+            outcome = FrameMismatchRecoveryOutcome(card_id=card.pk, recovery_method="fallback-refetch-unrecovered")
+        if len(result.outcomes) < audit_sample_size:
+            result.outcomes.append(outcome)
 
     if not dry_run:
         CardArtistVote.objects.bulk_create(artist_votes_batch)
@@ -452,6 +490,7 @@ __all__ = [
     "D0_SIBLING_ARTIST_CONFIDENCE",
     "recover_frame_mismatch_printing_via_phash",
     "recover_frame_mismatch_printing_via_ocr_refetch",
+    "recover_frame_mismatch_printing_via_fallback_refetch",
     "FrameMismatchRecoveryOutcome",
     "FrameMismatchRecoveryResult",
     "run_frame_mismatch_recovery",

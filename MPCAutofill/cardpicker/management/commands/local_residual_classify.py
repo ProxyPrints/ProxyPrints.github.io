@@ -45,6 +45,12 @@ class Command(BaseCommand):
             help="Max real CDN fetches to spend recovering OCR-flagged frame-mismatch rows "
             "(phash-flagged rows are always free and unbounded). Default: 0 (phash-only).",
         )
+        parser.add_argument(
+            "--fallback-refetch-budget",
+            type=int,
+            default=0,
+            help="Max real CDN fetches to spend recovering fallback-flagged frame-mismatch rows. " "Default: 0.",
+        )
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         stale = find_stale_applied_migrations()
@@ -75,17 +81,26 @@ class Command(BaseCommand):
 
             if not kwargs["skip_frame_mismatch"]:
                 frame_result = run_frame_mismatch_recovery(
-                    run_id=run_id, dry_run=dry_run, ocr_refetch_budget=kwargs["ocr_refetch_budget"]
+                    run_id=run_id,
+                    dry_run=dry_run,
+                    ocr_refetch_budget=kwargs["ocr_refetch_budget"],
+                    fallback_refetch_budget=kwargs["fallback_refetch_budget"],
+                )
+                recovered_total = (
+                    frame_result.phash_recovered
+                    + frame_result.ocr_refetch_recovered
+                    + frame_result.fallback_refetch_recovered
                 )
                 print(
                     f"[frame-mismatch] considered={frame_result.cards_considered} "
                     f"phash_recovered={frame_result.phash_recovered} "
                     f"ocr_refetch_attempted={frame_result.ocr_refetch_attempted} "
                     f"ocr_refetch_recovered={frame_result.ocr_refetch_recovered} "
-                    f"fallback_skipped_out_of_scope={frame_result.fallback_skipped_out_of_scope} "
+                    f"fallback_refetch_attempted={frame_result.fallback_refetch_attempted} "
+                    f"fallback_refetch_recovered={frame_result.fallback_refetch_recovered} "
                     f"unrecovered={frame_result.unrecovered} "
-                    f"artist_votes={'written=' + str(frame_result.artist_votes_written) if not dry_run else 'would_cast=' + str(frame_result.phash_recovered + frame_result.ocr_refetch_recovered)} "
-                    f"tag_votes={'written=' + str(frame_result.tag_votes_written) if not dry_run else 'would_cast=' + str(frame_result.phash_recovered + frame_result.ocr_refetch_recovered)}"
+                    f"artist_votes={'written=' + str(frame_result.artist_votes_written) if not dry_run else 'would_cast=' + str(recovered_total)} "
+                    f"tag_votes={'written=' + str(frame_result.tag_votes_written) if not dry_run else 'would_cast=' + str(recovered_total)}"
                 )
                 for outcome in frame_result.outcomes[:10]:
                     print(f"  sample: {outcome}")

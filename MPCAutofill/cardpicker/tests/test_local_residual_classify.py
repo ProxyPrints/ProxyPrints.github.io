@@ -9,7 +9,7 @@ fetch_card_image/run_ocr_for_card.
 import pytest
 
 import cardpicker.local_residual_classify as module
-from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID
+from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID, FallbackOutcome
 from cardpicker.local_identify_printing_tags import (
     OCR_ANONYMOUS_ID,
     PHASH_ANONYMOUS_ID,
@@ -148,15 +148,37 @@ class TestRunFrameMismatchRecovery:
         assert result.artist_votes_written == 1
         assert result.tag_votes_written == 0
 
-    def test_fallback_flagged_rows_are_out_of_scope(self, db):
+    def test_fallback_flagged_rows_default_budget_zero_stays_unrecovered(self, db):
         card = CardFactory(name="Forest", content_phash=100)
         CardScanLog.objects.create(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID, skip_reason="frame-mismatch")
 
         result = run_frame_mismatch_recovery(dry_run=True)
 
-        assert result.fallback_skipped_out_of_scope == 1
+        assert result.fallback_refetch_attempted == 0
+        assert result.unrecovered == 1
         assert result.phash_recovered == 0
         assert result.ocr_refetch_attempted == 0
+
+    def test_fallback_refetch_path_respects_budget(self, db, monkeypatch):
+        artist = CanonicalArtistFactory()
+        printing = CanonicalCardFactory(name="Forest", artist=artist)
+        card_a = CardFactory(name="Forest")
+        card_b = CardFactory(name="Forest")
+        CardScanLog.objects.create(card=card_a, anonymous_id=FALLBACK_ANONYMOUS_ID, skip_reason="frame-mismatch")
+        CardScanLog.objects.create(card=card_b, anonymous_id=FALLBACK_ANONYMOUS_ID, skip_reason="frame-mismatch")
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: object())
+        monkeypatch.setattr(
+            module,
+            "run_fallback_for_card",
+            lambda selected, image, ocr_raw_texts=None, **kw: FallbackOutcome(printing_pk=printing.pk),
+        )
+
+        result = run_frame_mismatch_recovery(dry_run=True, fallback_refetch_budget=1)
+
+        assert result.fallback_refetch_attempted == 1
+        assert result.fallback_refetch_recovered == 1
+        assert result.unrecovered == 1  # the second card hit the budget wall
 
     def test_card_flagged_by_both_phash_and_ocr_recovers_once_via_phash(self, db):
         printing = CanonicalCardFactory(name="Forest", image_hash=100)

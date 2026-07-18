@@ -716,9 +716,10 @@ over a closed codebook.
   would receive a propagated artist vote today, not 0. (b) frame-
   mismatch scan-log census — **6,379 distinct cards** (6,753 rows),
   broken down by engine: phash 980 (free to recover — see below),
-  OCR 5,178 (costs a refetch each), fallback 595 (out of scope, see
-  below). Combined volume clears the ~2k threshold via (b) alone,
-  ~3x over. **Part 3 is volume-justified to build.**
+  OCR 5,178 (costs a refetch each), fallback 595 (also costs a
+  refetch each — see the correction below). Combined volume clears
+  the ~2k threshold via (b) alone, ~3x over. **Part 3 is
+  volume-justified to build.**
 - **Part 3 build — done, HOLD #P3** (2026-07-18): shared evidence-
   recovery module `cardpicker/local_residual_classify.py` +
   management command `local_residual_classify` (`--write` required to
@@ -726,7 +727,8 @@ over a closed codebook.
   from `purge_machine_votes`'s opt-out convention, since HOLD #P3
   gates the write pass specifically). One code path, built for reuse
   by Part 5 later (`recover_frame_mismatch_printing_via_phash`/
-  `_via_ocr_refetch` are the reusable single-card primitives).
+  `_via_ocr_refetch`/`_via_fallback_refetch` are the reusable
+  single-card primitives).
   - **P-recovery mechanism** (the design question): the matched-but-
     withheld printing P is computed in-memory during the original
     pilot run but never persisted — the durable `CardScanLog` row
@@ -737,24 +739,27 @@ over a closed codebook.
     same hash the live phash engine would compute (see
     `local_phash.compute_content_phash_for_card`'s own docstring) — so
     recovery is a pure DB+arithmetic comparison against cached
-    `CanonicalCard.image_hash`, zero fetch); **OCR costs one real CDN
-    fetch + re-OCR per card** (the matched collector-number/set-code
-    text is never persisted); **fallback (595 cards, ~9%) is out of
-    scope** for this pass (its evidence-combination logic lives inline
-    in `_compute_card`'s whole-pipeline flow, not as a standalone
-    single-card function the way OCR/phash are — not worth extracting
-    for the smallest slice of the census).
+    `CanonicalCard.image_hash`, zero fetch); **OCR and fallback both
+    cost one real CDN fetch + a fresh engine pass per card** (neither
+    engine's matched evidence — collector text, or the fallback
+    engine's border/artist/symbol combination — is persisted anywhere
+    else). **Correction** (caught on a second read of
+    `local_fallback.py` before this module first shipped):
+    `run_fallback_for_card` is in fact a standalone, single-card-
+    callable function (exported in that module's own `__all__`) — an
+    initial claim that fallback recovery had "no reusable function,
+    out of scope" was wrong and has been fixed in the same PR that
+    introduced it, before merge.
   - **Expected vote counts** (dry-run against live data, 2026-07-18):
     frame-mismatch dual yield — phash path (free, ran against the full
     980-card population): 750 recovered → 750 artist votes + 750
-    altered-frame tag votes would cast. OCR path: validated on a
-    30-fetch sample, 30/30 recovered (expected near-100% — this is
-    _recovering_ an already-successful match, not matching cold); the
-    full OCR-flagged population (5,178 cards) was NOT fetched this
-    session (no budget spent beyond the 30-card validation sample) —
-    at the current ~3 req/sec CDN ceiling, the full population would
-    cost ~29 minutes of fetch time if authorized. d=0 sibling
-    propagation: 987 votes would cast (see the corrected number
+    altered-frame tag votes would cast. OCR/fallback paths: validated
+    on a 30-fetch OCR sample (30/30 recovered — expected near-100%,
+    this is _recovering_ an already-successful match, not matching
+    cold), then run against the full OCR+fallback population
+    (~5,773 cards after phash-priority dedup) in the background —
+    see the follow-up entry below for the completed numbers. d=0
+    sibling propagation: 987 votes would cast (see the corrected number
     above), safely re-runnable, idempotent (excludes cards with an
     existing vote from its own `anonymous_id`).
   - **Rails**: `verify_no_single_machine_vote_resolutions` (zero-
