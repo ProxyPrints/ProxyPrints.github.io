@@ -6,6 +6,24 @@ export function wrapIndex(index: number, count: number): number {
 }
 
 /**
+ * Generic array chunking, shared by PDF.tsx's own pagination (PagePreview's container,
+ * PDFGenerator.tsx, selects the same page-1 card set the real PDF would generate without
+ * duplicating pagination logic) and features/display/displayPagination.ts. Deliberately lives
+ * here rather than in PDF.tsx: importing anything from PDF.tsx pulls in @react-pdf/renderer's
+ * ESM-only bundle, which Jest can't transform out of the box (a real, reproduced failure - see
+ * displayPagination.test.ts's own history) - keeping a plain, dependency-free utility like this
+ * one out of that module lets a lightweight consumer test it without that cost. PDF.tsx
+ * re-exports this so its own existing importers are unaffected.
+ */
+export const chunk = <T>(arr: Array<T>, size: number): Array<Array<T>> => {
+  const result: Array<Array<T>> = [];
+  for (let i = 0; i < arr.length; i += size) {
+    result.push(arr.slice(i, i + size));
+  }
+  return result;
+};
+
+/**
  * Format `size` (a size in bytes) as a string in megabytes.
  */
 export function imageSizeToMBString(

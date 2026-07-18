@@ -37,6 +37,13 @@ export interface PagePreviewSlotContent {
   /** Rendered as the slot's accessible name; also shown as a fallback label when imageUrl is
    * undefined. */
   name: string;
+  /** Proposal B PR-3's hedged preview badge - "bleed will be generated", never confirmed-fact
+   * framing, since the real per-side measurement only happens at export (see this file's own
+   * module comment). Precomputed by the caller (`willLikelyGenerateBleed` in bleedNormalize.ts)
+   * rather than derived here, so this component stays a dumb renderer with no knowledge of the
+   * bleed-normalization algorithm itself. `undefined` renders no badge (bleed normalization
+   * doesn't apply to this card, or its signal hasn't resolved yet - never guess). */
+  willGenerateBleed?: boolean;
 }
 
 export interface PagePreviewProps {
@@ -55,6 +62,14 @@ export interface PagePreviewProps {
   showCutLines: boolean;
   /** Width, in real CSS px, of the preview panel this scales down to fit. */
   maxWidthPx: number;
+  /** Proposal H (docs/proposals/proposal-h-unified-display-page.md): when provided, each slot
+   * becomes clickable and calls back with its row-major index - the unified display page's own
+   * slot-select interaction. Omitted by existing callers (PDFGenerator's fast preview), which
+   * stay non-interactive with zero behavior change. */
+  onSlotClick?: (index: number) => void;
+  /** Row-major index of the slot to render with a selected outline. Ignored when onSlotClick
+   * isn't provided. */
+  selectedSlotIndex?: number;
 }
 
 export function PagePreview({
@@ -66,6 +81,8 @@ export function PagePreview({
   slots,
   showCutLines,
   maxWidthPx,
+  onSlotClick,
+  selectedSlotIndex,
 }: PagePreviewProps) {
   const layout = useMemo(
     () =>
@@ -121,10 +138,17 @@ export function PagePreview({
       >
         {layout.slots.map((slot, index) => {
           const content = slots[index];
+          const isSelected = onSlotClick != null && selectedSlotIndex === index;
           return (
             <div
               key={index}
               data-testid="page-preview-slot"
+              onClick={
+                onSlotClick != null ? () => onSlotClick(index) : undefined
+              }
+              role={onSlotClick != null ? "button" : undefined}
+              aria-label={onSlotClick != null ? content?.name : undefined}
+              aria-pressed={onSlotClick != null ? isSelected : undefined}
               style={{
                 position: "absolute",
                 left: slot.xMM + "mm",
@@ -133,17 +157,23 @@ export function PagePreview({
                 height: slotHeightMM + "mm",
                 overflow: "hidden",
                 background: "#d9d9d9",
+                cursor: onSlotClick != null ? "pointer" : undefined,
+                outline: isSelected ? "3px solid #df691a" : undefined,
+                outlineOffset: isSelected ? "-3px" : undefined,
               }}
             >
               {content?.imageUrl != null && (
                 <img
                   src={content.imageUrl}
                   alt={content.name}
+                  loading="lazy"
+                  decoding="async"
                   style={{
                     width: "100%",
                     height: "100%",
                     objectFit: "cover",
                     display: "block",
+                    pointerEvents: "none",
                   }}
                 />
               )}
@@ -160,6 +190,26 @@ export function PagePreview({
                     pointerEvents: "none",
                   }}
                 />
+              )}
+              {content?.willGenerateBleed === true && (
+                <div
+                  data-testid="page-preview-bleed-badge"
+                  style={{
+                    position: "absolute",
+                    left: "1mm",
+                    top: "1mm",
+                    padding: "0.5mm 1.5mm",
+                    fontSize: "2.2mm",
+                    lineHeight: 1.2,
+                    color: "white",
+                    background: "rgba(0, 0, 0, 0.65)",
+                    borderRadius: "1mm",
+                    pointerEvents: "none",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Bleed will be generated
+                </div>
               )}
             </div>
           );

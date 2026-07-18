@@ -431,6 +431,22 @@ calls at the very top of each component in the suspect render tree (starting fro
 binary-search how far the tree actually renders before going silent - the last log line reached
 pinpoints the synchronous throw's rough location even when nothing else in the stack reports it.
 
+## `page.reload()` (and a same-URL `page.goto()` waiting on `"load"`) hangs past the Playwright test timeout in this app
+
+Discovered writing a reload-persistence test for Proposal B PR-2 (full report:
+`docs/reports/proposal-b-pr2-bleed-override-ui.md`) - no test anywhere else in this suite
+reloads or renavigates a page mid-test, so there was no existing precedent to check first.
+`page.reload()` alone hung past the 30s test timeout waiting for the `"load"` event; a plain
+`page.goto()` back to the same URL hit the identical hang. This app's webworkers (client-search,
+PDF-render) appear not to settle a second `"load"` event cleanly within one Playwright page
+lifecycle - not investigated further since a workaround exists and the root cause is outside
+this repo's own code (Next.js/webworker/browser interaction, not app logic). Fix: navigate with
+`{ waitUntil: "domcontentloaded" }` instead of the default `"load"` - the DOM (and this app's
+React tree) is fully interactive well before whatever blocks a second `"load"` resolves, and a
+normal `page.getByText(...)` wait for real UI content afterward is sufficient to confirm the page
+is actually ready. Any future test that needs a real mid-test reload/renavigation should use this
+pattern from the start rather than rediscovering the hang.
+
 ## A stacked PR's base branch gets deleted out from under it when the parent merges (squash-and-delete)
 
 If PR B is opened against PR A's branch (a stack) and PR A is later squash-merged with
@@ -449,6 +465,39 @@ built on, even though the content is logically the same - expect at least one re
 a fast-forward). **Prevention, the actual fix**: retarget the child PR to `master` (`gh pr edit --base master` / a REST `PATCH .../pulls/N -f base=master`) BEFORE merging+deleting the parent's
 branch, while the retarget API call still works normally - not after.
 
+## A rewrite that "extracts X verbatim" can still silently drop an element the old component rendered
+
+`QuestionFeed.tsx`'s Level 1 (the fast-path single-suggestion screen, PR #49/commit `b413252`)
+prompts "Is it this one?" for a suggested printing with **no image of the printing itself** -
+only text (a set icon + expansion code + collector number). This was a real regression, not a
+missing feature: the pre-funnel `PrintingTagQueue.tsx` (deleted in the "Queue redesign" commit
+`9d71851`) always showed a Scryfall reference render next to every candidate, no exceptions - a
+plain `<img src={candidate.mediumThumbnailUrl}>`, nothing fancier. That commit's own message
+claimed "candidate-grid mechanics extracted verbatim into cardPanel.tsx" - true for the grid
+_mechanics_ (starburst, sticky panel, hover-zoom), but the image-per-candidate rendering actually
+landed directly in `QuestionFeed.tsx`, not `cardPanel.tsx`, and at that point still worked (Level
+2's grid still renders `candidate.mediumThumbnailUrl` correctly today). The regression is narrower
+and later than the redesign commit itself: PR #49 introduced Level 1 as a **new** UI surface (a
+fast path for the common case of a confident suggestion) and built its confirmation prompt from
+scratch as text-only, never copying the image element over - "is it this one" being unanswerable
+without a picture to compare against went unnoticed because nothing tested for the image's
+presence, only that the _text_ prompt appeared. Level 0 (`DeckbuilderConfirmAffordance.tsx`, PR
+#50, built after #49) was independently checked and is NOT affected - it does its own
+`APIGetPrintingCandidates` fetch and correctly renders a real `<img>` inside `ComparePin`.
+
+**The lesson, generalized**: a commit message claiming "extracted verbatim" or "same mechanics,
+new home" is a claim about _behavior_, not a guarantee - verify it by diffing what the OLD
+component actually rendered (every `<img>`/data-bearing element, not just the interactive
+controls) against what the NEW one renders, element for element, rather than trusting the
+message. A rewrite's author naturally focuses on what changed (the new grid/filter/funnel-stage
+logic); an element that was simply _always there_ and never part of the story being told is
+exactly the kind of thing that quietly doesn't make the trip. When building a NEW fast-path/
+shortcut screen that shortcuts around an existing one (Level 1 shortcutting Level 2's grid here),
+explicitly inventory what the screen it's bypassing shows before deciding what the shortcut needs
+
+- "the user has to make the same judgment call, just with fewer clicks" is the actual design
+  intent in cases like this, and a judgment call needs the same evidence either way.
+
 ## Cross-session branch-name collisions on a "standing convention" name
 
 Once a delivery pattern (e.g. "commit reports to a `report-relay` branch, relay the URL") gets
@@ -465,3 +514,86 @@ convention's bare name - a numeric/date/session-id suffix, chosen so two concurr
 adopting the same convention independently can't collide (a fixed default like a bare
 `report-relay` is exactly the thing every session will reach for identically). The bare
 `report-relay` name itself is now retired for this reason - always suffix.
+
+## Color-run measurement cannot see frame-colored bleed - the invisibility is the feature's own design goal
+
+Proposal B's original probe-based bleed measurement (`bleedNormalize.ts`, walk a uniform-color
+run inward from each edge) shipped with real synthetic-fixture coverage but only a "starting
+guess" calibration caveat on its constants. Task #134's real-image calibration pass (30 catalog
+images, `docs/reports/2026-07-18-bleed-calibration-134.md`) found a ~2x measurement bias and,
+critically, root-caused it rather than stopping at "found a bug": sweeping
+`RGB_DISTANCE_THRESHOLD` across a 4x range (6 to 24) moved the sample median under 3% - ruling
+out "threshold too loose" as the cause before it could be mistaken for one. The real cause: a
+standard MTG card's own border is commonly a flat, uniform color, and the synthetic bleed
+extension sitting just outside it is _deliberately_ colored to match the frame so a print
+misalignment doesn't show a visible seam - meaning the probe's "uniform run = bleed" assumption
+can never distinguish bleed from border once both are the same color, **by the bleed extension's
+own design intent**. No amount of threshold tuning fixes a measurement whose blind spot is the
+feature's own success condition.
+
+**The lesson, generalized**: when a measurement's error turns out to be invariant across a wide
+sweep of its own tuning constants, stop tuning and ask whether the measurement's _core method_ -
+not its parameters - structurally cannot see the thing it's trying to see. Here, the fix wasn't a
+better threshold; it was picking an entirely different signal immune to the same confound. The
+source image's own pixel dimensions (checked against the standard trim/bleed aspect ratios, the
+same method the backend's already-validated `classify_bleed_edge` uses) carry the same
+information a color-run walk was trying to extract, but a card's _file dimensions_ have no
+dependency on its _border color_ - so the confound simply doesn't apply. Demoting the original
+measurement to an advisory role (ambiguity detection, an asymmetry flag) rather than discarding
+it outright preserved the real edge cases it still catches (a solid-background full-art card, a
+degenerate scan) while removing it from the one thing it was structurally unable to do reliably.
+See `docs/proposals/proposal-b-bleed-normalization.md`'s "Owner design decision" section and
+`bleedNormalize.ts`'s own module comment for the full resolution order.
+
+## Passing a plain callback through comlink's Remote proxy throws DataCloneError - and the failure disguises itself as a false-positive Playwright "element is visible" result
+
+`pdfRenderService.ts` added a method that called `this.worker.onImageProgress(cb)` - `cb` a plain
+JS function - across the comlink `Remote<PDFWorker>` boundary into `pdf.worker.ts`. Comlink's
+default RPC transfer is a structured-clone `postMessage`, and a bare function isn't
+structured-clone-able: this throws `DataCloneError: Failed to execute 'postMessage' on 'Worker': ... could not be cloned` the instant the call actually fires - not at compile time (TypeScript
+has no way to know), not synchronously at the call site either (the throw happens inside a
+promise chain comlink builds internally). Fix: wrap the callback in `Comlink.proxy(cb)` before
+passing it - comlink's own documented mechanism for passing a _live, callable_ remote reference
+instead of clonable data, backed by its own internal `MessagePort`. A pre-existing, structurally
+identical `onProgress(cb: typeof console.info)` method on the same worker interface has this same
+latent bug, undetected only because nothing in the codebase actually calls it.
+
+**The Playwright false positive this produced is worth its own note**: the thrown error surfaced
+as Next.js dev mode's full-screen `<nextjs-portal>` "Unhandled Runtime Error" overlay, rendered
+_on top of_ (not instead of) the real in-app Modal this session had just built to replace
+`window.confirm()` - Playwright's `toBeVisible()` on the Modal's own locator still reported true
+(the Modal element genuinely is visible, CSS-wise, underneath the overlay), so the assertion the
+test led with passed cleanly. The failure only surfaced two steps later, as a `.click()` timing
+out with `<nextjs-portal> intercepts pointer events` - which reads exactly like an unrelated
+z-index/stacking-context bug, not "there's a JS exception on this page." **Always check for a
+`dialog "Unhandled Runtime Error"` node in a failing test's saved `error-context.md` (or
+`page.on('pageerror')`) before assuming a pointer-interception failure is a CSS/layout problem** -
+in dev mode, Next's own error overlay is frequently the actual "invisible" thing eating the click,
+and it's a much faster diagnosis than auditing z-index stacking contexts by hand.
+
+## A feature-flagged page's dev-server test suite passing proves nothing about its production build
+
+Proposal H's `/display` route (behind `NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED`) had a full green
+Playwright suite against `next dev` and still failed `npm run build` in production the moment the
+flag actually flipped true in a real deploy (`deploy-frontend.yml` run #107) - a `tsc` type error
+(`Card | undefined` not assignable to `Card`) that plain `npx tsc --noEmit` on the feature branch
+never caught either. Two independent causes stacked: (1) `next dev`'s Playwright run never
+prerenders every route through the production compiler the way `next build`'s static export does
+
+- a type error only reachable via the real build pipeline is invisible to dev-mode testing no
+  matter how thorough; (2) the type error itself only existed once the feature branch merged
+  alongside an unrelated same-day PR that correctly widened `useCardDocumentsByIdentifier()`'s
+  return type to include `undefined` (fixing a real crash, task #135) - a cross-PR interaction, not
+  a bug in either PR alone, so neither branch's own pre-merge CI could have caught it in isolation.
+  Diagnosis trap avoided here: don't trust a clean local repro build at face value - confirm it's
+  actually running against the SAME commit the real CI run failed on (`git log -1`), and regenerate
+  any gitignored build-time artifacts (this repo's `frontend/src/common/generated/` keyrune assets,
+  produced by `npm install`'s postinstall, not committed) before concluding a build error doesn't
+  reproduce - a stale/incomplete local environment can silently "fix" a real failure with an
+  unrelated false negative.
+
+**New standing verification bar**: any flag-gated page must pass a real production build with the
+flag ON - `NEXT_PUBLIC_<FLAG>=true npx next build` (or the equivalent for whatever flag var) -
+before its PR ships, in addition to (not instead of) `tsc --noEmit`, the Jest suite, and Playwright
+against `next dev`. Add this to the pre-push checklist for every future PR touching a flagged
+route, not just this one's remaining build-out.

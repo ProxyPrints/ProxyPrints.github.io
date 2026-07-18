@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Proposal H — Tablet (768–992)</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { width: 900px; }
+  .app-body { height: 560px; position: relative; z-index: 0; }
+  .sheet-region { padding: 20px; }
+  .sheet { max-width: 640px; }
+
+  .drawer-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    justify-content: flex-end;
+  }
+  .drawer {
+    width: 340px;
+    background: var(--panel-bg);
+    height: 100%;
+    box-shadow: -6px 0 24px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+  }
+  .drawer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .drawer-header button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 10px;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-frame">
+  <span class="frame-label">tablet 768–992 — state 1: DEFAULT (rail closed, sheet full-width, edge handle visible)</span>
+  <div class="toolbar condensed">
+    <span class="deck-name">Standard Cube</span>
+    <div class="pager">
+      <button>◀</button>
+      <span class="annotate">3/13</span>
+      <button>▶</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn-icon" title="Print settings">⚙</button>
+    <button class="btn-icon" title="Save to Drive">☁</button>
+    <button class="btn primary">Generate PDF</button>
+  </div>
+  <div class="app-body">
+    <div class="sheet-region">
+      <div class="sheet">
+        <div class="slot"><span class="slot-num">17</span></div>
+        <div class="slot"><span class="slot-num">18</span><span class="slot-badge">SET 142</span></div>
+        <div class="slot"><span class="slot-num">19</span></div>
+        <div class="slot"><span class="slot-num">20</span><span class="slot-badge degraded">SET 07</span></div>
+        <div class="slot"><span class="slot-num">21</span></div>
+        <div class="slot"><span class="slot-num">22</span></div>
+        <div class="slot"><span class="slot-num">23</span></div>
+        <div class="slot"><span class="slot-num">24</span></div>
+      </div>
+    </div>
+    <div class="drawer-handle">Details ▸</div>
+  </div>
+  <p class="annotate" style="padding: 0 16px 12px;">No slot selected yet — sheet takes the full content width. The "Details ▸" handle on
+  the right edge is the only sign the rail exists at this width (no permanently-visible idle rail here, unlike desktop/laptop).</p>
+</div>
+
+<div class="page-frame">
+  <span class="frame-label">tablet 768–992 — state 2: OPEN (slot 18 selected → rail slides in as a right-side off-canvas drawer)</span>
+  <div class="toolbar condensed">
+    <span class="deck-name">Standard Cube</span>
+    <div class="pager">
+      <button>◀</button>
+      <span class="annotate">3/13</span>
+      <button>▶</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn-icon" title="Print settings">⚙</button>
+    <button class="btn-icon" title="Save to Drive">☁</button>
+    <button class="btn primary">Generate PDF</button>
+  </div>
+  <div class="app-body">
+    <div class="sheet-region">
+      <div class="sheet">
+        <div class="slot"><span class="slot-num">17</span></div>
+        <div class="slot selected"><span class="slot-num">18</span><span class="slot-badge">SET 142</span></div>
+        <div class="slot"><span class="slot-num">19</span></div>
+        <div class="slot"><span class="slot-num">20</span><span class="slot-badge degraded">SET 07</span></div>
+        <div class="slot"><span class="slot-num">21</span></div>
+        <div class="slot"><span class="slot-num">22</span></div>
+        <div class="slot"><span class="slot-num">23</span></div>
+        <div class="slot"><span class="slot-num">24</span></div>
+      </div>
+    </div>
+
+    <div class="drawer-overlay">
+      <div class="drawer">
+        <div class="drawer-header">
+          <strong>Slot 18</strong>
+          <button>✕ Close</button>
+        </div>
+        <div class="rail-scroll">
+
+          <div class="rail-header">
+            <div class="card-identity">Slot 18 <span class="face-tag">Front</span></div>
+            <span class="printing-badge">SET 142</span>
+            <div class="confirm-row">
+              <span class="confirm-badge">Confirm?</span>
+              <div class="compare-pin"></div>
+              <div class="yn-buttons"><button class="yes">Y</button><button class="no">N</button></div>
+            </div>
+          </div>
+
+          <div class="accordion-section expanded">
+            <div class="accordion-header">
+              <h4>Choose Image</h4>
+              <span class="accordion-chevron">◂</span>
+            </div>
+            <div class="accordion-body">
+              <div class="instrument">
+                <div class="filters-toggle">▸ Filters</div>
+                <div class="candidate-grid">
+                  <div class="cand active"><span class="cand-label">SET 142</span></div>
+                  <div class="cand"><span class="cand-label">SET 089</span></div>
+                  <div class="cand"><span class="cand-label">SET 007</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-section collapsed">
+            <div class="accordion-header">
+              <h4>Attributes</h4>
+              <span class="accordion-chevron">◂</span>
+            </div>
+            <div class="accordion-body">
+              <div class="instrument">
+                <div class="chip-ring">
+                  <div class="chip-row">
+                    <button class="chip lean-positive">Full Art</button>
+                    <button class="chip">Showcase</button>
+                  </div>
+                  <div class="chip-row">
+                    <button class="chip lean-positive">Black Border</button>
+                    <button class="chip lean-negative">White Border</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-section collapsed">
+            <div class="accordion-header">
+              <h4>Print Options</h4>
+              <span class="accordion-chevron">◂</span>
+            </div>
+            <div class="accordion-body">
+              <div class="instrument">
+                <div class="segmented">
+                  <button class="active">Auto</button>
+                  <button>Force bleed</button>
+                  <button>Force trimmed</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-section collapsed">
+            <div class="accordion-header">
+              <h4>Artist</h4>
+              <span class="accordion-chevron">◂</span>
+            </div>
+            <div class="accordion-body">
+              <div class="instrument">
+                <div class="artist-line">Art by <strong>J. Placeholder</strong> — <a href="#">support this artist</a></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-section collapsed">
+            <div class="accordion-header">
+              <h4>Slot Actions</h4>
+              <span class="accordion-chevron">◂</span>
+            </div>
+            <div class="accordion-body">
+              <div class="instrument">
+                <div class="slot-actions">
+                  <button>⟲ Change Query</button>
+                  <button>⧉ Duplicate</button>
+                  <button>⛒ Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="annotate" style="padding: 0 16px 12px;">Drawer is 340px, fixed to the right, own overflow-y:auto scroll container — the
+  sheet dims behind it but stays mounted (page position preserved on close). Still ≥768px, so the same sticky/stacking-context
+  rule from desktop/laptop applies to the drawer once open.</p>
+</div>
+
+</body>
+</html>

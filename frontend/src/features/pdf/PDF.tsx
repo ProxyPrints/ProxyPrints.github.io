@@ -9,6 +9,7 @@ import {
 } from "@/common/constants";
 import { SourceType } from "@/common/schema_types";
 import { CardDocument, SlotProjectMembers } from "@/common/types";
+import { chunk } from "@/common/utils";
 import { normalizeCardBleed } from "@/features/pdf/bleedExtension";
 import { BleedPrior, ManualOverride } from "@/features/pdf/bleedNormalize";
 import { computeLayout } from "@/features/pdf/layout";
@@ -201,7 +202,7 @@ export interface PDFProps {
   pageMarginBottomMM: number;
   pageMarginLeftMM: number;
   pageMarginRightMM: number;
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument };
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined };
   projectMembers: Array<SlotProjectMembers>;
   projectCardback: string | undefined;
   imageQuality: PDFImageQuality;
@@ -214,6 +215,13 @@ export interface PDFProps {
   // of that failure being silently invisible. Optional so existing render
   // props unrelated to failure tracking don't need to know about it.
   reportImageFailure?: (identifier: string, label: string) => void;
+  // Called (by pdf.worker.ts, same as reportImageFailure above) once per card image slot that
+  // FINISHES resolving, success or failure - lets the export UI show live "fetching images:
+  // N/M" progress instead of a static spinner for the several-minutes-plus a large export can
+  // take once full-resolution fetches are paced to the image CDN's shared rate limit (see
+  // pdfImage.ts's fetchFullResolutionImageAsBlob). No arguments - the worker-side closure that
+  // supplies this owns the actual counting/total, this is just the "one more happened" signal.
+  reportImageProgress?: () => void;
   // Proposal B (docs/proposals/proposal-b-bleed-normalization.md) - export-time per-side bleed
   // normalization. Both maps are keyed by card identifier and pre-resolved on the MAIN thread
   // (PDFGenerator.tsx) before the render worker is invoked - not fetched from inside the worker
@@ -442,6 +450,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
     jpgQuality,
     fileHandles,
     reportImageFailure,
+    reportImageProgress,
     bleedPriors,
     bleedOverrides,
   } = usePDFContext();
@@ -520,6 +529,8 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
           } catch {
             reportImageFailure?.(cardDocument.identifier, cardDocument.name);
             return undefined;
+          } finally {
+            reportImageProgress?.();
           }
         }}
         style={
@@ -829,19 +840,13 @@ const CardGrid = ({
   );
 };
 
-// Exported so PagePreview's container (PDFGenerator.tsx) can select the same page-1 card set
-// the real PDF would generate, without duplicating pagination logic.
-export const chunk = <T,>(arr: Array<T>, size: number): Array<Array<T>> => {
-  const result: Array<Array<T>> = [];
-  for (let i = 0; i < arr.length; i += size) {
-    result.push(arr.slice(i, i + size));
-  }
-  return result;
-};
+// Re-exported for existing importers (PDFGenerator.tsx, SCMPDF.tsx) - the implementation
+// itself now lives in common/utils.ts; see that module's own comment for why.
+export { chunk };
 
 const paginateFrontsAndDistinctBacks = (
   projectMembers: Array<SlotProjectMembers>,
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
   projectCardback: string | undefined,
   cardsPerPage: number
 ): Array<Array<CardDocument>> => [
@@ -861,7 +866,7 @@ const paginateFrontsAndDistinctBacks = (
 
 const paginateFrontsOnly = (
   projectMembers: Array<SlotProjectMembers>,
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
   projectCardback: string | undefined,
   cardsPerPage: number
 ): Array<Array<CardDocument>> => [
@@ -876,7 +881,7 @@ const paginateFrontsOnly = (
 
 const paginateBacksOnly = (
   projectMembers: Array<SlotProjectMembers>,
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
   projectCardback: string | undefined,
   cardsPerPage: number
 ): Array<Array<CardDocument>> => [
@@ -891,7 +896,7 @@ const paginateBacksOnly = (
 
 const paginateFrontsAndBacks = (
   projectMembers: Array<SlotProjectMembers>,
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
   projectCardback: string | undefined,
   cardsPerPage: number
 ): Array<Array<CardDocument>> => {
@@ -921,7 +926,9 @@ const paginateFrontsAndBacks = (
 export const CardSelectionModeToPaginator: {
   [cardSelectionMode in keyof typeof CardSelectionMode]: (
     projectMembers: Array<SlotProjectMembers>,
-    cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
+    cardDocumentsByIdentifier: {
+      [identifier: string]: CardDocument | undefined;
+    },
     projectCardback: string | undefined,
     cardsPerPage: number
   ) => Array<Array<CardDocument>>;
@@ -951,6 +958,7 @@ export const PDF = (props: PDFProps) => {
         jpgQuality={props.jpgQuality}
         fileHandles={props.fileHandles}
         reportImageFailure={props.reportImageFailure}
+        reportImageProgress={props.reportImageProgress}
       />
     );
   }

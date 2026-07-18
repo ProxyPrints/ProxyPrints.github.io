@@ -96,13 +96,14 @@ Deployment, incidents, and cross-session lessons.
 
 One-word status per doc; see each file for the full survey/spec.
 
-| Doc                                                                                                                                                                      | Status   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
-| [`proposals/proposal-b-bleed-normalization.md`](proposals/proposal-b-bleed-normalization.md) — export-time per-side bleed normalization                                  | BUILDING |
-| [`proposals/proposal-c-context-menu-restyle.md`](proposals/proposal-c-context-menu-restyle.md) — right-click/long-press context menu (shipped); restyle direction (HOLD) | PARTIAL  |
-| [`proposals/proposal-f-public-stats-page.md`](proposals/proposal-f-public-stats-page.md) — public `/stats` transparency page                                             | HOLD     |
-| [`proposals/proposal-g-user-accounts-saved-decks.md`](proposals/proposal-g-user-accounts-saved-decks.md) — user accounts + saved decks via Discord OAuth                 | HOLD     |
-| [`federation/public-export-v1.md`](federation/public-export-v1.md) — publish-first federation: signed verdict export consumable by mpc-autofill forks and the MIT-lineage proxy tools, no peer required | HOLD     |
+| Doc                                                                                                                                                                                                          | Status   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| [`proposals/proposal-b-bleed-normalization.md`](proposals/proposal-b-bleed-normalization.md) — export-time per-side bleed normalization                                                                      | BUILDING |
+| [`proposals/proposal-c-context-menu-restyle.md`](proposals/proposal-c-context-menu-restyle.md) — right-click/long-press context menu (shipped); restyle direction (HOLD)                                     | PARTIAL  |
+| [`proposals/proposal-f-public-stats-page.md`](proposals/proposal-f-public-stats-page.md) — public `/stats` transparency page                                                                                 | HOLD     |
+| [`proposals/proposal-g-user-accounts-saved-decks.md`](proposals/proposal-g-user-accounts-saved-decks.md) — user accounts + saved decks via Discord OAuth                                                     | HOLD     |
+| [`proposals/proposal-h-unified-display-page.md`](proposals/proposal-h-unified-display-page.md) — one page merging the "Choose Art" editor and PDF export into a live print-sheet preview + card-details rail | HOLD     |
+| [`federation/public-export-v1.md`](federation/public-export-v1.md) — publish-first federation: signed verdict export consumable by mpc-autofill forks and the MIT-lineage proxy tools, no peer required     | HOLD     |
 
 Not every shipped proposal-lettered feature has a survey doc here — some
 (e.g. Proposal A, Proposal D) went straight from idea to shipped PR without

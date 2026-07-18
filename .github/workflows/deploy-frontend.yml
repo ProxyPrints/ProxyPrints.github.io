@@ -41,6 +41,7 @@ jobs:
           NEXT_PUBLIC_IMAGE_BUCKET_URL: https://img.proxyprints.ca
           NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID }}
           NEXT_PUBLIC_GOOGLE_DRIVE_APP_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_DRIVE_APP_ID }}
+          NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED: ${{ vars.NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
