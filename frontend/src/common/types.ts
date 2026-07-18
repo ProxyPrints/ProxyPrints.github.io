@@ -111,6 +111,11 @@ export interface SearchResults {
 
 export interface SearchResultsState extends ThunkStateBase {
   searchResults: SearchResults;
+  // Hash keys (matching `searchResults`' own keys) of queries whose printing-specific filter
+  // (expansionCode/collectorNumber) found nothing and were retried unfiltered by the backend -
+  // mirrors EditorSearchResponse.degradedQueries (schema_types.ts). Client-side search results
+  // never populate this - only the remote backend can report a degraded search.
+  degradedQueryHashKeys: Array<string>;
 }
 
 export interface BackendState {

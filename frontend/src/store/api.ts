@@ -924,11 +924,19 @@ export async function APIGetVoteQueue(
   });
 }
 
+// The 2/editorSearch/ (legacy, pre-E-2) endpoint predates degradedQueries entirely - there is no
+// equivalent signal to report, so callers always see an empty array from this path, never a
+// false positive/negative about degraded status.
+export interface EditorSearchResult {
+  results: SearchResults;
+  degradedQueries: Array<string>;
+}
+
 async function APIEditorSearchLegacy(
   backendURL: string,
   searchSettings: SearchSettings,
   queriesToSearch: Array<SearchQuery>
-): Promise<SearchResults> {
+): Promise<EditorSearchResult> {
   const rawResponse = await fetch(formatURL(backendURL, "/2/editorSearch/"), {
     method: "POST",
     body: JSON.stringify({
@@ -956,7 +964,7 @@ async function APIEditorSearchLegacy(
             )
           )
         );
-      return transformedResults;
+      return { results: transformedResults, degradedQueries: [] };
     }
     throw { name: content.name, message: content.message };
   });
@@ -966,7 +974,7 @@ export async function APIEditorSearch(
   backendURL: string,
   searchSettings: SearchSettings,
   queriesToSearch: Array<SearchQuery>
-): Promise<SearchResults> {
+): Promise<EditorSearchResult> {
   try {
     const rawResponse = await fetch(formatURL(backendURL, "/3/editorSearch/"), {
       method: "POST",
@@ -988,7 +996,11 @@ export async function APIEditorSearch(
     }
     return rawResponse.json().then((content) => {
       if (rawResponse.status === 200 && content.results != null) {
-        return content.results as EditorSearchResponse["results"];
+        return {
+          results: content.results as EditorSearchResponse["results"],
+          degradedQueries: (content.degradedQueries ??
+            []) as EditorSearchResponse["degradedQueries"],
+        };
       }
       throw { name: content.name, message: content.message };
     });

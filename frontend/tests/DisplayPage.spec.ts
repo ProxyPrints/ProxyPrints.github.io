@@ -1,9 +1,16 @@
 import { expect } from "@playwright/test";
+import { http, HttpResponse } from "msw";
 
+import { cardDocument8, localBackendURL } from "@/common/test-constants";
 import {
   cardDocumentsThreeResults,
+  cardDocumentsWithCanonicalCards,
+  cardDocumentsWithResolvedPrintingMatch,
   defaultHandlers,
+  searchResultsDegradedPrinting,
+  searchResultsResolvedPrintingMatch,
   searchResultsThreeResults,
+  searchResultsUnresolvedCanonicalImport,
   sourceDocumentsOneResult,
 } from "@/mocks/handlers";
 
@@ -16,6 +23,28 @@ const threeCardHandlers = [
   searchResultsThreeResults,
   ...defaultHandlers,
 ];
+
+function buildRoute(path: string): string {
+  return `${localBackendURL}/${path}`;
+}
+
+const REFERENCE_CANDIDATE = {
+  identifier: "xyz-001-printing",
+  canonicalId: "canonical-xyz-001",
+  expansionCode: "xyz",
+  expansionName: "XYZ Set",
+  collectorNumber: "001",
+  artist: "Some Artist",
+  smallThumbnailUrl: "https://example.com/small-ref.png",
+  mediumThumbnailUrl: "https://example.com/medium-ref.png",
+  fullArt: false,
+  isBorderless: false,
+  frame: "2015",
+  borderColor: "black",
+  isShowcase: false,
+  isExtendedArt: false,
+  isEtched: false,
+};
 
 // Proposal H, Step 1 (docs/proposals/proposal-h-unified-display-page.md) - the /display route's
 // page shell: toolbar, live sheet, slot selection, and the rail's accordion skeleton. Reaches
@@ -237,5 +266,145 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     await guidesToggle.uncheck();
     await expect(page.getByTestId("page-preview-cut-line")).toHaveCount(0);
+  });
+
+  test("the requested-printing badge shows the plain style for a resolved, non-degraded printing-specific import", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsWithResolvedPrintingMatch,
+      sourceDocumentsOneResult,
+      searchResultsResolvedPrintingMatch,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "1 Lightning Bolt (2ED) 162");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+
+    const badge = page.getByTestId("display-printing-badge");
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText("2ED 162");
+    await expect(badge).toHaveAttribute("data-degraded", "false");
+    await expect(badge).not.toHaveAttribute("title");
+  });
+
+  test("the requested-printing badge switches to a distinct degraded style - verified via actual computed styles, not just class names - when the backend reports the printing filter as degraded", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsThreeResults,
+      sourceDocumentsOneResult,
+      searchResultsDegradedPrinting,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "1 my search query (XYZ) 999");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+
+    const badge = page.getByTestId("display-printing-badge");
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText("XYZ 999");
+    await expect(badge).toHaveAttribute("data-degraded", "true");
+    await expect(badge).toHaveAttribute("title", /closest available match/);
+    await expect(badge.locator("i.bi-exclamation-triangle-fill")).toBeVisible();
+
+    // Bootswatch's Superhero theme hardcodes some component colors past the CSS-variable layer
+    // (the theming caveat from PR #91) - reading getComputedStyle is the only way to actually
+    // confirm the browser renders a distinct, visibly-warning color here, rather than trusting
+    // that the bg-warning class "should" look right from its definition alone.
+    const backgroundColor = await badge.evaluate(
+      (element) => getComputedStyle(element).backgroundColor
+    );
+    const [red, green, blue] = backgroundColor.match(/\d+/g)!.map(Number);
+    expect(blue).toBeLessThan(Math.min(red, green) - 20);
+  });
+
+  test("the Confirm? affordance mounts in the rail's always-visible header (same component CardSlot.tsx mounts, adapted only via onOpenGridSelector) and YES submits the same vote", async ({
+    page,
+    network,
+  }) => {
+    let submittedBody: Record<string, unknown> = {};
+    network.use(
+      cardDocumentsWithCanonicalCards,
+      sourceDocumentsOneResult,
+      searchResultsUnresolvedCanonicalImport,
+      http.post(buildRoute("2/printingCandidates/"), () =>
+        HttpResponse.json({ results: [REFERENCE_CANDIDATE] }, { status: 200 })
+      ),
+      http.post(buildRoute("2/submitPrintingTag/"), async ({ request }) => {
+        submittedBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(
+          {
+            resolvedPrinting: REFERENCE_CANDIDATE,
+            isNoMatch: false,
+            voteTally: [],
+          },
+          { status: 200 }
+        );
+      }),
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "1 card 8 (xyz) 001");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+
+    const header = page.getByTestId("display-rail-header");
+    const yesButton = header.getByTestId("deckbuilder-confirm-yes");
+    await expect(yesButton).toBeDisabled();
+
+    await header.getByTestId("deckbuilder-confirm-badge").hover();
+    await expect(header.getByTestId("deckbuilder-compare-pin")).toBeVisible();
+    await expect(yesButton).toBeEnabled();
+
+    await yesButton.click();
+
+    await expect
+      .poll(() => submittedBody.printingIdentifier)
+      .toBe(REFERENCE_CANDIDATE.identifier);
+    expect(submittedBody.voteSurface).toBe("deckbuilder");
+    await expect(
+      header.getByTestId(`deckbuilder-confirm-${cardDocument8.identifier}`)
+    ).toHaveCount(0);
+  });
+
+  test("the Confirm? affordance's NO expands the Choose Image accordion section instead of opening a modal (the rail has no modal to open)", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsWithCanonicalCards,
+      sourceDocumentsOneResult,
+      searchResultsUnresolvedCanonicalImport,
+      http.post(buildRoute("2/printingCandidates/"), () =>
+        HttpResponse.json({ results: [REFERENCE_CANDIDATE] }, { status: 200 })
+      ),
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "1 card 8 (xyz) 001");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+
+    // Choose Image is open by default - collapse it first so NO's "expand it" effect is
+    // observable, rather than trivially already true.
+    await page
+      .getByRole("heading", { name: "Choose Image", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: /Filters/ })
+    ).not.toBeVisible();
+
+    const header = page.getByTestId("display-rail-header");
+    await header.getByTestId("deckbuilder-confirm-badge").hover();
+    const noButton = header.getByTestId("deckbuilder-confirm-no");
+    await expect(noButton).toBeEnabled();
+    await noButton.click();
+
+    await expect(page.getByRole("button", { name: /Filters/ })).toBeVisible();
   });
 });
