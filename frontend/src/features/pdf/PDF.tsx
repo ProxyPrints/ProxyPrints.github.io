@@ -201,7 +201,7 @@ export interface PDFProps {
   pageMarginBottomMM: number;
   pageMarginLeftMM: number;
   pageMarginRightMM: number;
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument };
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined };
   projectMembers: Array<SlotProjectMembers>;
   projectCardback: string | undefined;
   imageQuality: PDFImageQuality;
@@ -851,7 +851,7 @@ export const chunk = <T,>(arr: Array<T>, size: number): Array<Array<T>> => {
 
 const paginateFrontsAndDistinctBacks = (
   projectMembers: Array<SlotProjectMembers>,
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
   projectCardback: string | undefined,
   cardsPerPage: number
 ): Array<Array<CardDocument>> => [
@@ -871,7 +871,7 @@ const paginateFrontsAndDistinctBacks = (
 
 const paginateFrontsOnly = (
   projectMembers: Array<SlotProjectMembers>,
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
   projectCardback: string | undefined,
   cardsPerPage: number
 ): Array<Array<CardDocument>> => [
@@ -886,7 +886,7 @@ const paginateFrontsOnly = (
 
 const paginateBacksOnly = (
   projectMembers: Array<SlotProjectMembers>,
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
   projectCardback: string | undefined,
   cardsPerPage: number
 ): Array<Array<CardDocument>> => [
@@ -901,7 +901,7 @@ const paginateBacksOnly = (
 
 const paginateFrontsAndBacks = (
   projectMembers: Array<SlotProjectMembers>,
-  cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
   projectCardback: string | undefined,
   cardsPerPage: number
 ): Array<Array<CardDocument>> => {
@@ -931,7 +931,9 @@ const paginateFrontsAndBacks = (
 export const CardSelectionModeToPaginator: {
   [cardSelectionMode in keyof typeof CardSelectionMode]: (
     projectMembers: Array<SlotProjectMembers>,
-    cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
+    cardDocumentsByIdentifier: {
+      [identifier: string]: CardDocument | undefined;
+    },
     projectCardback: string | undefined,
     cardsPerPage: number
   ) => Array<Array<CardDocument>>;
