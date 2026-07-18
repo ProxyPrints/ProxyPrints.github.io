@@ -430,6 +430,7 @@ export const projectSelectedImage1: Project = {
   nextMemberId: 1,
   cardback: null,
   mostRecentlySelectedSlot: null,
+  manualOverrides: {},
 };
 
 export const projectThreeMembersSelectedImage1: Project = {
@@ -465,6 +466,7 @@ export const projectThreeMembersSelectedImage1: Project = {
   nextMemberId: 3,
   cardback: null,
   mostRecentlySelectedSlot: null,
+  manualOverrides: {},
 };
 
 export const projectSelectedImage2: Project = {
@@ -482,6 +484,7 @@ export const projectSelectedImage2: Project = {
   nextMemberId: 1,
   cardback: null,
   mostRecentlySelectedSlot: null,
+  manualOverrides: {},
 };
 
 //# endregion

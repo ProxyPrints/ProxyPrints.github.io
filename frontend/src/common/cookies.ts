@@ -9,13 +9,26 @@ import {
   BackendURLKey,
   CSRFKey,
   FavoritesKey,
+  ManualOverridesKey,
   SearchSettingsKey,
 } from "@/common/constants";
 import { Convert } from "@/common/schema_types";
-import { SearchSettings, SourceDocuments, SourceRow } from "@/common/types";
+import {
+  Project,
+  SearchSettings,
+  SourceDocuments,
+  SourceRow,
+} from "@/common/types";
 import { getSourceRowsFromSourceSettings } from "@/common/utils";
+import { ManualOverride } from "@/features/pdf/bleedNormalize";
 import { FavoritesState } from "@/store/slices/favoritesSlice";
 import { getDefaultSearchSettings } from "@/store/slices/searchSettingsSlice";
+
+const MANUAL_OVERRIDE_VALUES: ReadonlyArray<ManualOverride> = [
+  "auto",
+  "force-bleed",
+  "force-trimmed",
+];
 
 //# region CSRF
 // TODO: unsure if we still need this.
@@ -120,6 +133,46 @@ export function setLocalStorageFavorites(
   favoriteRenders: FavoritesState["favoriteRenders"]
 ): void {
   localStorage.setItem(FavoritesKey, JSON.stringify(favoriteRenders));
+}
+
+//# endregion
+
+//# region manual bleed overrides
+
+/**
+ * Get per-card PDF export bleed overrides from localStorage data (Proposal B PR-2, decision 4).
+ * Returns empty object if no valid data is found.
+ */
+export function getLocalStorageManualOverrides(): Project["manualOverrides"] {
+  const serialisedRawOverrides = localStorage.getItem(ManualOverridesKey);
+  if (serialisedRawOverrides == null) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(serialisedRawOverrides);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+    ) {
+      const isValid = Object.values(parsed).every((value) =>
+        MANUAL_OVERRIDE_VALUES.includes(value as ManualOverride)
+      );
+      if (isValid) {
+        return parsed as Project["manualOverrides"];
+      }
+    }
+    return {};
+  } catch (e) {
+    // Invalid JSON or structure, return empty object
+    return {};
+  }
+}
+
+export function setLocalStorageManualOverrides(
+  manualOverrides: Project["manualOverrides"]
+): void {
+  localStorage.setItem(ManualOverridesKey, JSON.stringify(manualOverrides));
 }
 
 //# endregion

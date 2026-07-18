@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { ManualOverridesKey } from "@/common/constants";
 import { cardDocument1 } from "@/common/test-constants";
 import {
   cardDocumentsOneResult,
@@ -174,5 +175,59 @@ test.describe("PDFGenerator - card image fetch failures", () => {
     ]);
     expect(download.suggestedFilename()).toBe("cards.pdf");
     expect(dialogFired).toBe(false);
+  });
+});
+
+test.describe("PDFGenerator - manual bleed override (Proposal B PR-2)", () => {
+  test("setting an override persists to localStorage and survives reload", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsOneResult,
+      sourceDocumentsOneResult,
+      searchResultsOneResult,
+      imageBucketSuccess,
+      imageWorkerSuccess,
+      ...defaultHandlers
+    );
+
+    await addCardAndOpenPDFTab(page);
+
+    await page.getByText("Bleed Overrides").click();
+    const select = page.getByTestId(
+      `bleed-override-select-${cardDocument1.identifier}`
+    );
+    await expect(select).toBeVisible();
+    await expect(select).toHaveValue("auto");
+
+    await select.selectOption("force-bleed");
+    await expect(select).toHaveValue("force-bleed");
+
+    // The override is keyed by card identifier in a standalone localStorage entry, independent
+    // of the in-memory project (which doesn't itself persist across reload today) - decision 4
+    // only requires the override itself to survive, not the whole open project.
+    await expect
+      .poll(() =>
+        page.evaluate((key) => localStorage.getItem(key), ManualOverridesKey)
+      )
+      .toBe(JSON.stringify({ [cardDocument1.identifier]: "force-bleed" }));
+
+    // A fresh navigation rather than page.reload() - reload() alone was observed to hang past
+    // the test timeout in this app; waiting for "domcontentloaded" rather than the default
+    // "load" avoids a second hang, both unrelated to anything this PR touches (this app's
+    // webworkers appear not to settle a second "load" event cleanly within one Playwright page).
+    await page.goto("/editor?server=http://127.0.0.1:8000", {
+      waitUntil: "domcontentloaded",
+    });
+    await page.getByText("Choose Art").click();
+    await importText(page, "my search query");
+    await page.getByRole("tab", { name: "Print!" }).click();
+    await page.getByRole("tab", { name: "PDF" }).click();
+    await page.getByText("Bleed Overrides").click();
+
+    await expect(
+      page.getByTestId(`bleed-override-select-${cardDocument1.identifier}`)
+    ).toHaveValue("force-bleed");
   });
 });

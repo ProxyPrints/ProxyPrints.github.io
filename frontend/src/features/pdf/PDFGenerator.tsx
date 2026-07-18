@@ -16,8 +16,9 @@ import {
   CardWidthMM,
   ToggleButtonHeight,
 } from "@/common/constants";
+import { SourceType } from "@/common/schema_types";
 import { StyledDropdownTreeSelect } from "@/common/StyledDropdownTreeSelect";
-import { useAppDispatch, useAppSelector } from "@/common/types";
+import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { Blurrable } from "@/components/Blurrable";
 import { OverflowCol } from "@/components/OverflowCol";
@@ -27,6 +28,7 @@ import { downloadFile, useDoFileDownload } from "@/features/download/download";
 import { requestGoogleDriveWriteToken } from "@/features/googleDrive/googleDriveAuth";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { GoogleDriveService } from "@/features/googleDrive/GoogleDriveService";
+import { ManualOverride } from "@/features/pdf/bleedNormalize";
 import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
 import { computeLayout } from "@/features/pdf/layout";
 import {
@@ -61,8 +63,10 @@ import {
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
+  selectManualOverrides,
   selectProjectCardback,
   selectProjectMembers,
+  setManualOverride,
 } from "@/store/slices/projectSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 import { AppDispatch } from "@/store/store";
@@ -976,6 +980,88 @@ const SCMSettings = ({
   );
 };
 
+interface BleedOverrideSettingsProps {
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument };
+}
+
+/**
+ * Proposal B PR-2: per-card manual override (Auto / Force bleed / Force trimmed) for the
+ * export-time bleed measurement. Only lists cards bleed normalization can actually apply to
+ * (see PDF.tsx's isBleedNormalizationEligible - full-resolution Google Drive/local-file images
+ * only) so an override control never sits next to a card it would silently do nothing for.
+ * Reads/writes projectSlice directly (decision 4: persists in project state, not local
+ * component state) rather than taking value/setValue props like this file's other settings
+ * sections.
+ */
+const BleedOverrideSettings = ({
+  cardDocumentsByIdentifier,
+}: BleedOverrideSettingsProps) => {
+  const [expanded, setExpanded] = useState<boolean>(false);
+  const dispatch = useAppDispatch();
+  const manualOverrides = useAppSelector(selectManualOverrides);
+
+  const eligibleCards = useMemo(
+    () =>
+      Object.entries(cardDocumentsByIdentifier)
+        .filter(
+          ([, cardDocument]) =>
+            cardDocument.sourceType === SourceType.GoogleDrive ||
+            cardDocument.sourceType === SourceType.LocalFile
+        )
+        .sort(([, a], [, b]) => a.name.localeCompare(b.name)),
+    [cardDocumentsByIdentifier]
+  );
+
+  return (
+    <AutofillCollapse
+      expanded={expanded}
+      onClick={() => setExpanded(!expanded)}
+      zIndex={9}
+      title="Bleed Overrides"
+    >
+      <Container className="p-2">
+        <p className="text-muted" style={{ fontSize: "0.85em" }}>
+          Bleed is measured automatically per card at export. Override a card
+          below if the automatic measurement gets it wrong.
+        </p>
+        {eligibleCards.length === 0 ? (
+          <p className="text-muted mb-0" style={{ fontSize: "0.85em" }}>
+            No cards in this project support bleed normalization yet (Google
+            Drive / local-file sources only).
+          </p>
+        ) : (
+          eligibleCards.map(([identifier, cardDocument]) => (
+            <Row key={identifier} className="align-items-center mb-1">
+              <Col xs={7} className="text-truncate" title={cardDocument.name}>
+                {cardDocument.name}
+              </Col>
+              <Col xs={5}>
+                <Form.Select
+                  size="sm"
+                  data-testid={`bleed-override-select-${identifier}`}
+                  value={manualOverrides[identifier] ?? "auto"}
+                  onChange={(event) =>
+                    dispatch(
+                      setManualOverride({
+                        identifier,
+                        override: event.target.value as ManualOverride,
+                      })
+                    )
+                  }
+                >
+                  <option value="auto">Auto</option>
+                  <option value="force-bleed">Force bleed</option>
+                  <option value="force-trimmed">Force trimmed</option>
+                </Form.Select>
+              </Col>
+            </Row>
+          ))
+        )}
+      </Container>
+    </AutofillCollapse>
+  );
+};
+
 export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
   const dispatch = useAppDispatch();
   const [cardSpacingRowMM, setCardSpacingRowMM] = useState<number | undefined>(
@@ -1021,6 +1107,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
   const projectMembers = useAppSelector(selectProjectMembers);
   const projectCardback = useAppSelector(selectProjectCardback);
   const backendURL = useAppSelector(selectRemoteBackendURL);
+  const manualOverrides = useAppSelector(selectManualOverrides);
 
   const [pageSize, setPageSize] = useState<keyof typeof PageSize>(PageSize.A4);
   const [pageWidth, setPageWidth] = useState<number | undefined>(undefined);
@@ -1066,6 +1153,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     cardDocumentsByIdentifier: cardDocumentsByIdentifier,
     projectMembers: projectMembers,
     projectCardback: projectCardback,
+    bleedOverrides: manualOverrides,
     scmMode: scmMode,
     scmPaperSize: scmPaperSize,
     scmVariant: scmVariant,
@@ -1300,6 +1388,9 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
                 setPageMarginLeftMM={setPageMarginLeftMM}
                 pageMarginRightMM={pageMarginRightMM}
                 setPageMarginRightMM={setPageMarginRightMM}
+              />
+              <BleedOverrideSettings
+                cardDocumentsByIdentifier={cardDocumentsByIdentifier}
               />
             </>
           )}
