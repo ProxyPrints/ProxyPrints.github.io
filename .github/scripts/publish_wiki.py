@@ -13,14 +13,52 @@ migration) is never touched or deleted, regardless of whether it's listed
 in the mapping's legacy_pages. That distinction (marker present = we own
 it) is the only thing that makes "regenerate" safe to run unattended.
 
+LINK REWRITING (the part docs-lint.py can never check): docs/ uses its own
+[[file.md]] wiki-link convention, meant to render as plain text on GitHub's
+normal file view. GitHub WIKI pages give `[[...]]` a second, DIFFERENT
+meaning — native wiki auto-linking, keyed on the literal bracketed text as
+a page name. Copying a docs/ page's body verbatim into a wiki page lets
+GitHub's wiki engine reinterpret our own convention out from under us:
+`[[../troubleshooting.md]]` auto-links to a page literally named
+"../troubleshooting.md" (mangled into a dead slug), and `[[printing-tags.md]]`
+auto-links to "printing-tags.md" (the raw docs/ filename's casing), not the
+actual published page name "Printing-Tags". Both bugs are invisible to
+docs_lint.py, which only checks that a link resolves inside the docs/ tree
+itself — the wiki's own `[[...]]` reinterpretation is a second transform
+downstream of that check, and this is the only place it can be caught.
+
+Every internal link (both `[[wiki]]` and markdown `[text](path)` styles) is
+therefore resolved against its SOURCE file's real repo path, then mapped
+through wiki-publish-map.json: a target that's itself a published page
+becomes a same-wiki link using its REAL page name (never the raw docs/
+filename); a target that exists in the repo but isn't published becomes an
+absolute GitHub blob URL (never a guessed wiki slug); a target that resolves
+to neither a wiki page nor a real repo file is a hard error - the publish
+FAILS rather than shipping a page with a link nobody can follow.
+
 Exits 0 whether or not anything changed; the calling workflow decides
 whether to commit based on `git status --porcelain` in the wiki dir.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
 GENERATED_MARKER = "<!-- GENERATED PAGE"
+GITHUB_BLOB_BASE = "https://github.com/ProxyPrints/ProxyPrints.github.io/blob/master/"
+
+# Order matters: fence/inline must be tried before the link alternatives so
+# code content is never rewritten - both this repo's own [[wiki-link]] prose
+# convention AND real markdown links appear verbatim as ILLUSTRATIVE EXAMPLES
+# inside backticks in some docs (e.g. documentation-process.md explaining
+# this very system) and must not be touched.
+LINK_TOKEN_RE = re.compile(
+    r"(?P<fence>```.*?```)"
+    r"|(?P<inline>`[^`\n]+`)"
+    r"|\[\[(?P<wikilink>[^\]]+)\]\]"
+    r"|(?<!!)\[(?P<mdtext>[^\]]*)\]\((?P<mdpath>[^)]+)\)",
+    re.DOTALL,
+)
 
 
 def generated_header(source_path: str) -> str:
@@ -37,9 +75,86 @@ def load_mapping(repo_root: Path) -> dict:
         return json.load(f)
 
 
-def write_page(wiki_dir: Path, wiki_name: str, source_path: Path, source_rel: str) -> None:
+def build_repo_to_wiki_map(mapping: dict) -> dict:
+    return {page["source"]: page["wiki"] for group in mapping["groups"] for page in group["pages"]}
+
+
+def resolve_repo_relative(repo_root: Path, source_rel: str, target: str) -> str | None:
+    """
+    Resolve a link target string against source_rel's own directory. Returns
+    a repo-relative posix path, or None if target isn't a local-file
+    reference at all (external URL, bare anchor, mailto:).
+    """
+    if target.startswith(("http://", "https://", "mailto:")) or target.startswith("#"):
+        return None
+    path_part = target.split("#", 1)[0]
+    if not path_part:
+        return None
+    source_dir = (repo_root / source_rel).parent
+    resolved = (source_dir / path_part).resolve()
+    try:
+        rel = resolved.relative_to(repo_root.resolve())
+    except ValueError:
+        return None  # escaped the repo root somehow - treat as external, not our problem
+    return rel.as_posix()
+
+
+def rewrite_link(
+    repo_root: Path, source_rel: str, target: str, repo_to_wiki: dict, display_text: str | None
+) -> tuple[str | None, str | None]:
+    """Returns (new_markdown_link, error_message) - exactly one is non-None, unless
+    target wasn't a local path at all (both None - caller leaves the original text)."""
+    resolved_rel = resolve_repo_relative(repo_root, source_rel, target)
+    if resolved_rel is None:
+        return None, None
+
+    wiki_name = repo_to_wiki.get(resolved_rel)
+    if wiki_name:
+        text = display_text or wiki_name
+        return f"[{text}]({wiki_name})", None
+
+    if not (repo_root / resolved_rel).is_file():
+        return None, (
+            f"in {source_rel}: link to `{target}` resolves to `{resolved_rel}`, which is "
+            f"neither a published wiki page nor a real file in the repo"
+        )
+
+    text = display_text or resolved_rel.rsplit("/", 1)[-1]
+    return f"[{text}]({GITHUB_BLOB_BASE}{resolved_rel})", None
+
+
+def transform_links(repo_root: Path, source_rel: str, text: str, repo_to_wiki: dict, errors: list[str]) -> str:
+    def repl(m: re.Match) -> str:
+        if m.group("fence") is not None or m.group("inline") is not None:
+            return m.group(0)
+
+        if m.group("wikilink") is not None:
+            target = m.group("wikilink")
+            if not (target.endswith(".md") or "/" in target):
+                return m.group(0)  # e.g. [[routes]] - a literal TOML table, not a doc link
+            new_link, err = rewrite_link(repo_root, source_rel, target, repo_to_wiki, display_text=None)
+            if err:
+                errors.append(err)
+                return m.group(0)
+            return new_link or m.group(0)
+
+        # markdown link
+        mdtext, mdpath = m.group("mdtext"), m.group("mdpath")
+        new_link, err = rewrite_link(repo_root, source_rel, mdpath, repo_to_wiki, display_text=mdtext or None)
+        if err:
+            errors.append(err)
+            return m.group(0)
+        return new_link if new_link else m.group(0)
+
+    return LINK_TOKEN_RE.sub(repl, text)
+
+
+def write_page(
+    wiki_dir: Path, wiki_name: str, source_path: Path, source_rel: str, repo_root: Path, repo_to_wiki: dict, errors: list[str]
+) -> None:
     body = source_path.read_text()
-    content = generated_header(source_rel) + body
+    transformed = transform_links(repo_root, source_rel, body, repo_to_wiki, errors)
+    content = generated_header(source_rel) + transformed
     (wiki_dir / f"{wiki_name}.md").write_text(content)
 
 
@@ -58,8 +173,9 @@ def write_pointer_page(wiki_dir: Path, wiki_name: str, points_to: str, note: str
     (wiki_dir / f"{wiki_name}.md").write_text(content)
 
 
-def build_home_and_sidebar(repo_root: Path, wiki_dir: Path, mapping: dict) -> None:
-    intro = (repo_root / "docs" / "wiki-home-intro.md").read_text().rstrip() + "\n"
+def build_home_and_sidebar(repo_root: Path, wiki_dir: Path, mapping: dict, repo_to_wiki: dict, errors: list[str]) -> None:
+    intro_raw = (repo_root / "docs" / "wiki-home-intro.md").read_text().rstrip() + "\n"
+    intro = transform_links(repo_root, "docs/wiki-home-intro.md", intro_raw, repo_to_wiki, errors)
 
     home_lines = [
         generated_header("docs/wiki-home-intro.md + .github/wiki-publish-map.json"),
@@ -106,6 +222,8 @@ def main() -> int:
     wiki_dir = Path(sys.argv[2]).resolve()
 
     mapping = load_mapping(repo_root)
+    repo_to_wiki = build_repo_to_wiki_map(mapping)
+    errors: list[str] = []
 
     managed_names = set()
     for group in mapping["groups"]:
@@ -115,7 +233,7 @@ def main() -> int:
             if not source_path.is_file():
                 print(f"::error::wiki-publish-map.json references missing source {source_rel}")
                 return 1
-            write_page(wiki_dir, page["wiki"], source_path, source_rel)
+            write_page(wiki_dir, page["wiki"], source_path, source_rel, repo_root, repo_to_wiki, errors)
             managed_names.add(page["wiki"])
             print(f"wrote {page['wiki']}.md <- {source_rel}")
 
@@ -130,8 +248,18 @@ def main() -> int:
         managed_names.add(pointer["wiki"])
         print(f"wrote {pointer['wiki']}.md (pointer -> {pointer['points_to']})")
 
-    build_home_and_sidebar(repo_root, wiki_dir, mapping)
+    build_home_and_sidebar(repo_root, wiki_dir, mapping, repo_to_wiki, errors)
     managed_names.update({"Home", "_Sidebar"})
+
+    if errors:
+        for err in errors:
+            print(f"::error::{err}")
+        print(f"\n{len(errors)} link-resolution error(s) - failing the publish. "
+              f"docs_lint.py cannot catch this class of break (it only checks links "
+              f"resolve inside docs/ itself, not what they become after this script's "
+              f"wiki-name/blob-URL rewrite) - fix the source link or add the missing "
+              f"page to wiki-publish-map.json.")
+        return 1
 
     # Prune generated pages whose source left the mapping. Never touch a
     # page that doesn't carry our marker — that's hand-maintained content.

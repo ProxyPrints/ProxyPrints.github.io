@@ -5,9 +5,17 @@
       "title": "Understanding the system",
       "pages": [
         { "source": "docs/overview.md", "wiki": "Overview" },
+        {
+          "source": "docs/documentation-process.md",
+          "wiki": "Documentation-Process"
+        },
         { "source": "docs/theory.md", "wiki": "Theory" },
         { "source": "docs/federation-v1.md", "wiki": "Federation-v1" },
         { "source": "docs/upstreaming/vote-system.md", "wiki": "Vote-System" },
+        {
+          "source": "docs/upstreaming/upstream-wiki-drift.md",
+          "wiki": "Upstream-Wiki-Drift"
+        },
         { "source": "docs/features/printing-tags.md", "wiki": "Printing-Tags" },
         {
           "source": "docs/features/catalog-completion-plan.md",
