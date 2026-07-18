@@ -171,11 +171,7 @@ from cardpicker.schema_types import (
     VoteQueueRequest,
 )
 from cardpicker.schema_types import VoteQueueRequestKind as VoteQueueKind
-from cardpicker.schema_types import (
-    VoteQueueResponse,
-    VoteTallyEntry,
-    WhoamiResponse,
-)
+from cardpicker.schema_types import VoteQueueResponse, VoteTallyEntry, WhoamiResponse
 from cardpicker.search.sanitisation import to_searchable
 from cardpicker.search.search_functions import (
     SearchExceptions,
