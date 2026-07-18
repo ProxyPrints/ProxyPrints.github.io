@@ -253,6 +253,8 @@ export async function normalizeCardBleed(
       dpi,
       targetBleedMM,
       prior,
+      bitmap.width,
+      bitmap.height,
       manualOverride
     );
     const planPx = Object.fromEntries(

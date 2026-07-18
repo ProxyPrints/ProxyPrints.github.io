@@ -1,11 +1,14 @@
 As of: 2026-07-18
 What this is: survey + HOLD proposal for opening the existing Discord login to
 ordinary users and letting any logged-in user save/load named decks
-server-side.
-HOLD — build not started. **Spec CLOSED: no open decisions remain** (see
-Decisions). Proposal G builds at its queued slot. §7 (authed vote tier) is
-fully specified but remains a deliberately separate, later build — not part
-of this HOLD's core scope.
+server-side, encrypted client-side so the server operator cannot read deck
+contents (see the zero-knowledge amendment below, decision 10 — this
+supersedes §2/§3's originally-specified plaintext storage model).
+**BUILDING** — build in progress (PR1/schema #85, PR2/sign-in relocation #86
+opened; the ZK amendment lands in a schema revision to #85 before it merges,
+then PRs 3-4). **Spec CLOSED: no open decisions remain** (see Decisions).
+§7 (authed vote tier) is fully specified but remains a deliberately separate,
+later build — not part of this HOLD's core scope.
 
 ## Context — prior art outside this codebase
 
@@ -179,6 +182,14 @@ bytes/populated slot → **~15–21 KB for a 60-card deck, ~25–35 KB for a
 100-card deck.** Comfortably small for a Postgres `JSONField`.
 
 ## 3. Proposed model + endpoints
+
+**Superseded by §8's zero-knowledge amendment**: the `SavedDeck` schema
+below (plaintext `name`/`state` fields, server-side name-uniqueness
+constraint) was the round-1 design. §8 replaces `name`+`state` with opaque
+ciphertext/wrapped-key/nonce/salt-reference fields and removes the
+uniqueness constraint entirely (no longer server-enforceable once titles
+are encrypted). Left as-is below for the historical record of the original
+survey — see §8 for what's actually being built.
 
 **A note on prior art first**: `cardpicker/models.py:871-971` already
 defines a `Project`/`ProjectMember` pair — `user` FK (CASCADE), `name`,
@@ -569,6 +580,231 @@ _human_ cohort scoped by a `created_at`/`anonymous_id` window). An
 authenticated tier changes vote weight; it never changes what happens once
 a cohort turns out to be bad.
 
+## 8. Zero-knowledge encryption amendment (2026-07-18)
+
+**Supersedes §2's "Canonical serialization to store" and §3's `SavedDeck`
+schema as originally specified.** The goal: the server maintainer must be
+cryptographically unable to read saved deck contents. Discord OAuth remains
+**identity only** — which account owns which blobs — and never touches key
+material. This amendment replaces the plaintext-JSONField design; §2/§3's
+original text above is left as-is (historical record of the round-1 survey,
+per this doc's own convention of appending amendments rather than rewriting
+approved text), superseded by everything below.
+
+### Key design (client-side WebCrypto only)
+
+- At **first save** (after Discord connect), the user creates a
+  **passphrase**. Key derivation: PBKDF2-SHA256, iterations ≥600,000, a
+  per-user random salt (server-stored — the salt itself is public-safe, it
+  strengthens against precomputation, not secrecy; the iteration count used
+  is stored alongside it so a future default increase never invalidates an
+  existing user's derivation). The passphrase and every key derived from it
+  **never leave the browser**.
+- The **master key** is a separate, randomly-generated key (not the PBKDF2
+  output itself) — generated exactly once, at first save, and never
+  regenerated afterwards. The passphrase-derived key's only job is to
+  **wrap** this master key (see "Recovery key" below for the second,
+  independent way to wrap the same master key). Each deck gets its own
+  random **DEK** (AES-256-GCM), wrapped by the master key at the time that
+  deck is created. Because the master key never changes, **a passphrase
+  change re-wraps only the one master key** (a single small ciphertext,
+  stored on the user's crypto profile) under a freshly-derived
+  passphrase key — it never touches any individual deck's DEK, and never
+  re-encrypts any deck body.
+- The **entire** deck payload is encrypted, **including the title** — there
+  is no plaintext deck name anywhere server-side. Each server-side record
+  is: opaque ciphertext + wrapped DEK + nonces (one for the payload's
+  AES-GCM encryption, one for the DEK-wrap operation) + a reference to which
+  per-user salt/iteration-count was used + timestamps. Nothing else.
+
+### Recovery key (user-held, ZK-preserving)
+
+At passphrase creation, also generate a random 256-bit **recovery key**
+client-side, and wrap the _same_ master key with it — a second wrapped-key
+blob, stored server-side, exactly as opaque as everything else (the server
+holds a ciphertext it cannot unwrap without the recovery key, same as it
+can't unwrap the passphrase-wrapped slot without the passphrase). Prompted
+once: download as a text file (and shown for print/copy) with wording in
+the spirit of _"Store this somewhere safe — it is the ONLY way to recover
+your decks if you forget your passphrase."_ Never stored by us in
+recoverable form, never re-showable after the creation prompt closes.
+**Recovery flow**: paste the recovery key → unwrap the master key with it →
+set a new passphrase → re-wrap **both** slots (passphrase slot and recovery
+slot) under the new passphrase-derived key and a fresh recovery key
+respectively — the underlying master key, and therefore every deck's DEK
+and ciphertext, never changes; only what wraps the master key does. A
+recovery key generated _before_ a later passphrase change still works,
+because it wraps the master key directly, not anything passphrase-derived.
+
+### Account reset (data-destroying, Discord-gated — the true last resort)
+
+"Forgot passphrase, no recovery key" → re-authenticate via Discord (proves
+account ownership, nothing more — Discord is still identity-only) →
+explicit confirmation naming the actual consequence (e.g. _"this
+permanently deletes your N saved decks"_) → delete every `SavedDeck` row
+(ciphertext, wrapped keys, everything) → fresh start, a new passphrase/
+recovery key pair on next save. **Account access is always recoverable
+(via Discord); deck data never is without a user-held key (passphrase or
+recovery key).** UI copy must keep this distinction sharp — losing the
+passphrase never has to mean losing the _account_, only (absent a recovery
+key) the _decks_.
+
+### Explicitly rejected
+
+Any admin-side or Discord-derived decryption/escrow path. Each would hand
+the server a key path and void both the zero-knowledge guarantee and the
+"ciphertext we cannot decrypt" legal posture below — there is no "moderator
+override" or "owner can reset a user's passphrase" mechanism, by design,
+and none should be added later without revisiting this entire amendment.
+
+### Schema
+
+The saved-deck table stores blobs, not structure — no card columns, no
+searchable fields. Visible metadata, honestly documented: user id, blob
+count/sizes, timestamps. `SavedDeck.name` (the plaintext `CharField` and
+its `UniqueConstraint` from §3's original design) no longer exists — the
+title lives inside the encrypted payload like everything else. A new
+per-user crypto-profile record (salt, iteration count, the two wrapped
+master-key slots — passphrase and recovery) is created at first save.
+
+### UX
+
+Passphrase set at first save, with this warning shown verbatim in spirit:
+_"If you forget this passphrase, your saved decks are **permanently
+unrecoverable** — we cannot reset it, by design."_ (softened in practice by
+the recovery-key prompt immediately alongside it — the warning is about the
+passphrase specifically, not about doom in general). Unlock prompt once per
+session; unwrapped keys held in memory only (never `localStorage`, never
+any persisted store); an explicit "Lock" action clears them immediately
+without waiting for a session to end.
+
+### Future work (design notes only, nothing built here)
+
+- **Deck sharing**, if it ships, uses a **key-in-URL-fragment** scheme — the
+  DEK travels in the fragment (`#...`), which browsers never send to the
+  server, so a share link's server-side request never carries key material.
+  Expanded into a full design below (see "PR-5, post-v1: per-deck share
+  links").
+- **WebAuthn passkey PRF** as an **optional additional** unwrap method
+  someday — it would wrap the same master key a passphrase (or recovery
+  key) does, not a separate one. Withdrawn as the primary/only mechanism;
+  no survey needed now, since the passphrase + recovery-key design alone
+  satisfies the goal.
+
+### PR-5, post-v1: per-deck share links (design only — owner-directed addendum, 2026-07-18; nothing built here)
+
+Expands the "Deck sharing" future-work bullet above into a full design.
+**Design only in this pass** — this section describes a later, separate
+PR (PR-5); nothing here is built by the PRs in this amendment's own
+sequencing (schema, sign-in relocation, API, crypto module, frontend
+wiring). A new `SavedDeckShare` table (or equivalent) is additive to §3's
+schema and does not require changing `SavedDeck`/`UserCryptoProfile` as
+already specified above — shares reference an existing deck by id and
+carry their own wrapped-key blob, so this doesn't preclude anything
+already built in PR-1's schema.
+
+- **Share creation (client-side)**: the owner picks one of their decks; the
+  client generates a fresh random 256-bit `shareKey`, unwraps that deck's
+  existing DEK (via the owner's already-unlocked master key), and
+  re-wraps that same DEK with the new `shareKey` — a second, independent
+  wrapping of the deck's DEK, alongside the owner's own master-key-wrapped
+  copy. The client `POST`s a share record: `{shareId, deckRef, wrappedDEK_by_shareKey, wrapNonce, created, optional expiry}`. The
+  `shareKey` itself goes **only** into the share link's URL fragment —
+  `/shared/<shareId>#<shareKey-base64url>` — never in the path, query
+  string, or request body, so it never reaches the server. The server
+  stores one more opaque wrapped blob and learns nothing about the deck's
+  contents or the owner's own keys.
+- **Recipient flow (no account needed)**: opening the link, the client
+  fetches ciphertext + the share's wrapped DEK by `shareId` alone (an
+  unauthenticated, read-only lookup), unwraps the DEK using the fragment's
+  `shareKey`, and decrypts locally. Render is read-only — a recipient
+  never gets a wrapped-by-master-key copy, only the share-scoped one, so
+  they can never derive the owner's master key or reach any of the
+  owner's other decks.
+- **Revocation**: the owner can list their own active shares per deck
+  (`shareId`s + creation dates — metadata only, same honesty standard as
+  the rest of this schema). Revoking a share is a `DELETE` of that share
+  record — the link is dead for all future fetches immediately. A
+  **paranoid option**, offered per-revoke as a checkbox, additionally
+  rotates the deck's DEK: generate a fresh DEK, re-encrypt that one deck's
+  ciphertext with it, and re-wrap the new DEK for the owner's own
+  passphrase and recovery-key slots (any other still-active shares on that
+  deck would need re-issuing too, since they wrap the old DEK — the UI
+  must surface this rather than silently breaking other shares). This
+  makes even already-captured key material for that share permanently
+  useless. Honest limit, stated plainly in-product: revocation (with or
+  without rotation) cannot recall content a recipient already viewed and
+  saved elsewhere — true of every link-based sharing system, not a gap
+  specific to this design.
+- **Properties**: the master key never leaves its existing wrap chain (it
+  is never itself shared or derivable from a share); shares are
+  inherently per-deck, since they wrap that deck's DEK specifically, never
+  the master key; a deck can have multiple independent, individually
+  revocable shares outstanding at once; each `shareKey` is freshly random,
+  **not** derived from the master key or from any other share's key, so
+  leaking one share's key reveals nothing about the master key, the
+  owner's other decks, or any other share.
+- **Tests** (written now as the spec's requirement for PR-5, to implement
+  when that PR is built): share round-trip (create → fetch by
+  `shareId` + fragment key → decrypt correctly); a revoked share's fetch
+  fails (or 404s) for all subsequent attempts; rotation-on-revoke renders
+  a previously-captured `shareKey` unable to decrypt the rotated
+  ciphertext; a leaked `shareKey` cannot decrypt or unwrap anything for
+  any _other_ deck, shared or not.
+
+### Consequences (written honestly)
+
+- No server-side deck-derived feature is possible, ever: no deck search, no
+  deck-derived stats (the public stats page,
+  [`proposal-f-public-stats-page.md`](proposal-f-public-stats-page.md),
+  correctly draws only from votes, never from deck contents).
+- **No server-side name-uniqueness enforcement.** §3/decision 4's original
+  design (a `UniqueConstraint` on `(owner, name)` scoped to `kind=deck`) is
+  no longer possible once titles are encrypted — the server cannot compare
+  plaintext names it never sees. Collision detection becomes a
+  **client-side-only** check (the frontend decrypts its own deck list and
+  can warn on a duplicate name before saving), not a data-integrity
+  guarantee. This is a genuine behavior change from the original decision
+  4/7, not an oversight.
+- Lost passphrase **and** lost recovery key = lost data, deliberately —
+  the account-reset flow above is destructive by design, not a hidden
+  backdoor. There is no path that gives the server operator, an admin, or a
+  moderator access to deck contents under any circumstance (see "explicitly
+  rejected" above).
+
+### Tests required
+
+Encrypt/decrypt round-trip; wrong passphrase fails to unwrap; ciphertext
+tamper → AES-GCM authentication failure (not a silent garbage decrypt);
+passphrase change re-wraps the master key correctly without touching any
+deck's DEK or ciphertext (the master key itself never changes — see "Key
+design" above); recovery-key round-trip (forget passphrase → recover via
+the recovery key → set a new passphrase); both passphrase and recovery
+key lost → the account-reset flow deletes cleanly and a fresh pair issues
+correctly on next save; a recovery key generated _before_ a later
+passphrase change still unwraps the master key correctly (proving the
+recovery slot is independent of passphrase-derived state).
+
+### Legal data-inventory paragraph (for the owner's PIPEDA review; supersedes §6's original paragraph)
+
+_"Saved decks are stored as ciphertext the server cannot decrypt — the
+encryption passphrase, the user's recovery key, and every key derived from
+either, exist only in the user's browser (or the user's own safekeeping,
+for the recovery key) and are never transmitted or stored server-side in
+recoverable form. The server retains only: the owning account's identifier,
+an opaque encrypted blob per deck plus that deck's own wrapped encryption
+key, two wrapped copies of the user's single master key (one recoverable
+with the passphrase, one recoverable with the user's own recovery key —
+neither readable by us), a per-user random salt and iteration count (not
+secret; strengthens key derivation), and ordinary created/updated
+timestamps. A user can delete any saved deck — or,
+once account deletion ships, their entire account — at any time,
+immediately and permanently. If both the passphrase and the recovery key
+are lost, the affected decks are permanently unrecoverable by design; the
+server operator has no admin-side decryption or escrow path and cannot
+assist beyond a destructive account reset that deletes the unreadable data
+and lets the user start fresh."_
+
 ## Effort estimate
 
 | Piece                                                                                                           | Estimate     | Why                                                                                                                                                      |
@@ -650,8 +886,20 @@ with the saved-decks build.
    `authed_vote_weight()` as a fixed value for v1. Headroom to 2.0 is
    reserved for the future account-standing extension (age/history/
    Dawid-Skene-style estimate), not a sign 1.5 is provisional.
+10. **Zero-knowledge encryption (§8) — resolved, FINAL** (supersedes an
+    earlier passphrase-only amendment and a subsequent passkey/PRF
+    revision — both withdrawn, see §8). Saved decks are encrypted
+    client-side (PBKDF2-SHA256 ≥600k iterations + per-user salt → AES-256-GCM
+    master key; per-deck DEKs wrapped by it; the entire payload, including
+    the title, is ciphertext server-side) so the server operator is
+    cryptographically unable to read deck contents. A user-held recovery
+    key (generated at passphrase creation, wraps the same master key) is
+    the ZK-preserving recovery path; a Discord-gated, data-destroying
+    account reset is the true last resort if both are lost. No admin-side
+    or Discord-derived decryption/escrow path exists or will be added. See
+    §8 for the full design, schema, UX, consequences, and required tests.
 
-**Spec status: CLOSED.** All nine decisions above are resolved; no open
+**Spec status: CLOSED.** All ten decisions above are resolved; no open
 items remain in this document. §7 (authed vote tier) is fully specified but
 stays a separate, later build from the saved-decks core (own migration, own
 PR, own review) — it does not block Proposal G building at its queued slot.

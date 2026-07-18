@@ -515,6 +515,36 @@ adopting the same convention independently can't collide (a fixed default like a
 `report-relay` is exactly the thing every session will reach for identically). The bare
 `report-relay` name itself is now retired for this reason - always suffix.
 
+## Color-run measurement cannot see frame-colored bleed - the invisibility is the feature's own design goal
+
+Proposal B's original probe-based bleed measurement (`bleedNormalize.ts`, walk a uniform-color
+run inward from each edge) shipped with real synthetic-fixture coverage but only a "starting
+guess" calibration caveat on its constants. Task #134's real-image calibration pass (30 catalog
+images, `docs/reports/2026-07-18-bleed-calibration-134.md`) found a ~2x measurement bias and,
+critically, root-caused it rather than stopping at "found a bug": sweeping
+`RGB_DISTANCE_THRESHOLD` across a 4x range (6 to 24) moved the sample median under 3% - ruling
+out "threshold too loose" as the cause before it could be mistaken for one. The real cause: a
+standard MTG card's own border is commonly a flat, uniform color, and the synthetic bleed
+extension sitting just outside it is _deliberately_ colored to match the frame so a print
+misalignment doesn't show a visible seam - meaning the probe's "uniform run = bleed" assumption
+can never distinguish bleed from border once both are the same color, **by the bleed extension's
+own design intent**. No amount of threshold tuning fixes a measurement whose blind spot is the
+feature's own success condition.
+
+**The lesson, generalized**: when a measurement's error turns out to be invariant across a wide
+sweep of its own tuning constants, stop tuning and ask whether the measurement's _core method_ -
+not its parameters - structurally cannot see the thing it's trying to see. Here, the fix wasn't a
+better threshold; it was picking an entirely different signal immune to the same confound. The
+source image's own pixel dimensions (checked against the standard trim/bleed aspect ratios, the
+same method the backend's already-validated `classify_bleed_edge` uses) carry the same
+information a color-run walk was trying to extract, but a card's _file dimensions_ have no
+dependency on its _border color_ - so the confound simply doesn't apply. Demoting the original
+measurement to an advisory role (ambiguity detection, an asymmetry flag) rather than discarding
+it outright preserved the real edge cases it still catches (a solid-background full-art card, a
+degenerate scan) while removing it from the one thing it was structurally unable to do reliably.
+See `docs/proposals/proposal-b-bleed-normalization.md`'s "Owner design decision" section and
+`bleedNormalize.ts`'s own module comment for the full resolution order.
+
 ## Passing a plain callback through comlink's Remote proxy throws DataCloneError - and the failure disguises itself as a false-positive Playwright "element is visible" result
 
 `pdfRenderService.ts` added a method that called `this.worker.onImageProgress(cb)` - `cb` a plain
@@ -540,3 +570,30 @@ z-index/stacking-context bug, not "there's a JS exception on this page." **Alway
 `page.on('pageerror')`) before assuming a pointer-interception failure is a CSS/layout problem** -
 in dev mode, Next's own error overlay is frequently the actual "invisible" thing eating the click,
 and it's a much faster diagnosis than auditing z-index stacking contexts by hand.
+
+## A feature-flagged page's dev-server test suite passing proves nothing about its production build
+
+Proposal H's `/display` route (behind `NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED`) had a full green
+Playwright suite against `next dev` and still failed `npm run build` in production the moment the
+flag actually flipped true in a real deploy (`deploy-frontend.yml` run #107) - a `tsc` type error
+(`Card | undefined` not assignable to `Card`) that plain `npx tsc --noEmit` on the feature branch
+never caught either. Two independent causes stacked: (1) `next dev`'s Playwright run never
+prerenders every route through the production compiler the way `next build`'s static export does
+
+- a type error only reachable via the real build pipeline is invisible to dev-mode testing no
+  matter how thorough; (2) the type error itself only existed once the feature branch merged
+  alongside an unrelated same-day PR that correctly widened `useCardDocumentsByIdentifier()`'s
+  return type to include `undefined` (fixing a real crash, task #135) - a cross-PR interaction, not
+  a bug in either PR alone, so neither branch's own pre-merge CI could have caught it in isolation.
+  Diagnosis trap avoided here: don't trust a clean local repro build at face value - confirm it's
+  actually running against the SAME commit the real CI run failed on (`git log -1`), and regenerate
+  any gitignored build-time artifacts (this repo's `frontend/src/common/generated/` keyrune assets,
+  produced by `npm install`'s postinstall, not committed) before concluding a build error doesn't
+  reproduce - a stale/incomplete local environment can silently "fix" a real failure with an
+  unrelated false negative.
+
+**New standing verification bar**: any flag-gated page must pass a real production build with the
+flag ON - `NEXT_PUBLIC_<FLAG>=true npx next build` (or the equivalent for whatever flag var) -
+before its PR ships, in addition to (not instead of) `tsc --noEmit`, the Jest suite, and Playwright
+against `next dev`. Add this to the pre-push checklist for every future PR touching a flagged
+route, not just this one's remaining build-out.

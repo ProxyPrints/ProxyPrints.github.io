@@ -813,6 +813,49 @@ class ContributionsResponse(BaseModel):
         return result
 
 
+class CryptoProfileResponse(BaseModel):
+    exists: bool
+    kdfIterations: Optional[int] = None
+    passphraseWrappedMasterKey: Optional[str] = None
+    passphraseWrappedMasterKeyNonce: Optional[str] = None
+    recoveryWrappedMasterKey: Optional[str] = None
+    recoveryWrappedMasterKeyNonce: Optional[str] = None
+    salt: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CryptoProfileResponse":
+        assert isinstance(obj, dict)
+        exists = from_bool(obj.get("exists"))
+        kdfIterations = from_union([from_none, from_int], obj.get("kdfIterations"))
+        passphraseWrappedMasterKey = from_union([from_none, from_str], obj.get("passphraseWrappedMasterKey"))
+        passphraseWrappedMasterKeyNonce = from_union([from_none, from_str], obj.get("passphraseWrappedMasterKeyNonce"))
+        recoveryWrappedMasterKey = from_union([from_none, from_str], obj.get("recoveryWrappedMasterKey"))
+        recoveryWrappedMasterKeyNonce = from_union([from_none, from_str], obj.get("recoveryWrappedMasterKeyNonce"))
+        salt = from_union([from_none, from_str], obj.get("salt"))
+        return CryptoProfileResponse(
+            exists,
+            kdfIterations,
+            passphraseWrappedMasterKey,
+            passphraseWrappedMasterKeyNonce,
+            recoveryWrappedMasterKey,
+            recoveryWrappedMasterKeyNonce,
+            salt,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["exists"] = from_bool(self.exists)
+        result["kdfIterations"] = from_union([from_none, from_int], self.kdfIterations)
+        result["passphraseWrappedMasterKey"] = from_union([from_none, from_str], self.passphraseWrappedMasterKey)
+        result["passphraseWrappedMasterKeyNonce"] = from_union(
+            [from_none, from_str], self.passphraseWrappedMasterKeyNonce
+        )
+        result["recoveryWrappedMasterKey"] = from_union([from_none, from_str], self.recoveryWrappedMasterKey)
+        result["recoveryWrappedMasterKeyNonce"] = from_union([from_none, from_str], self.recoveryWrappedMasterKeyNonce)
+        result["salt"] = from_union([from_none, from_str], self.salt)
+        return result
+
+
 class DFCPairsResponse(BaseModel):
     dfcPairs: Dict[str, str]
 
@@ -825,6 +868,36 @@ class DFCPairsResponse(BaseModel):
     def to_dict(self) -> dict:
         result: dict = {}
         result["dfcPairs"] = from_dict(from_str, self.dfcPairs)
+        return result
+
+
+class DeleteDeckRequest(BaseModel):
+    key: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "DeleteDeckRequest":
+        assert isinstance(obj, dict)
+        key = from_str(obj.get("key"))
+        return DeleteDeckRequest(key)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["key"] = from_str(self.key)
+        return result
+
+
+class DeleteDeckResponse(BaseModel):
+    deleted: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> "DeleteDeckResponse":
+        assert isinstance(obj, dict)
+        deleted = from_bool(obj.get("deleted"))
+        return DeleteDeckResponse(deleted)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["deleted"] = from_bool(self.deleted)
         return result
 
 
@@ -1113,6 +1186,59 @@ class LanguagesResponse(BaseModel):
     def to_dict(self) -> dict:
         result: dict = {}
         result["languages"] = from_list(lambda x: to_class(Language, x), self.languages)
+        return result
+
+
+class LoadDeckRequest(BaseModel):
+    key: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "LoadDeckRequest":
+        assert isinstance(obj, dict)
+        key = from_str(obj.get("key"))
+        return LoadDeckRequest(key)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["key"] = from_str(self.key)
+        return result
+
+
+class LoadDeckResponseKind(str, Enum):
+    deck = "deck"
+    snapshot = "snapshot"
+
+
+class LoadDeckResponse(BaseModel):
+    ciphertext: str
+    ciphertextNonce: str
+    createdAt: str
+    kind: LoadDeckResponseKind
+    updatedAt: str
+    wrappedDek: str
+    wrappedDekNonce: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "LoadDeckResponse":
+        assert isinstance(obj, dict)
+        ciphertext = from_str(obj.get("ciphertext"))
+        ciphertextNonce = from_str(obj.get("ciphertextNonce"))
+        createdAt = from_str(obj.get("createdAt"))
+        kind = LoadDeckResponseKind(obj.get("kind"))
+        updatedAt = from_str(obj.get("updatedAt"))
+        wrappedDek = from_str(obj.get("wrappedDek"))
+        wrappedDekNonce = from_str(obj.get("wrappedDekNonce"))
+        return LoadDeckResponse(ciphertext, ciphertextNonce, createdAt, kind, updatedAt, wrappedDek, wrappedDekNonce)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["ciphertext"] = from_str(self.ciphertext)
+        result["ciphertextNonce"] = from_str(self.ciphertextNonce)
+        result["createdAt"] = from_str(self.createdAt)
+        result["kind"] = to_enum(LoadDeckResponseKind, self.kind)
+        result["updatedAt"] = from_str(self.updatedAt)
+        result["wrappedDek"] = from_str(self.wrappedDek)
+        result["wrappedDekNonce"] = from_str(self.wrappedDekNonce)
         return result
 
 
@@ -1732,6 +1858,36 @@ class ReportCardResponse(BaseModel):
         return result
 
 
+class ResetSavedDecksRequest(BaseModel):
+    confirm: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ResetSavedDecksRequest":
+        assert isinstance(obj, dict)
+        confirm = from_bool(obj.get("confirm"))
+        return ResetSavedDecksRequest(confirm)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["confirm"] = from_bool(self.confirm)
+        return result
+
+
+class ResetSavedDecksResponse(BaseModel):
+    deletedDeckCount: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ResetSavedDecksResponse":
+        assert isinstance(obj, dict)
+        deletedDeckCount = from_int(obj.get("deletedDeckCount"))
+        return ResetSavedDecksResponse(deletedDeckCount)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["deletedDeckCount"] = from_int(self.deletedDeckCount)
+        return result
+
+
 class Cards(BaseModel):
     CARD: List[Card]
     CARDBACK: List[Card]
@@ -1765,6 +1921,157 @@ class SampleCardsResponse(BaseModel):
     def to_dict(self) -> dict:
         result: dict = {}
         result["cards"] = to_class(Cards, self.cards)
+        return result
+
+
+class SaveCryptoProfileRequest(BaseModel):
+    kdfIterations: int
+    passphraseWrappedMasterKey: str
+    passphraseWrappedMasterKeyNonce: str
+    recoveryWrappedMasterKey: str
+    recoveryWrappedMasterKeyNonce: str
+    salt: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SaveCryptoProfileRequest":
+        assert isinstance(obj, dict)
+        kdfIterations = from_int(obj.get("kdfIterations"))
+        passphraseWrappedMasterKey = from_str(obj.get("passphraseWrappedMasterKey"))
+        passphraseWrappedMasterKeyNonce = from_str(obj.get("passphraseWrappedMasterKeyNonce"))
+        recoveryWrappedMasterKey = from_str(obj.get("recoveryWrappedMasterKey"))
+        recoveryWrappedMasterKeyNonce = from_str(obj.get("recoveryWrappedMasterKeyNonce"))
+        salt = from_str(obj.get("salt"))
+        return SaveCryptoProfileRequest(
+            kdfIterations,
+            passphraseWrappedMasterKey,
+            passphraseWrappedMasterKeyNonce,
+            recoveryWrappedMasterKey,
+            recoveryWrappedMasterKeyNonce,
+            salt,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["kdfIterations"] = from_int(self.kdfIterations)
+        result["passphraseWrappedMasterKey"] = from_str(self.passphraseWrappedMasterKey)
+        result["passphraseWrappedMasterKeyNonce"] = from_str(self.passphraseWrappedMasterKeyNonce)
+        result["recoveryWrappedMasterKey"] = from_str(self.recoveryWrappedMasterKey)
+        result["recoveryWrappedMasterKeyNonce"] = from_str(self.recoveryWrappedMasterKeyNonce)
+        result["salt"] = from_str(self.salt)
+        return result
+
+
+class SaveCryptoProfileResponse(BaseModel):
+    saved: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SaveCryptoProfileResponse":
+        assert isinstance(obj, dict)
+        saved = from_bool(obj.get("saved"))
+        return SaveCryptoProfileResponse(saved)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["saved"] = from_bool(self.saved)
+        return result
+
+
+class SaveDeckRequest(BaseModel):
+    ciphertext: str
+    ciphertextNonce: str
+    wrappedDek: str
+    wrappedDekNonce: str
+    key: Optional[str] = None
+    kind: Optional[LoadDeckResponseKind] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SaveDeckRequest":
+        assert isinstance(obj, dict)
+        ciphertext = from_str(obj.get("ciphertext"))
+        ciphertextNonce = from_str(obj.get("ciphertextNonce"))
+        wrappedDek = from_str(obj.get("wrappedDek"))
+        wrappedDekNonce = from_str(obj.get("wrappedDekNonce"))
+        key = from_union([from_none, from_str], obj.get("key"))
+        kind = from_union([LoadDeckResponseKind, from_none], obj.get("kind"))
+        return SaveDeckRequest(ciphertext, ciphertextNonce, wrappedDek, wrappedDekNonce, key, kind)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["ciphertext"] = from_str(self.ciphertext)
+        result["ciphertextNonce"] = from_str(self.ciphertextNonce)
+        result["wrappedDek"] = from_str(self.wrappedDek)
+        result["wrappedDekNonce"] = from_str(self.wrappedDekNonce)
+        result["key"] = from_union([from_none, from_str], self.key)
+        if self.kind is not None:
+            result["kind"] = from_union([lambda x: to_enum(LoadDeckResponseKind, x), from_none], self.kind)
+        return result
+
+
+class SaveDeckResponse(BaseModel):
+    key: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SaveDeckResponse":
+        assert isinstance(obj, dict)
+        key = from_str(obj.get("key"))
+        return SaveDeckResponse(key)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["key"] = from_str(self.key)
+        return result
+
+
+class SavedDeckSummary(BaseModel):
+    ciphertext: str
+    ciphertextNonce: str
+    createdAt: str
+    key: str
+    kind: LoadDeckResponseKind
+    updatedAt: str
+    wrappedDek: str
+    wrappedDekNonce: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SavedDeckSummary":
+        assert isinstance(obj, dict)
+        ciphertext = from_str(obj.get("ciphertext"))
+        ciphertextNonce = from_str(obj.get("ciphertextNonce"))
+        createdAt = from_str(obj.get("createdAt"))
+        key = from_str(obj.get("key"))
+        kind = LoadDeckResponseKind(obj.get("kind"))
+        updatedAt = from_str(obj.get("updatedAt"))
+        wrappedDek = from_str(obj.get("wrappedDek"))
+        wrappedDekNonce = from_str(obj.get("wrappedDekNonce"))
+        return SavedDeckSummary(
+            ciphertext, ciphertextNonce, createdAt, key, kind, updatedAt, wrappedDek, wrappedDekNonce
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["ciphertext"] = from_str(self.ciphertext)
+        result["ciphertextNonce"] = from_str(self.ciphertextNonce)
+        result["createdAt"] = from_str(self.createdAt)
+        result["key"] = from_str(self.key)
+        result["kind"] = to_enum(LoadDeckResponseKind, self.kind)
+        result["updatedAt"] = from_str(self.updatedAt)
+        result["wrappedDek"] = from_str(self.wrappedDek)
+        result["wrappedDekNonce"] = from_str(self.wrappedDekNonce)
+        return result
+
+
+class SavedDecksResponse(BaseModel):
+    decks: List[SavedDeckSummary]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SavedDecksResponse":
+        assert isinstance(obj, dict)
+        decks = from_list(SavedDeckSummary.from_dict, obj.get("decks"))
+        return SavedDecksResponse(decks)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["decks"] = from_list(lambda x: to_class(SavedDeckSummary, x), self.decks)
         return result
 
 
@@ -2038,26 +2345,26 @@ class TagsResponse(BaseModel):
         return result
 
 
-class Kind(str, Enum):
+class VoteQueueRequestKind(str, Enum):
     artist = "artist"
     printing = "printing"
     tag = "tag"
 
 
 class VoteQueueRequest(BaseModel):
-    kind: Kind
+    kind: VoteQueueRequestKind
     page: int
 
     @staticmethod
     def from_dict(obj: Any) -> "VoteQueueRequest":
         assert isinstance(obj, dict)
-        kind = Kind(obj.get("kind"))
+        kind = VoteQueueRequestKind(obj.get("kind"))
         page = from_int(obj.get("page"))
         return VoteQueueRequest(kind, page)
 
     def to_dict(self) -> dict:
         result: dict = {}
-        result["kind"] = to_enum(Kind, self.kind)
+        result["kind"] = to_enum(VoteQueueRequestKind, self.kind)
         result["page"] = from_int(self.page)
         return result
 
@@ -2476,12 +2783,36 @@ def ContributionsResponsetodict(x: ContributionsResponse) -> Any:
     return to_class(ContributionsResponse, x)
 
 
+def CryptoProfileResponsefromdict(s: Any) -> CryptoProfileResponse:
+    return CryptoProfileResponse.from_dict(s)
+
+
+def CryptoProfileResponsetodict(x: CryptoProfileResponse) -> Any:
+    return to_class(CryptoProfileResponse, x)
+
+
 def DFCPairsResponsefromdict(s: Any) -> DFCPairsResponse:
     return DFCPairsResponse.from_dict(s)
 
 
 def DFCPairsResponsetodict(x: DFCPairsResponse) -> Any:
     return to_class(DFCPairsResponse, x)
+
+
+def DeleteDeckRequestfromdict(s: Any) -> DeleteDeckRequest:
+    return DeleteDeckRequest.from_dict(s)
+
+
+def DeleteDeckRequesttodict(x: DeleteDeckRequest) -> Any:
+    return to_class(DeleteDeckRequest, x)
+
+
+def DeleteDeckResponsefromdict(s: Any) -> DeleteDeckResponse:
+    return DeleteDeckResponse.from_dict(s)
+
+
+def DeleteDeckResponsetodict(x: DeleteDeckResponse) -> Any:
+    return to_class(DeleteDeckResponse, x)
 
 
 def EditorSearchRequestfromdict(s: Any) -> EditorSearchRequest:
@@ -2562,6 +2893,22 @@ def LanguagesResponsefromdict(s: Any) -> LanguagesResponse:
 
 def LanguagesResponsetodict(x: LanguagesResponse) -> Any:
     return to_class(LanguagesResponse, x)
+
+
+def LoadDeckRequestfromdict(s: Any) -> LoadDeckRequest:
+    return LoadDeckRequest.from_dict(s)
+
+
+def LoadDeckRequesttodict(x: LoadDeckRequest) -> Any:
+    return to_class(LoadDeckRequest, x)
+
+
+def LoadDeckResponsefromdict(s: Any) -> LoadDeckResponse:
+    return LoadDeckResponse.from_dict(s)
+
+
+def LoadDeckResponsetodict(x: LoadDeckResponse) -> Any:
+    return to_class(LoadDeckResponse, x)
 
 
 def ModerationDriveCardsRequestfromdict(s: Any) -> ModerationDriveCardsRequest:
@@ -2740,12 +3087,76 @@ def ReportCardResponsetodict(x: ReportCardResponse) -> Any:
     return to_class(ReportCardResponse, x)
 
 
+def ResetSavedDecksRequestfromdict(s: Any) -> ResetSavedDecksRequest:
+    return ResetSavedDecksRequest.from_dict(s)
+
+
+def ResetSavedDecksRequesttodict(x: ResetSavedDecksRequest) -> Any:
+    return to_class(ResetSavedDecksRequest, x)
+
+
+def ResetSavedDecksResponsefromdict(s: Any) -> ResetSavedDecksResponse:
+    return ResetSavedDecksResponse.from_dict(s)
+
+
+def ResetSavedDecksResponsetodict(x: ResetSavedDecksResponse) -> Any:
+    return to_class(ResetSavedDecksResponse, x)
+
+
 def SampleCardsResponsefromdict(s: Any) -> SampleCardsResponse:
     return SampleCardsResponse.from_dict(s)
 
 
 def SampleCardsResponsetodict(x: SampleCardsResponse) -> Any:
     return to_class(SampleCardsResponse, x)
+
+
+def SaveCryptoProfileRequestfromdict(s: Any) -> SaveCryptoProfileRequest:
+    return SaveCryptoProfileRequest.from_dict(s)
+
+
+def SaveCryptoProfileRequesttodict(x: SaveCryptoProfileRequest) -> Any:
+    return to_class(SaveCryptoProfileRequest, x)
+
+
+def SaveCryptoProfileResponsefromdict(s: Any) -> SaveCryptoProfileResponse:
+    return SaveCryptoProfileResponse.from_dict(s)
+
+
+def SaveCryptoProfileResponsetodict(x: SaveCryptoProfileResponse) -> Any:
+    return to_class(SaveCryptoProfileResponse, x)
+
+
+def SaveDeckRequestfromdict(s: Any) -> SaveDeckRequest:
+    return SaveDeckRequest.from_dict(s)
+
+
+def SaveDeckRequesttodict(x: SaveDeckRequest) -> Any:
+    return to_class(SaveDeckRequest, x)
+
+
+def SaveDeckResponsefromdict(s: Any) -> SaveDeckResponse:
+    return SaveDeckResponse.from_dict(s)
+
+
+def SaveDeckResponsetodict(x: SaveDeckResponse) -> Any:
+    return to_class(SaveDeckResponse, x)
+
+
+def SavedDeckSummaryfromdict(s: Any) -> SavedDeckSummary:
+    return SavedDeckSummary.from_dict(s)
+
+
+def SavedDeckSummarytodict(x: SavedDeckSummary) -> Any:
+    return to_class(SavedDeckSummary, x)
+
+
+def SavedDecksResponsefromdict(s: Any) -> SavedDecksResponse:
+    return SavedDecksResponse.from_dict(s)
+
+
+def SavedDecksResponsetodict(x: SavedDecksResponse) -> Any:
+    return to_class(SavedDecksResponse, x)
 
 
 def SearchEngineHealthResponsefromdict(s: Any) -> SearchEngineHealthResponse:

@@ -596,31 +596,43 @@ phash cap (`PHASH_MAX_CANDIDATES`).
 
 **Built**: `cardpicker/local_lands_identify.py` (the module — target-pool
 query, the 3-step pipeline, `dry_run`/`run_id`/ledger rails matching
-Part 3's exact shape) + `management/commands/local_lands_identify.py`
-(`--write`/`--run-id`/`--sample-size` [default 300, per HOLD #B]/
-`--fetch-budget` [default 0], staleness guard, `PilotRunLedger` lifecycle,
-`verify_zero_resolutions` gate after any real write) +
-`tests/test_local_lands_identify.py` (16 tests, synthetic fixtures, no
-network — passing). Verified end-to-end against the real pytest suite
-(862 passed, 130/130 snapshots, only the pre-existing known-bucket
-failures — moxfield ×2, `test_sources.py` fixture-path ×2, unrelated to
-this module) and the real `pre-commit` hook set (ruff/isort/black/
-mypy/prettier all clean).
+Part 3's exact shape, plus the `=s800` OCR-tier addendum —
+`OCR_FETCH_DPI=220`, task #130's tier-routing idea applied here first;
+phash needs no fetch tier, it matches against already-ingested hashes)
 
-**HOLD #B — still open**: the actual volume-check numbers (land-pool
-size, artist-extraction rate on a 300-card sample, per-name candidate
-counts pre/post artist filter) require running
-`manage.py local_lands_identify` (dry-run, the default) against the real
-production database — this session does not have that access (direct
-DB/host-venv access was denied by the same classifier mechanism that
-blocked Docker build/compose access earlier this same session; per that
-established pattern, not re-attempted a fourth way here). The command is
-built, tested, and ready — `--fetch-budget 0` gets `land_pool_size` +
-`per_name_candidate_counts` (pre-filter) with zero network cost as a
-first, instant read of pool shape; the full HOLD #B report (including
-the artist-extraction rate, which needs real fetches) needs someone with
-production DB access to run the default invocation and report the
-output. Nothing writes without an explicit `--write`.
+- `management/commands/local_lands_identify.py`
+  (`--write`/`--run-id`/`--sample-size` [default 300, per HOLD #B]/
+  `--fetch-budget` [default 0], staleness guard, `PilotRunLedger` lifecycle,
+  `verify_zero_resolutions` gate after any real write) +
+  `tests/test_local_lands_identify.py` (17 tests, synthetic fixtures, no
+  network — passing). Verified end-to-end against the real pytest suite
+  (862 passed, 130/130 snapshots, only the pre-existing known-bucket
+  failures — moxfield ×2, `test_sources.py` fixture-path ×2, unrelated to
+  this module) and the real `pre-commit` hook set (ruff/isort/black/
+  mypy/prettier all clean).
+
+**HOLD #B — cleared, real numbers in** (2026-07-18,
+`run_id=20260718T215057-8af41b53`): land pool **39,707 cards**
+(materially larger than assumed — basic lands plus every other
+over-cap name; e.g. every "Forest" variant alone runs ~944 candidates).
+Real 300-card sample: 103 (34.3%) resolve via plain OCR alone (step 1,
+no artist-decomposition needed — these were simply never reached by the
+main pilot's own OCR pass, not genuinely OCR-illegible); of the
+remaining 197, 54 (18.0% of the full sample) got a real artist
+extraction, of which only 5 (3 singleton + 2 tiebreak) reached a
+confident printing match — 48 came up phash-ambiguous even after a
+successful artist match, because artist-filtering doesn't always bring
+a name under the phash cap (some filtered sets still run 13-20
+candidates). Extrapolated to the full pool (linear, not a guarantee):
+~13,633 cards resolvable via free OCR, ~662 additional via artist-
+decomposition specifically. Full data, per-outcome breakdown, and the
+open design question (is ~1.7% artist-decomposition yield an acceptable
+ceiling, or does the phash-ambiguous rate need a narrower margin/
+secondary signal) in
+[`docs/reports/2026-07-18-part4-hold-b.md`](../reports/2026-07-18-part4-hold-b.md).
+Nothing written — ran with no `--write` flag, `total_votes=would_cast=0`
+confirmed. Whether to authorize a real `--write` run (full pool or
+batched) is an open decision, not made here.
 
 ---
 
