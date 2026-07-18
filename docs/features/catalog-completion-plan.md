@@ -697,3 +697,21 @@ over a closed codebook.
   completes: Part 3's volume check against real `content_phash` + the
   6,379 scan-logged frame-mismatches, then Part 4 HOLD #B, then Part 5
   HOLD #C.
+- Part 2's backfill **completed** 2026-07-18 (~19.5h real wall-clock,
+  paced at ~3/s after the domain-mismatch fix - see
+  [[../troubleshooting.md]]): 218,164/218,179 cards hashed (15
+  fetch/hash failures, unset, will retry on next invocation).
+- **Part 3's volume check, run against real data for the first time**
+  (item 1's own gate, checked live 2026-07-18): (a) d=0 sibling with a
+  known artist — **0**, not a bug: only 3 cards in the entire catalog
+  have `inferred_canonical_card`/`inferred_canonical_artist` set at
+  all right now (the 0/43,426 gate meant the pilot's machine votes
+  structurally couldn't resolve anything; real human-backed
+  resolutions are still low-volume this early in the confirmation-
+  economy bootstrap, so the pool a d=0 duplicate-image match could
+  land in is tiny — expected to grow as real voting activity
+  accumulates, not a dead end). (b) frame-mismatch scan-log census —
+  **6,379 distinct cards** (6,753 rows). Combined volume clears the
+  ~2k threshold via (b) alone, ~3x over. **Part 3 is volume-justified
+  to build** — build itself not started this turn, held for the
+  owner's go-ahead per the established phase-transition pattern.
