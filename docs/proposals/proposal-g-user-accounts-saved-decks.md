@@ -53,7 +53,7 @@ Django cookie session auth throughout.
   is no signup gate, invite list, or allowlist of any kind.
 - **What gates moderator-only access is a completely separate, later check**:
   `cardpicker/moderation.py::is_moderator(user)` — `user.groups.filter(name=settings.MODERATORS_GROUP_NAME).exists()`,
-  checked at *resolution/request* time, never at login. "Logging in with
+  checked at _resolution/request_ time, never at login. "Logging in with
   Discord grants nothing by itself" (`docs/features/moderation.md:27-28`).
   Server-side enforcement is `cardpicker/security.py::require_moderator`
   (403s, not a redirect), stacked with `reject_untrusted_origin` (an
@@ -61,8 +61,7 @@ Django cookie session auth throughout.
   is `@csrf_exempt` for anonymous cross-origin clients) on every
   moderation-only view.
 - **Frontend auth state**: no dedicated auth context/provider — it's one
-  RTK Query cache entry. `GET 2/whoami/` → `{authenticated, username,
-  moderator, discordEnabled, loginUrl, logoutUrl}` (`store/api.ts:206-218`,
+  RTK Query cache entry. `GET 2/whoami/` → `{authenticated, username, moderator, discordEnabled, loginUrl, logoutUrl}` (`store/api.ts:206-218`,
   `credentials: "include"`). `AuthWidget.tsx` (`features/moderation/`)
   renders nothing if Discord isn't configured or the query errored/is
   loading; otherwise shows "Signed in as **{username}**" (+ "(moderator)"
@@ -111,16 +110,18 @@ type at `common/types.ts:120-144`):
 
 ```ts
 export interface ProjectMember {
-  query: SearchQuery;            // {cardType, query, expansionCode?, collectorNumber?}
-  selectedImage?: string;        // card identifier, e.g. a Google Drive file id
-  selected: boolean;             // multi-select UI state
+  query: SearchQuery; // {cardType, query, expansionCode?, collectorNumber?}
+  selectedImage?: string; // card identifier, e.g. a Google Drive file id
+  selected: boolean; // multi-select UI state
 }
-export type SlotProjectMembers = { id: string } & { [face in Faces]: ProjectMember | null };
+export type SlotProjectMembers = { id: string } & {
+  [face in Faces]: ProjectMember | null;
+};
 export type Project = {
   members: Array<SlotProjectMembers>;
-  nextMemberId: number;           // UI bookkeeping (stable React key counter)
+  nextMemberId: number; // UI bookkeeping (stable React key counter)
   cardback: string | null;
-  mostRecentlySelectedSlot: Slot | null;  // transient UI state
+  mostRecentlySelectedSlot: Slot | null; // transient UI state
 };
 ```
 
@@ -137,6 +138,7 @@ unrelated client-search-index slice.
 
 **XML 2.0 export/import gaps that make XML the wrong storage format**
 (`features/download/downloadXML.ts`, `features/import/ImportXML.tsx`):
+
 - Export re-derives the `<query>` text from the resolved card document's
   `searchq`, not the originally-stored `SearchQuery.query`/`expansionCode`/
   `collectorNumber` — reformats, doesn't round-trip byte-for-byte.
@@ -147,8 +149,7 @@ unrelated client-search-index slice.
 - Transient/UI-only fields (`nextMemberId`, `mostRecentlySelectedSlot`,
   per-member `selected`) are correctly never exported and never need to be.
 
-**Canonical serialization to store**: exactly `{members, cardback,
-finishSettings}` — the full `Project` shape minus `nextMemberId` and
+**Canonical serialization to store**: exactly `{members, cardback, finishSettings}` — the full `Project` shape minus `nextMemberId` and
 `mostRecentlySelectedSlot` (pure UI bookkeeping, meaningless across a
 save/load boundary; `selected` inside each member is likewise reset to
 `false` on every XML import today and should be dropped the same way here).
@@ -268,7 +269,7 @@ class SavedDeck(models.Model):
   available choice for a logged-in user," §4) must be unblockable by quota
   — a user sitting at their 100-deck cap must still be able to load another
   saved deck safely — and a snapshot must never silently eat into the
-  allowance the user thinks of as *their decks*. Enforcement: after any
+  allowance the user thinks of as _their decks_. Enforcement: after any
   snapshot insert, `2/saveDeck/` prunes that owner's `kind=SNAPSHOT` rows
   down to the 5 most recently created (plain `created_at`-ordered delete of
   the rest) — a fixed, non-configurable ring, not a setting, since it's an
@@ -286,13 +287,13 @@ which is a strictly weaker version of the existing `require_moderator` decorator
 same way, stacked with `@csrf_exempt` + `@reject_untrusted_origin` exactly like
 every other session-consuming endpoint today):
 
-| Endpoint | Method | Body | Behaviour |
-|---|---|---|---|
-| `2/savedDecks/` | GET | — | List `{key, name, kind, createdAt, updatedAt, approxSizeBytes}` for `request.user`, newest-updated first (client groups by `kind` for the collapsed snapshot section) |
-| `2/saveDeck/` | POST | `{key: string\|null, name, state, kind?: "deck"\|"snapshot"}` | Upsert: `key: null` creates; existing `key` updates in place if owned by `request.user`, else 403. `kind` defaults to `"deck"`; `"snapshot"` skips the 100-deck cap check and instead prunes the owner's snapshots to the newest 5 after insert. Name-uniqueness (scoped to `kind="deck"`) means a rename-into-collision 400s with a clear message, surfaced client-side |
-| `2/loadDeck/` | POST | `{key}` | Returns `{name, state, createdAt, updatedAt}`; 403/404 if not owned |
-| `2/renameDeck/` | POST | `{key, name}` | 403 if not owned; 400 on name collision |
-| `2/deleteDeck/` | POST | `{key}` | Hard delete, 403 if not owned |
+| Endpoint        | Method | Body                                                          | Behaviour                                                                                                                                                                                                                                                                                                                                                                |
+| --------------- | ------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `2/savedDecks/` | GET    | —                                                             | List `{key, name, kind, createdAt, updatedAt, approxSizeBytes}` for `request.user`, newest-updated first (client groups by `kind` for the collapsed snapshot section)                                                                                                                                                                                                    |
+| `2/saveDeck/`   | POST   | `{key: string\|null, name, state, kind?: "deck"\|"snapshot"}` | Upsert: `key: null` creates; existing `key` updates in place if owned by `request.user`, else 403. `kind` defaults to `"deck"`; `"snapshot"` skips the 100-deck cap check and instead prunes the owner's snapshots to the newest 5 after insert. Name-uniqueness (scoped to `kind="deck"`) means a rename-into-collision 400s with a clear message, surfaced client-side |
+| `2/loadDeck/`   | POST   | `{key}`                                                       | Returns `{name, state, createdAt, updatedAt}`; 403/404 if not owned                                                                                                                                                                                                                                                                                                      |
+| `2/renameDeck/` | POST   | `{key, name}`                                                 | 403 if not owned; 400 on name collision                                                                                                                                                                                                                                                                                                                                  |
+| `2/deleteDeck/` | POST   | `{key}`                                                       | Hard delete, 403 if not owned                                                                                                                                                                                                                                                                                                                                            |
 
 All five are small, close to boilerplate CRUD once `require_authenticated`
 exists — no consensus/moderation-style logic is needed anywhere here.
@@ -310,7 +311,7 @@ everywhere instead of only on `/whatsthat`.
 
 **Auth framing — resolved**: the button reads **"Sign in"**, benefit-framed
 (e.g. "Sign in to save decks & track your confirmations"), not "Sign in with
-Discord" — Discord is presented as the *method*, surfaced at the auth step
+Discord" — Discord is presented as the _method_, surfaced at the auth step
 itself (allauth's own login/consent redirect), never baked into the label.
 This is a small `AuthWidget` copy change from today's Discord-branded button.
 Ships Discord-only in v1, designed provider-agnostically (see §1's provider
@@ -325,7 +326,7 @@ Round 1 proposed folding "Load" into the Import dropdown instead; superseded
 because a feature meant to persist across real sessions reads better as its
 own destination (closer to how `/whatsthat` gets a full page) than as one
 more entry in a menu that's otherwise about one-shot imports into the
-*current* project. "Save deck" stays in the editor's action cluster near the
+_current_ project. "Save deck" stays in the editor's action cluster near the
 existing Download controls, not in the Export dropdown — and is rendered
 **only when authenticated**; a logged-out user sees nothing new in that
 cluster at all (no disabled/greyed "Save" teasing a feature they can't use —
@@ -337,6 +338,7 @@ user-triggered menu action, not automatic — autosave would be the first
 background-write pattern in this frontend and introduces real edge cases for
 free (debounce vs. rename races, "did I mean to overwrite my last save"
 surprise, extra traffic on every keystroke-adjacent mutation). Concretely:
+
 - **Save**: prompts for a name (pre-filled with the current deck's name if
   loaded from one) and calls `2/saveDeck/`. If the in-memory project
   contains any `LocalFile`-sourced slots, show a one-time inline warning
@@ -359,13 +361,14 @@ current content. The safety property is structural — something is always
 preserved automatically — never a dialog a user can decline past. "Dirty"
 means the in-memory project differs from whatever it was last loaded
 from/saved as, or is simply non-empty with no prior save at all.
+
 - **Editor empty** → load immediately, no prompt.
 - **Editor dirty + logged in** → **auto-snapshot before loading,
   unconditionally**:
   - If the current content is itself an already-saved deck with unsaved
     changes: prompt offers **"Update {existing deck name}"** vs. **"Save as
-    new snapshot"** — a choice of *where* the safety copy goes, not
-    *whether* it happens.
+    new snapshot"** — a choice of _where_ the safety copy goes, not
+    _whether_ it happens.
   - If the current content was never saved: auto-snapshot it as
     **"Backup — {date}"**, with an inline rename affordance (the only
     prompt is ever "what do you want to call this," pre-filled with a sane
@@ -378,7 +381,7 @@ from/saved as, or is simply non-empty with no prior save at all.
     be blocked by quota, and never eats into the user's own named-deck
     allowance.
 - **Editor dirty + logged out** → today's existing confirm-overwrite
-  warning, unchanged (there's nowhere to snapshot *to* without an account).
+  warning, unchanged (there's nowhere to snapshot _to_ without an account).
   This asymmetry — logged-in users never lose work to a load, logged-out
   users get a plain "are you sure" — is a deliberate, natural sign-in
   incentive, not an oversight to fix later.
@@ -436,12 +439,12 @@ underlying Discord-linked account (not built yet, for anyone) cascades to
 every owned `SavedDeck` automatically via `on_delete=CASCADE` — nothing extra
 to build for that case when it eventually ships.
 
-**PIPEDA-relevant one-liner for the lawyer list**: *"Saved decks store only
+**PIPEDA-relevant one-liner for the lawyer list**: _"Saved decks store only
 user-provided deck contents (card selections and a user-chosen name) linked
 to a Discord-authenticated account identifier; no browsing history, IP
 addresses, or usage analytics are collected, and a user can delete any saved
 deck — or, once account deletion ships, their entire account — at any time,
-immediately and permanently."*
+immediately and permanently."_
 
 **Pre-existing gap surfaced by this survey, not caused by it**: the site's
 Privacy Policy (`frontend/src/pages/about.tsx:91-142`) documents Google
@@ -466,12 +469,13 @@ own review — not bundled with this HOLD's core scope.
 **Proposed tiers — resolved** (mirrors the existing three-tier shape already
 implicit in the consensus model — `source`/`is_privileged`/`privileged_weight`,
 `cardpicker/moderation.py`):
+
 - anonymous: **1.0** (today's implicit baseline for an ordinary USER-source
   vote, unchanged)
 - authenticated, not moderator: **1.5** — a fixed constant for v1, returned
   by `authed_vote_weight()` below. Headroom to **2.0** is explicitly
   reserved, not used yet: the range surfaced in the prior round was the
-  ceiling for the *future* account-standing extension (age/history/
+  ceiling for the _future_ account-standing extension (age/history/
   Dawid-Skene-style estimate) mentioned next, not a hint that 1.5 is
   provisional — 1.5 is the shipped value until that extension exists.
 - moderator: **5.0** (matches the existing `VOTE_PRIVILEGED_WEIGHT` default,
@@ -486,7 +490,7 @@ Explicitly named as the **Dawid-Skene per-source-reliability hook**:
 "every source... as having some unknown, per-source reliability" and
 estimating the true label jointly with it — today's weights (including this
 one) are fixed/hand-set, and `authed_vote_weight()` is exactly where a
-future *estimated* (not hand-set) per-user reliability would plug in without
+future _estimated_ (not hand-set) per-user reliability would plug in without
 restructuring the surrounding consensus math.
 
 **Resolution gate — resolved for v1: status quo, made config-switchable by
@@ -495,6 +499,7 @@ single vote clearing the existing weight/share/human-backed thresholds
 resolves, authenticated or not — the authed tier is a tie-breaker weight
 among disagreeing voters this round, not a gate on anything. The two
 alternatives considered (both rejected for v1, not deleted from the record):
+
 - **Authed-required** — a winning consensus with no authenticated (or
   better) vote in the winning group parks `pending_approval`, reusing
   `require_privileged`'s existing `PENDING_PRIVILEGED` sentinel mechanism
@@ -526,7 +531,7 @@ today's status-quo choice is made with zero usage data, and should be
 checked against what actually happens once saved decks ship and login
 becomes common; (b) an observed manipulation attempt exploiting the
 anonymous path specifically — the Sybil-honesty note below already assumes
-this is *possible*; an actual instance, not a hypothetical one, is the
+this is _possible_; an actual instance, not a hypothetical one, is the
 trigger to escalate the gate mode via the settings switch above.
 
 **Cast-time recording, not resolution-time**: unlike `is_moderator` (checked
@@ -535,11 +540,11 @@ de-privileges every past vote — §1, `docs/features/moderation.md:27-28`),
 the tier behind this weight should be **recorded on the vote at cast time**
 — a new field, e.g. `AbstractWeightedVote.account_tier`, alongside
 `user`/`source`/`vote_surface` — not recomputed later. Deliberate contrast:
-what the voter's authenticated status *was at the moment of voting* is the
+what the voter's authenticated status _was at the moment of voting_ is the
 fact worth preserving, whereas moderator privilege is revocable authority
 that should retroactively apply or un-apply. Recomputing this one instead
 would let a since-deleted account's past votes silently reweight down over
-time, or let a promoted/demoted moderator's past *ordinary* votes silently
+time, or let a promoted/demoted moderator's past _ordinary_ votes silently
 reweight — both wrong for what this tier is meant to represent.
 
 **Sybil-honesty note**: Discord accounts are trivially mintable — no
@@ -550,23 +555,23 @@ Security continues to rest on the two mechanisms this pipeline already has:
 machine cross-checks (independent OCR/phash/deduction engines) and cohort
 revocation (`purge_machine_votes`'s existing `run_id`-scoped pattern,
 already noted in `docs/theory.md:279-286` as generalizing to a suspect
-*human* cohort scoped by a `created_at`/`anonymous_id` window). An
+_human_ cohort scoped by a `created_at`/`anonymous_id` window). An
 authenticated tier changes vote weight; it never changes what happens once
 a cohort turns out to be bad.
 
 ## Effort estimate
 
-| Piece | Estimate | Why |
-|---|---|---|
-| `SavedDeck` model + migration (incl. `kind` field + conditional unique constraint) | Small | One additive migration, no data backfill |
-| `require_authenticated` decorator + 5 endpoints (incl. cap check scoped to `kind=DECK` + snapshot FIFO pruning) | Small–Medium | Near-boilerplate CRUD; closely mirrors `require_moderator`/the moderation views' existing shape, no consensus logic needed |
-| Backend tests | Small–Medium | Mirrors `test_moderation_views.py`'s ownership/403 pattern, plus the FIFO-pruning and cap-scoping behavior |
-| Navbar login relocation + "Sign in" copy change | Small | `AuthWidget` already exists and works; mount-point + label change, not new UI |
-| "My Decks" top-level nav entry + page (decks + collapsed snapshot group) | Medium | New nav item + new page/panel + RTK Query endpoints (list/rename/delete/open-in-editor) — promoted out of the Import dropdown per §4's revised placement |
-| Save UX (action-cluster button + name prompt + local-file warning) | Small–Medium | New modal-ish prompt beside the existing Download controls, gated on whoami's authenticated flag |
-| Load-into-editor safety flow (auto-snapshot + reverse breadcrumb) | Small–Medium | New logic layered on the load path; snapshot creation calls `2/saveDeck/` with `kind: "snapshot"`, no new endpoint |
-| Anonymous→login adopt-prompt toast | Small | Reuses existing `Toasts` system |
-| Frontend↔backend state-shape schema validation | Small | Extends the existing quicktype `Convert`/schema pattern already used for `localStorage` |
+| Piece                                                                                                           | Estimate     | Why                                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SavedDeck` model + migration (incl. `kind` field + conditional unique constraint)                              | Small        | One additive migration, no data backfill                                                                                                                 |
+| `require_authenticated` decorator + 5 endpoints (incl. cap check scoped to `kind=DECK` + snapshot FIFO pruning) | Small–Medium | Near-boilerplate CRUD; closely mirrors `require_moderator`/the moderation views' existing shape, no consensus logic needed                               |
+| Backend tests                                                                                                   | Small–Medium | Mirrors `test_moderation_views.py`'s ownership/403 pattern, plus the FIFO-pruning and cap-scoping behavior                                               |
+| Navbar login relocation + "Sign in" copy change                                                                 | Small        | `AuthWidget` already exists and works; mount-point + label change, not new UI                                                                            |
+| "My Decks" top-level nav entry + page (decks + collapsed snapshot group)                                        | Medium       | New nav item + new page/panel + RTK Query endpoints (list/rename/delete/open-in-editor) — promoted out of the Import dropdown per §4's revised placement |
+| Save UX (action-cluster button + name prompt + local-file warning)                                              | Small–Medium | New modal-ish prompt beside the existing Download controls, gated on whoami's authenticated flag                                                         |
+| Load-into-editor safety flow (auto-snapshot + reverse breadcrumb)                                               | Small–Medium | New logic layered on the load path; snapshot creation calls `2/saveDeck/` with `kind: "snapshot"`, no new endpoint                                       |
+| Anonymous→login adopt-prompt toast                                                                              | Small        | Reuses existing `Toasts` system                                                                                                                          |
+| Frontend↔backend state-shape schema validation                                                                  | Small        | Extends the existing quicktype `Convert`/schema pattern already used for `localStorage`                                                                  |
 
 Overall: **backend Small–Medium, frontend Medium.** §7 (authed vote tier) is
 deliberately excluded from this table — its own migration and consensus
@@ -613,7 +618,7 @@ with the saved-decks build.
    distinguished from ordinary decks by the model's new `kind` field
    (`SavedDeckKind.DECK`/`SNAPSHOT`). Rationale: the load-flow's safety
    snapshot (§4) must be unblockable by quota, and must never eat into the
-   allowance a user thinks of as *their decks*. Snapshots list in their own
+   allowance a user thinks of as _their decks_. Snapshots list in their own
    collapsed group under "My Decks." See §3's auto-snapshot bullet and §4's
    load-into-editor flow for the concrete mechanism.
 8. **Resolution gate (§7) — resolved for v1: status quo.** Anonymous
@@ -624,7 +629,7 @@ with the saved-decks build.
    `AUTHED_VOTE_WEIGHT`), so switching to `authed_required` or
    `anonymous_below_threshold` later is a config change, not a migration.
    Revisit triggers (conditions, not a schedule): real resolution volume
-   once ordinary users are logging in at scale, or an *observed*
+   once ordinary users are logging in at scale, or an _observed_
    manipulation attempt exploiting the anonymous path (not a hypothetical
    one). See §7 for the full tradeoff analysis kept on record.
 9. **Authed vote weight (§7) — resolved: 1.5, constant.** Returned by

@@ -1,6 +1,8 @@
 As of: 2026-07-18
 What this is: survey + HOLD proposal for a public `/stats` transparency page — single-instance now, federation panel designed but not built.
-HOLD — build not started. Queued after Proposal E, per the approved order.
+HOLD — build not started. Queued after Proposal E, per the approved order —
+and, per Proposal G's Decision 1 (`docs/proposals/proposal-g-user-accounts-saved-decks.md`),
+also now behind Proposal G, B, C, and E-3 in the current unified build queue.
 
 ## Summary
 
@@ -34,7 +36,7 @@ Proposing **7 charts** (within the 6-8 budget), a `stats.json` schema with an ex
 
 ### 5. `content_phash` coverage
 
-`Card.content_phash` (`BigIntegerField`, nullable — `NULL` means "not yet computed," migration 0062). Backfilled by `local_backfill_content_phash.py` → `run_content_phash_backfill()` (`local_phash.py:207-325`), which prints `Hashed N/total_candidates` per invocation — but `total_candidates` there is _that run's own remaining backlog_, not the full catalog, so it can't be read as a standing coverage percentage. **The only coverage number that exists anywhere is a single hand-checked snapshot in a planning doc**: `docs/features/catalog-completion-plan.md:426-428`, "0/218,152 populated" as of 2026-07-16. New query: `Card.objects.filter(content_phash__isnull=False).count()` vs. `Card.objects.count()`.
+`Card.content_phash` (`BigIntegerField`, nullable — `NULL` means "not yet computed," migration 0062). Backfilled by `local_backfill_content_phash.py` → `run_content_phash_backfill()` (`local_phash.py:207-325`), which prints `Hashed N/total_candidates` per invocation — but `total_candidates` there is _that run's own remaining backlog_, not the full catalog, so it can't be read as a standing coverage percentage. **At the time this proposal was written, the only coverage number that existed anywhere was a single hand-checked snapshot in a planning doc**: `docs/features/catalog-completion-plan.md:426-428`, "0/218,152 populated" as of 2026-07-16. That backfill has since completed (2026-07-18): the same doc's `## Status` section now records 218,164/218,179 cards hashed — this proposal's aggregation query is unaffected, but the "0 populated" figure above is historical, not current. New query: `Card.objects.filter(content_phash__isnull=False).count()` vs. `Card.objects.count()`.
 
 ### 6. Management-command precedent
 

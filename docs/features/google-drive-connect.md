@@ -101,7 +101,7 @@ real upload, no confirmation a file actually lands in Drive.
 
 ## Key files
 
-- `frontend/src/components/GoogleDriveBackendConfig.tsx`,
+- `frontend/src/features/backend/GoogleDriveBackendConfig.tsx`,
   `LocalFolderBackendConfig.tsx`, `BackendConfig.tsx`
 - `frontend/src/features/googleDrive/` (`googleDriveAuth.ts`,
   `googleDriveConfig.ts`, `GoogleDriveService.ts`)
