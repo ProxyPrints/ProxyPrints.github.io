@@ -1,10 +1,10 @@
 """
-Deductive printing-tag backfill: cast AI-weight `CardPrintingTag` votes for cards whose
+Deductive printing-tag backfill: cast machine-weight `CardPrintingTag` votes for cards whose
 printing is logically entailed by existing catalog data, in two confidence tiers.
 
 PRINCIPLE: a deduction is only valid conditional on the image actually being an authentic
 depiction of the named card - this catalog contains custom art, so a deduction can never be
-more than a vote. `VoteSource.DEDUCTION` (weight `PRINTING_TAG_AI_WEIGHT`, default 0.5) plus the
+more than a vote. `VoteSource.DEDUCTION` (weight `PRINTING_TAG_MACHINE_WEIGHT`, default 0.5) plus the
 hard "at least one human-backed vote" gate in `cardpicker.vote_consensus.resolve_weighted_consensus`
 means these votes can NEVER resolve consensus by themselves, regardless of volume - a human
 still has to confirm. See `docs/features/printing-tags.md`'s Stage 4 section for the full

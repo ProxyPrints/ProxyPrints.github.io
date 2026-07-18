@@ -15,8 +15,8 @@ from cardpicker.models import VoteSource
 _SOURCE_WEIGHTS: dict[str, float] = {
     VoteSource.USER: 1.0,
     VoteSource.ADMIN: settings.PRINTING_TAG_ADMIN_WEIGHT,
-    VoteSource.DEDUCTION: settings.PRINTING_TAG_AI_WEIGHT,
-    VoteSource.OCR: settings.PRINTING_TAG_AI_WEIGHT,
+    VoteSource.DEDUCTION: settings.PRINTING_TAG_MACHINE_WEIGHT,
+    VoteSource.OCR: settings.PRINTING_TAG_MACHINE_WEIGHT,
     VoteSource.FEDERATED: settings.VOTE_FEDERATED_WEIGHT,
 }
 

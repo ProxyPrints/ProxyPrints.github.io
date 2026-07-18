@@ -26,13 +26,63 @@ export type BleedSide = "top" | "bottom" | "left" | "right";
 export const BLEED_SIDES: BleedSide[] = ["top", "bottom", "left", "right"];
 
 // Named per the spec's explicit "ship as named constants with a calibration caveat" requirement.
-// CALIBRATION CAVEAT: every value below is a reasonable starting guess, not empirically tuned -
-// the merge-time checklist carries a server-side calibration pass (~20-30 real catalog images
-// across the fixture categories below) to replace these with measured values before this ships
-// to real exports. Do not treat these as validated the way the backend's own bleed-edge
-// classification constants (classify_bleed_edge's TRIM_ASPECT_RATIO/BLEED_ASPECT_RATIO,
-// docs/features/printing-tags.md) were - those went through a real 40-source validation pass
-// before shipping; these have not yet.
+//
+// CALIBRATION PASS (2026-07-18): ran against 30 real catalog images spanning 10 distinct
+// sources, 6 DPIs (460-1240), both jpg/png - not the synthetic six-category fixture set (that
+// already exists in bleedNormalize.test.ts and covers the algorithm's *logic*; this pass is
+// about real photographic/scan noise). Ground truth was assigned per-image via the same
+// aspect-ratio classification the backend's already-validated `classify_bleed_edge` uses
+// (TRIM_ASPECT_RATIO/BLEED_ASPECT_RATIO, docs/features/printing-tags.md) - not a DB vote lookup,
+// since the negative-only voting change means a "bleed" reading casts no vote at all, but the
+// file's own dimensions already encode the same signal deterministically. Split 28 bleed / 2
+// trimmed (consistent with the backend's own ~97.5% bleed-prevalence finding on a different,
+// larger sample). Full data: 30 images, per-side measurements, and the sweep below live in the
+// PR that added this comment (docs/reports/2026-07-18-bleed-calibration-134.md).
+//
+// RESULT: none of the 4 constants below changed. Not because nothing was found - a real,
+// reproducible measurement bias WAS found (next paragraph) - but because sweeping each constant
+// against the real sample didn't show any single value cleanly fixing it, and forcing a fix
+// through a constant not designed for it (see below) would be a behavior change beyond this
+// pass's calibration charter. Left at the original starting-guess values pending a real design
+// follow-up, tracked below rather than patched blind.
+//
+// FINDING: real bleed-classified images measure a median per-side depth of ~5.8-6.3mm against a
+// true bleed target of 3.175mm (1/8" at 63x88mm trim) - roughly 2x the expected value, and
+// consistent (Evil Twin @460dpi: top/left/right ~5.5mm, bottom 9.2mm; Nebula_Back3 @1210dpi: all
+// four sides ~5.7-5.9mm). Root-caused, not just observed: sweeping RGB_DISTANCE_THRESHOLD from
+// 24 down to 6 (4x stricter) moved the sample median by under 3% (5.90mm -> 5.76mm) - ruling out
+// "threshold too loose" as the cause. Image dimensions were independently confirmed to match the
+// bleed-inclusive aspect ratio at each card's own declared DPI (within <1%), ruling out a DPI-
+// metadata bug. The real cause: a typical MTG card's own physical border/frame is *also* a flat,
+// uniform color (commonly black) immediately inside the synthetic bleed extension, which is
+// deliberately colored to match the frame so print misalignment doesn't show a visible seam -
+// the probe's uniform-color-run walk can't tell "still inside the bleed extension" from "now
+// inside the card's own border" when both are the same color, so it measures bleed+border
+// combined, not bleed alone. This isn't a threshold problem; it's the measurement's core
+// assumption (uniform run = bleed) not holding once a normal card frame's own uniform border
+// sits right next to it.
+//
+// WHY NOT JUST LOWER OVERSIZED_MULTIPLE: it's tempting to fix this via the 4th constant (it's
+// one of the "4 named constants" in scope), since a ~2x overshoot could be pushed under the
+// oversized-fallback path by tightening the multiple. Deliberately not done here: the approved
+// spec defines OVERSIZED_MULTIPLE as a bad-DPI-metadata guard specifically, not a border-color
+// guard - repurposing it to paper over a different, now-understood failure mode is a
+// resolveBleedPlan behavior change dressed as a calibration tweak, decided unilaterally, on code
+// another session is concurrently touching (see docs/lessons.md's stacked-PR/collision entries
+// from this same day). That decision belongs to the spec owner, not a same-session judgment call.
+//
+// PRODUCTION RISK, flagged not fixed: at the current OVERSIZED_MULTIPLE=3, a 3.175mm target's
+// oversized cutoff is ~9.5mm - most real overshoots observed here (5.5-6.5mm) sit *under* that
+// cutoff, so resolveBleedPlan's `targetBleedMM - measuredMM` arithmetic produces a *negative*
+// plan value (a trim instruction) on typical real bled cards, cropping ~2-3mm into the card's
+// own border content, not just excess bleed. This is a real, non-hypothetical risk on the common
+// case (28/30 of this sample), not an edge case - tracked as a follow-up design item, not built
+// here (see docs/proposals/proposal-b-bleed-normalization.md's "Tracked, not building" section).
+//
+// Do not treat the values below as validated the way the backend's own bleed-edge classification
+// constants were (a real 40-source pass before shipping) - this pass ran, found a real issue, and
+// left them as starting guesses pending the design follow-up above, which is a different state
+// from "unvalidated" or "validated."
 export const PROBE_COUNT = 20;
 /** Euclidean RGB distance (0-441, sqrt(255^2*3)) above which two pixels are "different enough"
  * to mark the end of a uniform bleed-margin run. */

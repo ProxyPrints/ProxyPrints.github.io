@@ -543,7 +543,7 @@ export function QuestionFeed() {
     <div data-testid="question-feed">
       {counts != null && (
         <>
-          {/* Headline leads with quick confirmations (tier 1 - an unresolved AI-suggested
+          {/* Headline leads with quick confirmations (tier 1 - an unresolved machine-suggested
               printing awaiting a one-tap human yes/no) since that's the easiest, fastest-to-
               clear category - falls back to the overall total once there's nothing quick left,
               rather than always showing the same undifferentiated "cards remaining" copy. */}
