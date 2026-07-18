@@ -449,6 +449,39 @@ built on, even though the content is logically the same - expect at least one re
 a fast-forward). **Prevention, the actual fix**: retarget the child PR to `master` (`gh pr edit --base master` / a REST `PATCH .../pulls/N -f base=master`) BEFORE merging+deleting the parent's
 branch, while the retarget API call still works normally - not after.
 
+## A rewrite that "extracts X verbatim" can still silently drop an element the old component rendered
+
+`QuestionFeed.tsx`'s Level 1 (the fast-path single-suggestion screen, PR #49/commit `b413252`)
+prompts "Is it this one?" for a suggested printing with **no image of the printing itself** -
+only text (a set icon + expansion code + collector number). This was a real regression, not a
+missing feature: the pre-funnel `PrintingTagQueue.tsx` (deleted in the "Queue redesign" commit
+`9d71851`) always showed a Scryfall reference render next to every candidate, no exceptions - a
+plain `<img src={candidate.mediumThumbnailUrl}>`, nothing fancier. That commit's own message
+claimed "candidate-grid mechanics extracted verbatim into cardPanel.tsx" - true for the grid
+_mechanics_ (starburst, sticky panel, hover-zoom), but the image-per-candidate rendering actually
+landed directly in `QuestionFeed.tsx`, not `cardPanel.tsx`, and at that point still worked (Level
+2's grid still renders `candidate.mediumThumbnailUrl` correctly today). The regression is narrower
+and later than the redesign commit itself: PR #49 introduced Level 1 as a **new** UI surface (a
+fast path for the common case of a confident suggestion) and built its confirmation prompt from
+scratch as text-only, never copying the image element over - "is it this one" being unanswerable
+without a picture to compare against went unnoticed because nothing tested for the image's
+presence, only that the _text_ prompt appeared. Level 0 (`DeckbuilderConfirmAffordance.tsx`, PR
+#50, built after #49) was independently checked and is NOT affected - it does its own
+`APIGetPrintingCandidates` fetch and correctly renders a real `<img>` inside `ComparePin`.
+
+**The lesson, generalized**: a commit message claiming "extracted verbatim" or "same mechanics,
+new home" is a claim about _behavior_, not a guarantee - verify it by diffing what the OLD
+component actually rendered (every `<img>`/data-bearing element, not just the interactive
+controls) against what the NEW one renders, element for element, rather than trusting the
+message. A rewrite's author naturally focuses on what changed (the new grid/filter/funnel-stage
+logic); an element that was simply _always there_ and never part of the story being told is
+exactly the kind of thing that quietly doesn't make the trip. When building a NEW fast-path/
+shortcut screen that shortcuts around an existing one (Level 1 shortcutting Level 2's grid here),
+explicitly inventory what the screen it's bypassing shows before deciding what the shortcut needs
+
+- "the user has to make the same judgment call, just with fewer clicks" is the actual design
+  intent in cases like this, and a judgment call needs the same evidence either way.
+
 ## Cross-session branch-name collisions on a "standing convention" name
 
 Once a delivery pattern (e.g. "commit reports to a `report-relay` branch, relay the URL") gets
