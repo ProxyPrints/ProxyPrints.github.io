@@ -25,6 +25,10 @@ only) for deployment, hosting, and domain specifics.
   `docs/troubleshooting.md` before the task closes (grep it first before
   re-deriving a fix — recurring blockers live there, not buried in a
   changelog).
+- **Policy text dates**: any change to on-site policy text (Privacy
+  Policy, Terms, etc. in `frontend/src/pages/about.tsx` and similar) must
+  update that page's own "Last updated" date in the same change — it's
+  hardcoded, not derived, so it goes stale silently otherwise.
 - **Wiki maintenance**: task-end check — did this change what a USER sees
   or what an ADMIN does? If yes: server sessions update the wiki page in
   the same task; cloud sessions add "wiki: `<page>` needs `<change>`" to

@@ -239,9 +239,10 @@ def post_editor_search(request: HttpRequest) -> HttpResponse:
         )
 
     results: dict[str, list[str]] = {}
+    degraded_queries: list[str] = []
     for hash_key, search_query in editor_search_request.queries.items():
         if search_query.query is not None and hash_key not in results.keys():
-            hits = retrieve_card_identifiers(
+            hits, degraded = retrieve_card_identifiers(
                 search_settings=editor_search_request.searchSettings,
                 query=search_query.query,
                 card_type=search_query.cardType,
@@ -249,7 +250,9 @@ def post_editor_search(request: HttpRequest) -> HttpResponse:
                 collector_number=search_query.collectorNumber,
             )
             results[hash_key] = hits
-    return JsonResponse(EditorSearchResponse(results=results).model_dump())
+            if degraded:
+                degraded_queries.append(hash_key)
+    return JsonResponse(EditorSearchResponse(results=results, degradedQueries=degraded_queries).model_dump())
 
 
 @csrf_exempt
@@ -285,7 +288,10 @@ def old_post_editor_search(request: HttpRequest) -> HttpResponse:
     results: dict[str, dict[str, list[str]]] = defaultdict(dict)
     for query, card_type in sorted({(item.query, item.cardType) for item in editor_search_request.queries}):
         if query is not None and results[query].get(card_type.value, None) is None:
-            hits = retrieve_card_identifiers(
+            # legacy endpoint has no printing-filter fields on its request schema at all, so
+            # `retrieve_card_identifiers` never gets an expansion_code/collector_number here and
+            # `degraded` is always False - nothing to surface on this frozen response shape.
+            hits, _degraded = retrieve_card_identifiers(
                 query=query, card_type=card_type, search_settings=editor_search_request.searchSettings
             )
             results[query][card_type.value] = hits

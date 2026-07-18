@@ -9,6 +9,24 @@
 
 const GSI_URL = "https://accounts.google.com/gsi/client";
 
+// The script tag itself loads fine or fails outright - there's no partial/timeout state to
+// handle - so a browser blocking accounts.google.com (privacy browsers, ad/tracker blockers;
+// a real occurrence, not hypothetical) surfaces here as a plain script `error` event, with no
+// detail beyond "it didn't load." This custom error exists so that specific, common cause gets
+// a specific, actionable message instead of the raw "Failed to load https://accounts.google.com/
+// gsi/client" URL string bubbling all the way up to the save-to-Drive failure toast verbatim.
+export class GSIScriptLoadError extends Error {
+  constructor() {
+    super(
+      "Couldn't reach Google's sign-in script, so Drive can't be authorized. This usually " +
+        "means a privacy browser or an ad/tracker blocker is blocking accounts.google.com - " +
+        "allow that domain for this site and try again, or download your PDF instead of " +
+        "saving it to Drive."
+    );
+    this.name = "GSIScriptLoadError";
+  }
+}
+
 const injectScript = (src: string): Promise<void> =>
   new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) {
@@ -18,7 +36,7 @@ const injectScript = (src: string): Promise<void> =>
     const script = document.createElement("script");
     script.src = src;
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`Failed to load ${src}`));
+    script.onerror = () => reject(new GSIScriptLoadError());
     document.head.appendChild(script);
   });
 

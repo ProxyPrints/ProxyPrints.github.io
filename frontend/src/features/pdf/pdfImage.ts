@@ -34,18 +34,18 @@ export const dedupeFailuresByIdentifier = (
 };
 
 /**
- * Fetch a URL's body and hand it back as a blob: URL. Unlike passing the
- * plain remote URL straight to @react-pdf/renderer's <Image> (which fetches
- * it internally and silently skips the image on failure, with no way for
+ * Fetch a URL's body and hand it back as a Blob. Unlike passing the plain
+ * remote URL straight to @react-pdf/renderer's <Image> (which fetches it
+ * internally and silently skips the image on failure, with no way for
  * calling code to observe that), fetching it ourselves lets a failure
  * surface as a real rejection the caller can catch and report.
  */
-const fetchAsObjectURL = async (url: string): Promise<string> => {
+const fetchAsBlob = async (url: string): Promise<Blob> => {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`request for ${url} failed with status ${response.status}`);
   }
-  return URL.createObjectURL(await response.blob());
+  return response.blob();
 };
 
 /**
@@ -65,7 +65,7 @@ const getThumbnailURL = async (
   const bucketURL = getBucketImageURL(cardDocument, size);
   if (bucketURL !== undefined) {
     try {
-      return await fetchAsObjectURL(bucketURL);
+      return URL.createObjectURL(await fetchAsBlob(bucketURL));
     } catch {
       // bucket miss or network error - fall through to the worker
     }
@@ -81,7 +81,7 @@ const getThumbnailURL = async (
       `no image source configured for card ${cardDocument.identifier}`
     );
   }
-  return fetchAsObjectURL(workerURL);
+  return URL.createObjectURL(await fetchAsBlob(workerURL));
 };
 
 /**
@@ -118,7 +118,7 @@ export const getPDFImageURL = async (
               `no image source configured for card ${cardDocument.identifier}`
             );
           }
-          return fetchAsObjectURL(workerURL);
+          return URL.createObjectURL(await fetchAsBlob(workerURL));
         }
         default:
           throw new Error(`invalid imageQuality ${imageQuality}`);
@@ -136,6 +136,52 @@ export const getPDFImageURL = async (
     default:
       throw new Error(
         `cannot get PDF thumbnail URL for card ${cardDocument.identifier}`
+      );
+  }
+};
+
+/**
+ * Resolves the raw image Blob for a card's full-resolution PDF source (Google Drive image
+ * worker, or a local file) - the entry point Proposal B's bleed normalization
+ * (bleedExtension.ts's normalizeCardBleed, called from PDF.tsx's PDFCardImage) needs a decodable
+ * Blob from, not yet a blob: URL. Deliberately separate from getPDFImageURL above (rather than
+ * one calling the other) so each keeps its own simple, independently-tested error contract -
+ * only covers the two sources full-resolution bleed normalization actually applies to; thumbnail
+ * tiers are out of scope (see the proposal doc) and keep using getPDFImageURL directly.
+ */
+export const getPDFImageBlob = async (
+  cardDocument: CardDocument,
+  dpi: number | undefined,
+  jpgQuality: number,
+  fileHandles: { [identifier: string]: FileSystemFileHandle }
+): Promise<Blob> => {
+  switch (cardDocument.sourceType) {
+    case SourceType.GoogleDrive: {
+      const workerURL = getWorkerImageURL(
+        cardDocument,
+        "full",
+        dpi,
+        jpgQuality
+      );
+      if (workerURL === undefined) {
+        throw new Error(
+          `no image source configured for card ${cardDocument.identifier}`
+        );
+      }
+      return fetchAsBlob(workerURL);
+    }
+    case SourceType.LocalFile: {
+      const handle = fileHandles[cardDocument.identifier];
+      if (handle === undefined) {
+        throw new Error(
+          `could not get handle for file ${cardDocument.identifier}`
+        );
+      }
+      return handle.getFile();
+    }
+    default:
+      throw new Error(
+        `cannot get PDF image blob for card ${cardDocument.identifier}`
       );
   }
 };

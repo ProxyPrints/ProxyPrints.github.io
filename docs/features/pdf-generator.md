@@ -88,6 +88,21 @@ absorbed harmlessly. The bug-4 fix above replaced the `HEAD` check with a
 real `GET`, so this specific console-noise pattern no longer occurs — kept
 here as a historical note in case an old bug report referencing it resurfaces.
 
+## Proposal B — export-time per-side bleed normalization
+
+Full spec + approval record: `docs/proposals/proposal-b-bleed-normalization.md`. Core algorithm (`bleedNormalize.ts`: probe-median measurement per side, IQR ambiguity, fallback + manual-override plan resolution) and canvas synthesis (`bleedExtension.ts`: pure crop/extend geometry + `normalizeCardBleed`'s decode→measure→plan→draw→encode→release pipeline) are built and unit tested (12 tests across the two modules, plus 4 new `pdfImage.test.ts` tests for the `getPDFImageBlob` split). Wired into `PDF.tsx`'s `PDFCardImage`: full-resolution Google Drive/local-file images run through normalization instead of the old uniform proportional rescale; SCM mode and the thumbnail tiers are untouched (out of scope per the proposal doc).
+
+**Shipped and tested**: the measurement/plan/extension math end-to-end, real per-card wiring in the standard (non-SCM) render path, `PDFProps.bleedPriors`/`bleedOverrides` (both optional maps keyed by card identifier, safely defaulting to `"unresolved"`/`"auto"` when absent).
+
+**Explicitly not yet built** (next concrete steps, not silently dropped):
+1. The main-thread batch resolution of `bleedPriors` from `APIGetTagConsensus` (per the approved spec's fallback prior) — `PDFGenerator.tsx` doesn't populate this map yet, so every ambiguous side currently falls through to the safe default (`"unresolved"` → extend the full target) rather than a real per-card machine-vote lean. This needs its own concurrency-bounded batch fetch (one card's tag consensus can fail without failing the whole export) and hasn't been built or tested yet - building it without that care would risk exactly the kind of half-tested network code this proposal's own memory-discipline section was written to guard against.
+2. The manual override UI (Auto / Force bleed / Force trimmed per card) and its persistence in project state - `resolveBleedPlan` already fully supports all three modes (tested), but nothing in the UI sets `bleedOverrides` yet.
+3. The WYSIWYG preview badge ("bleed will be generated") in `PagePreview.tsx` - the preview still shows the pre-Proposal-B cheap CSS approximation only.
+
+`PDFCardImage`'s effective-dpi derivation (`imageDPI` when it's set and lower than `cardDocument.dpi`, else `cardDocument.dpi`) handles the case where a lower `imageDPI` setting makes the Worker serve a downscaled image - measurement always converts px→mm against the resolution of what was actually decoded, not assumed.
+
+**A real crash caught only by running `tests/PDFGenerator.spec.ts`, not by `tsc`/`jest`**: the first version skipped the old proportional rescale by setting `transform: "none"` when normalized. `@react-pdf/renderer`'s own stylesheet parser (`@react-pdf/stylesheet`) has a bug where any single-token transform value throws deep inside its internals (see `docs/lessons.md`'s entry for the exact mechanism) - and their custom reconciler doesn't propagate that as a rejection anywhere, so `pdf(...).toBlob()` just hangs forever with zero console/page error. All 3 download-path Playwright tests hung at their timeout; a stashed pre-Proposal-B baseline confirmed they pass cleanly with no other changes. Fixed by using `transform: undefined` (omitting the key) instead of `"none"` - all 4 tests pass afterward, matching baseline timing.
+
 ## Key files
 
 - `frontend/src/features/pdf/PDFGenerator.tsx`,

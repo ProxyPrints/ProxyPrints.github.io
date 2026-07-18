@@ -67,6 +67,26 @@ test file that uses any factory from `cardpicker/tests/factories.py`,
 apply this pattern preemptively rather than waiting to see which
 snapshots break.
 
+**Variant: a new TEST inside an EXISTING file, not a new file** (E-2,
+`test_views.py`, `d7e4653c`) — the same drift, different trigger. Adding
+one new test to `TestPostEditorSearchResults` (which uses the class's own
+function-scoped `populated_database` autouse fixture, same as every other
+test in the class) shifted `TestGetSampleCards`/`TestNewCardsFirstPages`/
+`TestNewCardsPage`/`TestPostExploreSearchResults` downstream in the same
+file - going from N to N+1 tests using a sequence-consuming fixture
+permanently shifts everything after it, file-wide autouse isn't an option
+here (it would reset the ambient count for ~200 _other_, correctly-passing
+tests in the same file that depend on it). The fix has to be scoped to
+just the one new test, which is non-trivial: a same-scope fixture the test
+merely _requests_ instantiates too late to see the pre-existing-fixture
+"before" value, because same-scope autouse fixtures always instantiate
+first. Resolution: a **module-level autouse fixture, gated on
+`request.node.name`** - inert (immediate no-op `yield`) for every test
+except the one named test, so it wins fixture-ordering priority (module-
+level autouse beats class-level autouse at the same nominal scope) while
+having zero effect on the rest of the file. See
+`test_views.py::_preserve_shared_factory_sequences_for_insulated_tests`.
+
 ## Seeding rows via a data migration breaks tests that assert a table is empty/complete
 
 **Symptom**: a new data migration seeds rows into a table, and several
