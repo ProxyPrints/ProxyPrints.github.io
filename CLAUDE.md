@@ -115,7 +115,15 @@ status update, and blocker report.
   the card-version-picker modal + `Card.tsx`'s image loading/error states.
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
-  Upstreaming workflow in `docs/infrastructure.md`).
+  Upstreaming workflow in `docs/infrastructure.md`); accurate through
+  2026-07-13 only, see readiness-audit.md §5 for what's changed since.
+- [`docs/upstreaming/readiness-audit.md`](docs/upstreaming/readiness-audit.md)
+  — full fork-vs-upstream diff decomposed into feature chunks, dependency
+  graph, the upstream-value/extraction-ease ladder, and the branch
+  architecture proposal.
+- [`docs/upstreaming/conventions.md`](docs/upstreaming/conventions.md) —
+  one-page checklist any `upstream-fix-*`/`upstream-feat-*` branch must
+  satisfy, mined from our merged PR #467 and upstream's own recent PRs.
 - [`docs/federation-v1.md`](docs/federation-v1.md) — federation verdict
   exchange format v1 (spec, implementation pending).
 - [`docs/theory.md`](docs/theory.md) — the printing-identification
