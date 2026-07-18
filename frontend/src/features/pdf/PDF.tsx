@@ -7,9 +7,16 @@ import {
   CardWidthMM,
   CornerRadiusMM,
 } from "@/common/constants";
+import { SourceType } from "@/common/schema_types";
 import { CardDocument, SlotProjectMembers } from "@/common/types";
+import { normalizeCardBleed } from "@/features/pdf/bleedExtension";
+import { BleedPrior, ManualOverride } from "@/features/pdf/bleedNormalize";
 import { computeLayout } from "@/features/pdf/layout";
-import { getPDFImageURL, PDFImageQuality } from "@/features/pdf/pdfImage";
+import {
+  getPDFImageBlob,
+  getPDFImageURL,
+  PDFImageQuality,
+} from "@/features/pdf/pdfImage";
 import {
   ScmPaperSize,
   ScmRegistration,
@@ -207,6 +214,15 @@ export interface PDFProps {
   // of that failure being silently invisible. Optional so existing render
   // props unrelated to failure tracking don't need to know about it.
   reportImageFailure?: (identifier: string, label: string) => void;
+  // Proposal B (docs/proposals/proposal-b-bleed-normalization.md) - export-time per-side bleed
+  // normalization. Both maps are keyed by card identifier and pre-resolved on the MAIN thread
+  // (PDFGenerator.tsx) before the render worker is invoked - not fetched from inside the worker
+  // itself, since APIGetTagConsensus's CSRF header needs document.cookie, which doesn't exist in
+  // a Worker context. A missing entry for a given identifier defaults to "unresolved"/"auto"
+  // respectively (see bleedNormalize.ts), so this stays fully optional for any caller (SCM mode,
+  // existing tests) that doesn't populate it.
+  bleedPriors?: { [identifier: string]: BleedPrior };
+  bleedOverrides?: { [identifier: string]: ManualOverride };
   // SCM (Silhouette Card Maker) mode. When scmMode is true, the standard
   // parametric layout above is ignored in favour of an SCM-template-compatible
   // layout with registration marks (see scm/SCMPDF.tsx).
@@ -403,6 +419,19 @@ const CutLineCorner = ({
   );
 };
 
+// Proposal B (docs/proposals/proposal-b-bleed-normalization.md) - full-resolution images from
+// Google Drive or a local file are the only ones bleed normalization applies to (the two
+// sources that carry a real, decodable full-res bitmap; the thumbnail tiers are cheap-preview
+// quality, not what real printing bleed geometry needs). SCM mode's own image path
+// (scm/SCMPDF.tsx) is untouched - out of scope for this pass, see the proposal doc.
+const isBleedNormalizationEligible = (
+  cardDocument: CardDocument,
+  imageQuality: PDFImageQuality
+): boolean =>
+  imageQuality === "full-resolution" &&
+  (cardDocument.sourceType === SourceType.GoogleDrive ||
+    cardDocument.sourceType === SourceType.LocalFile);
+
 // Renders only the card image, with no cut lines.
 const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
   const {
@@ -413,12 +442,31 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
     jpgQuality,
     fileHandles,
     reportImageFailure,
+    bleedPriors,
+    bleedOverrides,
   } = usePDFContext();
   const height = CardHeightMM + 2 * bleedEdgeMM;
   const heightProportion = (CardHeightMM + 2 * BleedEdgeMM) / height;
   const width = CardWidthMM + 2 * bleedEdgeMM;
   const widthProportion = (CardWidthMM + 2 * BleedEdgeMM) / width;
   const radius = roundCorners ? CornerRadiusMM : 0;
+  const bleedNormalized = isBleedNormalizationEligible(
+    cardDocument,
+    imageQuality
+  );
+  // Bleed-normalized output is already synthesized at exactly the target bleed box (see
+  // normalizeCardBleed) - the old proportion-based rescale below exists specifically to fix up
+  // an image assumed to be at the STANDARD bleed amount, which no longer applies once this
+  // card's own image has been measured and corrected directly. Omitted (not "none") when
+  // normalized - @react-pdf/renderer's own style processor (processTransform in
+  // @react-pdf/stylesheet) has a real bug where a single-token transform value like "none"
+  // crashes deep inside its parser (normalizeTransformOperation ends up calling .map() on
+  // undefined), hanging the whole render with no error surfaced anywhere - found via a real
+  // Playwright regression, not by reading their source speculatively. Omitting the key entirely
+  // sidesteps their parser altogether, which is what "no transform" actually needs anyway.
+  const scaleTransform = bleedNormalized
+    ? undefined
+    : `scale(${widthProportion}, ${heightProportion})`;
 
   return (
     <View
@@ -432,6 +480,36 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
       <Image
         src={async () => {
           try {
+            if (bleedNormalized) {
+              const blob = await getPDFImageBlob(
+                cardDocument,
+                imageDPI,
+                jpgQuality,
+                fileHandles
+              );
+              // cardDocument.dpi is the source's own recorded resolution, but a lower imageDPI
+              // setting can make the Worker serve a downscaled image below that - if so, the
+              // BYTES actually fetched are at imageDPI, not cardDocument.dpi, and px->mm
+              // conversion needs to match what was really decoded, not the source's original
+              // resolution. Never assumed higher than the source's own recorded dpi (that would
+              // imply an upscale, which getWorkerImageURL doesn't do).
+              const effectiveDpi =
+                imageDPI != null && imageDPI < cardDocument.dpi
+                  ? imageDPI
+                  : cardDocument.dpi;
+              const prior =
+                bleedPriors?.[cardDocument.identifier] ?? "unresolved";
+              const manualOverride =
+                bleedOverrides?.[cardDocument.identifier] ?? "auto";
+              const normalized = await normalizeCardBleed(
+                blob,
+                effectiveDpi,
+                bleedEdgeMM,
+                prior,
+                manualOverride
+              );
+              return URL.createObjectURL(normalized);
+            }
             return await getPDFImageURL(
               cardDocument,
               imageQuality,
@@ -450,7 +528,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
             minWidth: width + "mm",
             height: height + "mm",
             minHeight: height + "mm",
-            transform: `scale(${widthProportion}, ${heightProportion})`,
+            transform: scaleTransform,
             overflow: "hidden",
             borderTopLeftRadius: radius + "mm",
             borderTopRightRadius: radius + "mm",
