@@ -129,9 +129,15 @@ external reader's orientation to the whole fork, see
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
   Upstreaming workflow in `docs/infrastructure.md`).
+- [`docs/upstreaming/upstream-wiki-drift.md`](docs/upstreaming/upstream-wiki-drift.md)
+  — weekly automated tracking of changes to chilli-axe/mpc-autofill's own
+  wiki (detection only, never copied in).
 - [`docs/federation-v1.md`](docs/federation-v1.md) — federation verdict
   exchange format v1 (spec, implementation pending).
 - [`docs/theory.md`](docs/theory.md) — the printing-identification
   pipeline as candidate-constrained decoding: false-accept bound,
   prior-art comparison, soundness mechanisms, Sybil/Dawid-Skene
   addendum. Doubles as the federation pitch's technical annex.
+- [`docs/documentation-process.md`](docs/documentation-process.md) — docs/
+  as source of truth, the wiki as a generated view of it, mechanical lint
+  vs. the quarterly judgment pass, upstream wiki tracking.

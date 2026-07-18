@@ -1,0 +1,51 @@
+name: Upstream wiki drift
+
+# Weekly detection-only check for changes to chilli-axe/mpc-autofill's
+# wiki, so this fork notices when the project it forked from documents
+# something new — NEVER copies upstream wiki text anywhere in this repo.
+# Wiki content has no clear license; the only correct integration is a
+# link to the upstream page plus, where genuinely worth it, a
+# human-written adaptation with attribution, decided on human review —
+# never a mirror. See docs/upstreaming/upstream-wiki-drift.md's own header
+# for the same statement in the doc this workflow maintains.
+#
+# Pushes directly to this repo's docs/ (not a wiki), so the default
+# GITHUB_TOKEN is sufficient — no PAT needed here (contrast with
+# docs-wiki-publish.yml, which pushes to a *different* repo — the wiki —
+# and does need one).
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # weekly, Mondays 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-drift:
+    name: Check chilli-axe/mpc-autofill wiki for changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: repo
+
+      - name: Clone upstream wiki (read-only)
+        run: git clone https://github.com/chilli-axe/mpc-autofill.wiki.git upstream-wiki
+
+      - name: Update drift doc in place
+        run: python3 repo/.github/scripts/upstream_wiki_drift.py repo upstream-wiki
+
+      - name: Commit and push if anything changed
+        working-directory: repo
+        run: |
+          git config user.name "ProxyPrints Docs Bot"
+          git config user.email "docs-bot@users.noreply.github.com"
+          git add docs/upstreaming/upstream-wiki-drift.md
+          if git diff --cached --quiet; then
+            echo "No drift to record."
+            exit 0
+          fi
+          git commit -m "Upstream wiki drift check ($(date -u +%Y-%m-%d))"
+          git push origin HEAD:master
