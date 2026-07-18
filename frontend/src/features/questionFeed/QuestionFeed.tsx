@@ -157,6 +157,14 @@ export function QuestionFeed() {
     initialChipStates()
   );
   const [followUp, setFollowUp] = useState<FollowUp>("none");
+  // Candidate identifiers the user has explicitly said NO to (Level 1 only - "Not sure" is
+  // genuine uncertainty, not a rejection, and deliberately never adds here) within THIS item's
+  // flow - reset on every new item below. Design rule (owner-directed): a candidate the user
+  // has just rejected is never re-presented as a selectable answer at a later level within the
+  // same item - see rejectSuggestion below and the filtered candidate list this feeds.
+  const [rejectedCandidateIds, setRejectedCandidateIds] = useState<Set<string>>(
+    new Set()
+  );
   const [fetchToken, setFetchToken] = useState<number>(0);
   // A 429 from any vote-casting call below (printing, tag, artist) sets this instead of firing
   // the usual error toast - see the banner rendered near the top of the item below. In a
@@ -208,6 +216,7 @@ export function QuestionFeed() {
         setRevealed(false);
         setChipStates(initialChipStates());
         setFollowUp("none");
+        setRejectedCandidateIds(new Set());
         setSelectedCandidateId(null);
         setRateLimited(false);
         setFilterExpanded(false);
@@ -402,6 +411,23 @@ export function QuestionFeed() {
 
   const skip = () => advance();
 
+  // Level 1's NO. Casts no vote itself (never has - there's no backend concept of "reject just
+  // this one candidate specifically," only a positive vote for a specific printing or a
+  // generic isNoMatch for the whole set - see selectCandidate above) - purely records the
+  // rejection client-side so Level 2's candidate list (below) excludes it, then falls through
+  // to the SAME setStage("level2") transition as before. The actual, single negative vote for
+  // this item still only ever happens once, whenever the user eventually taps "None of these"/
+  // custom-art/skip - unchanged from before this fix, so there is no double-vote risk: this
+  // function only ever changes what's DISPLAYED, never what's SUBMITTED.
+  const rejectSuggestion = () => {
+    if (item?.suggestedPrinting != null) {
+      setRejectedCandidateIds((previous) =>
+        new Set(previous).add(item.suggestedPrinting!.identifier)
+      );
+    }
+    setStage("level2");
+  };
+
   if (loading && item == null) {
     return (
       <div className="text-center py-4" data-testid="question-feed-loading">
@@ -448,11 +474,28 @@ export function QuestionFeed() {
   const isCandidateType =
     item.type === "confirm_suggestion" || item.type === "identify_printing";
   const allCandidates = item.candidates ?? [];
+  // Excludes anything the user rejected at Level 1 ("No" - see rejectSuggestion) BEFORE the
+  // chip filter applies, so a rejected candidate is never offered again as a selectable tile
+  // for the rest of this item's flow, regardless of chip state. hiddenCount below is computed
+  // against this (not allCandidates) so "N hidden by your tags" doesn't conflate a rejection
+  // with a filter - they're excluded for different reasons and the copy should stay accurate.
+  const nonRejectedCandidates = allCandidates.filter(
+    (candidate) => !rejectedCandidateIds.has(candidate.identifier)
+  );
   const visibleCandidates = filterCandidatesByChipStates(
-    allCandidates,
+    nonRejectedCandidates,
     chipStates
   );
-  const hiddenCount = allCandidates.length - visibleCandidates.length;
+  const hiddenCount = nonRejectedCandidates.length - visibleCandidates.length;
+  // The singleton case (or any rejection that happens to empty the remaining set): Level 2
+  // renders with zero grid tiles either way (visibleCandidates is simply empty), but this
+  // drives the contextual copy/rejected-candidate-context swap below rather than showing the
+  // generic "Which of these is it?" prompt over a blank grid.
+  const suggestionRejectedWithNoneLeft =
+    item.type === "confirm_suggestion" &&
+    item.suggestedPrinting != null &&
+    rejectedCandidateIds.has(item.suggestedPrinting.identifier) &&
+    nonRejectedCandidates.length === 0;
 
   // BurstSvg renders alongside (not inside) RevealWrapper deliberately - RevealWrapper has
   // overflow: hidden (it clips the silhouette-reveal animation to the card's own box), which
@@ -655,7 +698,7 @@ export function QuestionFeed() {
                         <Button
                           variant="outline-danger"
                           disabled={submitting}
-                          onClick={() => setStage("level2")}
+                          onClick={rejectSuggestion}
                           data-testid="question-feed-level1-no"
                         >
                           No
@@ -767,7 +810,43 @@ export function QuestionFeed() {
                           : "Needs identification"}
                       </Badge>
                       {item.type === "confirm_suggestion" &&
-                        item.suggestedPrinting != null && (
+                        item.suggestedPrinting != null &&
+                        (suggestionRejectedWithNoneLeft ? (
+                          <>
+                            {/* Singleton-rejection case (task: eliminate double-asking) - the
+                                suggested printing was the ONLY candidate, so there's nothing
+                                left to pick from a grid. Skips straight to the classified-exit
+                                choice below, with the rejected candidate kept as grayed,
+                                non-interactive context (never a button) rather than vanishing
+                                without explanation. */}
+                            <p data-testid="question-feed-suggestion-prompt">
+                              Got it - not that one. Is it any official
+                              printing at all?
+                            </p>
+                            <div
+                              className="d-flex align-items-center gap-2 mb-3 opacity-50"
+                              data-testid="question-feed-rejected-context"
+                            >
+                              <div style={{ width: 40, flexShrink: 0 }}>
+                                <img
+                                  src={item.suggestedPrinting.mediumThumbnailUrl}
+                                  alt=""
+                                  style={{ width: "100%" }}
+                                />
+                              </div>
+                              <div className="text-muted small">
+                                You said: not{" "}
+                                <SetIcon
+                                  expansionCode={
+                                    item.suggestedPrinting.expansionCode
+                                  }
+                                />{" "}
+                                {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                                {item.suggestedPrinting.collectorNumber}
+                              </div>
+                            </div>
+                          </>
+                        ) : (
                           <p data-testid="question-feed-suggestion-prompt">
                             Which of these is it?{" "}
                             <SetIcon
@@ -779,21 +858,23 @@ export function QuestionFeed() {
                             {item.suggestedPrinting.collectorNumber} was
                             suggested
                           </p>
-                        )}
-                      <div className="mb-2">
-                        <Button
-                          variant="link"
-                          className="p-0"
-                          onClick={() =>
-                            setFilterExpanded((previous) => !previous)
-                          }
-                          data-testid="question-feed-filter-toggle"
-                        >
-                          {filterExpanded
-                            ? "Hide filters"
-                            : "Filter by attribute"}
-                        </Button>
-                      </div>
+                        ))}
+                      {!suggestionRejectedWithNoneLeft && (
+                        <div className="mb-2">
+                          <Button
+                            variant="link"
+                            className="p-0"
+                            onClick={() =>
+                              setFilterExpanded((previous) => !previous)
+                            }
+                            data-testid="question-feed-filter-toggle"
+                          >
+                            {filterExpanded
+                              ? "Hide filters"
+                              : "Filter by attribute"}
+                          </Button>
+                        </div>
+                      )}
                       {hiddenCount > 0 && (
                         <p
                           className="text-muted small"

@@ -235,8 +235,12 @@ printings, artists, tags, and moderation from one screen.
     no grid. YES casts the same vote Level 2's tap does; NOT SURE and NO
     both drop to Level 2 with no vote cast (per the state diagram, they're
     intentionally identical transitions — "an honest skip beats a coerced
-    guess"). `identify_printing` items (and `confirm_suggestion` items
-    without a `suggestedPrinting`) skip Level 1 entirely.
+    guess"), but NO additionally records the rejected candidate's
+    identifier client-side (`rejectedCandidateIds` — never NOT SURE, which
+    is genuine uncertainty, not a rejection) so Level 2 excludes it — see
+    the no-re-presentation rule below. `identify_printing` items (and
+    `confirm_suggestion` items without a `suggestedPrinting`) skip Level 1
+    entirely.
   - **Level 2** — the candidate grid. The attribute-chip ring is now an
     opt-in, collapsed-by-default "Filter by attribute" disclosure instead
     of always-on chrome — selecting a candidate ignores filter state
@@ -249,6 +253,37 @@ printings, artists, tags, and moderation from one screen.
     match" until a chip was explicitly set is gone — it existed only to
     force a description before a now-superseded flow, and directly
     conflicted with the filter panel defaulting to collapsed.
+  - **No-re-presentation rule** (owner-directed fix, was a real live bug:
+    Level 1 "Is it M21 203?" → NO → Level 2 grid containing only M21 203
+    again): within a single question item's flow, a candidate the user
+    has just rejected is never re-presented as a selectable answer at a
+    later level — each level's display set is candidates minus
+    already-rejected-this-item. Level 2's grid is computed from
+    `nonRejectedCandidates` (all candidates minus `rejectedCandidateIds`,
+    filtered *before* the attribute-chip filter, so "N hidden by your
+    tags" doesn't conflate a rejection with a filter), and the singleton
+    case — rejecting the one and only candidate, or a rejection that
+    happens to empty the remaining set — skips the grid entirely: the
+    prompt swaps to a contextual "Got it — not that one. Is it any
+    official printing at all?" with the rejected candidate shown only as
+    grayed, non-interactive context (never a button), falling straight
+    through to the same classified-exit choice (None of these / custom
+    art / skip) that always rendered below the grid. `rejectedCandidateIds`
+    is per-item state, reset alongside every other per-question field in
+    the same fetch effect (see the module's own comment on why that reset
+    can't be a separate dependency-keyed effect). Vote semantics are
+    unchanged by this fix: Level 1's NO never cast a vote before (no
+    schema concept of "reject just this one candidate" — see Level 0's
+    identical constraint above), and still doesn't; `rejectSuggestion`
+    only changes what's *displayed*, the one real negative vote per item
+    still only happens once, at the eventual "None of these"/custom-art/
+    skip tap. Audited as clean for the same re-presentation pattern:
+    Level 0 below (NO opens the deckbuilder's general grid-selector
+    browse UI, a different paradigm from a guided funnel step — showing
+    the current image among many search results there is normal browse
+    behavior, not a re-ask) and Level 3 (only ever asks about attribute
+    groups `getOpenExclusionGroups` finds genuinely open on the *selected*
+    candidate — inherently already excludes anything already answered).
   - **Level 3** — conditional, not a standard stage. Selecting a candidate
     auto-tags everything derivable from it (see above); Level 3 only
     renders when `getOpenExclusionGroups` finds a genuinely open group,
