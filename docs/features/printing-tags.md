@@ -139,7 +139,14 @@ printings, artists, tags, and moderation from one screen.
   `z-index`, together) on its wrapping `Col` — `position: relative` alone
   does not establish one, and the card's own `z-index: -1` otherwise
   escapes all the way to the page root and makes its interactive content
-  unclickable at the hit-testing layer.
+  unclickable at the hit-testing layer. `StaticCardPanel` (same file) is
+  the non-sticky variant used by Level 1 only (below) — `position:
+  relative`, no `z-index`, plain document flow throughout. Real-device
+  evidence (not reproducible in this sandbox's Chromium) found `CardPanel`'s
+  sticky-plus-negative-z-index mechanism, correctly scoped for Level 2's
+  long-scrolling two-column layout, compositing incorrectly on a real
+  phone when reused for Level 1's short single-screen flow — the answer
+  controls painted overlapping the card instead of cleanly below it.
 - `frontend/src/features/attributeChips/` — tri-state chips
   (untouched → positive → negative), fill color renders weighted net
   polarity (`tag_consensus.get_tag_net_polarity`). Two exclusion groups

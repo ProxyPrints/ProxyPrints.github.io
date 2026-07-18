@@ -79,6 +79,24 @@ export const CardPanel = styled.div`
   z-index: -1;
 `;
 
+// Level 1's compact single-card confirmation screen (QuestionFeed.tsx) has no long scrollable
+// candidate list to keep the card pinned against while scrolling past - unlike Level 2's
+// two-column layout, which is what CardPanel's sticky-plus-negative-z-index mechanism above
+// exists for. Real-device evidence (a phone, not this sandbox's Chromium) showed that same
+// mechanism compositing incorrectly for Level 1's simpler flow: the sticky card's reserved
+// layout-flow box and its actual pinned visual position diverge once the page scrolls even a
+// little, leaving a gap where the card "should" be and letting the answer buttons that follow
+// it in the DOM paint underneath/inside the card's own box instead of cleanly below it -
+// nested sticky-plus-negative-z-index stacking contexts are a known cross-engine compositing
+// risk this sandbox's Chromium doesn't reproduce. `position: relative` still gives
+// BurstSvg/RevealOverlay the positioned containing block they anchor themselves to (identical
+// visual result to CardPanel for that part), but with no sticky and no negative z-index,
+// there's nothing to detach from its own reserved space or to invert paint order against its
+// siblings - the whole thing just stays one ordinary block in normal document flow.
+export const StaticCardPanel = styled.div`
+  position: relative;
+`;
+
 // Measures how far the panel naturally sits below the top of its scrolling ancestor (see
 // ContentContainer in Layout.tsx - the app's content area is a fixed-position, internally
 // scrolling box, not the normal document body) right after it mounts, and uses that as the
