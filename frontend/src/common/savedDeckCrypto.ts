@@ -306,6 +306,26 @@ export async function changePassphrase(
   return { salt, passphraseWrapped };
 }
 
+/**
+ * Reissues a brand-new recovery key and wraps the (already-unwrapped) master key under it. Used
+ * by the recovery flow specifically (not an ordinary passphrase change, which leaves the
+ * recovery slot untouched - see `changePassphrase`): once a recovery key has actually been
+ * exercised to recover a forgotten passphrase, the addendum's recovery flow re-wraps BOTH slots
+ * - the passphrase slot under the new passphrase, and the recovery slot under a fresh recovery
+ * key - so the old, now-used recovery key is superseded rather than left valid indefinitely.
+ */
+export async function rewrapMasterKeyWithNewRecoveryKey(
+  masterKey: CryptoKey
+): Promise<{
+  recoveryKeyBytes: Uint8Array<ArrayBuffer>;
+  recoveryWrapped: WrappedKey;
+}> {
+  const recoveryKeyBytes = generateRecoveryKey();
+  const recoveryKey = await importRecoveryKey(recoveryKeyBytes);
+  const recoveryWrapped = await wrapKey(masterKey, recoveryKey);
+  return { recoveryKeyBytes, recoveryWrapped };
+}
+
 /** Generates a fresh DEK for a brand-new deck, wrapped by the (already-unlocked) master key. */
 export async function createDeckKey(
   masterKey: CryptoKey
