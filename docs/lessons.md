@@ -406,3 +406,38 @@ method that actually worked after `page.on(console/pageerror)` came up empty: ad
 calls at the very top of each component in the suspect render tree (starting from the root) to
 binary-search how far the tree actually renders before going silent - the last log line reached
 pinpoints the synchronous throw's rough location even when nothing else in the stack reports it.
+
+## A stacked PR's base branch gets deleted out from under it when the parent merges (squash-and-delete)
+
+If PR B is opened against PR A's branch (a stack) and PR A is later squash-merged with
+`--delete-branch`, GitHub does NOT retarget B to the repo's default branch - it auto-CLOSES B
+instead, the moment A's branch disappears (confirmed via `gh pr view`: `state: CLOSED`,
+`mergeStateStatus: DIRTY`, immediately after A's merge, not something B's author did). Worse:
+the GitHub API then refuses to reopen a PR whose base branch was deleted at all - a direct
+`state cannot be changed` 422, not a `gh` CLI limitation, not something worth retrying a
+different way. Confirmed live (`claude/e2-bleed-prior-batch-resolution`, PR #69, stacked on PR
+#66's branch): #66 merged, #69 auto-closed, reopen attempts 422'd twice (once for `state=open`
+alone, once combined with `base=master`). Recovery: the _head_ branch survives (only the base
+branch was deleted) - preserve the closed PR's title/body, open a brand-new PR from the same
+head branch against `master` directly (became #72), then resolve whatever real merge conflict
+appears (git sees the parent's squash commit as unrelated history to what the child branch was
+built on, even though the content is logically the same - expect at least one real conflict, not
+a fast-forward). **Prevention, the actual fix**: retarget the child PR to `master` (`gh pr edit --base master` / a REST `PATCH .../pulls/N -f base=master`) BEFORE merging+deleting the parent's
+branch, while the retarget API call still works normally - not after.
+
+## Cross-session branch-name collisions on a "standing convention" name
+
+Once a delivery pattern (e.g. "commit reports to a `report-relay` branch, relay the URL") gets
+adopted as a _standing_ convention rather than a one-off, multiple independent sessions on this
+box will reach for the exact same bare branch name for their own unrelated work - confirmed live:
+a second, unrelated session pushed 5 more commits (upstream-ladder CI, federation-v1 doc updates)
+on top of this session's own single report commit on a bare `report-relay` branch, with no
+warning or conflict at push time (git branches don't lock; two sessions can both fast-forward the
+same ref from their own local history without either one noticing the other's commits landed
+first, as long as neither force-pushes). Confirmed via `git log <branch> --oneline`: the last
+commit either session recognizes, followed by commits from a different narrative it never wrote.
+**Fix**: every session's first relay push must use a branch name unique to that session, not the
+convention's bare name - a numeric/date/session-id suffix, chosen so two concurrent sessions
+adopting the same convention independently can't collide (a fixed default like a bare
+`report-relay` is exactly the thing every session will reach for identically). The bare
+`report-relay` name itself is now retired for this reason - always suffix.

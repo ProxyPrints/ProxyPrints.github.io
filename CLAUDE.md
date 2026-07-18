@@ -87,6 +87,15 @@ partial work reports in the same structure ("WHAT SHIPPED: nothing —
 blocked at step N because X"). Applies to every hold point, completion,
 status update, and blocker report.
 
+For any report longer than ~10 lines, or whenever normal message
+delivery has been unreliable: commit the fenced block to a
+`docs/reports/<date>-<topic>.md` file on a short-lived, **per-session
+uniquely-suffixed** branch (never the bare `report-relay` — it's
+retired; two independent sessions collided on it with no push
+conflict to warn either one), push, and reply with only the branch
+name, file path, and one header line. See [[docs/lessons.md]] for the
+collision this prevents.
+
 ## docs/ index
 
 This is a flat working index for Claude Code sessions. For an
