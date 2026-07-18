@@ -127,7 +127,13 @@ status update, and blocker report.
   branch, never opened without the owner sending it personally.
 - [`docs/upstreaming/conventions.md`](docs/upstreaming/conventions.md) —
   one-page checklist any `upstream-fix-*`/`upstream-feat-*` branch must
-  satisfy, mined from our merged PR #467 and upstream's own recent PRs.
+  satisfy, mined from our merged PR #467 and upstream's own recent PRs;
+  also covers the CI (`upstream-branch-verification.yml`,
+  `upstream-drift-monitor.yml`) that watches the ladder.
+- [`docs/upstreaming/drift-log.md`](docs/upstreaming/drift-log.md) —
+  auto-generated, edited in place weekly: does each `upstream-*` branch
+  still apply cleanly onto current `upstream/master`, and how far has
+  upstream moved. Detection only, never auto-rebases anything.
 - [`docs/federation-v1.md`](docs/federation-v1.md) — federation verdict
   exchange format v1 (spec, implementation pending).
 - [`docs/theory.md`](docs/theory.md) — the printing-identification

@@ -78,6 +78,41 @@ preference across all 5 of this fork's upstream PRs so far.
     Node.js frontend). A chunk sitting ready on a branch is not the same
     thing as permission to open the PR.
 
+## CI for the ladder
+
+Two small GitHub Actions workflows keep every cut `upstream-fix-*`/
+`upstream-feat-*` branch honest without ever writing or fixing code
+themselves: `upstream-branch-verification.yml` mirrors upstream's own
+`test-pre-commit.yml`/`test-backend.yml` recipes against each branch
+(weekly cron, plus a manual `workflow_dispatch` right after cutting or
+updating one — GitHub can't fire a native `on: push` for these branches
+since a clean extraction never carries the workflow file itself, so
+`workflow_dispatch` is the real substitute; see the file's own header
+comment), and `upstream-drift-monitor.yml` runs a no-commit trial merge
+(`git merge-tree`) of each branch onto the current `upstream/master` tip
+weekly and rewrites `docs/upstreaming/drift-log.md` in place with
+whether it still applies cleanly, how far upstream has moved past the
+branch's fork point, and whether any of those new upstream commits touch
+the same files. Both relay a short note per the standing report-relay
+convention (`docs/reports/<date>-*.md` on `report-relay`); the
+verification workflow's per-branch pre-commit/test output and the drift
+monitor's always-current table are the durable artifacts, the relay note
+is just the pointer. Neither workflow decides pass/fail for you — a real
+test failure caused only by this fork's own CI missing
+`GOOGLE_DRIVE_API_KEY`/`MOXFIELD_SECRET` secrets is expected noise, not
+a regression, so each branch's own draft doc under `docs/upstreaming/drafts/`
+should record its expected-green baseline to check the run's output
+against. The drift monitor never rebases, merges, or otherwise touches a
+branch — automation's job stops at detecting rot; a human or a worker
+session decides what "still upstream-shaped" means and whether/when a
+rebase is worth doing, the same separation of concerns the entrypoint/
+migrate composition lesson in `docs/troubleshooting.md` argues for
+(steps that look independently automatable can already be fused if you
+let them chain unsupervised). Once a branch's PR actually merges or
+closes upstream, delete the `origin` copy — both workflows discover
+branches by name pattern alone, with no way to know a PR's status, so a
+stale branch just keeps getting harmlessly re-checked forever otherwise.
+
 ## Style notes from the wider PR sample
 
 - No enforced title prefix. PR titles are short descriptive noun phrases,

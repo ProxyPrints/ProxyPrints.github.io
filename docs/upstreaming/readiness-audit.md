@@ -32,6 +32,15 @@ question is answered, since both are frontend chunks and their value
 depends on there still being a Node.js frontend for upstream to accept
 changes into.
 
+**CI added for the ladder, 2026-07-18** (while dormant, per a separate
+request): `.github/workflows/upstream-branch-verification.yml` and
+`upstream-drift-monitor.yml`, detection-only, described in full in
+`conventions.md`'s "CI for the ladder" section. Neither fires for real
+until this branch merges to `master` (GitHub only schedules workflows
+that exist on the default branch) — `docs/upstreaming/drift-log.md` is
+seeded by hand in the meantime with the same computation the workflow
+will run.
+
 ## 0. Method and ground truth
 
 `git diff upstream/master origin/master` (two-dot, tree-level) is the

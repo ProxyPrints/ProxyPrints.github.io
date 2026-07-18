@@ -160,3 +160,34 @@ What was actually done instead, to get real signal rather than none:
 real Postgres+ES (or upstream's own CI, once opened) to cover the 8
 untested cases — everything above is real, non-fabricated verification,
 but it's not a substitute for the actual integration tests passing.
+
+## CI baseline (for `upstream-branch-verification.yml`)
+
+What a real CI run (GitHub-hosted runner, real Docker, upstream's exact
+`test-pre-commit`/`test-backend` recipes) should show for this branch —
+cross-reference `upstream-branch-verification.yml`'s relayed report
+against this before treating anything as a regression:
+
+- **`pre-commit run --all-files`**: expected fully green. Verified
+  locally against the exact pinned hook versions (see "Verification"
+  above) with zero findings in any file this branch touches.
+- **`pytest .` in `MPCAutofill/`**: expected **17/17 green** in
+  `cardpicker/tests/test_local_file_source.py` specifically — this
+  branch's own tests are fully self-contained against `tmp_path`, no
+  live credentials or external services beyond the workflow's own
+  Postgres/ES services.
+- **Expected non-regressions elsewhere in the suite**: any failure in a
+  test file this branch doesn't touch that traces back to a missing
+  `GOOGLE_DRIVE_API_KEY`/`MOXFIELD_SECRET` (this fork's CI has neither
+  configured) is a known environmental gap, not something this branch
+  broke — `docs/features/local-file-source.md`'s own comparison already
+  flags the pre-existing Google Drive source tests as the CI-fragile
+  ones for exactly this reason. If the relayed report shows failures
+  **only** in Google-Drive/Moxfield-dependent test files, that's the
+  expected baseline, not a blocker.
+- **A real blocker looks like**: any failure inside
+  `test_local_file_source.py` itself, or a failure in a file this branch
+  modifies (`admin.py`, `views.py`, `urls.py`, `settings.py`,
+  `sources/api.py`, `sources/source_types.py`,
+  `management/commands/update_database.py`) that isn't one of the two
+  known-environmental buckets above.
