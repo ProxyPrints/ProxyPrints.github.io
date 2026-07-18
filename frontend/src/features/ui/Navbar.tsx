@@ -24,6 +24,7 @@ import {
   OpenDownloadManagerButton,
 } from "@/features/download/DownloadManager";
 import { AuthWidget } from "@/features/moderation/AuthWidget";
+import { useGetWhoamiQuery } from "@/store/api";
 import {
   useAnyBackendConfigured,
   useProjectName,
@@ -55,6 +56,8 @@ export default function ProjectNavbar() {
 
   const projectName = useProjectName();
   const router = useRouter();
+  const whoami = useGetWhoamiQuery();
+  const isAuthenticated = whoami.data?.authenticated === true;
 
   return (
     <DisableSSR>
@@ -138,6 +141,16 @@ export default function ProjectNavbar() {
                   eventKey="/whatsthat"
                 >
                   What&apos;s That Card?
+                </Nav.Link>
+              )}
+              {remoteBackendConfigured && isAuthenticated && (
+                <Nav.Link
+                  as={Link}
+                  href="/myDecks"
+                  active={router.route === "/myDecks"}
+                  eventKey="/myDecks"
+                >
+                  My Decks
                 </Nav.Link>
               )}
               <Nav.Link
