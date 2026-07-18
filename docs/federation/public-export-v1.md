@@ -472,6 +472,57 @@ real, both are worth naming, but only one is actually MIT — §5's license
 discussion accounts for this discrepancy rather than assuming both
 consumers sit under the same permissive umbrella.
 
+**Concrete finding, not a hypothetical (2026-07-18)**: `Akurosia/proxies-at-home`,
+a public GitHub fork of `acoreyj/proxies-at-home`, is the accessible copy of
+the codebase that actually powers the production `proxxied.com` deployment —
+its README documents that production URL, its own backend/frontend hosting,
+and states its source lives at `kclipsto/proxies-at-home`. That claimed
+source repo does **not** resolve (`api.github.com/repos/kclipsto/proxies-at-home`
+404s, and the `kclipsto` account's only other public repo is an unrelated
+issue tracker) — so `Akurosia`'s fork, not `kclipsto`'s repo, is what was
+actually readable for this finding. **License is genuinely unclear, not
+confidently MIT**: the README's own "Key Details" section states "License:
+MIT," but `package.json`'s `license` field says `"ISC"` (very plausibly
+just npm-init boilerplate, not a deliberate choice), there is no `LICENSE`/
+`LICENSE.md`/`COPYING` file anywhere in the repo root, and GitHub's own
+license-detection API returns `null` for it. Naming it here without a
+confirmed license would repeat the exact mistake this doc already corrected
+above for `alex-taxiera/proxy-print` — so it's named as a real, working
+integration, not folded into "MIT-lineage" until an owner of that repo
+clarifies or a `LICENSE` file actually lands. What's confirmed by reading
+its actual source (`client/src/helpers/mpcXmlExport.ts`,
+`mpcAutofillApi.ts`, `importParsers.ts`): it already calls a real
+MPC-Autofill-style search backend (`POST /api/mpcfill/search` and
+`/batch-search`, proxied through its own server) to resolve card art by
+identifier, and its XML export is a plain, attribute-free `<order>`/
+`<fronts>`/`<backs>`/`<card>` dialect (`id`/`slots`/`name`/`query` as
+child elements, no version attribute) — genuinely compatible with this
+export's `scryfall_id`/`set`+`collector_number` join keys, independent of
+the license question.
+
+**Import-side XML dialect note, informing the PR-7 XML 2.0 provenance-attribute
+design**: this tool's own XML import (`importParsers.ts`) uses the browser's
+native `DOMParser`, then pulls known child elements by CSS-selector/tag-name
+(`"fronts > card"`, `id`, `name`, `slots`) with no schema/whitelist
+validation anywhere in the path — it does not enumerate or reject unrecognized
+elements or attributes, it simply never looks for them. A future XML 2.0
+export carrying optional provenance attributes or child elements (e.g. a
+`provenance`/`confidence` attribute on `<card>`, per the "Tracked, not
+building (XML)" note in `docs/proposals/proposal-b-bleed-normalization.md`)
+would pass through this parser untouched — ignored, not rejected — meaning
+PR-7 can add such fields without needing a coordinated opt-in from
+downstream consumers built this way; it's a genuinely safe, additive
+extension against at least this one real consumer's actual parsing code, not
+just an assumption about XML's general leniency.
+
+**One-line correction to this doc's own earlier framing**: the "production,
+proprietary" characterization implicit in citing only the MIT upstream
+(`acoreyj/proxies-at-home`) and treating the live `proxxied.com` deployment
+as a separate, unexamined closed service is superseded by this finding — the
+actual production fork is public and its integration code is readable, even
+though its license status (unlike the MIT upstream it forked from) remains
+genuinely unresolved rather than confidently open.
+
 ## 7. What v1 explicitly isn't
 
 Stated plainly so nothing here gets read as more than it is:
@@ -502,3 +553,22 @@ publisher-before-subscriber sequencing `federation-v1.md`'s
 not on this program shipping. Revisit when there's an actual second
 instance on the other end of a real subscribe relationship, exactly the
 same revisit condition the audit ladder's Tier 6 entry already states.
+
+## 8. Future work (design intent, no build)
+
+**Reference consumers + upstreaming intent**: two reference consumer
+implementations are planned to live in this repo — a Python/Django-style
+import command for the mpc-autofill family, and a TypeScript
+verdict-lookup module for the `proxies-at-home` family (§6b) — written
+upstream-shaped from the start: generic "import community identification
+data" capabilities, standalone-useful on their own, instance-agnostic
+rather than hardcoded to this fork's own catalog or API shape. The
+explicit long-term goal is to contribute each to its respective upstream,
+once (a) this export is actually live (nothing to consume until then) and
+(b) the relationship exists — for mpc-autofill, via the existing
+contribution ladder (`docs/upstreaming/`); for `proxies-at-home`, after
+initial contact, since no prior relationship exists yet and §6b's own
+license-ambiguity finding on the `Akurosia`/`kclipsto` fork means that
+contact would need to clarify licensing before any code changes hands in
+either direction. Gated accordingly in the project ledger — this is a
+design note recording intent, not a build authorized by this doc.
