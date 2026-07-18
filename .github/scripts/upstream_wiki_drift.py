@@ -24,9 +24,7 @@ LAST_CHECKED_RE = re.compile(r"^Last checked: .*$", re.MULTILINE)
 
 
 def git(args: list[str], cwd: Path) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 
 
 def page_name(filename: str) -> str:
@@ -65,9 +63,7 @@ def main() -> int:
         print("No change upstream since last check.")
         changed_count = 0
     else:
-        changed = set(
-            git(["diff", "--name-only", last_seen_sha, current_head], wiki_dir).splitlines()
-        )
+        changed = set(git(["diff", "--name-only", last_seen_sha, current_head], wiki_dir).splitlines())
         changed = {f for f in changed if f.endswith(".md")}
         changed_count = len(changed)
         print(f"{changed_count} page(s) changed upstream since last check: {sorted(changed)}")
@@ -100,7 +96,7 @@ def main() -> int:
         new_doc,
     )
     if old_table_block:
-        new_doc = new_doc[: old_table_block.start()] + new_table + "\n" + new_doc[old_table_block.end():]
+        new_doc = new_doc[: old_table_block.start()] + new_table + "\n" + new_doc[old_table_block.end() :]
     else:
         new_doc = new_doc.rstrip() + "\n\n" + new_table + "\n"
 
@@ -111,8 +107,10 @@ def main() -> int:
         new_doc = new_doc.rstrip() + f"\n\nLast checked: {today}\n"
 
     doc_path.write_text(new_doc)
-    print(f"Updated {DOC_REL}: last-seen-sha {last_seen_sha[:8]} -> {current_head[:8]}, "
-          f"{changed_count} page(s) refreshed.")
+    print(
+        f"Updated {DOC_REL}: last-seen-sha {last_seen_sha[:8]} -> {current_head[:8]}, "
+        f"{changed_count} page(s) refreshed."
+    )
     return 0
 
 

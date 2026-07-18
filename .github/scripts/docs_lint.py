@@ -24,7 +24,6 @@ found.
 """
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,8 +41,21 @@ ALLOWLIST = {
 }
 
 PATH_EXTENSIONS = (
-    ".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".yml", ".yaml", ".json",
-    ".css", ".toml", ".txt", ".csv", ".conf", ".sh",
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".md",
+    ".yml",
+    ".yaml",
+    ".json",
+    ".css",
+    ".toml",
+    ".txt",
+    ".csv",
+    ".conf",
+    ".sh",
 )
 
 WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
@@ -92,7 +104,8 @@ def is_gitignored(candidate: str) -> bool:
     try:
         result = subprocess.run(
             ["git", "check-ignore", "--quiet", candidate],
-            cwd=REPO_ROOT, timeout=5,
+            cwd=REPO_ROOT,
+            timeout=5,
         )
         return result.returncode == 0
     except (subprocess.SubprocessError, OSError):
@@ -143,9 +156,15 @@ def check_file(path: Path) -> list[str]:
         # a known top-level dir) to keep false positives low.
         top = candidate.split("/", 1)[0]
         known_tops = {
-            "docs", "frontend", "MPCAutofill", "image-cdn", "desktop-tool",
-            "cloudflare-static-site", "github-release-reverse-proxy",
-            "docker", ".github",
+            "docs",
+            "frontend",
+            "MPCAutofill",
+            "image-cdn",
+            "desktop-tool",
+            "cloudflare-static-site",
+            "github-release-reverse-proxy",
+            "docker",
+            ".github",
         }
         if top not in known_tops and not candidate.startswith(("../", "./")):
             continue
@@ -173,10 +192,12 @@ def main() -> int:
         print(finding)
 
     if all_findings:
-        print(f"\n{len(all_findings)} finding(s). See docs/documentation-process.md's "
-              f"known-limitations note if any of these are false positives — add a "
-              f"one-line ALLOWLIST entry in .github/scripts/docs_lint.py rather than "
-              f"loosening the general heuristic.")
+        print(
+            f"\n{len(all_findings)} finding(s). See docs/documentation-process.md's "
+            f"known-limitations note if any of these are false positives — add a "
+            f"one-line ALLOWLIST entry in .github/scripts/docs_lint.py rather than "
+            f"loosening the general heuristic."
+        )
     else:
         print("docs-lint: clean.")
 

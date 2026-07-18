@@ -61,7 +61,11 @@ def write_pointer_page(wiki_dir: Path, wiki_name: str, points_to: str, note: str
 def build_home_and_sidebar(repo_root: Path, wiki_dir: Path, mapping: dict) -> None:
     intro = (repo_root / "docs" / "wiki-home-intro.md").read_text().rstrip() + "\n"
 
-    home_lines = [generated_header("docs/wiki-home-intro.md + .github/wiki-publish-map.json"), intro, "\n## Wiki contents\n"]
+    home_lines = [
+        generated_header("docs/wiki-home-intro.md + .github/wiki-publish-map.json"),
+        intro,
+        "\n## Wiki contents\n",
+    ]
     sidebar_lines = [generated_header(".github/wiki-publish-map.json"), "**[Home](Home)**\n"]
 
     for group in mapping["groups"]:
@@ -117,8 +121,10 @@ def main() -> int:
 
     for pointer in mapping.get("pointer_pages", []):
         if pointer["points_to"] not in managed_names:
-            print(f"::error::pointer_pages entry {pointer['wiki']!r} points to "
-                  f"{pointer['points_to']!r}, which isn't a real published page")
+            print(
+                f"::error::pointer_pages entry {pointer['wiki']!r} points to "
+                f"{pointer['points_to']!r}, which isn't a real published page"
+            )
             return 1
         write_pointer_page(wiki_dir, pointer["wiki"], pointer["points_to"], pointer["note"])
         managed_names.add(pointer["wiki"])
