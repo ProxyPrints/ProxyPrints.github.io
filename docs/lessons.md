@@ -498,3 +498,29 @@ convention's bare name - a numeric/date/session-id suffix, chosen so two concurr
 adopting the same convention independently can't collide (a fixed default like a bare
 `report-relay` is exactly the thing every session will reach for identically). The bare
 `report-relay` name itself is now retired for this reason - always suffix.
+
+## Passing a plain callback through comlink's Remote proxy throws DataCloneError - and the failure disguises itself as a false-positive Playwright "element is visible" result
+
+`pdfRenderService.ts` added a method that called `this.worker.onImageProgress(cb)` - `cb` a plain
+JS function - across the comlink `Remote<PDFWorker>` boundary into `pdf.worker.ts`. Comlink's
+default RPC transfer is a structured-clone `postMessage`, and a bare function isn't
+structured-clone-able: this throws `DataCloneError: Failed to execute 'postMessage' on 'Worker': ... could not be cloned` the instant the call actually fires - not at compile time (TypeScript
+has no way to know), not synchronously at the call site either (the throw happens inside a
+promise chain comlink builds internally). Fix: wrap the callback in `Comlink.proxy(cb)` before
+passing it - comlink's own documented mechanism for passing a _live, callable_ remote reference
+instead of clonable data, backed by its own internal `MessagePort`. A pre-existing, structurally
+identical `onProgress(cb: typeof console.info)` method on the same worker interface has this same
+latent bug, undetected only because nothing in the codebase actually calls it.
+
+**The Playwright false positive this produced is worth its own note**: the thrown error surfaced
+as Next.js dev mode's full-screen `<nextjs-portal>` "Unhandled Runtime Error" overlay, rendered
+_on top of_ (not instead of) the real in-app Modal this session had just built to replace
+`window.confirm()` - Playwright's `toBeVisible()` on the Modal's own locator still reported true
+(the Modal element genuinely is visible, CSS-wise, underneath the overlay), so the assertion the
+test led with passed cleanly. The failure only surfaced two steps later, as a `.click()` timing
+out with `<nextjs-portal> intercepts pointer events` - which reads exactly like an unrelated
+z-index/stacking-context bug, not "there's a JS exception on this page." **Always check for a
+`dialog "Unhandled Runtime Error"` node in a failing test's saved `error-context.md` (or
+`page.on('pageerror')`) before assuming a pointer-interception failure is a CSS/layout problem** -
+in dev mode, Next's own error overlay is frequently the actual "invisible" thing eating the click,
+and it's a much faster diagnosis than auditing z-index stacking contexts by hand.

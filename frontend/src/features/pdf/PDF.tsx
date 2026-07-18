@@ -214,6 +214,13 @@ export interface PDFProps {
   // of that failure being silently invisible. Optional so existing render
   // props unrelated to failure tracking don't need to know about it.
   reportImageFailure?: (identifier: string, label: string) => void;
+  // Called (by pdf.worker.ts, same as reportImageFailure above) once per card image slot that
+  // FINISHES resolving, success or failure - lets the export UI show live "fetching images:
+  // N/M" progress instead of a static spinner for the several-minutes-plus a large export can
+  // take once full-resolution fetches are paced to the image CDN's shared rate limit (see
+  // pdfImage.ts's fetchFullResolutionImageAsBlob). No arguments - the worker-side closure that
+  // supplies this owns the actual counting/total, this is just the "one more happened" signal.
+  reportImageProgress?: () => void;
   // Proposal B (docs/proposals/proposal-b-bleed-normalization.md) - export-time per-side bleed
   // normalization. Both maps are keyed by card identifier and pre-resolved on the MAIN thread
   // (PDFGenerator.tsx) before the render worker is invoked - not fetched from inside the worker
@@ -442,6 +449,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
     jpgQuality,
     fileHandles,
     reportImageFailure,
+    reportImageProgress,
     bleedPriors,
     bleedOverrides,
   } = usePDFContext();
@@ -520,6 +528,8 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
           } catch {
             reportImageFailure?.(cardDocument.identifier, cardDocument.name);
             return undefined;
+          } finally {
+            reportImageProgress?.();
           }
         }}
         style={
@@ -951,6 +961,7 @@ export const PDF = (props: PDFProps) => {
         jpgQuality={props.jpgQuality}
         fileHandles={props.fileHandles}
         reportImageFailure={props.reportImageFailure}
+        reportImageProgress={props.reportImageProgress}
       />
     );
   }

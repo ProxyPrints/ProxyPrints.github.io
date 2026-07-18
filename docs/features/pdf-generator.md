@@ -78,6 +78,44 @@ a `HEAD` request had is gone — the body was going to be fetched by `<Image>`
 anyway on a hit, so fetching it once ourselves is a real efficiency win, not
 just a correctness one.
 
+## Full-resolution fetches are paced + retrying (mass export-image-failure incident)
+
+A large real export (~104 cards) failed almost every full-resolution image fetch, all reporting
+as blank in the confirm dialog. Root cause: the image-CDN Worker's full-resolution tier shares
+ONE global 3-req/s rate limiter across every caller (see [[image-cdn.md]]'s "What it does"
+section), enforced server-side with its own internal retry/backoff - but nothing on the CLIENT
+paced how many concurrent full-resolution fetches it fired at once.
+`@react-pdf/renderer`'s own internal scheduler resolves every card's `<Image src={async () => ...}>` callback with its own concurrency, entirely outside this codebase's control - a large
+export could trigger dozens of simultaneous fetches, each independently exhausting its own
+server-side retry budget under that contention and coming back as a permanent per-card failure.
+
+**Fix** (`pdfImage.ts`'s `fetchFullResolutionImageAsBlob`, used by both `getPDFImageURL`'s and
+`getPDFImageBlob`'s full-resolution branches - the risk applies to any full-resolution export,
+not just Proposal B's bleed-normalized cards):
+
+- A shared `Semaphore` (`common/semaphore.ts`, new - a plain acquire/release concurrency gate for
+  gating an unbounded stream of ad-hoc calls from a scheduler this codebase doesn't control,
+  distinct from `concurrencyLimit.ts`'s `mapWithConcurrencyLimit`, which needs a known, finite
+  item list) caps client-side full-resolution fetches to `FULL_RESOLUTION_FETCH_CONCURRENCY = 3`,
+  matching the server's own limit.
+- Retries a 429 or 5xx (transient) up to `FULL_RESOLUTION_FETCH_MAX_RETRIES = 3` times with
+  exponential backoff + jitter - a non-retryable 4xx (a real dead link) still fails on the first
+  attempt, so a genuinely broken image doesn't burn retry budget that delays every other card
+  queued behind the concurrency gate.
+- **Live progress**: a large export paced to 3 req/s can now take several minutes (honestly
+  reported, not hidden) - `PDFProps.reportImageProgress` (mirroring the existing
+  `reportImageFailure` pattern, threaded through `pdf.worker.ts` → comlink's `onImageProgress` →
+  `pdfRenderService` → `PDFGenerator.tsx`) drives a "Fetching images: N/M" indicator so the wait
+  reads as working, not hung. `total` is an approximation (unique card count, not slot count - a
+  duplicate card in the deck fetches once per slot, so `completed` can end up slightly ahead of
+  it), intentionally not presented as an exact fraction for that reason.
+- **In-app confirm modal, not `window.confirm()`**: the incident's own screenshot showed
+  Firefox's "allow notifications?" anti-spam chrome sitting next to the native confirm dialog -
+  a browser can silently start auto-suppressing FUTURE `window.confirm()` calls on an origin once
+  enough of them fire near other browser-level prompts, which would turn this safeguard off with
+  no visible warning. `ImageFailureConfirmModal` (a real React-rendered Bootstrap `Modal`,
+  `PDFGenerator.tsx`) can't be affected by that heuristic at all.
+
 ## "HEAD request fails" console noise — historical, no longer applies
 
 A cross-session report once flagged failed `HEAD` requests to
