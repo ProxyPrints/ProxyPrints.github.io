@@ -113,8 +113,9 @@ Full spec + approval record: `docs/proposals/proposal-b-bleed-normalization.md`.
   `failures` array — see bug 4), `pdfRenderService.ts`, `useRenderPDF.ts`
 - `frontend/src/features/pdf/PDFCanvasPreview.tsx`
 - `frontend/scripts/copy-pdf-worker.js`
-- `frontend/src/components/PDFGeneratorModal.tsx`,
-  `FinishedMyProject.tsx`, `ProjectEditor.tsx`
+- `frontend/src/features/pdf/PDFGeneratorModal.tsx`,
+  `frontend/src/features/export/FinishedMyProject.tsx`,
+  `frontend/src/components/ProjectEditor.tsx`
 - `frontend/tests/PDFGenerator.spec.ts` — mocked-CDN Playwright coverage for
   bug 4 (preview warning, confirm-gated download/cancel, and a real-image
   success-path regression check)

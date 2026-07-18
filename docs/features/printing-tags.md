@@ -1,6 +1,6 @@
 # Printing-aware card tagging ("What's That Card?" vote queue)
 
-_Current-state reference, as of 2026-07-16._ Full stage-by-stage build
+_Current-state reference, as of 2026-07-17._ Full stage-by-stage build
 history (Stages 1–7 below): `git log e4eb6cb3 -- docs/features/printing-tags.md`
 and earlier commits — that SHA is the last commit before this file was
 rewritten from a linear changelog into this reference.
@@ -1498,7 +1498,7 @@ unrelated to the OCR token-position bug above. Two separate fixes, not
 one parser fix arriving twice - the D2.5 deterministic tier is **not**
 implied by this OCR fix and was not built.
 
-## Key files
+## Key files (Stage 8 era, historical)
 
 - Backend: `cardpicker/printing_consensus.py`,
   `cardpicker/printing_metadata_import.py`,
@@ -1533,7 +1533,7 @@ implied by this OCR fix and was not built.
   `get_baked_git_sha`), `cardpicker/management/commands/purge_machine_votes.py`,
   migration `0061_pilotrunledger_cardartistvote_run_id_and_more.py`
 
-## Known gaps
+## Known gaps (Stage 8 era, historical)
 
 - The Stage 7 layout (starburst/card/chip-ring composition) was hand-tuned
   via iterative screenshot review, not built against a real design system -
@@ -1563,8 +1563,8 @@ implied by this OCR fix and was not built.
   feedback.
 - Stage numbering: Stage 4 (no-match reason tags, merged as PR #12),
   Stage 5 (tag identity/presentation decoupling via `Tag.display_name`,
-  merged as PR #14), and Stage 6 (this document's current stage —
-  deductive printing-tag backfill) reflect three concurrently-developed
+  merged as PR #14), and Stage 6 (deductive printing-tag backfill) reflect
+  three concurrently-developed
   branches sharing this one doc file, numbered in landing order to avoid
   collisions.
 - **Future work: anonymous_id trust scoring via honeypot questions**
@@ -1722,8 +1722,9 @@ federation, deferred), item 5 (questionFeed ordering mirror, separate follow-up 
 Scryfall's own token detection), task #111 (unrelated CI noise in the thumbnail-refresh
 trigger), PR #19's disposition (owner's convenience).
 
-**Full-catalog run: not yet fired.** This report is the synthesizing deliverable requested
-before that authorization - awaiting explicit owner go-ahead.
+**Full-catalog run: since fired and completed** (see `catalog-completion-plan.md`'s Status
+section for final numbers). This report was the synthesizing deliverable requested before
+that authorization.
 
 ## Two fast-follows, built after HOLD #2 (2026-07-16)
 

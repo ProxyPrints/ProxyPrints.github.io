@@ -526,11 +526,13 @@ faster than "N tag votes alone" would suggest.
 **Fix**: for the rate-limit class of failure specifically, nothing to
 fix server-side once the rate is sane for real usage (raised to 300/h
 alongside this entry — see `settings.py`'s own comment for the full
-reasoning). The frontend's swallowed-error-message bug is still open —
-fixing it means changing each bare `.catch(() => {...})` to
-`.catch((err) => {...})` and surfacing `err.message` instead of the
-hardcoded string, so a 429 actually reads "Too many tag vote
-submissions - please slow down" instead of a generic failure.
+reasoning). The frontend's swallowed-error-message bug — noted here as
+still open — was fixed the same day by PR #47: every vote-submission
+`.catch(...)` (`AttributeChipPanel.tsx`, `PrintingTagPicker.tsx`,
+`QueueTagQuestion.tsx`, `ArtistVotePicker.tsx`, `TagVotePicker.tsx`,
+`NoMatchReasonStrip.tsx`) now surfaces the real error via
+`errorToNotification`/`isRateLimited` (`common/apiErrors.ts`), so a 429
+reads as a friendly rate-limit message instead of a generic failure.
 
 **Refs**: `MPCAutofill/MPCAutofill/settings.py` (rate + LOGGING
 comments), `frontend/src/store/api.ts`'s `APISubmitTagVote`.

@@ -23,7 +23,7 @@ are the only classification targets across every part below.
 
 ---
 
-## Part 1 — Run-cohort safety (in progress, finish as planned)
+## Part 1 — Run-cohort safety (merged, PR #28)
 
 Revocability via a **separate column**, never an `anonymous_id` suffix.
 Confirmed via two parallel research passes (git history in this branch's
@@ -402,7 +402,7 @@ and live-traffic-fairness control, not a cost control, so the WAIT sequencing ab
 
 ---
 
-## Part 3 — Shared evidence-recovery module (after PR #27 merges; expanded)
+## Part 3 — Shared evidence-recovery module (built, HOLD #P3 — write pass pending)
 
 Insight: artist is a property of the ARTWORK, not the printing — art-
 identity evidence supports artist votes even where printing votes are
@@ -611,7 +611,7 @@ Part 3's frame-mismatch census number for its share of this pool).
 
 ---
 
-## Part 6 — Formal note (starts only after the full-catalog run's final report exists)
+## Part 6 — Formal note (merged — docs/theory.md)
 
 `docs/theory.md`: the pipeline as candidate-constrained unique decoding
 over a closed codebook.

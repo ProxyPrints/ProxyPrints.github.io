@@ -89,6 +89,12 @@ status update, and blocker report.
 
 ## docs/ index
 
+This is a flat working index for Claude Code sessions. For an
+audience-grouped map (including `docs/proposals/`, `docs/audits/`,
+`docs/reports/`) see [`docs/README.md`](docs/README.md); for a cold
+external reader's orientation to the whole fork, see
+[`docs/overview.md`](docs/overview.md).
+
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — symptom-first
   index of recurring blockers (grep your error text here first, before
   re-deriving a fix or reading anything else below).
@@ -109,6 +115,9 @@ status update, and blocker report.
   — the "Print!" export page's ordering tabs and flag icons.
 - [`docs/features/printing-tags.md`](docs/features/printing-tags.md) — the
   "What's That Card?" printing-consensus tagging system, backend + frontend.
+- [`docs/features/moderation.md`](docs/features/moderation.md) — Discord
+  OAuth login, the `Moderators` group gate, sensitive-tag approval queue,
+  card reports.
 - [`docs/features/local-file-source.md`](docs/features/local-file-source.md)
   — backend `LOCAL_FILE` catalog source type.
 - [`docs/features/card-dom-api.md`](docs/features/card-dom-api.md) —
