@@ -81,8 +81,7 @@ proposal to reuse it was wrong on that premise).
   never on page load — a real zero-telemetry-posture property, not just
   perf. A real occurrence on the owner's own device (privacy
   browser/ad-tracker blockers routinely block `accounts.google.com`)
-  surfaced as the raw `"Failed to load https://accounts.google.com/gsi/
-  client"` string in the save-to-Drive failure toast; `injectScript`'s
+  surfaced as the raw `"Failed to load https://accounts.google.com/gsi/ client"` string in the save-to-Drive failure toast; `injectScript`'s
   `onerror` now rejects with a dedicated `GSIScriptLoadError` carrying an
   actionable message (privacy browser/ad blocker likely cause, allow the
   domain and retry, or use the plain PDF download instead) instead of

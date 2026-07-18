@@ -18,8 +18,7 @@ other `PDFProps` field already does, no new plumbing needed there.
 
 ### New files
 
-- `frontend/src/common/concurrencyLimit.ts` — `mapWithConcurrencyLimit<T, R>(items, concurrency,
-  fn)`, a general-purpose bounded-concurrency map (worker-pool-over-an-index-cursor, not
+- `frontend/src/common/concurrencyLimit.ts` — `mapWithConcurrencyLimit<T, R>(items, concurrency, fn)`, a general-purpose bounded-concurrency map (worker-pool-over-an-index-cursor, not
   fixed-size batching — a worker claims the next unclaimed index the instant it's free, rather
   than waiting for a whole batch to finish). Deliberately a new, separate utility rather than
   reusing `GoogleDriveService.ts`'s own private `Semaphore` class — that class isn't exported,
@@ -27,8 +26,7 @@ other `PDFProps` field already does, no new plumbing needed there.
   file for a small win. 6 tests: order preservation, concurrency actually bounded (not
   serialized), every item processed exactly once, empty input, concurrency > item count,
   rejection propagation (no built-in per-item error tolerance — that's the caller's job).
-- `frontend/src/features/pdf/bleedPriorResolution.ts` — `resolveBleedPriors(backendURL,
-  identifiers, concurrency?)`. Deduplicates identifiers, fetches each unique card's
+- `frontend/src/features/pdf/bleedPriorResolution.ts` — `resolveBleedPriors(backendURL, identifiers, concurrency?)`. Deduplicates identifiers, fetches each unique card's
   `TagConsensusResponse` via `APIGetTagConsensus`, maps the `appropriate-bleed` entry's
   `netPolarity` to a `BleedPrior`: clearly positive → `"bleed"`, clearly negative → `"trimmed"`,
   missing entry or zero/near-zero → `"unresolved"` (this 3-way split is for code

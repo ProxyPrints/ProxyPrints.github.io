@@ -7,13 +7,13 @@ What this is: Proposal C — (a) a right-click/long-press context menu on editor
 
 `frontend/src/features/card/CardSlot.tsx` already has every "obvious slot action" named in the approved scope — as a 3-dot dropdown button (`CardGridContextMenu`, a `react-bootstrap` `Dropdown` despite the misleading name; it isn't a right-click menu today), not a right-click/long-press surface. This means Proposal C's real new work is narrower than it first sounds: the actions and their Redux wiring are done; what's missing is triggering the same menu from `onContextMenu`/long-press instead of only a click on the 3-dot icon.
 
-| Action | Existing handler | Dispatch |
-|---|---|---|
-| Change image | `handleShowGridSelector` (local state) | opens `GridSelectorModal`; selection → `setSelectedImages` (`projectSlice`) |
-| Change query ("jump to search" in the approved scope — see note below) | `handleShowChangeSelectedImageQueriesModal` | `showChangeQueryModal` (`modalsSlice`) → opens `ChangeQueryModal` |
-| Duplicate | `duplicateThisSlot` | `duplicateSlot` (`projectSlice`) |
-| Delete | `deleteThisSlot` | `deleteSlots` (`projectSlice`) |
-| Unfilter printing (conditional — only shown when the slot's query filters on printing) | `removePrintingFilter` | `bulkRemovePrintingFilter` (`projectSlice`) |
+| Action                                                                                 | Existing handler                            | Dispatch                                                                    |
+| -------------------------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------- |
+| Change image                                                                           | `handleShowGridSelector` (local state)      | opens `GridSelectorModal`; selection → `setSelectedImages` (`projectSlice`) |
+| Change query ("jump to search" in the approved scope — see note below)                 | `handleShowChangeSelectedImageQueriesModal` | `showChangeQueryModal` (`modalsSlice`) → opens `ChangeQueryModal`           |
+| Duplicate                                                                              | `duplicateThisSlot`                         | `duplicateSlot` (`projectSlice`)                                            |
+| Delete                                                                                 | `deleteThisSlot`                            | `deleteSlots` (`projectSlice`)                                              |
+| Unfilter printing (conditional — only shown when the slot's query filters on printing) | `removePrintingFilter`                      | `bulkRemovePrintingFilter` (`projectSlice`)                                 |
 
 **Note on "jump to search"**: the approved scope's phrase doesn't literally match anything in the codebase. The closest existing action is "Change Query," which opens `ChangeQueryModal` to search again for this slot — that's what this doc proposes the context menu calls "jump to search" maps to. Flagging the terminology gap rather than silently assuming; if "jump to search" meant something else (e.g. navigating to `/explore` pre-filtered on this card), that doesn't exist today and would be new scope.
 

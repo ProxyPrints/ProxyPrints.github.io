@@ -95,6 +95,7 @@ Full spec + approval record: `docs/proposals/proposal-b-bleed-normalization.md`.
 **Shipped and tested**: the measurement/plan/extension math end-to-end, real per-card wiring in the standard (non-SCM) render path, `PDFProps.bleedPriors`/`bleedOverrides` (both optional maps keyed by card identifier, safely defaulting to `"unresolved"`/`"auto"` when absent).
 
 **Explicitly not yet built** (next concrete steps, not silently dropped):
+
 1. The main-thread batch resolution of `bleedPriors` from `APIGetTagConsensus` (per the approved spec's fallback prior) — `PDFGenerator.tsx` doesn't populate this map yet, so every ambiguous side currently falls through to the safe default (`"unresolved"` → extend the full target) rather than a real per-card machine-vote lean. This needs its own concurrency-bounded batch fetch (one card's tag consensus can fail without failing the whole export) and hasn't been built or tested yet - building it without that care would risk exactly the kind of half-tested network code this proposal's own memory-discipline section was written to guard against.
 2. The manual override UI (Auto / Force bleed / Force trimmed per card) and its persistence in project state - `resolveBleedPlan` already fully supports all three modes (tested), but nothing in the UI sets `bleedOverrides` yet.
 3. The WYSIWYG preview badge ("bleed will be generated") in `PagePreview.tsx` - the preview still shows the pre-Proposal-B cheap CSS approximation only.
