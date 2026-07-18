@@ -67,4 +67,24 @@ def require_moderator(view: F) -> F:
     return cast(F, wrapper)
 
 
-__all__ = ["reject_untrusted_origin", "require_moderator"]
+def require_authenticated(view: F) -> F:
+    """
+    403 unless the requesting session belongs to a logged-in user - strictly weaker than
+    require_moderator (every moderator is authenticated, not every authenticated user is a
+    moderator). Backs the saved-decks endpoints
+    (docs/proposals/proposal-g-user-accounts-saved-decks.md §3/§8) - "is this deck's owner the
+    requesting session's user" is enforced per-object inside each view, not here; this decorator
+    only proves *a* real account is behind the request at all.
+    """
+
+    @wraps(view)
+    def wrapper(request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponse:
+        if not request.user.is_authenticated:
+            error = ErrorResponse(name="Sign-in required", message="This endpoint requires a signed-in account.")
+            return JsonResponse(error.model_dump(), status=403)
+        return view(request, *args, **kwargs)
+
+    return cast(F, wrapper)
+
+
+__all__ = ["reject_untrusted_origin", "require_moderator", "require_authenticated"]

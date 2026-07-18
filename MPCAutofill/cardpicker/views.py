@@ -1,3 +1,5 @@
+import base64
+import binascii
 import itertools
 import json
 import logging
@@ -15,6 +17,7 @@ from pydantic import ValidationError
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Case, Count, IntegerField, Q, When
@@ -25,6 +28,7 @@ from django.http import (
     HttpResponseBase,
     JsonResponse,
 )
+from django.utils import dateformat
 from django.views.decorators.csrf import csrf_exempt
 
 from cardpicker.artist_consensus import UNKNOWN as ARTIST_UNKNOWN
@@ -36,11 +40,13 @@ from cardpicker.artist_consensus import (
 )
 from cardpicker.constants import (
     CARDS_PAGE_SIZE,
+    DATE_FORMAT,
     DEFAULT_LANGUAGE,
     EDITOR_SEARCH_MAX_QUERIES,
     EXPLORE_SEARCH_MAX_PAGE_SIZE,
     NSFW,
     PRINTING_TAG_QUEUE_PAGE_SIZE,
+    SAVED_DECK_SNAPSHOT_RING_SIZE,
 )
 from cardpicker.documents import CardSearch
 from cardpicker.integrations.integrations import get_configured_game_integration
@@ -57,8 +63,11 @@ from cardpicker.models import (
     CardTypes,
     DFCPair,
     PrintingTagStatus,
+    SavedDeck,
+    SavedDeckKind,
     Source,
     Tag,
+    UserCryptoProfile,
     VotePolarity,
     VoteSource,
     summarise_contributions,
@@ -91,6 +100,9 @@ from cardpicker.schema_types import (
     CardsRequest,
     CardsResponse,
     ContributionsResponse,
+    CryptoProfileResponse,
+    DeleteDeckRequest,
+    DeleteDeckResponse,
     DFCPairsResponse,
     EditorSearchRequest,
     EditorSearchResponse,
@@ -103,11 +115,11 @@ from cardpicker.schema_types import (
     ImportSitesResponse,
     Info,
     InfoResponse,
-)
-from cardpicker.schema_types import Kind as VoteQueueKind
-from cardpicker.schema_types import (
     Language,
     LanguagesResponse,
+    LoadDeckRequest,
+    LoadDeckResponse,
+    LoadDeckResponseKind,
     ModerationDriveCardsRequest,
     ModerationDriveCardsResponse,
     ModerationDriveItem,
@@ -135,7 +147,15 @@ from cardpicker.schema_types import (
     QuestionFeedResponse,
     ReportCardRequest,
     ReportCardResponse,
+    ResetSavedDecksRequest,
+    ResetSavedDecksResponse,
     SampleCardsResponse,
+    SaveCryptoProfileRequest,
+    SaveCryptoProfileResponse,
+    SavedDecksResponse,
+    SavedDeckSummary,
+    SaveDeckRequest,
+    SaveDeckResponse,
     SearchEngineHealthResponse,
     SortBy,
     SourcesResponse,
@@ -149,6 +169,9 @@ from cardpicker.schema_types import (
     TagVoteTallyEntry,
     VoteQueueItem,
     VoteQueueRequest,
+)
+from cardpicker.schema_types import VoteQueueRequestKind as VoteQueueKind
+from cardpicker.schema_types import (
     VoteQueueResponse,
     VoteTallyEntry,
     WhoamiResponse,
@@ -162,7 +185,11 @@ from cardpicker.search.search_functions import (
     retrieve_card_identifiers,
     retrieve_cardback_identifiers,
 )
-from cardpicker.security import reject_untrusted_origin, require_moderator
+from cardpicker.security import (
+    reject_untrusted_origin,
+    require_authenticated,
+    require_moderator,
+)
 from cardpicker.sensitive_tags import REPORT_REASON_TO_TAG_NAME
 from cardpicker.sources.api import PathTraversalError, resolve_within_root
 from cardpicker.sources.source_types import SourceTypeChoices
@@ -1519,3 +1546,293 @@ def get_whoami(request: HttpRequest) -> HttpResponse:
             logoutUrl="/accounts/logout/" if authenticated else None,
         ).model_dump()
     )
+
+
+# region Saved decks (docs/proposals/proposal-g-user-accounts-saved-decks.md §3/§8)
+#
+# Every one of these endpoints treats `ciphertext`/nonces/`wrappedDek`/wrapped-master-key
+# fields as opaque base64 strings - never decrypted, inspected, or searched server-side. That
+# is the entire point of the §8 zero-knowledge amendment: this backend stores and returns
+# bytes faithfully and enforces per-object ownership, nothing else.
+
+
+def _b64_to_bytes_or_400(value: str, field_name: str) -> bytes:
+    try:
+        return base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        raise BadRequestException(f"{field_name!r} must be valid base64.")
+
+
+def _bytes_to_b64(value: Union[bytes, memoryview]) -> str:
+    return base64.b64encode(bytes(value)).decode("ascii")
+
+
+def _authenticated_user(request: HttpRequest) -> User:
+    """
+    require_authenticated already 403s an anonymous request before the view body runs - this
+    narrows request.user's type from Django's own `User | AnonymousUser` to plain `User` for
+    every saved-decks view, rather than repeating an isinstance check in each one.
+    """
+    assert isinstance(request.user, User)
+    return request.user
+
+
+def _get_saved_deck_or_400(key: str) -> SavedDeck:
+    try:
+        return SavedDeck.objects.get(key=key)
+    except (SavedDeck.DoesNotExist, DjangoValidationError, ValueError):
+        raise BadRequestException(f"No saved deck found with key {key!r}.")
+
+
+def _forbidden(message: str) -> HttpResponse:
+    return JsonResponse(ErrorResponse(name="Forbidden", message=message).model_dump(), status=403)
+
+
+def _prune_snapshot_ring(owner: User) -> None:
+    """
+    Keep only the SAVED_DECK_SNAPSHOT_RING_SIZE most-recently-created snapshot rows for `owner`
+    - a fixed FIFO ring (decision 7), not a configurable quota. Called after every snapshot
+    insert; a no-op once the ring is already at or under the limit.
+    """
+    keep_pks = list(
+        SavedDeck.objects.filter(owner=owner, kind=SavedDeckKind.SNAPSHOT)
+        .order_by("-created_at")
+        .values_list("pk", flat=True)[:SAVED_DECK_SNAPSHOT_RING_SIZE]
+    )
+    SavedDeck.objects.filter(owner=owner, kind=SavedDeckKind.SNAPSHOT).exclude(pk__in=keep_pks).delete()
+
+
+def _serialise_saved_deck(deck: SavedDeck) -> SavedDeckSummary:
+    return SavedDeckSummary(
+        key=str(deck.key),
+        kind=LoadDeckResponseKind(deck.kind),
+        ciphertext=_bytes_to_b64(deck.ciphertext),
+        ciphertextNonce=_bytes_to_b64(deck.ciphertext_nonce),
+        wrappedDek=_bytes_to_b64(deck.wrapped_dek),
+        wrappedDekNonce=_bytes_to_b64(deck.wrapped_dek_nonce),
+        createdAt=dateformat.format(deck.created_at, DATE_FORMAT),
+        updatedAt=dateformat.format(deck.updated_at, DATE_FORMAT),
+    )
+
+
+@csrf_exempt
+@require_authenticated
+@ErrorWrappers.to_json
+def get_saved_decks(request: HttpRequest) -> HttpResponse:
+    """
+    List every SavedDeck owned by the requesting user, newest-updated first. Returns full
+    ciphertext per row (not just metadata) - since the deck's own title lives inside that
+    ciphertext (§8), the client must decrypt each row to render a human-readable "My Decks"
+    list; there is no server-visible name to return instead. Read-only (GET), so - like
+    get_whoami - this needs no Origin check.
+    """
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+    decks = SavedDeck.objects.filter(owner=_authenticated_user(request)).order_by("-updated_at")
+    return JsonResponse(SavedDecksResponse(decks=[_serialise_saved_deck(deck) for deck in decks]).model_dump())
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_authenticated
+@ErrorWrappers.to_json
+def post_save_deck(request: HttpRequest) -> HttpResponse:
+    """
+    Upsert one SavedDeck. `key: null` creates; an existing `key` updates in place if owned by
+    request.user, else 403. `kind` defaults to "deck"; a "snapshot" create skips
+    SAVED_DECK_MAX_PER_USER's cap entirely and instead prunes the owner's snapshot rows down to
+    the newest SAVED_DECK_SNAPSHOT_RING_SIZE afterwards (decision 7). There is no server-side
+    name-uniqueness check - §8's Consequences section is explicit that this became a
+    client-side-only concern once titles are encrypted.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    user = _authenticated_user(request)
+    req = SaveDeckRequest.model_validate(json.loads(request.body))
+    kind = SavedDeckKind(req.kind) if req.kind is not None else SavedDeckKind.DECK
+    ciphertext = _b64_to_bytes_or_400(req.ciphertext, "ciphertext")
+    ciphertext_nonce = _b64_to_bytes_or_400(req.ciphertextNonce, "ciphertextNonce")
+    wrapped_dek = _b64_to_bytes_or_400(req.wrappedDek, "wrappedDek")
+    wrapped_dek_nonce = _b64_to_bytes_or_400(req.wrappedDekNonce, "wrappedDekNonce")
+
+    if req.key is not None:
+        deck = _get_saved_deck_or_400(req.key)
+        if deck.owner_id != user.id:
+            return _forbidden("You do not own this saved deck.")
+        deck.ciphertext = ciphertext
+        deck.ciphertext_nonce = ciphertext_nonce
+        deck.wrapped_dek = wrapped_dek
+        deck.wrapped_dek_nonce = wrapped_dek_nonce
+        deck.save(update_fields=["ciphertext", "ciphertext_nonce", "wrapped_dek", "wrapped_dek_nonce", "updated_at"])
+        return JsonResponse(SaveDeckResponse(key=str(deck.key)).model_dump())
+
+    if kind == SavedDeckKind.DECK:
+        existing_deck_count = SavedDeck.objects.filter(owner=user, kind=SavedDeckKind.DECK).count()
+        if existing_deck_count >= settings.SAVED_DECK_MAX_PER_USER:
+            raise BadRequestException(
+                f"You've reached the {settings.SAVED_DECK_MAX_PER_USER} saved deck limit - "
+                f"delete an old one to save a new one."
+            )
+
+    deck = SavedDeck.objects.create(
+        owner=user,
+        kind=kind,
+        ciphertext=ciphertext,
+        ciphertext_nonce=ciphertext_nonce,
+        wrapped_dek=wrapped_dek,
+        wrapped_dek_nonce=wrapped_dek_nonce,
+    )
+
+    if kind == SavedDeckKind.SNAPSHOT:
+        _prune_snapshot_ring(user)
+
+    return JsonResponse(SaveDeckResponse(key=str(deck.key)).model_dump())
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_authenticated
+@ErrorWrappers.to_json
+def post_load_deck(request: HttpRequest) -> HttpResponse:
+    """Fetch one SavedDeck's ciphertext by key. 403 if it belongs to someone else."""
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    req = LoadDeckRequest.model_validate(json.loads(request.body))
+    deck = _get_saved_deck_or_400(req.key)
+    if deck.owner_id != request.user.id:
+        return _forbidden("You do not own this saved deck.")
+    return JsonResponse(
+        LoadDeckResponse(
+            kind=LoadDeckResponseKind(deck.kind),
+            ciphertext=_bytes_to_b64(deck.ciphertext),
+            ciphertextNonce=_bytes_to_b64(deck.ciphertext_nonce),
+            wrappedDek=_bytes_to_b64(deck.wrapped_dek),
+            wrappedDekNonce=_bytes_to_b64(deck.wrapped_dek_nonce),
+            createdAt=dateformat.format(deck.created_at, DATE_FORMAT),
+            updatedAt=dateformat.format(deck.updated_at, DATE_FORMAT),
+        ).model_dump()
+    )
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_authenticated
+@ErrorWrappers.to_json
+def post_delete_deck(request: HttpRequest) -> HttpResponse:
+    """Hard delete one SavedDeck by key. 403 if it belongs to someone else. No undo, by design
+    - same precedent as moderationRemoveCard/moderationRemoveDrive."""
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    req = DeleteDeckRequest.model_validate(json.loads(request.body))
+    deck = _get_saved_deck_or_400(req.key)
+    if deck.owner_id != request.user.id:
+        return _forbidden("You do not own this saved deck.")
+    deck.delete()
+    return JsonResponse(DeleteDeckResponse(deleted=True).model_dump())
+
+
+@csrf_exempt
+@require_authenticated
+@ErrorWrappers.to_json
+def get_crypto_profile(request: HttpRequest) -> HttpResponse:
+    """
+    Report the requesting user's zero-knowledge crypto parameters, or `exists: false` if none
+    yet (the frontend's signal to run the first-save passphrase-creation flow). Read-only, so
+    - like get_whoami/get_saved_decks - this needs no Origin check.
+    """
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+    try:
+        profile = UserCryptoProfile.objects.get(owner=_authenticated_user(request))
+    except UserCryptoProfile.DoesNotExist:
+        return JsonResponse(
+            CryptoProfileResponse(
+                exists=False,
+                salt=None,
+                kdfIterations=None,
+                passphraseWrappedMasterKey=None,
+                passphraseWrappedMasterKeyNonce=None,
+                recoveryWrappedMasterKey=None,
+                recoveryWrappedMasterKeyNonce=None,
+            ).model_dump()
+        )
+    return JsonResponse(
+        CryptoProfileResponse(
+            exists=True,
+            salt=_bytes_to_b64(profile.salt),
+            kdfIterations=profile.kdf_iterations,
+            passphraseWrappedMasterKey=_bytes_to_b64(profile.passphrase_wrapped_master_key),
+            passphraseWrappedMasterKeyNonce=_bytes_to_b64(profile.passphrase_wrapped_master_key_nonce),
+            recoveryWrappedMasterKey=_bytes_to_b64(profile.recovery_wrapped_master_key),
+            recoveryWrappedMasterKeyNonce=_bytes_to_b64(profile.recovery_wrapped_master_key_nonce),
+        ).model_dump()
+    )
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_authenticated
+@ErrorWrappers.to_json
+def post_save_crypto_profile(request: HttpRequest) -> HttpResponse:
+    """
+    Create (first save) or replace (e.g. a passphrase change, which re-wraps the passphrase
+    slot - see §8) the requesting user's crypto profile. Every field is opaque to the backend
+    except kdfIterations, checked against SAVED_DECK_MIN_KDF_ITERATIONS as a defensive floor
+    against a buggy/malicious client persisting a weak key derivation. A passphrase change only
+    ever replaces this one row - deck ciphertext/wrapped-DEKs are never touched by it.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    req = SaveCryptoProfileRequest.model_validate(json.loads(request.body))
+    if req.kdfIterations < settings.SAVED_DECK_MIN_KDF_ITERATIONS:
+        raise BadRequestException(f"kdfIterations must be at least {settings.SAVED_DECK_MIN_KDF_ITERATIONS}.")
+    UserCryptoProfile.objects.update_or_create(
+        owner=_authenticated_user(request),
+        defaults={
+            "salt": _b64_to_bytes_or_400(req.salt, "salt"),
+            "kdf_iterations": req.kdfIterations,
+            "passphrase_wrapped_master_key": _b64_to_bytes_or_400(
+                req.passphraseWrappedMasterKey, "passphraseWrappedMasterKey"
+            ),
+            "passphrase_wrapped_master_key_nonce": _b64_to_bytes_or_400(
+                req.passphraseWrappedMasterKeyNonce, "passphraseWrappedMasterKeyNonce"
+            ),
+            "recovery_wrapped_master_key": _b64_to_bytes_or_400(
+                req.recoveryWrappedMasterKey, "recoveryWrappedMasterKey"
+            ),
+            "recovery_wrapped_master_key_nonce": _b64_to_bytes_or_400(
+                req.recoveryWrappedMasterKeyNonce, "recoveryWrappedMasterKeyNonce"
+            ),
+        },
+    )
+    return JsonResponse(SaveCryptoProfileResponse(saved=True).model_dump())
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_authenticated
+@ErrorWrappers.to_json
+def post_reset_saved_decks(request: HttpRequest) -> HttpResponse:
+    """
+    The data-destroying last resort (§8's "Account reset"): deletes every SavedDeck and the
+    crypto profile for the requesting user, so a fresh passphrase/recovery-key pair can be
+    created on the next save. Requires an explicit `confirm: true` - irreversible, and the
+    frontend must have already shown the "this permanently deletes your N saved decks"
+    confirmation before calling it. There is no admin-side or Discord-derived decryption/escrow
+    path, by design (§8's "Explicitly rejected") - require_authenticated is the only gate,
+    exactly as it is for every other saved-decks endpoint.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    user = _authenticated_user(request)
+    req = ResetSavedDecksRequest.model_validate(json.loads(request.body))
+    if not req.confirm:
+        raise BadRequestException("Set confirm=true to proceed - this is a destructive, irreversible action.")
+    with transaction.atomic():
+        deleted_deck_count, _ = SavedDeck.objects.filter(owner=user).delete()
+        UserCryptoProfile.objects.filter(owner=user).delete()
+    return JsonResponse(ResetSavedDecksResponse(deletedDeckCount=deleted_deck_count).model_dump())
+
+
+# endregion
