@@ -24,10 +24,17 @@ import {
   useAppDispatch,
   useAppSelector,
 } from "@/common/types";
+import { useLongPress } from "@/common/useLongPress";
 import { wrapIndex } from "@/common/utils";
 import { RightPaddedIcon } from "@/components/icon";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import { CardFooter } from "@/features/card/CardFooter";
+import { CardSlotContextMenu } from "@/features/card/CardSlotContextMenu";
+import {
+  CardSlotMenuAction,
+  getCardSlotMenuActions,
+} from "@/features/card/CardSlotMenuActions";
+import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
 import { GridSelectorModal } from "@/features/gridSelector/GridSelectorModal";
 import { selectCardDocumentByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import { showChangeQueryModal } from "@/store/slices/modalsSlice";
@@ -98,50 +105,32 @@ export const MemoizedCardSlotGridSelector = memo(CardSlotGridSelector);
 
 //# endregion
 
+// Proposal C part (a) (docs/proposals/proposal-c-context-menu-restyle.md): renders whatever
+// action list its caller passes in - CardSlot builds that list once (getCardSlotMenuActions)
+// and shares it with both this dropdown AND the new right-click/long-press context menu below,
+// per the approved "one menu component, two triggers" decision. This component owns only the
+// 3-dot toggle + Popper-anchored Dropdown.Menu chrome, not the actions themselves anymore.
 const CardGridContextMenu = ({
-  id,
-  searchQuery,
-  face,
-  slot,
-}: CardSlotProps) => {
-  const dispatch = useAppDispatch();
-  const handleShowChangeSelectedImageQueriesModal = () => {
-    dispatch(
-      showChangeQueryModal({
-        slots: [[face, slot]],
-        query: searchQuery?.query ?? null,
-      })
-    );
-  };
-  const deleteThisSlot = () => {
-    dispatch(deleteSlots({ slots: [slot] }));
-  };
-  const removePrintingFilter = () => {
-    dispatch(bulkRemovePrintingFilter({ slots: [[face, slot]] }));
-  };
-  const duplicateThisSlot = () => {
-    dispatch(duplicateSlot({ slot: slot, quantity: 1 }));
-  };
+  actions,
+}: {
+  actions: CardSlotMenuAction[];
+}) => {
   return (
     <Dropdown className="card-context-menu" align="end">
-      <Dropdown.Toggle variant="" data-testid="more-select-options">
+      <Dropdown.Toggle
+        variant=""
+        aria-label="More options"
+        data-testid="more-select-options"
+      >
         <i className="bi bi-three-dots" />
       </Dropdown.Toggle>
       <Dropdown.Menu>
-        <Dropdown.Item onClick={handleShowChangeSelectedImageQueriesModal}>
-          <RightPaddedIcon bootstrapIconName="arrow-repeat" /> Change Query
-        </Dropdown.Item>
-        <Dropdown.Item onClick={duplicateThisSlot}>
-          <RightPaddedIcon bootstrapIconName="copy" /> Duplicate
-        </Dropdown.Item>
-        {doesSearchQueryFilterOnPrinting(searchQuery) && (
-          <Dropdown.Item onClick={removePrintingFilter}>
-            <RightPaddedIcon bootstrapIconName="filter" /> Unfilter Printing
+        {actions.map((action) => (
+          <Dropdown.Item key={action.key} onClick={action.onClick}>
+            <RightPaddedIcon bootstrapIconName={action.bootstrapIconName} />{" "}
+            {action.label}
           </Dropdown.Item>
-        )}
-        <Dropdown.Item onClick={deleteThisSlot}>
-          <RightPaddedIcon bootstrapIconName="x-circle" /> Delete
-        </Dropdown.Item>
+        ))}
       </Dropdown.Menu>
     </Dropdown>
   );
@@ -190,6 +179,13 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
   //# region state
 
   const [showGridSelector, setShowGridSelector] = useState<boolean>(false);
+  // Proposal C part (a): the right-click/long-press context menu's own open state - null when
+  // closed, the trigger's viewport (x, y) when open. Separate from showGridSelector/the 3-dot
+  // dropdown's own internal state (react-bootstrap's Dropdown owns that itself).
+  const [contextMenuPosition, setContextMenuPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
 
   //# endregion
 
@@ -215,6 +211,14 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
       })
     );
   };
+  const closeContextMenu = () => setContextMenuPosition(null);
+  const handleContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    setContextMenuPosition({ x: event.clientX, y: event.clientY });
+  };
+  const longPressHandlers = useLongPress((x, y) =>
+    setContextMenuPosition({ x, y })
+  );
   const toggleSelectionForThisMember = (
     event: React.MouseEvent<HTMLButtonElement>
   ) => {
@@ -274,6 +278,20 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
         ]
       : undefined;
   const cardHeaderTitle = `Slot ${slot + 1}`;
+  // Proposal C part (a): single source of truth for the slot's actions, shared by the 3-dot
+  // dropdown below and the right-click/long-press context menu rendered at the bottom of this
+  // component - "one menu component, two triggers" per the approved decision. Reuses the
+  // stringified-query version of change-query (previously only nameOnClick's own behavior;
+  // CardGridContextMenu's old inline handler passed the raw query with no expansion/collector
+  // suffix) rather than keeping two subtly different implementations of the same action.
+  const menuActions = getCardSlotMenuActions({
+    onChangeQuery: handleShowChangeSelectedImageQueriesModal,
+    onDuplicate: () => dispatch(duplicateSlot({ slot, quantity: 1 })),
+    onDelete: () => dispatch(deleteSlots({ slots: [slot] })),
+    onUnfilterPrinting: () =>
+      dispatch(bulkRemovePrintingFilter({ slots: [[face, slot]] })),
+    showUnfilterPrinting: !!doesSearchQueryFilterOnPrinting(searchQuery),
+  });
   const cardHeaderButtons = (
     <>
       <button
@@ -290,12 +308,7 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
           }checked`}
         ></i>
       </button>
-      <CardGridContextMenu
-        id={id}
-        searchQuery={searchQuery}
-        face={face}
-        slot={slot}
-      />
+      <CardGridContextMenu actions={menuActions} />
     </>
   );
   const cardFooter = (
@@ -315,6 +328,8 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
       ref={setElementRef}
       data-testid={`${face}-slot${slot}`}
       style={{ opacity: isDragging ? 0.7 : undefined }}
+      onContextMenu={handleContextMenu}
+      {...longPressHandlers}
     >
       <MemoizedEditorCard
         imageIdentifier={selectedImage}
@@ -332,6 +347,14 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
         }
       />
 
+      {selectedImage != null && (
+        <DeckbuilderConfirmAffordance
+          cardIdentifier={selectedImage}
+          searchQuery={searchQuery}
+          onOpenGridSelector={handleShowGridSelector}
+        />
+      )}
+
       {searchResultsForQuery.length > 1 && showGridSelector && (
         <MemoizedCardSlotGridSelector
           face={face}
@@ -342,6 +365,14 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
           handleClose={handleCloseGridSelector}
           setSelectedImageFromIdentifier={setSelectedImageFromIdentifier}
           searchq={searchQuery?.query ?? undefined}
+        />
+      )}
+
+      {contextMenuPosition != null && (
+        <CardSlotContextMenu
+          actions={menuActions}
+          position={contextMenuPosition}
+          onClose={closeContextMenu}
         />
       )}
     </div>

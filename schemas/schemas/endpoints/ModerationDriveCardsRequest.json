@@ -1,0 +1,11 @@
+{
+  "title": "Moderation Drive Cards Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "sourceId": { "type": "integer" },
+    "page": { "type": "integer" }
+  },
+  "required": ["sourceId", "page"],
+  "additionalProperties": false
+}

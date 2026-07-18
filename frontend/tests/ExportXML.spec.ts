@@ -49,7 +49,7 @@ test.describe("ExportXML", () => {
 
     expect(normaliseString(content)).toBe(
       normaliseString(
-        `<order>
+        `<order version="2.0">
           <details>
             <quantity>2</quantity>
             <stock>${S30}</stock>
@@ -101,7 +101,7 @@ test.describe("ExportXML", () => {
 
     expect(normaliseString(content)).toBe(
       normaliseString(
-        `<order>
+        `<order version="2.0">
           <details>
             <quantity>2</quantity>
             <stock>${S30}</stock>
@@ -163,7 +163,7 @@ test.describe("ExportXML", () => {
 
     expect(normaliseString(content)).toBe(
       normaliseString(
-        `<order>
+        `<order version="2.0">
           <details>
             <quantity>3</quantity>
             <stock>${S30}</stock>

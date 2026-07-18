@@ -33,6 +33,11 @@ urlpatterns = [
     path("2/submitTagVote/", views.post_submit_tag_vote),
     path("2/voteQueue/", views.post_vote_queue),
     path("2/moderationQueue/", views.post_moderation_queue),
+    path("2/moderationDrives/", views.post_moderation_drives),
+    path("2/moderationDriveCards/", views.post_moderation_drive_cards),
+    path("2/moderationRemoveCard/", views.post_moderation_remove_card),
+    path("2/moderationRemoveDrive/", views.post_moderation_remove_drive),
+    path("2/questionFeed/", views.get_question_feed),
     path("2/reportCard/", views.post_report_card),
     path("2/whoami/", views.get_whoami),
 ]

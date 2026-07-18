@@ -9,6 +9,7 @@
 import React, { useState } from "react";
 import Button from "react-bootstrap/Button";
 
+import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch } from "@/common/types";
@@ -21,6 +22,16 @@ interface QueueTagQuestionProps {
   tagName: string;
   /** Called once the user has answered (apply/not applicable submitted successfully) or skipped. */
   onAnswered: () => void;
+  /** "include" attaches the moderator session cookie, making the vote privileged at
+   * resolution time - used by the question feed's "moderation" question type (see
+   * QuestionFeed.tsx), which reuses this exact component rather than forking a moderator-only
+   * variant. Defaults to "same-origin" - unchanged behavior for every pre-existing caller. */
+  credentials?: RequestCredentials;
+  /** Called instead of the usual error toast when a submission is rejected with 429 - see
+   * ArtistVotePicker.tsx's identical prop for the full rationale. This component has only one
+   * caller today (QuestionFeed.tsx), so this is effectively always provided, but stays optional
+   * to match the same safe-default convention as the other funnel components. */
+  onRateLimited?: () => void;
 }
 
 const APPLY = 1;
@@ -31,6 +42,8 @@ export function QueueTagQuestion({
   cardIdentifier,
   tagName,
   onAnswered,
+  credentials = "same-origin",
+  onRateLimited,
 }: QueueTagQuestionProps) {
   const dispatch = useAppDispatch();
   const getTagDisplayName = useTagDisplayName();
@@ -43,22 +56,27 @@ export function QueueTagQuestion({
       cardIdentifier,
       getOrCreateAnonymousId(),
       tagName,
-      polarity
+      polarity,
+      credentials,
+      "question-feed"
     )
       .then(() => onAnswered())
-      .catch(() =>
+      .catch((error) => {
+        if (isRateLimited(error) && onRateLimited) {
+          onRateLimited();
+          return;
+        }
         dispatch(
           setNotification([
             Math.random().toString(),
-            {
+            errorToNotification(error, {
               name: "Vote failed",
               message:
                 "Something went wrong submitting your vote - please try again.",
-              level: "error",
-            },
+            }),
           ])
-        )
-      )
+        );
+      })
       .finally(() => setSubmitting(false));
   };
 

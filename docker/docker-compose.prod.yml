@@ -12,10 +12,13 @@ services:
   django:
     image: mpcautofill_django
     container_name: mpcautofill_django
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: ./docker/django/Dockerfile
       target: webserver
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     expose:
       - 8000
     depends_on:
@@ -34,13 +37,26 @@ services:
       - CSRF_TRUSTED_ORIGINS=https://api.proxyprints.ca
       - CORS_ALLOWED_ORIGINS=https://proxyprints.github.io,https://proxyprints.ca
       - SITE_NAME=ProxyPrints
+      # Discord OAuth (moderation layer, docs/features/moderation.md) - docker/.env alone
+      # does NOT inject arbitrary variables into the container; only vars explicitly listed
+      # here (via ${...} interpolation) actually reach the process. This block was missing
+      # from the moderation layer's original PR, so DISCORD_AUTH_ENABLED silently stayed
+      # False even with real credentials set in docker/.env - discovered live, 2026-07-15.
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET}
+      - SESSION_COOKIE_SAMESITE=${SESSION_COOKIE_SAMESITE}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE}
+      - CORS_ALLOW_CREDENTIALS=${CORS_ALLOW_CREDENTIALS}
   worker:
     image: mpcautofill_worker
     container_name: mpcautofill_worker
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: ./docker/django/Dockerfile
       target: worker
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     depends_on:
       - postgres
       - elasticsearch
@@ -57,11 +73,22 @@ services:
       - CSRF_TRUSTED_ORIGINS=https://api.proxyprints.ca
       - CORS_ALLOWED_ORIGINS=https://proxyprints.github.io,https://proxyprints.ca
       - SITE_NAME=ProxyPrints
+      # Discord OAuth (moderation layer, docs/features/moderation.md) - docker/.env alone
+      # does NOT inject arbitrary variables into the container; only vars explicitly listed
+      # here (via ${...} interpolation) actually reach the process. This block was missing
+      # from the moderation layer's original PR, so DISCORD_AUTH_ENABLED silently stayed
+      # False even with real credentials set in docker/.env - discovered live, 2026-07-15.
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET}
+      - SESSION_COOKIE_SAMESITE=${SESSION_COOKIE_SAMESITE}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE}
+      - CORS_ALLOW_CREDENTIALS=${CORS_ALLOW_CREDENTIALS}
 
   # nginx serving the frontend
   nginx:
     image: mpcautofill_nginx
     container_name: mpcautofill_nginx
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: ./docker/nginx/Dockerfile
@@ -77,6 +104,7 @@ services:
     extends:
       file: docker-compose.yml
       service: postgres
+    restart: unless-stopped
     expose:
       - 5432
     ports: []
@@ -84,6 +112,7 @@ services:
     extends:
       file: docker-compose.yml
       service: elasticsearch
+    restart: unless-stopped
     expose:
       - 5432
     ports: []

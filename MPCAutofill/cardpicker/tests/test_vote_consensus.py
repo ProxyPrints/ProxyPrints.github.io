@@ -5,8 +5,26 @@ from cardpicker.tests.factories import CardArtistVoteFactory, CardFactory
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
     VoteTuple,
+    is_human_backed_source,
     resolve_weighted_consensus,
 )
+
+
+class TestIsHumanBackedSource:
+    """Direct coverage of the 2026-07-15 AI->DEDUCTION/OCR split's single source of truth for
+    the human-backed gate - both new machine-derived values must read as non-human-backed,
+    same as the old single AI value did; everything else (including a future FEDERATED vote,
+    whose human-backed-ness is reported by the exporting peer, not derived from `source`) is
+    human-backed by default."""
+
+    def test_deduction_and_ocr_are_not_human_backed(self):
+        assert is_human_backed_source(VoteSource.DEDUCTION) is False
+        assert is_human_backed_source(VoteSource.OCR) is False
+
+    def test_user_admin_federated_are_human_backed(self):
+        assert is_human_backed_source(VoteSource.USER) is True
+        assert is_human_backed_source(VoteSource.ADMIN) is True
+        assert is_human_backed_source(VoteSource.FEDERATED) is True
 
 
 class TestResolveWeightedConsensus:
@@ -86,6 +104,20 @@ class TestFederatedWeighting:
         # as an AI vote, regardless of how much weight it carries
         votes = [VoteTuple(outcome_key="a", weight=settings.VOTE_FEDERATED_WEIGHT * 100, is_human_backed=False)]
         assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) is None
+
+
+class TestMachineWeightRename:
+    """
+    PRINTING_TAG_AI_WEIGHT -> PRINTING_TAG_MACHINE_WEIGHT (terminology fix - the machine votes
+    are OCR/phash/deduction, classical algorithms, no AI/ML involved). Direct coverage that the
+    rename didn't change any actual weight: DEDUCTION and OCR still resolve to the same
+    configured value they always did, just read from the new setting name.
+    """
+
+    def test_deduction_and_ocr_use_the_machine_weight(self):
+        assert _SOURCE_WEIGHTS[VoteSource.DEDUCTION] == settings.PRINTING_TAG_MACHINE_WEIGHT
+        assert _SOURCE_WEIGHTS[VoteSource.OCR] == settings.PRINTING_TAG_MACHINE_WEIGHT
+        assert settings.PRINTING_TAG_MACHINE_WEIGHT == 0.5
 
 
 class TestFederatedModelFields:

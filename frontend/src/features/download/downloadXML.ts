@@ -2,6 +2,22 @@
  * This module contains functionality for generating an XML representation of the project,
  * suitable for re-uploading into the frontend or uploading to MakePlayingCards
  * through the desktop tool CLI.
+ *
+ * XML 2.0 (see the held print-preview design task's proposal artifact for the full findings):
+ * a `version="2.0"` attribute on the root `<order>` element, plus optional `<set>`/
+ * `<collectorNumber>`/`<scryfallId>` elements per `<card>`, populated from that card's
+ * *community-confirmed* `canonicalCard` (not the slot's own search query, which is only a
+ * declared import intent, not a verified identity - see docs/features/printing-tags.md's
+ * Level 0 section for why those are kept distinct). A card without a resolved canonicalCard
+ * simply omits the new elements, same as it always omitted `data-card-set-code` in the DOM API.
+ *
+ * Both additions are structurally invisible to the desktop tool's existing 1.0 parser -
+ * verified by reading `desktop-tool/src/order.py` and `utils.py` directly: `unpack_element`
+ * builds its dict from an element's *actual* children merged over expected-tag defaults, so an
+ * unrecognised child tag just becomes an unread dict entry, and no code path anywhere in
+ * `order.py` reads `Element.attrib` at all, on any element, ever - so `version` is invisible to
+ * it structurally, not just by convention. An unmodified 1.0 desktop-tool install reads a 2.0
+ * file exactly as if these additions didn't exist.
  */
 
 import formatXML from "xml-formatter";
@@ -116,6 +132,28 @@ function createCardElement(
     )
   );
   cardElement.append(queryElement);
+
+  // XML 2.0 additions - optional, additive, invisible to a 1.0 parser (see this module's own
+  // header comment for the compat evidence). Only emitted for a card whose canonicalCard is
+  // actually populated - i.e. a community-confirmed printing, not merely an imported search
+  // query's declared intent (see the header comment for why those two are kept distinct).
+  const canonicalCard = maybeCardDocument.canonicalCard;
+  if (canonicalCard != null) {
+    const setElement = doc.createElement("set");
+    setElement.appendChild(doc.createTextNode(canonicalCard.expansionCode));
+    cardElement.append(setElement);
+
+    const collectorNumberElement = doc.createElement("collectorNumber");
+    collectorNumberElement.appendChild(
+      doc.createTextNode(canonicalCard.collectorNumber)
+    );
+    cardElement.append(collectorNumberElement);
+
+    const scryfallIdElement = doc.createElement("scryfallId");
+    scryfallIdElement.appendChild(doc.createTextNode(canonicalCard.identifier));
+    cardElement.append(scryfallIdElement);
+  }
+
   return cardElement;
 }
 
@@ -145,6 +183,9 @@ export function generateXML(
   // top level XML doc element, attach everything to this
   const doc = document.implementation.createDocument("", "", null);
   const orderElement = doc.createElement("order");
+  // An XML attribute, not an element - invisible to the 1.0 desktop-tool parser, which never
+  // reads Element.attrib on any element (see this module's header comment for the evidence).
+  orderElement.setAttribute("version", "2.0");
 
   // project details
   const detailsElement = doc.createElement("details");

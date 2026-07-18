@@ -29,7 +29,7 @@ requiring hand-rolled SVG specifically.
 
 ## Key files
 
-- `frontend/src/components/FinishedMyProject.tsx`
+- `frontend/src/features/export/FinishedMyProject.tsx`
 - `frontend/src/components/flags.tsx`
 - `frontend/public/*.svg` (vendored flag icons)
 
@@ -45,3 +45,6 @@ addition).
 
 - The NotMPC flow steps still carry a TODO for manual verification against
   the real site (currently based on an automated read only).
+- The PringlePrints flow steps carry the identical TODO (`FinishedMyProject.tsx:347`)
+  — steps/pricing/service-area were derived from a one-time read of
+  pringleprints.ca, not a manual walkthrough, and may have changed since.

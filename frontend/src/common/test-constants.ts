@@ -522,6 +522,10 @@ export const printingCandidate1: PrintingCandidate = {
   fullArt: false,
   isBorderless: false,
   frame: "2015",
+  borderColor: "black",
+  isShowcase: false,
+  isExtendedArt: false,
+  isEtched: false,
   releasedAt: "2020-01-01",
 };
 
@@ -537,6 +541,10 @@ export const printingCandidate2: PrintingCandidate = {
   fullArt: true,
   isBorderless: true,
   frame: "2003",
+  borderColor: "borderless",
+  isShowcase: true,
+  isExtendedArt: false,
+  isEtched: false,
   releasedAt: "2010-06-15",
 };
 

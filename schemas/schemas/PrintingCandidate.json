@@ -14,6 +14,10 @@
     "fullArt": { "type": "boolean" },
     "isBorderless": { "type": "boolean" },
     "frame": { "type": "string" },
+    "borderColor": { "type": "string" },
+    "isShowcase": { "type": "boolean" },
+    "isExtendedArt": { "type": "boolean" },
+    "isEtched": { "type": "boolean" },
     "releasedAt": { "type": ["string", "null"] }
   },
   "required": [
@@ -27,7 +31,11 @@
     "mediumThumbnailUrl",
     "fullArt",
     "isBorderless",
-    "frame"
+    "frame",
+    "borderColor",
+    "isShowcase",
+    "isExtendedArt",
+    "isEtched"
   ],
   "additionalProperties": false
 }

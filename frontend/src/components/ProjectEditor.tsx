@@ -46,7 +46,10 @@ const AddCardsPanel = ({
 }: {
   onImportComplete: () => void;
 }) => (
-  <OverflowCol heightDelta={NavPillButtonHeight + NavbarHeight}>
+  <OverflowCol
+    data-testid="add-cards-panel"
+    heightDelta={NavPillButtonHeight + NavbarHeight}
+  >
     <Row className="p-2 g-0">
       <Col lg={6} md={6} sm={12} xs={12} className="px-2">
         <h5>Enter a Card List</h5>
@@ -99,25 +102,38 @@ const ChooseArtPanel = ({
         <SelectedImagesRibbon />
       </Ribbon>
       <Row className="g-0">
+        {/* chainScroll: below the sm breakpoint this panel stacks above the settings panel
+            (see xs=12 note below) - without it, overscroll-behavior:none traps a real
+            touch-scroll gesture once the card grid's own content is exhausted, with no way
+            to chain into scrolling the page down to reach the settings panel underneath. */}
         <OverflowCol
           lg={8}
           md={8}
           sm={6}
-          xs={6}
+          xs={12}
           data-testid="left-panel"
           heightDelta={RibbonHeight + NavPillButtonHeight + NavbarHeight}
+          chainScroll
         >
           <CardGrid />
         </OverflowCol>
+        {/* xs=12 (below the sm breakpoint) stacks this panel under the card grid instead of
+            splitting the screen 50/50 with it - at that width the settings sidebar was
+            squeezing every control (e.g. the cardstock dropdown) into an unreadably narrow
+            column. sm/md/lg keep the existing side-by-side split unchanged. chainScroll here
+            too: this panel holds "I've Finished My Project", the only way to reach the
+            Print/Save-to-Drive flow, so it must itself remain reachable via scroll chaining
+            from whatever's stacked above it (matters if this component is ever reordered). */}
         <OverflowCol
           data-testid="right-panel"
           lg={4}
           md={4}
           sm={6}
-          xs={6}
+          xs={12}
           style={{ zIndex: 1 }}
           className="px-2"
           heightDelta={RibbonHeight + NavPillButtonHeight + NavbarHeight}
+          chainScroll
         >
           <Status />
           <Row className="g-0 pt-2">

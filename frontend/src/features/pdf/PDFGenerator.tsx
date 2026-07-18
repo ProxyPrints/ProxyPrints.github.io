@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import React from "react";
+import Alert from "react-bootstrap/Alert";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Container from "react-bootstrap/Container";
@@ -9,7 +10,12 @@ import Row from "react-bootstrap/Row";
 import Toggle from "react-bootstrap-toggle";
 import { useDebounce } from "use-debounce";
 
-import { BleedEdgeMM, ToggleButtonHeight } from "@/common/constants";
+import {
+  BleedEdgeMM,
+  CardHeightMM,
+  CardWidthMM,
+  ToggleButtonHeight,
+} from "@/common/constants";
 import { StyledDropdownTreeSelect } from "@/common/StyledDropdownTreeSelect";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
@@ -21,14 +27,27 @@ import { downloadFile, useDoFileDownload } from "@/features/download/download";
 import { requestGoogleDriveWriteToken } from "@/features/googleDrive/googleDriveAuth";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { GoogleDriveService } from "@/features/googleDrive/GoogleDriveService";
+import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
+import { computeLayout } from "@/features/pdf/layout";
+import {
+  PagePreview,
+  PagePreviewSlotContent,
+} from "@/features/pdf/PagePreview";
 import {
   CardSelectionMode,
+  CardSelectionModeToPaginator,
+  chunk,
   CutLinePlacement,
   CutLineShape,
+  getPageSizeMM,
   PageSize,
   PDFProps,
 } from "@/features/pdf/PDF";
 import { PDFCanvasPreview } from "@/features/pdf/PDFCanvasPreview";
+import {
+  dedupeFailuresByIdentifier,
+  ImageFetchFailure,
+} from "@/features/pdf/pdfImage";
 import { pdfRenderService } from "@/features/pdf/pdfRenderService";
 import {
   BORDERLESS_STUDIO_EXPANSION_MM,
@@ -39,6 +58,7 @@ import {
   scmTemplateName,
   ScmVariant,
 } from "@/features/pdf/scm/scmLayout";
+import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
   selectProjectCardback,
@@ -50,10 +70,41 @@ import { AppDispatch } from "@/store/store";
 import { useClientSearchContext } from "../clientSearch/clientSearchContext";
 import { useRenderPDF } from "./useRenderPDF";
 
+/**
+ * @react-pdf/renderer silently skips a card image it can't fetch rather than
+ * failing the whole render (see pdfImage.ts) - so a successful render can
+ * still contain blank cards. Confirming with the user before committing to
+ * the download/upload is the only point this is still cheaply recoverable:
+ * once the file is saved, a blank card is easy to miss until it's already
+ * been sent off to print.
+ */
+const confirmDespiteImageFailures = (
+  failures: Array<ImageFetchFailure>
+): boolean => {
+  const shown = failures.slice(0, 10).map((failure) => `• ${failure.label}`);
+  const remainder =
+    failures.length > shown.length
+      ? [`…and ${failures.length - shown.length} more`]
+      : [];
+  return window.confirm(
+    [
+      `${failures.length} card image${
+        failures.length === 1 ? "" : "s"
+      } couldn't be loaded and will be blank:`,
+      "",
+      ...shown,
+      ...remainder,
+      "",
+      "Continue anyway?",
+    ].join("\n")
+  );
+};
+
 const downloadPDF = async (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
-  dispatch: AppDispatch
+  dispatch: AppDispatch,
+  backendURL: string | null
 ): Promise<boolean> => {
   const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
     props.cardDocumentsByIdentifier
@@ -68,19 +119,48 @@ const downloadPDF = async (
       },
     ])
   );
-  return pdfRenderService
-    .renderPDF({ ...props, fileHandles })
-    .then((blob) =>
-      downloadFile(blob, undefined, "cards.pdf", clientSearchService)
-    )
-    .then(() => true);
+  // Proposal B PR-1: resolved here (main thread, has cookie access for the CSRF header) rather
+  // than inside pdf.worker.ts, which can't fetch this itself - see bleedPriorResolution.ts's
+  // module comment. Skipped entirely (bleedPriors stays undefined) when no remote backend is
+  // configured - PDFCardImage already defaults a missing entry to the safe "unresolved" fallback.
+  const bleedPriors =
+    backendURL != null
+      ? await resolveBleedPriors(
+          backendURL,
+          Object.keys(props.cardDocumentsByIdentifier)
+        )
+      : undefined;
+  const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
+    ...props,
+    fileHandles,
+    bleedPriors,
+  });
+  const failures = dedupeFailuresByIdentifier(rawFailures);
+  if (failures.length > 0 && !confirmDespiteImageFailures(failures)) {
+    dispatch(
+      setNotification([
+        Math.random().toString(),
+        {
+          name: "Download Cancelled",
+          message: `${failures.length} card image${
+            failures.length === 1 ? "" : "s"
+          } failed to load - PDF was not downloaded.`,
+          level: "warning",
+        },
+      ])
+    );
+    return false;
+  }
+  await downloadFile(blob, undefined, "cards.pdf", clientSearchService);
+  return true;
 };
 
 const useDownloadPDF = (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
-  setIsDownloading: (newState: boolean) => void
+  setIsDownloading: (newState: boolean) => void,
+  backendURL: string | null
 ) => {
   const doFileDownload = useDoFileDownload();
   return () =>
@@ -90,7 +170,7 @@ const useDownloadPDF = (
           "pdf",
           "cards.pdf",
           (): Promise<boolean> =>
-            downloadPDF(props, clientSearchService, dispatch)
+            downloadPDF(props, clientSearchService, dispatch, backendURL)
         )
       )
       .finally(() => setIsDownloading(false));
@@ -99,7 +179,8 @@ const useDownloadPDF = (
 const saveToDrivePDF = async (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
-  dispatch: AppDispatch
+  dispatch: AppDispatch,
+  backendURL: string | null
 ): Promise<boolean> => {
   const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
     props.cardDocumentsByIdentifier
@@ -114,7 +195,35 @@ const saveToDrivePDF = async (
       },
     ])
   );
-  const blob = await pdfRenderService.renderPDF({ ...props, fileHandles });
+  // See downloadPDF's identical step for why this runs here, not inside the worker.
+  const bleedPriors =
+    backendURL != null
+      ? await resolveBleedPriors(
+          backendURL,
+          Object.keys(props.cardDocumentsByIdentifier)
+        )
+      : undefined;
+  const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
+    ...props,
+    fileHandles,
+    bleedPriors,
+  });
+  const failures = dedupeFailuresByIdentifier(rawFailures);
+  if (failures.length > 0 && !confirmDespiteImageFailures(failures)) {
+    dispatch(
+      setNotification([
+        Math.random().toString(),
+        {
+          name: "Save Cancelled",
+          message: `${failures.length} card image${
+            failures.length === 1 ? "" : "s"
+          } failed to load - PDF was not saved.`,
+          level: "warning",
+        },
+      ])
+    );
+    return false;
+  }
   const token = await requestGoogleDriveWriteToken(
     process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID as string
   );
@@ -140,11 +249,14 @@ const useSaveToDrivePDF = (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
-  setIsSavingToDrive: (newState: boolean) => void
+  setIsSavingToDrive: (newState: boolean) => void,
+  backendURL: string | null
 ) => {
   return () =>
     Promise.resolve(setIsSavingToDrive(true))
-      .then(() => saveToDrivePDF(props, clientSearchService, dispatch))
+      .then(() =>
+        saveToDrivePDF(props, clientSearchService, dispatch, backendURL)
+      )
       .catch((reason) =>
         dispatch(
           setNotification([
@@ -908,6 +1020,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
   const { clientSearchService } = useClientSearchContext();
   const projectMembers = useAppSelector(selectProjectMembers);
   const projectCardback = useAppSelector(selectProjectCardback);
+  const backendURL = useAppSelector(selectRemoteBackendURL);
 
   const [pageSize, setPageSize] = useState<keyof typeof PageSize>(PageSize.A4);
   const [pageWidth, setPageWidth] = useState<number | undefined>(undefined);
@@ -970,12 +1083,64 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     equalityFn,
   });
 
-  const { url, loading, error } = useRenderPDF(debouncedPDFProps);
+  const {
+    url,
+    failures: rawFailures,
+    loading,
+    error,
+  } = useRenderPDF(debouncedPDFProps);
+  const failures = dedupeFailuresByIdentifier(rawFailures);
 
   const showSpinner = debouncedState.isPending() || loading;
 
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
   const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
+
+  // "Fast" (the default) skips @react-pdf/renderer + pdf.js entirely - just computeLayout()
+  // and plain DOM/CSS, updated instantly (no debounce, no spinner, no canvas) from the
+  // existing small-tier thumbnail URLs already in memory. "Exact" is the pre-existing
+  // pdf.js-rendered canvas preview, a real (debounced) PDF render - useful for confirming cut
+  // lines/bleed exactly as they'll print, at the cost of the heavier render pipeline.
+  const [previewMode, setPreviewMode] = useState<"fast" | "exact">("fast");
+  const fastPreviewSize = getPageSizeMM(pageSize, pageWidth, pageHeight);
+  const fastPreviewMargins = {
+    top: pageMarginTopMM ?? 0,
+    bottom: pageMarginBottomMM ?? 0,
+    left: pageMarginLeftMM ?? 0,
+    right: pageMarginRightMM ?? 0,
+  };
+  const fastPreviewSpacing = {
+    row: cardSpacingRowMM ?? 0,
+    col: cardSpacingColMM ?? 0,
+  };
+  const fastPreviewLayout = computeLayout(
+    fastPreviewSize.width,
+    fastPreviewSize.height,
+    CardWidthMM,
+    CardHeightMM,
+    bleedEdgeMM ?? 0,
+    fastPreviewMargins,
+    fastPreviewSpacing
+  );
+  const fastPreviewCardsPerPage =
+    fastPreviewLayout.cardsPerRow * fastPreviewLayout.cardsPerCol;
+  // Reuses the PDF generator's own pagination functions (not a reimplementation) so the fast
+  // preview's page-1 card selection always matches what the real PDF would generate first.
+  const fastPreviewCardSets = CardSelectionModeToPaginator[cardSelectionMode](
+    projectMembers,
+    cardDocumentsByIdentifier,
+    projectCardback,
+    fastPreviewCardsPerPage
+  );
+  const fastPreviewFirstPage =
+    fastPreviewCardSets.flatMap((set) =>
+      chunk(set, fastPreviewCardsPerPage)
+    )[0] ?? [];
+  const fastPreviewSlots: Array<PagePreviewSlotContent> =
+    fastPreviewFirstPage.map((doc) => ({
+      imageUrl: doc?.smallThumbnailUrl,
+      name: doc?.name ?? "",
+    }));
 
   const fullResolutionPDFProps = {
     ...debouncedPDFProps,
@@ -988,14 +1153,16 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     fullResolutionPDFProps,
     clientSearchService,
     dispatch,
-    setIsDownloading
+    setIsDownloading,
+    backendURL
   );
 
   const saveToDrive = useSaveToDrivePDF(
     fullResolutionPDFProps,
     clientSearchService,
     dispatch,
-    setIsSavingToDrive
+    setIsSavingToDrive,
+    backendURL
   );
 
   return (
@@ -1159,15 +1326,73 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
           )}
         </OverflowCol>
         <Col lg={9} md={8} sm={7} xs={6} style={{ position: "relative" }}>
-          {showSpinner && (
-            <Spinner size={6} zIndex={3} positionAbsolute={true} />
+          {!scmMode && (
+            <div className="d-flex justify-content-end mb-2">
+              <Button
+                size="sm"
+                variant="outline-secondary"
+                data-testid="preview-mode-toggle"
+                onClick={() =>
+                  setPreviewMode(previewMode === "fast" ? "exact" : "fast")
+                }
+              >
+                {previewMode === "fast"
+                  ? "Switch to exact PDF preview"
+                  : "Switch to fast preview"}
+              </Button>
+            </div>
           )}
-          <Blurrable
-            disabled={showSpinner}
-            style={{ height: 100 + "%", overflowY: "hidden" }}
-          >
-            <PDFCanvasPreview url={url} />
-          </Blurrable>
+          {/* Image-fetch-failure/error detection comes from the real (debounced)
+              @react-pdf/renderer render via useRenderPDF, which runs unconditionally
+              regardless of which preview is on screen - these warnings stay visible in fast
+              mode too, not just exact mode, since generating a PDF full of silently-blank
+              cards is exactly the mistake this warns against, independent of which preview
+              the user happened to be looking at. */}
+          {!showSpinner && error != null && (
+            <Alert
+              variant="danger"
+              className="m-2"
+              data-testid="pdf-preview-error"
+            >
+              Couldn&apos;t generate a preview:{" "}
+              {error instanceof Error ? error.message : String(error)}
+            </Alert>
+          )}
+          {!showSpinner && error == null && failures.length > 0 && (
+            <Alert
+              variant="warning"
+              className="m-2"
+              data-testid="pdf-preview-image-failures"
+            >
+              {failures.length} card image{failures.length === 1 ? "" : "s"}{" "}
+              couldn&apos;t be loaded and will appear blank:{" "}
+              {failures.map((failure) => failure.label).join(", ")}
+            </Alert>
+          )}
+          {!scmMode && previewMode === "fast" ? (
+            <PagePreview
+              pageWidthMM={fastPreviewSize.width}
+              pageHeightMM={fastPreviewSize.height}
+              bleedEdgeMM={bleedEdgeMM ?? 0}
+              margins={fastPreviewMargins}
+              spacing={fastPreviewSpacing}
+              slots={fastPreviewSlots}
+              showCutLines={drawCardCutLines}
+              maxWidthPx={480}
+            />
+          ) : (
+            <>
+              {showSpinner && (
+                <Spinner size={6} zIndex={3} positionAbsolute={true} />
+              )}
+              <Blurrable
+                disabled={showSpinner}
+                style={{ height: 100 + "%", overflowY: "hidden" }}
+              >
+                <PDFCanvasPreview url={url} />
+              </Blurrable>
+            </>
+          )}
         </Col>
       </Row>
     </Container>

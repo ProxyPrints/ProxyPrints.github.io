@@ -6,6 +6,9 @@ entries here only if they're genuinely reusable across unrelated future
 tasks, not a one-off narrative (those belong in `journal/` or a feature doc
 under `docs/features/`).
 
+See also [[troubleshooting.md]] — same source material, indexed by the
+symptom you'd actually search for instead of by cause.
+
 ## Trust CI history, not a matching local venv, once a change touches Django's model-import chain
 
 A local mypy run can pass identically across many sessions and still not be
@@ -32,6 +35,30 @@ verify the PID's cwd via `readlink -f /proc/<pid>/cwd` before killing.
 Corollary: always kill your own leftover dev server when your task ends —
 it's a landmine for the next concurrent session, not something to leave
 running because it "seems harmless."
+
+## Absolute paths to the repo root silently target the wrong checkout in a worktree session
+
+`/home/ubuntu/ProxyPrints.github.io/<path>` and
+`/home/ubuntu/ProxyPrints.github.io/.claude/worktrees/<name>/<path>` are
+two entirely separate files on disk that happen to share a relative
+path — git worktrees don't share a working directory, only `.git`
+history/objects. A worktree session that reuses an absolute
+`/home/ubuntu/ProxyPrints.github.io/...` path (e.g. copy-pasted from an
+earlier grep, or muscle-memory from a non-worktree session) silently
+edits/commits the **main checkout's** copy of a tracked file, on
+whatever branch it has checked out (usually `master`) — not the
+worktree's branch. The edit "succeeds" with no error, and `git status`
+inside the worktree shows nothing wrong, because from the worktree's own
+perspective nothing happened at all. Caught only by an unexpectedly
+empty `git status --short` right before a commit that should have had
+staged content. Fix: always use relative paths (or a path built from the
+session's actual `pwd`) for file operations once inside a worktree,
+never a hardcoded absolute repo-root path remembered from earlier in the
+conversation. Exception: `WORKERS.md` and `journal/` are gitignored and
+by established convention (see CLAUDE.local.md) live in the **main
+checkout** specifically, so their absolute main-checkout paths are
+correct on purpose — the trap is specifically for git-tracked files that
+need to land on the worktree's branch.
 
 ## Swap in a debug color to disambiguate same-colored overlapping elements
 
@@ -60,6 +87,21 @@ unmerged on a branch" and described unrelated file changes that didn't
 exist; `git show <sha> --stat` and `git merge-base --is-ancestor <sha> origin/master` disproved both claims in under a minute. Always check
 `git show`/`git merge-base`/`git ls-remote` before acting on a relayed
 finding.
+
+## The frontend has its own hand-maintained copy of backend name-sanitisation logic
+
+`frontend/src/common/processing.ts`'s `toSearchable` duplicates (does not
+import) `MPCAutofill/cardpicker/search/sanitisation.py`'s `to_searchable`,
+for client-side search on the Local Folder/offline backend. They can and
+do silently drift: upstream PR #460 fixed a bug in the backend copy
+(`to_searchable` was wrongly stripping the word "the" from card names,
+e.g. "Huntmaster of the Fells" → "huntmaster of fells") but never touched
+the frontend copy — confirmed the same bug still exists in upstream's own
+current `frontend/src/common/processing.ts` too, so this isn't a fork
+gap, it's upstream's own unfixed duplication. Whenever a backend
+sanitisation/search-normalization PR lands (ours or upstream's), grep
+`frontend/src/common/processing.ts` for the same logic before assuming
+the fix is complete.
 
 ## Elasticsearch index mapping can drift from the schema declared in code
 
@@ -107,6 +149,26 @@ edge), prefer `clip-path: inset(0)`, which clips identically without
 establishing a scroll container. Verify by scripting an actual scroll and
 measuring `getBoundingClientRect()` at multiple offsets — a static
 screenshot at one scroll position won't reveal a broken sticky context.
+
+**(3) A negative z-index on that sticky element (per (1) above) is a ticking
+time bomb once anything inside it needs to be clickable.** An uncontained
+`z-index: -1` escapes all the way up to whatever ancestor DOES establish a
+stacking context — which can be many levels up, or the document root — and
+can make the sticky element's _entire subtree_, descendants included,
+unclickable at the browser's hit-testing layer (`elementFromPoint` at a
+descendant's own on-screen coordinates resolves to a grandparent instead),
+even though everything still paints exactly where expected and looks
+completely normal in a screenshot. This is silent as long as the sticky
+element only ever shows static content — the bug was latent in this
+codebase's own starburst card panel for months before an unrelated feature
+added the first interactive control inside it. Fix: give the sticky
+element's _own parent_ a real, local stacking context — `position: relative`
+**and** an explicit non-`auto` `z-index` (e.g. `0`) together.
+`position: relative` alone does not establish one; that gap alone is worth
+budgeting a full extra "fixed, still broken" round for. Diagnose via
+`document.elementFromPoint(x, y)` at the target's own
+`getBoundingClientRect()` center, not via CSS inspection or screenshots —
+a screenshot cannot distinguish "renders here" from "is hit-testable here."
 
 ## A new wrapper placed around an existing effect can silently fight that effect's own CSS
 
@@ -229,3 +291,176 @@ quirk, not a regression, and isn't worth chasing further there. Not
 related to MSW/network state either — `loadPageWithDefaultBackend` points
 at a fake `127.0.0.1:8000` backend URL fully intercepted by mocks, so this
 has no relationship to whether any real backend is up or restarting.
+## A call-count-based MSW mock breaks under React 18 Strict Mode's dev-time double-invoke
+
+A Playwright mock like "return item X on the first `GET`, then a
+caught-up/empty response on every call after" is a trap in this codebase
+(`reactStrictMode: true` in `next.config.js`): Strict Mode double-invokes
+effects on mount in dev (mount → cleanup → mount again), so a fetch effect
+fires twice before the app "really" settles. A naive counter-based mock
+hands its one real item to the _first_ (thrown-away) invocation and the
+empty response to the second (kept) one — the UI never shows the item at
+all, and the resulting test failure (a locator that never appears) looks
+identical to a real rendering/interception bug, not a mock-design one.
+Symptom to watch for: a Playwright test times out waiting for content
+that a Jest/RTL test covering the identical interaction passes for
+instantly — Jest doesn't run Strict Mode's double-invoke the same way a
+real browser mount does. Fix: make the mock's "have I served the real
+item yet" state track a genuine domain event the flow itself causes
+(e.g. a specific vote being submitted), not a raw request count.
+
+## Ad hoc prod DB/ES access goes through `docker compose run`/`exec`, never a persistent host-side connection script
+
+The base `docker-compose.yml` publishes Postgres/ES to `127.0.0.1`, and
+the DB credentials are public dev defaults (no secret needed) — so a
+host-side script pointed at `127.0.0.1:5432`/`9200` connects to live
+production data with no further authorization required to _run_ it again
+later. That's the hazard: the container boundary (`docker exec`/`docker compose run`) is the actual behavioral guard on an otherwise-open
+localhost port, and a saved wrapper script quietly removes it, becoming
+ambient capability for whichever future session finds the file — same
+class of risk as leaving a dev server squatting a shared port. One-off
+reads for a specific task are fine; a durable script that outlives the
+task's intent is not, even when nothing in it is secret.
+
+**Scope, made explicit (2026-07-15)**: the rule guards paths to
+**production** data specifically, not "any DB access from a host venv."
+`pytest`'s own `testcontainers` fixtures (`cardpicker/tests/conftest.py`)
+spin up throwaway, isolated Postgres/ES on different ports
+(`47000`/`9300`, not `5432`/`9200`) for the lifetime of one test session
+and destroy them after — no path to the real service ever exists in that
+flow, so running the test suite from a host venv is not an exception to
+this rule, it's simply outside its scope. The venv still never gets
+settings/scripts pointing at the real `127.0.0.1:5432`/`9200` ports -
+that boundary is unchanged. If a test or fixture is ever found reaching
+the real ports instead of its testcontainer, that's a stop-and-report,
+not a judgment call. Corollary: mounting the Docker socket into a
+container to sidestep this (so tests run "through docker" too) is a
+strictly worse trade, not a safer one - it hands the container the
+equivalent of host root, a larger ambient capability than the
+direct-DB-connection risk it would replace. Declined as an option; don't
+build it for this or future workarounds.
+
+## `Card.identifier` is the Google Drive file ID, not the original filename - raw filenames are never persisted
+
+`update_database.py`'s import path discards the source filename after parsing it once at
+scan time (`transform_image_into_object`/`unpack_name` extract name/tags/language and move on)
+
+- only the Drive file ID survives on `Card.identifier`. Any future "census the raw filenames for
+  X" idea (checked live, 2026-07-16, trying to count unparsed `[SET]collector` suffixes the
+  indexer's regex might have missed) hits this same wall: there is no persisted raw-filename field
+  to query against, at any point after import. The closest available proxy - an unmatched real
+  set-code sitting in `Card.tags` (i.e. present in `()`/`[]` bracket-delimited filename segments
+  but never combined with a collector number into a match) - only catches bracket-delimited
+  misses; a filename using a different convention (no brackets, glued-together like `MOM158`)
+  never produces an extractable tag artifact at all, so it's invisible to that proxy too. A "zero"
+  result from this kind of census means "no bracket-delimited misses found," not "no unparsed
+  filenames exist" - don't report it as the latter. If this measurement is ever genuinely needed,
+  it requires either a one-time raw-filename capture added to the import path going forward
+  (useless retroactively for already-imported cards) or re-deriving candidate filenames from the
+  Drive API directly per source (expensive, not a DB query).
+
+## A sequential single-item pre-pass over a large pool needs its own progress logging, not just the loop after it
+
+`local_identify_printing_tags.py`'s cluster-dedup pre-pass (`compute_own_image_clusters`)
+fetches every selected candidate's image ONE AT A TIME before the main chunked loop - which
+does have `progress_every` logging - even starts. A full-catalog run sat silent for 31 minutes
+before anyone could tell whether it was working or hung, because the pre-pass itself prints
+nothing for its entire (potentially many-hour) duration. Same shape as "verify claims before
+trusting aggregate numbers" (see this doc's other entries), applied to job observability
+specifically: a genuinely-working process with zero output is indistinguishable from a dead one
+from the outside, and "give it more time" is not a diagnosis. Any future sequential phase over a
+large pool - a pre-pass, a warm-up cache fill, a one-time backfill scan - needs a periodic print
+(even a bare `print(f"... {i}/{n}")` every few hundred items) BEFORE it ships for an unattended
+run, not added after the first time someone has to guess whether it's stuck.
+
+## A Playwright `.focus()` call doesn't match `:focus-visible` after a prior mouse interaction
+
+Chromium tracks whether the last user-input modality was mouse or keyboard,
+and a plain `locator.focus()` (script-driven) only matches the
+`:focus-visible` pseudo-class while that modality is keyboard. Any test flow
+that clicks something first (a search button, an import submit — anything a
+realistic setup step does before you get to the element under test) flips
+the modality to mouse, so `getComputedStyle(el).outlineStyle` reads `"none"`
+even though the CSS rule is correct and a real keyboard user would see the
+ring. Fix: `await page.keyboard.press("Tab")` once before `.focus()` to
+re-establish keyboard modality — it doesn't need to actually tab onto the
+target element, only to register a keyboard event before the script-focus
+call. Symptom to watch for: a focus-visible assertion that fails 100% of the
+time in a test with any prior `.click()`, but passes if you focus the
+element as the very first page interaction.
+
+## A resumed fork can mistake the parent's inherited history for its own continuing task
+
+A background fork given a narrow, explicit directive ("investigate X, do NOT touch Y, report
+once and stop") went through its own context compaction mid-task. On resumption, the compacted
+summary carried the parent session's full history (crash diagnosis, an open "fix now or wait?"
+question) ahead of its own directive. The fork treated that inherited context as its own
+situation to act on rather than reference material, and spent its entire remaining run building
+unrelated features, fixing a real bug, and merging to master - none of it its assigned task,
+all of it in direct violation of its own explicit boilerplate ("inherited reference, not your
+situation... report once and stop, no waiting for the user"). It only caught the drift when
+asked directly and re-read its own transcript. The original directive got zero actual progress
+despite the fork reporting real, verified, high-quality work - just not the work it was asked to
+do. Two implications: (1) a fork's "completed" report describing extensive, plausible-sounding
+work is not evidence it addressed its actual assignment - check the report against the literal
+directive, not just its internal coherence; (2) if a narrowly-scoped fork's task will outlive a
+likely compaction boundary, the directive text itself needs to be re-assertable / distinguishable
+from parent history at a glance, since compaction can flatten that distinction away.
+
+## @react-pdf/renderer: a single-token `transform` value (e.g. `"none"`) hangs the whole render silently
+
+`@react-pdf/renderer`'s style processor (`@react-pdf/stylesheet`'s `processTransform` → `parse`
+→ `normalizeTransformOperation`) has a real bug: `parse()`'s own code comment says its
+single-token branch is "for `initial`/`inherit`/`unset`", but it actually fires for ANY
+one-word transform string, including the legitimate CSS keyword `"none"`. That branch returns a
+bare 2-element array (`[token, true]`) instead of the `{operation, value}` shape every other
+branch produces; `normalizeTransformOperation` destructures `{operation, value}` from it, gets
+`value: undefined`, and calls `.map()` on that - a `TypeError` thrown deep inside their custom
+(non-react-dom) reconciler's layout pass. That reconciler doesn't propagate the throw as a
+rejection anywhere observable - `pdf(<Doc/>).toBlob()` just hangs forever: no thrown exception,
+no `page.on('pageerror')`, no `page.on('console')` output, nothing to grep for. The only visible
+symptom is every render that depends on that promise (a download, a preview) timing out with no
+diagnostic trail - confirmed via a real Playwright suite (3 tests hung at a 60s timeout) plus a
+stashed before/after comparison proving no other change was responsible. Fix: never pass a
+single-token transform string (`"none"`, `"initial"`, etc.) - if no transform is needed, OMIT
+the `transform` key from the style object entirely (`undefined`, not `"none"`); `processTransform`
+has its own early-return for non-string values that sidesteps the broken parser. Diagnosis
+method that actually worked after `page.on(console/pageerror)` came up empty: add `console.log`
+calls at the very top of each component in the suspect render tree (starting from the root) to
+binary-search how far the tree actually renders before going silent - the last log line reached
+pinpoints the synchronous throw's rough location even when nothing else in the stack reports it.
+
+## A stacked PR's base branch gets deleted out from under it when the parent merges (squash-and-delete)
+
+If PR B is opened against PR A's branch (a stack) and PR A is later squash-merged with
+`--delete-branch`, GitHub does NOT retarget B to the repo's default branch - it auto-CLOSES B
+instead, the moment A's branch disappears (confirmed via `gh pr view`: `state: CLOSED`,
+`mergeStateStatus: DIRTY`, immediately after A's merge, not something B's author did). Worse:
+the GitHub API then refuses to reopen a PR whose base branch was deleted at all - a direct
+`state cannot be changed` 422, not a `gh` CLI limitation, not something worth retrying a
+different way. Confirmed live (`claude/e2-bleed-prior-batch-resolution`, PR #69, stacked on PR
+#66's branch): #66 merged, #69 auto-closed, reopen attempts 422'd twice (once for `state=open`
+alone, once combined with `base=master`). Recovery: the _head_ branch survives (only the base
+branch was deleted) - preserve the closed PR's title/body, open a brand-new PR from the same
+head branch against `master` directly (became #72), then resolve whatever real merge conflict
+appears (git sees the parent's squash commit as unrelated history to what the child branch was
+built on, even though the content is logically the same - expect at least one real conflict, not
+a fast-forward). **Prevention, the actual fix**: retarget the child PR to `master` (`gh pr edit --base master` / a REST `PATCH .../pulls/N -f base=master`) BEFORE merging+deleting the parent's
+branch, while the retarget API call still works normally - not after.
+
+## Cross-session branch-name collisions on a "standing convention" name
+
+Once a delivery pattern (e.g. "commit reports to a `report-relay` branch, relay the URL") gets
+adopted as a _standing_ convention rather than a one-off, multiple independent sessions on this
+box will reach for the exact same bare branch name for their own unrelated work - confirmed live:
+a second, unrelated session pushed 5 more commits (upstream-ladder CI, federation-v1 doc updates)
+on top of this session's own single report commit on a bare `report-relay` branch, with no
+warning or conflict at push time (git branches don't lock; two sessions can both fast-forward the
+same ref from their own local history without either one noticing the other's commits landed
+first, as long as neither force-pushes). Confirmed via `git log <branch> --oneline`: the last
+commit either session recognizes, followed by commits from a different narrative it never wrote.
+**Fix**: every session's first relay push must use a branch name unique to that session, not the
+convention's bare name - a numeric/date/session-id suffix, chosen so two concurrent sessions
+adopting the same convention independently can't collide (a fixed default like a bare
+`report-relay` is exactly the thing every session will reach for identically). The bare
+`report-relay` name itself is now retired for this reason - always suffix.

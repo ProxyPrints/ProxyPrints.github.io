@@ -1,13 +1,14 @@
 /**
- * The moderator-only review queue (docs/features/moderation.md): (card, sensitive-tag)
+ * The moderator-only report review queue (docs/features/moderation.md): (card, sensitive-tag)
  * pairs awaiting a privileged co-sign, most-reported first. Mirrors GenericVoteQueue's
  * item/advance/lazy-pagination mechanics but is typed to the moderation endpoint's richer
  * item shape (report count + excerpts) and its actions are Approve/Reject - which are
  * ordinary submitTagVote calls sent with credentials so the backend records this
  * moderator's user on the vote and the pair resolves through the normal consensus pass.
  *
- * Distinct `moderation-queue*` testids rather than reusing "vote-queue" - see
- * docs/features/printing-tags.md's testid-collision lesson.
+ * `moderation-reports-*` testids (not a bare `moderation-queue-*`, which this component used
+ * to be called before the Moderation tab grew a Drives sibling) - see docs/lessons.md's
+ * testid-collision check, since ModerationTab.tsx can keep an inactive pane mounted.
  *
  * The tab that mounts this is already gated on whoami, but hidden is not secured - the
  * backend 403s non-moderators, and this component renders that defensively too.
@@ -19,6 +20,7 @@ import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
+import { errorToNotification } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { ModerationQueueItem } from "@/common/schema_types";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
@@ -28,7 +30,7 @@ import { APIGetModerationQueue, APISubmitTagVote } from "@/store/api";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 
-export function ModerationQueue() {
+export function ReportsPanel() {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
   const getTagDisplayName = useTagDisplayName();
@@ -96,16 +98,14 @@ export function ModerationQueue() {
         "include" // attach the moderator session so this vote is privileged
       );
       advance();
-    } catch (error: any) {
+    } catch (error) {
       dispatch(
         setNotification([
           Math.random().toString(),
-          {
-            name: error?.name ?? "Vote failed",
-            message:
-              error?.message ?? "Something went wrong - please try again.",
-            level: "error",
-          },
+          errorToNotification(error, {
+            name: "Vote failed",
+            message: "Something went wrong - please try again.",
+          }),
         ])
       );
     } finally {
@@ -115,7 +115,7 @@ export function ModerationQueue() {
 
   if (forbidden) {
     return (
-      <p className="text-primary" data-testid="moderation-queue-forbidden">
+      <p className="text-primary" data-testid="moderation-reports-forbidden">
         You need moderator access to review this queue.
       </p>
     );
@@ -123,7 +123,7 @@ export function ModerationQueue() {
 
   if (queueExhausted) {
     return (
-      <div data-testid="moderation-queue-empty">
+      <div data-testid="moderation-reports-empty">
         <p className="text-primary">
           Nothing awaiting approval - the queue is clear!
         </p>
@@ -132,7 +132,7 @@ export function ModerationQueue() {
   }
 
   return (
-    <div data-testid="moderation-queue">
+    <div data-testid="moderation-reports">
       <p className="text-primary">
         Awaiting approval: {hits} item{hits !== 1 && "s"}
       </p>
@@ -141,7 +141,7 @@ export function ModerationQueue() {
           <Spinner size={2} />
         </div>
       ) : (
-        <div data-testid="moderation-queue-current-item">
+        <div data-testid="moderation-reports-current-item">
           <Row className="g-4">
             <Col xs={12} md={4}>
               <img
@@ -157,7 +157,10 @@ export function ModerationQueue() {
                 <b>{getTagDisplayName(currentItem.tagName)}</b>?
               </p>
               <p>
-                <Badge bg="danger" data-testid="moderation-queue-report-count">
+                <Badge
+                  bg="danger"
+                  data-testid="moderation-reports-report-count"
+                >
                   {currentItem.reportCount} report
                   {currentItem.reportCount !== 1 && "s"}
                 </Badge>
@@ -165,7 +168,7 @@ export function ModerationQueue() {
               {currentItem.reportExcerpts.length > 0 && (
                 <ul
                   className="text-muted small"
-                  data-testid="moderation-queue-excerpts"
+                  data-testid="moderation-reports-excerpts"
                 >
                   {currentItem.reportExcerpts.map((excerpt, index) => (
                     <li key={index}>&ldquo;{excerpt}&rdquo;</li>
@@ -177,7 +180,7 @@ export function ModerationQueue() {
                   variant="success"
                   disabled={submitting}
                   onClick={() => castModeratorVote(1)}
-                  data-testid="moderation-queue-approve"
+                  data-testid="moderation-reports-approve"
                 >
                   Approve
                 </Button>
@@ -185,7 +188,7 @@ export function ModerationQueue() {
                   variant="danger"
                   disabled={submitting}
                   onClick={() => castModeratorVote(-1)}
-                  data-testid="moderation-queue-reject"
+                  data-testid="moderation-reports-reject"
                 >
                   Reject
                 </Button>
@@ -193,7 +196,7 @@ export function ModerationQueue() {
                   variant="outline-secondary"
                   disabled={submitting}
                   onClick={advance}
-                  data-testid="moderation-queue-skip"
+                  data-testid="moderation-reports-skip"
                 >
                   Skip
                 </Button>

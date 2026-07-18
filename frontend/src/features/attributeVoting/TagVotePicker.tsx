@@ -10,6 +10,7 @@
 import React, { useEffect, useState } from "react";
 import Badge from "react-bootstrap/Badge";
 
+import { errorToNotification } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { TagConsensusResponse } from "@/common/schema_types";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
@@ -63,16 +64,15 @@ export function TagVotePicker({
           )
         );
       })
-      .catch(() =>
+      .catch((error) =>
         dispatch(
           setNotification([
             Math.random().toString(),
-            {
+            errorToNotification(error, {
               name: "Vote failed",
               message:
                 "Something went wrong submitting your vote - please try again.",
-              level: "error",
-            },
+            }),
           ])
         )
       )

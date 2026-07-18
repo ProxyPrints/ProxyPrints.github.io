@@ -11,6 +11,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         dos2unix \
         gcc netcat-traditional curl libpq-dev \
+        tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements.txt
@@ -24,6 +25,16 @@ RUN pip3 install -r requirements.txt
 # Copy relevant files from repository
 COPY docker /MPCAutofill/docker
 COPY MPCAutofill /MPCAutofill/MPCAutofill
+
+# Iteration safety (docs/features/catalog-completion-plan.md's Part 1): .git is excluded from
+# the build context (.dockerignore), so the SHA must be passed in from the host via
+# --build-arg, computed before the build starts (see the required GIT_SHA=... prefix on the
+# documented rebuild command) - it can't be computed from inside this Dockerfile. Best-effort
+# visibility only (cardpicker.utils.get_baked_git_sha) - the hard staleness gate
+# (find_stale_applied_migrations) is deliberately independent of this and can't be bypassed by
+# a forgotten build-arg the way this file's own freshness could be.
+ARG GIT_SHA=unknown
+RUN echo "$GIT_SHA" > /MPCAutofill/MPCAutofill/GIT_SHA
 
 # Handle environment variables - write out `.env` with the variables passed from the
 # compose file (and overwrite `.env` as copied from the host machine in the process)

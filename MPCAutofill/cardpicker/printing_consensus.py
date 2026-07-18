@@ -3,17 +3,12 @@ from typing import Iterable, Literal, TypedDict
 
 from django.conf import settings
 
-from cardpicker.models import (
-    CanonicalCard,
-    Card,
-    CardPrintingTag,
-    PrintingTagStatus,
-    VoteSource,
-)
+from cardpicker.models import CanonicalCard, Card, CardPrintingTag, PrintingTagStatus
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
     VoteTuple,
     contested_queryset,
+    is_human_backed_source,
     resolve_weighted_consensus,
 )
 
@@ -91,7 +86,7 @@ def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
             VoteTuple(
                 outcome_key=key,
                 weight=_SOURCE_WEIGHTS[vote.source],
-                is_human_backed=vote.source != VoteSource.AI,
+                is_human_backed=is_human_backed_source(vote.source),
             )
         )
 

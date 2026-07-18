@@ -19,6 +19,12 @@ import { RootState } from "@/store/store";
 
 /**
  * Retrieve the names of each card (note: excludes cardbacks and tokens) in the project.
+ * A card whose specific printing has been community-confirmed (i.e. has a resolved
+ * `canonicalCard` - see downloadXML.ts's header comment for the canonicalCard-vs-searchQuery
+ * rationale) has its name suffixed with "(SET) NUM", the same syntax `processSearchQuery`
+ * (the plaintext decklist importer's parser) already recognises. This is additive and purely
+ * cosmetic for unresolved cards - it's what lets a decklist export + reimport round-trip a
+ * specific printing instead of silently reverting to "best match" on reimport.
  */
 function extractProjectMemberNames(
   projectMembers: Array<SlotProjectMembers>,
@@ -27,15 +33,23 @@ function extractProjectMemberNames(
   function extractProjectMemberName(
     projectMember: ProjectMember | null
   ): string | null {
-    return projectMember != null &&
-      projectMember.selectedImage != null &&
-      Object.prototype.hasOwnProperty.call(
+    if (
+      projectMember == null ||
+      projectMember.selectedImage == null ||
+      !Object.prototype.hasOwnProperty.call(
         cardDocuments,
         projectMember.selectedImage
-      ) &&
-      cardDocuments[projectMember.selectedImage].cardType === Card
-      ? stripTextInParentheses(cardDocuments[projectMember.selectedImage].name)
-      : null;
+      ) ||
+      cardDocuments[projectMember.selectedImage].cardType !== Card
+    ) {
+      return null;
+    }
+    const cardDocument = cardDocuments[projectMember.selectedImage];
+    const name = stripTextInParentheses(cardDocument.name);
+    const canonicalCard = cardDocument.canonicalCard;
+    return canonicalCard != null
+      ? `${name} (${canonicalCard.expansionCode}) ${canonicalCard.collectorNumber}`
+      : name;
   }
 
   return projectMembers.map((slotProjectMembers: SlotProjectMembers) => [

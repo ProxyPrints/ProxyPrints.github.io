@@ -37,6 +37,12 @@ DEBUG = env("DJANGO_DEBUG", default=False)
 # IP or Domain
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
+# nginx terminates TLS and proxies to this container over plain HTTP (see docker/nginx/nginx.conf,
+# which forwards X-Forwarded-Proto) - without this, request.is_secure() always reads False here,
+# so anything building an absolute URL from the request (django-allauth's OAuth redirect_uri,
+# notably) constructs an http:// URL even though the real, public-facing request was https://.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 # This server's own public URL, used to build image URLs for LOCAL_FILE sources (the frontend can only
 # load images by URL, so images on disk are served back out through this server's own `get_local_file_image` view).
 LOCAL_FILE_SOURCE_BASE_URL = env("LOCAL_FILE_SOURCE_BASE_URL", default="http://localhost:8000")
@@ -59,7 +65,11 @@ PREPEND_WWW = env("PREPEND_WWW", default=False)
 PRINTING_TAG_MIN_VOTES = env.float("PRINTING_TAG_MIN_VOTES", default=2)
 PRINTING_TAG_MIN_SHARE = env.float("PRINTING_TAG_MIN_SHARE", default=0.6)
 PRINTING_TAG_ADMIN_WEIGHT = env.float("PRINTING_TAG_ADMIN_WEIGHT", default=5)
-PRINTING_TAG_AI_WEIGHT = env.float("PRINTING_TAG_AI_WEIGHT", default=0.5)
+# PRINTING_TAG_AI_WEIGHT is the old name (a fossil of the pre-2026-07-15 VoteSource.AI split) -
+# still read as a fallback so an existing deployment's env doesn't silently regress on upgrade.
+PRINTING_TAG_MACHINE_WEIGHT = env.float(
+    "PRINTING_TAG_MACHINE_WEIGHT", default=env.float("PRINTING_TAG_AI_WEIGHT", default=0.5)
+)
 # weight of a vote cast by a privileged user (a Moderators-group member - see
 # cardpicker.moderation.privileged_weight). Defaults to the admin weight: a lone moderator
 # clears the consensus threshold the same way a lone admin does.
@@ -69,8 +79,16 @@ VOTE_PRIVILEGED_WEIGHT = env.float("VOTE_PRIVILEGED_WEIGHT", default=PRINTING_TA
 # alongside the weights above.
 VOTE_FEDERATED_WEIGHT = env.float("VOTE_FEDERATED_WEIGHT", default=1.0)
 # django-ratelimit rate string (see cardpicker.views.post_submit_printing_tag), keyed by the
-# client-generated anonymous ID (IP as a fallback if that header is somehow missing).
-PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="20/h")
+# client-generated anonymous ID (IP as a fallback if that header is somehow missing). Shared
+# across printing-tag/artist-vote/tag-vote submission (_printing_tag_rate_limit_key/_rate are
+# reused across all three @ratelimit call sites in views.py) - one budget for a session's whole
+# voting activity, not per-endpoint. Raised from 20/h to 300/h on 2026-07-17 after a real user
+# tripped the old limit in ~7 minutes of genuine rapid tagging - the pilot's own confirmation-
+# economy work (85k one-tap questions) makes fast legitimate voting the desired behavior now,
+# not something to throttle. 300/h = one tap/12s sustained, still a real wall against naive
+# flooding; Sybil defense was never resting on this limit anyway - machine-evidence cross-checks
+# and cohort revocation (docs/theory.md's addendum) are the actual layer for that.
+PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="300/h")
 # same mechanism for the card report button (see cardpicker.views.post_report_card).
 CARD_REPORT_RATE = env("CARD_REPORT_RATE", default="10/d")
 
@@ -277,6 +295,14 @@ ELASTICSEARCH_DSL = {
 
 ELASTICSEARCH_DSL_AUTOSYNC = False
 
+# The Cloudflare Worker image CDN (image-cdn/, docs/features/image-cdn.md) - the frontend
+# reads this as a build-time NEXT_PUBLIC_ var, so the backend has never needed its own copy
+# until now: cardpicker.local_identify_printing_tags (docs/features/printing-tags.md's Stage 8)
+# fetches a card's own full-resolution image server-side for OCR/phash, via the same Worker's
+# "full" tier the PDF export path already relies on for print-quality output (Google Drive
+# sources only today - see get_worker_image_url in that module).
+IMAGE_WORKER_URL = env("IMAGE_WORKER_URL", default="https://cdn.proxyprints.ca")
+
 # Email for logging
 ADMINS = [("admin", env("TARGET_EMAIL", default=""))]
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
@@ -286,6 +312,33 @@ EMAIL_HOST_PASSWORD = env("DJANGO_GMAIL_PASSWORD", default="")
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 DEFAULT_FROM_EMAIL = "default from email"
+
+# Logging - closes a real gap found 2026-07-17 diagnosing a live incident (turned out to be a
+# 429, not a 500 - nginx's access log ended up being the actual evidence, not django's). Every
+# view in cardpicker.views IS already wrapped in ErrorWrappers.to_json, whose own bare
+# `except Exception: logger.exception(...)` was, verified empirically, already visible via
+# Python's logging.lastResort fallback (stderr, which docker logs captures) even before this
+# change - so this isn't "every exception was invisible." What WAS invisible: anything escaping
+# that decorator entirely (middleware, ASGI/WSGI-level errors, a future view that forgets the
+# decorator) - those route through Django's own exception-to-response machinery, which logs to
+# django.request, wired by Django's own DEFAULT_LOGGING to mail_admins ONLY when DEBUG=False,
+# never console. console here is additive, not a replacement - mail_admins/ADMINS above stays
+# wired as a second channel.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+        "mail_admins": {"class": "django.utils.log.AdminEmailHandler", "level": "ERROR"},
+    },
+    "loggers": {
+        "django.request": {
+            "handlers": ["console", "mail_admins"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+    },
+}
 
 # Database update settings
 DEFAULT_CARDBACK_FOLDER_PATH = env("DEFAULT_CARDBACK_FOLDER_PATH", default="Chilli_Axe's MTG Renders / 12. Cardbacks")

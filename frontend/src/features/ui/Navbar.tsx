@@ -12,6 +12,8 @@ import {
   ContentMaxWidth,
   NavbarHeight,
   NavbarLogoHeight,
+  UpstreamDesktopTool,
+  UpstreamDesktopToolReleasesURL,
 } from "@/common/constants";
 import DisableSSR from "@/components/DisableSSR";
 import { RightPaddedIcon } from "@/components/icon";
@@ -119,16 +121,17 @@ export default function ProjectNavbar() {
               {remoteBackendConfigured && (
                 <Nav.Link
                   as={Link}
-                  href="/printingQueue"
-                  active={router.route === "/printingQueue"}
-                  eventKey="/printingQueue"
+                  href="/whatsthat"
+                  active={router.route === "/whatsthat"}
+                  eventKey="/whatsthat"
                 >
                   What&apos;s That Card?
                 </Nav.Link>
               )}
               <Nav.Link
-                href="https://github.com/chilli-axe/mpc-autofill/releases/latest"
+                href={UpstreamDesktopToolReleasesURL}
                 target="_blank"
+                title={`${UpstreamDesktopTool} (compatible with ${projectName} project files)`}
               >
                 Download
               </Nav.Link>

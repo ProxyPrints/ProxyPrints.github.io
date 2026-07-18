@@ -499,9 +499,8 @@ class TestUpdateDatabase:
                     date_modified=make_aware(date_modified),
                     source=source,
                     tags=list(tags),
-                    # not strictly relevant for this test, but values for these non-nullable fields are required.
+                    # not strictly relevant for this test, but this non-nullable field is required.
                     size=0,
-                    image_hash=0,
                 )
                 for (identifier, searchq, date_modified, tags) in incoming_cards
             ],
@@ -516,6 +515,68 @@ class TestUpdateDatabase:
             (result.identifier, result.searchq_keyword, make_naive(result.date_modified), tuple(sorted(result.tags)))
             for result in CardSearch().search().scan()
         } == set(incoming_cards)
+
+    @freezegun.freeze_time(DEFAULT_DATE)
+    def test_bulk_sync_objects_hashes_newly_created_cards(self, django_settings, elasticsearch, monkeypatch):
+        """
+        docs/features/printing-tags.md's hash-at-ingest architecture (2026-07-16):
+        content_phash is computed for CREATED cards only (see hash_newly_created_cards' own
+        docstring for why not updated ones) as part of bulk_sync_objects, before bulk_create.
+        """
+        import cardpicker.local_phash as local_phash_module
+
+        monkeypatch.setattr(local_phash_module, "compute_content_phash_for_card", lambda card, dpi=None: 42)
+
+        source = factories.SourceFactory()
+        bulk_sync_objects(
+            source=source,
+            cards=[
+                Card(
+                    identifier="new_card",
+                    searchq="new card",
+                    date_created=make_aware(DEFAULT_DATE),
+                    date_modified=make_aware(DEFAULT_DATE),
+                    source=source,
+                    tags=[],
+                    size=0,
+                )
+            ],
+        )
+
+        card = Card.objects.get(identifier="new_card")
+        assert card.content_phash == 42
+
+    @freezegun.freeze_time(DEFAULT_DATE)
+    def test_bulk_sync_objects_does_not_touch_content_phash_on_update(self, django_settings, elasticsearch):
+        """An updated card's content_phash is deliberately never in bulk_update's field list
+        (see hash_newly_created_cards' docstring) - a metadata-only change (name/tags/etc.)
+        must never wipe an already-computed hash back to NULL."""
+        source = factories.SourceFactory()
+        existing = factories.CardFactory(
+            identifier="existing_card",
+            source=source,
+            date_modified=make_aware(DEFAULT_DATE),
+            content_phash=123,
+        )
+
+        bulk_sync_objects(
+            source=source,
+            cards=[
+                Card(
+                    identifier="existing_card",
+                    searchq="renamed",
+                    date_created=make_aware(DEFAULT_DATE),
+                    date_modified=make_aware(DEFAULT_DATE) + dt.timedelta(days=1),
+                    source=source,
+                    tags=[],
+                    size=0,
+                )
+            ],
+        )
+
+        existing.refresh_from_db()
+        assert existing.searchq == "renamed"  # the update itself did happen
+        assert existing.content_phash == 123  # but content_phash survived it untouched
 
     @freezegun.freeze_time(DEFAULT_DATE)
     def test_bulk_sync_objects_persists_expansion_hint_on_update(self, django_settings, elasticsearch):
@@ -551,7 +612,6 @@ class TestUpdateDatabase:
                     source=source,
                     expansion_hint="mh3",
                     size=0,
-                    image_hash=0,
                 )
             ],
         )
@@ -595,7 +655,6 @@ class TestUpdateDatabase:
                     source=source,
                     tags=[],
                     size=0,
-                    image_hash=0,
                 )
             ],
         )

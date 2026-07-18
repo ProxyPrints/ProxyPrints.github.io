@@ -19,6 +19,7 @@ import OverlayTrigger from "react-bootstrap/OverlayTrigger";
 import Popover from "react-bootstrap/Popover";
 import Row from "react-bootstrap/Row";
 
+import { errorToNotification } from "@/common/apiErrors";
 import { getPrintingCandidateDataAttributes } from "@/common/cardDom";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import {
@@ -117,16 +118,15 @@ export function PrintingTagPicker({
           ])
         );
       })
-      .catch(() =>
+      .catch((error) =>
         dispatch(
           setNotification([
             Math.random().toString(),
-            {
+            errorToNotification(error, {
               name: "Vote failed",
               message:
                 "Something went wrong submitting your vote - please try again.",
-              level: "error",
-            },
+            }),
           ])
         )
       )

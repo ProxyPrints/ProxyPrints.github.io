@@ -18,7 +18,11 @@ export only locally-resolved consensus — never re-broadcast federated votes
         {
           "image": {
             "drive_id": "<Google Drive file id — the join key>",
-            "content_hash": null,          // reserved: perceptual hash, v1 nullable
+            "content_hash": null,          // perceptual hash (imagehash.phash, hash_size=8,
+                                            // 64-bit) - now backed by Card.content_phash
+                                            // (docs/features/printing-tags.md's hash-at-ingest
+                                            // section, 2026-07-16); still v1 nullable, since not
+                                            // every instance's backfill will be complete
             "name": "<card name, advisory only>"
           },
           "kind": "printing" | "artist" | "tag",
@@ -27,9 +31,15 @@ export only locally-resolved consensus — never re-broadcast federated votes
                     | "tag:<tag name>:apply" | "tag:<tag name>:reject",
           "resolved_at": "<ISO 8601>",
           "vote_weight": <float — total weight behind the verdict>,
-          "human_votes": <int — non-AI vote count; importers MUST treat
-                          human_votes >= 1 as the condition for the imported
-                          vote to be human-backed for gate purposes>
+          "human_votes": <int — count of votes NOT from a machine-derived
+                          source (VoteSource.DEDUCTION or VoteSource.OCR —
+                          the single umbrella VoteSource.AI value this
+                          interchange format was designed against was split
+                          into these two 2026-07-15, same weight/gate
+                          treatment; see cardpicker/models.py's VoteSource
+                          docstring). Importers MUST treat human_votes >= 1
+                          as the condition for the imported vote to be
+                          human-backed for gate purposes>
         }
       ],
       "signature": "<ed25519 over canonical JSON (sorted keys, no whitespace)
@@ -39,7 +49,9 @@ export only locally-resolved consensus — never re-broadcast federated votes
 ## Interchange keys & stability contract
 
 - Images join across instances by `drive_id` (Google Drive file id).
-  `content_hash` is the planned upgrade path for surviving re-uploads.
+  `content_hash` is the planned upgrade path for surviving re-uploads - the field itself
+  (`Card.content_phash`) and its own local consumer (two-threshold dedup clustering) now exist;
+  the cross-instance join logic that would actually use it for federation is still unbuilt.
 - Artists travel by canonical name; tags by `Tag.name`. **Tag names are
   therefore a cross-instance contract: renaming a Tag is a breaking data
   migration, not an edit.** `Tag.name` is the immutable interchange key;

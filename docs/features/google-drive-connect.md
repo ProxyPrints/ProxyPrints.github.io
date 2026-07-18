@@ -76,7 +76,17 @@ proposal to reuse it was wrong on that premise).
   `requestGoogleDriveWriteToken(clientId)`, a minimal standalone token
   requester using Google Identity Services
   (`google.accounts.oauth2.initTokenClient`) scoped to `drive.file`,
-  independent of the Picker's read-only token.
+  independent of the Picker's read-only token. The GSI script
+  (`accounts.google.com/gsi/client`) is injected lazily on first call —
+  never on page load — a real zero-telemetry-posture property, not just
+  perf. A real occurrence on the owner's own device (privacy
+  browser/ad-tracker blockers routinely block `accounts.google.com`)
+  surfaced as the raw `"Failed to load https://accounts.google.com/gsi/ client"` string in the save-to-Drive failure toast; `injectScript`'s
+  `onerror` now rejects with a dedicated `GSIScriptLoadError` carrying an
+  actionable message (privacy browser/ad blocker likely cause, allow the
+  domain and retry, or use the plain PDF download instead) instead of
+  that raw URL bubbling up verbatim through `useSaveToDrivePDF`'s catch
+  handler.
 - `GoogleDriveService.uploadFile()` — multipart POST to the Drive v3 upload
   endpoint, separate from the existing `executeCall` (that method's
   retry/semaphore machinery is tailored to GET-based browsing endpoints;
@@ -101,7 +111,7 @@ real upload, no confirmation a file actually lands in Drive.
 
 ## Key files
 
-- `frontend/src/components/GoogleDriveBackendConfig.tsx`,
+- `frontend/src/features/backend/GoogleDriveBackendConfig.tsx`,
   `LocalFolderBackendConfig.tsx`, `BackendConfig.tsx`
 - `frontend/src/features/googleDrive/` (`googleDriveAuth.ts`,
   `googleDriveConfig.ts`, `GoogleDriveService.ts`)

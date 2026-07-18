@@ -76,6 +76,7 @@ from cardpicker.printing_consensus import (
     resolve_and_persist_printing,
     resolve_printing,
 )
+from cardpicker.question_feed import get_next_question_feed_item, get_remaining_estimate
 from cardpicker.schema_types import (
     ArtistCandidatesRequest,
     ArtistCandidatesResponse,
@@ -107,9 +108,18 @@ from cardpicker.schema_types import Kind as VoteQueueKind
 from cardpicker.schema_types import (
     Language,
     LanguagesResponse,
+    ModerationDriveCardsRequest,
+    ModerationDriveCardsResponse,
+    ModerationDriveItem,
+    ModerationDrivesRequest,
+    ModerationDrivesResponse,
     ModerationQueueItem,
     ModerationQueueRequest,
     ModerationQueueResponse,
+    ModerationRemoveCardRequest,
+    ModerationRemoveCardResponse,
+    ModerationRemoveDriveRequest,
+    ModerationRemoveDriveResponse,
     NewCardsFirstPage,
     NewCardsFirstPagesResponse,
     NewCardsPageResponse,
@@ -122,6 +132,7 @@ from cardpicker.schema_types import (
     PrintingConsensusRequest,
     PrintingConsensusResponse,
     PrintingTagQueueResponse,
+    QuestionFeedResponse,
     ReportCardRequest,
     ReportCardResponse,
     SampleCardsResponse,
@@ -157,6 +168,7 @@ from cardpicker.sources.api import PathTraversalError, resolve_within_root
 from cardpicker.sources.source_types import SourceTypeChoices
 from cardpicker.tag_consensus import (
     get_pending_approval_queue_pairs,
+    get_tag_net_polarity,
     get_tag_review_queue_pairs,
     get_tag_vote_tally,
     resolve_and_persist_tag_votes,
@@ -227,9 +239,10 @@ def post_editor_search(request: HttpRequest) -> HttpResponse:
         )
 
     results: dict[str, list[str]] = {}
+    degraded_queries: list[str] = []
     for hash_key, search_query in editor_search_request.queries.items():
         if search_query.query is not None and hash_key not in results.keys():
-            hits = retrieve_card_identifiers(
+            hits, degraded = retrieve_card_identifiers(
                 search_settings=editor_search_request.searchSettings,
                 query=search_query.query,
                 card_type=search_query.cardType,
@@ -237,7 +250,9 @@ def post_editor_search(request: HttpRequest) -> HttpResponse:
                 collector_number=search_query.collectorNumber,
             )
             results[hash_key] = hits
-    return JsonResponse(EditorSearchResponse(results=results).model_dump())
+            if degraded:
+                degraded_queries.append(hash_key)
+    return JsonResponse(EditorSearchResponse(results=results, degradedQueries=degraded_queries).model_dump())
 
 
 @csrf_exempt
@@ -273,7 +288,10 @@ def old_post_editor_search(request: HttpRequest) -> HttpResponse:
     results: dict[str, dict[str, list[str]]] = defaultdict(dict)
     for query, card_type in sorted({(item.query, item.cardType) for item in editor_search_request.queries}):
         if query is not None and results[query].get(card_type.value, None) is None:
-            hits = retrieve_card_identifiers(
+            # legacy endpoint has no printing-filter fields on its request schema at all, so
+            # `retrieve_card_identifiers` never gets an expansion_code/collector_number here and
+            # `degraded` is always False - nothing to surface on this frozen response shape.
+            hits, _degraded = retrieve_card_identifiers(
                 query=query, card_type=card_type, search_settings=editor_search_request.searchSettings
             )
             results[query][card_type.value] = hits
@@ -698,6 +716,13 @@ def _get_card_or_400(identifier: str) -> Card:
         raise BadRequestException(f"No card found with identifier {identifier!r}.")
 
 
+def _get_source_or_400(source_id: int) -> Source:
+    try:
+        return Source.objects.get(pk=source_id)
+    except Source.DoesNotExist:
+        raise BadRequestException(f"No source found with id {source_id!r}.")
+
+
 def _requesting_user(request: HttpRequest) -> Optional[User]:
     """
     The authenticated user behind a vote/report submission, or None for the (typical)
@@ -875,6 +900,7 @@ def post_submit_printing_tag(request: HttpRequest) -> HttpResponse:
             anonymous_id=req.anonymousId,
             source=VoteSource.USER,
             user=_requesting_user(request),
+            vote_surface=req.voteSurface,
         )
         resolved = resolve_and_persist_printing(card)
 
@@ -999,6 +1025,7 @@ def post_submit_artist_vote(request: HttpRequest) -> HttpResponse:
             anonymous_id=req.anonymousId,
             source=VoteSource.USER,
             user=_requesting_user(request),
+            vote_surface=req.voteSurface,
         )
         resolved = resolve_and_persist_artist(card)
 
@@ -1012,6 +1039,7 @@ def _build_tag_consensus_entry(card: Card, tag: Tag) -> TagConsensusEntry:
         # a sensitive tag awaiting privileged approval reads as unresolved to the public
         # consensus surface - the pending state is a moderation-queue concern, not a voter one
         resolvedPolarity=None if isinstance(resolved, _PendingPrivileged) else resolved,
+        netPolarity=get_tag_net_polarity(card, tag),
         tally=[
             TagVoteTallyEntry(polarity=entry["polarity"], count=entry["count"])
             for entry in get_tag_vote_tally(card, tag)
@@ -1066,30 +1094,59 @@ def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
         tag = Tag.objects.get(name=req.tagName)
     except Tag.DoesNotExist:
         raise BadRequestException(f"No tag found with name {req.tagName!r}.")
-    if req.polarity not in (VotePolarity.APPLY, VotePolarity.NOT_APPLICABLE):
-        raise BadRequestException(f"Invalid polarity {req.polarity!r} - must be 1 (apply) or -1 (not applicable).")
+    if req.polarity not in (VotePolarity.APPLY, VotePolarity.NOT_APPLICABLE, RETRACT_POLARITY):
+        raise BadRequestException(
+            f"Invalid polarity {req.polarity!r} - must be 1 (apply), -1 (not applicable), or 0 (retract)."
+        )
 
     _cast_tag_vote_and_resolve(
-        card=card, tag=tag, anonymous_id=req.anonymousId, polarity=req.polarity, user=_requesting_user(request)
+        card=card,
+        tag=tag,
+        anonymous_id=req.anonymousId,
+        polarity=req.polarity,
+        user=_requesting_user(request),
+        vote_surface=req.voteSurface,
     )
     return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
 
 
-def _cast_tag_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str, polarity: int, user: Optional[User]) -> None:
+# Sentinel accepted by post_submit_tag_vote/_cast_tag_vote_and_resolve alongside the two real
+# VotePolarity values - never persisted (VotePolarity.choices is unchanged), it means "delete
+# my existing vote on this (card, tag) if I have one" - the untouched-with-no-votes state a
+# tri-state attribute chip cycles back to. See docs/features/printing-tags.md's questionFeed
+# section for why this didn't exist before the attribute-chip UI needed it: every prior tag
+# voter (QueueTagQuestion, PrintingConfirmStrip, NoMatchReasonStrip) only ever asks apply-or-
+# not-applicable, with no UI path back to "no opinion" once tapped.
+RETRACT_POLARITY = 0
+
+
+def _cast_tag_vote_and_resolve(
+    card: Card, tag: Tag, anonymous_id: str, polarity: int, user: Optional[User], vote_surface: Optional[str] = None
+) -> None:
     """
     The one write path for a tag vote - shared verbatim between `post_submit_tag_vote` and
     `post_report_card` (a report on a tag-mapped reason IS a tag vote plus an audit row), so
     the two entry points can never drift on how a vote lands or when consensus recomputes.
+    `vote_surface` defaults to None for `post_report_card`'s call site - report-driven votes
+    aren't a "surface" a person consciously chose to vote from in the same sense.
     """
     with transaction.atomic():
-        # `user` sits in defaults deliberately: the row reflects the *latest* submission from
-        # this (card, tag, anonymous_id), so a later unauthenticated re-vote clears it.
-        CardTagVote.objects.update_or_create(
-            card=card,
-            tag=tag,
-            anonymous_id=anonymous_id,
-            defaults={"polarity": polarity, "source": VoteSource.USER, "user": user},
-        )
+        if polarity == RETRACT_POLARITY:
+            CardTagVote.objects.filter(card=card, tag=tag, anonymous_id=anonymous_id).delete()
+        else:
+            # `user` sits in defaults deliberately: the row reflects the *latest* submission
+            # from this (card, tag, anonymous_id), so a later unauthenticated re-vote clears it.
+            CardTagVote.objects.update_or_create(
+                card=card,
+                tag=tag,
+                anonymous_id=anonymous_id,
+                defaults={
+                    "polarity": polarity,
+                    "source": VoteSource.USER,
+                    "user": user,
+                    "vote_surface": vote_surface,
+                },
+            )
         resolve_and_persist_tag_votes(card)
 
 
@@ -1219,6 +1276,28 @@ def post_vote_queue(request: HttpRequest) -> HttpResponse:
 
 
 @csrf_exempt
+@ErrorWrappers.to_json
+def get_question_feed(request: HttpRequest) -> HttpResponse:
+    """
+    The unified "What's That Card?" question feed (see cardpicker.question_feed and
+    docs/features/printing-tags.md) - one question at a time rather than a paginated batch,
+    since (unlike printingTagQueue/voteQueue) which question comes next depends on what this
+    same voter has already answered, evaluated fresh on every call.
+    """
+
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+
+    anonymous_id = request.GET.get("anonymousId")
+    if not anonymous_id:
+        raise BadRequestException("Missing required anonymousId query parameter.")
+
+    item = get_next_question_feed_item(anonymous_id)
+    remaining_estimate = get_remaining_estimate()
+    return JsonResponse(QuestionFeedResponse(item=item, remainingEstimate=remaining_estimate).model_dump())
+
+
+@csrf_exempt
 @reject_untrusted_origin
 @require_moderator
 @ErrorWrappers.to_json
@@ -1276,6 +1355,136 @@ def post_moderation_queue(request: HttpRequest) -> HttpResponse:
     return JsonResponse(
         ModerationQueueResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump()
     )
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_moderation_drives(request: HttpRequest) -> HttpResponse:
+    """
+    Moderator-only "recently added drives" list (Moderation > Drives tab -
+    docs/features/moderation.md): every Source, newest-first, each with its card/cardback/
+    token counts so a moderator can spot a bad or spammy drive at a glance and drill into
+    removing individual cards or the whole thing via post_moderation_remove_card/_drive below.
+
+    Ordered by `-pk` rather than a creation timestamp - Source has no date field of its own
+    (one existed briefly in 2021 and was removed in favour of per-Card dates, see migration
+    0004_auto_20210214_1126), and pk insertion order is a reliable enough proxy for "recently
+    added" without introducing a new migration for a moderator-facing sort order.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ModerationDrivesRequest.model_validate(json.loads(request.body))
+    sources = Source.objects.order_by("-pk").annotate(
+        qty_cards=Count("card", filter=Q(card__card_type=CardTypes.CARD), distinct=True),
+        qty_cardbacks=Count("card", filter=Q(card__card_type=CardTypes.CARDBACK), distinct=True),
+        qty_tokens=Count("card", filter=Q(card__card_type=CardTypes.TOKEN), distinct=True),
+    )
+    paginator = _paginate(sources, req.page)
+    items = [
+        ModerationDriveItem(
+            source=source.serialise(),
+            qtyCards=source.qty_cards,
+            qtyCardbacks=source.qty_cardbacks,
+            qtyTokens=source.qty_tokens,
+        )
+        for source in paginator.page(req.page).object_list
+    ]
+    return JsonResponse(
+        ModerationDrivesResponse(hits=paginator.count, pages=paginator.num_pages, items=items).model_dump()
+    )
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_moderation_drive_cards(request: HttpRequest) -> HttpResponse:
+    """
+    Moderator-only card listing for a single drive (Moderation > Drives tab, drill-down from
+    post_moderation_drives above) - the per-drive card/cardback/token counts on that list are
+    just totals, this is where a moderator actually sees and picks individual cards to remove
+    via post_moderation_remove_card.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ModerationDriveCardsRequest.model_validate(json.loads(request.body))
+    source = _get_source_or_400(req.sourceId)
+    cards = Card.objects.filter(source=source).order_by("name", "identifier")
+    paginator = _paginate(cards, req.page)
+    return JsonResponse(
+        ModerationDriveCardsResponse(
+            hits=paginator.count,
+            pages=paginator.num_pages,
+            source=source.serialise(),
+            cards=[card.serialise() for card in paginator.page(req.page).object_list],
+        ).model_dump()
+    )
+
+
+def _delete_card_from_index_safely(card: Card) -> None:
+    """
+    Mirrors `reindex_card_safely`'s error-swallow rationale (documents.py) but for removal -
+    Postgres is authoritative for the delete; a failed Elasticsearch delete just leaves a
+    stale doc that the next full reindex (`search_index --rebuild`) cleans up, so it must
+    never block or partially-fail the moderator's actual delete action. Needs the live `Card`
+    instance (not just its pk) to resolve the document, mirroring reindex_card_safely.
+    """
+    try:
+        CardSearch().update([card], action="delete")
+    except Exception:
+        logger.exception("Failed to remove card %s from Elasticsearch after moderator deletion", card.identifier)
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_moderation_remove_card(request: HttpRequest) -> HttpResponse:
+    """
+    Permanently delete a single card (Moderation > Drives tab). Removes it from Elasticsearch
+    before the Postgres delete (the ES document lookup needs the live Card instance), then
+    deletes the row - irreversible, no soft-delete/undo, by design: this is a moderator-only
+    action for spam/bad-content cleanup, not something voters trigger.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ModerationRemoveCardRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    _delete_card_from_index_safely(card)
+    card.delete()
+    return JsonResponse(ModerationRemoveCardResponse(removed=True).model_dump())
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_moderation_remove_drive(request: HttpRequest) -> HttpResponse:
+    """
+    Permanently delete an entire drive/source and every card it contributed (Moderation >
+    Drives tab) - irreversible, same rationale as post_moderation_remove_card above. Bulk-
+    removes from Elasticsearch by `source_pk` (CardSearch indexes this - see documents.py)
+    before the Postgres delete, which cascades onto every Card row via Card.source's
+    on_delete=CASCADE - one delete_by_query instead of one ES call per card, since a drive can
+    carry thousands of cards.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ModerationRemoveDriveRequest.model_validate(json.loads(request.body))
+    source = _get_source_or_400(req.sourceId)
+    cards_removed = Card.objects.filter(source=source).count()
+    try:
+        CardSearch().search().filter("term", source_pk=str(source.pk)).delete()
+    except Exception:
+        logger.exception("Failed to bulk-remove source %s from Elasticsearch before deletion", source.pk)
+    source.delete()
+    return JsonResponse(ModerationRemoveDriveResponse(removed=True, cardsRemoved=cards_removed).model_dump())
 
 
 @csrf_exempt

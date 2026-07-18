@@ -27,11 +27,31 @@ otherwise be direct Google Drive image URLs.
   component) and falls back to the worker on a miss, for small/large tiers
   only — full-resolution still always goes through the worker, matching
   upstream (`getBucketImageURL` throws for `"full"`).
+- **Full-tier requests bypass R2 caching entirely** (only small/large are
+  cached - see `R2Service`) and go through `fetchWithRateLimit(env. IMAGE_FULL_TIER_RATE_LIMITER, ...)` to Google's `lh4` endpoint instead -
+  `simple = { limit: 30, period: 10 }` (3 req/sec), shared globally across
+  live PDF export, live bulk download, AND the local pilot/backfill's own
+  fetches (`cardpicker.image_cdn_fetch.get_worker_image_url` builds this
+  same full-tier URL - confirmed via code, every pilot candidate fetch is
+  one Worker invocation, none go direct to Google). This limiter exists to
+  protect Google's endpoint from abuse (an earlier unattended backfill
+  script hammered it directly) and stays exactly where it is regardless of
+  Cloudflare account billing tier - it's a politeness/fairness control, not
+  a cost control.
+- **Separately, the account was on Cloudflare Workers' free tier (100,000
+  invocations/day) until 2026-07-16**, when the pilot's own full-tier
+  fetches (one Worker invocation per candidate, per the point above) were
+  found to be consuming meaningful daily quota alongside live traffic -
+  upgraded to Workers Paid ($5/month, 10M requests/month included) the
+  same day, removing the daily cap. The 218k-card `content_phash` backfill
+  (docs/features/catalog-completion-plan.md's Part 2) needed this: at full
+  tier its request count alone exceeds the old 100k/day cap, independent
+  of the rate limiter's own pacing.
 
 ## Key files
 
 - `image-cdn/src/index.ts` (Worker), `image-cdn/wrangler.toml`
-- `frontend/src/common/image.ts`, `frontend/src/components/Card.tsx`
+- `frontend/src/common/image.ts`, `frontend/src/features/card/Card.tsx`
 - `frontend/src/features/pdf/pdfImage.ts`
 
 ## Status / verification

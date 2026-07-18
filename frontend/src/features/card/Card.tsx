@@ -6,7 +6,6 @@
  */
 
 import styled from "@emotion/styled";
-import { OnLoadingComplete } from "next/dist/shared/lib/get-img-props";
 import Image from "next/image";
 import React, {
   memo,
@@ -45,7 +44,16 @@ const HiddenImage = styled(Image)`
   opacity: 0;
 `;
 
-const VisibleImage = styled(Image)<{
+// next/image's <Image> forwards unrecognised props straight onto the underlying <img>, so
+// these component-only props (used only for this styled-component's own CSS interpolation)
+// need filtering at this boundary - otherwise React logs a "does not recognize the ... prop"
+// console warning for each one, on every card image rendered anywhere in the app.
+const VisibleImage = styled(Image, {
+  shouldForwardProp: (prop) =>
+    prop !== "imageIsLoading" &&
+    prop !== "showDetailedViewOnClick" &&
+    prop !== "zIndex",
+})<{
   imageIsLoading?: boolean;
   showDetailedViewOnClick?: boolean;
   zIndex?: number;
@@ -67,6 +75,49 @@ const OutlinedBSCardSubtitle = styled(BSCard.Subtitle)`
     outline-color: #ffffff;
     cursor: pointer;
   }
+`;
+
+// Replaces the old solid-black error_404*.png assets, which read as a harsh black square at
+// grid scale against the card's own #4e5d6c placeholder background - matching that background
+// here instead makes a failed fetch (a real production path - dead Drive links) look like a
+// designed empty state rather than a rendering glitch.
+const ErrorPlaceholder = styled.div`
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  background: #4e5d6c;
+  color: rgba(255, 255, 255, 0.75);
+  text-align: center;
+  padding: 0.5rem;
+
+  i {
+    font-size: 1.75rem;
+  }
+
+  span {
+    font-size: 0.8rem;
+  }
+`;
+
+// A card image fetch that's still pending after SlowLoadHintDelayMS gets a small "still
+// loading" hint alongside the spinner - an indefinite spinner with no feedback and no
+// timeout is indistinguishable from a genuinely stuck fetch.
+const SlowLoadHintDelayMS = 6_000;
+
+const SlowLoadHint = styled.div`
+  position: absolute;
+  bottom: 8px;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  text-align: center;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.85);
 `;
 
 const CardIcon = styled(Icon)`
@@ -130,7 +181,7 @@ export const useImageSrc = (
   small: boolean
 ): {
   imageSrc: string | undefined;
-  onLoadingComplete: OnLoadingComplete;
+  onLoad: React.ReactEventHandler<HTMLImageElement>;
   onError: React.ReactEventHandler<HTMLImageElement>;
   imageIsLoading: boolean;
   imageRef: Ref<HTMLImageElement>;
@@ -149,7 +200,7 @@ export const useImageSrc = (
 
   /**
    * Ensure that the small thumbnail fades in each time the selected image changes.
-   * Next.js seems to not fire `onLoadingComplete` when opening a page with a cached image.
+   * Next.js seems to not fire `onLoad` when opening a page with a cached image.
    * This implementation was retrieved from https://stackoverflow.com/a/59809184
    */
   useEffect(() => {
@@ -160,7 +211,7 @@ export const useImageSrc = (
     );
   }, [cardDocument.identifier]);
 
-  const onLoadingComplete: OnLoadingComplete = (img) => {
+  const onLoad: React.ReactEventHandler<HTMLImageElement> = () => {
     if (imageState === "loading-from-bucket") {
       setImageState("loaded-from-bucket");
     } else if (imageState === "loading-from-fallback") {
@@ -182,7 +233,7 @@ export const useImageSrc = (
   if (localFileImageSrc !== undefined) {
     return {
       imageSrc: localFileImageSrc,
-      onLoadingComplete,
+      onLoad,
       onError,
       imageIsLoading,
       imageRef,
@@ -222,7 +273,7 @@ export const useImageSrc = (
 
   return {
     imageSrc,
-    onLoadingComplete,
+    onLoad,
     onError,
     imageIsLoading,
     imageRef,
@@ -238,6 +289,11 @@ interface CardImageProps {
   /** The `SearchQuery` specified when searching for this card - used to detect whether
    * `cardDocument` was matched to a specific printing via community tags. */
   searchQuery?: SearchQuery | undefined;
+  /** Hints this specific image as the page's LCP element (next/image's `priority` prop) -
+   * defaults to false, since almost every render of this shared component is one of many
+   * cards in a grid, where eager-loading every image would be actively harmful. Only ever
+   * pass true for a genuinely above-the-fold, singular hero-style usage. */
+  priority?: boolean;
 }
 
 function CardImage({
@@ -246,6 +302,7 @@ function CardImage({
   small,
   showDetailedViewOnClick,
   searchQuery,
+  priority = false,
 }: CardImageProps) {
   const dispatch = useAppDispatch();
   const handleShowDetailedView = () => {
@@ -254,21 +311,25 @@ function CardImage({
     }
   };
 
-  const {
-    imageSrc,
-    onLoadingComplete,
-    onError,
-    imageIsLoading,
-    imageRef,
-    imageState,
-  } = useImageSrc(cardDocument, small);
-
-  // if loading from fallback fails, display a 404 error image
-  const errorImageSrc = small ? "/error_404.png" : "/error_404_med.png";
+  const { imageSrc, onLoad, onError, imageIsLoading, imageRef, imageState } =
+    useImageSrc(cardDocument, small);
 
   // a few other computed constants
   const imageAlt = cardDocument.name ?? "Unnamed Card";
   const showSpinner = imageIsLoading && !hidden;
+
+  const [showSlowLoadHint, setShowSlowLoadHint] = useState<boolean>(false);
+  useEffect(() => {
+    if (!showSpinner) {
+      setShowSlowLoadHint(false);
+      return;
+    }
+    const timer = setTimeout(
+      () => setShowSlowLoadHint(true),
+      SlowLoadHintDelayMS
+    );
+    return () => clearTimeout(timer);
+  }, [showSpinner, cardDocument.identifier]);
 
   const isFavorite = useAppSelector((state: RootState) =>
     selectIsFavoriteRender(
@@ -288,15 +349,25 @@ function CardImage({
 
   return (
     <>
-      {showSpinner && <Spinner zIndex={2} />}
+      {showSpinner && (
+        <>
+          <Spinner zIndex={2} />
+          {showSlowLoadHint && (
+            <SlowLoadHint data-testid="card-image-slow-load-hint">
+              Still loading&hellip;
+            </SlowLoadHint>
+          )}
+        </>
+      )}
       {imageSrc != null &&
         (hidden ? (
           <HiddenImage
             ref={imageRef}
             className="card-img"
-            loading="lazy"
+            loading={priority ? undefined : "lazy"}
+            priority={priority}
             src={imageSrc}
-            onLoadingComplete={onLoadingComplete}
+            onLoad={onLoad}
             onErrorCapture={onError}
             alt={imageAlt}
             fill={true}
@@ -304,14 +375,10 @@ function CardImage({
         ) : (
           <>
             {imageState === "errored" ? (
-              <VisibleImage
-                ref={imageRef}
-                className="card-img card-img-fade-in"
-                loading="lazy"
-                src={errorImageSrc}
-                alt={""}
-                fill={true}
-              />
+              <ErrorPlaceholder data-testid="card-image-error-placeholder">
+                <i className="bi bi-exclamation-triangle" aria-hidden="true" />
+                <span>Image unavailable</span>
+              </ErrorPlaceholder>
             ) : (
               <>
                 {isFavorite && small && (
@@ -335,11 +402,12 @@ function CardImage({
                 <VisibleImage
                   ref={imageRef}
                   className="card-img card-img-fade-in"
-                  loading="lazy"
+                  loading={priority ? undefined : "lazy"}
+                  priority={priority}
                   imageIsLoading={imageIsLoading}
                   showDetailedViewOnClick={showDetailedViewOnClick}
                   src={imageSrc}
-                  onLoadingComplete={onLoadingComplete}
+                  onLoad={onLoad}
                   onErrorCapture={onError}
                   onClick={handleShowDetailedView}
                   alt={imageAlt}
@@ -488,12 +556,31 @@ export function Card({
   const BSCardSubtitle: typeof BSCard.Subtitle =
     nameOnClick != null ? OutlinedBSCardSubtitle : BSCard.Subtitle;
 
+  // BSCard renders a plain, non-interactive <div> - clicking it (via cardOnClick, e.g. to
+  // select this card's image) was previously mouse-only, with no way to reach it by Tab or
+  // activate it with Enter/Space. Only made focusable/keyboard-activatable when it's actually
+  // clickable - a card with no cardOnClick (e.g. the What's New page) shouldn't pretend to be
+  // a button. The single real cardOnClick call site (CardResultSet.tsx) ignores its event
+  // argument entirely, so re-invoking it from a keydown handler is safe.
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (cardOnClick == null) {
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      cardOnClick(event as unknown as React.MouseEvent<HTMLElement>);
+    }
+  };
+
   //# endregion
 
   return (
     <BSCard
       className={`mpccard ${highlight ? "mpccard-highlight" : "mpccard-hover"}`}
       onClick={cardOnClick}
+      onKeyDown={cardOnClick != null ? handleKeyDown : undefined}
+      tabIndex={cardOnClick != null ? 0 : undefined}
+      role={cardOnClick != null ? "button" : undefined}
       style={{ contentVisibility: "auto" }}
       {...getCardDataAttributes(maybeCardDocument)}
     >

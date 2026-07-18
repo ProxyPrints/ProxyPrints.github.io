@@ -2,7 +2,7 @@ import { Remote, wrap } from "comlink";
 
 import { PDFProps } from "@/features/pdf/PDF";
 
-import type { PDFWorker } from "./pdf.worker";
+import type { PDFWorker, RenderPDFResult } from "./pdf.worker";
 
 export class PDFRenderService {
   worker: Remote<PDFWorker> | undefined;
@@ -17,7 +17,7 @@ export class PDFRenderService {
     this.worker = wrap<PDFWorker>(worker);
   }
 
-  public renderPDF(props: PDFProps): Promise<Blob> {
+  public renderPDF(props: PDFProps): Promise<RenderPDFResult> {
     if (this.worker === undefined) {
       throw new Error("PDFRenderService was not initialised!");
     }
@@ -25,7 +25,7 @@ export class PDFRenderService {
   }
 
   // TODO: awful naming. fix.
-  public renderPDFInWorker(props: PDFProps): Promise<Blob> {
+  public renderPDFInWorker(props: PDFProps): Promise<RenderPDFResult> {
     if (this.worker === undefined) {
       throw new Error("PDFRenderService was not initialised!");
     }

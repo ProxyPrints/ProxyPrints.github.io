@@ -50,13 +50,16 @@ repos:
             "django-q2~=1.8.0",
             "django-ratelimit~=4.1.0",
             "google-api-python-client~=2.86",
+            "ImageHash~=4.3.2",
             "Levenshtein~=0.27.3",
             "oauth2client~=4.1",
             "Markdown~=3.4",
+            "numpy~=2.2.6",
             "Pillow~=12.3",
             "psycopg2-binary~=2.9.6",
             "pycountry~=22.3.0",
             "pydantic~=2.10.0",
+            "pytesseract~=0.3.13",
             "tqdm~=4.65",
           ]
         pass_filenames: false

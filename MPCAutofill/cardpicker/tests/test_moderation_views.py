@@ -11,9 +11,12 @@ from django.urls import reverse
 
 from cardpicker import views
 from cardpicker.models import (
+    Card,
     CardReport,
     CardReportReason,
     CardTagVote,
+    CardTypes,
+    Source,
     TagModerationClass,
     TagVoteStatus,
     VotePolarity,
@@ -24,6 +27,7 @@ from cardpicker.tests.factories import (
     CardFactory,
     CardReportFactory,
     CardTagVoteFactory,
+    SourceFactory,
     TagFactory,
 )
 
@@ -393,3 +397,146 @@ class TestPostModerationQueue:
         assert card.tag_vote_statuses[tag.name] == TagVoteStatus.RESOLVED_REJECT
         assert card.tags == []
         assert self.fetch(client).json()["hits"] == 0
+
+
+class TestPostModerationDrives:
+    @pytest.fixture(autouse=True)
+    def autouse_django_settings(self, django_settings):
+        pass
+
+    @staticmethod
+    def fetch(client, page: int = 1):
+        return client.post(reverse(views.post_moderation_drives), {"page": page}, content_type="application/json")
+
+    def test_anonymous_is_403(self, client):
+        assert self.fetch(client).status_code == 403
+
+    def test_authenticated_non_moderator_is_403(self, client, plain_user):
+        client.force_login(plain_user)
+        assert self.fetch(client).status_code == 403
+
+    def test_moderator_sees_sources_newest_first_with_counts(self, client, moderator_user):
+        older = SourceFactory()
+        newer = SourceFactory()
+        CardFactory.create_batch(2, source=older, card_type=CardTypes.CARD)
+        CardFactory(source=older, card_type=CardTypes.CARDBACK)
+        CardFactory(source=newer, card_type=CardTypes.TOKEN)
+
+        client.force_login(moderator_user)
+        response = self.fetch(client)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["hits"] == 2
+        # newest (highest pk) first
+        assert [item["source"]["pk"] for item in body["items"]] == [newer.pk, older.pk]
+        older_item = next(item for item in body["items"] if item["source"]["pk"] == older.pk)
+        assert (older_item["qtyCards"], older_item["qtyCardbacks"], older_item["qtyTokens"]) == (2, 1, 0)
+        newer_item = next(item for item in body["items"] if item["source"]["pk"] == newer.pk)
+        assert (newer_item["qtyCards"], newer_item["qtyCardbacks"], newer_item["qtyTokens"]) == (0, 0, 1)
+
+
+class TestPostModerationRemoveCard:
+    @pytest.fixture(autouse=True)
+    def autouse_django_settings(self, django_settings):
+        pass
+
+    @staticmethod
+    def remove(client, identifier: str):
+        return client.post(
+            reverse(views.post_moderation_remove_card), {"identifier": identifier}, content_type="application/json"
+        )
+
+    def test_anonymous_is_403(self, client):
+        card = CardFactory()
+        assert self.remove(client, card.identifier).status_code == 403
+        assert Card.objects.filter(pk=card.pk).exists()
+
+    def test_authenticated_non_moderator_is_403(self, client, plain_user):
+        card = CardFactory()
+        client.force_login(plain_user)
+        assert self.remove(client, card.identifier).status_code == 403
+        assert Card.objects.filter(pk=card.pk).exists()
+
+    def test_moderator_deletes_the_card(self, client, moderator_user):
+        card = CardFactory()
+        client.force_login(moderator_user)
+        response = self.remove(client, card.identifier)
+        assert response.status_code == 200
+        assert response.json() == {"removed": True}
+        assert not Card.objects.filter(pk=card.pk).exists()
+
+    def test_unknown_card_is_a_bad_request(self, client, moderator_user):
+        client.force_login(moderator_user)
+        assert self.remove(client, "does-not-exist").status_code == 400
+
+
+class TestPostModerationRemoveDrive:
+    @pytest.fixture(autouse=True)
+    def autouse_django_settings(self, django_settings):
+        pass
+
+    @staticmethod
+    def remove(client, source_id: int):
+        return client.post(
+            reverse(views.post_moderation_remove_drive), {"sourceId": source_id}, content_type="application/json"
+        )
+
+    def test_anonymous_is_403(self, client):
+        source = SourceFactory()
+        assert self.remove(client, source.pk).status_code == 403
+        assert Source.objects.filter(pk=source.pk).exists()
+
+    def test_moderator_deletes_the_drive_and_only_its_own_cards(self, client, moderator_user):
+        source = SourceFactory()
+        other_source = SourceFactory()
+        cards = CardFactory.create_batch(3, source=source)
+        untouched = CardFactory(source=other_source)
+
+        client.force_login(moderator_user)
+        response = self.remove(client, source.pk)
+        assert response.status_code == 200
+        assert response.json() == {"removed": True, "cardsRemoved": 3}
+        assert not Source.objects.filter(pk=source.pk).exists()
+        for card in cards:
+            assert not Card.objects.filter(pk=card.pk).exists()
+        assert Card.objects.filter(pk=untouched.pk).exists()
+
+    def test_unknown_source_is_a_bad_request(self, client, moderator_user):
+        client.force_login(moderator_user)
+        assert self.remove(client, 999999).status_code == 400
+
+
+class TestPostModerationDriveCards:
+    @pytest.fixture(autouse=True)
+    def autouse_django_settings(self, django_settings):
+        pass
+
+    @staticmethod
+    def fetch(client, source_id: int, page: int = 1):
+        return client.post(
+            reverse(views.post_moderation_drive_cards),
+            {"sourceId": source_id, "page": page},
+            content_type="application/json",
+        )
+
+    def test_anonymous_is_403(self, client):
+        source = SourceFactory()
+        assert self.fetch(client, source.pk).status_code == 403
+
+    def test_moderator_sees_only_this_drives_cards(self, client, moderator_user):
+        source = SourceFactory()
+        other_source = SourceFactory()
+        cards = CardFactory.create_batch(2, source=source)
+        CardFactory(source=other_source)
+
+        client.force_login(moderator_user)
+        response = self.fetch(client, source.pk)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["hits"] == 2
+        assert body["source"]["pk"] == source.pk
+        assert {item["identifier"] for item in body["cards"]} == {card.identifier for card in cards}
+
+    def test_unknown_source_is_a_bad_request(self, client, moderator_user):
+        client.force_login(moderator_user)
+        assert self.fetch(client, 999999).status_code == 400

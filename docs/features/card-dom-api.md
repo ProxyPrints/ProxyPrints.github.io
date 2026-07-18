@@ -24,8 +24,8 @@ confirmed (prev/next arrows or grid selector), with the same fields
 
 ### Printing-candidate extension
 
-The printing-tag candidate grids (`PrintingTagQueue.tsx`'s standalone
-queue and `PrintingTagPicker.tsx`'s embedded picker in
+The printing-tag candidate grids (`QuestionFeed.tsx`'s unified vote queue
+and `PrintingTagPicker.tsx`'s embedded picker in
 `CardDetailedViewModal.tsx`) carry a sibling helper,
 `getPrintingCandidateDataAttributes(cardName, candidate)` — not a reuse of
 `getCardDataAttributes`, since `PrintingCandidate` (`schema_types.ts`)
@@ -40,15 +40,18 @@ The "No match" button intentionally carries none of these attributes.
 ## Key files
 
 - `frontend/src/common/cardDom.ts`
-- `frontend/src/components/Card.tsx`, `CardSlot.tsx`,
-  `CardDetailedViewModal.tsx`
-- `frontend/src/features/printingTags/PrintingTagQueue.tsx`,
-  `PrintingTagPicker.tsx`
+- `frontend/src/features/card/Card.tsx`, `CardSlot.tsx`
+- `frontend/src/features/cardDetailedView/CardDetailedViewModal.tsx`
+- `frontend/src/features/questionFeed/QuestionFeed.tsx`,
+  `frontend/src/features/printingTags/PrintingTagPicker.tsx`,
+  `cardPanel.tsx`
 - `frontend/docs/dom-api.md` (stability: best-effort, semver-ish,
   additive-only)
 
 ## Status
 
 Documented in `frontend/docs/dom-api.md`. Test coverage in
-`CardSlot.spec.ts`, `PrintingTagQueue.spec.ts`, `PrintingTagPicker.spec.ts`
+`CardSlot.spec.ts`, `PrintingTagPicker.spec.ts`, and the
+`QuestionFeed*.spec.ts` suite (unified vote queue, successor to the old
+standalone `PrintingTagQueue.tsx` this API originally shipped against)
 — real Playwright runs against the mocked backend, not just typecheck.

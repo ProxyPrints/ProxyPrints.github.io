@@ -117,6 +117,24 @@ describe("worker image routing", () => {
     }
   );
 
+  it("retries the full-tier fetch when the image rate limiter denies the first attempt", async () => {
+    const fetchMock = vi.fn(async () => new Response("full-image"));
+    vi.stubGlobal("fetch", fetchMock);
+    const limit = vi.fn().mockResolvedValueOnce({ success: false }).mockResolvedValueOnce({ success: true });
+    vi.spyOn(global, "setTimeout").mockImplementation(((cb: () => void) => {
+      cb();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+
+    const request = new IncomingRequest("http://example.com/images/google_drive/full/image-id.jpg");
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(request, { ...env, IMAGE_FULL_TIER_RATE_LIMITER: { limit } as unknown as RateLimit }, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(await response.text()).toBe("full-image");
+    expect(limit).toHaveBeenCalledTimes(2);
+  });
+
   it("throws for invalid dpi or JPG quality query parameters", async () => {
     await expect(fetchWorker("http://example.com/images/google_drive/full/image-id.jpg?dpi=0")).rejects.toThrow("invalid DPI 0");
     await expect(fetchWorker("http://example.com/images/google_drive/full/image-id.jpg?jpgQuality=101")).rejects.toThrow(

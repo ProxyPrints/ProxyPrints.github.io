@@ -15,8 +15,10 @@ from .models import (
     CardArtistVote,
     CardPrintingTag,
     CardReport,
+    CardScanLog,
     CardTagVote,
     DFCPair,
+    PilotRunLedger,
     Project,
     ProjectMember,
     Source,
@@ -216,6 +218,32 @@ class AdminTagAliasSuggestion(admin.ModelAdmin[TagAliasSuggestion]):
     search_fields = ("raw_text",)
     ordering = ("-occurrence_count",)
     actions = ["accept_suggestions", "reject_suggestions"]
+
+
+@admin.register(PilotRunLedger)
+class AdminPilotRunLedger(admin.ModelAdmin[PilotRunLedger]):
+    list_display = (
+        "run_id",
+        "command",
+        "status",
+        "dry_run",
+        "git_sha",
+        "started_at",
+        "finished_at",
+        "votes_written",
+        "purged_at",
+    )
+    list_filter = ("command", "status", "dry_run")
+    search_fields = ("run_id", "git_sha")
+    ordering = ("-started_at",)
+
+
+@admin.register(CardScanLog)
+class AdminCardScanLog(admin.ModelAdmin[CardScanLog]):
+    list_display = ("card", "anonymous_id", "run_id", "skip_reason", "scanned_at")
+    list_filter = ("anonymous_id", "skip_reason")
+    search_fields = ("run_id",)
+    ordering = ("-scanned_at",)
 
     @admin.action(description="Accept selected suggestions (adds raw text as a tag alias)")
     def accept_suggestions(self, request: HttpRequest, queryset: QuerySet[TagAliasSuggestion]) -> None:

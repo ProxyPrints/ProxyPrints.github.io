@@ -132,6 +132,7 @@ class TestPostPrintingCandidates:
         assert result["fullArt"] is True
         assert result["isBorderless"] is True
         assert result["frame"] == "1997"
+        assert result["borderColor"] == "borderless"
         assert result["artist"] == printing.artist.name
 
     def test_candidate_with_non_borderless_border_color(self, client, django_settings):
@@ -147,6 +148,24 @@ class TestPostPrintingCandidates:
 
         [result] = response.json()["results"]
         assert result["isBorderless"] is False
+        assert result["borderColor"] == "black"
+
+    def test_candidate_frame_effect_booleans(self, client, django_settings):
+        card = CardFactory(name="Brainstorm")
+        printing = CanonicalCardFactory(name="Brainstorm")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, frame_effects=["showcase", "etched", "legendary"])
+
+        response = client.post(
+            reverse(views.post_printing_candidates),
+            {"identifier": card.identifier},
+            content_type="application/json",
+        )
+
+        [result] = response.json()["results"]
+        assert result["isShowcase"] is True
+        assert result["isEtched"] is True
+        # "legendary" is deliberately not a chip - see cardpicker.attribute_tags
+        assert result["isExtendedArt"] is False
 
     def test_candidate_without_printing_metadata_uses_defaults(self, client, django_settings):
         card = CardFactory(name="Brainstorm")
@@ -162,6 +181,10 @@ class TestPostPrintingCandidates:
         assert result["fullArt"] is False
         assert result["isBorderless"] is False
         assert result["frame"] == ""
+        assert result["borderColor"] == ""
+        assert result["isShowcase"] is False
+        assert result["isExtendedArt"] is False
+        assert result["isEtched"] is False
         assert result["releasedAt"] is None
 
 
@@ -362,6 +385,44 @@ class TestPostSubmitPrintingTag:
 
         assert first.status_code == 200
         assert second.status_code == 200
+
+    def test_vote_surface_is_persisted_verbatim_when_sent(self, client, django_settings):
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+
+        client.post(
+            reverse(views.post_submit_printing_tag),
+            {
+                "identifier": card.identifier,
+                "printingIdentifier": str(printing.identifier),
+                "isNoMatch": False,
+                "anonymousId": "anon-1",
+                "voteSurface": "deckbuilder-confirm",
+            },
+            content_type="application/json",
+        )
+
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id="anon-1")
+        assert vote.vote_surface == "deckbuilder-confirm"
+
+    def test_vote_surface_is_null_when_omitted_old_client_unaffected(self, client, django_settings):
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+
+        response = client.post(
+            reverse(views.post_submit_printing_tag),
+            {
+                "identifier": card.identifier,
+                "printingIdentifier": str(printing.identifier),
+                "isNoMatch": False,
+                "anonymousId": "anon-1",
+            },
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id="anon-1")
+        assert vote.vote_surface is None
 
 
 class TestGetPrintingTagQueue:

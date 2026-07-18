@@ -59,8 +59,9 @@ logins at all.
   `api.proxyprints.ca`, so production needs `SESSION_COOKIE_SAMESITE=None`,
   `SESSION_COOKIE_SECURE=True`, `CORS_ALLOW_CREDENTIALS=True` (defaults suit
   same-site localhost dev). Only fetches that opt into `credentials:'include'`
-  are affected — whoami, reportCard, moderationQueue, and the moderation
-  queue's approve/reject votes; every anonymous surface is byte-identical.
+  are affected — whoami, reportCard, and every moderationQueue/moderationDrives\*/
+  moderationRemoveCard/moderationRemoveDrive call (plus the moderation
+  queue's approve/reject votes); every anonymous surface is byte-identical.
 
 ## CSRF: why csrf_exempt stays, and what replaces it
 
@@ -76,7 +77,8 @@ browsers unconditionally attach an `Origin` header to cross-origin POSTs and
 a page cannot forge it, so POSTs whose Origin is present but not in
 `CORS_ALLOWED_ORIGINS` (∪ the backend's own origin) are rejected with 403.
 Applied to every session-consuming POST (the three vote submit views,
-`reportCard`, `moderationQueue`). Non-browser clients send no Origin at all
+`reportCard`, `moderationQueue`, `moderationDrives`, `moderationDriveCards`,
+`moderationRemoveCard`, `moderationRemoveDrive`). Non-browser clients send no Origin at all
 and keep exactly today's trust level; GET endpoints (whoami) change no state
 and need nothing.
 
@@ -164,11 +166,27 @@ points cannot drift), in one transaction. Unseeded tag = report still lands,
 vote skipped. Broken image / Other are report-row-only. Rate limit:
 `CARD_REPORT_RATE` (default `10/d`) per anonymous_id, polite 429 in the UI.
 
-## Moderation queue
+## Moderation tab
 
-The vote-queue page grows a **Moderation** tab, rendered only when whoami says
-moderator (presentation; `POST 2/moderationQueue/` 403s non-moderators via
-`require_moderator`). Serves `pending_approval` pairs most-reported first
+`whatsthat.tsx` (`ModerationTab.tsx`) grows a **Moderation** tab alongside the
+ordinary Question Feed tab, rendered only when whoami says moderator
+(presentation; every endpoint below 403s non-moderators server-side via
+`require_moderator`). It has two independent sub-tabs — **Reports** and
+**Drives** — switched with a plain `Tab.Container`, the same idiom the
+pre-redesign printing/artist/tag tab switcher used.
+
+Report review used to be injected into the single-question feed itself as a
+moderator-only "tier 3" (between contested and fresh-unresolved), which meant
+any pending report displaced a moderator's ordinary tagging work for as long
+as it stayed pending. Reverted — `cardpicker/question_feed.py`'s
+`get_next_question_feed_item` never serves a `pending_approval` pair any
+more, for any role; see that module's docstring for the full history. Report
+review now lives only in the Moderation tab, so the two are always
+switchable, never one hijacking the other.
+
+### Reports (`ReportsPanel.tsx`)
+
+`POST 2/moderationQueue/` serves `pending_approval` pairs most-reported first
 (count of matching-reason CardReports; oldest first report breaks ties;
 organically-pending pairs last), each item: card image + tag + report count +
 up to three newest free-text excerpts + **Approve / Reject / Skip**. Approve
@@ -176,6 +194,31 @@ and Reject are ordinary `2/submitTagVote/` calls (polarity +1/−1) sent with
 credentials, so the vote records the moderator's user and the pair resolves —
 or not — through the normal pass. Pending pairs are excluded from the public
 tag queue.
+
+### Drives (`DrivesPanel.tsx`)
+
+A browse-and-manage view over `Source` rows, for spotting and removing a bad
+or spammy drive (or an individual card within an otherwise-fine one) —
+unrelated to report review; nothing here requires a `CardReport` to exist.
+
+- `POST 2/moderationDrives/` lists every Source, newest-first (ordered by
+  `-pk` — `Source` has no creation timestamp of its own; one existed briefly
+  in 2021 and was removed in favour of per-`Card` dates, see migration
+  `0004_auto_20210214_1126` — pk insertion order is a reliable enough proxy
+  for "recently added" without a new migration), each with its
+  card/cardback/token counts.
+- `POST 2/moderationDriveCards/` drills into one drive's individual cards
+  (paginated) so a specific card can be targeted.
+- `POST 2/moderationRemoveCard/` and `POST 2/moderationRemoveDrive/`
+  permanently delete a card or an entire drive (cascading onto every card it
+  contributed via `Card.source`'s `on_delete=CASCADE`) — irreversible, no
+  soft-delete, confirmed client-side via `window.confirm` since there's no
+  undo. Both remove from Elasticsearch first (`ELASTICSEARCH_DSL_AUTOSYNC = False` in settings.py means deletes are never automatic — a card-delete
+  reindexes via `CardSearch().update([card], action="delete")`, a drive-
+  delete bulk-removes by the indexed `source_pk` field in one
+  `delete_by_query` rather than one ES call per card) before the Postgres
+  delete; Postgres stays authoritative even if the ES side fails (same
+  swallow-and-log rationale as `reindex_card_safely` in documents.py).
 
 ## Consequence: NSFW hidden from search by default
 
@@ -187,12 +230,28 @@ for low-res / incorrect-info yet).
 
 ## Server deployment checklist (one-time, in order)
 
+0. **SSL cert must exist before nginx is first started.** `nginx.conf`
+   hardcodes `ssl_certificate /etc/nginx/certs/origin.pem` /
+   `origin.key` for the (single) `listen 443` server block with no HTTP-only
+   fallback — if those files aren't present at `docker/nginx/certs/` when
+   the `nginx` container starts, nginx fails to load its config and the
+   **entire site** goes down, not just OAuth. On a brand-new server,
+   provision the Cloudflare origin cert and drop it in
+   `docker/nginx/certs/` (gitignored, never committed — see "Never commit")
+   before the first `docker compose up`/rebuild of `nginx`. Steps 1–7 below
+   assume this is already done.
 1. Discord developer portal: create an application, add redirect URI
    `https://api.proxyprints.ca/accounts/discord/login/callback/`.
-2. Env (`docker/.env` / django env): `DISCORD_CLIENT_ID`,
-   `DISCORD_CLIENT_SECRET`, `SESSION_COOKIE_SAMESITE=None`,
-   `SESSION_COOKIE_SECURE=True`, `CORS_ALLOW_CREDENTIALS=True`. Optional:
-   `VOTE_PRIVILEGED_WEIGHT`, `CARD_REPORT_RATE`, `MODERATORS_GROUP_NAME`.
+2. Env (`docker/.env`): `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+   `SESSION_COOKIE_SAMESITE=None`, `SESSION_COOKIE_SECURE=True`,
+   `CORS_ALLOW_CREDENTIALS=True`. Optional: `VOTE_PRIVILEGED_WEIGHT`,
+   `CARD_REPORT_RATE`, `MODERATORS_GROUP_NAME`. **`docker/.env` alone does
+   not inject these into the containers** — Compose only passes through
+   vars explicitly listed in a service's `environment:` block. All five are
+   already wired into both `django` and `worker` in
+   `docker-compose.prod.yml` as of 2026-07-15 (found missing during the
+   first live setup — a fresh checkout has this for free now, but a new
+   OAuth/session var still needs a matching line added there).
 3. `pip install -r requirements.txt` (adds `django-allauth[socialaccount]`),
    rebuild/restart django + worker containers (and nginx — see the
    stale-upstream gotcha in [[../infrastructure.md]]).
@@ -210,7 +269,41 @@ for low-res / incorrect-info yet).
    page → whoami shows `moderator: true` → the Moderation tab appears → cast
    one Approve on a test pending pair and verify the card's tags + ES search
    update; reverse the test votes afterwards (the cast-verify-reverse
-   discipline from [[printing-tags.md]]).
+   discipline from [[printing-tags.md]]). If this 404s, or Discord rejects
+   the redirect, see "nginx routing and proxy headers for `/accounts/`"
+   below before re-checking Discord portal config — both live bugs on the
+   first production attempt were server-side plumbing, not Discord config.
+
+### nginx routing and proxy headers for `/accounts/`
+
+Two more gaps found live during the first production OAuth attempt
+(2026-07-15), both now baked into the checked-in `docker/nginx/nginx.conf`
+and `MPCAutofill/MPCAutofill/settings.py` so a fresh checkout gets them automatically —
+documented here so the reasoning survives if either file is ever touched:
+
+- **Missing `/accounts/` proxy route.** `nginx.conf` only had `location`
+  blocks for `/2/`, `/3/`, `/admin/`, `/static/`; every allauth URL
+  (`/accounts/discord/login/`, the OAuth callback, logout) fell through to
+  the static-file `location /` block and 404'd even with
+  `DISCORD_AUTH_ENABLED=True` server-side. Fixed by an explicit
+  `location /accounts/ { proxy_pass http://django-api; }` block.
+- **`redirect_uri` built from the wrong host/scheme.** nginx's
+  `proxy_pass` defaults the `Host` header it forwards to `$proxy_host` (the
+  upstream container's own name, `django-api`) rather than the original
+  client's `Host`, and Django never learns the original request was HTTPS
+  without being told. Together this made django-allauth construct
+  `http://django-api/accounts/discord/login/callback/` as the OAuth
+  `redirect_uri` — an internal-only, plain-HTTP URL Discord's registered
+  callback can never match, so Discord silently rejected the login. Fixed
+  with `proxy_set_header Host $host;` and
+  `proxy_set_header X-Forwarded-Proto $scheme;` at the nginx server-block
+  level (inherited by every `location` below it), paired with
+  `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")` in
+  `settings.py` — without the Django-side setting, `request.is_secure()`
+  ignores the forwarded header and still reads `False`. Verified by
+  manually walking the flow with `curl` (GET the login page for a CSRF
+  token, POST it, inspect the 302 `Location` header) rather than a full
+  browser round-trip.
 
 ## Key files
 
@@ -218,26 +311,35 @@ for low-res / incorrect-info yet).
   `cardpicker/tag_consensus.py`, `cardpicker/moderation.py`,
   `cardpicker/security.py`, `cardpicker/sensitive_tags.py` (+ management
   command), `cardpicker/models.py` (user FK, `TagModerationClass`,
-  `CardReport`, `TagVoteStatus.PENDING_APPROVAL`), `cardpicker/views.py`
-  (whoami / reportCard / moderationQueue), `accounts/adapter.py`,
-  `MPCAutofill/settings.py`.
+  `CardReport`, `TagVoteStatus.PENDING_APPROVAL`), `cardpicker/question_feed.py`
+  (report review deliberately absent - see "Moderation tab" above),
+  `cardpicker/views.py` (whoami / reportCard / moderationQueue /
+  moderationDrives / moderationDriveCards / moderationRemoveCard /
+  moderationRemoveDrive), `accounts/adapter.py`, `MPCAutofill/MPCAutofill/settings.py`.
 - Frontend: `features/reporting/ReportCardPanel.tsx`,
-  `features/moderation/AuthWidget.tsx` + `ModerationQueue.tsx`,
-  `features/filters/MatureContentFilter.tsx`, `pages/printingQueue.tsx`,
-  `store/api.ts` (whoami query + credentialed fetches).
+  `features/moderation/AuthWidget.tsx` (Discord-branded login button) +
+  `ModerationTab.tsx` (Reports/Drives sub-tab switcher) + `ReportsPanel.tsx`
+  - `DrivesPanel.tsx`, `features/filters/MatureContentFilter.tsx`,
+    `pages/whatsthat.tsx` (Question Feed/Moderation tab switcher, moderator-
+    only), `store/api.ts` (whoami query + credentialed fetches).
 - Tests: `cardpicker/tests/test_moderation_gate.py`,
-  `test_moderation_views.py`, `test_sensitive_tags.py`;
+  `test_moderation_views.py`, `test_sensitive_tags.py`, `test_question_feed.py`
+  (asserts pending-approval pairs never surface in the ordinary feed);
   `frontend/src/features/reporting/ReportCardPanel.test.tsx`;
-  `frontend/tests/{ReportCard,ModerationQueue,MatureContentToggle}.spec.ts`.
+  `frontend/tests/{ReportCard,ModerationQueue,ModerationTab,MatureContentToggle}.spec.ts`.
 
 ## Known gaps / follow-ups
 
-- Live OAuth round-trip is untested until the server checklist runs (this
-  branch was built in a cloud session against mocks by design).
 - Discord guild-role sync for a federation-wide moderator roster (see "Who is
   a moderator").
 - Federation export/import of moderation verdicts is v1.1
   ([[../federation-v1.md]]) — explicitly out of scope here.
 - No consequences yet for resolved `low-res` / `incorrect-info`.
 - The rate limiter shares the existing single-gunicorn-worker in-process-cache
-  caveat ([[printing-tags.md]]).
+  caveat (documented as a code comment on `post_submit_printing_tag`,
+  `cardpicker/views.py:860-863` — not currently written up in any doc).
+
+**Verified, not a gap**: live Discord OAuth working end-to-end in production
+2026-07-15 (server-side plumbing via `curl` simulation, then a real
+moderator's browser round-trip) — see "nginx routing and proxy headers for
+`/accounts/`" above.

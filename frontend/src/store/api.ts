@@ -36,7 +36,11 @@ import {
   Kind as VoteQueueKind,
   Language,
   LanguagesResponse,
+  ModerationDriveCardsResponse,
+  ModerationDrivesResponse,
   ModerationQueueResponse,
+  ModerationRemoveCardResponse,
+  ModerationRemoveDriveResponse,
   NewCardsFirstPage,
   NewCardsFirstPagesResponse,
   NewCardsPageResponse,
@@ -47,6 +51,7 @@ import {
   PrintingCandidatesResponse,
   PrintingConsensusResponse,
   PrintingTagQueueResponse,
+  QuestionFeedResponse,
   Reason as ReportReason,
   ReportCardResponse,
   SampleCardsResponse,
@@ -411,7 +416,11 @@ export async function APISubmitPrintingTag(
   identifier: string,
   anonymousId: string,
   printingIdentifier?: string,
-  isNoMatch = false
+  isNoMatch = false,
+  // Which UI surface cast this vote (e.g. "deckbuilder" / "question-feed") - optional and
+  // additive (see MPCAutofill/cardpicker/models.py's AbstractWeightedVote.vote_surface),
+  // omitted entirely for surfaces that haven't been wired yet rather than sending a guess.
+  voteSurface?: string
 ): Promise<PrintingConsensusResponse> {
   const rawResponse = await fetch(
     formatURL(backendURL, "/2/submitPrintingTag/"),
@@ -422,6 +431,7 @@ export async function APISubmitPrintingTag(
         anonymousId,
         printingIdentifier,
         isNoMatch,
+        voteSurface,
       }),
       credentials: "same-origin",
       headers: getCSRFHeader(),
@@ -431,7 +441,12 @@ export async function APISubmitPrintingTag(
     if (rawResponse.status === 200 && content.voteTally != null) {
       return content as PrintingConsensusResponse;
     }
-    throw { name: content.name, message: content.message };
+    // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
   });
 }
 
@@ -483,13 +498,21 @@ export async function APISubmitArtistVote(
   identifier: string,
   anonymousId: string,
   artistName?: string,
-  isUnknown = false
+  isUnknown = false,
+  // See APISubmitPrintingTag's identical param for the full rationale.
+  voteSurface?: string
 ): Promise<ArtistConsensusResponse> {
   const rawResponse = await fetch(
     formatURL(backendURL, "/2/submitArtistVote/"),
     {
       method: "POST",
-      body: JSON.stringify({ identifier, anonymousId, artistName, isUnknown }),
+      body: JSON.stringify({
+        identifier,
+        anonymousId,
+        artistName,
+        isUnknown,
+        voteSurface,
+      }),
       credentials: "same-origin",
       headers: getCSRFHeader(),
     }
@@ -498,7 +521,12 @@ export async function APISubmitArtistVote(
     if (rawResponse.status === 200 && content.voteTally != null) {
       return content as ArtistConsensusResponse;
     }
-    throw { name: content.name, message: content.message };
+    // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
   });
 }
 
@@ -530,11 +558,19 @@ export async function APISubmitTagVote(
   // (making it privileged at resolution time). Deliberately opt-in per call: third-party
   // backends without CORS_ALLOW_CREDENTIALS reject credentialed requests outright, so the
   // default must stay "same-origin" for every pre-existing anonymous voting surface.
-  credentials: RequestCredentials = "same-origin"
+  credentials: RequestCredentials = "same-origin",
+  // See APISubmitPrintingTag's identical param for the full rationale.
+  voteSurface?: string
 ): Promise<TagConsensusResponse["tags"][number]> {
   const rawResponse = await fetch(formatURL(backendURL, "/2/submitTagVote/"), {
     method: "POST",
-    body: JSON.stringify({ identifier, anonymousId, tagName, polarity }),
+    body: JSON.stringify({
+      identifier,
+      anonymousId,
+      tagName,
+      polarity,
+      voteSurface,
+    }),
     credentials,
     headers: getCSRFHeader(),
   });
@@ -542,7 +578,12 @@ export async function APISubmitTagVote(
     if (rawResponse.status === 200 && content.tally != null) {
       return content as TagConsensusResponse["tags"][number];
     }
-    throw { name: content.name, message: content.message };
+    // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
   });
 }
 
@@ -597,6 +638,107 @@ export async function APIGetModerationQueue(
   });
 }
 
+export async function APIGetModerationDrives(
+  backendURL: string,
+  page: number
+): Promise<ModerationDrivesResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/moderationDrives/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ page }),
+      credentials: "include", // the backend 403s without a moderator session
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.items != null) {
+      return content as ModerationDrivesResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+export async function APIGetModerationDriveCards(
+  backendURL: string,
+  sourceId: number,
+  page: number
+): Promise<ModerationDriveCardsResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/moderationDriveCards/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ sourceId, page }),
+      credentials: "include", // the backend 403s without a moderator session
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.cards != null) {
+      return content as ModerationDriveCardsResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+export async function APIRemoveModerationCard(
+  backendURL: string,
+  identifier: string
+): Promise<ModerationRemoveCardResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/moderationRemoveCard/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ identifier }),
+      credentials: "include", // the backend 403s without a moderator session
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.removed != null) {
+      return content as ModerationRemoveCardResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+export async function APIRemoveModerationDrive(
+  backendURL: string,
+  sourceId: number
+): Promise<ModerationRemoveDriveResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/moderationRemoveDrive/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ sourceId }),
+      credentials: "include", // the backend 403s without a moderator session
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.removed != null) {
+      return content as ModerationRemoveDriveResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
 export async function APIGetPrintingTagQueue(
   backendURL: string,
   page: number
@@ -612,6 +754,30 @@ export async function APIGetPrintingTagQueue(
   return rawResponse.json().then((content) => {
     if (rawResponse.status === 200 && content.cards != null) {
       return content as PrintingTagQueueResponse;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+export async function APIGetQuestionFeed(
+  backendURL: string,
+  anonymousId: string,
+  credentials: RequestCredentials = "same-origin"
+): Promise<QuestionFeedResponse> {
+  const rawResponse = await fetch(
+    formatURL(
+      backendURL,
+      `/2/questionFeed/?anonymousId=${encodeURIComponent(anonymousId)}`
+    ),
+    {
+      method: "GET",
+      credentials,
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.remainingEstimate != null) {
+      return content as QuestionFeedResponse;
     }
     throw { name: content.name, message: content.message };
   });

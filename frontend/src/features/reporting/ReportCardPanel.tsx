@@ -15,6 +15,7 @@ import Col from "react-bootstrap/Col";
 import Form from "react-bootstrap/Form";
 import Row from "react-bootstrap/Row";
 
+import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { Reason } from "@/common/schema_types";
 import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
@@ -62,23 +63,21 @@ export function ReportCardPanel({ cardDocument }: ReportCardPanelProps) {
         text
       );
       setSubmitted(true);
-    } catch (error: any) {
+    } catch (error) {
       dispatch(
         setNotification([
           Math.random().toString(),
-          error?.status === 429
+          isRateLimited(error)
             ? {
                 name: "Report limit reached",
                 message:
                   "You've sent quite a few reports today - please try again tomorrow.",
                 level: "warning",
               }
-            : {
-                name: error?.name ?? "Report failed",
-                message:
-                  error?.message ?? "Something went wrong - please try again.",
-                level: "error",
-              },
+            : errorToNotification(error, {
+                name: "Report failed",
+                message: "Something went wrong - please try again.",
+              }),
         ])
       );
     } finally {

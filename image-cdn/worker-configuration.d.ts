@@ -4,6 +4,7 @@
 interface __BaseEnv_Env {
 	thumbnails: R2Bucket;
 	GOOGLE_DRIVE_RATE_LIMITER: RateLimit;
+	IMAGE_FULL_TIER_RATE_LIMITER: RateLimit;
 	GOOGLE_CLIENT_ID: "";
 	GOOGLE_CLIENT_SECRET: string;
 	GOOGLE_REFRESH_TOKEN: string;

@@ -5,11 +5,12 @@
   "properties": {
     "tagName": { "type": "string" },
     "resolvedPolarity": { "type": ["integer", "null"] },
+    "netPolarity": { "type": "number" },
     "tally": {
       "type": "array",
       "items": { "$ref": "./TagVoteTallyEntry.json" }
     }
   },
-  "required": ["tagName", "tally"],
+  "required": ["tagName", "tally", "netPolarity"],
   "additionalProperties": false
 }

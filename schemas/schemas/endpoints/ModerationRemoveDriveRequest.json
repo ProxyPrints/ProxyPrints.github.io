@@ -1,0 +1,10 @@
+{
+  "title": "Moderation Remove Drive Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "sourceId": { "type": "integer" }
+  },
+  "required": ["sourceId"],
+  "additionalProperties": false
+}

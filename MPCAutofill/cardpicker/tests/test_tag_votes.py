@@ -8,6 +8,7 @@ from cardpicker.models import CardTagVote, TagVoteStatus, VotePolarity, VoteSour
 from cardpicker.tag_consensus import (
     get_contested_tag_pairs,
     get_resolved_tag_overlay,
+    get_tag_net_polarity,
     get_tag_review_queue_pairs,
     get_tag_vote_tally,
     resolve_and_persist_tag_votes,
@@ -332,6 +333,40 @@ class TestPostTagConsensus:
         assert all(entry["resolvedPolarity"] is None for entry in body["tags"])
 
 
+class TestGetTagNetPolarity:
+    def test_no_votes_is_zero(self, db):
+        card = CardFactory()
+        tag = TagFactory()
+        assert get_tag_net_polarity(card, tag) == 0.0
+
+    def test_unanimous_positive_is_one(self, db):
+        card = CardFactory()
+        tag = TagFactory()
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        assert get_tag_net_polarity(card, tag) == 1.0
+
+    def test_unanimous_negative_is_negative_one(self, db):
+        card = CardFactory()
+        tag = TagFactory()
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, source=VoteSource.USER)
+        assert get_tag_net_polarity(card, tag) == -1.0
+
+    def test_even_split_by_weight_is_zero(self, db):
+        card = CardFactory()
+        tag = TagFactory()
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, source=VoteSource.USER)
+        assert get_tag_net_polarity(card, tag) == 0.0
+
+    def test_votes_on_a_different_tag_are_not_counted(self, db):
+        card = CardFactory()
+        tag_a = TagFactory()
+        tag_b = TagFactory()
+        CardTagVoteFactory(card=card, tag=tag_a, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        assert get_tag_net_polarity(card, tag_b) == 0.0
+
+
 class TestPostSubmitTagVote:
     def test_unknown_card_identifier_is_a_bad_request(self, client, django_settings):
         response = client.post(
@@ -411,6 +446,58 @@ class TestPostSubmitTagVote:
 
         assert CardTagVote.objects.filter(card=card, anonymous_id="anon-1").count() == 2
 
+    def test_retraction_deletes_the_vote_and_unresolves_consensus(self, client, django_settings):
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="Borderless")
+        client.post(
+            reverse(views.post_submit_tag_vote),
+            {"identifier": card.identifier, "tagName": tag.name, "polarity": 1, "anonymousId": "anon-1"},
+            content_type="application/json",
+        )
+        assert CardTagVote.objects.filter(card=card, tag=tag, anonymous_id="anon-1").count() == 1
+
+        response = client.post(
+            reverse(views.post_submit_tag_vote),
+            {"identifier": card.identifier, "tagName": tag.name, "polarity": 0, "anonymousId": "anon-1"},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        assert CardTagVote.objects.filter(card=card, tag=tag, anonymous_id="anon-1").count() == 0
+        assert response.json()["resolvedPolarity"] is None
+        card.refresh_from_db()
+        assert card.tags == []
+
+    def test_retracting_a_vote_that_was_never_cast_is_a_no_op(self, client, django_settings):
+        card = CardFactory()
+        tag = TagFactory()
+        response = client.post(
+            reverse(views.post_submit_tag_vote),
+            {"identifier": card.identifier, "tagName": tag.name, "polarity": 0, "anonymousId": "anon-1"},
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+        assert CardTagVote.objects.filter(card=card, tag=tag).count() == 0
+
+    def test_retraction_only_removes_this_anonymous_ids_own_vote(self, client, django_settings):
+        card = CardFactory()
+        tag = TagFactory()
+        CardTagVoteFactory(card=card, tag=tag, anonymous_id="anon-other", polarity=1)
+        client.post(
+            reverse(views.post_submit_tag_vote),
+            {"identifier": card.identifier, "tagName": tag.name, "polarity": 1, "anonymousId": "anon-1"},
+            content_type="application/json",
+        )
+
+        client.post(
+            reverse(views.post_submit_tag_vote),
+            {"identifier": card.identifier, "tagName": tag.name, "polarity": 0, "anonymousId": "anon-1"},
+            content_type="application/json",
+        )
+
+        assert CardTagVote.objects.filter(card=card, tag=tag, anonymous_id="anon-1").count() == 0
+        assert CardTagVote.objects.filter(card=card, tag=tag, anonymous_id="anon-other").count() == 1
+
     def test_rate_limited_after_exceeding_the_configured_rate(self, client, django_settings, settings):
         settings.PRINTING_TAG_SUBMISSION_RATE = "1/m"
         card = CardFactory()
@@ -427,3 +514,36 @@ class TestPostSubmitTagVote:
 
         assert first.status_code == 200
         assert second.status_code == 429
+
+    def test_vote_surface_is_persisted_verbatim_when_sent(self, client, django_settings):
+        card = CardFactory()
+        tag = TagFactory()
+
+        client.post(
+            reverse(views.post_submit_tag_vote),
+            {
+                "identifier": card.identifier,
+                "tagName": tag.name,
+                "polarity": 1,
+                "anonymousId": "anon-1",
+                "voteSurface": "question-feed",
+            },
+            content_type="application/json",
+        )
+
+        vote = CardTagVote.objects.get(card=card, tag=tag, anonymous_id="anon-1")
+        assert vote.vote_surface == "question-feed"
+
+    def test_vote_surface_is_null_when_omitted_old_client_unaffected(self, client, django_settings):
+        card = CardFactory()
+        tag = TagFactory()
+
+        response = client.post(
+            reverse(views.post_submit_tag_vote),
+            {"identifier": card.identifier, "tagName": tag.name, "polarity": 1, "anonymousId": "anon-1"},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        vote = CardTagVote.objects.get(card=card, tag=tag, anonymous_id="anon-1")
+        assert vote.vote_surface is None

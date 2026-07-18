@@ -9,13 +9,30 @@ from cardpicker.models import VoteSource
 # Shared across printing/artist/tag consensus - previously duplicated identically in each of
 # their own modules; hoisted here so a new source (e.g. `FEDERATED`) can't be forgotten in one
 # of them. `printing_consensus.py`/`artist_consensus.py`/`tag_consensus.py` import this rather
-# than redefining it.
+# than redefining it. DEDUCTION and OCR (the 2026-07-15 split of the old single `AI` value -
+# see VoteSource's own docstring) share the same weight, matching the old AI value's - this
+# was a label split, not a policy change.
 _SOURCE_WEIGHTS: dict[str, float] = {
     VoteSource.USER: 1.0,
     VoteSource.ADMIN: settings.PRINTING_TAG_ADMIN_WEIGHT,
-    VoteSource.AI: settings.PRINTING_TAG_AI_WEIGHT,
+    VoteSource.DEDUCTION: settings.PRINTING_TAG_MACHINE_WEIGHT,
+    VoteSource.OCR: settings.PRINTING_TAG_MACHINE_WEIGHT,
     VoteSource.FEDERATED: settings.VOTE_FEDERATED_WEIGHT,
 }
+
+# Every source NOT in this set counts as "human-backed" for resolve_weighted_consensus's
+# require_privileged gate (the "an AI-only group can never resolve a card by itself, no matter
+# how many AI votes pile up" invariant that every stage of this project is built around -
+# verified live at scale, 0/28,112 violations in deductive_backfill's production run). A single
+# shared set + helper, not scattered `!= VoteSource.AI` comparisons in each of printing_
+# consensus.py/artist_consensus.py/tag_consensus.py (as it was before the AI->DEDUCTION/OCR
+# split) - deliberately centralized here: a future new machine-derived source only ever needs
+# to be added to this one set, not remembered at every comparison site.
+_MACHINE_DERIVED_SOURCES: set[str] = {VoteSource.DEDUCTION, VoteSource.OCR}
+
+
+def is_human_backed_source(source: str) -> bool:
+    return source not in _MACHINE_DERIVED_SOURCES
 
 
 class VoteTuple(NamedTuple):
@@ -159,4 +176,11 @@ def contested_queryset(
     return list(grouped.values_list(*group_fields))
 
 
-__all__ = ["VoteTuple", "resolve_weighted_consensus", "PENDING_PRIVILEGED", "_SOURCE_WEIGHTS", "contested_queryset"]
+__all__ = [
+    "VoteTuple",
+    "resolve_weighted_consensus",
+    "PENDING_PRIVILEGED",
+    "_SOURCE_WEIGHTS",
+    "contested_queryset",
+    "is_human_backed_source",
+]

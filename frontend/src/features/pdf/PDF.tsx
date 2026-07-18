@@ -7,8 +7,16 @@ import {
   CardWidthMM,
   CornerRadiusMM,
 } from "@/common/constants";
+import { SourceType } from "@/common/schema_types";
 import { CardDocument, SlotProjectMembers } from "@/common/types";
-import { getPDFImageURL, PDFImageQuality } from "@/features/pdf/pdfImage";
+import { normalizeCardBleed } from "@/features/pdf/bleedExtension";
+import { BleedPrior, ManualOverride } from "@/features/pdf/bleedNormalize";
+import { computeLayout } from "@/features/pdf/layout";
+import {
+  getPDFImageBlob,
+  getPDFImageURL,
+  PDFImageQuality,
+} from "@/features/pdf/pdfImage";
 import {
   ScmPaperSize,
   ScmRegistration,
@@ -83,7 +91,9 @@ const SIZES: { [key: string]: { width: number; height: number } } = {
 
 const pdfPointsToMM = (pdfPoints: number) => (pdfPoints / 72) * 25.4;
 
-const getPageSizeMM = (
+// Exported so the WYSIWYG page preview (PagePreview.tsx) can resolve the same page-size table
+// (Letter/A4/.../CUSTOM) the PDF generator itself uses, rather than duplicating this lookup.
+export const getPageSizeMM = (
   pageSize: keyof typeof PageSize,
   pageWidth: number | undefined,
   pageHeight: number | undefined
@@ -104,86 +114,34 @@ const getPageSizeMM = (
   }
 };
 
-const calculateCardContainerDimension = (
-  pageSizeMM: number,
-  cardSizeMM: number,
-  bleedEdgeMM: number,
-  cardSpacingMM: number,
-  pageMarginStartMM: number,
-  pageMarginEndMM: number
-) => {
-  const maxWidth = pageSizeMM - (pageMarginStartMM + pageMarginEndMM);
-  const calculateContainerWidth = (cardsFitted: number) =>
-    // adding a small buffer of 0.1 mm as I observed some weird wrapping behaviour from react-pdf without this
-    cardsFitted * (cardSizeMM + 2 * bleedEdgeMM) +
-    (cardsFitted - 1) * cardSpacingMM +
-    0.1;
-  let cardsFitted = 1;
-  while (true) {
-    const containerWidth = calculateContainerWidth(cardsFitted);
-    if (containerWidth < maxWidth) {
-      cardsFitted++;
-    } else {
-      return calculateContainerWidth(Math.max(1, cardsFitted - 1));
-    }
-  }
-};
-
-const calculateCardContainerWidth = (
+// Thin wrapper over the shared computeLayout() - was previously two independently-tuned
+// algorithms (a greedy container-fit loop, and a separate division-based cards-per-row/col
+// re-derivation) at each of this file's three call sites; see layout.ts's module comment.
+const layoutForPage = (
   pageWidthMM: number,
-  bleedEdgeMM: number,
-  cardSpacingColMM: number,
-  pageMarginLeftMM: number,
-  pageMarginRightMM: number
-) =>
-  calculateCardContainerDimension(
-    pageWidthMM,
-    CardWidthMM,
-    bleedEdgeMM,
-    cardSpacingColMM,
-    pageMarginLeftMM,
-    pageMarginRightMM
-  );
-
-const calculateCardContainerHeight = (
   pageHeightMM: number,
   bleedEdgeMM: number,
   cardSpacingRowMM: number,
+  cardSpacingColMM: number,
   pageMarginTopMM: number,
-  pageMarginBottomMM: number
+  pageMarginBottomMM: number,
+  pageMarginLeftMM: number,
+  pageMarginRightMM: number
 ) =>
-  calculateCardContainerDimension(
+  computeLayout(
+    pageWidthMM,
     pageHeightMM,
+    CardWidthMM,
     CardHeightMM,
     bleedEdgeMM,
-    cardSpacingRowMM,
-    pageMarginTopMM,
-    pageMarginBottomMM
+    {
+      top: pageMarginTopMM,
+      bottom: pageMarginBottomMM,
+      left: pageMarginLeftMM,
+      right: pageMarginRightMM,
+    },
+    { row: cardSpacingRowMM, col: cardSpacingColMM }
   );
-
-const getCardsPerRow = (
-  containerWidthMM: number,
-  bleedEdgeMM: number,
-  cardSpacingColMM: number
-) => {
-  const cardSlotWidth = CardWidthMM + 2 * bleedEdgeMM;
-  return Math.round(
-    (containerWidthMM - 0.1 + cardSpacingColMM) /
-      (cardSlotWidth + cardSpacingColMM)
-  );
-};
-
-const getCardsPerCol = (
-  containerHeightMM: number,
-  bleedEdgeMM: number,
-  cardSpacingRowMM: number
-) => {
-  const cardSlotHeight = CardHeightMM + 2 * bleedEdgeMM;
-  return Math.round(
-    (containerHeightMM - 0.1 + cardSpacingRowMM) /
-      (cardSlotHeight + cardSpacingRowMM)
-  );
-};
 
 export const PageSize = {
   A4: "A4",
@@ -250,6 +208,21 @@ export interface PDFProps {
   imageDPI: number | undefined;
   jpgQuality: number;
   fileHandles: { [identifier: string]: FileSystemFileHandle };
+  // Called (by pdf.worker.ts, which supplies this internally - not by any
+  // caller of the public PDF render hooks) once per card image that couldn't
+  // be fetched, so the worker can report which cards ended up blank instead
+  // of that failure being silently invisible. Optional so existing render
+  // props unrelated to failure tracking don't need to know about it.
+  reportImageFailure?: (identifier: string, label: string) => void;
+  // Proposal B (docs/proposals/proposal-b-bleed-normalization.md) - export-time per-side bleed
+  // normalization. Both maps are keyed by card identifier and pre-resolved on the MAIN thread
+  // (PDFGenerator.tsx) before the render worker is invoked - not fetched from inside the worker
+  // itself, since APIGetTagConsensus's CSRF header needs document.cookie, which doesn't exist in
+  // a Worker context. A missing entry for a given identifier defaults to "unresolved"/"auto"
+  // respectively (see bleedNormalize.ts), so this stays fully optional for any caller (SCM mode,
+  // existing tests) that doesn't populate it.
+  bleedPriors?: { [identifier: string]: BleedPrior };
+  bleedOverrides?: { [identifier: string]: ManualOverride };
   // SCM (Silhouette Card Maker) mode. When scmMode is true, the standard
   // parametric layout above is ignored in favour of an SCM-template-compatible
   // layout with registration marks (see scm/SCMPDF.tsx).
@@ -446,6 +419,19 @@ const CutLineCorner = ({
   );
 };
 
+// Proposal B (docs/proposals/proposal-b-bleed-normalization.md) - full-resolution images from
+// Google Drive or a local file are the only ones bleed normalization applies to (the two
+// sources that carry a real, decodable full-res bitmap; the thumbnail tiers are cheap-preview
+// quality, not what real printing bleed geometry needs). SCM mode's own image path
+// (scm/SCMPDF.tsx) is untouched - out of scope for this pass, see the proposal doc.
+const isBleedNormalizationEligible = (
+  cardDocument: CardDocument,
+  imageQuality: PDFImageQuality
+): boolean =>
+  imageQuality === "full-resolution" &&
+  (cardDocument.sourceType === SourceType.GoogleDrive ||
+    cardDocument.sourceType === SourceType.LocalFile);
+
 // Renders only the card image, with no cut lines.
 const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
   const {
@@ -455,12 +441,32 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
     imageDPI,
     jpgQuality,
     fileHandles,
+    reportImageFailure,
+    bleedPriors,
+    bleedOverrides,
   } = usePDFContext();
   const height = CardHeightMM + 2 * bleedEdgeMM;
   const heightProportion = (CardHeightMM + 2 * BleedEdgeMM) / height;
   const width = CardWidthMM + 2 * bleedEdgeMM;
   const widthProportion = (CardWidthMM + 2 * BleedEdgeMM) / width;
   const radius = roundCorners ? CornerRadiusMM : 0;
+  const bleedNormalized = isBleedNormalizationEligible(
+    cardDocument,
+    imageQuality
+  );
+  // Bleed-normalized output is already synthesized at exactly the target bleed box (see
+  // normalizeCardBleed) - the old proportion-based rescale below exists specifically to fix up
+  // an image assumed to be at the STANDARD bleed amount, which no longer applies once this
+  // card's own image has been measured and corrected directly. Omitted (not "none") when
+  // normalized - @react-pdf/renderer's own style processor (processTransform in
+  // @react-pdf/stylesheet) has a real bug where a single-token transform value like "none"
+  // crashes deep inside its parser (normalizeTransformOperation ends up calling .map() on
+  // undefined), hanging the whole render with no error surfaced anywhere - found via a real
+  // Playwright regression, not by reading their source speculatively. Omitting the key entirely
+  // sidesteps their parser altogether, which is what "no transform" actually needs anyway.
+  const scaleTransform = bleedNormalized
+    ? undefined
+    : `scale(${widthProportion}, ${heightProportion})`;
 
   return (
     <View
@@ -472,22 +478,57 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
       }}
     >
       <Image
-        src={async () =>
-          getPDFImageURL(
-            cardDocument,
-            imageQuality,
-            imageDPI,
-            jpgQuality,
-            fileHandles
-          )
-        }
+        src={async () => {
+          try {
+            if (bleedNormalized) {
+              const blob = await getPDFImageBlob(
+                cardDocument,
+                imageDPI,
+                jpgQuality,
+                fileHandles
+              );
+              // cardDocument.dpi is the source's own recorded resolution, but a lower imageDPI
+              // setting can make the Worker serve a downscaled image below that - if so, the
+              // BYTES actually fetched are at imageDPI, not cardDocument.dpi, and px->mm
+              // conversion needs to match what was really decoded, not the source's original
+              // resolution. Never assumed higher than the source's own recorded dpi (that would
+              // imply an upscale, which getWorkerImageURL doesn't do).
+              const effectiveDpi =
+                imageDPI != null && imageDPI < cardDocument.dpi
+                  ? imageDPI
+                  : cardDocument.dpi;
+              const prior =
+                bleedPriors?.[cardDocument.identifier] ?? "unresolved";
+              const manualOverride =
+                bleedOverrides?.[cardDocument.identifier] ?? "auto";
+              const normalized = await normalizeCardBleed(
+                blob,
+                effectiveDpi,
+                bleedEdgeMM,
+                prior,
+                manualOverride
+              );
+              return URL.createObjectURL(normalized);
+            }
+            return await getPDFImageURL(
+              cardDocument,
+              imageQuality,
+              imageDPI,
+              jpgQuality,
+              fileHandles
+            );
+          } catch {
+            reportImageFailure?.(cardDocument.identifier, cardDocument.name);
+            return undefined;
+          }
+        }}
         style={
           {
             width: width + "mm",
             minWidth: width + "mm",
             height: height + "mm",
             minHeight: height + "mm",
-            transform: `scale(${widthProportion}, ${heightProportion})`,
+            transform: scaleTransform,
             overflow: "hidden",
             borderTopLeftRadius: radius + "mm",
             borderTopRightRadius: radius + "mm",
@@ -590,30 +631,16 @@ const PageCutLines = ({
   const size = getPageSizeMM(pageSize, pageWidth, pageHeight);
   const lengthMM = Math.max(size.width, size.height);
 
-  const containerWidth = calculateCardContainerWidth(
+  const { cardsPerRow, cardsPerCol } = layoutForPage(
     size.width,
-    bleedEdgeMM,
-    cardSpacingColMM,
-    pageMarginLeftMM,
-    pageMarginRightMM
-  );
-  const cardsPerRow = getCardsPerRow(
-    containerWidth,
-    bleedEdgeMM,
-    cardSpacingColMM
-  );
-
-  const containerHeight = calculateCardContainerHeight(
     size.height,
     bleedEdgeMM,
     cardSpacingRowMM,
+    cardSpacingColMM,
     pageMarginTopMM,
-    pageMarginBottomMM
-  );
-  const cardsPerCol = getCardsPerCol(
-    containerHeight,
-    bleedEdgeMM,
-    cardSpacingRowMM
+    pageMarginBottomMM,
+    pageMarginLeftMM,
+    pageMarginRightMM
   );
 
   return (
@@ -691,31 +718,21 @@ const CardGrid = ({
     pageMarginBottomMM,
   } = usePDFContext();
 
-  const containerWidth = calculateCardContainerWidth(
+  const {
+    containerWidthMM: containerWidth,
+    containerHeightMM: containerHeight,
+    cardsPerRow,
+    cardsPerCol,
+  } = layoutForPage(
     pageWidthMM,
-    bleedEdgeMM,
-    cardSpacingColMM,
-    pageMarginLeftMM,
-    pageMarginRightMM
-  );
-
-  const cardsPerRow = getCardsPerRow(
-    containerWidth,
-    bleedEdgeMM,
-    cardSpacingColMM
-  );
-
-  const containerHeight = calculateCardContainerHeight(
     pageHeightMM,
     bleedEdgeMM,
     cardSpacingRowMM,
+    cardSpacingColMM,
     pageMarginTopMM,
-    pageMarginBottomMM
-  );
-  const cardsPerCol = getCardsPerCol(
-    containerHeight,
-    bleedEdgeMM,
-    cardSpacingRowMM
+    pageMarginBottomMM,
+    pageMarginLeftMM,
+    pageMarginRightMM
   );
 
   return (
@@ -812,7 +829,9 @@ const CardGrid = ({
   );
 };
 
-const chunk = <T,>(arr: Array<T>, size: number): Array<Array<T>> => {
+// Exported so PagePreview's container (PDFGenerator.tsx) can select the same page-1 card set
+// the real PDF would generate, without duplicating pagination logic.
+export const chunk = <T,>(arr: Array<T>, size: number): Array<Array<T>> => {
   const result: Array<Array<T>> = [];
   for (let i = 0; i < arr.length; i += size) {
     result.push(arr.slice(i, i + size));
@@ -898,7 +917,8 @@ const paginateFrontsAndBacks = (
   ).flat();
 };
 
-const CardSelectionModeToPaginator: {
+// See the `chunk` export comment above - same reason.
+export const CardSelectionModeToPaginator: {
   [cardSelectionMode in keyof typeof CardSelectionMode]: (
     projectMembers: Array<SlotProjectMembers>,
     cardDocumentsByIdentifier: { [identifier: string]: CardDocument },
@@ -930,29 +950,25 @@ export const PDF = (props: PDFProps) => {
         imageDPI={props.imageDPI}
         jpgQuality={props.jpgQuality}
         fileHandles={props.fileHandles}
+        reportImageFailure={props.reportImageFailure}
       />
     );
   }
 
   const size = getPageSizeMM(props.pageSize, props.pageWidth, props.pageHeight);
 
-  const containerWidth = calculateCardContainerWidth(
+  const { cardsPerRow, cardsPerCol } = layoutForPage(
     size.width,
-    props.bleedEdgeMM,
-    props.cardSpacingColMM,
-    props.pageMarginLeftMM,
-    props.pageMarginRightMM
-  );
-  const containerHeight = calculateCardContainerHeight(
     size.height,
     props.bleedEdgeMM,
     props.cardSpacingRowMM,
+    props.cardSpacingColMM,
     props.pageMarginTopMM,
-    props.pageMarginBottomMM
+    props.pageMarginBottomMM,
+    props.pageMarginLeftMM,
+    props.pageMarginRightMM
   );
-  const cardsPerPage =
-    getCardsPerRow(containerWidth, props.bleedEdgeMM, props.cardSpacingColMM) *
-    getCardsPerCol(containerHeight, props.bleedEdgeMM, props.cardSpacingRowMM);
+  const cardsPerPage = cardsPerRow * cardsPerCol;
 
   const cardDocumentSets = CardSelectionModeToPaginator[
     props.cardSelectionMode

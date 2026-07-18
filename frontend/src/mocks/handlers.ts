@@ -5,6 +5,7 @@ import { computeSearchQueryHashKey } from "@/common/processing";
 import {
   Campaign,
   CardType,
+  QuestionFeedCounts,
   Supporter,
   SupporterTier,
 } from "@/common/schema_types";
@@ -392,6 +393,31 @@ export const searchResultsResolvedPrintingMatch = http.post(
             expansionCode: "2ED",
             collectorNumber: "162",
           })]: [cardDocument12.identifier],
+        },
+      },
+      { status: 200 }
+    )
+);
+
+// Same shape as searchResultsResolvedPrintingMatch, but the card ISN'T yet Resolved -
+// cardDocument8 already carries a matching canonicalCard (xyz/001) with
+// printingTagStatus: Unresolved, so this is the "imported with a canonical printing ID, not
+// yet human-confirmed" case Level 0's deckbuilder-confirmation affordance gates on (see
+// DeckbuilderConfirmAffordance.tsx). Two results (not one, unlike
+// searchResultsResolvedPrintingMatch) so CardSlot's own grid-selector-modal gate
+// (searchResultsForQuery.length > 1) actually opens for the NO path's test coverage.
+export const searchResultsUnresolvedCanonicalImport = http.post(
+  buildRoute("3/editorSearch/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [computeSearchQueryHashKey({
+            query: "card 8",
+            cardType: CardType.Card,
+            expansionCode: "XYZ",
+            collectorNumber: "001",
+          })]: [cardDocument8.identifier, cardDocument9.identifier],
         },
       },
       { status: 200 }
@@ -802,8 +828,9 @@ export const submitPrintingTagResolvesToPrintingCandidate1 = http.post(
     )
 );
 
-// printingCandidate2 (unlike printingCandidate1) has fullArt/isBorderless both true - used to
-// exercise PrintingConfirmStrip's pre-fill-from-candidate-metadata behaviour in both states.
+// printingCandidate2 (unlike printingCandidate1) has fullArt/isBorderless/isShowcase all true
+// - used to exercise QuestionFeed's auto-tag-on-selection behaviour (see attributeChips.ts's
+// STANDALONE_CHIPS) across both states.
 export const submitPrintingTagResolvesToPrintingCandidate2 = http.post(
   buildRoute("2/submitPrintingTag/"),
   () =>
@@ -891,6 +918,114 @@ export const voteQueueNoResults = http.post(buildRoute("2/voteQueue/"), () =>
 
 //# endregion
 
+//# region question feed
+
+// counts default to a plausible non-zero breakdown (one bucket standing in for "some work
+// remains") - callers that care about a specific bucket's value pass an override rather than
+// every mock spelling out all four fields for a number the test doesn't actually check.
+function questionFeedCounts(
+  overrides: Partial<QuestionFeedCounts> = {}
+): QuestionFeedCounts {
+  return { total: 5, confirmable: 0, contested: 0, fresh: 5, ...overrides };
+}
+
+export const questionFeedConfirmSuggestion = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "confirm_suggestion",
+          card: cardDocument1,
+          suggestedPrinting: printingCandidate1,
+          candidates: [printingCandidate1, printingCandidate2],
+          tagConfidence: { "Full Art": 0, Borderless: 0 },
+        },
+        remainingEstimate: questionFeedCounts({
+          total: 5,
+          confirmable: 5,
+          fresh: 0,
+        }),
+      },
+      { status: 200 }
+    )
+);
+
+export const questionFeedIdentifyPrinting = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "identify_printing",
+          card: cardDocument1,
+          candidates: [printingCandidate1, printingCandidate2],
+          tagConfidence: { "Full Art": 0, Borderless: 0.6 },
+        },
+        remainingEstimate: questionFeedCounts({ total: 3, fresh: 3 }),
+      },
+      { status: 200 }
+    )
+);
+
+export const questionFeedArtist = http.get(buildRoute("2/questionFeed/"), () =>
+  HttpResponse.json(
+    {
+      item: {
+        type: "artist",
+        card: cardDocument8,
+        confidentlyKnownArtistName: null,
+      },
+      remainingEstimate: questionFeedCounts({ total: 2, fresh: 2 }),
+    },
+    { status: 200 }
+  )
+);
+
+// cardDocument8 has a confidently-known canonicalArtist (Alpha Artist) - this mock exercises
+// ArtistVotePicker's collapsed pre-filled state (see its own "wrong?" affordance) via real
+// questionFeed-shaped data, distinct from questionFeedArtist's plain-picker (unresolved) case.
+export const questionFeedArtistConfidentlyKnown = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "artist",
+          card: cardDocument8,
+          confidentlyKnownArtistName: "Alpha Artist",
+        },
+        remainingEstimate: questionFeedCounts({ total: 2, fresh: 2 }),
+      },
+      { status: 200 }
+    )
+);
+
+export const questionFeedTag = http.get(buildRoute("2/questionFeed/"), () =>
+  HttpResponse.json(
+    {
+      item: {
+        type: "tag",
+        card: cardDocument9,
+        tagName: "Borderless",
+      },
+      remainingEstimate: questionFeedCounts({ total: 1, fresh: 1 }),
+    },
+    { status: 200 }
+  )
+);
+
+export const questionFeedCaughtUp = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      { remainingEstimate: questionFeedCounts({ total: 0, fresh: 0 }) },
+      { status: 200 }
+    )
+);
+
+//# endregion
+
 //# region attribute voting
 
 export const artistCandidatesTwoResults = http.post(
@@ -930,8 +1065,18 @@ export const tagConsensusTwoUnresolvedTags = http.post(
     HttpResponse.json(
       {
         tags: [
-          { tagName: "Borderless", resolvedPolarity: null, tally: [] },
-          { tagName: "Extended", resolvedPolarity: null, tally: [] },
+          {
+            tagName: "Borderless",
+            resolvedPolarity: null,
+            netPolarity: 0,
+            tally: [],
+          },
+          {
+            tagName: "Extended",
+            resolvedPolarity: null,
+            netPolarity: 0,
+            tally: [],
+          },
         ],
       },
       { status: 200 }
@@ -945,6 +1090,7 @@ export const submitTagVoteResolvesToApply = http.post(
       {
         tagName: "Borderless",
         resolvedPolarity: 1,
+        netPolarity: 1,
         tally: [{ polarity: 1, count: 1 }],
       },
       { status: 200 }
@@ -1036,6 +1182,64 @@ export const moderationQueueForbidden = http.post(
     HttpResponse.json(createError("Moderator access required"), {
       status: 403,
     })
+);
+
+export const moderationDrivesTwoResults = http.post(
+  buildRoute("2/moderationDrives/"),
+  () =>
+    HttpResponse.json(
+      {
+        hits: 2,
+        pages: 1,
+        items: [
+          {
+            source: sourceDocument2,
+            qtyCards: 3,
+            qtyCardbacks: 0,
+            qtyTokens: 1,
+          },
+          {
+            source: sourceDocument1,
+            qtyCards: 1,
+            qtyCardbacks: 1,
+            qtyTokens: 0,
+          },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
+export const moderationDrivesForbidden = http.post(
+  buildRoute("2/moderationDrives/"),
+  () =>
+    HttpResponse.json(createError("Moderator access required"), {
+      status: 403,
+    })
+);
+
+export const moderationDriveCardsOneResult = http.post(
+  buildRoute("2/moderationDriveCards/"),
+  () =>
+    HttpResponse.json(
+      {
+        hits: 1,
+        pages: 1,
+        source: sourceDocument1,
+        cards: [cardDocument1],
+      },
+      { status: 200 }
+    )
+);
+
+export const moderationRemoveCardSucceeds = http.post(
+  buildRoute("2/moderationRemoveCard/"),
+  () => HttpResponse.json({ removed: true }, { status: 200 })
+);
+
+export const moderationRemoveDriveSucceeds = http.post(
+  buildRoute("2/moderationRemoveDrive/"),
+  () => HttpResponse.json({ removed: true, cardsRemoved: 1 }, { status: 200 })
 );
 
 //# endregion

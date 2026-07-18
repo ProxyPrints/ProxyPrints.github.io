@@ -114,6 +114,7 @@ class CanonicalCard(models.Model):
         `serialise()`'s embedded-in-a-resolved-Card shape needs.
         """
         metadata = getattr(self, "printing_metadata", None)
+        frame_effects = metadata.frame_effects if metadata is not None else []
         return PrintingCandidate(
             identifier=str(self.identifier),
             canonicalId=str(self.canonical_id),
@@ -126,6 +127,13 @@ class CanonicalCard(models.Model):
             fullArt=metadata.full_art if metadata is not None else False,
             isBorderless=metadata.border_color == "borderless" if metadata is not None else False,
             frame=metadata.frame if metadata is not None else "",
+            borderColor=metadata.border_color if metadata is not None else "",
+            # curated subset of the `frame_effects` list with a dedicated attribute chip - see
+            # cardpicker.attribute_tags / docs/features/printing-tags.md's questionFeed section
+            # for why these three and not the (more numerous) rest of the field's values.
+            isShowcase="showcase" in frame_effects,
+            isExtendedArt="extendedart" in frame_effects,
+            isEtched="etched" in frame_effects,
             releasedAt=metadata.released_at.isoformat() if metadata is not None and metadata.released_at else None,
         )
 
@@ -168,7 +176,7 @@ class Source(models.Model):
     ordinal = models.IntegerField(default=0)  # TODO: why is this not unique?
 
     def __str__(self) -> str:
-        (qty_total, qty_cards, qty_cardbacks, qty_tokens, _) = self.count()
+        qty_total, qty_cards, qty_cardbacks, qty_tokens, _ = self.count()
         return (
             f"[{self.ordinal}.] {self.name} "
             f"[{qty_total} total: {qty_cards} cards, {qty_cardbacks} cardbacks, {qty_tokens} tokens]"
@@ -391,7 +399,27 @@ class Card(models.Model):
     # source filename (e.g. "[MH3]") - not resolved to a specific printing (no collector
     # number was present to pair with it), just a ranking hint for get_ranked_printing_candidates
     expansion_hint = models.CharField(max_length=10, blank=True, db_index=True)
-    image_hash = models.BigIntegerField()
+    # Perceptual hash (imagehash.phash) of THIS card's own uploaded image - NOT the same concept
+    # as CanonicalCard.image_hash above (that's a Scryfall CANDIDATE image's hash, computed
+    # lazily by local_phash.get_or_compute_canonical_hash; this is OUR OWN uploaded image's
+    # hash). Was a dead field named `image_hash` (migration 0046) - always written as a literal
+    # 0 placeholder by update_database and never read anywhere; repurposed and renamed here
+    # (2026-07-16, hash-at-ingest work, docs/features/printing-tags.md) into a real, populated
+    # column, since a same-named-but-different-purpose dead field sitting next to a live one
+    # would be a permanent footgun for future readers.
+    #
+    # Dual consumer, one field: (1) cardpicker.local_clustering's two-threshold dedup (d=0 vote
+    # propagation, d<=2 candidate narrowing) - a per-run DB read instead of a per-run fetch; (2)
+    # docs/federation-v1.md's reserved `content_hash` verdict-exchange field ("the planned
+    # upgrade path for surviving re-uploads"). Cross-instance interchange contract: algorithm is
+    # imagehash.phash, hash_size=8 (the library default, 64-bit output - inherited from
+    # CanonicalCard.image_hash's pre-existing convention, not deliberately chosen; changing it
+    # is a re-hash migration, not a config flip, since federation peers would need to agree on
+    # the same params). NULL = not yet computed (see cardpicker.local_phash's ingest/backfill
+    # helpers) - distinct from a real hash value of 0, which is why this is nullable rather than
+    # reusing 0 as a sentinel the way CanonicalCard.image_hash does (that field predates this
+    # decision; not retrofitted here, out of scope).
+    content_phash = models.BigIntegerField(null=True, blank=True, db_index=True)
 
     def __str__(self) -> str:
         return (
@@ -514,12 +542,28 @@ class VoteSource(models.TextChoices):
     """
     Shared `source` enum for every `AbstractWeightedVote` subclass (`CardPrintingTag`,
     `CardArtistVote`, `CardTagVote`) - not printing-tag-specific despite the historical name
-    this replaced (`CardPrintingTagSource`). The stored string values are unchanged.
+    this replaced (`CardPrintingTagSource`).
+
+    `AI` (a single umbrella value) was split 2026-07-15 into `DEDUCTION` and `OCR` - both were
+    genuinely different mechanisms sharing one label: DEDUCTION is pure logical inference from
+    already-trusted structured data (cardpicker.deductive_backfill - zero image inspection),
+    while OCR (kept as an umbrella name, not literal-OCR-only) covers everything in
+    cardpicker.local_identify_printing_tags/local_fallback that actually looks at the card
+    image - Tesseract text extraction, perceptual-hash art matching, and the border/artist/
+    symbol evidence-combination fallback. The individual technique within OCR's umbrella is
+    still distinguishable via `anonymous_id` (local-ocr-v1/local-phash-v1/local-fallback-v1) -
+    a third split wasn't worth it for that reason alone. Every existing production `source="ai"`
+    row predates this split entirely (deductive_backfill's own 28,112-vote production run, sole
+    source of "ai" rows at split time) - see migration 0060 for the one-time backfill.
+    Weight/gate treatment for both new values is identical to the old AI's (see
+    vote_consensus.py's _SOURCE_WEIGHTS and is_human_backed_source) - this was a label split,
+    not a policy change.
     """
 
     USER = "user", gettext_lazy("User")
     ADMIN = "admin", gettext_lazy("Admin")
-    AI = "ai", gettext_lazy("AI")
+    DEDUCTION = "deduction", gettext_lazy("Deduction")
+    OCR = "ocr", gettext_lazy("OCR")
     FEDERATED = "federated", gettext_lazy("Federated")
 
 
@@ -549,6 +593,31 @@ class AbstractWeightedVote(models.Model):
     peer = models.CharField(
         max_length=64, null=True, blank=True, help_text="Federation peer name; set only when source='federated'"
     )
+    # Iteration-safety revocability (docs/features/catalog-completion-plan.md's Part 1): set on
+    # every MACHINE-cast vote from local_identify_printing_tags.py/local_fallback.py's engines -
+    # one fresh value generated once per run_pilot()/run_name_frequency_elimination() invocation
+    # and threaded through every vote that invocation writes. NEVER set on a human-submitted
+    # vote (views.py's post_submit_* views construct votes with no run_id kwarg, so it stays
+    # NULL there). Deliberately separate from anonymous_id, whose EXACT-MATCH reuse across
+    # invocations is load-bearing for _eligible_base_queryset's idempotence/resume logic and
+    # must never change - confirmed via direct investigation that every production call site
+    # depends on that exact-match reuse, and that anonymous_id's own max_length=40 would hard-
+    # block a stamped value for at least two engines anyway. This field exists purely so one bad
+    # invocation's votes can be identified and purged (management command purge_machine_votes
+    # --run-id <id>) without touching any other invocation's votes under the same anonymous_id.
+    # Indexed since the purge command filters on it directly.
+    run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    # Which UI surface cast this vote (e.g. "deckbuilder-confirm", "question-feed") - client-
+    # supplied, optional, persisted verbatim with no server-side vocabulary enforced here (the
+    # frontend owns what surface names exist; a new surface needs no backend change to start
+    # sending it). Never affects consensus weighting or resolution today - purely an evidence-
+    # source label. Exists for future per-surface reliability estimation (docs/theory.md's
+    # Dawid-Skene addendum): a deckbuilder-confirm ("is this the right art?", already-selected
+    # context) and a cold question-feed vote (no prior context) are different evidence channels
+    # with plausibly different reliability, and this field is what would let that be measured
+    # rather than assumed. Optional and ignore-if-absent on every submission endpoint - an old
+    # frontend build that's never heard of this field keeps working unchanged, NULL here.
+    vote_surface = models.CharField(max_length=64, null=True, blank=True)
 
     class Meta:
         abstract = True
@@ -849,9 +918,11 @@ class Project(models.Model):
         }
         members: list[ProjectMember] = [
             ProjectMember(
-                card=card_identifiers_to_pk[card_identifier]
-                if (card_identifier := value.get("card_identifier", None)) is not None
-                else None,
+                card=(
+                    card_identifiers_to_pk[card_identifier]
+                    if (card_identifier := value.get("card_identifier", None)) is not None
+                    else None
+                ),
                 slot=value["slot"],
                 query=query,
                 face=face,
@@ -899,6 +970,78 @@ class ProjectMember(models.Model):
         }
 
 
+class PilotRunLedger(models.Model):
+    """
+    One row per local-pilot invocation (run_pilot/run_name_frequency_elimination), written at
+    start (status=RUNNING) and updated at end (status=COMPLETED/FAILED) - the durable, queryable
+    record purge_machine_votes and any future tooling consult by run_id (see
+    docs/features/catalog-completion-plan.md's Part 1). Purely an audit/context layer: the
+    actual purge target set is always found by querying CardPrintingTag/CardArtistVote/
+    CardTagVote directly by run_id, never by trusting this table's row count - a missing or
+    inconsistent ledger row must never block a purge.
+    """
+
+    class Status(models.TextChoices):
+        RUNNING = "running", gettext_lazy("Running")
+        COMPLETED = "completed", gettext_lazy("Completed")
+        FAILED = "failed", gettext_lazy("Failed")
+
+    run_id = models.CharField(max_length=64, unique=True)
+    command = models.CharField(max_length=64)
+    dry_run = models.BooleanField(default=False)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.RUNNING)
+    # best-effort visibility only (see AbstractWeightedVote.run_id's own docstring for why this
+    # is never a hard gate) - the image's baked-in git SHA, if the build-time ARG was set.
+    git_sha = models.CharField(max_length=40, null=True, blank=True)
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    votes_written = models.IntegerField(null=True, blank=True)
+    purged_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"[{self.status}] {self.command} run_id={self.run_id}"
+
+
+class CardScanLog(models.Model):
+    """
+    Persists ABSTENTION evidence exactly like `AbstractWeightedVote` subclasses persist assent
+    evidence (docs/features/catalog-completion-plan.md's addendum item 3, upgraded from
+    propose-to-hold to build 2026-07-16) - one row per (card, engine) an engine actually looked
+    at and did NOT cast a vote for. This restores the originally-intended design: the bleed
+    engine's negative-only votes and Part 5's evidence-gathered-and-negative guard both
+    presuppose a durable negative record existing somewhere, not just a positive one.
+
+    Deliberately slim and additive-only - no vote-semantics change, the human-backed resolution
+    gate is completely untouched by this model's existence. `skip_reason` uses the pipeline's
+    own existing reason strings verbatim (see local_identify_printing_tags.py's skip_counts
+    call sites) - not a separately-invented vocabulary - so a `grep` for a skip reason in the
+    log output and a `WHERE skip_reason = '...'` query agree on what string to look for.
+
+    A card can have at most one CURRENT scan-log row per (card, anonymous_id) that actually
+    matters for the resume-exclusion query (see local_identify_printing_tags._eligible_base_
+    queryset) - older rows for the same pair are historical (multiple runs can each abstain on
+    the same card for different or the same reason over time), not deduplicated away, since the
+    resume query only cares whether ANY non-re-scannable row exists, and the scan_log table
+    itself is a append-only audit trail like the vote tables are.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="scan_logs")
+    # same field, same width, same semantics as AbstractWeightedVote.anonymous_id - this is
+    # deliberately NOT a subclass of AbstractWeightedVote (a scan-log row is not a vote, has no
+    # source/confidence/user, and should never be reachable via vote_consensus's resolution
+    # machinery even by accident).
+    anonymous_id = models.CharField(max_length=40)
+    run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    skip_reason = models.CharField(max_length=64)
+    scanned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["card", "anonymous_id"])]
+
+    def __str__(self) -> str:
+        return f"card={self.card_id} anonymous_id={self.anonymous_id} skip_reason={self.skip_reason}"
+
+
 __all__ = [
     "Faces",
     "CardTypes",
@@ -915,4 +1058,6 @@ __all__ = [
     "get_default_cardback",
     "Project",
     "ProjectMember",
+    "PilotRunLedger",
+    "CardScanLog",
 ]
