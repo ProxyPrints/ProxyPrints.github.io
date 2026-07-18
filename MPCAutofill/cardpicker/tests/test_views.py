@@ -395,8 +395,14 @@ class TestPostEditorSearchResults:
         snapshot_response(response, snapshot)
         assert response.status_code == 200
         assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        # a real hit under the filter - exact-match behaviour, never degraded
+        assert response.json()["degradedQueries"] == []
 
     def test_filter_by_expansion_code_no_results(self, client, snapshot):
+        # name kept for snapshot continuity, but this is no longer a "no results" case since
+        # E-2: a zero-hit printing-specific search now retries without the filter and still
+        # finds the card by name, flagging the query as degraded rather than returning nothing
+        # for a card that genuinely exists (just not under this particular printing).
         response = client.post(
             reverse(views.post_editor_search),
             {
@@ -407,7 +413,8 @@ class TestPostEditorSearchResults:
         )
         snapshot_response(response, snapshot)
         assert response.status_code == 200
-        assert response.json()["results"]["key1"] == []
+        assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["degradedQueries"] == ["key1"]
 
     def test_filter_by_collector_number(self, client, snapshot):
         response = client.post(
@@ -423,8 +430,11 @@ class TestPostEditorSearchResults:
         snapshot_response(response, snapshot)
         assert response.status_code == 200
         assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["degradedQueries"] == []
 
     def test_filter_by_collector_number_no_results(self, client, snapshot):
+        # see test_filter_by_expansion_code_no_results's comment - same E-2 behaviour change,
+        # name kept for snapshot continuity.
         response = client.post(
             reverse(views.post_editor_search),
             {
@@ -437,7 +447,8 @@ class TestPostEditorSearchResults:
         )
         snapshot_response(response, snapshot)
         assert response.status_code == 200
-        assert response.json()["results"]["key1"] == []
+        assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["degradedQueries"] == ["key1"]
 
     def test_filter_by_expansion_code_and_collector_number(self, client, snapshot):
         response = client.post(
@@ -458,6 +469,28 @@ class TestPostEditorSearchResults:
         snapshot_response(response, snapshot)
         assert response.status_code == 200
         assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["degradedQueries"] == []
+
+    def test_only_the_actually_degraded_query_is_flagged_among_several(self, client, snapshot):
+        # E-2: `degradedQueries` must track degradation per query, not globally - a batch
+        # request with one real hit-under-filter and one zero-hit-then-fallback must flag only
+        # the second key, never both just because at least one query in the batch degraded.
+        response = client.post(
+            reverse(views.post_editor_search),
+            {
+                "searchSettings": BASE_SEARCH_SETTINGS,
+                "queries": {
+                    "key1": {"query": Cards.BRAINSTORM.value.name, "cardType": "CARD", "expansionCode": "ICE"},
+                    "key2": {"query": Cards.BRAINSTORM.value.name, "cardType": "CARD", "expansionCode": "ZZZ"},
+                },
+            },
+            content_type="application/json",
+        )
+        snapshot_response(response, snapshot)
+        assert response.status_code == 200
+        assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["results"]["key2"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["degradedQueries"] == ["key2"]
 
     def test_page_equal_to_max_size(self, client, monkeypatch, snapshot):
         monkeypatch.setattr("cardpicker.views.EDITOR_SEARCH_MAX_QUERIES", 2)

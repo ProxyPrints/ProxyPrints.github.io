@@ -376,6 +376,14 @@ export interface SearchQuery {
 }
 
 export interface EditorSearchResponse {
+  /**
+   * Hash keys (matching `results`' own keys) of queries whose printing-specific search
+   * (expansion_code and/or collector_number) found zero hits under that filter and were
+   * retried without it. Absence from this list means either the query carried no printing
+   * filter at all, or the filter found real hits - exact-match behaviour when hits exist is
+   * completely unaffected by this field.
+   */
+  degradedQueries: string[];
   results: { [key: string]: string[] };
 }
 
@@ -2122,7 +2130,10 @@ const typeMap: any = {
     false
   ),
   EditorSearchResponse: o(
-    [{ json: "results", js: "results", typ: m(a("")) }],
+    [
+      { json: "degradedQueries", js: "degradedQueries", typ: a("") },
+      { json: "results", js: "results", typ: m(a("")) },
+    ],
     false
   ),
   ErrorResponse: o(
