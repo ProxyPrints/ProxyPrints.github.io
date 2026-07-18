@@ -78,6 +78,10 @@ export default defineConfig({
     env: {
       NEXT_PUBLIC_IMAGE_WORKER_URL: "https://cdn.proxyprints.ca",
       NEXT_PUBLIC_IMAGE_BUCKET_URL: "https://img.proxyprints.ca",
+      // Proposal H (docs/proposals/proposal-h-unified-display-page.md) - /display stays behind
+      // this flag in real deployments; enabling it for the whole test run is the established
+      // pattern this config already uses for other NEXT_PUBLIC_* flags above.
+      NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED: "true",
     },
   },
 });
