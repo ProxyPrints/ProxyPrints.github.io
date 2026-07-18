@@ -2,7 +2,7 @@ import { getBucketImageURL, getWorkerImageURL } from "@/common/image";
 import { SourceType } from "@/common/schema_types";
 import { CardDocument } from "@/common/types";
 
-import { getPDFImageURL } from "./pdfImage";
+import { getPDFImageBlob, getPDFImageURL } from "./pdfImage";
 
 jest.mock("../../common/image", () => ({
   getBucketImageURL: jest.fn(),
@@ -145,5 +145,62 @@ describe("getPDFImageURL", () => {
     await expect(
       getPDFImageURL(card, "full-resolution", undefined, 100, {})
     ).rejects.toThrow(/cannot get PDF thumbnail URL/);
+  });
+});
+
+describe("getPDFImageBlob", () => {
+  beforeEach(() => {
+    jest.spyOn(global, "fetch").mockReset();
+    mockGetWorkerImageURL.mockReset();
+  });
+
+  it("resolves the raw Blob for a Google Drive card's full-resolution worker URL", async () => {
+    mockGetWorkerImageURL.mockReturnValue("https://worker.test/card-1-full");
+    jest.spyOn(global, "fetch").mockResolvedValue(okResponse());
+
+    const blob = await getPDFImageBlob(googleDriveCard(), 300, 100, {});
+
+    expect(blob).toBeInstanceOf(Blob);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "https://worker.test/card-1-full"
+    );
+  });
+
+  it("rejects a failed fetch instead of resolving to an unvalidated Blob", async () => {
+    mockGetWorkerImageURL.mockReturnValue("https://worker.test/card-1-full");
+    jest.spyOn(global, "fetch").mockResolvedValue(errorResponse(503));
+
+    await expect(
+      getPDFImageBlob(googleDriveCard(), 300, 100, {})
+    ).rejects.toThrow(/503/);
+  });
+
+  it("resolves a local file card's Blob directly via its file handle, without fetching", async () => {
+    const file = new File(["contents"], "card.png");
+    const getFile = jest.fn().mockResolvedValue(file);
+    const card = {
+      identifier: "local-1",
+      name: "Local Card",
+      sourceType: SourceType.LocalFile,
+    } as CardDocument;
+
+    const blob = await getPDFImageBlob(card, undefined, 100, {
+      "local-1": { getFile } as unknown as FileSystemFileHandle,
+    });
+
+    expect(blob).toBe(file);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsupported source type", async () => {
+    const card = {
+      identifier: "s3-1",
+      name: "S3 Card",
+      sourceType: SourceType.AwsS3,
+    } as CardDocument;
+
+    await expect(getPDFImageBlob(card, undefined, 100, {})).rejects.toThrow(
+      /cannot get PDF image blob/
+    );
   });
 });
