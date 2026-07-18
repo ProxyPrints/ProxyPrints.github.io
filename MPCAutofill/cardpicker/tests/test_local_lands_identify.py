@@ -228,6 +228,24 @@ class TestRunLandsIdentify:
         assert vote.anonymous_id == LANDS_ANONYMOUS_ID
         assert vote.confidence == LANDS_SINGLETON_CONFIDENCE
 
+    def test_fetch_uses_the_s800_ocr_tier_not_the_full_dpi_default(self, db, monkeypatch):
+        CanonicalCardFactory(name="Plains")
+        CardFactory(name="Plains")
+        captured_dpi = []
+
+        def _capture_dpi(card, dpi=None):
+            captured_dpi.append(dpi)
+            return object()
+
+        monkeypatch.setattr(module, "fetch_card_image", _capture_dpi)
+        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, **kw: OcrCardResult())
+        monkeypatch.setattr(module, "detect_illus_anchor", lambda image, raw_texts: (False, None))
+
+        run_lands_identify(dry_run=True, sample_size=300, fetch_budget=10)
+
+        assert captured_dpi == [module.OCR_FETCH_DPI]
+        assert module.OCR_FETCH_DPI != 250  # not the print-quality DEFAULT_FETCH_DPI
+
     def test_dry_run_writes_nothing(self, db, monkeypatch):
         artist = CanonicalArtistFactory(name="Rebecca Guay")
         CanonicalCardFactory(name="Plains", artist=artist, image_hash=7)
