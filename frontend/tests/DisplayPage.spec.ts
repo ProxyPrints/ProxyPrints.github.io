@@ -80,6 +80,11 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(railHeader).toContainText("Slot 1");
     await expect(railHeader).toContainText("front");
 
+    // Compressed view (viewSettingsSlice's real, hardcoded default) renders only the bare card
+    // image - no per-card "Option N" text - so toggle it off first, same precedent as
+    // CardSlot.spec.ts's own version-picker test.
+    await page.getByText("Compressed").click();
+
     // Choose Image is open by default (real candidate grid, wired in PR 2a); the other four
     // sections start collapsed - per the owner's accordion amendment (design doc §2).
     await expect(page.getByText("Option 1")).toBeVisible();
@@ -100,6 +105,8 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     const sheetSlot = page.getByTestId("page-preview-slot").first();
     await sheetSlot.click();
+    // Compressed view (the default) hides "Option N" text entirely - see the previous test.
+    await page.getByText("Compressed").click();
     // searchResultsThreeResults (mocks/handlers.ts) resolves "my search query" to
     // [cardDocument1, cardDocument2, cardDocument3] in that order - Option 1 is cardDocument1.
     await page.getByText("Option 2").click();
@@ -121,6 +128,8 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await importText(page, "my search query");
     await page.getByRole("link", { name: "Display (beta)" }).click();
     await page.getByTestId("page-preview-slot").first().click();
+    // Compressed view (the default) hides "Option N" text entirely - see the earlier tests.
+    await page.getByText("Compressed").click();
 
     const candidateCard = page.getByText("Option 1");
     await expect(candidateCard).toBeVisible();
@@ -177,6 +186,10 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     const slots = page.getByTestId("page-preview-slot");
     await slots.first().click();
+    // Compressed view (the default) hides "Option N" text entirely - see the earlier tests.
+    // This is a global view setting, not slot-specific state, so toggling it once here holds
+    // for the rest of the test (including after selecting the second slot below).
+    await page.getByText("Compressed").click();
     await page
       .getByRole("heading", { name: "Attributes", exact: true })
       .click();

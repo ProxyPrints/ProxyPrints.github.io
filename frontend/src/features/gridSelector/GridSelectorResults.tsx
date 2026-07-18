@@ -105,6 +105,7 @@ function ResultsColumn({
           selectedImage={selectedImage}
           favoriteIdentifiers={search.favoriteIdentifiersInFilteredResults}
           originalIndexMap={search.originalIndexMap}
+          variant={variant}
         />
       </Blurrable>
       {search.noSearchResults && (
