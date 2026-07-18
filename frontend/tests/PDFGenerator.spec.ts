@@ -81,7 +81,7 @@ test.describe("PDFGenerator - card image fetch failures", () => {
     await expect(warning).toContainText(cardDocument1.name);
   });
 
-  test("blocks the download behind a confirm naming the failed card, and honours cancelling it", async ({
+  test("blocks the download behind an in-app confirm modal naming the failed card, and honours cancelling it", async ({
     page,
     network,
   }) => {
@@ -99,21 +99,24 @@ test.describe("PDFGenerator - card image fetch failures", () => {
       timeout: 15_000,
     });
 
-    let dialogMessage = "";
-    page.once("dialog", async (dialog) => {
-      dialogMessage = dialog.message();
-      await dialog.dismiss();
-    });
-
     const downloadPromise = page
       .waitForEvent("download", { timeout: 3_000 })
       .catch(() => undefined);
     await page.getByRole("button", { name: "Generate PDF" }).click();
 
+    // Not window.confirm() - a real in-app Modal, immune to a browser silently suppressing
+    // future confirm() calls after enough of them fire close together with other browser chrome
+    // (the real incident this replaced native confirm() over - see PDFGenerator.tsx's comment).
+    const modal = page.getByTestId("image-failure-confirm-modal");
+    await expect(modal).toBeVisible({ timeout: 15_000 });
+    await expect(modal).toContainText(cardDocument1.name);
+    await expect(modal).toContainText(/blank/i);
+
+    await page.getByTestId("image-failure-confirm-cancel").click();
+
     await expect(page.getByText("Download Cancelled")).toBeVisible();
-    expect(dialogMessage).toContain(cardDocument1.name);
-    expect(dialogMessage.toLowerCase()).toContain("blank");
-    // Cancelling the confirm must actually prevent the file from downloading.
+    await expect(modal).not.toBeVisible();
+    // Cancelling must actually prevent the file from downloading.
     await expect(downloadPromise).resolves.toBeUndefined();
   });
 
@@ -135,11 +138,14 @@ test.describe("PDFGenerator - card image fetch failures", () => {
       timeout: 15_000,
     });
 
-    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Generate PDF" }).click();
+    await expect(page.getByTestId("image-failure-confirm-modal")).toBeVisible({
+      timeout: 15_000,
+    });
 
     const [download] = await Promise.all([
       page.waitForEvent("download"),
-      page.getByRole("button", { name: "Generate PDF" }).click(),
+      page.getByTestId("image-failure-confirm-continue").click(),
     ]);
     expect(download.suggestedFilename()).toBe("cards.pdf");
   });
@@ -162,17 +168,65 @@ test.describe("PDFGenerator - card image fetch failures", () => {
       page.getByTestId("pdf-preview-image-failures")
     ).not.toBeVisible();
 
-    let dialogFired = false;
-    page.once("dialog", (dialog) => {
-      dialogFired = true;
-      void dialog.dismiss();
-    });
-
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       page.getByRole("button", { name: "Generate PDF" }).click(),
     ]);
     expect(download.suggestedFilename()).toBe("cards.pdf");
-    expect(dialogFired).toBe(false);
+    await expect(
+      page.getByTestId("image-failure-confirm-modal")
+    ).not.toBeVisible();
+  });
+});
+
+test.describe("PDFGenerator - export image-fetch progress (rate-limit fix)", () => {
+  test("shows live 'fetching images' progress instead of a silent, indefinite spinner", async ({
+    page,
+    network,
+  }) => {
+    // Artificially delayed (not instant, like every other mock in this file) so the progress
+    // text has a real window to be observed in, rather than flashing for under a frame - a
+    // large real export is genuinely slow now that full-resolution fetches are paced to the
+    // image CDN's shared rate limit (see pdfImage.ts), which is exactly the wait this UI exists
+    // to explain.
+    const delayedImageWorkerSuccess = http.get(
+      IMAGE_WORKER_URL_PATTERN,
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        return new HttpResponse(validImageBytes, {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        });
+      }
+    );
+    network.use(
+      cardDocumentsOneResult,
+      sourceDocumentsOneResult,
+      searchResultsOneResult,
+      imageBucketFailure, // bucket miss, falls through to the (delayed) worker
+      delayedImageWorkerSuccess,
+      ...defaultHandlers
+    );
+
+    await addCardAndOpenPDFTab(page);
+
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      (async () => {
+        await page.getByRole("button", { name: "Generate PDF" }).click();
+        await expect(page.getByTestId("pdf-image-fetch-progress")).toBeVisible({
+          timeout: 15_000,
+        });
+        await expect(
+          page.getByTestId("pdf-image-fetch-progress")
+        ).toContainText("Fetching images:");
+      })(),
+    ]);
+    expect(download.suggestedFilename()).toBe("cards.pdf");
+
+    // Clears once the render settles - doesn't linger after the button goes back to idle.
+    await expect(
+      page.getByTestId("pdf-image-fetch-progress")
+    ).not.toBeVisible();
   });
 });

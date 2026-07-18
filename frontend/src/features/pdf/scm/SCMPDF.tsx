@@ -44,6 +44,7 @@ export interface SCMPDFProps {
   jpgQuality: number;
   fileHandles: { [identifier: string]: FileSystemFileHandle };
   reportImageFailure?: (identifier: string, label: string) => void;
+  reportImageProgress?: () => void;
 }
 
 interface CardPair {
@@ -76,6 +77,7 @@ const SCMCard = ({
   jpgQuality,
   fileHandles,
   reportImageFailure,
+  reportImageProgress,
 }: {
   cardDocument: CardDocument;
   x: number;
@@ -88,6 +90,7 @@ const SCMCard = ({
   jpgQuality: number;
   fileHandles: { [identifier: string]: FileSystemFileHandle };
   reportImageFailure?: (identifier: string, label: string) => void;
+  reportImageProgress?: () => void;
 }) => {
   const boxW = cardWidthMM + 2 * SCM_BLEED_MM;
   const boxH = cardHeightMM + 2 * SCM_BLEED_MM;
@@ -122,6 +125,8 @@ const SCMCard = ({
           } catch {
             reportImageFailure?.(cardDocument.identifier, cardDocument.name);
             return undefined;
+          } finally {
+            reportImageProgress?.();
           }
         }}
         style={
@@ -176,6 +181,7 @@ const PageContent = ({
     jpgQuality: number;
     fileHandles: { [identifier: string]: FileSystemFileHandle };
     reportImageFailure?: (identifier: string, label: string) => void;
+    reportImageProgress?: () => void;
   };
 }) => {
   const { cols, rows, slotsMM, cardWidthMM, cardHeightMM, orientation } =
@@ -260,6 +266,7 @@ export const SCMPDF = (props: SCMPDFProps) => {
     jpgQuality: props.jpgQuality,
     fileHandles: props.fileHandles,
     reportImageFailure: props.reportImageFailure,
+    reportImageProgress: props.reportImageProgress,
   };
 
   const offsetActive =
