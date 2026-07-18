@@ -703,15 +703,100 @@ over a closed codebook.
   fetch/hash failures, unset, will retry on next invocation).
 - **Part 3's volume check, run against real data for the first time**
   (item 1's own gate, checked live 2026-07-18): (a) d=0 sibling with a
-  known artist — **0**, not a bug: only 3 cards in the entire catalog
-  have `inferred_canonical_card`/`inferred_canonical_artist` set at
-  all right now (the 0/43,426 gate meant the pilot's machine votes
-  structurally couldn't resolve anything; real human-backed
-  resolutions are still low-volume this early in the confirmation-
-  economy bootstrap, so the pool a d=0 duplicate-image match could
-  land in is tiny — expected to grow as real voting activity
-  accumulates, not a dead end). (b) frame-mismatch scan-log census —
-  **6,379 distinct cards** (6,753 rows). Combined volume clears the
-  ~2k threshold via (b) alone, ~3x over. **Part 3 is volume-justified
-  to build** — build itself not started this turn, held for the
-  owner's go-ahead per the established phase-transition pattern.
+  known artist — **CORRECTED, 2026-07-18**: originally reported as 0
+  here, but that number only queried the vote-derived fields
+  (`inferred_canonical_card`/`inferred_canonical_artist`, still 3/0
+  catalog-wide). The spec's own wording ("resolved printing's Scryfall
+  artist OR resolved artist consensus") also includes confirmed
+  indexing matches (`canonical_card`/`canonical_artist` — 10,926/7,333
+  cards catalog-wide, entirely independent of the vote system). Once
+  `run_d0_sibling_artist_propagation` (built this session, see below)
+  was run for real against the full precedence chain
+  `Card.serialise()` uses, the correct number is **987** cards that
+  would receive a propagated artist vote today, not 0. (b) frame-
+  mismatch scan-log census — **6,379 distinct cards** (6,753 rows),
+  broken down by engine: phash 980 (free to recover — see below),
+  OCR 5,178 (costs a refetch each), fallback 595 (out of scope, see
+  below). Combined volume clears the ~2k threshold via (b) alone,
+  ~3x over. **Part 3 is volume-justified to build.**
+- **Part 3 build — done, HOLD #P3** (2026-07-18): shared evidence-
+  recovery module `cardpicker/local_residual_classify.py` +
+  management command `local_residual_classify` (`--write` required to
+  actually cast votes; defaults to dry-run — a deliberate deviation
+  from `purge_machine_votes`'s opt-out convention, since HOLD #P3
+  gates the write pass specifically). One code path, built for reuse
+  by Part 5 later (`recover_frame_mismatch_printing_via_phash`/
+  `_via_ocr_refetch` are the reusable single-card primitives).
+  - **P-recovery mechanism** (the design question): the matched-but-
+    withheld printing P is computed in-memory during the original
+    pilot run but never persisted — the durable `CardScanLog` row
+    only records which _engine_ flagged a frame-mismatch skip, not
+    which printing it matched. Recovery is recomputed, priced very
+    differently by engine: **phash is free** (`Card.content_phash`,
+    backfilled catalog-wide by Part 2, is confirmed to be the exact
+    same hash the live phash engine would compute (see
+    `local_phash.compute_content_phash_for_card`'s own docstring) — so
+    recovery is a pure DB+arithmetic comparison against cached
+    `CanonicalCard.image_hash`, zero fetch); **OCR costs one real CDN
+    fetch + re-OCR per card** (the matched collector-number/set-code
+    text is never persisted); **fallback (595 cards, ~9%) is out of
+    scope** for this pass (its evidence-combination logic lives inline
+    in `_compute_card`'s whole-pipeline flow, not as a standalone
+    single-card function the way OCR/phash are — not worth extracting
+    for the smallest slice of the census).
+  - **Expected vote counts** (dry-run against live data, 2026-07-18):
+    frame-mismatch dual yield — phash path (free, ran against the full
+    980-card population): 750 recovered → 750 artist votes + 750
+    altered-frame tag votes would cast. OCR path: validated on a
+    30-fetch sample, 30/30 recovered (expected near-100% — this is
+    _recovering_ an already-successful match, not matching cold); the
+    full OCR-flagged population (5,178 cards) was NOT fetched this
+    session (no budget spent beyond the 30-card validation sample) —
+    at the current ~3 req/sec CDN ceiling, the full population would
+    cost ~29 minutes of fetch time if authorized. d=0 sibling
+    propagation: 987 votes would cast (see the corrected number
+    above), safely re-runnable, idempotent (excludes cards with an
+    existing vote from its own `anonymous_id`).
+  - **Rails**: `verify_no_single_machine_vote_resolutions` (zero-
+    resolution-style gate, mirrors `purge_machine_votes`'s identical
+    check — a single machine vote, weight 0.5, can never alone resolve
+    an artist per `resolve_weighted_consensus`'s human-backed gate; see
+    `test_artist_votes.py::TestResolveArtist::test_ai_only_insufficient`
+    for the existing template this shares). `PilotRunLedger` row per
+    invocation (RUNNING → COMPLETED/FAILED).
+    Purgeable via the existing `purge_machine_votes --run-id` (both
+    `CardArtistVote`/`CardTagVote` already carry `run_id` from Part
+    1 — no new purge code needed). 17 tests in
+    `test_local_residual_classify.py`, all passing (host venv only —
+    the same testcontainers-vs-nested-Docker limitation documented in
+    [[../troubleshooting.md]] applies).
+  - **Queue-surfacing spot-check** (real finding, not inferred): a
+    newly-cast machine artist vote correctly stays `UNRESOLVED` (0.5
+    weight can't cross the 2.0 threshold alone) and correctly surfaces
+    via `question_feed.py`'s Tier 4 (fresh). But `_artist_item()`
+    (question_feed.py:79) has **no artist equivalent of printing's
+    Tier-1 "confirm suggestion" UI** — it only exposes
+    `confidentlyKnownArtistName` (populated only for a non-vote-
+    derived, confirmed artist). A voter answering a fresh Tier-4
+    artist question sees zero hint of the machine's guess, even
+    though the vote is correctly weighted and participates in
+    consensus. This is a **pre-existing question_feed gap**, not
+    introduced by Part 3 (identical for every existing artist AI vote,
+    not just these) — flagged here for whoever next touches
+    question_feed's artist tier, not fixed as part of this work.
+  - **HOLD #P3 stands**: no vote has been written to the live database
+    by this pass. The write pass (`--write`) runs only after explicit
+    go-ahead.
+  - Item 1's 15 permanent `content_phash` backfill failures: scattered
+    across 6 distinct community Drive sources (CompC ×1,
+    Hathwellcrisping ×4, LePoulpe_Dec_2023 ×2, RustyShackleford ×6,
+    Trix_Are_For_Scoot ×1, Trix_Are_For_Scoot_2 ×1) — **not**
+    concentrated in the owner's own WilfordGrimley source, genuine
+    scattered dead/flaky Drive links rather than an intentional
+    exclusion. No distinct per-card failure-reason field exists to
+    report beyond `content_phash IS NULL` itself (the backfill command
+    only tracks an aggregate `failed` count). Noted here as the
+    ready-made live test set for PR #35's dead-link blocking-confirm
+    feature and the "degradation badge" work: card ids 35226, 6074,
+    1631, 6342, 4614, 36867, 36927, 57997, 62298, 74102, 58652, 64896,
+    57583, 114225, 117403.
