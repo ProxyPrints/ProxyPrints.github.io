@@ -4,17 +4,17 @@ import {
   buildDeckPayload,
   serializeDeckPayload,
 } from "@/features/savedDecks/deckPayload";
-import {
-  selectCurrentSavedDeck,
-  SavedDeckSessionState,
-} from "@/store/slices/savedDeckSessionSlice";
 import { selectFinishSettings } from "@/store/slices/finishSettingsSlice";
 import {
   selectIsProjectEmpty,
-  selectProjectMembers,
-  selectProjectCardback,
   selectManualOverrides,
+  selectProjectCardback,
+  selectProjectMembers,
 } from "@/store/slices/projectSlice";
+import {
+  SavedDeckSessionState,
+  selectCurrentSavedDeck,
+} from "@/store/slices/savedDeckSessionSlice";
 import { RootState } from "@/store/store";
 
 /**
