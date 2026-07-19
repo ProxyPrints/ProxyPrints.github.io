@@ -598,6 +598,23 @@ before its PR ships, in addition to (not instead of) `tsc --noEmit`, the Jest su
 against `next dev`. Add this to the pre-push checklist for every future PR touching a flagged
 route, not just this one's remaining build-out.
 
+## A rejected option must never re-appear as a selectable answer later in the same guided flow
+
+Caught live in `/whatsthat`'s Question Feed: Level 1 "Is it M21 203?" -> NO -> Level 2's grid
+contained only M21 203 again - the user's own just-given answer, re-offered as if it were new.
+General rule, not specific to this one screen: within a single multi-step guided flow (a funnel,
+a wizard, a question-by-question form), an option the user has explicitly rejected at an earlier
+step must never be re-presented as a selectable choice at a later step of the _same_ flow
+instance - each step's display set is "all options minus already-rejected-this-instance," and
+when rejecting the only remaining option would leave nothing to choose from, skip straight to
+whatever the flow's exit/fallback path is rather than rendering a choice screen with nothing
+new on it. See `docs/features/printing-tags.md`'s "No-re-presentation rule" for the concrete
+fix (`rejectedCandidateIds` client-side state, no backend change, no vote-semantics change -
+this is purely a display-filtering fix). Before applying a similar fix to any other guided flow,
+check what the rejecting action actually casts today (a vote, a mutation, nothing) - here Level
+1's NO already cast zero votes before the fix, which is what made this safe as a pure
+display-layer change with no risk of a double negative being recorded.
+
 ## A value carried "verbatim" out of its old context can silently stop meaning what it meant
 
 Two independent instances, same underlying failure mode: something copied forward unchanged from

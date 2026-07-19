@@ -975,6 +975,31 @@ export const questionFeedConfirmSuggestion = http.get(
     )
 );
 
+// Singleton variant of questionFeedConfirmSuggestion above - candidates contains ONLY the
+// suggested printing, exercising the case where rejecting it at Level 1 empties the remaining
+// set entirely (see QuestionFeed.tsx's suggestionRejectedWithNoneLeft / the double-asking fix).
+export const questionFeedConfirmSuggestionSingleton = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "confirm_suggestion",
+          card: cardDocument1,
+          suggestedPrinting: printingCandidate1,
+          candidates: [printingCandidate1],
+          tagConfidence: { "Full Art": 0, Borderless: 0 },
+        },
+        remainingEstimate: questionFeedCounts({
+          total: 5,
+          confirmable: 5,
+          fresh: 0,
+        }),
+      },
+      { status: 200 }
+    )
+);
+
 export const questionFeedIdentifyPrinting = http.get(
   buildRoute("2/questionFeed/"),
   () =>

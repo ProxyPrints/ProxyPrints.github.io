@@ -1,9 +1,14 @@
 import { expect } from "@playwright/test";
 
-import { cardDocument1, printingCandidate1 } from "@/common/test-constants";
+import {
+  cardDocument1,
+  printingCandidate1,
+  printingCandidate2,
+} from "@/common/test-constants";
 import {
   defaultHandlers,
   questionFeedConfirmSuggestion,
+  questionFeedConfirmSuggestionSingleton,
   submitPrintingTagResolvesToPrintingCandidate1,
 } from "@/mocks/handlers";
 
@@ -102,10 +107,14 @@ test.describe("question feed - confirm_suggestion question type", () => {
     expect(printingTagSubmitted).toBe(false);
   });
 
-  test("NO drops to Level 2's candidate grid without casting a vote", async ({
+  test("NO drops to Level 2's candidate grid, excluding the rejected suggestion, without casting a vote", async ({
     page,
     network,
   }) => {
+    // Double-asking fix: a candidate the user just rejected at Level 1 is never
+    // re-presented as a selectable tile at Level 2 within the same item - see
+    // rejectSuggestion/rejectedCandidateIds in QuestionFeed.tsx. This mock has two
+    // candidates, so the remaining one (printingCandidate2) should still show.
     let printingTagSubmitted = false;
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     page.on("request", (request) => {
@@ -119,7 +128,47 @@ test.describe("question feed - confirm_suggestion question type", () => {
 
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
+    ).toHaveCount(0);
+    await expect(
+      page.locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
     ).toBeVisible();
+    expect(printingTagSubmitted).toBe(false);
+  });
+
+  test("NO on a singleton suggestion (no other candidates) skips the grid entirely and goes straight to the exit choice", async ({
+    page,
+    network,
+  }) => {
+    // The specific bug the owner hit live: Level 1 "Is it M21 203?" -> NO -> Level 2 grid
+    // containing ONLY M21 203 again. With a single-candidate mock, rejecting the suggestion
+    // empties the remaining candidate set, so Level 2 should skip straight to the classified
+    // exit choice (None of these / art-matches-not-official / skip) rather than rendering a
+    // grid with nothing selectable in it.
+    let printingTagSubmitted = false;
+    network.use(questionFeedConfirmSuggestionSingleton, ...defaultHandlers);
+    page.on("request", (request) => {
+      if (request.url().includes("/2/submitPrintingTag/")) {
+        printingTagSubmitted = true;
+      }
+    });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await page.getByTestId("question-feed-level1-no").click();
+
+    // the rejected candidate is never a selectable tile again
+    await expect(
+      page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
+    ).toHaveCount(0);
+    // contextual copy replaces the generic "Which of these is it?" grid prompt
+    await expect(
+      page.getByTestId("question-feed-suggestion-prompt")
+    ).toContainText("Is it any official printing at all?");
+    // rejected candidate stays visible as grayed, non-interactive context
+    const rejectedContext = page.getByTestId("question-feed-rejected-context");
+    await expect(rejectedContext).toBeVisible();
+    await expect(rejectedContext).toContainText("not");
+    // the exit choices are reachable directly, without a grid in between
+    await expect(page.getByTestId("question-feed-no-match")).toBeVisible();
     expect(printingTagSubmitted).toBe(false);
   });
 
