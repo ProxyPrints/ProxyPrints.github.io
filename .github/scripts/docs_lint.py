@@ -39,6 +39,11 @@ ALLOWLIST = {
         "regression.md cite it deliberately as git archaeology, not a "
         "live reference"
     ),
+    "frontend/scripts/generate-docs-data.js": (
+        "docs/proposals/proposal-i-docs-as-site-source.md is a HOLD spec, "
+        "not yet built — this is the proposed script's path, cited for "
+        "when/if the spec is approved, not a claim it exists today"
+    ),
 }
 
 PATH_EXTENSIONS = (

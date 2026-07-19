@@ -130,6 +130,25 @@ export const cardDocumentsOneResult = http.post(buildRoute("2/cards/"), () =>
   )
 );
 
+// Same as cardDocumentsOneResult, but with a canonicalArtist set - cardDocument1 itself has none
+// (exercises the "Unknown" no-link path in CardDetailedViewModal's Artist Support Link row),
+// so this variant exists specifically to exercise the has-a-known-artist path.
+export const cardDocumentsOneResultWithCanonicalArtist = http.post(
+  buildRoute("2/cards/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [cardDocument1.identifier]: {
+            ...cardDocument1,
+            canonicalArtist: canonicalArtist1,
+          },
+        },
+      },
+      { status: 200 }
+    )
+);
+
 export const cardDocumentsThreeResults = http.post(buildRoute("2/cards/"), () =>
   HttpResponse.json(
     {
@@ -963,6 +982,31 @@ export const questionFeedConfirmSuggestion = http.get(
           card: cardDocument1,
           suggestedPrinting: printingCandidate1,
           candidates: [printingCandidate1, printingCandidate2],
+          tagConfidence: { "Full Art": 0, Borderless: 0 },
+        },
+        remainingEstimate: questionFeedCounts({
+          total: 5,
+          confirmable: 5,
+          fresh: 0,
+        }),
+      },
+      { status: 200 }
+    )
+);
+
+// Singleton variant of questionFeedConfirmSuggestion above - candidates contains ONLY the
+// suggested printing, exercising the case where rejecting it at Level 1 empties the remaining
+// set entirely (see QuestionFeed.tsx's suggestionRejectedWithNoneLeft / the double-asking fix).
+export const questionFeedConfirmSuggestionSingleton = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "confirm_suggestion",
+          card: cardDocument1,
+          suggestedPrinting: printingCandidate1,
+          candidates: [printingCandidate1],
           tagConfidence: { "Full Art": 0, Borderless: 0 },
         },
         remainingEstimate: questionFeedCounts({
