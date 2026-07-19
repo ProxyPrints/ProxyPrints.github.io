@@ -237,6 +237,51 @@ deprecation error (a known `gh` CLI bug unrelated to the edit itself), fall
 back to `gh api repos/<owner>/<repo>/pulls/<n> -X PATCH -f body="..."`,
 which hits the REST API directly and isn't affected.
 
+## Branch protection (GitHub-side backstop)
+
+No branch protection exists on `master` today (confirmed via
+`gh api repos/ProxyPrints/ProxyPrints.github.io/branches/master/protection`
+→ 404, 2026-07-19). The `.claude/hooks/guard_master.py` PreToolUse hook
+(see "Push policy" above) blocks a worker session from pushing straight
+to master or merging on its own, but it's a **local, in-process**
+check — every session on this repo currently authenticates with the
+same git/`gh` credential (`~/.git-credentials-proxyprints`), so
+GitHub itself can't yet tell "the owner, interactively" from "a worker
+session" apart by identity. Branch protection is the backstop for
+"the hook has a bug or gets bypassed," not a redundant copy of it —
+but only if configured with that gap in mind:
+
+- **"Require a pull request before merging," admins NOT exempt**
+  (i.e. leave "Do not allow bypassing the above settings" **checked**)
+  is the only setting that's a _real_ backstop under the current
+  single-credential setup: it rejects `git push origin master` outright
+  for every credential, including the owner's own, so a hook bug can't
+  silently land an unreviewed push. The cost: the owner's own solo
+  workflow changes from `git push origin master` to
+  `git push -u origin <branch> && gh pr create && gh pr merge --squash`
+  — an explicit merge step every time, which is also exactly the
+  owner-triggers-every-merge property the automation work above wants.
+- **Leave "Require approvals" at 0** rather than 1 — this is a
+  solo-maintained repo; there is no second human to satisfy a
+  required-review count, and setting it to 1 with admins exempt from
+  bypass would lock the owner out of merging their own repo entirely.
+  Requiring a PR to exist (and CI to pass on it) is the real gate here,
+  not a second reviewer.
+- Also enable: **require status checks to pass** (pick the CI jobs that
+  matter — e.g. `Formatting and static type checking`, `Backend tests`
+  if the repo wants that enforced), and leave **"Allow force pushes"**
+  and **"Allow deletions"** unchecked.
+- If a future setup gives workers their own restricted, non-admin
+  credential (rather than sharing the owner's), branch protection
+  becomes meaningfully layered — until then, "admins exempt" versions
+  of these settings provide no real protection against a worker using
+  the same credential, only against accidental non-owner contributors.
+
+This is a real workflow change (push-straight-to-master goes away for
+everyone, owner included) traded for a protection that actually holds
+under a hook bug — not a default to flip without a deliberate decision
+on that trade-off.
+
 ## Upstreaming to chilli-axe/mpc-autofill
 
 `upstream` remote = `https://github.com/chilli-axe/mpc-autofill.git`. Cut

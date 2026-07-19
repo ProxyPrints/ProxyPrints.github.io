@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://proxyprints.ca/schemas/report.json",
+  "title": "Standing report (structured mirror)",
+  "description": "Machine-parseable mirror of the six-field standing report format documented in CLAUDE.md's Reporting convention. The prose report on its branch is the record of truth for a human reader; this is a parity artifact for tooling that needs to route on verdict/deviations/open-items without re-parsing prose. Tiered: `summary` is read on every report; `detail` is read only when summary signals something needs it.",
+  "type": "object",
+  "required": ["task", "summary"],
+  "properties": {
+    "task": {
+      "type": "object",
+      "description": "Field 1 of the standing format: name + branch(es) + PR/commit refs.",
+      "required": ["name", "branch"],
+      "properties": {
+        "name": { "type": "string" },
+        "branch": { "type": "string" },
+        "refs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "PR numbers / commit SHAs this report is about."
+        }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "description": "Always read. Fields 2, 3, and 5 of the standing format, condensed: what happened, what diverged, what needs a decision. Most reports are clean and this tier is the whole read.",
+      "required": ["verdict", "shipped"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["clean", "deviations", "blocked"],
+          "description": "clean = shipped as directed, no deviations, no open items. deviations = shipped with noted departures from spec. blocked = nothing or partial shipped."
+        },
+        "shipped": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Per numbered item of the instruction executed. Empty + verdict:blocked means nothing shipped."
+        },
+        "deviations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["item", "reasoning"],
+            "properties": {
+              "item": { "type": "string" },
+              "reasoning": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "description": "Omit or empty array means \"none\" — matches the prose format's explicit 'none' rather than a missing field."
+        },
+        "open_items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["question"],
+            "properties": {
+              "question": { "type": "string" },
+              "answerable": {
+                "type": "boolean",
+                "description": "True if a single reply resolves it (per the standing format's 'numbered, answerable' rule)."
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "detail": {
+      "type": "object",
+      "description": "Read only when summary.verdict != 'clean', or summary.open_items is non-empty. Fields 4 and 6 of the standing format. A directive referencing this report cites `report_path` + an item number here — never re-quotes its content.",
+      "properties": {
+        "verification": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["check"],
+            "properties": {
+              "check": { "type": "string" },
+              "result": { "type": "string" },
+              "deferred_reason": {
+                "type": "string",
+                "description": "Set instead of result when this check was deferred rather than run."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "live_state": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Anything running, deployed, pushed, or left behind."
+        }
+      },
+      "additionalProperties": false
+    },
+    "report_path": {
+      "type": "string",
+      "description": "Repo-relative path to the full prose report (docs/reports/<date>-<topic>.md) when one was committed. Directives referencing this report cite this path + an item number; they do not re-paste content from it."
+    }
+  },
+  "additionalProperties": false
+}

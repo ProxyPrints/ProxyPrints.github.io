@@ -5,6 +5,13 @@ agent pass, written up for a later reader instead of staying trapped in
 that session's own transcript. Not living reference: check each report's
 own "as of" date before trusting anything in it as current.
 
+`schema.json` is a structured mirror of the six-field standing report
+format (CLAUDE.md's Reporting convention) — the prose report is still
+the record of truth for a human reader; the schema exists for tooling
+that needs to route on verdict/deviations/open-items without
+re-parsing prose. Tiered: a `summary` object read on every report, and
+a `detail` object read only when the summary signals it's needed.
+
 - `2026-07-18-part3-fullrun.md` — Part 3 catalog-completion fullrun
   status + backfilled HOLD #P3 record.
 - `2026-07-18-part3-fullrun-data-loss.md` — the fullrun dry-run's
