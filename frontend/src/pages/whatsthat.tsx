@@ -220,6 +220,20 @@ export default function PrintingQueue() {
           name="description"
           content={`Test your Magic: the Gathering knowledge and help tag which real-world printing each card image in ${ProjectName} depicts.`}
         />
+        {/* PWA installability (mobile funnel pass) - deliberately scoped to /whatsthat only
+            (start_url/scope both "/whatsthat" in the manifest itself), not a site-wide
+            manifest on _document.tsx: the game is the installable "app" here, not the whole
+            catalog/editor, and Next.js's per-page <Head> content lands only in this route's
+            own generated HTML under `output: "export"`'s static per-page output - so this
+            link is genuinely absent from every other page's markup, not just visually unused
+            there. Icons generated from whatsthat-mark.svg (the branding integration's own
+            source asset - see docs/features/artist-support-links.md's sibling doc,
+            docs/features/printing-tags.md's "Branding integration" bullet) via a one-off
+            Playwright rasterization (not committed - see this task's own report), not a new
+            build-time asset pipeline; PNGs are checked in directly like the SVGs themselves. */}
+        <link rel="manifest" href="/whatsthat-manifest.json" />
+        <meta name="theme-color" content="#ff4719" />
+        <link rel="apple-touch-icon" href="/whatsthat-icon-192.png" />
       </Head>
       <PrintingQueueOrDefault />
     </ProjectContainer>

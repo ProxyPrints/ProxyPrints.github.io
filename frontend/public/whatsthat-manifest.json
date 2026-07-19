@@ -1,0 +1,22 @@
+{
+  "name": "What's That Card?",
+  "short_name": "What's That Card?",
+  "description": "Test your Magic: the Gathering knowledge - identify real-world printings, artists, and descriptor tags one card at a time.",
+  "start_url": "/whatsthat",
+  "scope": "/whatsthat",
+  "display": "standalone",
+  "background_color": "#ff4719",
+  "theme_color": "#ff4719",
+  "icons": [
+    {
+      "src": "/whatsthat-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/whatsthat-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
