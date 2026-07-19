@@ -285,7 +285,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.getByRole("link", { name: "Display (beta)" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
-    const badge = page.getByTestId("display-printing-badge");
+    const badge = page.getByTestId("requested-printing-badge");
     await expect(badge).toBeVisible();
     await expect(badge).toContainText("2ED 162");
     await expect(badge).toHaveAttribute("data-degraded", "false");
@@ -307,7 +307,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.getByRole("link", { name: "Display (beta)" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
-    const badge = page.getByTestId("display-printing-badge");
+    const badge = page.getByTestId("requested-printing-badge");
     await expect(badge).toBeVisible();
     await expect(badge).toContainText("XYZ 999");
     await expect(badge).toHaveAttribute("data-degraded", "true");

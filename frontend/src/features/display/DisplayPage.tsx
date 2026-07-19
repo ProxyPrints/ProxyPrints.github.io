@@ -8,11 +8,13 @@
  * surfaces share one real search implementation). The always-visible header now carries the real
  * requested-printing badge (Step 2 PR 2b - degraded-style variant keyed off
  * EditorSearchResponse.degradedQueries, wired end to end through searchResultsSlice's
- * selectIsSearchQueryDegraded) and the real DeckbuilderConfirmAffordance (same component
- * CardSlot.tsx mounts, adapted only via its onOpenGridSelector prop - the rail has no modal to
- * open, so N expands the Choose Image section instead). Every other accordion section still
- * renders a labeled stub - see each section's own comment for which later PR fills it in, per
- * the design doc's §6 migration/sequencing plan.
+ * selectIsSearchQueryDegraded; later extracted into its own RequestedPrintingBadge.tsx component
+ * - item (c) of the frontend-polish package - so CardSlot.tsx's editor slots could mount the
+ * exact same badge, one component instead of two copies that could drift) and the real
+ * DeckbuilderConfirmAffordance (same component CardSlot.tsx mounts, adapted only via its
+ * onOpenGridSelector prop - the rail has no modal to open, so N expands the Choose Image section
+ * instead). Every other accordion section still renders a labeled stub - see each section's own
+ * comment for which later PR fills it in, per the design doc's §6 migration/sequencing plan.
  *
  * Deliberately NOT built here (see the design doc + this task's relay reports for the full
  * reasoning): the tablet off-canvas drawer and mobile bottom-sheet overlay interaction patterns
@@ -46,6 +48,7 @@ import {
 import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { Spinner } from "@/components/Spinner";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
+import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
@@ -73,10 +76,7 @@ import {
   selectProjectMembers,
   setSelectedImages,
 } from "@/store/slices/projectSlice";
-import {
-  selectIsSearchQueryDegraded,
-  selectSearchResultsForQueryOrDefault,
-} from "@/store/slices/searchResultsSlice";
+import { selectSearchResultsForQueryOrDefault } from "@/store/slices/searchResultsSlice";
 import {
   selectFrontsVisible,
   toggleFaces,
@@ -160,12 +160,6 @@ interface RailHeaderProps {
   face: Faces;
   slot: number;
   cardName: string | undefined;
-  printingBadge: string | undefined;
-  // Whether this slot's printing-specific search (expansionCode/collectorNumber) found nothing
-  // and the backend retried it unfiltered - EditorSearchResponse.degradedQueries, wired end to
-  // end in Step 2's second instrument PR (see selectIsSearchQueryDegraded). Meaningless when
-  // printingBadge is undefined (no printing filter to have degraded in the first place).
-  isDegraded: boolean;
   cardIdentifier: string | undefined;
   searchQuery: SearchQuery | undefined;
   onOpenChooseImage: () => void;
@@ -175,8 +169,6 @@ const RailHeader = ({
   face,
   slot,
   cardName,
-  printingBadge,
-  isDegraded,
   cardIdentifier,
   searchQuery,
   onOpenChooseImage,
@@ -191,24 +183,12 @@ const RailHeader = ({
         <span className="text-muted fst-italic">No art selected yet</span>
       )}
     </div>
-    {printingBadge != null && (
-      <span
-        className={`badge mt-1 ${
-          isDegraded ? "bg-warning text-dark" : "bg-secondary"
-        }`}
-        style={{ fontFamily: "monospace" }}
-        data-testid="display-printing-badge"
-        data-degraded={isDegraded}
-        title={
-          isDegraded
-            ? "This printing wasn't found - showing the closest available match instead."
-            : undefined
-        }
-      >
-        {isDegraded && <i className="bi bi-exclamation-triangle-fill me-1" />}
-        {printingBadge}
-      </span>
-    )}
+    {/* Item (c) of the frontend-polish package extracted this into its own shared component
+        (RequestedPrintingBadge.tsx) so CardSlot.tsx's editor slots could mount the identical
+        badge - one place the degraded-style logic lives, so the two surfaces can't drift. */}
+    <div className="mt-1">
+      <RequestedPrintingBadge query={searchQuery} />
+    </div>
     {/* Adapts CardSlot.tsx's own mount of this component (same props, same gating logic inside
         DeckbuilderConfirmAffordance itself - not forked) for the rail's status header: N's
         "open the grid selector" becomes "expand (or keep expanded, if already open) the Choose
@@ -360,19 +340,6 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
       : undefined
   );
   const query = projectMember?.query;
-  // Hooks must run unconditionally on every render (same order regardless of selectedSlotRef),
-  // so this - like the projectMember selector above - is called before the idle-state early
-  // return below, with the "nothing selected yet" case handled inside the selector itself
-  // rather than by skipping the call.
-  const isDegraded = useAppSelector((state) =>
-    selectIsSearchQueryDegraded(
-      state,
-      query?.query,
-      query?.cardType,
-      query?.expansionCode,
-      query?.collectorNumber
-    )
-  );
 
   if (selectedSlotRef == null) {
     return (
@@ -389,12 +356,6 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
   const cardName =
     selectedImage != null
       ? cardDocumentsByIdentifier[selectedImage]?.name
-      : undefined;
-  const printingBadge =
-    query?.expansionCode != null
-      ? `${query.expansionCode.toUpperCase()}${
-          query.collectorNumber ? " " + query.collectorNumber : ""
-        }`
       : undefined;
 
   const onToggle = (key: AccordionSectionKey) =>
@@ -414,8 +375,6 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
         face={selectedSlotRef.face}
         slot={selectedSlotRef.slot}
         cardName={cardName}
-        printingBadge={printingBadge}
-        isDegraded={isDegraded}
         cardIdentifier={selectedImage}
         searchQuery={query}
         onOpenChooseImage={onOpenChooseImage}
