@@ -697,3 +697,34 @@ live for this fix (`tests/Navbar.spec.ts`): the new click-through tests fail det
 (`page.waitForURL` times out) against the original nested-anchor markup and pass cleanly once the
 wrapper is removed - proof the test genuinely exercises the failure mode, not just incidental
 coverage.
+
+## A backgrounded Playwright run's dev server breaks if you `git checkout` the same working directory while it's still live
+
+Kicked off `npx playwright test ... ` in the background (it exceeded the foreground timeout and
+auto-backgrounded), then - without waiting for it to actually finish - ran `git checkout master`
+and `git checkout -b <new-branch>` in the SAME working directory to start a different, unrelated
+task. The backgrounded run's own `next dev` server was still live and still serving requests for
+its in-flight test suite; the checkout swapped the filesystem out from under it mid-serve. Next's
+dev server watches the filesystem for HMR, so a branch swap while it's live isn't a clean restart -
+it's a partial, inconsistent reload. Symptom: 2 of that run's ~43 tests failed at almost exactly the
+point in the run where the checkout happened (confirmed by cross-referencing the failure position
+against wall-clock timing), while everything before and after ran fine - looking exactly like a
+flaky pair of real test failures, not infrastructure corruption. A second, unrelated mistake
+compounded it: after seeing failures, immediately launching a SECOND `npx playwright test` in the
+same directory without confirming the first one had actually finished and its dev server had
+actually exited - `pgrep -fa "next dev"` showing no live process is not proof of that; a
+just-completed backgrounded task's own teardown can race with a check run moments later. The result
+was two Playwright invocations colliding over the same dev server port, producing
+`ERR_CONNECTION_REFUSED` on an unrelated, otherwise-passing spec.
+
+**The fix that actually resolved it**: re-run the SAME suite once more, uncontested (no other
+Playwright/git activity in that working directory for the run's entire duration) - it passed
+34/34 clean, confirming both prior failure sets were self-inflicted infrastructure noise, not real
+regressions. **The rule going forward**: once a `npx playwright test` invocation is running -
+foreground or auto-backgrounded - treat that working directory as locked until it completes: no
+`git checkout`/`git stash`/branch switches, and no launching a second Playwright invocation in the
+same directory in parallel. If a task genuinely needs to run something else while a Playwright suite
+is still in flight, use a separate worktree (see this doc's own worktree-port-collision entry) or
+just wait for a completion notification before touching git state again. A "no processes running"
+check via `pgrep` at one instant is not sufficient proof it's safe to proceed - the teardown of the
+task you just kicked off may not have landed yet.
