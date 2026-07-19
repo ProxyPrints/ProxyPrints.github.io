@@ -20,6 +20,7 @@ on:
       - ".github/scripts/**"
       - ".github/wiki-publish-map.json"
       - ".github/workflows/docs-lint.yml"
+      - "readme.md"
   schedule:
     # Weekly, independent of any PR — catches rot introduced by a change
     # OUTSIDE docs/ (e.g. a component move that a doc's path reference
@@ -54,3 +55,28 @@ jobs:
       - uses: actions/checkout@v6
       - name: Run publish_wiki.py link-rewrite parity fixtures
         run: python3 .github/scripts/tests/test_publish_wiki_link_rewrite.py
+
+  readme-parity:
+    name: readme.md parity (publish_readme.py)
+    # readme.md is generated-and-COMMITTED, not gitignored like the site
+    # emit — GitHub renders it directly from the default branch with no
+    # build step in between (docs/proposals/proposal-i-readme-pipeline.md
+    # §2). This job is the correctness gate in place of a build-time
+    # regenerate: run the emit fresh and fail the PR if the committed file
+    # has drifted from it, so a hand-edit to readme.md (should have gone
+    # into a docs/ source region) or a source-region edit whose author
+    # forgot to rerun the script are both caught here instead of shipping
+    # silently stale.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run publish_readme.py unit + parity tests
+        run: python3 .github/scripts/tests/test_publish_readme.py
+      - name: Regenerate readme.md and diff against the committed file
+        run: |
+          cp readme.md /tmp/readme-committed.md
+          python3 .github/scripts/publish_readme.py .
+          if ! diff -u /tmp/readme-committed.md readme.md; then
+            echo "::error::readme.md is out of date - rerun \`python3 .github/scripts/publish_readme.py .\` and commit the result"
+            exit 1
+          fi

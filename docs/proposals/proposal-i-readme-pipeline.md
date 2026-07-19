@@ -1,11 +1,12 @@
 As of: 2026-07-19
 What this is: README-into-the-docs-pipeline — folds into Proposal I
 (`docs/proposals/proposal-i-docs-as-site-source.md`, single-transform
-architecture). **AUDIT ONLY, HOLD.** This doc is the deliverable requested:
-a content merge map for `readme.md` plus a proposed post-review
-architecture. **No restructuring has happened. `readme.md` is untouched.**
-Content judgment (what's kept, what's cut, exact final wording) is the
-owner's call — this doc proposes, it doesn't decide.
+architecture). **SHIPPED.** §§0–4 below are the original audit deliverable
+(content merge map + proposed architecture), kept verbatim as a record —
+every "open question"/"owner call" phrasing in them reflects that
+pre-decision state, not the current one. **§5 records the owner's GO
+decision on all five open items and what actually shipped** — read that
+section for the current, built state of `readme.md`'s generation.
 
 Note on filename casing: the actual file at the repo root is `readme.md`
 (lowercase), not `README.md` — GitHub renders either casing as the repo's
@@ -189,3 +190,78 @@ block on it):
    handed down as final.
 5. `readme` mode's exact CLI shape and source-region layout (§2) — sketch
    only, not designed in full, pending this map's approval first.
+
+## 5. GO decision (owner) + what shipped
+
+Owner resolved all five open items above, no further review gate before
+build:
+
+1. **Releases/downloads badge — REMOVE.** Zero releases exist; restore if
+   releases ever do.
+2. **SignPath/sponsors — REMOVE, extended to ALL desktop-tool content.**
+   Amendment after the initial GO: ProxyPrints is web-only and does not
+   ship the desktop tool — that's upstream's product. The README removes
+   the desktop-tool CI badge, any download/install instructions for the
+   desktop client, and any feature description implying this fork
+   distributes it — not just the SignPath credit. One line points to
+   upstream's project if the desktop tool is mentioned at all. (The
+   `desktop-tool-ci.yml` workflow itself is untouched — README scope
+   only, per the amendment's own wording.)
+3. **Code Signing Policy section — REMOVE entirely.**
+4. **Header/tagline — seeded from `docs/wiki-home-intro.md`** (the
+   ratified voice, not new copy), per §1's original proposal.
+5. **Emit mode — built per §2's sketch**, with the marker-layout/CLI
+   details settled here rather than re-litigated:
+
+**What actually shipped** (`.github/scripts/publish_readme.py` +
+`docs/readme-sections.md`):
+
+- **Marker name is `README-REGION`, not `DATA-EXTRACT`.** §2's sketch
+  proposed reusing `DATA-EXTRACT`'s marker mechanics; building it revealed
+  that's the wrong name to reuse — `DATA-EXTRACT`'s contract
+  (`proposal-i-docs-as-site-source.md` §3) is explicitly table-only, and
+  these regions are prose. Same mechanics (named HTML-comment start/end
+  pairs, hard-error on a missing/unterminated marker, an unlisted region
+  in the same file is silently ignored), different, honestly-labeled
+  name.
+- **Three regions, two source files**: `identity` lives in the existing
+  `docs/wiki-home-intro.md` (wrapped in markers, content unchanged — it
+  was already exactly the right paragraph, per §1's finding); `license`,
+  `documentation-pointer`, and `desktop-tool-pointer` live in a new,
+  single-purpose `docs/readme-sections.md`, read directly by
+  `publish_readme.py` and — like `wiki-home-intro.md` itself — never
+  listed in `.github/wiki-publish-map.json`'s page list, so it isn't
+  independently wiki-published.
+- **No link-rewriting — a real deviation from the §2 sketch, with a
+  concrete reason found while building it.** `readme.md` lives at the
+  repo root; its source regions live in `docs/`. A relative link correct
+  when a region is linted in place (relative to `docs/`, `docs_lint.py`'s
+  own resolution rule) would resolve to something else entirely once that
+  same text is copied verbatim into the root file. Rather than teach
+  `publish_readme.py` a second, output-relative link-resolution mode (and
+  duplicate `publish_wiki.py`'s transform machinery for a 3-region file),
+  every region author uses absolute `https://github.com/...` URLs for any
+  file reference — sidesteps the ambiguity entirely. A dedicated test
+  (`test_no_relative_file_links_in_source_regions` in
+  `.github/scripts/tests/test_publish_readme.py`) guards this.
+- **CI badges (`web-ci`, `cloudflare-workers-ci`) are hardcoded directly
+  in `publish_readme.py`**, not sourced from a `docs/` region — matching
+  `publish_wiki.py`'s own precedent (`generated_header()` is hardcoded,
+  not docs-sourced) for content that's deterministic from the repo's own
+  identity rather than genuine editorial prose.
+- **CI gate**: `docs-lint.yml` gained a `readme-parity` job — runs
+  `publish_readme.py`'s own unit test suite
+  (`.github/scripts/tests/test_publish_readme.py`, 8 tests: region
+  extraction, both hard-error paths, the unlisted-region-is-ignored case,
+  a real-repo build-matches-committed-file parity check, idempotency, and
+  the no-relative-links guard), then regenerates `readme.md` into a
+  scratch copy and diffs it against the committed file, annotating and
+  failing the PR check on drift.
+- **Verified**: two consecutive runs of `publish_readme.py` produce
+  byte-identical output (idempotent); `docs_lint.py` still reports clean
+  with the new `docs/readme-sections.md` file and the marker comments
+  added to `docs/wiki-home-intro.md`; the real wiki publish
+  (`publish_wiki.py . <scratch dir>`) still succeeds and produces the same
+  visible Home page content as before — the added `README-REGION`/`END README-REGION` HTML comments are inert, GitHub hides HTML comments when
+  rendering both normal repo pages and wiki pages; the rendered
+  `readme.md` was eyeballed in the build PR.
