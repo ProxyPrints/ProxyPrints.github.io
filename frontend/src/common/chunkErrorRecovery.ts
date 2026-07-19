@@ -10,6 +10,31 @@
  * symptom: a stuck "No Server Configured" page until a manual hard refresh).
  */
 
+// In-memory only (module-level, not sessionStorage) - this only needs to survive from the
+// instant reloadOnceForChunkError() decides to reload to the synchronous `beforeunload` event
+// that `window.location.reload()` fires, both within the same tick, before this module's whole
+// JS context is torn down by the reload itself. See isRecoveryReloadInFlight()'s own comment for
+// why ProjectEditor.tsx's unsaved-work guard needs this at all.
+let recoveryReloadInFlight = false;
+
+/** True for the brief window between reloadOnceForChunkError() deciding to reload and the
+ * reload's own beforeunload event actually firing. ProjectEditor.tsx's unsaved-work guard reads
+ * this to distinguish "the app itself is recovering from a stale/failed chunk fetch" (this
+ * function's whole reason for existing) from a genuine user-initiated exit (tab close, address-
+ * bar navigation, a manual refresh) - `beforeunload` itself carries zero information about *why*
+ * or *where* the page is unloading (a deliberate browser privacy/security constraint), so there
+ * is no way for the guard to tell these apart except a flag exactly like this one. Root-caused
+ * from a priority bug report: clicking a next/link nav item (e.g. Editor -> /display) while that
+ * target route's JS chunk fails to fetch (a stale deploy, or a plain transient network blip - see
+ * this file's own module comment) sends the router down this exact recovery path; since the
+ * failed transition never actually left the current page, ProjectEditor's beforeunload listener
+ * was still mounted and - correctly, per its own narrow logic, but unhelpfully here - intercepted
+ * this reload as if the user were abandoning their work, when it's really the app's own recovery
+ * attempt for a problem unrelated to their project state. */
+export function isRecoveryReloadInFlight(): boolean {
+  return recoveryReloadInFlight;
+}
+
 const CHUNK_RELOAD_GUARD_KEY = "chunkReloadAttemptedAt";
 // A real deploy-caused chunk failure is fixed by exactly one reload (the browser fetches the
 // fresh HTML/chunk manifest). This window exists only to stop a reload LOOP if reloading somehow
@@ -54,5 +79,6 @@ export function reloadOnceForChunkError(): void {
     return;
   }
   window.sessionStorage.setItem(CHUNK_RELOAD_GUARD_KEY, String(now));
+  recoveryReloadInFlight = true;
   window.location.reload();
 }

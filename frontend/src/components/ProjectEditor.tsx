@@ -10,6 +10,7 @@ import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 import Tab from "react-bootstrap/Tab";
 
+import { isRecoveryReloadInFlight } from "@/common/chunkErrorRecovery";
 import {
   NavbarHeight,
   NavPillButtonHeight,
@@ -184,11 +185,20 @@ function ProjectEditor() {
   const [editorPanel, setEditorPanel] = useState<EditorPanel>("import");
 
   /**
-   * Ask the user for confirmation before they close the page if their project has any cards in it.
+   * Ask the user for confirmation before they close the page if their project has any cards in
+   * it. Priority bug fix: this must NOT fire for the app's own chunk-load-error recovery reload
+   * (chunkErrorRecovery.ts) - that reload is triggered internally when a client-side nav's target
+   * chunk fails to fetch (a stale deploy, or a plain transient network blip), and since the
+   * failed transition never actually leaves this page, this listener is still mounted when it
+   * fires. Diagnosis for the reported "/display navigation shows an unsaved-work dialog" bug:
+   * editor -> /display IS already a normal client-side next/link transition (Navbar.tsx) that
+   * preserves the store correctly - verified, no changes needed there. This chunk-recovery path
+   * was the actual (narrower, real) trigger; every genuine exit (tab close, address-bar
+   * navigation, a manual refresh) still warns exactly as before.
    */
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
-      if (!isProjectEmpty) {
+      if (!isProjectEmpty && !isRecoveryReloadInFlight()) {
         event.preventDefault();
         return false;
       }
