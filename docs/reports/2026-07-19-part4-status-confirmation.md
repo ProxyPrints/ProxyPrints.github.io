@@ -33,8 +33,7 @@ shipped and run; no rebuild or re-run was needed or performed.
 
 The re-stated spec cited "=s800 tier for OCR fetches (2.6x)". Flagged
 this in the first pass of this report as unverifiable against the shipped
-addendum's own derivation (`OCR_FETCH_DPI = 220` vs `DEFAULT_FETCH_DPI =
-250` works out to ~1.14x linear / ~1.29x by fetch area, not 2.6x, and no
+addendum's own derivation (`OCR_FETCH_DPI = 220` vs `DEFAULT_FETCH_DPI = 250` works out to ~1.14x linear / ~1.29x by fetch area, not 2.6x, and no
 "2.6x" figure exists anywhere in the repo). Owner confirmed directly:
 this priority push was a courier re-send, and "2.6x" refers to the
 already-shipped `=s800` addendum itself — nothing to re-derive or
