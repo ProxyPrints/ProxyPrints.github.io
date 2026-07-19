@@ -7,7 +7,7 @@
   "scripts": {
     "postinstall": "patch-package && node scripts/copy-pdf-worker.js && node scripts/generate-keyrune-assets.js",
     "dev": "next dev",
-    "prebuild": "node scripts/generate-docs-site.js",
+    "docs:generate": "python3 ../.github/scripts/publish_site.py .. generated-docs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

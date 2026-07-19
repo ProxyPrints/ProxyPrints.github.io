@@ -38,6 +38,20 @@ FAILS rather than shipping a page with a link nobody can follow.
 
 Exits 0 whether or not anything changed; the calling workflow decides
 whether to commit based on `git status --porcelain` in the wiki dir.
+
+SINGLE-TRANSFORM ARCHITECTURE (per docs/proposals/proposal-i-docs-as-site-
+source.md): this module is the ONLY owner of link-rewrite logic, for BOTH
+the wiki and the site. rewrite_link()/transform_links() take an optional
+repo_to_site map - None (the default, used by this script's own wiki-
+publish mode) preserves the exact 2-way behavior above; a real dict (used
+by publish_site.py's site-emit mode) adds a 3rd resolution branch (a link
+to a "site"-targeted page becomes that page's own route) and changes how a
+wiki-only target resolves (a same-repo wiki link only makes sense when
+publishing FOR the wiki; the site doesn't host that page, so it needs an
+absolute external wiki URL instead). frontend/scripts has no reimplemented
+copy of any of this - see publish_site.py and
+frontend/src/pages/guide/[[...slug]].tsx, which only read this script's
+JSON output and render markdown to HTML.
 """
 
 import json
@@ -47,6 +61,7 @@ from pathlib import Path
 
 GENERATED_MARKER = "<!-- GENERATED PAGE"
 GITHUB_BLOB_BASE = "https://github.com/ProxyPrints/ProxyPrints.github.io/blob/master/"
+GITHUB_WIKI_BASE = "https://github.com/ProxyPrints/ProxyPrints.github.io/wiki/"
 
 # Order matters: fence/inline must be tried before the link alternatives so
 # code content is never rewritten - both this repo's own [[wiki-link]] prose
@@ -84,6 +99,16 @@ def build_repo_to_wiki_map(mapping: dict) -> dict:
     return {page["source"]: page["wiki"] for group in mapping["groups"] for page in group["pages"] if page.get("wiki")}
 
 
+def build_repo_to_site_map(mapping: dict) -> dict:
+    """source -> sitePath, for every page whose targets include "site"."""
+    return {
+        page["source"]: page["sitePath"]
+        for group in mapping["groups"]
+        for page in group["pages"]
+        if "site" in page.get("targets", []) and page.get("sitePath")
+    }
+
+
 def resolve_repo_relative(repo_root: Path, source_rel: str, target: str) -> str | None:
     """
     Resolve a link target string against source_rel's own directory. Returns
@@ -105,30 +130,58 @@ def resolve_repo_relative(repo_root: Path, source_rel: str, target: str) -> str 
 
 
 def rewrite_link(
-    repo_root: Path, source_rel: str, target: str, repo_to_wiki: dict, display_text: str | None
+    repo_root: Path,
+    source_rel: str,
+    target: str,
+    repo_to_wiki: dict,
+    display_text: str | None,
+    repo_to_site: dict | None = None,
 ) -> tuple[str | None, str | None]:
-    """Returns (new_markdown_link, error_message) - exactly one is non-None, unless
-    target wasn't a local path at all (both None - caller leaves the original text)."""
+    """
+    Returns (new_markdown_link, error_message) - exactly one is non-None, unless
+    target wasn't a local path at all (both None - caller leaves the original text).
+
+    repo_to_site: None (the default) means "wiki-publish mode" - a wiki-only
+    target becomes a same-wiki link, exactly the original 2-way behavior.
+    A dict (possibly empty) means "site-emit mode": a "site"-targeted match
+    takes priority (the site hosts that page itself) and a wiki-only match
+    becomes an ABSOLUTE wiki URL instead of a same-repo link, since the site
+    doesn't host wiki pages.
+    """
     resolved_rel = resolve_repo_relative(repo_root, source_rel, target)
     if resolved_rel is None:
         return None, None
 
+    if repo_to_site is not None and resolved_rel in repo_to_site:
+        site_path = repo_to_site[resolved_rel]
+        text = display_text or site_path
+        return f"[{text}]({site_path})", None
+
     wiki_name = repo_to_wiki.get(resolved_rel)
     if wiki_name:
         text = display_text or wiki_name
+        if repo_to_site is not None:
+            return f"[{text}]({GITHUB_WIKI_BASE}{wiki_name})", None
         return f"[{text}]({wiki_name})", None
 
     if not (repo_root / resolved_rel).is_file():
         return None, (
-            f"in {source_rel}: link to `{target}` resolves to `{resolved_rel}`, which is "
-            f"neither a published wiki page nor a real file in the repo"
+            f"in {source_rel}: link to `{target}` resolves to `{resolved_rel}`, which is neither "
+            f"a mapped page (wiki{'/site' if repo_to_site is not None else ''}) nor a real file in the repo"
         )
 
     text = display_text or resolved_rel.rsplit("/", 1)[-1]
     return f"[{text}]({GITHUB_BLOB_BASE}{resolved_rel})", None
 
 
-def transform_links(repo_root: Path, source_rel: str, text: str, repo_to_wiki: dict, errors: list[str]) -> str:
+def transform_links(
+    repo_root: Path,
+    source_rel: str,
+    text: str,
+    repo_to_wiki: dict,
+    errors: list[str],
+    repo_to_site: dict | None = None,
+) -> str:
     def repl(m: re.Match) -> str:
         if m.group("fence") is not None or m.group("inline") is not None:
             return m.group(0)
@@ -137,7 +190,9 @@ def transform_links(repo_root: Path, source_rel: str, text: str, repo_to_wiki: d
             target = m.group("wikilink")
             if not (target.endswith(".md") or "/" in target):
                 return m.group(0)  # e.g. [[routes]] - a literal TOML table, not a doc link
-            new_link, err = rewrite_link(repo_root, source_rel, target, repo_to_wiki, display_text=None)
+            new_link, err = rewrite_link(
+                repo_root, source_rel, target, repo_to_wiki, display_text=None, repo_to_site=repo_to_site
+            )
             if err:
                 errors.append(err)
                 return m.group(0)
@@ -145,7 +200,9 @@ def transform_links(repo_root: Path, source_rel: str, text: str, repo_to_wiki: d
 
         # markdown link
         mdtext, mdpath = m.group("mdtext"), m.group("mdpath")
-        new_link, err = rewrite_link(repo_root, source_rel, mdpath, repo_to_wiki, display_text=mdtext or None)
+        new_link, err = rewrite_link(
+            repo_root, source_rel, mdpath, repo_to_wiki, display_text=mdtext or None, repo_to_site=repo_to_site
+        )
         if err:
             errors.append(err)
             return m.group(0)

@@ -1,51 +1,34 @@
 import styled from "@emotion/styled";
-import fs from "fs";
 import { GetStaticPaths, GetStaticProps } from "next";
 import Head from "next/head";
-import path from "path";
 
 import { ProjectName } from "@/common/constants";
+import {
+  readGeneratedPage,
+  readManifest,
+  renderMarkdown,
+} from "@/features/guide/docsSite";
 import Footer from "@/features/ui/Footer";
 import { ProjectContainer } from "@/features/ui/Layout";
 
 // Build-time-only site pages sourced from docs/, per
-// docs/proposals/proposal-i-docs-as-site-source.md §1(a). Content is
-// pre-rendered to HTML by ../../../scripts/generate-docs-site.js (an npm
-// "prebuild" step, see package.json) into
-// src/common/generated/docsSite/*.json, and injected here the same way
-// about.tsx already injects backend-provided HTML: dangerouslySetInnerHTML
-// on build-time-trusted content, not user input.
+// docs/proposals/proposal-i-docs-as-site-source.md's single-transform
+// architecture: .github/scripts/publish_site.py (Python) owns ALL
+// link-rewrite logic and writes pre-transformed markdown into
+// frontend/generated-docs/*.json (gitignored, run via `npm run
+// docs:generate` locally, or a dedicated step in
+// .github/workflows/deploy-frontend.yml before `npm run build`). This
+// page has no transform logic of its own - it only reads that markdown
+// (via @/features/guide/docsSite, kept out of this file so its fs usage
+// never leaks into the client bundle) and renders it to HTML via
+// `marked`, then injects it the same way about.tsx already injects
+// backend-provided HTML: dangerouslySetInnerHTML on build-time-trusted
+// content, not user input.
 
 interface GuidePageProps {
   title: string;
   html: string;
   sourcePath: string;
-}
-
-interface ManifestEntry {
-  sitePath: string;
-  slug: string;
-  title: string;
-  sourcePath: string;
-}
-
-const docsSiteDir = path.join(
-  process.cwd(),
-  "src",
-  "common",
-  "generated",
-  "docsSite"
-);
-
-function readManifest(): ManifestEntry[] {
-  const manifestPath = path.join(docsSiteDir, "manifest.json");
-  if (!fs.existsSync(manifestPath)) {
-    // generate-docs-site.js hasn't run (e.g. a `next dev` invocation that
-    // skipped `npm run build`'s prebuild step) - render nothing rather
-    // than crashing the whole dev server.
-    return [];
-  }
-  return JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
 }
 
 export const getStaticPaths: GetStaticPaths = async () => {
@@ -63,14 +46,17 @@ export const getStaticProps: GetStaticProps<GuidePageProps> = async ({
 }) => {
   const slugParts = (params?.slug as string[] | undefined) ?? [];
   const slug = slugParts.length === 0 ? "index" : slugParts.join("__");
-  const entryPath = path.join(docsSiteDir, `${slug}.json`);
-  if (!fs.existsSync(entryPath)) {
+  const page = readGeneratedPage(slug);
+  if (page === null) {
     return { notFound: true };
   }
-  const { title, html, sourcePath } = JSON.parse(
-    fs.readFileSync(entryPath, "utf-8")
-  );
-  return { props: { title, html, sourcePath } };
+  return {
+    props: {
+      title: page.title,
+      html: renderMarkdown(page.markdown),
+      sourcePath: page.sourcePath,
+    },
+  };
 };
 
 const GuideContent = styled.div`
