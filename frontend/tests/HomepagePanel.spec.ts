@@ -25,9 +25,7 @@ test.describe("homepage panel", () => {
     await expect(
       page.getByTestId("homepage-panel-whatsthat-link")
     ).toBeVisible();
-    await expect(
-      page.getByTestId("homepage-panel-mydecks-link")
-    ).toBeVisible();
+    await expect(page.getByTestId("homepage-panel-mydecks-link")).toBeVisible();
     await expect(
       page.getByTestId("homepage-panel-catalog-stats-slot")
     ).toContainText("coming soon");

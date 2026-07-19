@@ -40,14 +40,12 @@ function GameCard() {
             height={28}
             style={{ height: 28, width: "auto" }}
           />
-          <Card.Title className="mb-0">
-            Play the identification game
-          </Card.Title>
+          <Card.Title className="mb-0">Play the identification game</Card.Title>
         </div>
         <Card.Text className="flex-grow-1">
           Think you know your Magic: the Gathering art? Help the community
-          figure out which real-world printing, artist, or descriptor tag
-          each card image actually depicts - one card at a time.
+          figure out which real-world printing, artist, or descriptor tag each
+          card image actually depicts - one card at a time.
         </Card.Text>
         <Link href="/whatsthat" passHref legacyBehavior>
           <Card.Link
@@ -67,12 +65,14 @@ function DecksCard() {
   return (
     <Card bg="dark" text="light" className="h-100">
       <Card.Body className="d-flex flex-column">
-        <Card.Title>Your decks, encrypted so even we can&apos;t read them</Card.Title>
+        <Card.Title>
+          Your decks, encrypted so even we can&apos;t read them
+        </Card.Title>
         <Card.Text className="flex-grow-1">
-          Save your projects across devices with real client-side encryption
-          - your decklists are encrypted before they ever leave your browser,
-          and we genuinely have no way to read them. Sign in with Discord to
-          get started.
+          Save your projects across devices with real client-side encryption -
+          your decklists are encrypted before they ever leave your browser, and
+          we genuinely have no way to read them. Sign in with Discord to get
+          started.
         </Card.Text>
         <Link href="/myDecks" passHref legacyBehavior>
           <Card.Link

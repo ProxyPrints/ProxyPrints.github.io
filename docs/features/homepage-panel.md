@@ -18,8 +18,7 @@ otherwise never discover — the community printing-identification game
 
 The whole panel returns `null` without a remote backend configured
 (`useRemoteBackendConfigured`) — the exact same condition `Navbar.tsx`
-already uses to decide whether to show its own `/whatsthat` and `My
-Decks` nav links. Promoting a CTA to a route that would 404/no-op for a
+already uses to decide whether to show its own `/whatsthat` and `My Decks` nav links. Promoting a CTA to a route that would 404/no-op for a
 Local-Folder-only visitor is worse than not showing it; this keeps the
 panel's own gating identical to the nav's, rather than inventing a
 second, possibly-drifting rule for the same underlying condition.
@@ -45,8 +44,7 @@ a real click-through Playwright test, not just an href assertion — see
 
 ## Catalog stats slot — deliberately NOT a stats widget
 
-`CatalogStatsSlot` is a placeholder only (`data-testid="homepage-panel-
-catalog-stats-slot"`, text "Live catalog stats - coming soon") — it
+`CatalogStatsSlot` is a placeholder only (`data-testid="homepage-panel- catalog-stats-slot"`, text "Live catalog stats - coming soon") — it
 fetches nothing and computes nothing. A chart pipeline (server lane,
 post-Part-4) will produce `docs/assets/charts/catalog-coverage-strip.svg`;
 per the owner's explicit instruction, this panel reserves the slot's
