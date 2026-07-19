@@ -21,14 +21,23 @@ IMAGE_FULL_TIER_RATE_LIMITER binding (3 req/sec, image-cdn/wrangler.toml) is emp
 confirmed leaky (local_phash.py's 2026-07-17 addendum: ~10.5/s sustained, zero 429s, during
 Part 2's backfill), meaning THIS client-side limiter is the SOLE real enforcement protecting
 Google's lh4 endpoint - and, since that endpoint is shared with live PDF export/bulk download,
-the live site itself - at bulk volume. `GOOGLE_IMAGE` is paced at the documented,
-empirically-safe rate Part 2's backfill actually sustained (~3/s), not a higher number the
-Worker binding's leaky config might otherwise suggest is safe. A 403 on a Google-bound
-destination is a hard stop (raises `GoogleFetchLockoutError`), not a soft degrade-and-continue -
-a lockout here risks the live site's own image serving, not just this pipeline's own
-throughput, and Google's lh3/lh4 endpoints are externally documented to escalate 429->403 under
-sustained load. A 429 gets exponential backoff instead - a materially milder, more common,
-recoverable signal.
+the live site itself - at bulk volume. `GOOGLE_IMAGE` is paced per task #165's own
+concurrency-raise probe (2026-07-19, see docs/features/catalog-completion-plan.md's
+concurrency-probe table): rate_per_sec=8.0, max_concurrency=6, a touch under the
+concurrency=6 step's measured 8.116/s ceiling for margin, superseding the earlier ~3/s Part-2-
+backfill-derived pacing. That step was clean on every dimension the probe tracked, including its
+independent live-site canary (p95 0.39s, BETTER than the concurrency=3 baseline's 0.81s) - not
+just the remote quota signal, which alone would have missed the next step's problem: concurrency=10
+measured a higher raw throughput (9.59/s) but was REJECTED because the same canary caught a 2.43x
+p95 latency regression (1.97s) on the shared Worker path despite zero Google 429/403 events across
+the entire run. That gap - a clean quota signal shipping a config that would have degraded the live
+site - is why concurrency=6/rate=8.0 is the chosen ceiling rather than the higher raw-throughput
+number probed: it is the highest step that stayed safe on BOTH the remote-quota signal and the
+live-site canary, not just the former. A 403 on a Google-bound destination is a hard stop (raises
+`GoogleFetchLockoutError`), not a soft degrade-and-continue - a lockout here risks the live site's
+own image serving, not just this pipeline's own throughput, and Google's lh3/lh4 endpoints are
+externally documented to escalate 429->403 under sustained load. A 429 gets exponential backoff
+instead - a materially milder, more common, recoverable signal.
 """
 
 import logging
@@ -72,16 +81,23 @@ class DestinationLimiterConfig:
 # Google lh3/lh4 (image-cdn's "full" tier target, reached via OUR OWN Worker - see module
 # docstring's red-team correction, never "direct"). The harvest's real, only-governed
 # destination today (Stage B reframe - R2 is unused, see docs/features/catalog-completion-plan.md).
-# Paced at the rate Part 2's own backfill empirically sustained safely (~3/s) - not a higher
-# number the Worker binding's observed leakiness (~10.5/s with zero 429s at smaller volume)
-# might otherwise suggest is safe. The real unknown is Google's own undocumented ceiling at
-# 218k-image harvest scale (~40x Part 2's volume), which this pipeline has no data point for
-# yet - hence pacing at the one rate that's actually been proven safe, plus real reactive
-# handling below rather than an optimistic higher guess.
+# Paced per task #165's concurrency-raise probe (2026-07-19, docs/features/catalog-completion-plan.md's
+# concurrency-probe table): rate_per_sec=8.0/max_concurrency=6, a touch under the concurrency=6
+# step's measured 8.116/s achieved throughput for margin. That step was clean on every dimension
+# probed - zero lockout/backoff events AND its independent live-site canary (p95 0.39s, better
+# than the concurrency=3 baseline's 0.81s) - unlike the next step up: concurrency=10 measured a
+# higher raw ceiling (9.59/s) but was REJECTED, since its canary caught a 2.43x p95 latency
+# regression (1.97s) on the shared Worker path despite zero Google quota (429/403) events across
+# the entire step. The remote quota signal alone would have missed that regression; the canary is
+# what makes concurrency=6 the actual chosen ceiling rather than concurrency=10's higher number
+# (see docs/lessons.md's canary entry for the general rule this establishes). Google's own
+# undocumented ceiling at 218k-image harvest scale remains unmeasured beyond what these probe
+# steps exercised - hence keeping real reactive handling below rather than assuming headroom
+# past the measured-clean step.
 GOOGLE_IMAGE = DestinationLimiterConfig(
     name="google_image",
-    rate_per_sec=3.0,
-    max_concurrency=3,
+    rate_per_sec=8.0,
+    max_concurrency=6,
     lockout_status_codes=frozenset({403}),
     backoff_status_codes=frozenset({429}),
 )

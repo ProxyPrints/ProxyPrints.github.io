@@ -214,8 +214,9 @@ DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES = 2
 # `image_cdn_fetch.fetch_card_image` (this backfill's actual fetch call, via
 # `compute_content_phash_for_card`) paces internally as of Stage B. Two gates in series, not a
 # conflict: the effective rate is whichever is stricter. At this constant's default (3.0/s) that
-# stays this value, unchanged from before Stage B existed - GOOGLE_IMAGE's 5.0/s ceiling only
-# becomes the binding one if a caller explicitly raises `--rate-limit-per-sec` above it.
+# stays this value, unchanged from before Stage B existed - GOOGLE_IMAGE's 8.0/s ceiling (task
+# #165's concurrency-raise probe, 2026-07-19) only becomes the binding one if a caller explicitly
+# raises `--rate-limit-per-sec` above it.
 DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC = 3.0
 
 
