@@ -137,6 +137,64 @@ explicitly if a peer's own review process has already made a federated
 verdict genuinely human-backed. The per-peer-promotable design below
 remains the eventual real mechanism and is still not built.
 
+## Future work: contributor nodes (design note, 2026-07-19 — NOT built)
+
+The pieces already landing for local, non-federated reasons compose
+into something bigger than any one of them was designed for. Three
+Stage C/lazy-mode primitives, put together:
+
+1. **The per-card callable work unit** (`cardpicker/image_evidence.py`'s
+   `extract_card_evidence`/`persist_evidence` split, task #145) —
+   fetch → extract → evidence → discard, independent of the bulk
+   runner by construction (FINAL POSTURE item 8a).
+2. **Manifest-mode segmentation** (task #99, still deferred) — running
+   the pipeline against a bounded, caller-supplied card set rather
+   than the whole catalog.
+3. **Evidence keyed by content hash, not by who computed it**
+   (`ImageEvidence`'s `(card, content_hash)` key) — the store doesn't
+   care whether the hash/OCR/geometry for a given image came from our
+   own harvest or from somewhere else, only that it's correctly keyed.
+
+Together these describe a **self-hosted contributor node**: a user
+imports their own deck → the node fetches THEIR OWN images (their own
+IP, their own Google throttle budget, no shared quota, no API key of
+ours required — the exact "pull" mode task #161's lazy-identification
+design note already names) → runs the same extractors locally → phones
+home with **evidence only** (hashes, OCR text, geometry/quality
+classes — never image bytes, posture-clean in _both_ directions, not
+just ours: the contributor's images never cross the wire either) → the
+federation verdict-exchange format above (once a subscriber side
+exists) is the natural transport for that evidence back to us. The
+phash-cache/evidence-exchange machinery already being built for peer
+federation doubles as this contributor node's bootstrap protocol — no
+second transport to design.
+
+This is the lazy-mode principle (task #161: "identification capacity
+scales with usage, not hardware") taken one step further:
+**identification capacity scales with USERS, not our hardware.** Every
+deck import is a potential free extraction pass on cards we'd
+otherwise have to harvest ourselves, paced by real user traffic
+instead of a bulk job competing for our one shared Google quota.
+
+**Hardware floor**: a Steam-Deck-class x86 Linux machine (real CPU,
+real Python/Tesseract/Pillow support) is a full contributor node,
+capable of the whole fetch→extract pipeline. A phone is not — it's a
+confirmation client only (views evidence, casts votes), not a compute
+contributor. Any pitch or implementation plan for this should account
+for that split rather than assuming uniform client capability.
+
+**One sentence for the pitch, next time it's edited**: "the
+architecture already permits your users to be the compute."
+
+Not built. Depends on: task #161 (lazy identification mode) landing
+first, a real subscriber-side federation implementation (this doc's
+"Consumer component" is currently spec-only), and its own dedicated
+design pass for node auth/trust (a contributor node is a much higher-
+Sybil-risk actor than a pinned-key peer instance — evidence from an
+anonymous contributor node cannot carry the same weight as our own
+harvest or a trusted peer's signed verdict without a real trust model,
+not sketched here).
+
 **The fix (design only, not implemented)**: route federated gate
 treatment through a settings-driven mode, `FEDERATED_VOTE_GATE_MODE`
 (default `"suggestion"` — contributes weight, does **not** count toward
