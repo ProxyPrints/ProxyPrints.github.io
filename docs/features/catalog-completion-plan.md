@@ -711,37 +711,45 @@ economics as the real, current picture — no R2 tier in the split
 limiter (nothing would ever hit it), keep the config structure
 multi-destination so an R2 tier is a later addition, not a rewrite.
 
-**Item 2 — split limiter, implemented**: `cardpicker/harvest_fetch_limiter.py`,
+**Item 2 — split limiter, implemented, corrected 2026-07-19 by an
+owner-commissioned red-team review**: `cardpicker/harvest_fetch_limiter.py`,
 a per-destination registry (`DestinationLimiterConfig` + a
 `_DestinationLimiter` pacer: strict minimum-interval, a concurrency
-semaphore, and one-way sticky degradation on a trip status code — the
-degradation is sticky rather than cooldown-and-recover deliberately,
-since a trip at harvest scale is read as "stay cautious for the rest
-of this one-shot run," not a blip to retry past). Three destinations
-configured today:
+semaphore, and two distinct reactive severities — a lockout status
+raises `GoogleFetchLockoutError` immediately, a hard stop; a backoff
+status doubles the pacing interval, sticky for the process). Both are
+one-way for the life of the process deliberately: a reactive signal at
+harvest scale means "stay cautious for the rest of this one-shot run,"
+not a blip to retry past. Three destinations configured today:
 
-- `GOOGLE_IMAGE` — 5.0 req/s, concurrency 3, trips to 1.0/s on any 403. The real, only-governed destination (see the R2 finding
-  above). Deliberately conservative relative to the Worker's own
+- `GOOGLE_IMAGE` — **3.0 req/s** (corrected from an initial 5.0 —
+  the red-team review found this exceeded the only
+  empirically-proven-safe sustained rate), concurrency 3, hard-stops
+  on 403, exponential backoff on 429. The real, only-governed
+  destination (see the R2 finding above) — and, per the review's own
+  correction, reached via OUR OWN Worker, never "direct to Google":
+  every fetch is one Worker invocation to its full tier, which then
+  calls Google's lh4 endpoint server-side. The Worker's own
   `IMAGE_FULL_TIER_RATE_LIMITER` binding (3 req/s configured,
-  `image-cdn/wrangler.toml`) despite that binding being empirically
-  confirmed leaky at smaller volume (`local_phash.py`'s 2026-07-17
-  addendum measured ~10.5/s sustained, zero 429s, during Part 2's
-  backfill) — the real unknown is Google's own undocumented ceiling
-  on lh3/lh4 at harvest scale (~40x Part 2's volume), not our
-  Worker's binding, hence the reactive trip rather than trusting
-  smaller-scale headroom to hold.
-- `SCRYFALL_CDN` — 10.0 req/s, concurrency 5, no reactive trip (no
-  observed throttling history). "Local caching" (the owner's
-  amendment) is already satisfied structurally, not by anything new:
-  `CanonicalCard.image_hash` is a permanent cache
-  (`local_phash.get_or_compute_canonical_hash` never refetches a
-  nonzero hash) — this limiter only ever governs genuine first-time
-  misses.
-- `SCRYFALL_REST` — 2.0 req/s, concurrency 2, no reactive trip. A
-  deliberate low guard against volume this call site shouldn't have
-  at harvest scale (most candidate metadata should come from
-  catalog-import data, not a live REST call) — narrowing that gap is
-  Stage C/D scope, not this limiter's.
+  `image-cdn/wrangler.toml`) is empirically confirmed leaky at
+  smaller volume (`local_phash.py`'s 2026-07-17 addendum measured
+  ~10.5/s sustained, zero 429s, during Part 2's backfill) — meaning
+  THIS client-side limiter is the sole real enforcement, and 3.0/s is
+  the one rate that's actually been proven safe at real volume, not a
+  number derived from the Worker binding's leakiness. A 403 here is a
+  hard stop, not a soft degrade: a lockout risks the live site's own
+  image serving (PDF export/bulk download share this same Google
+  endpoint), not just this pipeline's throughput.
+- `SCRYFALL_CDN` — 10.0 req/s, concurrency 5, no reactive handling
+  (no observed throttling history). "Local caching" (the owner's
+  amendment) is now satisfied by a real fix, not just a structural
+  claim: `CanonicalPrintingMetadata.art_crop_url`, parsed from the
+  same weekly Scryfall bulk-data dump already used for printing
+  metadata, serves the common case with zero network — see the
+  dedicated fix below.
+- `SCRYFALL_REST` — 2.0 req/s, concurrency 2, no reactive handling.
+  Was the dominant real cost before the fix below (a live REST call
+  per not-yet-hashed candidate); now a genuine-gap-only fallback.
 
 No R2 entry exists in the registry (see the owner decision above) —
 adding one is a config addition once #130 lands, not a rewrite.
@@ -753,57 +761,90 @@ Part 2's backfill, the ingest hook, the harvest pipeline) shares the
 same process-wide ceiling automatically; Part 2's own
 `--rate-limit-per-sec` flag composes with `GOOGLE_IMAGE` rather than
 conflicting with it (two gates in series, effective rate is whichever
-is stricter — unchanged in practice at Part 2's 3.0/s default).
+is stricter — unchanged in practice at Part 2's 3.0/s default, now
+identical to `GOOGLE_IMAGE`'s own corrected rate).
 
-**Item 3 — measured, real numbers, 2026-07-19** (`probe_harvest_pipeline --sample-size=30`, real network cost, no votes written): total
-521.76s across 30 fetched cards — fetch 25.10s (4.8%, mean
-0.837s/card), OCR 8.35s (1.6%, mean 0.278s/card), **phash 488.17s
-(93.6%, mean 16.272s/card)**, DB 0.14s (~0%). Stage A's original
-pre-Stage-B run was never written to a durable location (only existed
-in prior chat context, since compacted away) — a real process gap,
-not repeated here: this doc entry is the actual number going forward,
-and no literal side-by-side delta against the original unpaced run is
-possible from written record.
+**Scryfall REST fix, 2026-07-19 (owner-flagged: "should not be a need
+to query their REST")**: `get_or_compute_canonical_hash` previously
+always hit Scryfall's live REST API per candidate for the art-crop
+URL — confirmed as the real bottleneck by item 3's measurement below.
+The same URL was already present, unused, in the weekly bulk-data
+dump `import_scryfall_printing_metadata` reads (`image_uris.art_crop`,
+or `card_faces[0].image_uris.art_crop` for double-faced cards) —
+`PrintingMetadataRow` now parses it and
+`CanonicalPrintingMetadata.art_crop_url` stores it, zero incremental
+network cost (same file, same weekly import). `get_or_compute_canonical_hash`
+now checks this local field first, falling back to the live REST call
+only when the sidecar row is missing or the field is genuinely empty —
+matching `SCRYFALL_REST`'s own "guard for true gaps only" design
+intent for the first time.
 
-**Surprise finding, corrects the item-4 framing below as first
-drafted**: phash, not fetch, dominates the paced wall-clock — and not
-because of Google. `SCRYFALL_REST` (2.0 req/s, deliberately set low as
-"a guard against volume this call site shouldn't have," per this
-doc's own limiter description above) is now the real bottleneck:
-`get_or_compute_canonical_hash` still makes one REST call per
-not-yet-hashed candidate (the module docstring's own caveat, now
-confirmed with real numbers) and **65.5% of `CanonicalCard` rows have
-a populated `image_hash` today (74,144/113,224)** — meaning 34.5% of
-candidates hit anywhere in the catalog still pay a real, first-time
+**Item 3 — measured, real numbers, 2026-07-19** (`probe_harvest_pipeline --sample-size=30`, real network cost, no votes written, run BEFORE the
+Scryfall REST fix above): total 521.76s across 30 fetched cards —
+fetch 25.10s (4.8%, mean 0.837s/card), OCR 8.35s (1.6%, mean
+0.278s/card), **phash 488.17s (93.6%, mean 16.272s/card)**, DB 0.14s
+(~0%). Stage A's original pre-Stage-B run was never written to a
+durable location (only existed in prior chat context, since compacted
+away) — a real process gap, not repeated here: this doc entry is the
+actual number going forward, and no literal side-by-side delta
+against the original unpaced run is possible from written record.
+
+**Root cause identified and fixed** (see the Scryfall REST fix
+above): phash dominated because `SCRYFALL_REST` (2.0 req/s,
+deliberately low as "a guard against volume this call site shouldn't
+have") was absorbing a live REST call for every not-yet-hashed
+candidate, and **65.5% of `CanonicalCard` rows had a populated
+`image_hash` at measurement time (74,144/113,224)** — meaning 34.5%
+of candidates hit anywhere in the catalog paid a real, first-time
 Scryfall REST+CDN round-trip, now correctly paced instead of running
-unthrottled as it did before Stage B. This is a persistent cost at
-full-harvest scale, not a one-off backfill artifact — every
-not-yet-hashed candidate any future run touches pays it again.
+unthrottled as it did before Stage B. This was a persistent cost at
+full-harvest scale, not a one-off backfill artifact. The fix above
+eliminates the REST leg for any candidate the bulk-data dump already
+covers (the large majority) — a re-measurement under the fixed code is
+still owed before Stage C, not yet run.
 
-**Item 4 — reprojected wall-clock, corrected**: the ≤5/s Google
-ceiling alone would put the harvest at a ~12h fetch-bound floor as
-originally projected, but item 3's real measurement shows Scryfall
-REST pacing, not Google fetch, as the actual dominant cost today.
-Which one governs the real 218k-card wall-clock depends on how much
-of the remaining 34.5% unhashed `CanonicalCard` population this
-harvest's own candidate pool actually touches — not yet computed.
-**Open item for HOLD, not resolved here**: either (a) run a
-dedicated `CanonicalCard.image_hash` backfill (mirroring Part 2's own
-`content_phash` backfill shape) ahead of the full harvest so the
-harvest itself doesn't repeatedly pay this tax, or (b) accept the
-Scryfall-bound cost as part of the harvest's own wall-clock and raise
-`SCRYFALL_REST`'s ceiling with real justification (it was set low as a
-deliberate guard, not tuned for measured throughput). Worker-topology
+**Item 4 — reprojected wall-clock, corrected twice**: first for the
+Scryfall finding (item 3), then for the red-team review's Google-rate
+correction. At `GOOGLE_IMAGE`'s corrected 3.0/s ceiling, the full
+218k-image harvest has a **~20.2h fetch-bound floor** (218,164 ÷ 3.0),
+not the ~12h figure an uncorrected 5.0/s would project — matching
+Part 2's own documented backfill wall-clock at the same rate. Whether
+Google fetch or Scryfall REST actually dominates the real 218k-card
+run depends on how much of the (now much smaller, post-fix)
+still-unhashed `CanonicalCard` population this harvest's own candidate
+pool touches — not yet re-measured under the fixed code. Worker-topology
 consequence (fewer OCR workers may suffice, cores idle waiting on a
-network ceiling) still holds — just against whichever destination
-turns out to actually govern, confirmed with real numbers before
-Stage C/D topology is sized.
+network ceiling) still holds, now against the corrected ~20h Google
+floor specifically unless Scryfall re-measures as dominant again.
+
+**Fetch Acceleration Study (owner directive, 2026-07-19, amends but
+does not yet change the ≤3/s figure above — findings owed before the
+full harvest, tracked as task #152)**: three investigations, run
+before any full-catalog fire, that could legitimately raise the
+Google ceiling above 3/s with real evidence rather than the informed
+guess the number above still is: (1) a circuit-breakered ramp probe
+through the Worker path (3→5→8→10 req/s steps, ~20-30min each,
+logging req/s + status codes; first 429 → drop to 3/s and record that
+as the ceiling; any 403 → stop everything, no further steps) — this
+confirms rather than blindly explores, since Part 2's backfill already
+observed 10.5/s sustained for 50+ minutes with zero 429s through this
+exact path; (2) dedupe the fetch queue by unique content cluster (d=0)
+rather than per-`Card`-row, reporting how much of 218k collapses away
+for free; (3) a 1-2h feasibility spike (investigation only, no build)
+on whether the Google Drive `files.get?alt=media` API, using
+`update_database`'s existing credentials, could serve these same
+images at a materially higher, Google-documented quota — potentially
+beating every scraper-path number and removing the guesswork
+entirely. Explicitly rejected: any "deliberate exceed-and-cool"
+cycling pattern — the circuit breaker exists specifically so this
+pipeline never has to learn a 403 lockout's real duration firsthand.
+Re-projects wall-clock at HOLD under whichever lever(s) survive.
 
 **Write-through hedge (owner amendment, 2026-07-19, tracked as task
 #150)**: conditional on the resolution/tier investigation below
 clearing — persist a copy of each fetched image to R2 (or make the
 Worker's full tier genuinely write-through) so a future extractor
-needing different pixels never re-triggers a ~12h Google pull.
+needing different pixels never re-triggers a ~20h Google pull.
 Estimated ~218k × ~200KB ≈ 44GB ≈ $0.66/mo storage, Class A writes
 inside Cloudflare's free tier. Owner decides for/against at HOLD; not
 built yet.
