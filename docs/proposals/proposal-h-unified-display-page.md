@@ -391,7 +391,12 @@ on one page instead of two.
    focuses, if already open) the **Choose Image** accordion section
    (§4.4) already scoped to this slot.
 
-### 4.4 Printing switch (Choose Image accordion section)
+### 4.4 Printing switch (Choose Image accordion section) — SUPERSEDED
+
+Superseded by §4.4′ below (owner directive, "SELECT VERSION SECTION,
+UNIFIED SPEC" — left as-is for history rather than rewritten, since
+Step 2 PR 2a already shipped the embedded (non-modal) picker this
+section originally called for; §4.4′ is the actual current spec).
 
 1. From the rail's Slot Actions section (or directly from the
    requested-printing badge's N path), open — or focus, if already
@@ -414,6 +419,124 @@ on one page instead of two.
 4. Selecting an image dispatches the existing `setSelectedImages`
    action; the sheet's thumbnail for that slot updates immediately
    (same Redux state, same `PagePreview` render path — no new plumbing).
+
+### 4.4′ Select Version section — unified spec (owner directive; HOLD, spec only)
+
+Status: **SPEC ONLY — HOLD for owner review before any build.** Slots
+into the standing work order after the pane migration (left-panel
+unification). Defines the left panel's Select Version section (2a's
+`GridSelectorResults` "embedded" variant, which the left-panel-
+unification amendment already established as the ONE surface for this
+— no modal, ever, on `/display`; see that amendment's own text).
+
+**Purpose.** The picker maximizes both usefulness (find the right art
+fast) and 1-click verification potential (every gap in the catalog's
+knowledge is a visible, tappable confirmation opportunity). Browsing
+and contributing are the same surface, not two separate flows bolted
+together.
+
+**Structure — three ordered groups:**
+
+1. **Canonical, grouped by printing.** One representative per distinct
+   printing — the highest-DPI copy in that printing's cluster. Resolved
+   printings first, then machine-suggested, visually distinguished per
+   the shared badge language (verified vs. suggested never blurred —
+   same principle `RequestedPrintingBadge.tsx`'s degraded-style split
+   already establishes). The slot's own REQUESTED printing sorts first
+   with its badge. Expanding a printing reveals its other copies ("+N
+   more of this printing").
+2. **Non-canonical / likely-custom.** Cards with resolved custom-art /
+   altered-frame / ai-art tags, sub-grouped by highest-confidence
+   high-priority tags (frame type first), same
+   one-representative-then-rest pattern as group 1.
+3. **Unknown.** No printing data, no classifying tags — the honest
+   residue, last.
+
+**Verification woven in — three moments, one principle (every vote is
+deliberate, none silent):**
+
+- **(a) Suggested-printing Confirm.** Suggested-printing
+  representatives carry the shared Confirm affordance — the exact same
+  `DeckbuilderConfirmAffordance.tsx` component already mounted in the
+  rail header (2b), same votes, same API `/whatsthat` itself uses.
+  Never required, never blocking.
+- **(b) Art-as-filter.** Selecting/focusing any card offers "more like
+  this" — filters the section to cards sharing its resolved tags
+  (frame, border, fullart). One tap on/off, state visible as chips.
+  This is filtering against `Card.tags` (already resolved-only — see
+  Data dependencies below), NOT a new vote-casting UI: it reuses
+  `attributeChips.ts`'s existing taxonomy/matching helpers
+  (`ALL_ATTRIBUTE_CHIPS`, `filterCandidatesByChipStates`) as the shared
+  tag vocabulary, rendered as a plain filter-chip bar — NOT a mount of
+  `AttributeChipPanel.tsx`'s full vote-casting ring, which is a
+  single-card-focus voting UI built for the question feed's different
+  context and the wrong shape for filtering a whole result grid.
+- **(c) Filtered-selection confirm moment.** When a user selects a card
+  while attribute filters are active AND the matching tag(s) are
+  suggested rather than resolved, selection succeeds normally and a
+  one-tap inline chip follows (not a modal): "Looks retro-frame? ✓" —
+  one tap casts a real `CardTagVote` via the existing
+  `APISubmitTagVote` (`store/api.ts`, already used by
+  `AttributeChipPanel.tsx` — same call, new small caller, not a new
+  endpoint). Ignoring costs nothing, casts nothing. Resolved tags → no
+  prompt, ever. Once per card per session (dismissal/cast state kept in
+  local component state, not persisted — matches the "never repeats
+  within a session" framing the owner used for the separate post-export
+  contribution toast, task #31, though these are two independent
+  pieces of session-scoped UI state, not the same mechanism). NO vote
+  is ever cast from selection alone — zero-telemetry and the
+  deliberate-vote principle both hold, same as every other funnel this
+  fork has built (`docs/features/printing-tags.md`).
+
+**Data dependencies — audited against what `Card.serialise()`
+(`MPCAutofill/cardpicker/models.py`) / `Card.json`
+(`schemas/schemas/Card.json`) already carries, vs. what group 1/2's
+grouping and moment (c) actually need:**
+
+| Need | Already available? | Detail |
+| --- | --- | --- |
+| Resolved attribute tags (Full Art, Borderless, Old/Modern Border, etc.) for group 2's sub-grouping and moment (b)'s filter chips | **Yes, no change needed.** | `Card.tags: string[]` already contains ONLY consensus-resolved tags — `tag_consensus.resolve_and_persist_tag_votes` explicitly merges a resolved APPLY into `card.tags` and explicitly does NOT write contested or pending-approval tags there. `attributeChips.ts`'s `ALL_ATTRIBUTE_CHIPS` tag names already match this taxonomy 1:1 (`cardpicker.attribute_tags.ATTRIBUTE_TAGS`) — the frontend can group/filter on `tags.includes(chip.tagName)` today, client-side, with zero backend change. |
+| Machine-suggested (not yet community-resolved) printing, for group 1's "then machine-suggested" ordering | **No — real gap.** | `Card.canonicalCard` is `null` until `printingTagStatus === "resolved"` (via `inferred_canonical_card`) or a confirmed indexing match exists (`canonical_card`). There is no field carrying "our best unresolved guess" — `get_ranked_printing_candidates()`'s top hit is only ever surfaced on-demand, per-slot, via the separate `2/printingCandidates/` endpoint (what `DeckbuilderConfirmAffordance` fetches when opened), never attached in bulk to search results. Grouping an entire result set by "suggested printing" needs this precomputed per-`Card`, not fetched N times over a result set. |
+| Suggested (unresolved/contested) attribute tags, for moment (c)'s "is the matching tag resolved or suggested" check | **No — real gap.** | The DB model already has `tag_vote_statuses: {tag.name: "resolved_apply" \| "resolved_reject" \| "contested" \| "unresolved" \| "pending_approval"}`, but `Card.serialise()` never puts it on `SerialisedCard`/`Card.json` — `tags` alone can't distinguish "no votes yet" from "actively suggested but unresolved," and moment (c) specifically needs that distinction to decide whether to show the inline confirm chip at all. |
+
+**Serializer-field ask, for the server session (spec only — not built
+here):**
+
+1. A lightweight suggested-printing summary on `Card`/`SerialisedCard`
+   — e.g. `suggestedCanonicalCard: CanonicalCard | null`, populated
+   from `get_ranked_printing_candidates()`'s top hit, **only** when
+   `printingTagStatus != RESOLVED` (so it's never redundant with the
+   already-resolved `canonicalCard`). Whether this needs its own
+   confidence/score field alongside it, and whether computing it inline
+   in `serialise()` is cheap enough to run per-card across a search
+   result set or needs precomputing/caching at ingest or vote-resolve
+   time, is a call for whoever picks this up server-side — flagging the
+   need, not prescribing the implementation.
+2. `tag_vote_statuses` (or a filtered subset of it) exposed on
+   `Card`/`SerialisedCard` — e.g. `tagVoteStatuses: Record<string,
+   "resolved" | "suggested">` — collapsing the DB's five-way status
+   down to the two-way distinction the frontend actually needs, and
+   **excluding `pending_approval` tags entirely** (those are gated
+   behind the sensitive-tag co-sign queue —
+   `docs/features/moderation.md` — and must not leak to ordinary users
+   ahead of that review, the same reason that status is excluded from
+   `card.tags` today).
+
+Both changes are additive fields on an existing serializer, not a
+schema migration or new endpoint — low-risk, but real backend work,
+hence the explicit hand-off rather than a client-side workaround (e.g.
+fetching `printingCandidates` per-card across a whole result set, which
+would multiply request volume against an endpoint designed for a
+single focused slot, not bulk use).
+
+**Component breakdown (build, once un-HOLD'd):**
+
+| Component | New or reused | Notes |
+| --- | --- | --- |
+| Group/sub-group sectioning + "+N more of this printing" expansion | New | Pure client-side grouping over the existing `GridSelectorResults` candidate list, keyed on `canonicalCard`/`suggestedCanonicalCard` once available; the "+N more" expansion is local component state, no new Redux slice |
+| Suggested-printing Confirm badge (moment a) | Reused | `DeckbuilderConfirmAffordance.tsx`, unchanged — already proven inline in this exact rail (2b) |
+| Art-as-filter chip bar (moment b) | New, thin | A plain filter-chip row (not `AttributeChipPanel.tsx`'s ring) built on `attributeChips.ts`'s existing `ALL_ATTRIBUTE_CHIPS`/`filterCandidatesByChipStates`/`useTagDisplayName` — filters against `card.tags`, no vote cast by filtering alone |
+| Filtered-selection confirm chip (moment c) | New, thin | Calls the existing `APISubmitTagVote` (same function `AttributeChipPanel.tsx` already calls); gated on the new `tagVoteStatuses` field being `"suggested"` for the active filter tag(s) on the just-selected card |
 
 ### 4.5 Export
 
