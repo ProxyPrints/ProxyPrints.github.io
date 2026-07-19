@@ -19,9 +19,13 @@ from io import BytesIO
 from typing import TYPE_CHECKING, Optional
 
 import imagehash
-import requests
 from PIL import Image
 
+from cardpicker.harvest_fetch_limiter import (
+    SCRYFALL_CDN,
+    SCRYFALL_REST,
+    rate_limited_get,
+)
 from cardpicker.image_cdn_fetch import fetch_card_image
 from cardpicker.local_fallback import classify_bleed_edge, normalize_crop_box
 from cardpicker.models import CanonicalCard, Card
@@ -80,7 +84,9 @@ def _int_to_hash(value: int) -> "imagehash.ImageHash":
 
 def _fetch_scryfall_art_crop_url(scryfall_id: str) -> Optional[str]:
     try:
-        response = requests.get(f"https://api.scryfall.com/cards/{scryfall_id}", headers=SCRYFALL_HEADERS, timeout=10)
+        response = rate_limited_get(
+            SCRYFALL_REST, f"https://api.scryfall.com/cards/{scryfall_id}", headers=SCRYFALL_HEADERS, timeout=10
+        )
         response.raise_for_status()
         return response.json().get("image_uris", {}).get("art_crop")
     except Exception:
@@ -90,7 +96,7 @@ def _fetch_scryfall_art_crop_url(scryfall_id: str) -> Optional[str]:
 
 def _fetch_and_hash(url: str) -> Optional[int]:
     try:
-        response = requests.get(url, headers=SCRYFALL_HEADERS, stream=True, timeout=10)
+        response = rate_limited_get(SCRYFALL_CDN, url, headers=SCRYFALL_HEADERS, stream=True, timeout=10)
         response.raise_for_status()
         image = Image.open(BytesIO(response.content))
         return _hash_to_int(imagehash.phash(image))
@@ -180,6 +186,14 @@ DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES = 2
 # log). See docs/troubleshooting.md. The ceiling's original purpose (protecting the shared lh4
 # endpoint live PDF export/bulk download also depend on) is unchanged, so client-side pacing is
 # now the only layer actually holding it.
+#
+# Stage B addendum (2026-07-19, docs/features/catalog-completion-plan.md): this backfill's own
+# `_RateLimiter` below now composes with `cardpicker.harvest_fetch_limiter.GOOGLE_IMAGE`, which
+# `image_cdn_fetch.fetch_card_image` (this backfill's actual fetch call, via
+# `compute_content_phash_for_card`) paces internally as of Stage B. Two gates in series, not a
+# conflict: the effective rate is whichever is stricter. At this constant's default (3.0/s) that
+# stays this value, unchanged from before Stage B existed - GOOGLE_IMAGE's 5.0/s ceiling only
+# becomes the binding one if a caller explicitly raises `--rate-limit-per-sec` above it.
 DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC = 3.0
 
 

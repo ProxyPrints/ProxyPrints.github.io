@@ -652,6 +652,159 @@ harvest-calculate pipeline's lands chunk inherits.
 
 ---
 
+## Harvest-calculate pipeline (Stages A–F, supersedes Part 4's remaining write run)
+
+Fetch-fetch-fetch/extract-once/calculate-once replacement for Part 4's
+ad-hoc fetch/OCR/phash logic, commissioned after the owner's 2026-07-19
+stop of Part 4's first full-pool write run (see above): fetch each
+image once, extract everything, compute every conclusion, streaming
+(per-batch flush, never end-of-run dump — the exact gap that write
+attempt exposed). Standing rules across every stage: branch/PR per
+repo convention, per-batch flush MANDATORY (Stage E), `run_id`
+stamping (Part 1's mechanism, unchanged), zero-resolution assertion at
+every write pass, the human-backed gate untouched, no new tags
+(altered-frame/custom-art only, matching every other part in this
+doc). HOLD for owner GO before any full-catalog fire, gated on
+real numbers, not projections — see each stage below and the
+pipeline-fidelity gate (task #151, blocks Stage D's HOLD) for what
+"real" means here.
+
+### Stage A — instrumented wall-clock probe (merged, PR #128)
+
+`cardpicker/harvest_probe.py` + `manage.py probe_harvest_pipeline [--sample-size N]`: fetches real images for a random sample (default
+30), runs the real OCR/bleed/phash/canonical-hash engines against
+them, times a real `bulk_create()` that's always rolled back inside a
+savepoint (no persistence). Reports the wall-clock split
+(fetch/OCR/phash/DB) as totals, percentages, and per-card means.
+Baseline (pre-Stage-B, unpaced fetch): see the Stage B measurement
+below for the actual numbers — Stage A produced the harness, Stage B
+is the first real before/after comparison run through it.
+
+### Stage B — fetch economics (measured, then implemented)
+
+**Item 1 finding — R2 hit-rate is structurally moot, not a
+measurement problem**: the harvest's only fetch path
+(`image_cdn_fetch.fetch_card_image`/`get_worker_image_url`, the
+Worker's "full" tier) never touches R2. Confirmed three independent
+ways: `image-cdn/src/handler/image.ts`'s switch statement routes only
+`small`/`large` through `R2Service.getThumbnail` — the `full` case
+calls `fetchWithRateLimit` directly, and the code's own comment states
+it plainly ("full-tier bypasses R2 entirely... EVERY request here hits
+lh4.googleusercontent.com directly"); `R2Service.ts`'s
+`getThumbnail`/`putImage` are called from nowhere else;
+`frontend/src/common/image.ts`'s own `getBucketImageURL()` explicitly
+`throw`s for `size === "full"` ("Cannot get full-res image through
+bucket, fetch through worker instead") — the frontend's own
+acknowledgment that "full" was never designed to have a bucket-domain
+path. **This also answers the kill-order's open "did R2 population
+survive" check: it's moot.** The stopped Part 4 write run used this
+same full-tier-only path, so it never populated R2 in the first
+place — there was nothing to survive or not survive. That run's ~4h of
+real work is entirely in the `CanonicalCard.image_hash` cache
+(73,223/113,224, reported at the time of the stop), not in any R2
+cache state. Connects to a pre-existing, already-flagged gap: task
+#130 ("tier-route image-cdn fetches by requested size, not hardcoded
+full") is the same issue, independently rediscovered here.
+
+**Owner decision, 2026-07-19 (Stage B reframe)**: Google-direct
+economics as the real, current picture — no R2 tier in the split
+limiter (nothing would ever hit it), keep the config structure
+multi-destination so an R2 tier is a later addition, not a rewrite.
+
+**Item 2 — split limiter, implemented**: `cardpicker/harvest_fetch_limiter.py`,
+a per-destination registry (`DestinationLimiterConfig` + a
+`_DestinationLimiter` pacer: strict minimum-interval, a concurrency
+semaphore, and one-way sticky degradation on a trip status code — the
+degradation is sticky rather than cooldown-and-recover deliberately,
+since a trip at harvest scale is read as "stay cautious for the rest
+of this one-shot run," not a blip to retry past). Three destinations
+configured today:
+
+- `GOOGLE_IMAGE` — 5.0 req/s, concurrency 3, trips to 1.0/s on any 403. The real, only-governed destination (see the R2 finding
+  above). Deliberately conservative relative to the Worker's own
+  `IMAGE_FULL_TIER_RATE_LIMITER` binding (3 req/s configured,
+  `image-cdn/wrangler.toml`) despite that binding being empirically
+  confirmed leaky at smaller volume (`local_phash.py`'s 2026-07-17
+  addendum measured ~10.5/s sustained, zero 429s, during Part 2's
+  backfill) — the real unknown is Google's own undocumented ceiling
+  on lh3/lh4 at harvest scale (~40x Part 2's volume), not our
+  Worker's binding, hence the reactive trip rather than trusting
+  smaller-scale headroom to hold.
+- `SCRYFALL_CDN` — 10.0 req/s, concurrency 5, no reactive trip (no
+  observed throttling history). "Local caching" (the owner's
+  amendment) is already satisfied structurally, not by anything new:
+  `CanonicalCard.image_hash` is a permanent cache
+  (`local_phash.get_or_compute_canonical_hash` never refetches a
+  nonzero hash) — this limiter only ever governs genuine first-time
+  misses.
+- `SCRYFALL_REST` — 2.0 req/s, concurrency 2, no reactive trip. A
+  deliberate low guard against volume this call site shouldn't have
+  at harvest scale (most candidate metadata should come from
+  catalog-import data, not a live REST call) — narrowing that gap is
+  Stage C/D scope, not this limiter's.
+
+No R2 entry exists in the registry (see the owner decision above) —
+adding one is a config addition once #130 lands, not a rewrite.
+Wired into all three of the codebase's real Google/Scryfall fetch call
+sites (`image_cdn_fetch.fetch_card_image`,
+`local_phash._fetch_scryfall_art_crop_url`,
+`local_phash._fetch_and_hash`) — every existing caller (this pilot,
+Part 2's backfill, the ingest hook, the harvest pipeline) shares the
+same process-wide ceiling automatically; Part 2's own
+`--rate-limit-per-sec` flag composes with `GOOGLE_IMAGE` rather than
+conflicting with it (two gates in series, effective rate is whichever
+is stricter — unchanged in practice at Part 2's 3.0/s default).
+
+**Item 3 — measured, not projected**: Stage A's probe re-run under the
+split limiter, real network cost, no votes written. See the report at
+HOLD for the actual before/after wall-clock numbers.
+
+**Item 4 — reprojected wall-clock (owner directive, 2026-07-19)**: at
+the Google tier's ≤5/s aggregate ceiling, the full 218k-image harvest
+is **fetch-bound**, not OCR-bound — a ~12h floor from fetch pacing
+alone, dominating whatever the OCR/phash/DB stages themselves cost.
+This reverses Stage A's original single-digit-hours, OCR-bound
+projection. Consequence for worker topology: fewer OCR workers may
+suffice, since cores spend most of their time idle waiting on Google
+rather than CPU-bound on OCR — sized properly once Stage C/D land.
+
+**Write-through hedge (owner amendment, 2026-07-19, tracked as task
+#150)**: conditional on the resolution/tier investigation below
+clearing — persist a copy of each fetched image to R2 (or make the
+Worker's full tier genuinely write-through) so a future extractor
+needing different pixels never re-triggers a ~12h Google pull.
+Estimated ~218k × ~200KB ≈ 44GB ≈ $0.66/mo storage, Class A writes
+inside Cloudflare's free tier. Owner decides for/against at HOLD; not
+built yet.
+
+**Resolution/tier investigation (owner directive, 2026-07-19, superseding
+the initial "full-only, reject dual-tier" framing)**: two cheap
+measurements (T1: OCR accuracy vs. fetch resolution; T2: phash Hamming-
+distance stability vs. fetch resolution, since `docs/theory.md`'s d=0/
+0<d≤2 thresholds were calibrated against full-resolution inputs) must
+clear before any tier change — not interpolation from
+`RESOLUTION_FLOOR_DPI`/`DEFAULT_FETCH_DPI` alone. If both clear, the
+preferred design is a new R2-cached harvest tier (~1200px, above the
+pipeline's own ~925px working height) added to image-cdn's existing
+small/large R2 branch, with the hopper semantics in task #150 (write-
+through, content-hash canonicalization, resilience to dead source
+Drives). Not started; results pending.
+
+### Stages C–F (extractors, calculators, streaming assembly, consumers) — not started
+
+Queued behind Stage B per the paced task sequence (#145–148). Stage D
+carries a hard precondition: the pipeline-fidelity gate (task #151,
+owner directive 2026-07-19) — calculators must call the existing
+shipped identification code paths with `ImageEvidence`-supplied
+inputs, not re-derive their logic; a stratified-sample parity replay
+against run `20260716T193408-6613a1a6`'s recorded outputs must show
+zero unexplained divergence; a full knowledge-inventory sweep (every
+empirically-derived constant/threshold/override/skip-reason mapped to
+its home in the new pipeline, or flagged missing) must be clean. Both
+gate task #148 (the owner HOLD deliverable) and any full-catalog fire.
+
+---
+
 ## Part 5 — Residual classification (existing tags only)
 
 Only for cards where ALL identification tiers **genuinely ran** and
