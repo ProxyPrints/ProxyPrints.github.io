@@ -62,7 +62,7 @@ chain the backend's `Card.serialise` exposes (i.e. `canonicalArtist` is
 non-null) or a vote the user just cast themselves - never for a vote-
 pending or unknown artist, since there'd be no name to build a URL from.
 
-## Surfaces (v1: two)
+## Surfaces (three, as of the Proposal H pane migration)
 
 1. **Card Detail Modal** (`CardDetailedViewModal.tsx`'s attribute table,
    the `"Canonical Aritst"` row - yes, that's a pre-existing typo in the
@@ -85,14 +85,19 @@ pending or unknown artist, since there'd be no name to build a URL from.
    doesn't pass this prop, so its behaviour is unchanged - the confirm
    banner is specific to the `/whatsthat` funnel's own post-answer moment,
    not a general property of casting an artist vote anywhere.
+3. **Proposal H's `/display` rail Artist section**
+   (`frontend/src/features/display/ArtistSection.tsx`, left-panel
+   unification, issue #164) - the follow-on this doc originally
+   anticipated. Same precedence chain/gating as surface 1:
+   `cardDocument.canonicalArtist != null` renders the link (`"Art by <Name>"`), `null` renders plain `"Unknown"` text, never a link with
+   nothing to point at. Reads the rail's currently-selected slot's own
+   `CardDocument` (already resident in `cardDocumentsByIdentifier`) - no
+   new fetch.
 
-**Not built in v1** (explicitly out of scope, noted so a future session
-doesn't have to re-derive why): the confidently-known-artist collapsed
-display inside `ArtistVotePicker` itself (the `"<name> wrong?"` span,
-shared by both its callers) does not get a link - only the two surfaces
-above. The held Proposal H unified `/display` rail's own Artist section is
-expected to inherit `ArtistSupportLink` directly once that surface is
-built, but that's a follow-on, not part of this change.
+**Not built** (explicitly out of scope, noted so a future session doesn't
+have to re-derive why): the confidently-known-artist collapsed display
+inside `ArtistVotePicker` itself (the `"<name> wrong?"` span, shared by
+both its callers) does not get a link - only the three surfaces above.
 
 ## Credits
 
@@ -113,3 +118,7 @@ richer, blessed integration later.
 - `tests/QuestionFeedArtistAndTag.spec.ts` (Playwright) - surface 2: the
   post-answer banner appears (with the correct href) after voting for a
   named artist; voting "Unknown artist" never shows it.
+- `tests/DisplayPage.spec.ts` (Playwright) - surface 3: the rail's Artist
+  section shows the support link for a slot with a known canonical artist
+  (Print Options and Slot Actions' own new-section coverage lives in the
+  same file, alongside this).

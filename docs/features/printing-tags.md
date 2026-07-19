@@ -408,8 +408,13 @@ printings, artists, tags, and moderation from one screen.
   looking like a filled button — its own `p-0` had to be removed, not
   just supplemented, since Bootstrap's utility class carries `!important`
   and would otherwise silently win over any styled-component override) —
-  and one change to `AttributeChipPanel.tsx`'s own `Chip` styled-button
-  (`min-height`/`min-width: 44px`, flex-centered). Level 3's
+  and one change to the shared `Chip` styled-button (`min-height`/
+  `min-width: 44px`, flex-centered — originally defined in
+  `AttributeChipPanel.tsx`, later extracted into `attributeChipRender.tsx`
+  alongside the chip-render/vote-submission logic so the display page's
+  rail Attributes section could reuse the exact same chip, per the
+  left-panel-unification pass — see
+  `docs/proposals/proposal-h-unified-display-page.md`). Level 3's
   Confirm/Skip pair also gained `flex-column flex-sm-row` (previously
   always side-by-side, squeezed to half-width each on a phone) to match
   the stacking-to-full-width pattern every other level already used.

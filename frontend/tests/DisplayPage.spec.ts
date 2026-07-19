@@ -14,6 +14,7 @@ import {
   searchResultsThreeResults,
   searchResultsUnresolvedCanonicalImport,
   sourceDocumentsOneResult,
+  tagConsensusTwoUnresolvedTags,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
@@ -23,6 +24,12 @@ const threeCardHandlers = [
   cardDocumentsThreeResults,
   sourceDocumentsOneResult,
   searchResultsThreeResults,
+  // The Attributes rail section (AutofillCollapse keeps every section mounted, not just the
+  // expanded one - same reason ChooseImageSection's own search fires unconditionally on slot
+  // select) fetches tag consensus the moment a slot is selected, whether or not the user ever
+  // opens Attributes - every test below that selects a slot needs this mocked, not just the
+  // ones that expand the section.
+  tagConsensusTwoUnresolvedTags,
   ...defaultHandlers,
 ];
 
@@ -121,9 +128,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // sections start collapsed - per the owner's accordion amendment (design doc §2).
     await expect(page.getByText("Option 1")).toBeVisible();
     await expect(page.getByRole("button", { name: /Filters/ })).toBeVisible();
-    await expect(
-      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
-    ).not.toBeVisible();
+    await expect(page.getByTestId("attribute-chip-Full Art")).not.toBeVisible();
   });
 
   test("selecting a candidate image in Choose Image updates the sheet's slot immediately", async ({
@@ -199,9 +204,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page
       .getByRole("heading", { name: "Attributes", exact: true })
       .click();
-    await expect(
-      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
-    ).toBeVisible();
+    await expect(page.getByTestId("attribute-chip-Full Art")).toBeVisible();
   });
 
   test("selecting a different slot resets the accordion back to its default (Choose Image open again)", async ({
@@ -225,16 +228,12 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page
       .getByRole("heading", { name: "Attributes", exact: true })
       .click();
-    await expect(
-      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
-    ).toBeVisible();
+    await expect(page.getByTestId("attribute-chip-Full Art")).toBeVisible();
 
     // Selecting the other real slot swaps the rail's whole subtree - Attributes should be back
     // to collapsed, not still expanded from the last slot.
     await slots.nth(1).click();
-    await expect(
-      page.getByText("Attribute chips (AttributeChipPanel)", { exact: false })
-    ).not.toBeVisible();
+    await expect(page.getByTestId("attribute-chip-Full Art")).not.toBeVisible();
     await expect(page.getByText("Option 1")).toBeVisible();
   });
 
@@ -279,6 +278,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       cardDocumentsWithResolvedPrintingMatch,
       sourceDocumentsOneResult,
       searchResultsResolvedPrintingMatch,
+      tagConsensusTwoUnresolvedTags,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
@@ -301,6 +301,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       cardDocumentsThreeResults,
       sourceDocumentsOneResult,
       searchResultsDegradedPrinting,
+      tagConsensusTwoUnresolvedTags,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
@@ -349,6 +350,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
           { status: 200 }
         );
       }),
+      tagConsensusTwoUnresolvedTags,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
@@ -386,6 +388,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       http.post(buildRoute("2/printingCandidates/"), () =>
         HttpResponse.json({ results: [REFERENCE_CANDIDATE] }, { status: 200 })
       ),
+      tagConsensusTwoUnresolvedTags,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
@@ -476,5 +479,131 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(page.getByTestId("display-sheet-indicator")).toContainText(
       "Sheet 3 of 3"
     );
+  });
+
+  // Proposal H pane migration, left-panel unification (issue #164) - the four rail sections that
+  // were stubs before this pass: Attributes, Print Options, Artist, Slot Actions.
+
+  test("the Attributes section casts a real tag vote when a chip is tapped", async ({
+    page,
+    network,
+  }) => {
+    let submittedTagName: string | undefined;
+    network.use(
+      cardDocumentsThreeResults,
+      sourceDocumentsOneResult,
+      searchResultsThreeResults,
+      tagConsensusTwoUnresolvedTags,
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as { tagName: string };
+        submittedTagName = body.tagName;
+        return HttpResponse.json(
+          {
+            tagName: body.tagName,
+            resolvedPolarity: 1,
+            netPolarity: 1,
+            tally: [{ polarity: 1, count: 1 }],
+          },
+          { status: 200 }
+        );
+      }),
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "my search query");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+    await page
+      .getByRole("heading", { name: "Attributes", exact: true })
+      .click();
+
+    const chip = page.getByTestId("attribute-chip-Full Art");
+    await expect(chip).toHaveAttribute("data-chip-state", "untouched");
+    await chip.click();
+
+    await expect(chip).toHaveAttribute("data-chip-state", "positive");
+    await expect.poll(() => submittedTagName).toBe("Full Art");
+  });
+
+  test("the Print Options section shows a bleed override select for an eligible (Google Drive) card", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsWithCanonicalCards,
+      sourceDocumentsOneResult,
+      searchResultsUnresolvedCanonicalImport,
+      tagConsensusTwoUnresolvedTags,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "1 card 8 (xyz) 001");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+    await page
+      .getByRole("heading", { name: "Print Options", exact: true })
+      .click();
+
+    const select = page.getByTestId(
+      `bleed-override-select-${cardDocument8.identifier}`
+    );
+    await expect(select).toBeVisible();
+    await expect(select).toHaveValue("auto");
+
+    await select.selectOption("force-bleed");
+    await expect(select).toHaveValue("force-bleed");
+  });
+
+  test("the Artist section shows a support link for a card with a known canonical artist", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsWithCanonicalCards,
+      sourceDocumentsOneResult,
+      searchResultsUnresolvedCanonicalImport,
+      tagConsensusTwoUnresolvedTags,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "1 card 8 (xyz) 001");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+    await page.getByRole("heading", { name: "Artist", exact: true }).click();
+
+    const link = page.getByTestId("artist-support-link");
+    await expect(link).toBeVisible();
+    await expect(link).toContainText("Alpha Artist");
+    await expect(link).toHaveAttribute(
+      "href",
+      "https://www.mtgartistconnection.com/artist/Alpha%20Artist"
+    );
+  });
+
+  test("the Slot Actions section's Delete removes the slot and returns the rail to idle", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    // 2 slots, not 1 - deleting the only slot in the project would make it empty and swap the
+    // whole page to the empty-state view (a different, already-covered case) rather than
+    // leaving the sheet showing one fewer filled slot, which is what this test actually checks.
+    await importText(page, "2x my search query");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+    await page
+      .getByRole("heading", { name: "Slot Actions", exact: true })
+      .click();
+
+    await expect(
+      page.getByTestId("page-preview-slot").locator("img")
+    ).toHaveCount(2);
+    await page.getByTestId("display-slot-action-delete").click();
+
+    await expect(page.getByTestId("display-rail-idle")).toBeVisible();
+    await expect(
+      page.getByTestId("page-preview-slot").locator("img")
+    ).toHaveCount(1);
   });
 });

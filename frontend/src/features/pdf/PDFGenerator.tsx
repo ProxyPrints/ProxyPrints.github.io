@@ -47,6 +47,7 @@ import {
   CutLinePlacement,
   CutLineShape,
   getPageSizeMM,
+  isBleedNormalizationEligible,
   PageSize,
   PDFProps,
 } from "@/features/pdf/PDF";
@@ -1045,8 +1046,7 @@ const BleedOverrideSettings = ({
         .filter(
           (entry): entry is [string, CardDocument] =>
             entry[1] != null &&
-            (entry[1].sourceType === SourceType.GoogleDrive ||
-              entry[1].sourceType === SourceType.LocalFile)
+            isBleedNormalizationEligible(entry[1], "full-resolution")
         )
         .sort(([, a], [, b]) => a.name.localeCompare(b.name)),
     [cardDocumentsByIdentifier]
