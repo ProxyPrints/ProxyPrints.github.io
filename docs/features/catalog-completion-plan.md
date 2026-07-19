@@ -1015,11 +1015,59 @@ quota behavior measured across 3,136 downloads (zero 429/403,
 spanning 247/248 available community sources) is the evidence backing
 this role: Drive is safe and reliable for the low-volume, high-value
 cases the bulk path doesn't need to reach for. The previously-
-cancelled ramp probe (task #152's former item 1) is **REVIVED** —
-tracked as task #163, pending an owner-named low-traffic window — to
-push `GOOGLE_IMAGE`'s scraper-path ceiling past 3.0/s with real
-evidence, since that's now confirmed as the only lever left for
-moving the bulk-harvest floor.
+cancelled ramp probe (task #152's former item 1) was **REVIVED** as
+task #163 and run 2026-07-19 (owner cleared it to fire without a
+scheduled window — "the breaker is the safety mechanism, not a human
+watching live" — since the design's own automated stop conditions
+cover both real failure modes).
+
+**Ramp probe results (task #163, completed 2026-07-19)**: full
+circuit-breakered ramp through the real production path
+(`image_cdn_fetch`'s Worker "full" tier, the exact `GOOGLE_IMAGE`
+limiter singleton every real caller shares), steps 3→5→8→10 req/s
+target, ~25min/step, 22,752 total requests. **Zero 429/403 across the
+entire run** — the breaker never tripped, `last_confirmed_safe_rate`
+reached the full 10.0/s target with no quota signal at any step.
+
+**But the real per-step throughput plateaued well below the target
+rates** — computed from each step's own (ok ÷ elapsed), not the
+script's cumulative-average `current_rate()` reading (which dilutes
+later steps with earlier, slower ones): 3.0/s target → 2.94/s
+achieved; 5.0/s target → 3.83/s achieved; 8.0/s target → 4.16/s
+achieved; 10.0/s target → **4.22/s achieved (the asymptote)**. Step 1
+was still genuinely pacing-limited (target 3.0/s sits below the real
+ceiling); steps 2-4 show throughput converging toward ~4.2/s
+regardless of how much higher the pacing target goes — the signature
+of a DIFFERENT bottleneck than pacing taking over.
+
+**Little's Law identifies that bottleneck as `GOOGLE_IMAGE.max_concurrency=3`
+interacting with real per-request latency, not Google's own rate
+limit**: L = λW → with L (concurrency) = 3 and the step 4 asymptotic
+λ (throughput) = 4.215/s, **W (mean round-trip latency) ≈ 0.712s** —
+strikingly close to Stage B's own independently-measured fetch mean
+(0.735s/card, item 3's post-fix measurement above), a real
+convergent cross-check, not a coincidence. At `max_concurrency=3`,
+no pacing target above ~4.2/s can ever be reached, because only 3
+requests can be in flight at once and each one occupies its slot for
+~0.71s regardless of how eagerly new requests are paced in.
+
+**Two separate ceilings, only one of them Google's** (owner's own
+framing, confirmed): the throughput ceiling measured here (~4.2/s) is
+**our own client-side concurrency configuration**, not a Google/Worker
+quota — Google's real ceiling remains genuinely unmeasured, since
+concurrency=3 capped real throughput below whatever that number is at
+every step. This is what task #165 (concurrency-raise probe,
+owner-authorized, holds rate fixed at 10/s and steps
+`max_concurrency` 3→6→10 instead) is designed to find.
+
+**Immediate, already-measured, lower-risk finding**: independent of
+task #165, this run is itself real evidence that `GOOGLE_IMAGE.rate_per_sec`
+could safely move from 3.0 to ~4.0-4.2/s at the CURRENT `max_concurrency=3`
+— a full 25-minute step targeted 10/s (far above this range) with zero
+quota events. Not applied here (config values land only from a
+deliberate follow-up per the standing "measure, don't assume" rule) —
+flagged as a cheap, separate option the owner may want to take before
+or independent of the larger concurrency-raise probe.
 
 ### Governing posture: we index, we do not store images (owner FINAL POSTURE + PRIORITIZATION directive, 2026-07-19)
 
