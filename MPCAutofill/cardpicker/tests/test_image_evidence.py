@@ -3,7 +3,14 @@ Stage C substrate tests (docs/features/catalog-completion-plan.md, task #145): t
 callable extraction unit + persistence split, the fetch_health extractor riding along as
 end-to-end proof, and the reconciliation ledger (task #155). No network - `fetch_card_image`
 is monkeypatched throughout.
+
+geometry_bleed (task #147) is exercised against a lightweight `_StubImage` rather than a real
+PIL Image - `local_fallback.classify_bleed_edge` (the function this extractor calls, unmodified)
+only ever reads `.size`, so a bare `(width, height)` stand-in is sufficient and keeps these tests
+fast/dependency-light; the real classifier function itself is never mocked, only its input.
 """
+
+from dataclasses import dataclass
 
 import pytest
 
@@ -11,11 +18,13 @@ import cardpicker.image_evidence as module
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import (
     FETCH_HEALTH_EXTRACTOR_VERSION,
+    GEOMETRY_BLEED_EXTRACTOR_VERSION,
     ExtractionResult,
     build_reconciliation_report,
     extract_card_evidence,
     persist_evidence,
 )
+from cardpicker.local_fallback import BLEED_ASPECT_RATIO, TRIM_ASPECT_RATIO
 from cardpicker.models import CardScanLog, ImageEvidence
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
@@ -25,6 +34,19 @@ from cardpicker.tests.factories import (
 )
 
 _SHARED_FACTORIES = [CardFactory, SourceFactory, CanonicalArtistFactory, CanonicalExpansionFactory]
+
+
+@dataclass(frozen=True)
+class _StubImage:
+    size: tuple[int, int]
+
+
+# A real fetched image at DEFAULT_FETCH_DPI (250) is ~925px tall - these stub sizes just need to
+# land at the right aspect ratio, not the right absolute resolution, since classify_bleed_edge
+# only looks at the width/height ratio.
+_BLEED_IMAGE = _StubImage(size=(round(1000 * BLEED_ASPECT_RATIO), 1000))
+_TRIMMED_IMAGE = _StubImage(size=(round(1000 * TRIM_ASPECT_RATIO), 1000))
+_AMBIGUOUS_IMAGE = _StubImage(size=(1000, 1000))  # square - far from both known ratios
 
 
 @pytest.fixture(autouse=True)
@@ -40,14 +62,18 @@ def _preserve_shared_factory_sequences():
 class TestExtractCardEvidence:
     def test_successful_fetch_marks_fetch_ok_and_records_no_skip(self, db, monkeypatch):
         card = CardFactory(content_phash=12345)
-        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: object())
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
 
         result = extract_card_evidence(card)
 
         assert result.card_id == card.pk
         assert result.content_hash == 12345
-        assert result.fields == {"fetch_ok": True, "fetch_error_class": ""}
-        assert result.extractor_versions == {"fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION}
+        assert result.fields["fetch_ok"] is True
+        assert result.fields["fetch_error_class"] == ""
+        assert result.extractor_versions == {
+            "fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION,
+            "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
+        }
         assert result.skip_reasons == {}
 
     def test_failed_fetch_marks_fetch_not_ok_and_records_a_named_skip(self, db, monkeypatch):
@@ -57,14 +83,19 @@ class TestExtractCardEvidence:
         result = extract_card_evidence(card)
 
         assert result.fields == {"fetch_ok": False, "fetch_error_class": "fetch_failed"}
-        # extractor_versions is still set - fetch_health ran to completion, it just found a
-        # negative result. Only a crash omits this key (see ExtractionResult's docstring).
-        assert result.extractor_versions == {"fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION}
-        assert result.skip_reasons == {"fetch_health": "fetch_failed"}
+        # extractor_versions is still set for BOTH extractors - each ran to completion, it just
+        # found a negative result (a fetch failure is a shared root cause, not a crash in either
+        # extractor). Only a crash omits an extractor's own key (see ExtractionResult's
+        # docstring).
+        assert result.extractor_versions == {
+            "fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION,
+            "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
+        }
+        assert result.skip_reasons == {"fetch_health": "fetch_failed", "geometry_bleed": "fetch_failed"}
 
     def test_null_content_phash_surfaces_as_none(self, db, monkeypatch):
         card = CardFactory(content_phash=None)
-        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: object())
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
 
         result = extract_card_evidence(card)
 
@@ -83,12 +114,92 @@ class TestExtractCardEvidence:
 
     def test_no_db_writes_happen(self, db, monkeypatch):
         card = CardFactory(content_phash=12345)
-        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: object())
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
 
         extract_card_evidence(card)
 
         assert ImageEvidence.objects.count() == 0
         assert CardScanLog.objects.count() == 0
+
+
+class TestExtractCardEvidenceGeometryBleed:
+    """task #147 - the first real manifest extractor."""
+
+    def test_bleed_image_records_dims_ratio_and_bleed_class(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+
+        result = extract_card_evidence(card)
+
+        width, height = _BLEED_IMAGE.size
+        assert result.fields["width"] == width
+        assert result.fields["height"] == height
+        assert result.fields["aspect_ratio"] == pytest.approx(width / height)
+        assert result.fields["bleed_class"] == "bleed"
+        assert "geometry_bleed" not in result.skip_reasons
+
+    def test_trimmed_image_records_trimmed_bleed_class(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["bleed_class"] == "trimmed"
+        assert "geometry_bleed" not in result.skip_reasons
+
+    def test_ambiguous_aspect_ratio_records_named_skip(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _AMBIGUOUS_IMAGE)
+
+        result = extract_card_evidence(card)
+
+        # bleed_class stores "" (not null) for the ambiguous case, matching fetch_error_class's
+        # own blank-string-as-sentinel convention (see ImageEvidence's docstring).
+        assert result.fields["bleed_class"] == ""
+        assert result.skip_reasons["geometry_bleed"] == "ambiguous"
+        # geometry_bleed still ran to completion (width/height/aspect_ratio were computable even
+        # though bleed classification itself abstained) - only the fetch failure case below
+        # withholds these fields entirely.
+        assert result.fields["width"] == 1000
+        assert result.fields["aspect_ratio"] == pytest.approx(1.0)
+
+    def test_zero_height_image_guards_aspect_ratio_division(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["aspect_ratio"] is None
+        assert result.skip_reasons["geometry_bleed"] == "ambiguous"
+
+    def test_fetch_failure_withholds_geometry_fields_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "width" not in result.fields
+        assert "height" not in result.fields
+        assert "aspect_ratio" not in result.fields
+        assert "bleed_class" not in result.fields
+        assert result.skip_reasons["geometry_bleed"] == "fetch_failed"
+
+    def test_persist_writes_geometry_fields(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={"width": 925, "height": 1300, "aspect_ratio": 925 / 1300, "bleed_class": "bleed"},
+            extractor_versions={"geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.width == 925
+        assert evidence.height == 1300
+        assert evidence.aspect_ratio == pytest.approx(925 / 1300)
+        assert evidence.bleed_class == "bleed"
 
 
 class TestPersistEvidence:

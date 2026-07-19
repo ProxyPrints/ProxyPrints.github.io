@@ -92,6 +92,50 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # to establish the convention other extractors will follow, not because fetch_health has
     # anything subtle to assert.
     "fetch_health": [GoldenExpectation(card_id=cid, value=True) for cid in GOLDEN_CARD_IDS],
+    # geometry_bleed (task #147, recorded 2026-07-19 against a real extract_card_evidence() run
+    # over all 30 golden cards at DEFAULT_FETCH_DPI - no persistence, see the task's own
+    # VERIFICATION notes for how this was gathered). `value` is only `bleed_class` - the single
+    # discrete, stable-under-re-fetch signal worth pinning as a hard gate; `width`/`height`/
+    # `aspect_ratio` are real but continuous/DPI-derived and would make this set brittle to pin
+    # exactly, so they're intentionally not part of the golden assertion. 27/30 bleed, 3/30
+    # trimmed (90%/10%) - a higher trimmed share than the 40-source validation's ~2.5% baseline
+    # (local_fallback.py's own bleed-classification section), but this is a small n=30
+    # stratified-by-source sample, not a re-measurement of that baseline.
+    "geometry_bleed": [
+        GoldenExpectation(card_id=cid, value=value)
+        for cid, value in {
+            35: "bleed",
+            37: "bleed",
+            40: "bleed",
+            37962: "bleed",
+            39520: "bleed",
+            41039: "bleed",
+            102138: "bleed",
+            128981: "bleed",
+            144933: "bleed",
+            145081: "bleed",
+            145532: "trimmed",
+            147855: "bleed",
+            150472: "trimmed",
+            159175: "bleed",
+            161020: "bleed",
+            175889: "bleed",
+            189166: "trimmed",
+            189921: "bleed",
+            190895: "bleed",
+            193523: "bleed",
+            194684: "bleed",
+            199986: "bleed",
+            200330: "bleed",
+            200668: "bleed",
+            204427: "bleed",
+            207913: "bleed",
+            208337: "bleed",
+            208569: "bleed",
+            214113: "bleed",
+            217783: "bleed",
+        }.items()
+    ],
 }
 
 

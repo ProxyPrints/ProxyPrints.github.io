@@ -15,9 +15,16 @@ do not store images) - they go out of scope the moment this function returns.
 
 Extend this module (not ImageEvidence's callers) when adding a new extractor: fetch once at
 the top of `extract_card_evidence`, call each new pure extractor function against the same
-in-memory image, and add its fields/version/skip-reason to the result. Only `fetch_health`
-exists today - intentional, per task #145's "infrastructure PR first, one extractor per PR
-after" sequencing.
+in-memory image, and add its fields/version/skip-reason to the result. `fetch_health` and
+`geometry_bleed` exist today (task #147) - every subsequent extractor (OCR/collector-line,
+artist OCR, phash, border color, symbol-strip, legal-line, etc.) lands as its own follow-up PR
+per task #145's manifest and one-PR-per-extractor gate.
+
+geometry_bleed calls `local_fallback.classify_bleed_edge` directly rather than re-deriving the
+aspect-ratio math - that function is the exact classifier the live pilot/harvest vote path
+already uses (`cast_bleed_edge_vote`'s own upstream input), so this extractor's stored
+`bleed_class` is guaranteed to agree with what the shipped identification code would conclude
+for the same image, not a second implementation that could quietly drift from it over time.
 
 RECONCILIATION LEDGER (owner directive 2026-07-19, task #155): `build_reconciliation_report`
 answers "attempted = voted + each named skip-reason + dropped" for one extractor over one set
@@ -31,11 +38,13 @@ from typing import Any, Optional
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
+from cardpicker.local_fallback import classify_bleed_edge
 from cardpicker.models import Card, CardScanLog, ImageEvidence
 
 logger = logging.getLogger(__name__)
 
 FETCH_HEALTH_EXTRACTOR_VERSION = "fetch-health-v1"
+GEOMETRY_BLEED_EXTRACTOR_VERSION = "geometry-bleed-v1"
 
 
 @dataclass(frozen=True)
@@ -89,6 +98,26 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
     # Set even on skip - fetch_health RAN TO COMPLETION either way, it just didn't find a
     # positive result. Omitted only if this function raises before reaching here.
     extractor_versions["fetch_health"] = FETCH_HEALTH_EXTRACTOR_VERSION
+
+    # geometry_bleed (task #147): depends on the same fetched image - if the fetch itself
+    # failed, this extractor never gets to run either, but that's a named skip (same root cause
+    # fetch_health already recorded), not a crash, so it still gets its own extractor_versions
+    # entry - matching fetch_health's own "ran to completion, found nothing" convention above.
+    if image is None:
+        skip_reasons["geometry_bleed"] = "fetch_failed"
+    else:
+        width, height = image.size
+        fields["width"] = width
+        fields["height"] = height
+        fields["aspect_ratio"] = (width / height) if height else None
+        bleed_class = classify_bleed_edge(image)
+        fields["bleed_class"] = bleed_class or ""
+        if bleed_class is None:
+            # classify_bleed_edge's own documented "genuinely non-standard image" outcome -
+            # "ambiguous" is the pipeline's own pre-existing skip-reason vocabulary
+            # (docs/features/catalog-completion-plan.md's CardScanLog section), not a new string.
+            skip_reasons["geometry_bleed"] = "ambiguous"
+    extractor_versions["geometry_bleed"] = GEOMETRY_BLEED_EXTRACTOR_VERSION
 
     return ExtractionResult(
         card_id=card.pk,
@@ -195,4 +224,5 @@ __all__ = [
     "ReconciliationReport",
     "build_reconciliation_report",
     "FETCH_HEALTH_EXTRACTOR_VERSION",
+    "GEOMETRY_BLEED_EXTRACTOR_VERSION",
 ]

@@ -1260,6 +1260,36 @@ artist OCR, phash, border color, symbol-strip, legal-line, etc.)
 lands as its own PR against this substrate, golden-set-tested before
 merge, per task #145's manifest and its freeze rule.
 
+**geometry/bleed — first manifest extractor, built** (public issue
+#147, 2026-07-19): adds `width`/`height`/`aspect_ratio`/`bleed_class`
+to `ImageEvidence` (migration `0069`, additive-only `AddField`s, no
+freeze conflict — none of `docs/troubleshooting.md`/this doc's own
+"Status" section records an active migration freeze). The extractor
+itself calls `local_fallback.classify_bleed_edge` directly rather than
+re-deriving the aspect-ratio math, so its stored `bleed_class` is
+guaranteed to agree with the exact classifier the live pilot/harvest
+vote path (`cast_bleed_edge_vote`) already uses — reused, not
+duplicated, and no changes to `local_fallback.py` itself (PROTECTED
+CORE; calling its existing exported function from new code is not
+"changing" it, per `docs/upstreaming/license-provenance.md`).
+Deliberately first per the manifest's own stated order: every later
+crop-coordinate extractor (#148+) needs `width`/`height` (to turn a
+fixed-fraction crop box into pixel coordinates) and `bleed_class` (to
+remap that box via `normalize_crop_box` first) — this extractor is
+what makes both available from stored evidence. Scope held strictly to
+extraction: no vote is cast here (`cast_bleed_edge_vote` is not
+called) — that's Stage D calculator territory per the pipeline-fidelity
+gate (task #151) once it's built, not folded into this PR.
+`GOLDEN_EXPECTATIONS["geometry_bleed"]` populated against a real,
+no-persistence `extract_card_evidence()` run over all 30 golden cards
+(host venv, real network fetch through the shared `GOOGLE_IMAGE`-paced
+Worker path, zero DB writes): 27/30 bleed, 3/30 trimmed. 8 new tests
+(6 in `test_image_evidence.py`'s new `TestExtractCardEvidenceGeometryBleed`
+class plus 5 pre-existing `TestExtractCardEvidence` tests updated for
+the new extractor's presence, 2 in `test_golden_set.py`); full suite
+987 passed / 4 skipped (the CI-documented named skips — Moxfield +
+Google-Drive-credential — nothing newly broken); `makemigrations --check` clean.
+
 Queued behind Stage B per the paced task sequence (#145–148). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
