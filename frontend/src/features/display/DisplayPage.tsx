@@ -90,6 +90,7 @@ import {
   useSaveToDrivePDF,
 } from "@/features/pdf/PDFGenerator";
 import { ImageFetchFailure } from "@/features/pdf/pdfImage";
+import { SavedDeckPanel } from "@/features/savedDecks/SavedDeckPanel";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
@@ -782,6 +783,15 @@ export function DisplayPage() {
             Sheet {clampedVisibleSheetIndex + 1} of {sheets.length}
           </span>
         </div>
+
+        {/* Issue #165, Proposal G save integration - the same reverse-breadcrumb + Save
+            button ProjectEditor.tsx mounts (SavedDeckPanel is fully route-agnostic; only
+            the spacing differs - see that component's own comment). Renders nothing at all
+            for an anonymous session, matching the editor's degradation exactly. Doubles as
+            this toolbar's "deck name" slot (design doc §2's information architecture never
+            anticipated saved decks, since Proposal G landed after that doc's own pass - see
+            saved-decks.md's "Where it's wired in" section for the full cross-reference). */}
+        <SavedDeckPanel className="" />
 
         <Button
           size="sm"

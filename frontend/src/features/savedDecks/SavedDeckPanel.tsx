@@ -1,10 +1,18 @@
 /**
- * The editor's saved-deck action cluster (docs/proposals/proposal-g-user-accounts-saved-decks.md
- * §4): the reverse breadcrumb ("Editing: {name}" / "Unsaved project") and the Save button,
- * rendered only when authenticated - a logged-out user sees nothing new here at all. Clicking
- * Save runs the passphrase-setup or unlock prerequisite first if the crypto session isn't ready,
- * then opens SaveDeckModal. Also raises the one-time anonymous-to-login "adopt your project"
- * toast on the whoami transition to authenticated.
+ * The saved-deck action cluster (docs/proposals/proposal-g-user-accounts-saved-decks.md §4): the
+ * reverse breadcrumb ("Editing: {name}" / "Unsaved project") and the Save button, rendered only
+ * when authenticated - a logged-out user sees nothing new here at all. Clicking Save runs the
+ * passphrase-setup or unlock prerequisite first if the crypto session isn't ready, then opens
+ * SaveDeckModal. Also raises the one-time anonymous-to-login "adopt your project" toast on the
+ * whoami transition to authenticated.
+ *
+ * Mounted in two places (issue #165, Proposal G save integration into Proposal H's unified
+ * display page): ProjectEditor.tsx's right-panel action cluster (original placement, `pt-2` to
+ * stack under the panels above it) and DisplayPage.tsx's top toolbar (docs/proposals/
+ * proposal-h-unified-display-page.md §5's "deck name" toolbar slot - see that doc's own row for
+ * this component). The component itself is entirely route-agnostic (reads/writes projectSlice +
+ * savedDeckSessionSlice only), so the only thing that differs between callers is spacing - hence
+ * the className prop rather than a second, forked component.
  */
 
 import React, { useEffect, useRef, useState } from "react";
@@ -22,7 +30,15 @@ import { setNotification } from "@/store/slices/toastsSlice";
 
 type PendingModal = "passphrase-setup" | "unlock" | "save" | null;
 
-export function SavedDeckPanel() {
+interface SavedDeckPanelProps {
+  // Defaults to the original ProjectEditor placement's own spacing (a block stacked under the
+  // panels above it in a vertical column) - DisplayPage.tsx passes "" instead, since there this
+  // renders inline as one more item in the toolbar's own horizontal flex-wrap row, which already
+  // supplies its own gap-2 between siblings.
+  className?: string;
+}
+
+export function SavedDeckPanel({ className = "pt-2" }: SavedDeckPanelProps) {
   const dispatch = useAppDispatch();
   const whoami = useGetWhoamiQuery();
   const isAuthenticated = whoami.data?.authenticated === true;
@@ -72,7 +88,7 @@ export function SavedDeckPanel() {
 
   return (
     <>
-      <div className="d-flex align-items-center gap-2 pt-2">
+      <div className={`d-flex align-items-center gap-2 ${className}`.trim()}>
         <span className="text-muted small" data-testid="saved-deck-breadcrumb">
           {currentSavedDeck.currentDeckName
             ? `Editing: ${currentSavedDeck.currentDeckName}`
