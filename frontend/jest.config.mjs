@@ -17,8 +17,15 @@ const customJestConfig = {
   maxWorkers: 4,
   // Ignore Playwright tests directory
   testPathIgnorePatterns: ["/node_modules/", "/tests/"],
-  // Only match Jest test files (not Playwright .spec.ts files)
-  testMatch: ["**/*.test.ts", "**/*.test.tsx"],
+  // Only match Jest test files (not Playwright .spec.ts files). *.test.js
+  // is scoped narrowly (frontend/scripts/**) - the build scripts there are
+  // plain JS (tsconfig.json's allowJs: false rules out testing them via
+  // .test.ts), and no other *.test.js files exist in the project.
+  testMatch: [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "<rootDir>/scripts/**/*.test.js",
+  ],
 };
 
 const createJestConfig = nextJest({
@@ -32,7 +39,7 @@ const jestConfigWithOverrides = async (...args) => {
 
   res.transformIgnorePatterns = res.transformIgnorePatterns.map((pattern) => {
     if (pattern === "/node_modules/") {
-      return "node_modules/(?!(until-async)|(node-fetch)|(data-uri-to-buffer)|(fetch-blob)|(formdata-polyfill)/)";
+      return "node_modules/(?!(until-async)|(node-fetch)|(data-uri-to-buffer)|(fetch-blob)|(formdata-polyfill)|(marked)/)";
     }
     return pattern;
   });

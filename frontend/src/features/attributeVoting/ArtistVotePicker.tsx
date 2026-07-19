@@ -51,6 +51,12 @@ interface ArtistVotePickerProps {
    * full rationale. Omitted (this component's other caller, AttributeVotingPanel): unchanged
    * behavior, no voteSurface sent. */
   voteSurface?: string;
+  /** Called right after a vote for a SPECIFIC named artist succeeds (never for "Unknown
+   * artist" - there's no name to do anything with there). Lets a caller show its own
+   * "you just told us who this is" moment (e.g. QuestionFeed.tsx's Artist Support Link) without
+   * this component needing to know anything about that surface's own UI. Omitted (this
+   * component's other caller, AttributeVotingPanel): unchanged behavior, nothing extra rendered. */
+  onArtistConfirmed?: (artistName: string) => void;
 }
 
 export function ArtistVotePicker({
@@ -59,6 +65,7 @@ export function ArtistVotePicker({
   confidentlyKnownArtistName,
   onRateLimited,
   voteSurface,
+  onArtistConfirmed,
 }: ArtistVotePickerProps) {
   const dispatch = useAppDispatch();
 
@@ -113,6 +120,9 @@ export function ArtistVotePicker({
             },
           ])
         );
+        if (!isUnknown && artistName != null) {
+          onArtistConfirmed?.(artistName);
+        }
       })
       .catch((error) => {
         if (isRateLimited(error) && onRateLimited) {

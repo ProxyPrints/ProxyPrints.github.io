@@ -68,7 +68,12 @@ from cardpicker.local_identify_printing_tags import (
     generate_run_id,
     run_ocr_for_card,
 )
-from cardpicker.models import CanonicalCard, CardPrintingTag, VoteSource
+from cardpicker.models import (
+    CanonicalCard,
+    CardPrintingTag,
+    LandsAmbiguousResidue,
+    VoteSource,
+)
 
 # "=s800" tier addendum (task #130's tier-routing idea, applied here first): OCR only needs to
 # read small collector-line/artist-credit text, not print resolution - fetching at the normal
@@ -169,6 +174,10 @@ class LandsIdentifyResult:
     tiebreak_votes: int = 0
     ambiguous_phash: int = 0
     votes_written: int = 0
+    # LandsAmbiguousResidue rows written (routing data, not votes) - counted separately from
+    # votes_written since it's a distinct table with distinct semantics; see that model's
+    # docstring. Always 0 in dry_run, same convention as votes_written.
+    residue_written: int = 0
     # name -> pre-artist-filter candidate count, over the FULL pool (free, not sample-scoped).
     per_name_candidate_counts: dict[str, int] = field(default_factory=dict)
     # name -> list of post-artist-filter candidate-set sizes seen in the sample (one entry per
@@ -210,16 +219,24 @@ def _land_pool_selected_cards(index: CandidateNameIndex, sample_size: Optional[i
 def identify_land_printing(
     selected: SelectedCard,
     artist_name: Optional[str],
-) -> tuple[Optional[int], Optional[float], str, Optional[frozenset[int]]]:
+) -> tuple[Optional[int], Optional[float], str, Optional[frozenset[int]], Optional[dict[int, int]]]:
     """Pure (no fetch, no DB write): steps 2-3 of the module docstring's pipeline, given an
     already-extracted artist_name (or None if extraction failed). Returns (printing_pk,
-    confidence, skip_reason, artist_matched_pks) - exactly one of (printing_pk, skip_reason) is
-    populated; artist_matched_pks is always populated once match_artist itself returns a reading
-    (even on a later phash failure), so callers get the artist-filter distribution without a
-    second match_artist call. Split out from run_lands_identify's orchestrator so it's directly
-    unit-testable without a real fetch or DB access."""
+    confidence, skip_reason, artist_matched_pks, phash_distances) - exactly one of (printing_pk,
+    skip_reason) is populated; artist_matched_pks is always populated once match_artist itself
+    returns a reading (even on a later phash failure), so callers get the artist-filter
+    distribution without a second match_artist call. phash_distances ({candidate_pk: hamming
+    distance from the card's own content_phash}) is populated whenever a phash comparison was
+    actually attempted (i.e. content_phash existed) - None on every earlier skip path, since
+    there's nothing to report a distance against yet. Ambiguous-residue capture (docs/features/
+    catalog-completion-plan.md's Part 4 addendum, 2026-07-19) reuses this instead of
+    recomputing distances a second time - find_best_match itself only returns the WINNING
+    distance on success and nothing on failure, so this computes the full per-candidate spread
+    directly rather than extending that shared helper's own return shape for every other caller.
+    Split out from run_lands_identify's orchestrator so it's directly unit-testable without a
+    real fetch or DB access."""
     if artist_name is None:
-        return None, None, "no-artist-extracted", None
+        return None, None, "no-artist-extracted", None, None
 
     candidate_pks = {c.pk for c in selected.candidates}
     canonicals = {c.pk: c for c in CanonicalCard.objects.select_related("artist").filter(pk__in=candidate_pks)}
@@ -227,7 +244,7 @@ def identify_land_printing(
 
     matched_pks = match_artist(artist_name, selected.candidates, artist_by_pk)
     if matched_pks is None:
-        return None, None, "artist-no-match", None
+        return None, None, "artist-no-match", None, None
     frozen_matched_pks = frozenset(matched_pks)
 
     filtered_candidates = [c for c in selected.candidates if c.pk in frozen_matched_pks]
@@ -241,14 +258,19 @@ def identify_land_printing(
             candidates_with_hashes.append((candidate, candidate_hash))
 
     if selected.card.content_phash is None:
-        return None, None, "no-content-phash", frozen_matched_pks
+        return None, None, "no-content-phash", frozen_matched_pks, None
+
+    phash_distances = {
+        candidate.pk: local_phash._int_to_hash(selected.card.content_phash) - local_phash._int_to_hash(candidate_hash)
+        for candidate, candidate_hash in candidates_with_hashes
+    }
 
     match, reason = local_phash.find_best_match(selected.card.content_phash, candidates_with_hashes)
     if match is None:
-        return None, None, f"phash-{reason}", frozen_matched_pks
+        return None, None, f"phash-{reason}", frozen_matched_pks, phash_distances
 
     confidence = LANDS_SINGLETON_CONFIDENCE if len(frozen_matched_pks) == 1 else LANDS_TIEBREAK_CONFIDENCE
-    return match.candidate.pk, confidence, "", frozen_matched_pks
+    return match.candidate.pk, confidence, "", frozen_matched_pks, phash_distances
 
 
 def run_lands_identify(
@@ -281,6 +303,7 @@ def run_lands_identify(
     result.sampled = len(sampled_selected)
 
     votes_batch: list[CardPrintingTag] = []
+    residue_batch: list[LandsAmbiguousResidue] = []
     for selected in sampled_selected:
         card = selected.card
         if result.fetch_attempted >= fetch_budget:
@@ -340,7 +363,9 @@ def run_lands_identify(
         else:
             result.artist_extraction_failed += 1
 
-        printing_pk, confidence, skip_reason, artist_matched_pks = identify_land_printing(selected, artist_name)
+        printing_pk, confidence, skip_reason, artist_matched_pks, phash_distances = identify_land_printing(
+            selected, artist_name
+        )
 
         if printing_pk is not None:
             if confidence == LANDS_SINGLETON_CONFIDENCE:
@@ -361,6 +386,19 @@ def run_lands_identify(
                 )
         elif skip_reason.startswith("phash-"):
             result.ambiguous_phash += 1
+            # Routing data, not a vote (see LandsAmbiguousResidue's own docstring) - the artist
+            # match already paid the real narrowing cost; persist it so a future funnel surface
+            # can serve "which of these N?" instead of recomputing from the name's full pool.
+            if not dry_run and artist_name is not None and artist_matched_pks and phash_distances is not None:
+                residue_batch.append(
+                    LandsAmbiguousResidue(
+                        card_id=card.pk,
+                        run_id=run_id,
+                        artist_name=artist_name,
+                        candidate_pks=sorted(artist_matched_pks),
+                        phash_distances={str(pk): distance for pk, distance in phash_distances.items()},
+                    )
+                )
 
         if artist_matched_pks is not None:
             result.per_name_post_filter_candidate_counts.setdefault(card.name, []).append(len(artist_matched_pks))
@@ -382,6 +420,10 @@ def run_lands_identify(
     if not dry_run and votes_batch:
         CardPrintingTag.objects.bulk_create(votes_batch)
         result.votes_written = len(votes_batch)
+
+    if not dry_run and residue_batch:
+        LandsAmbiguousResidue.objects.bulk_create(residue_batch)
+        result.residue_written = len(residue_batch)
 
     result.outcomes = result.outcomes[:audit_sample_size]
     return result

@@ -3,11 +3,13 @@ import { http, HttpResponse } from "msw";
 
 import { cardDocument8, localBackendURL } from "@/common/test-constants";
 import {
+  cardDocumentsNoResults,
   cardDocumentsThreeResults,
   cardDocumentsWithCanonicalCards,
   cardDocumentsWithResolvedPrintingMatch,
   defaultHandlers,
   searchResultsDegradedPrinting,
+  searchResultsNoResults,
   searchResultsResolvedPrintingMatch,
   searchResultsThreeResults,
   searchResultsUnresolvedCanonicalImport,
@@ -406,5 +408,26 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await noButton.click();
 
     await expect(page.getByRole("button", { name: /Filters/ })).toBeVisible();
+  });
+
+  test("a slot with no resolved image shows its query text on the sheet instead of a blank hole (item 1, owner's hands-on review)", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsNoResults,
+      sourceDocumentsOneResult,
+      searchResultsNoResults,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "an unfindable card");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+
+    const sheetSlot = page.getByTestId("page-preview-slot").first();
+    await expect(sheetSlot.locator("img")).toHaveCount(0);
+    const label = sheetSlot.getByTestId("page-preview-empty-slot-label");
+    await expect(label).toBeVisible();
+    await expect(label).toContainText("an unfindable card");
   });
 });

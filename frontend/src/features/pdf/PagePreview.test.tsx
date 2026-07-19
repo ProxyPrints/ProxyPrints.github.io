@@ -60,6 +60,51 @@ describe("PagePreview", () => {
     expect(images[0]).toHaveAttribute("src", "https://example.com/only.png");
   });
 
+  it("shows the slot's name and query text instead of a blank hole when it has no resolved image", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: undefined,
+            name: "Slot 1",
+            queryText: "lightning bolt (2ED 162)",
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    const label = screen.getByTestId("page-preview-empty-slot-label");
+    expect(label).toHaveTextContent("Slot 1");
+    expect(label).toHaveTextContent("lightning bolt (2ED 162)");
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+
+  it("shows just the name, no stray query line, when queryText is omitted (e.g. a shared cardback slot)", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: undefined, name: "Slot 1" }]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    expect(
+      screen.getByTestId("page-preview-empty-slot-label")
+    ).toHaveTextContent("Slot 1");
+  });
+
   it("leaves a slot empty (no <img>) when no content is provided for it", () => {
     render(
       <PagePreview
@@ -76,6 +121,11 @@ describe("PagePreview", () => {
 
     expect(screen.getAllByTestId("page-preview-slot")).toHaveLength(9);
     expect(screen.queryAllByRole("img")).toHaveLength(0);
+    // Genuinely unfilled grid capacity (no project slot at all) - distinct from a real slot
+    // that just hasn't resolved an image yet, which gets the name/query placeholder above.
+    expect(
+      screen.queryAllByTestId("page-preview-empty-slot-label")
+    ).toHaveLength(0);
   });
 
   it("draws a cut-line rectangle per slot only when showCutLines is true", () => {
