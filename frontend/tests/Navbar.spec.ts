@@ -30,7 +30,11 @@ test.describe("Navbar - Discord auth links", () => {
     // real backend so the navigation completes deterministically instead of hanging/erroring
     // against a login URL nothing is actually listening on in this test environment.
     await page.route("**/accounts/discord/login/**", (route) =>
-      route.fulfill({ status: 200, contentType: "text/html", body: "<html></html>" })
+      route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<html></html>",
+      })
     );
     await loadPageWithDefaultBackend(page, "editor");
 
@@ -51,7 +55,11 @@ test.describe("Navbar - Discord auth links", () => {
   }) => {
     network.use(whoamiSignedInNotModerator, ...defaultHandlers);
     await page.route("**/accounts/logout/**", (route) =>
-      route.fulfill({ status: 200, contentType: "text/html", body: "<html></html>" })
+      route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<html></html>",
+      })
     );
     await loadPageWithDefaultBackend(page, "editor");
 
