@@ -207,13 +207,6 @@ directly.
   `-R`) defaults the base repo to the **upstream parent**, not this fork —
   always pass `-R ProxyPrints/ProxyPrints.github.io` to `gh pr create`, or
   check the base-repo dropdown, when the PR is meant to land on this repo.
-- `worker-agent-model-lint.yml` (issue #180) fails a PR/push touching
-  `.claude/agents/**` if any `worker-*.md` is missing `model: sonnet` in
-  its YAML frontmatter — that line is what pins a spawned worker to the
-  mid-tier model, and nothing else enforces it. Kept as its own workflow
-  rather than folded into `docs-lint.yml` since its trigger path is
-  unrelated to `docs/`. Check script:
-  `.github/scripts/check_worker_agent_model.py`.
 
 ## Push policy
 

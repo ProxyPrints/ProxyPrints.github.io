@@ -54,12 +54,11 @@ governing docs without anyone having to remember which file covers what.
 
 ## Not yet in this table
 
-`docs/reports/schema.json` and the four `.claude/agents/worker-*.md`
-files aren't `docs/` proper (schema lives under `docs/reports/`, agent
-files under `.claude/agents/`) — not manifest rows, but worth knowing
-about for the same "what governs this surface" question. A future pass
-could fold config-adjacent files like these in if the "governs-what"
-query needs to reach past `docs/` itself.
+`docs/reports/schema.json` isn't `docs/` proper (it lives under
+`docs/reports/`) — not a manifest row, but worth knowing about for the
+same "what governs this surface" question. A future pass could fold
+config-adjacent files like this in if the "governs-what" query needs to
+reach past `docs/` itself.
 
 ## Maintenance
 
