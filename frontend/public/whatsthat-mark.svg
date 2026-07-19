@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="715 180 160 295" width="160" height="295">
+  <defs>
+    <linearGradient id="wtc-grad-mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F8D42B"></stop>
+      <stop offset="52%" stop-color="#EFCB16"></stop>
+      <stop offset="100%" stop-color="#D6AB11"></stop>
+    </linearGradient>
+  </defs>
+  <g transform="translate(7,9)">
+    <path d="M760 190 L802 193 L846 208 L858 218 L856 232 L853 266 L846 296 L820 316 L814 384 L781 384 L784 316 L792 298 L806 290 L830 270 L817 236 L786 234 L786 264 L754 266 L735 256 L731 214 Z" fill-rule="evenodd" transform="" fill="#124063" stroke="#124063" stroke-width="15" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"></path>
+    <path d="M786 412 L822 414 L828 421 L826 450 L819 456 L787 453 L781 445 L783 418 Z" fill-rule="evenodd" transform="" fill="#124063" stroke="#124063" stroke-width="15" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"></path>
+  </g>
+  <path d="M760 190 L802 193 L846 208 L858 218 L856 232 L853 266 L846 296 L820 316 L814 384 L781 384 L784 316 L792 298 L806 290 L830 270 L817 236 L786 234 L786 264 L754 266 L735 256 L731 214 Z" fill-rule="evenodd" transform="" fill="#1a659a" stroke="#1a659a" stroke-width="15" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"></path>
+  <path d="M760 190 L802 193 L846 208 L858 218 L856 232 L853 266 L846 296 L820 316 L814 384 L781 384 L784 316 L792 298 L806 290 L830 270 L817 236 L786 234 L786 264 L754 266 L735 256 L731 214 Z" fill-rule="evenodd" transform="" fill="url(#wtc-grad-mark)"></path>
+  <path d="M786 412 L822 414 L828 421 L826 450 L819 456 L787 453 L781 445 L783 418 Z" fill-rule="evenodd" transform="" fill="#1a659a" stroke="#1a659a" stroke-width="15" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"></path>
+  <path d="M786 412 L822 414 L828 421 L826 450 L819 456 L787 453 L781 445 L783 418 Z" fill-rule="evenodd" transform="" fill="url(#wtc-grad-mark)"></path>
+</svg>
