@@ -7,6 +7,11 @@ six fields:
 - **id** — `CORR-NNNN`, zero-padded, sequential, never reused.
 - **date** — when it was caught (not when the underlying mistake was
   made, if those differ).
+- **evidence** — usually a commit SHA. When no SHA exists (a fix that
+  iterated inside a live container/session with no discrete commit),
+  cite the report instead and say so explicitly — the correction is
+  the fact being recorded; a commit is one kind of evidence for it,
+  not the only kind (see `CORR-0008`).
 - **trigger / wrong premise** — what was assumed that turned out
   false, stated plainly. No blame language; the point is the gap in
   the system, not the session that hit it.
