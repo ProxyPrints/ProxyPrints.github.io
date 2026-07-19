@@ -1265,6 +1265,22 @@ over a closed codebook.
 
 ---
 
+## Future work: contributor nodes (design note, 2026-07-19 — not built)
+
+The per-card callable extraction unit (`image_evidence.py`, task
+#145), manifest-mode segmentation (task #99), and content-hash-keyed
+evidence (`ImageEvidence`) compose into a self-hosted contributor
+node: users fetch and extract their own decks locally (their own IP,
+no shared quota) and contribute evidence-only back — never image
+bytes, in either direction. Full design note lives in
+`docs/federation-v1.md`'s "Future work: contributor nodes" section
+(depends on task #161 landing first, plus a real subscriber-side
+federation implementation and its own node-trust design pass — none
+of that exists yet). One-line pitch: "the architecture already
+permits your users to be the compute."
+
+---
+
 ## Status
 
 - Part 1: **merged** (PR #28) - `run_id`, `PilotRunLedger`, staleness
