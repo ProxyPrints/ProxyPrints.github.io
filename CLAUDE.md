@@ -7,6 +7,20 @@ Next.js static export deployed via GitHub Pages. Backend = a separate
 Django/Elasticsearch/Postgres API. See `CLAUDE.local.md` (local sessions
 only) for deployment, hosting, and domain specifics.
 
+## Governing premise: we index, we do not store images
+
+The catalog persists knowledge about card images, never the images
+themselves — this is both the project's legal protection and the
+federation pitch's core claim ("card artwork never crosses the wire"),
+applied to our own disk as strictly as to the network. Standing test for
+any future design (harvest pipeline, caching, evidence storage, etc.):
+if it stores image pixels beyond transient display-serving cache, it
+fails regardless of other merits. (2026-07-19 — see
+`docs/features/catalog-completion-plan.md`'s "Harvest-calculate
+pipeline" section for the full posture directive this codifies; the
+hopper/R2-write-through/retention-tier idea it cancels is intentionally
+not described here so it doesn't get re-derived.)
+
 ## Never commit
 
 - `docker/.env`, `docker/nginx/certs/`, `docker/django/env.txt`

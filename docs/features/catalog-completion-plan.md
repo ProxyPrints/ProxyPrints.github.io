@@ -848,27 +848,36 @@ cycling pattern — the circuit breaker exists specifically so this
 pipeline never has to learn a 403 lockout's real duration firsthand.
 Re-projects wall-clock at HOLD under whichever lever(s) survive.
 
-**Write-through hedge (owner amendment, 2026-07-19, tracked as task
-#150)**: conditional on the resolution/tier investigation below
-clearing — persist a copy of each fetched image to R2 (or make the
+**Write-through hedge — CANCELLED (owner FINAL POSTURE directive,
+2026-07-19; task #150 closed SUPERSEDED-BY-POSTURE)**: the R2
+write-through/hopper idea sketched below is superseded in full by the
+governing premise adopted the same day — see "Governing posture: we
+index, we do not store images" after the Fetch Acceleration Study
+below. No R2 write-through, no derivative storage, no retention tiers
+of any kind; storage cost $0. Left here, struck through in spirit only
+(not literally deleted) as a record of what was considered and why it
+was rejected, so a future session doesn't re-derive and re-propose the
+same idea: persist a copy of each fetched image to R2 (or make the
 Worker's full tier genuinely write-through) so a future extractor
 needing different pixels never re-triggers a ~20h Google pull.
 Estimated ~218k × ~200KB ≈ 44GB ≈ $0.66/mo storage, Class A writes
-inside Cloudflare's free tier. Owner decides for/against at HOLD; not
-built yet.
+inside Cloudflare's free tier — rejected on principle (legal/federation
+posture), not cost.
 
 **Resolution/tier investigation (owner directive, 2026-07-19, superseding
-the initial "full-only, reject dual-tier" framing)**: two cheap
+the initial "full-only, reject dual-tier" framing; scope narrowed again
+by the same day's later FINAL POSTURE directive)**: two cheap
 measurements (T1: OCR accuracy vs. fetch resolution; T2: phash Hamming-
 distance stability vs. fetch resolution, since `docs/theory.md`'s d=0/
-0<d≤2 thresholds were calibrated against full-resolution inputs) must
-clear before any tier change — not interpolation from
-`RESOLUTION_FLOOR_DPI`/`DEFAULT_FETCH_DPI` alone. If both clear, the
-preferred design is a new R2-cached harvest tier (~1200px, above the
-pipeline's own ~925px working height) added to image-cdn's existing
-small/large R2 branch, with the hopper semantics in task #150 (write-
-through, content-hash canonicalization, resilience to dead source
-Drives).
+0<d≤2 thresholds were calibrated against full-resolution inputs) still
+stand on their own merits — resolution choice affects extraction
+_accuracy_ regardless of what happens to the pixels afterward. What
+changed: the reason to run them is no longer "which resolution to
+cache," since nothing is cached — it's now purely "which resolution to
+_fetch at_ for the single in-memory extraction pass," a strictly
+cheaper question. The R2-cached-harvest-tier design floated here is
+CANCELLED along with task #150 (see "Governing posture" below) — not
+a tier-storage decision, only a per-fetch dpi parameter.
 
 **Baseline facts confirmed before any measurement** (both were open
 questions, now resolved against primary sources, not assumed): "full
@@ -894,6 +903,141 @@ validation path (T1: match rate) and computes the real art-crop phash
 (T2: reports Hamming distance vs. both `native` and `925px`
 separately). Not yet run against real data — the live run is the next
 step, real network cost, no votes ever persisted.
+
+**Fetch Acceleration Study — items 2 and 3 results (measured
+2026-07-19, item 1's ramp probe re-sequenced behind item 3, see
+below)**:
+
+- **Item 2, content-cluster dedupe**: `_compute_exact_match_clusters`
+  run directly against production `Card.content_phash` — 36,709 of
+  218,192 fetch targets (16.82%) collapse into an existing d=0 cluster,
+  leaving 181,483 unique fetch targets. At the 3.0/s `GOOGLE_IMAGE`
+  ceiling this removes ~3.4h from the ~20.2h floor if wired into the
+  harvest queue (not yet wired — a queue-construction change, not a
+  rate change, so it composes with whatever the fetch path ends up
+  being).
+- **Item 3, Drive API feasibility spike (1-2h investigation, no build,
+  per directive)**: `find_or_create_google_drive_service()` +
+  `service.files().get_media(fileId=...)` technically works — 6/6 real
+  downloads succeeded, run through the production Docker container's
+  own working credentials (the bare-metal pilot venv can't sign the
+  service-account JWT — known pyOpenSSL version mismatch, same root
+  cause as the pre-existing `test_sources.py` CI flaky bucket). Real
+  trade-off found: raw Drive originals are ~5-30x larger than the
+  lh4-resized Worker output the harvest pipeline actually needs,
+  projecting to roughly 890GB-1TB+ total egress at full-catalog scale
+  if adopted naively (vs. the Worker path's much smaller resized
+  bytes) — and whether Google enforces a separate sustained-bulk-media-
+  download quota beyond the general 200 QPS figure documented for
+  metadata-scan concurrency was **unverified** at spike scale (6
+  files). This is exactly what the larger verification test below
+  answers.
+
+**Drive API verification test (owner "FETCH PATH DECISION" directive,
+2026-07-19 — proceeds to verification, not adoption yet)**: pacing
+pinned via `AskUserQuestion` after the original "500-1000 files /
+1-2h / 2-5 files/s" framing was flagged as internally inconsistent (the
+owner's own arithmetic correction): **rate binds** at 2-5 files/s (the
+real prospective harvest rate), **duration binds** at 30-45min sustained
+(crosses Google's ~100s quota windows repeatedly — the actual thing
+being tested), **file count falls out** (~4-10k, not a target). Sample
+is a stratified round-robin across every `GOOGLE_DRIVE`-type `Source`
+(capped 300/source) so mixed-drive coverage — explicitly including
+community drives not owned by the project — is guaranteed by
+construction, not luck of a random draw. Abort conditions: first 429 →
+note the threshold + sticky exponential backoff (doubling, capped 16x,
+mirrors `harvest_fetch_limiter.py`'s existing design); any 403 → full
+stop. Bytes discarded per the no-image-storage posture below — sizes
+and timings only. **In progress as this line is written**; results
+land in this section once the run completes. Pre-set decision
+standard: if Drive sustains ≥ the scraper's effective deduped rate
+(3.0/s × (1 - 0.1682) ≈ 2.5/s equivalent) with clean quota behavior,
+ADOPT Drive as primary fetch path (no R2 write-through of originals —
+see the governing posture below, which postdates and overrides the
+original "$15/mo accepted" framing of that option); if Drive shows
+quota trouble, fall back to scraper + dedupe + the still-cancelled-
+pending-this-result ramp probe. Item 1 (ramp probe) stays cancelled
+unless this test fails.
+
+### Governing posture: we index, we do not store images (owner FINAL
+
+### POSTURE + PRIORITIZATION directive, 2026-07-19)
+
+**Constitutional premise**: the catalog persists knowledge about card
+images, never the images themselves — the project's legal protection
+and the federation pitch's core claim ("card artwork never crosses the
+wire"), applied to our own disk as strictly as to the network. Codified
+as a one-line standing test in the top-level `CLAUDE.md` so no future
+session re-invents a storage tier.
+
+1. **Hopper cancelled entirely** (task #150, and task #154's
+   whole-image-persistence idea, both closed SUPERSEDED-BY-POSTURE): no
+   R2 write-through, no derivative storage, no retention tiers, no
+   EDHREC-gated keeps, no best-DPI exemplars, no dead-drive archives.
+   Storage cost: $0.
+2. **Evidence store = pure metadata (Stage C amendment)**:
+   `ImageEvidence` persists ONLY derived facts — hashes (whole-card /
+   art-region / symbol-region), full OCR text + TSV word boxes, parsed
+   fields, geometry/layout/border/bleed classes, color statistics,
+   quality/integrity signals, dims/DPI, fetch health, extractor-version
+   map. No persisted image crops of any kind: crop COORDINATES persist
+   (geometry + TSV terms), crop PIXELS exist only in memory during the
+   pass and are discarded. The symbol-strip diagnosis re-plans as
+   in-pass hash/feature-vector math (store the math, not the strip).
+   Folded into task #145's own description as the binding spec for
+   Stage C's build.
+3. **Consequence accepted, documented**: any re-extraction = re-fetch
+   (Drive API path, pending the verification test above) + re-derive in
+   memory. Images live at their sources; the catalog retains only what
+   it measured.
+4. **EDHREC rank + source health survive as prioritization, not
+   retention** (task #160): `edhrec_rank` added to
+   `CanonicalPrintingMetadata` from the Scryfall bulk dump already
+   parsed by `printing_metadata_import.py`; harvest order becomes lands
+   chunk #1 → dying-source cards (drive-health rollup, measure before a
+   community source vanishes) → queue-backing cards → descending
+   `edhrec_rank` → cold tail; same ranking available to the
+   confirmation queue's display order later.
+5. **Lawyer-hour flag, list-don't-act** (task #162): the existing
+   image-cdn R2 small/large thumbnail cache is transient display
+   caching inherited from upstream's serving design — queued for
+   counsel's read on where caching ends and hosting begins. Region
+   hashes/statistics (Stage C's actual extractor outputs) are pure-math
+   safe by contrast, not in scope for this flag.
+6. **Standing test**: any future design that stores image pixels beyond
+   transient display-serving cache fails regardless of other merits —
+   see `CLAUDE.md`'s new "Governing premise" section.
+7. **Queue-display cache warming** (optional, low priority, UX only —
+   the posture-legitimate remainder of the hopper idea): when a card
+   enters the human confirmation queue, the EXISTING small/large
+   serving tiers MAY be warmed for it — same cache, same eviction,
+   triggered by queue-entry instead of first viewer. Strictly bounded
+   to queue-backing cards, never catalog-wide; no new tier, no
+   resolution change, zero harvest-path involvement. Build only if
+   nearly free; skip entirely otherwise. Not started, not tracked as a
+   numbered task given its own "skip if not free" clause.
+8. **Lazy identification mode** (task #161 for the design-note/docs
+   half; the structural half is binding now, folded into task #145):
+   (a) **binding on Stage C/E now** — the per-card work unit (fetch →
+   extract → evidence → calculate → discard) must be a callable unit
+   independent of the bulk runner; the bulk harvest is one driver of
+   it, a future demand-driven async task is another; per-card logic
+   must never fuse into batch orchestration. (b) **lazy mode**
+   (documented now, built later): card viewed/requested + no evidence
+   for its content hash → enqueue a single-flight async identification
+   job (extraction is ~1-2s, too slow inline; single-flight lock
+   prevents duplicate work on concurrent views) → evidence + machine
+   suggestion appear seconds later. The evidence store IS the cache;
+   computed-once-forever; traffic is the scheduler. (c) **federation
+   payoff** (one paragraph for `docs/federation-v1.md` §8, task #161): a
+   reference consumer on minimal hardware runs no bulk jobs — knowledge
+   accretes with use, fetch load is traffic-paced, peer queries about
+   never-seen hashes can trigger on-demand computation.
+   "Identification capacity scales with usage, not hardware." (d)
+   **equivalence**: bulk harvest = eager pre-computation of what lazy
+   mode would eventually compute; same pipeline, two drive modes
+   (push/pull) — our instance runs eager because we can, federation
+   peers run pull because the design permits it.
 
 ### Stages C–F (extractors, calculators, streaming assembly, consumers) — not started
 
