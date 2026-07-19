@@ -13,6 +13,11 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests",
+  // frontend/tests/perf/ holds a manually-run scroll/virtualization benchmark
+  // (playwright.perf.config.ts), not a CI-gated correctness test - excluded here so neither a
+  // plain `npx playwright test` nor CI's sharded run ever picks it up; run it explicitly via
+  // `npx playwright test --config=playwright.perf.config.ts` instead.
+  testIgnore: "**/tests/perf/**",
   globalSetup: "./tests/global-setup",
   /* Run tests in files in parallel */
   fullyParallel: true,
