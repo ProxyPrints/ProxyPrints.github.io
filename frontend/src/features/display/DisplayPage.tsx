@@ -13,8 +13,18 @@
  * exact same badge, one component instead of two copies that could drift) and the real
  * DeckbuilderConfirmAffordance (same component CardSlot.tsx mounts, adapted only via its
  * onOpenGridSelector prop - the rail has no modal to open, so N expands the Choose Image section
- * instead). Every other accordion section still renders a labeled stub - see each section's own
- * comment for which later PR fills it in, per the design doc's §6 migration/sequencing plan.
+ * instead). Left-panel unification (issue #164) filled in every remaining rail section: Attributes
+ * (AttributesSection.tsx - the same tap/vote-submission logic AttributeChipPanel.tsx uses via the
+ * shared useTagVoting hook, rendered as a plain vertical stack instead of a ring around a card),
+ * Print Options (PrintOptionsSection.tsx - the same per-card bleed override
+ * projectSlice/PDF.tsx's isBleedNormalizationEligible already implement for the classic PDF tab's
+ * Bleed Overrides panel), Artist (ArtistSection.tsx - inherits ArtistSupportLink directly, per
+ * docs/features/artist-support-links.md's own anticipated follow-on), and Slot Actions
+ * (SlotActionsSection.tsx - the same getCardSlotMenuActions list CardSlot.tsx's 3-dot dropdown/
+ * context menu use, rendered as a plain action list rather than a dropdown overlay). Every rail
+ * section is now real, not a stub - see docs/proposals/proposal-h-unified-display-page.md's own
+ * status line for what's still not built (the Select Version rework, tablet/mobile interaction
+ * patterns, and the switchover step).
  *
  * Item 3 (owner's hands-on review, flat-scroll amendment) replaced the original one-page-at-a-
  * time pager with a continuous vertical stack of every sheet (`sheets`, derived from
@@ -60,7 +70,11 @@ import { Spinner } from "@/components/Spinner";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
 import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
+import { ArtistSection } from "@/features/display/ArtistSection";
+import { AttributesSection } from "@/features/display/AttributesSection";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
+import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
+import { SlotActionsSection } from "@/features/display/SlotActionsSection";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { GridSelectorResults } from "@/features/gridSelector/GridSelectorResults";
 import { useGridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
@@ -119,7 +133,7 @@ const SHEET_MAX_WIDTH_PX = 960;
 
 //# endregion
 
-//# region accordion section stubs
+//# region accordion sections
 
 type AccordionSectionKey =
   | "chooseImage"
@@ -135,12 +149,6 @@ const DEFAULT_EXPANDED: Record<AccordionSectionKey, boolean> = {
   artist: false,
   slotActions: false,
 };
-
-const Stub = ({ children }: { children: React.ReactNode }) => (
-  <p className="text-muted small mb-0" data-testid="display-rail-stub">
-    {children}
-  </p>
-);
 
 interface RailSectionProps {
   sectionKey: AccordionSectionKey;
@@ -343,9 +351,18 @@ interface RailProps {
   // hide that from tsc entirely (see that file's own comment, task #135). Every actual field
   // access below already goes through `?.`, so this is a type-only fix - no behavior change.
   cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined };
+  backendURL: string;
+  // Called after Slot Actions' Delete - see SlotActionsSection's own prop comment for why the
+  // rail needs to hand control back to the page rather than just re-rendering its own subtree.
+  onSlotDeleted: () => void;
 }
 
-const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
+const Rail = ({
+  selectedSlotRef,
+  cardDocumentsByIdentifier,
+  backendURL,
+  onSlotDeleted,
+}: RailProps) => {
   const [expandedSections, setExpandedSections] =
     useState<Record<AccordionSectionKey, boolean>>(DEFAULT_EXPANDED);
 
@@ -413,10 +430,10 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
         expandedSections={expandedSections}
         onToggle={onToggle}
       >
-        <Stub>
-          Attribute chips (AttributeChipPanel) land here in Step 2&apos;s third
-          instrument-parity PR.
-        </Stub>
+        <AttributesSection
+          backendURL={backendURL}
+          cardIdentifier={selectedImage}
+        />
       </RailSection>
       <RailSection
         sectionKey="printOptions"
@@ -424,11 +441,13 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
         expandedSections={expandedSections}
         onToggle={onToggle}
       >
-        <Stub>
-          Per-card bleed override — blocked on Proposal B PR-2 (its Auto/Force
-          bleed/Force trimmed control + projectSlice persistence haven&apos;t
-          shipped yet); this section ships once that lands.
-        </Stub>
+        <PrintOptionsSection
+          cardDocument={
+            selectedImage != null
+              ? cardDocumentsByIdentifier[selectedImage]
+              : undefined
+          }
+        />
       </RailSection>
       <RailSection
         sectionKey="artist"
@@ -436,10 +455,13 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
         expandedSections={expandedSections}
         onToggle={onToggle}
       >
-        <Stub>
-          The artist line + support link lands here in Step 2&apos;s fifth
-          instrument-parity PR.
-        </Stub>
+        <ArtistSection
+          cardDocument={
+            selectedImage != null
+              ? cardDocumentsByIdentifier[selectedImage]
+              : undefined
+          }
+        />
       </RailSection>
       <RailSection
         sectionKey="slotActions"
@@ -447,10 +469,12 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
         expandedSections={expandedSections}
         onToggle={onToggle}
       >
-        <Stub>
-          Change Query / Duplicate / Delete (CardSlotMenuActions) land here in
-          Step 2&apos;s fourth instrument-parity PR.
-        </Stub>
+        <SlotActionsSection
+          face={selectedSlotRef.face}
+          slot={selectedSlotRef.slot}
+          searchQuery={query}
+          onDeleted={onSlotDeleted}
+        />
       </RailSection>
     </div>
   );
@@ -969,6 +993,8 @@ export function DisplayPage() {
             }
             selectedSlotRef={selectedSlotRef}
             cardDocumentsByIdentifier={cardDocumentsByIdentifier}
+            backendURL={backendURL ?? ""}
+            onSlotDeleted={() => setSelectedSlotRef(null)}
           />
         </RailWrapper>
       </div>

@@ -1,10 +1,22 @@
-As of: 2026-07-18
+As of: 2026-07-19
 What this is: Proposal H — survey + design + static HTML mockups for a
 single unified display page that replaces both the "Choose Art" grid
 editor and the separate PDF-preview/export step with one page that IS
 the live print-sheet preview, with a persistent card-details rail beside
-it. **HOLD — zero feature code in this pass.** Design doc + mockups only,
-per the owner-approved brief.
+it. **PARTIAL — this doc's own design/mockup pass is complete and most of
+§6's migration plan has since shipped as feature code** (route shell #87;
+inline PDF export #109; missing-image slot names #104; requested-printing
+badge #110/#102; the candidate/version picker #96; flat-scroll +
+virtualization #115; and, most recently, the pane migration's remaining
+rail instruments — Attributes, Print Options, Artist, Slot Actions —
+issue #164). Still not built: §4.4′'s Select Version section rework
+(separately HELD per its own PR #116, blocked on issue #140), the tablet
+off-canvas drawer / mobile bottom-sheet interaction patterns (§3), and
+§6 step 3/4 (switchover to make `/display` the default nav entry point,
+then retiring `/editor` + the classic PDF tab) — see
+`docs/features/grid-selector.md`, `docs/features/print-export-page.md`,
+and `docs/features/pdf-generator.md` for the surfaces this page is meant
+to eventually absorb.
 
 ## 0. Vision, in our own words
 

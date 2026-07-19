@@ -432,7 +432,11 @@ const CutLineCorner = ({
 // sources that carry a real, decodable full-res bitmap; the thumbnail tiers are cheap-preview
 // quality, not what real printing bleed geometry needs). SCM mode's own image path
 // (scm/SCMPDF.tsx) is untouched - out of scope for this pass, see the proposal doc.
-const isBleedNormalizationEligible = (
+// Exported (Proposal H pane migration) so the display page's rail Print Options section
+// (DisplayPage.tsx) can gate its per-card bleed override control with the exact same
+// eligibility rule PDFGenerator.tsx's own BleedOverrideSettings panel uses, rather than
+// re-deriving a second copy of this source-type check that could silently drift from it.
+export const isBleedNormalizationEligible = (
   cardDocument: CardDocument,
   imageQuality: PDFImageQuality
 ): boolean =>
