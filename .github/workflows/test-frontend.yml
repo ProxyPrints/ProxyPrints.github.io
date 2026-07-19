@@ -3,10 +3,13 @@ on:
   pull_request:
     paths:
       - "frontend/**"
-      # generate-docs-site.test.js's half of the shared link-rewrite
-      # fixture set (.github/scripts/testdata/link_rewrite/) - the
-      # Python half (publish_wiki.py) runs via docs-lint.yml instead.
-      - ".github/scripts/testdata/link_rewrite/**"
+      # src/features/guide/docsSite.test.ts shells out to these directly
+      # (a real subprocess run, not a mock) as its smoke test that
+      # publish_site.py's emitted artifacts actually exist and render -
+      # see docs/proposals/proposal-i-docs-as-site-source.md.
+      - ".github/scripts/publish_wiki.py"
+      - ".github/scripts/publish_site.py"
+      - ".github/wiki-publish-map.json"
   workflow_dispatch:
 jobs:
   test:

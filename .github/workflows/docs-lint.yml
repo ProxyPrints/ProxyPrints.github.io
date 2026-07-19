@@ -40,12 +40,14 @@ jobs:
         run: python3 .github/scripts/docs_lint.py
 
   link-rewrite-parity:
-    name: Link-rewrite parity fixtures (publish_wiki.py side)
-    # publish_wiki.py's half of the shared link-rewrite fixture set (see
-    # .github/scripts/testdata/link_rewrite/cases.json) - the JS half
-    # (generate-docs-site.js) runs via the existing frontend Jest suite,
-    # triggered separately by test-frontend.yml, since it needs
-    # frontend/node_modules. This job needs nothing beyond stdlib Python -
+    name: Link-rewrite parity fixtures (publish_wiki.py transform_links)
+    # Runs the shared fixture set (.github/scripts/testdata/link_rewrite/)
+    # through both modes of publish_wiki.py's transform_links() - the
+    # SINGLE link-rewrite implementation in this repo (single-transform
+    # architecture, docs/proposals/proposal-i-docs-as-site-source.md).
+    # frontend/src/features/guide/docsSite.test.ts separately smoke-tests
+    # that publish_site.py's emitted artifacts exist and render, via
+    # test-frontend.yml. This job needs nothing beyond stdlib Python -
     # publish_wiki.py has no third-party dependencies.
     runs-on: ubuntu-latest
     steps:
