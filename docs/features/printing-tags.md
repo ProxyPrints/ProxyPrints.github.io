@@ -329,8 +329,8 @@ printings, artists, tags, and moderation from one screen.
   mode.
 - **Item (c) — requested-printing badge on editor slots** (frontend-
   polish package), a sibling of Level 0 above but a distinct concept:
-  where Level 0 shows the *resolved canonical* printing (confirm/deny
-  what indexing found), this badge shows the *requested* printing —
+  where Level 0 shows the _resolved canonical_ printing (confirm/deny
+  what indexing found), this badge shows the _requested_ printing —
   the expansion code + collector number the slot's own search query
   actually asked for (e.g. `MID 245`), which otherwise gets visually
   "sanitized away" the moment an image is selected, with no at-a-glance
@@ -351,7 +351,7 @@ printings, artists, tags, and moderation from one screen.
   nothing and the backend retried unfiltered, so what's shown is the
   closest available match, not a guaranteed exact hit (see
   `selectIsSearchQueryDegraded` in `searchResultsSlice.ts`). Unlike
-  Level 0 (gated on a *selected image* existing to compare against),
+  Level 0 (gated on a _selected image_ existing to compare against),
   this badge is independent of whether an image has been selected yet
   — it's about what was asked for, not what's currently shown.
 - **Vote provenance (`voteSurface`)**: `AbstractWeightedVote.vote_surface`

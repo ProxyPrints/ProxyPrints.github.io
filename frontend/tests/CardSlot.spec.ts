@@ -669,9 +669,9 @@ test.describe("CardSlot", () => {
 
       await importText(page, "1 Lightning Bolt (2ED) 162");
 
-      const badge = page.getByTestId("front-slot0").getByTestId(
-        "requested-printing-badge"
-      );
+      const badge = page
+        .getByTestId("front-slot0")
+        .getByTestId("requested-printing-badge");
       await expect(badge).toBeVisible();
       await expect(badge).toContainText("2ED 162");
       await expect(badge).toHaveAttribute("data-degraded", "false");
@@ -692,9 +692,9 @@ test.describe("CardSlot", () => {
 
       await importText(page, "1 my search query (XYZ) 999");
 
-      const badge = page.getByTestId("front-slot0").getByTestId(
-        "requested-printing-badge"
-      );
+      const badge = page
+        .getByTestId("front-slot0")
+        .getByTestId("requested-printing-badge");
       await expect(badge).toBeVisible();
       await expect(badge).toContainText("XYZ 999");
       await expect(badge).toHaveAttribute("data-degraded", "true");

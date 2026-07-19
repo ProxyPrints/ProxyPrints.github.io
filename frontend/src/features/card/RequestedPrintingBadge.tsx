@@ -45,7 +45,9 @@ export function RequestedPrintingBadge({ query }: RequestedPrintingBadgeProps) {
 
   return (
     <span
-      className={`badge ${isDegraded ? "bg-warning text-dark" : "bg-secondary"}`}
+      className={`badge ${
+        isDegraded ? "bg-warning text-dark" : "bg-secondary"
+      }`}
       style={{ fontFamily: "monospace" }}
       data-testid="requested-printing-badge"
       data-degraded={isDegraded}
