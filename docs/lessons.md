@@ -652,3 +652,31 @@ property instead of referencing the variable. Fix is direct: set the literal pro
 #91 (bootswatch's hardcoding loop only covers `$theme-colors`, not the link variant) — the
 hardcoding is per-component, not theme-wide, so check each component actually touched rather than
 assuming the pattern is universal or absent.
+
+## Components that each correctly render an anchor can compose into invalid nested-anchor HTML that silently swallows clicks
+
+`Navbar.tsx` wrapped `<AuthWidget />` in `<Nav.Link eventKey="auth">`. Both pieces were individually
+correct in isolation: `AuthWidget` renders a real `<a href={loginUrl}>`/`<a href={logoutUrl}>` for
+its two states, and react-bootstrap's `Nav.Link` renders a normal `<a>` too - but `Nav.Link` renders
+its OWN `<a href="#">` *around* whatever children it's given whenever it carries an `eventKey` (its
+tab-selection machinery). Composing them nested one real anchor inside another, which is invalid
+HTML - the outer `<a>` silently intercepts every click at the DOM level, so the inner Discord
+login/logout link never actually navigated. No thrown error, no console warning, and the inner
+anchor's own `href` attribute was still completely correct the whole time - a render-only assertion
+("does the link have the right href?") passes cleanly right through this bug, because the bug is
+purely about which element *catches the click*, not what either element renders.
+
+**The check this implies**: a component that itself only ever renders real anchors is not
+automatically safe to nest inside another navigation/tab component (`Nav.Link`, `Tab.Link`, anything
+from a component library that renders its own wrapping `<a>`/interactive element based on a prop
+like `eventKey`/`href`) - check what THAT wrapper actually renders as, not just what the child does.
+Prefer a plain, non-interactive wrapper (a `<div>`/`<li>` carrying only the layout/spacing classes
+the interactive wrapper used to provide) around a child that already supplies its own real
+interactive element. **The test that actually catches this class of bug**: a real Playwright click
+on the rendered control asserting navigation/an action actually initiated (a request fired, the URL
+changed, a callback ran) - never just `toHaveAttribute("href", ...)` on the innermost element, since
+that assertion is blind to whatever intercepts the click before it reaches that element. Verified
+live for this fix (`tests/Navbar.spec.ts`): the new click-through tests fail deterministically
+(`page.waitForURL` times out) against the original nested-anchor markup and pass cleanly once the
+wrapper is removed - proof the test genuinely exercises the failure mode, not just incidental
+coverage.
