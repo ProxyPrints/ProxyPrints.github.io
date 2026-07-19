@@ -54,6 +54,15 @@ not described here so it doesn't get re-derived.)
   the same task; cloud sessions add "wiki: `<page>` needs `<change>`" to
   their PR's merge-time checklist. Wiki pages link to `docs/` for
   operational detail — never duplicate a fact that changes.
+- **Extractable-primitives ledger**: task-end check — did this
+  extraction/refactor produce (or destroy) a primitive with no dependency
+  on the vote system/`CanonicalPrinting`-consensus/auth? If yes, add (or
+  remove) one row in
+  [`docs/upstreaming/extractable-primitives.md`](docs/upstreaming/extractable-primitives.md),
+  judged honestly at write time — a `CLEAN` claim that goes stale is caught
+  by that doc's own mechanical tether in `docs_lint.py`, but only after the
+  fact; get the judgment right at the row's creation instead of relying on
+  CI to catch a wrong one later.
 - **Push policy**: commit and push straight to `master` for solo work on
   this repo, no PR needed. PRs (+ user approval before merge) are reserved
   for upstreaming to `chilli-axe/mpc-autofill`. Never `git push --force` as

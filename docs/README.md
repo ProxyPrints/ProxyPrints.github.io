@@ -50,6 +50,12 @@ The methodology and the systems it governs.
 - [`upstreaming/upstream-wiki-drift.md`](upstreaming/upstream-wiki-drift.md)
   — weekly, automated, detection-only tracking of what's changed on
   chilli-axe/mpc-autofill's own wiki since we last looked.
+- [`upstreaming/extractable-primitives.md`](upstreaming/extractable-primitives.md)
+  — repo-wide ledger of generic, no-fork-dependency code an outside
+  consumer (upstream, the proxies-at-home lineage, federation peers) could
+  lift wholesale, versus what's honestly entangled. HOLD: seeded audit
+  awaiting owner review, not yet a to-do list. `CLEAN` claims are checked
+  by a mechanical tether riding `docs-lint`.
 - [`features/printing-tags.md`](features/printing-tags.md) — the "What's
   That Card?" printing-consensus tagging system and vote-queue funnel,
   backend + frontend. Stages 1–7 are the current-state reference; Stage 8
