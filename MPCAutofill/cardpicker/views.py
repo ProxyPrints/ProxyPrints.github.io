@@ -70,6 +70,7 @@ from cardpicker.models import (
     UserCryptoProfile,
     VotePolarity,
     VoteSource,
+    suggested_printing_votes_prefetch,
     summarise_contributions,
 )
 from cardpicker.moderation import is_moderator
@@ -358,9 +359,16 @@ def post_explore_search(request: HttpRequest) -> HttpResponse:
     s_sliced = s[explore_search_request.pageStart : explore_search_request.pageStart + explore_search_request.pageSize]
     card_ids = [man.identifier for man in s_sliced.execute()]
     # TODO: the below code feels inefficient but is set up this way to ensure sorting from elasticsearch is respected.
+    # `include_suggested_printing=True` + `suggested_printing_votes_prefetch()` together
+    # populate `suggestedCanonicalCard` (Proposal H §4.4′, issue #184) with no extra query
+    # per card - see that prefetch helper's own docstring.
     card_id_object_dict = {
-        card.identifier: card.serialise()
-        for card in (Card.objects.select_related("source", "canonical_card").filter(identifier__in=card_ids))
+        card.identifier: card.serialise(include_suggested_printing=True)
+        for card in (
+            Card.objects.select_related("source", "canonical_card")
+            .prefetch_related(suggested_printing_votes_prefetch())
+            .filter(identifier__in=card_ids)
+        )
     }
     cards = [card_id_object_dict[card_id] for card_id in card_ids]
     return JsonResponse(ExploreSearchResponse(cards=cards, count=count).model_dump())
@@ -379,11 +387,14 @@ def post_cards(request: HttpRequest) -> HttpResponse:
             f"Must be less than or equal to {CARDS_PAGE_SIZE}."
         )
 
+    # `include_suggested_printing=True` + `suggested_printing_votes_prefetch()` together
+    # populate `suggestedCanonicalCard` (Proposal H §4.4′, issue #184) with no extra query
+    # per card - see that prefetch helper's own docstring.
     results = {
-        card.identifier: card.serialise()
-        for card in Card.objects.select_related("source", "canonical_card").filter(
-            identifier__in=cards_request.cardIdentifiers
-        )
+        card.identifier: card.serialise(include_suggested_printing=True)
+        for card in Card.objects.select_related("source", "canonical_card")
+        .prefetch_related(suggested_printing_votes_prefetch())
+        .filter(identifier__in=cards_request.cardIdentifiers)
     }
     return JsonResponse(CardsResponse(results=results).model_dump())
 

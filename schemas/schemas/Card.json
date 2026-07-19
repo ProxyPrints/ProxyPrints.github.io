@@ -71,6 +71,10 @@
     "canonicalCard": {
       "$ref": "./CanonicalCard.json"
     },
+    "suggestedCanonicalCard": {
+      "description": "The catalog's own best unconfirmed guess at this card's printing - a machine-cast (VoteSource.DEDUCTION/OCR) CardPrintingTag vote's printing, surfaced only while printingTagStatus is not 'resolved' (never redundant with the already-resolved canonicalCard). null when no machine vote exists yet, printingTagStatus is already 'resolved', or the serializing endpoint didn't request this field (see cardpicker/models.py Card.serialise's include_suggested_printing kwarg - opt-in per endpoint to keep this a zero-cost no-op everywhere it isn't needed).",
+      "$ref": "./CanonicalCard.json"
+    },
     "printingTagStatus": {
       "description": "Community printing-tag vote consensus status for this card. Only RESOLVED cards have a community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by the frontend to show a 'matched by community tags' indicator and is otherwise informational.",
       "$ref": "./PrintingTagStatus.json"
@@ -85,6 +89,13 @@
     "canonicalArtistSource": {
       "description": "Which rung of the artist fallback chain actually supplied canonicalArtist - debug/introspection field, not load-bearing for any current frontend logic.",
       "type": ["string", "null"]
+    },
+    "tagVoteStatuses": {
+      "description": "Suggested-vs-resolved status for every tag with at least one cast vote against this card (Card.tag_vote_statuses collapsed from its 5-way DB status to the 2-way distinction the frontend needs - see TagVoteDisplayStatus.json). A tag absent from this object has zero votes cast, same convention as the DB field it derives from. pending_approval tags are deliberately excluded entirely (sensitive-tag co-sign queue, docs/features/moderation.md) - never leaked ahead of that review, same reason they're excluded from the `tags` field today.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "./TagVoteDisplayStatus.json"
+      }
     }
   },
   "required": [

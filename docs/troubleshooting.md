@@ -87,6 +87,24 @@ level autouse beats class-level autouse at the same nominal scope) while
 having zero effect on the rest of the file. See
 `test_views.py::_preserve_shared_factory_sequences_for_insulated_tests`.
 
+**Variant: `--snapshot-update` run against a single file diverges from a
+full-suite run** (issue #184's card-payload work). Running
+`pytest cardpicker/tests/test_views.py --snapshot-update` in isolation
+(to bake in new, purely-additive fields) updated 17 snapshots as expected
+— but 6 of those 17 also changed unrelated `Artist N`/etc. sequence-derived
+values, because CI (`.github/actions/test-backend/action.yml`) invokes
+`pytest .` from `MPCAutofill/`, collecting **every** test file in one
+process — several files earlier in collection order consume shared-factory
+sequence numbers before `test_views.py` ever runs, and a single-file
+invocation skips all of that consumption. **Fix**: always run
+`--snapshot-update` against the same scope CI actually uses (`pytest .`
+from `MPCAutofill/`, or at minimum every file that shares
+`cardpicker/tests/factories.py`'s factories), never a single test file in
+isolation — then diff the updated `.ambr` file and confirm it's purely
+additive (only the new keys you actually added) before trusting it, since
+a same-file-only update can silently bake in wrong sequence-derived values
+for tests you didn't otherwise touch.
+
 ## Seeding rows via a data migration breaks tests that assert a table is empty/complete
 
 **Symptom**: a new data migration seeds rows into a table, and several
