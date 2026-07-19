@@ -15,16 +15,45 @@ do not store images) - they go out of scope the moment this function returns.
 
 Extend this module (not ImageEvidence's callers) when adding a new extractor: fetch once at
 the top of `extract_card_evidence`, call each new pure extractor function against the same
-in-memory image, and add its fields/version/skip-reason to the result. `fetch_health` and
-`geometry_bleed` exist today (task #147) - every subsequent extractor (OCR/collector-line,
-artist OCR, phash, border color, symbol-strip, legal-line, etc.) lands as its own follow-up PR
-per task #145's manifest and one-PR-per-extractor gate.
+in-memory image, and add its fields/version/skip-reason to the result. `fetch_health`,
+`geometry_bleed` (task #147), and `layout_class`/`crop_coordinates` (issue #148, the
+geometry-group) exist today - every subsequent extractor (OCR/collector-line, artist OCR,
+phash, symbol-strip, legal-line, etc.) lands as its own follow-up PR per task #145's manifest
+and one-PR-per-extractor gate.
 
 geometry_bleed calls `local_fallback.classify_bleed_edge` directly rather than re-deriving the
 aspect-ratio math - that function is the exact classifier the live pilot/harvest vote path
 already uses (`cast_bleed_edge_vote`'s own upstream input), so this extractor's stored
 `bleed_class` is guaranteed to agree with what the shipped identification code would conclude
 for the same image, not a second implementation that could quietly drift from it over time.
+
+layout_class (issue #148) calls `local_fallback.classify_border_color` - the ONLY remaining
+`classify_*` helper in `local_fallback.py` that doesn't require OCR output as an input.
+`classify_frame_style(parsed_a_collector_number, illus_anchor_fired)` was considered and
+rejected for this field: both its inputs come from a real OCR pass (pass-1 collector-number
+parsing, `detect_illus_anchor`'s own OCR-text scan), which is issue #149's PR, not this one -
+building it here would either fake those inputs or silently couple this PR to OCR, neither
+acceptable. `classify_border_color` needs only the fetched image + `bleed_class` (already
+computed by geometry_bleed above), so it's the one border/frame-adjacent classifier this PR can
+honestly build. Stored under the `layout_class` field name to match issue #148's own title
+wording, even though the underlying classifier is named for border color - documented here so a
+future reader isn't confused by the name/semantics gap.
+
+crop_coordinates (issue #148) turns three existing fixed-fraction crop-box constants
+(`local_ocr.DEFAULT_CROP_BOX`, `local_fallback.ARTIST_CROP_BOX`, `local_phash.ART_CROP_BOX` -
+the collector-line, artist-credit, and art-region boxes issue #149/#150's own future extractors
+will crop against) into concrete PIXEL coordinates for this specific fetched image: each box is
+remapped via `local_fallback.normalize_crop_box(box, bleed_class)` (a no-op for 'bleed'/None,
+exactly as that function's own docstring specifies) then scaled by `width`/`height`. Crop
+COORDINATES only - crop PIXELS are never computed or stored here, matching the FINAL POSTURE
+directive (CLAUDE.md's "Governing premise").
+
+`back_face_flag`, also named in issue #148's title, is deliberately NOT built in this PR: no
+signal for it exists in `Card`/`CanonicalCard` metadata (no DFC-face field anywhere - the only
+`face` field in the whole schema is `ProjectMember.face`, an unrelated per-slot print-request
+concept) or in `local_fallback.py`'s exported helpers, and no other doc/issue in this repo
+defines what visual signal it should measure. Flagged as an OPEN ITEM on this PR rather than
+shipped as an invented heuristic with fabricated golden-set expectations.
 
 RECONCILIATION LEDGER (owner directive 2026-07-19, task #155): `build_reconciliation_report`
 answers "attempted = voted + each named skip-reason + dropped" for one extractor over one set
@@ -38,13 +67,22 @@ from typing import Any, Optional
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
-from cardpicker.local_fallback import classify_bleed_edge
+from cardpicker.local_fallback import (
+    ARTIST_CROP_BOX,
+    classify_bleed_edge,
+    classify_border_color,
+    normalize_crop_box,
+)
+from cardpicker.local_ocr import DEFAULT_CROP_BOX
+from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import Card, CardScanLog, ImageEvidence
 
 logger = logging.getLogger(__name__)
 
 FETCH_HEALTH_EXTRACTOR_VERSION = "fetch-health-v1"
 GEOMETRY_BLEED_EXTRACTOR_VERSION = "geometry-bleed-v1"
+LAYOUT_CLASS_EXTRACTOR_VERSION = "layout-class-v1"
+CROP_COORDINATES_EXTRACTOR_VERSION = "crop-coordinates-v1"
 
 
 @dataclass(frozen=True)
@@ -65,6 +103,15 @@ class ExtractionResult:
     fields: dict[str, Any] = field(default_factory=dict)
     extractor_versions: dict[str, str] = field(default_factory=dict)
     skip_reasons: dict[str, str] = field(default_factory=dict)
+
+
+def _crop_box_to_pixels(
+    box: tuple[float, float, float, float], bleed_class: Optional[str], width: int, height: int
+) -> list[int]:
+    """Remaps a fixed-fraction crop box via `normalize_crop_box` (a no-op for 'bleed'/None) then
+    scales it into this image's own pixel space - crop COORDINATES only, never crop pixels."""
+    left, top, right, bottom = normalize_crop_box(box, bleed_class)
+    return [round(left * width), round(top * height), round(right * width), round(bottom * height)]
 
 
 def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) -> ExtractionResult:
@@ -118,6 +165,32 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
             # (docs/features/catalog-completion-plan.md's CardScanLog section), not a new string.
             skip_reasons["geometry_bleed"] = "ambiguous"
     extractor_versions["geometry_bleed"] = GEOMETRY_BLEED_EXTRACTOR_VERSION
+
+    # layout_class (issue #148): reuses this same fetched image + the bleed_class just computed
+    # above - see module docstring for why classify_border_color, not classify_frame_style.
+    if image is None:
+        skip_reasons["layout_class"] = "fetch_failed"
+    else:
+        layout_class = classify_border_color(image, bleed_class)
+        fields["layout_class"] = layout_class or ""
+        if layout_class is None:
+            # classify_border_color's own documented ambiguous outcome (non-uniform sample or a
+            # color outside this taxonomy) - "ambiguous" is the same pre-existing skip-reason
+            # vocabulary geometry_bleed's own abstention above uses, not a new string.
+            skip_reasons["layout_class"] = "ambiguous"
+    extractor_versions["layout_class"] = LAYOUT_CLASS_EXTRACTOR_VERSION
+
+    # crop_coordinates (issue #148): three existing fixed-fraction crop-box constants, remapped
+    # via normalize_crop_box (a no-op for 'bleed'/None) and scaled to this image's own pixel
+    # space. Unlike layout_class/geometry_bleed, normalize_crop_box never abstains - there is no
+    # "ambiguous" outcome here, only fetch_failed.
+    if image is None:
+        skip_reasons["crop_coordinates"] = "fetch_failed"
+    else:
+        fields["collector_line_crop_px"] = _crop_box_to_pixels(DEFAULT_CROP_BOX, bleed_class, width, height)
+        fields["artist_crop_px"] = _crop_box_to_pixels(ARTIST_CROP_BOX, bleed_class, width, height)
+        fields["art_crop_px"] = _crop_box_to_pixels(ART_CROP_BOX, bleed_class, width, height)
+    extractor_versions["crop_coordinates"] = CROP_COORDINATES_EXTRACTOR_VERSION
 
     return ExtractionResult(
         card_id=card.pk,
@@ -225,4 +298,6 @@ __all__ = [
     "build_reconciliation_report",
     "FETCH_HEALTH_EXTRACTOR_VERSION",
     "GEOMETRY_BLEED_EXTRACTOR_VERSION",
+    "LAYOUT_CLASS_EXTRACTOR_VERSION",
+    "CROP_COORDINATES_EXTRACTOR_VERSION",
 ]

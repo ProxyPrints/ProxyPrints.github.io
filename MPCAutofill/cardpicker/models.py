@@ -1325,6 +1325,14 @@ class ImageEvidence(models.Model):
     crop box into pixel coordinates) and `bleed_class` (to remap that box via
     `local_fallback.normalize_crop_box` before converting) - this extractor is what makes those
     two inputs available from stored evidence instead of a live re-fetch.
+
+    geometry-group (public issue #148, second manifest extractor group): `layout_class` plus
+    the three `*_crop_px` fields. See `image_evidence.py`'s module docstring for why
+    `layout_class` reuses `local_fallback.classify_border_color` rather than
+    `classify_frame_style` (the latter needs OCR outputs not available until issue #149's PR).
+    `back_face_flag`, also named in issue #148's title, is deliberately NOT built in this PR -
+    no signal for it was found anywhere in `Card`/`CanonicalCard` metadata or in
+    `local_fallback.py`'s exported helpers; see this PR's own OPEN ITEMS.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -1348,6 +1356,21 @@ class ImageEvidence(models.Model):
     height = models.IntegerField(null=True, blank=True)
     aspect_ratio = models.FloatField(null=True, blank=True)
     bleed_class = models.CharField(max_length=16, blank=True, default="")
+
+    # geometry-group (issue #148) - layout_class mirrors local_fallback.classify_border_color's
+    # own return convention ("black"/"white"/"silver"/"borderless"), same blank-string-as-
+    # sentinel convention as bleed_class above for the ambiguous/not-yet-run case.
+    layout_class = models.CharField(max_length=16, blank=True, default="")
+    # Pixel-coordinate crop boxes (issue #148's "crop coordinates") - each a [left, top, right,
+    # bottom] int list in the fetched image's own pixel space, derived from an existing
+    # fixed-fraction crop-box constant (local_ocr.DEFAULT_CROP_BOX / local_fallback.
+    # ARTIST_CROP_BOX / local_phash.ART_CROP_BOX) remapped via local_fallback.normalize_crop_box
+    # for this row's own bleed_class, then multiplied out by width/height. Crop COORDINATES
+    # only - crop PIXELS are never persisted (CLAUDE.md's "Governing premise"). Null when not
+    # yet computed (fetch failure - see image_evidence.py).
+    collector_line_crop_px = models.JSONField(null=True, blank=True)
+    artist_crop_px = models.JSONField(null=True, blank=True)
+    art_crop_px = models.JSONField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

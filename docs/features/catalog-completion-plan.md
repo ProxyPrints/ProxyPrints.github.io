@@ -1294,6 +1294,68 @@ the new extractor's presence, 2 in `test_golden_set.py`); full suite
 987 passed / 4 skipped (the CI-documented named skips — Moxfield +
 Google-Drive-credential — nothing newly broken); `makemigrations --check` clean.
 
+**geometry-group — second manifest extractor PR, built** (public issue
+#148, 2026-07-19): adds `layout_class`, `collector_line_crop_px`,
+`artist_crop_px`, `art_crop_px` to `ImageEvidence` (migration `0070`,
+additive-only `AddField`s, no freeze conflict — checked
+`gh issue list --label deploy-freeze-active` fresh immediately before
+both the migration and the golden-set gathering run, empty both times).
+`layout_class` calls `local_fallback.classify_border_color` — the ONLY
+remaining `classify_*` helper in that file that doesn't require an OCR
+pass as an input (`classify_frame_style` needs
+`parsed_a_collector_number`/`illus_anchor_fired`, both OCR outputs —
+issue #149's PR, not this one). Stored under the `layout_class` field
+name to match issue #148's own title wording even though the
+underlying classifier is named for border color — documented in
+`image_evidence.py`'s module docstring so a future reader isn't
+confused by the name/semantics gap. The three `*_crop_px` fields turn
+the existing fixed-fraction crop-box constants
+(`local_ocr.DEFAULT_CROP_BOX`/`local_fallback.ARTIST_CROP_BOX`/
+`local_phash.ART_CROP_BOX`) into pixel coordinates for this specific
+fetched image, remapped via `normalize_crop_box(box, bleed_class)`
+first — crop COORDINATES only, never crop pixels, matching the FINAL
+POSTURE directive. No changes to `local_fallback.py`/`local_phash.py`
+themselves (both PROTECTED CORE; calling their existing exported
+functions/constants from new code is not "changing" them, per
+`docs/upstreaming/license-provenance.md`).
+
+**`back_face_flag` (also named in issue #148's title) was NOT built in
+this PR** — no signal for it was found anywhere in this repo: `Card`/
+`CanonicalCard` carry no DFC-face field (the only `face` field in the
+whole schema is `ProjectMember.face`, an unrelated per-slot
+print-request concept, not a property of the uploaded image itself),
+and no `local_fallback.py` exported helper addresses it either. Four
+candidate heuristics were considered and rejected as ungrounded
+guesses rather than shipped as an invented definition with fabricated
+golden-set expectations (flagging `CardTypes.CARDBACK` rows — already
+excluded from the identification pipeline pool at three call sites, so
+moot; reusing `ProjectMember.face` — wrong model entirely;
+`classify_frame_style`/border-color based guesses — neither actually
+addresses "back face"; an aspect-ratio "composite scan" heuristic
+built from a prose aside in `local_fallback.py`'s bleed-classification
+comment — the comment names it as one of three peer examples of an
+ambiguous read, not a discriminating signal). Open question for the
+owner, not decided here.
+
+`GOLDEN_EXPECTATIONS["layout_class"]`/`["crop_coordinates"]` populated
+against a real, no-persistence `extract_card_evidence()` run over all
+30 golden cards (host venv, real network fetch through the shared
+`GOOGLE_IMAGE`-paced Worker path, zero DB writes): 14 `black`, 13
+`borderless`, 1 `white`, 1 `silver`/gold-taxonomy-miss card (207913)
+recorded as `""` with a genuine `ambiguous` skip_reason — kept as-is
+rather than discarded, since a golden set that only ever pins
+clean-positive outcomes would never catch a regression in the
+ambiguous path. The three `trimmed`-classified cards
+(145532/150472/189166) show visibly different crop-coordinate numbers
+than the `bleed` majority, real evidence `normalize_crop_box`'s remap
+is actually engaged for those rows. 21 new tests (11 in
+`test_image_evidence.py`'s new `TestExtractCardEvidenceLayoutClass`/
+`TestExtractCardEvidenceCropCoordinates` classes, 6 pre-existing
+`TestExtractCardEvidence*` tests updated for the two new extractors'
+presence, 4 in `test_golden_set.py`); full suite 1024 passed / 4
+skipped (the same CI-documented named skips — nothing newly broken);
+`makemigrations --check` clean.
+
 Queued behind Stage B per the paced task sequence (#145–148). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
