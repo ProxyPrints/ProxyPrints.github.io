@@ -1,6 +1,9 @@
 import { expect } from "@playwright/test";
 
-import { defaultHandlers, questionFeedConfirmSuggestion } from "@/mocks/handlers";
+import {
+  defaultHandlers,
+  questionFeedConfirmSuggestion,
+} from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
 import { loadPageWithDefaultBackend } from "./test-utils";
@@ -25,9 +28,10 @@ test.describe("/whatsthat PWA installability", () => {
       "content",
       "#ff4719"
     );
-    await expect(
-      page.locator('link[rel="apple-touch-icon"]')
-    ).toHaveAttribute("href", "/whatsthat-icon-192.png");
+    await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute(
+      "href",
+      "/whatsthat-icon-192.png"
+    );
   });
 
   test("the manifest is absent on a different page (scoping doesn't leak)", async ({
@@ -38,8 +42,6 @@ test.describe("/whatsthat PWA installability", () => {
     await loadPageWithDefaultBackend(page, "editor");
 
     await expect(page.locator('link[rel="manifest"]')).toHaveCount(0);
-    await expect(
-      page.locator('link[rel="apple-touch-icon"]')
-    ).toHaveCount(0);
+    await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveCount(0);
   });
 });
