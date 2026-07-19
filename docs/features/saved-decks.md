@@ -9,6 +9,35 @@ the opaque-blob API (#94, a recreation after #88's stacked-PR base-deletion
 auto-close — see [`../lessons.md`](../lessons.md)), the client-side crypto
 module (#89), and the frontend UI wiring (#93).
 
+## Where it's wired in
+
+The save cluster (`SavedDeckPanel.tsx` — reverse breadcrumb + Save button)
+mounts in two places, both reading/writing the same `projectSlice` +
+`savedDeckSessionSlice` state, so a save made from one surface is visible
+from the other without any extra plumbing:
+
+- `ProjectEditor.tsx`'s right-panel action cluster — the original
+  placement (round 1 of the spec, §4).
+- `DisplayPage.tsx`'s top toolbar (issue #165, "Proposal G save
+  integration" — Proposal H's own milestone, landed after the pane
+  migration, #164) — see
+  [`../proposals/proposal-h-unified-display-page.md`](../proposals/proposal-h-unified-display-page.md)'s
+  §5 mapping table for this row. `SavedDeckPanel` takes an optional
+  `className` prop so the two callers can each supply their own spacing
+  (`ProjectEditor`'s vertical stack vs. `DisplayPage`'s horizontal
+  flex-wrap toolbar row) without forking the component.
+
+The **load** side (`MyDecksPage.tsx`'s "Open in editor") still always
+navigates to `/editor`, unchanged — that's the spec's own explicit binding
+text (§4: "an **'Open in editor'** action per row ... navigates to
+`/editor`"), not an oversight of this integration. A user working entirely
+on `/display` therefore still has to detour through `/editor` once to load
+a previously-saved deck (client-side nav between the two pages preserves
+the in-memory project — see `DisplayPage.tsx`'s own comment — so this is a
+one-time hop, not a full reload); giving `/display` its own load entry
+point is unbuilt, tracked as an open item on issue #165, not silently
+assumed out of scope.
+
 ## The mental model
 
 Discord OAuth (already used for moderator login — see
