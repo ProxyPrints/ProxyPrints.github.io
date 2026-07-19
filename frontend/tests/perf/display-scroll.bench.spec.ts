@@ -66,23 +66,35 @@ test(`Item 3 benchmark: ${CARD_COUNT}-card deck scroll fps/heap/jank under ${CPU
   console.log(`BENCH: sheetCount=${sheetCount}`);
 
   const client = await page.context().newCDPSession(page);
-  await client.send("Emulation.setCPUThrottlingRate", { rate: CPU_THROTTLE_RATE });
+  await client.send("Emulation.setCPUThrottlingRate", {
+    rate: CPU_THROTTLE_RATE,
+  });
 
   // Peak JS heap + max simultaneously-mounted <img> tags (the actual anti-crash metric - real
   // decoded image memory, not just DOM node count) sampled throughout the scroll.
   await page.evaluate(() => {
-    (window as any).__bench = { maxHeap: 0, maxImgs: 0, frameTimes: [] as number[] };
+    (window as any).__bench = {
+      maxHeap: 0,
+      maxImgs: 0,
+      frameTimes: [] as number[],
+    };
     let last = performance.now();
     const sample = () => {
       const now = performance.now();
       (window as any).__bench.frameTimes.push(now - last);
       last = now;
       const heap = (performance as any).memory?.usedJSHeapSize ?? 0;
-      (window as any).__bench.maxHeap = Math.max((window as any).__bench.maxHeap, heap);
+      (window as any).__bench.maxHeap = Math.max(
+        (window as any).__bench.maxHeap,
+        heap
+      );
       const imgs = document.querySelectorAll(
         '[data-testid="display-sheet-region"] img'
       ).length;
-      (window as any).__bench.maxImgs = Math.max((window as any).__bench.maxImgs, imgs);
+      (window as any).__bench.maxImgs = Math.max(
+        (window as any).__bench.maxImgs,
+        imgs
+      );
       requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
@@ -134,7 +146,9 @@ test(`Item 3 benchmark: ${CARD_COUNT}-card deck scroll fps/heap/jank under ${CPU
   const scrollDurationMs = Date.now() - scrollStart;
 
   const bench = await page.evaluate(() => (window as any).__bench);
-  const longTasksResult = await page.evaluate(() => (window as any).__longTasks);
+  const longTasksResult = await page.evaluate(
+    () => (window as any).__longTasks
+  );
 
   const frameTimes: number[] = bench.frameTimes.slice(5); // drop warm-up frames
   const avgFrameMs =
