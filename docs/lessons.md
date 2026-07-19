@@ -728,3 +728,40 @@ is still in flight, use a separate worktree (see this doc's own worktree-port-co
 just wait for a completion notification before touching git state again. A "no processes running"
 check via `pgrep` at one instant is not sufficient proof it's safe to proceed - the teardown of the
 task you just kicked off may not have landed yet.
+
+## A multi-hour write run with no per-batch flush risks total loss on crash - survived once by luck, not design
+
+Part 4's full LANDS write run (`local_lands_identify.py --write`,
+39,707-card pool, ~19.5h projected) accumulates every vote and residue
+row in memory (`votes_batch`/`residue_batch` lists inside
+`run_lands_identify`) and calls `bulk_create()` exactly once, after the
+entire card loop finishes - not per-batch, deviating from Part 1's own
+run-cohort-safety rails (`docs/features/catalog-completion-plan.md`'s
+`run_id`/ledger/resumability design) applied everywhere else in the
+pilot. Caught via direct code read while building the read-only observability
+report a session asked for mid-run, not via any failure - the run
+never crashed.
+
+**Why this is a real risk, not a hypothetical**: if the container is
+OOM-killed, the host reboots, or anything else kills the process before
+the final `bulk_create()`, the full multi-hour accumulation is
+unrecoverable - not partially recovered, not resumable from a
+checkpoint, because none exists (no logfile, no incremental DB write,
+no ledger row for progress - the `PilotRunLedger` row only gets
+`votes_written` set at completion). This run survived only because
+`local_phash.get_or_compute_canonical_hash`'s candidate-hash cache is
+itself permanent (written to `CanonicalCard.image_hash` on first
+success, reused forever after) - that's an unrelated, incidental
+property of a different function, not a safety net this run's own
+design provided.
+
+**The rule going forward**: any successor to this run (Part 4b, Part 5,
+future residual-classification passes) MUST implement per-batch flush
+(bulk_create every N cards, not once at the end) before launch - the
+permanent phash cache made this specific run survivable, that is not a
+reason to accept the same gap again.
+
+**Refs**: `MPCAutofill/cardpicker/local_lands_identify.py`'s
+`run_lands_identify` (the single end-of-loop `bulk_create()` calls),
+`docs/features/catalog-completion-plan.md`'s Part 1 (run-cohort
+safety).
