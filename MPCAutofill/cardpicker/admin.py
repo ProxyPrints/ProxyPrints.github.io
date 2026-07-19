@@ -18,6 +18,7 @@ from .models import (
     CardScanLog,
     CardTagVote,
     DFCPair,
+    ImageEvidence,
     LandsAmbiguousResidue,
     PilotRunLedger,
     Project,
@@ -279,6 +280,14 @@ class AdminLandsAmbiguousResidue(admin.ModelAdmin[LandsAmbiguousResidue]):
     list_filter = ("run_id",)
     search_fields = ("run_id", "artist_name")
     ordering = ("-created_at",)
+
+
+@admin.register(ImageEvidence)
+class AdminImageEvidence(admin.ModelAdmin[ImageEvidence]):
+    list_display = ("card", "content_hash", "fetch_ok", "fetch_error_class", "extractor_versions", "updated_at")
+    list_filter = ("fetch_ok",)
+    search_fields = ("card__identifier",)
+    ordering = ("-updated_at",)
 
 
 @admin.register(SavedDeck)

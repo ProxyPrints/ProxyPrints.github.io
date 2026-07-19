@@ -1099,7 +1099,53 @@ session re-invents a storage tier.
    (push/pull) — our instance runs eager because we can, federation
    peers run pull because the design permits it.
 
-### Stages C–F (extractors, calculators, streaming assembly, consumers) — not started
+### Stages C–F (extractors, calculators, streaming assembly, consumers)
+
+**Stage C: GO NOW (owner directive, 2026-07-19)** — the measurement
+hold is cleared (Fetch Acceleration Study closed, task #152). First
+PR is the substrate, not an extractor (advisor-confirmed sequencing:
+the "one PR per extractor, golden-set-tested before merge" gate isn't
+executable until this exists):
+
+- **`ImageEvidence` model** (`cardpicker/models.py`) — metadata-only
+  per task #145's amended spec (hashes, geometry, quality signals;
+  crop coordinates yes, crop pixels never), keyed `(card, content_hash)` with a `unique_together` constraint so a content
+  change creates a new row rather than overwriting the old one.
+  `extractor_versions` JSONField is the per-field completion map.
+  **Reconciliation ledger fields folded in now** (owner directive,
+  same day — task #155's fields, not retrofitted per-extractor):
+  `run_id` (last-writer, for report scoping) plus reuse of the
+  existing `CardScanLog` model for named skips (`anonymous_id` set to
+  the extractor name) — no new ledger table. Migration `0068`.
+- **`cardpicker/image_evidence.py`** — the per-card callable
+  extraction unit (`extract_card_evidence`, pure, no DB writes) and
+  its separate persistence step (`persist_evidence`), satisfying
+  FINAL POSTURE item 8a's binding requirement that this be
+  independent of the bulk runner. `build_reconciliation_report`
+  computes attempted/voted/skipped-by-reason/dropped by querying
+  `ImageEvidence` + `CardScanLog` directly (never a separately
+  maintained counter, so it can't drift from what was actually
+  persisted). Only extractor riding along: `fetch_health` (trivial,
+  end-to-end proof only — not the manifest).
+- **`cardpicker/golden_set.py`** (new infrastructure — no prior
+  precedent existed in this codebase) — 30 real card ids, stratified
+  by source (28 distinct sources, drawn 2026-07-19, seeded), pinned
+  rather than re-randomized per test run. `GOLDEN_EXPECTATIONS` is
+  populated incrementally, one extractor at a time, by whichever PR
+  builds that extractor.
+- 21 new tests (`test_image_evidence.py`, `test_golden_set.py`), all
+  passing; full suite 979 passed / 4 failed (the known pre-existing
+  baseline: moxfield x2, sources OpenSSL x2 — nothing new broke);
+  `makemigrations --check` clean. Tests run from the host venv
+  (`~/.venvs/mpcautofill-pilot`), not inside the django container —
+  the container has no Docker socket access, and pytest-django's `db`
+  fixture setup needs one; this was hit and diagnosed this session,
+  not previously documented.
+
+Every subsequent extractor (geometry/bleed, OCR/collector-line,
+artist OCR, phash, border color, symbol-strip, legal-line, etc.)
+lands as its own PR against this substrate, golden-set-tested before
+merge, per task #145's manifest and its freeze rule.
 
 Queued behind Stage B per the paced task sequence (#145–148). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
