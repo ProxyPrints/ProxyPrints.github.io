@@ -8,16 +8,25 @@ module for something this foundational.
 
 Not for Scryfall/candidate images - see cardpicker.local_phash's own Scryfall fetch helpers for
 that separate concern.
+
+`fetch_card_image` is paced via `cardpicker.harvest_fetch_limiter.GOOGLE_IMAGE` (Stage B split
+limiter, docs/features/catalog-completion-plan.md's "Harvest-calculate pipeline" section,
+2026-07-19) - every caller (this pilot, the harvest pipeline, the ingest hook) shares one
+process-wide ceiling on Google lh3/lh4, regardless of which caller's thread pool is doing the
+fetching.
 """
 
 import logging
 from io import BytesIO
 from typing import TYPE_CHECKING, Optional
 
-import requests
-
 from django.conf import settings
 
+from cardpicker.harvest_fetch_limiter import (
+    GOOGLE_IMAGE,
+    GoogleFetchLockoutError,
+    rate_limited_get,
+)
 from cardpicker.sources.source_types import SourceTypeChoices
 
 if TYPE_CHECKING:
@@ -66,9 +75,16 @@ def fetch_card_image(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Op
     if url is None:
         return None
     try:
-        response = requests.get(url, timeout=15)
+        response = rate_limited_get(GOOGLE_IMAGE, url, timeout=15)
         response.raise_for_status()
         return Image.open(BytesIO(response.content))
+    except GoogleFetchLockoutError:
+        # Deliberately NOT caught by the broad except below - a 403 lockout is a hard stop
+        # (see GoogleFetchLockoutError's own docstring), not an ordinary per-card fetch failure.
+        # Swallowing this here would silently let a long-running harvest keep hammering a
+        # destination that has already locked us out, risking the live site's own image
+        # serving (which shares this same Google endpoint) for an extended cooldown window.
+        raise
     except Exception:
         logger.exception("Failed to fetch image for card %s", card.identifier)
         return None

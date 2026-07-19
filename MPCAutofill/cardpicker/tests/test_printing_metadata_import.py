@@ -68,6 +68,44 @@ class TestImportScryfallPrintingMetadata:
         assert metadata.border_color == "borderless"
         assert metadata.edhrec_rank == 1234
 
+    def test_art_crop_url_taken_from_top_level_image_uris(self, db, tmp_path):
+        canonical_card = CanonicalCardFactory()
+        record = _record(
+            id=str(canonical_card.identifier),
+            image_uris={"small": "https://example.test/small.jpg", "art_crop": "https://example.test/art.jpg"},
+        )
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        import_scryfall_printing_metadata(default_cards_path=path)
+
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=canonical_card)
+        assert metadata.art_crop_url == "https://example.test/art.jpg"
+
+    def test_art_crop_url_falls_back_to_first_card_face(self, db, tmp_path):
+        # double-faced cards nest image_uris under card_faces instead of top-level - Scryfall's
+        # own documented convention.
+        canonical_card = CanonicalCardFactory()
+        record = _record(
+            id=str(canonical_card.identifier),
+            card_faces=[{"image_uris": {"art_crop": "https://example.test/face-a.jpg"}}, {"image_uris": {}}],
+        )
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        import_scryfall_printing_metadata(default_cards_path=path)
+
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=canonical_card)
+        assert metadata.art_crop_url == "https://example.test/face-a.jpg"
+
+    def test_art_crop_url_empty_when_neither_present(self, db, tmp_path):
+        canonical_card = CanonicalCardFactory()
+        record = _record(id=str(canonical_card.identifier))
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        import_scryfall_printing_metadata(default_cards_path=path)
+
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=canonical_card)
+        assert metadata.art_crop_url == ""
+
     def test_skips_row_with_no_matching_canonical_card(self, db, tmp_path):
         record = _record(id=str(uuid.uuid4()))
         path = _write_bulk_data_file(tmp_path, [record])

@@ -158,6 +158,14 @@ class CanonicalPrintingMetadata(models.Model):
     printings_count = models.IntegerField(default=0)
     released_at = models.DateField(null=True, blank=True)
     lang = models.CharField(max_length=5, default="en")
+    # Scryfall's own art-crop image URL, straight from the same bulk-data dump this whole model
+    # is populated from (image_uris.art_crop, or card_faces[0].image_uris.art_crop for
+    # double-faced cards - see printing_metadata_import.PrintingMetadataRow.art_crop_url).
+    # Local-first source for cardpicker.local_phash.get_or_compute_canonical_hash, which
+    # previously always hit Scryfall's live REST API per candidate for this exact URL - data
+    # already sitting in the same weekly bulk-data file this sidecar already parses (2026-07-19,
+    # harvest-calculate pipeline Stage B - see docs/features/catalog-completion-plan.md).
+    art_crop_url = models.CharField(blank=True, default="")
 
     def __str__(self) -> str:
         return f"Printing metadata for {self.canonical_card}"

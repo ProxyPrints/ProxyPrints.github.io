@@ -19,12 +19,16 @@ from io import BytesIO
 from typing import TYPE_CHECKING, Optional
 
 import imagehash
-import requests
 from PIL import Image
 
+from cardpicker.harvest_fetch_limiter import (
+    SCRYFALL_CDN,
+    SCRYFALL_REST,
+    rate_limited_get,
+)
 from cardpicker.image_cdn_fetch import fetch_card_image
 from cardpicker.local_fallback import classify_bleed_edge, normalize_crop_box
-from cardpicker.models import CanonicalCard, Card
+from cardpicker.models import CanonicalCard, CanonicalPrintingMetadata, Card
 from cardpicker.utils import twos_complement
 
 if TYPE_CHECKING:
@@ -80,7 +84,9 @@ def _int_to_hash(value: int) -> "imagehash.ImageHash":
 
 def _fetch_scryfall_art_crop_url(scryfall_id: str) -> Optional[str]:
     try:
-        response = requests.get(f"https://api.scryfall.com/cards/{scryfall_id}", headers=SCRYFALL_HEADERS, timeout=10)
+        response = rate_limited_get(
+            SCRYFALL_REST, f"https://api.scryfall.com/cards/{scryfall_id}", headers=SCRYFALL_HEADERS, timeout=10
+        )
         response.raise_for_status()
         return response.json().get("image_uris", {}).get("art_crop")
     except Exception:
@@ -90,13 +96,28 @@ def _fetch_scryfall_art_crop_url(scryfall_id: str) -> Optional[str]:
 
 def _fetch_and_hash(url: str) -> Optional[int]:
     try:
-        response = requests.get(url, headers=SCRYFALL_HEADERS, stream=True, timeout=10)
+        response = rate_limited_get(SCRYFALL_CDN, url, headers=SCRYFALL_HEADERS, stream=True, timeout=10)
         response.raise_for_status()
         image = Image.open(BytesIO(response.content))
         return _hash_to_int(imagehash.phash(image))
     except Exception:
         logger.exception("Failed to fetch/hash image at %s", url)
         return None
+
+
+def _local_art_crop_url(canonical: CanonicalCard) -> Optional[str]:
+    """The art-crop URL already sitting in CanonicalPrintingMetadata (Stage B, 2026-07-19,
+    docs/features/catalog-completion-plan.md) - parsed from the same weekly bulk-data file
+    import_scryfall_printing_metadata already reads, zero network. Returns None (not "") for
+    "genuinely not available locally", covering both a missing sidecar row (a card that predates
+    this field, or whose metadata import hasn't run yet) and a present-but-empty URL (a real gap
+    in Scryfall's own data for this printing) - both fall through to the live REST call below,
+    which is exactly SCRYFALL_REST's own "guard for true gaps only" contract."""
+    try:
+        url = canonical.printing_metadata.art_crop_url
+    except CanonicalPrintingMetadata.DoesNotExist:
+        return None
+    return url or None
 
 
 def get_or_compute_canonical_hash(canonical: CanonicalCard) -> Optional[int]:
@@ -107,11 +128,18 @@ def get_or_compute_canonical_hash(canonical: CanonicalCard) -> Optional[int]:
     (an all-white or otherwise-degenerate phash of 0 is possible in principle but vanishingly
     unlikely for real card art - not specially handled, matching upstream's own use of the same
     sentinel in import_canonical_card_data).
+
+    Art-crop URL source, local-first (Stage B, 2026-07-19): CanonicalPrintingMetadata.art_crop_url
+    if present (zero network - the same bulk-data file the weekly metadata import already reads),
+    else one live Scryfall REST call as a genuine-gap fallback - see _local_art_crop_url and
+    SCRYFALL_REST's own docstring in harvest_fetch_limiter.py. Previously always took the REST
+    path; measured as the dominant cost (93.6% of a 30-card Stage B wall-clock probe) before this
+    change.
     """
     if canonical.image_hash != 0:
         return canonical.image_hash
 
-    art_crop_url = _fetch_scryfall_art_crop_url(str(canonical.identifier))
+    art_crop_url = _local_art_crop_url(canonical) or _fetch_scryfall_art_crop_url(str(canonical.identifier))
     if art_crop_url is None:
         return None
     computed = _fetch_and_hash(art_crop_url)
@@ -180,6 +208,14 @@ DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES = 2
 # log). See docs/troubleshooting.md. The ceiling's original purpose (protecting the shared lh4
 # endpoint live PDF export/bulk download also depend on) is unchanged, so client-side pacing is
 # now the only layer actually holding it.
+#
+# Stage B addendum (2026-07-19, docs/features/catalog-completion-plan.md): this backfill's own
+# `_RateLimiter` below now composes with `cardpicker.harvest_fetch_limiter.GOOGLE_IMAGE`, which
+# `image_cdn_fetch.fetch_card_image` (this backfill's actual fetch call, via
+# `compute_content_phash_for_card`) paces internally as of Stage B. Two gates in series, not a
+# conflict: the effective rate is whichever is stricter. At this constant's default (3.0/s) that
+# stays this value, unchanged from before Stage B existed - GOOGLE_IMAGE's 5.0/s ceiling only
+# becomes the binding one if a caller explicitly raises `--rate-limit-per-sec` above it.
 DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC = 3.0
 
 
