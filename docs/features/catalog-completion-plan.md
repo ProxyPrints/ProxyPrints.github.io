@@ -561,7 +561,7 @@ pilot wasn't stopped for this.
 
 ---
 
-## Part 4 — LANDS (artist-decomposed identification) (module built 2026-07-18; HOLD #B still open — real volume-check numbers not yet run)
+## Part 4 — LANDS (artist-decomposed identification) (module built 2026-07-18, HOLD #B cleared 2026-07-18; first full write attempt owner-stopped 2026-07-19 — see status below)
 
 Target pool: unresolved basic lands (Plains/Island/Swamp/Mountain/Forest/
 Wastes + Snow-Covered) OR any name whose candidate count exceeded the
@@ -633,6 +633,22 @@ secondary signal) in
 Nothing written — ran with no `--write` flag, `total_votes=would_cast=0`
 confirmed. Whether to authorize a real `--write` run (full pool or
 batched) is an open decision, not made here.
+
+**First write attempt — owner-stopped, 2026-07-19** (`run_id= 20260719T004057-e531b323`): authorized full-pool `--write` run launched
+2026-07-19T00:41Z, stopped intentionally by the owner ~3.5h in
+(2026-07-19T04:08Z), superseded by the harvest-calculate pipeline
+(which re-runs the lands pool as its own first workload, using the same
+fetch/hash pre-warm this run left behind). Not a crash. Cost, verified
+post-stop: zero `CardPrintingTag`/`LandsAmbiguousResidue` rows for this
+`run_id` (expected — the module's `bulk_create()` calls fire once,
+after the full card loop, not per-batch; see
+[[../lessons.md]]'s batch-flush entry, written from this same run).
+`PilotRunLedger` row closed as `FAILED` (the model's closest available
+status - no dedicated "owner-stopped" state exists) with `votes_written = 0`. The run's ~3.5h of `CanonicalCard.image_hash` computation
+persists regardless (73,223/113,224 canonical printings now hashed,
+confirmed post-stop) - that cache is permanent and independent of this
+run's own vote/residue loss, and is exactly the pre-warm the
+harvest-calculate pipeline's lands chunk inherits.
 
 ---
 
