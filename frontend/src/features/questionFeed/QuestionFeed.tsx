@@ -50,6 +50,7 @@ import {
   QuestionFeedItem,
 } from "@/common/schema_types";
 import { useAppDispatch, useAppSelector } from "@/common/types";
+import { ArtistSupportLink } from "@/components/ArtistSupportLink";
 import { SetIcon } from "@/components/SetIcon";
 import { Spinner } from "@/components/Spinner";
 import {
@@ -117,6 +118,17 @@ function normalizeQuestionFeedCounts(
     // (never show a false "quick confirmations ready" headline) and fresh mirrors total.
     return { total: raw, confirmable: 0, contested: 0, fresh: raw };
   }
+  // `total === fresh` is expected for the legacy number shape above (fresh is forced to mirror
+  // total there), but for a genuine object-shaped response it would mean every card in the
+  // catalog is still "fresh" - vanishingly unlikely in practice, and far more likely a sign that
+  // this build is talking to a backend that hasn't finished rolling out the fresh/total split.
+  // Never shown to the user (the subcounts line dropped `fresh` entirely - see the audit note
+  // above the render) - this is purely a version-skew signal for whoever reads the console.
+  if (raw.total === raw.fresh) {
+    console.warn(
+      "QuestionFeed: counts.total === counts.fresh on a non-legacy response - possible backend/frontend version skew."
+    );
+  }
   return raw;
 }
 
@@ -146,7 +158,22 @@ export function QuestionFeed() {
     initialChipStates()
   );
   const [followUp, setFollowUp] = useState<FollowUp>("none");
+  // Candidate identifiers the user has explicitly said NO to (Level 1 only - "Not sure" is
+  // genuine uncertainty, not a rejection, and deliberately never adds here) within THIS item's
+  // flow - reset on every new item below. Design rule (owner-directed): a candidate the user
+  // has just rejected is never re-presented as a selectable answer at a later level within the
+  // same item - see rejectSuggestion below and the filtered candidate list this feeds.
+  const [rejectedCandidateIds, setRejectedCandidateIds] = useState<Set<string>>(
+    new Set()
+  );
   const [fetchToken, setFetchToken] = useState<number>(0);
+  // Artist Support Links v1 - set once the user casts a real (non-"Unknown") artist vote on an
+  // "artist"-type item, via ArtistVotePicker's onArtistConfirmed below. Drives the post-answer
+  // "Art by <Name> - support them" banner (see the artist item's render block) - reset on every
+  // new item alongside the other per-question state, so it can't bleed into the next question.
+  const [confirmedArtistName, setConfirmedArtistName] = useState<string | null>(
+    null
+  );
   // A 429 from any vote-casting call below (printing, tag, artist) sets this instead of firing
   // the usual error toast - see the banner rendered near the top of the item below. In a
   // one-tap funnel, a rate-limit pause is an expected, honest condition, not a failure, so it
@@ -179,9 +206,31 @@ export function QuestionFeed() {
     setFetchError(false);
     APIGetQuestionFeed(backendURL, getOrCreateAnonymousId())
       .then((response) => {
-        setItem(response.item ?? null);
+        const newItem = response.item ?? null;
+        setItem(newItem);
         setCounts(normalizeQuestionFeedCounts(response.remainingEstimate));
-        setCaughtUp(response.item == null);
+        setCaughtUp(newItem == null);
+        // Reset per-question local state in the SAME update as the new item, rather than a
+        // separate effect keyed on item?.card.identifier/type. Two consecutive feed items can
+        // legitimately share both (e.g. the same card can carry more than one pending question
+        // type, or the same question can be re-served) - a dependency-array-keyed effect skips
+        // the reset entirely when neither value changes, silently carrying stale chipStates
+        // (and revealed/selectedCandidateId/etc) over from the previous card. That's exactly
+        // what produced the real-device symptom of the candidate grid rendering empty (chip
+        // states left over from a previous card filtering out every candidate of the new one)
+        // until the user tapped a chip - the only other thing that ever updated chipStates,
+        // which incidentally "fixed" it by replacing the stale filter. Resetting here instead
+        // makes the reset unconditional on every new item, with no dependency array to miss.
+        setRevealed(false);
+        setChipStates(initialChipStates());
+        setFollowUp("none");
+        setRejectedCandidateIds(new Set());
+        setSelectedCandidateId(null);
+        setConfirmedArtistName(null);
+        setRateLimited(false);
+        setFilterExpanded(false);
+        setLevel3ChipStates({});
+        setStage(initialStage(newItem));
       })
       .catch(() => {
         setItem(null);
@@ -190,19 +239,6 @@ export function QuestionFeed() {
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, fetchToken]);
-
-  // reset per-question local state whenever a new item lands
-  useEffect(() => {
-    setRevealed(false);
-    setChipStates(initialChipStates());
-    setFollowUp("none");
-    setSelectedCandidateId(null);
-    setRateLimited(false);
-    setFilterExpanded(false);
-    setLevel3ChipStates({});
-    setStage(initialStage(item));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item?.card.identifier, item?.type]);
 
   const advance = () => {
     setFlavorText(randomFlavorText());
@@ -384,6 +420,23 @@ export function QuestionFeed() {
 
   const skip = () => advance();
 
+  // Level 1's NO. Casts no vote itself (never has - there's no backend concept of "reject just
+  // this one candidate specifically," only a positive vote for a specific printing or a
+  // generic isNoMatch for the whole set - see selectCandidate above) - purely records the
+  // rejection client-side so Level 2's candidate list (below) excludes it, then falls through
+  // to the SAME setStage("level2") transition as before. The actual, single negative vote for
+  // this item still only ever happens once, whenever the user eventually taps "None of these"/
+  // custom-art/skip - unchanged from before this fix, so there is no double-vote risk: this
+  // function only ever changes what's DISPLAYED, never what's SUBMITTED.
+  const rejectSuggestion = () => {
+    if (item?.suggestedPrinting != null) {
+      setRejectedCandidateIds((previous) =>
+        new Set(previous).add(item.suggestedPrinting!.identifier)
+      );
+    }
+    setStage("level2");
+  };
+
   if (loading && item == null) {
     return (
       <div className="text-center py-4" data-testid="question-feed-loading">
@@ -430,11 +483,28 @@ export function QuestionFeed() {
   const isCandidateType =
     item.type === "confirm_suggestion" || item.type === "identify_printing";
   const allCandidates = item.candidates ?? [];
+  // Excludes anything the user rejected at Level 1 ("No" - see rejectSuggestion) BEFORE the
+  // chip filter applies, so a rejected candidate is never offered again as a selectable tile
+  // for the rest of this item's flow, regardless of chip state. hiddenCount below is computed
+  // against this (not allCandidates) so "N hidden by your tags" doesn't conflate a rejection
+  // with a filter - they're excluded for different reasons and the copy should stay accurate.
+  const nonRejectedCandidates = allCandidates.filter(
+    (candidate) => !rejectedCandidateIds.has(candidate.identifier)
+  );
   const visibleCandidates = filterCandidatesByChipStates(
-    allCandidates,
+    nonRejectedCandidates,
     chipStates
   );
-  const hiddenCount = allCandidates.length - visibleCandidates.length;
+  const hiddenCount = nonRejectedCandidates.length - visibleCandidates.length;
+  // The singleton case (or any rejection that happens to empty the remaining set): Level 2
+  // renders with zero grid tiles either way (visibleCandidates is simply empty), but this
+  // drives the contextual copy/rejected-candidate-context swap below rather than showing the
+  // generic "Which of these is it?" prompt over a blank grid.
+  const suggestionRejectedWithNoneLeft =
+    item.type === "confirm_suggestion" &&
+    item.suggestedPrinting != null &&
+    rejectedCandidateIds.has(item.suggestedPrinting.identifier) &&
+    nonRejectedCandidates.length === 0;
 
   // BurstSvg renders alongside (not inside) RevealWrapper deliberately - RevealWrapper has
   // overflow: hidden (it clips the silhouette-reveal animation to the card's own box), which
@@ -525,7 +595,7 @@ export function QuestionFeed() {
     <div data-testid="question-feed">
       {counts != null && (
         <>
-          {/* Headline leads with quick confirmations (tier 1 - an unresolved AI-suggested
+          {/* Headline leads with quick confirmations (tier 1 - an unresolved machine-suggested
               printing awaiting a one-tap human yes/no) since that's the easiest, fastest-to-
               clear category - falls back to the overall total once there's nothing quick left,
               rather than always showing the same undifferentiated "cards remaining" copy. */}
@@ -539,8 +609,7 @@ export function QuestionFeed() {
                 }`}
           </p>
           <p className="text-muted small" data-testid="question-feed-subcounts">
-            {counts.total} total &middot; {counts.contested} contested &middot;{" "}
-            {counts.fresh} fresh
+            {counts.total} in catalog &middot; {counts.contested} contested
           </p>
         </>
       )}
@@ -586,6 +655,26 @@ export function QuestionFeed() {
                         >
                           Suggested match
                         </Badge>
+                        {/* The Scryfall reference render for the suggested printing - dropped
+                            when Level 1 was introduced (a regression, not an intentional
+                            text-only design; every other stage still shows one per candidate).
+                            Restored using the exact same mechanism Level 2's grid already uses
+                            correctly: mediumThumbnailUrl straight into a plain <img>, no new URL
+                            construction. */}
+                        <div
+                          className="mx-auto mb-2"
+                          style={{ maxWidth: 160 }}
+                          data-testid="question-feed-level1-reference-image"
+                        >
+                          <ArtPlaceholder>
+                            <ZoomableThumbnail>
+                              <img
+                                src={item.suggestedPrinting.mediumThumbnailUrl}
+                                alt={`${item.suggestedPrinting.expansionCode} ${item.suggestedPrinting.collectorNumber}`}
+                              />
+                            </ZoomableThumbnail>
+                          </ArtPlaceholder>
+                        </div>
                         <p data-testid="question-feed-suggestion-prompt">
                           Is it this one?{" "}
                           <SetIcon
@@ -618,7 +707,7 @@ export function QuestionFeed() {
                         <Button
                           variant="outline-danger"
                           disabled={submitting}
-                          onClick={() => setStage("level2")}
+                          onClick={rejectSuggestion}
                           data-testid="question-feed-level1-no"
                         >
                           No
@@ -730,7 +819,45 @@ export function QuestionFeed() {
                           : "Needs identification"}
                       </Badge>
                       {item.type === "confirm_suggestion" &&
-                        item.suggestedPrinting != null && (
+                        item.suggestedPrinting != null &&
+                        (suggestionRejectedWithNoneLeft ? (
+                          <>
+                            {/* Singleton-rejection case (task: eliminate double-asking) - the
+                                suggested printing was the ONLY candidate, so there's nothing
+                                left to pick from a grid. Skips straight to the classified-exit
+                                choice below, with the rejected candidate kept as grayed,
+                                non-interactive context (never a button) rather than vanishing
+                                without explanation. */}
+                            <p data-testid="question-feed-suggestion-prompt">
+                              Got it - not that one. Is it any official printing
+                              at all?
+                            </p>
+                            <div
+                              className="d-flex align-items-center gap-2 mb-3 opacity-50"
+                              data-testid="question-feed-rejected-context"
+                            >
+                              <div style={{ width: 40, flexShrink: 0 }}>
+                                <img
+                                  src={
+                                    item.suggestedPrinting.mediumThumbnailUrl
+                                  }
+                                  alt=""
+                                  style={{ width: "100%" }}
+                                />
+                              </div>
+                              <div className="text-muted small">
+                                You said: not{" "}
+                                <SetIcon
+                                  expansionCode={
+                                    item.suggestedPrinting.expansionCode
+                                  }
+                                />{" "}
+                                {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                                {item.suggestedPrinting.collectorNumber}
+                              </div>
+                            </div>
+                          </>
+                        ) : (
                           <p data-testid="question-feed-suggestion-prompt">
                             Which of these is it?{" "}
                             <SetIcon
@@ -742,21 +869,23 @@ export function QuestionFeed() {
                             {item.suggestedPrinting.collectorNumber} was
                             suggested
                           </p>
-                        )}
-                      <div className="mb-2">
-                        <Button
-                          variant="link"
-                          className="p-0"
-                          onClick={() =>
-                            setFilterExpanded((previous) => !previous)
-                          }
-                          data-testid="question-feed-filter-toggle"
-                        >
-                          {filterExpanded
-                            ? "Hide filters"
-                            : "Filter by attribute"}
-                        </Button>
-                      </div>
+                        ))}
+                      {!suggestionRejectedWithNoneLeft && (
+                        <div className="mb-2">
+                          <Button
+                            variant="link"
+                            className="p-0"
+                            onClick={() =>
+                              setFilterExpanded((previous) => !previous)
+                            }
+                            data-testid="question-feed-filter-toggle"
+                          >
+                            {filterExpanded
+                              ? "Hide filters"
+                              : "Filter by attribute"}
+                          </Button>
+                        </div>
+                      )}
                       {hiddenCount > 0 && (
                         <p
                           className="text-muted small"
@@ -935,7 +1064,18 @@ export function QuestionFeed() {
                       }
                       onRateLimited={() => setRateLimited(true)}
                       voteSurface="question-feed"
+                      onArtistConfirmed={setConfirmedArtistName}
                     />
+                    {confirmedArtistName != null && (
+                      <div
+                        className="mt-2 text-muted small"
+                        data-testid="question-feed-artist-support"
+                      >
+                        <ArtistSupportLink artistName={confirmedArtistName}>
+                          Art by {confirmedArtistName} - support them
+                        </ArtistSupportLink>
+                      </div>
+                    )}
                     <div className="mt-3">
                       <Button variant="outline-secondary" onClick={skip}>
                         Skip

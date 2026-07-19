@@ -13,8 +13,11 @@ import {
   cardDocumentsOneResult,
   cardDocumentsSixResults,
   cardDocumentsThreeResults,
+  cardDocumentsWithResolvedPrintingMatch,
   defaultHandlers,
+  searchResultsDegradedPrinting,
   searchResultsOneResult,
+  searchResultsResolvedPrintingMatch,
   searchResultsSixResults,
   searchResultsThreeResults,
   sourceDocumentsOneResult,
@@ -559,5 +562,163 @@ test.describe("CardSlot", () => {
 
     // Should automatically deselect the invalid image and select the first result
     await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
+  });
+
+  test.describe("right-click context menu (Proposal C part (a))", () => {
+    test("right-clicking a CardSlot opens the same actions as the 3-dot dropdown, positioned at the cursor", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsThreeResults,
+        sourceDocumentsOneResult,
+        searchResultsThreeResults,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(
+        page,
+        `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
+      );
+      await expect(page.getByText(cardDocument1.name)).toBeVisible();
+
+      const slot = page.getByTestId("front-slot0");
+      await slot.click({ button: "right" });
+
+      const contextMenu = page.getByTestId("card-slot-context-menu");
+      await expect(contextMenu).toBeVisible();
+      await expect(contextMenu.getByText("Change Query")).toBeVisible();
+      await expect(contextMenu.getByText("Duplicate")).toBeVisible();
+      await expect(contextMenu.getByText("Delete")).toBeVisible();
+    });
+
+    test("selecting Delete from the context menu deletes the slot, matching the 3-dot dropdown's own Delete", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsThreeResults,
+        sourceDocumentsOneResult,
+        searchResultsThreeResults,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(
+        page,
+        `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
+      );
+      await expect(page.getByText(cardDocument1.name)).toBeVisible();
+
+      await page.getByTestId("front-slot0").click({ button: "right" });
+      await page
+        .getByTestId("card-slot-context-menu")
+        .getByText("Delete")
+        .click();
+
+      await expectCardSlotToNotExist(page, 1);
+    });
+
+    test("clicking outside the context menu closes it without triggering an action", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsThreeResults,
+        sourceDocumentsOneResult,
+        searchResultsThreeResults,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(
+        page,
+        `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
+      );
+      await expect(page.getByText(cardDocument1.name)).toBeVisible();
+
+      await page.getByTestId("front-slot0").click({ button: "right" });
+      await expect(page.getByTestId("card-slot-context-menu")).toBeVisible();
+
+      // A plain left-click well away from the menu and the slot itself.
+      await page.mouse.click(5, 5);
+
+      await expect(
+        page.getByTestId("card-slot-context-menu")
+      ).not.toBeVisible();
+      await expectCardSlotToExist(page, 1);
+    });
+  });
+
+  // Item (c) of the frontend-polish package - the same RequestedPrintingBadge.tsx component
+  // DisplayPage.tsx's rail header shows (see its own equivalent tests in DisplayPage.spec.ts),
+  // now also mounted directly on the standard editor's own slots.
+  test.describe("requested-printing badge", () => {
+    test("shows the plain style for a resolved, non-degraded printing-specific import", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsWithResolvedPrintingMatch,
+        sourceDocumentsOneResult,
+        searchResultsResolvedPrintingMatch,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(page, "1 Lightning Bolt (2ED) 162");
+
+      const badge = page
+        .getByTestId("front-slot0")
+        .getByTestId("requested-printing-badge");
+      await expect(badge).toBeVisible();
+      await expect(badge).toContainText("2ED 162");
+      await expect(badge).toHaveAttribute("data-degraded", "false");
+      await expect(badge).not.toHaveAttribute("title");
+    });
+
+    test("switches to the degraded style when the backend reports the printing filter as degraded", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsThreeResults,
+        sourceDocumentsOneResult,
+        searchResultsDegradedPrinting,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(page, "1 my search query (XYZ) 999");
+
+      const badge = page
+        .getByTestId("front-slot0")
+        .getByTestId("requested-printing-badge");
+      await expect(badge).toBeVisible();
+      await expect(badge).toContainText("XYZ 999");
+      await expect(badge).toHaveAttribute("data-degraded", "true");
+      await expect(badge).toHaveAttribute("title", /closest available match/);
+    });
+
+    test("shows nothing when the slot's query names no specific printing", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsThreeResults,
+        sourceDocumentsOneResult,
+        searchResultsThreeResults,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(page, "my search query");
+
+      await expect(page.getByTestId("front-slot0")).toBeVisible();
+      await expect(
+        page.getByTestId("front-slot0").getByTestId("requested-printing-badge")
+      ).toHaveCount(0);
+    });
   });
 });

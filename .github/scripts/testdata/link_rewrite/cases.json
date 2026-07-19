@@ -1,0 +1,95 @@
+{
+  "//": "Shared link-rewrite fixture cases, run by .github/scripts/tests/test_publish_wiki_link_rewrite.py against publish_wiki.py's transform_links() - the ONLY link-rewrite implementation in this repo (single-transform architecture, docs/proposals/proposal-i-docs-as-site-source.md). sourcePath is relative to ./fixture_repo, resolved against ./map.json (a small, fixed, standalone mapping — not the real wiki-publish-map.json). transform_links() is called twice per case, once per MODE: wiki-publish mode (repo_to_site=None, publish_wiki.py's own use) and site-emit mode (repo_to_site=the built map, publish_site.py's use) — both modes are the SAME function, just given different arguments, so this isn't testing two implementations anymore, it's testing the one function's two legitimate output shapes. Cases where both modes produce the same output assert a single `expected`; cases where they legitimately diverge (a wiki-only target: wiki mode links to the same-wiki page name, site mode links to the external wiki URL, since the site doesn't host that page) assert a `wikiModeExpected`/`siteModeExpected` pair instead of pretending the divergence away. `expectError: true` means this link must be reported as unresolvable in BOTH modes, with the original text left unchanged in the output — never a silent pass-through.",
+  "cases": [
+    {
+      "name": "fenced code block is never touched, even containing link-shaped text",
+      "sourcePath": "docs/site-doc.md",
+      "input": "Some text.\n\n```\n[[wiki-doc.md]]\n```\n\nMore text.",
+      "expected": "Some text.\n\n```\n[[wiki-doc.md]]\n```\n\nMore text."
+    },
+    {
+      "name": "inline code is never touched",
+      "sourcePath": "docs/site-doc.md",
+      "input": "See `[[wiki-doc.md]]` for the raw syntax.",
+      "expected": "See `[[wiki-doc.md]]` for the raw syntax."
+    },
+    {
+      "name": "image links are never touched (negative lookbehind on !)",
+      "sourcePath": "docs/site-doc.md",
+      "input": "![alt text](wiki-doc.md)",
+      "expected": "![alt text](wiki-doc.md)"
+    },
+    {
+      "name": "external https URL is left untouched",
+      "sourcePath": "docs/site-doc.md",
+      "input": "[Example](https://example.com)",
+      "expected": "[Example](https://example.com)"
+    },
+    {
+      "name": "mailto: link is left untouched",
+      "sourcePath": "docs/site-doc.md",
+      "input": "[Email](mailto:test@example.com)",
+      "expected": "[Email](mailto:test@example.com)"
+    },
+    {
+      "name": "anchor-only link (#fragment, no path) is left untouched",
+      "sourcePath": "docs/site-doc.md",
+      "input": "[Jump](#section)",
+      "expected": "[Jump](#section)"
+    },
+    {
+      "name": "a [[bracketed]] literal with no .md and no / is left untouched (e.g. a TOML table name)",
+      "sourcePath": "docs/site-doc.md",
+      "input": "[[routes]]",
+      "expected": "[[routes]]"
+    },
+    {
+      "name": "wikilink to a wiki-only target diverges by mode: same-wiki link vs. external wiki URL",
+      "sourcePath": "docs/site-doc.md",
+      "input": "[[wiki-doc.md]]",
+      "wikiModeExpected": "[Wiki-Doc](Wiki-Doc)",
+      "siteModeExpected": "[Wiki-Doc](https://github.com/ProxyPrints/ProxyPrints.github.io/wiki/Wiki-Doc)"
+    },
+    {
+      "name": "markdown link with custom display text to a wiki-only target preserves the custom text in both modes",
+      "sourcePath": "docs/site-doc.md",
+      "input": "[Custom Text](wiki-doc.md)",
+      "wikiModeExpected": "[Custom Text](Wiki-Doc)",
+      "siteModeExpected": "[Custom Text](https://github.com/ProxyPrints/ProxyPrints.github.io/wiki/Wiki-Doc)"
+    },
+    {
+      "name": "link to a real file that isn't in the map at all resolves identically in both modes: a GitHub blob URL",
+      "sourcePath": "docs/site-doc.md",
+      "input": "[Unmapped](unmapped-real.md)",
+      "expected": "[Unmapped](https://github.com/ProxyPrints/ProxyPrints.github.io/blob/master/docs/unmapped-real.md)"
+    },
+    {
+      "name": "link to a path that doesn't exist anywhere is an error in both modes, text left unchanged",
+      "sourcePath": "docs/site-doc.md",
+      "input": "[Nowhere](does-not-exist.md)",
+      "expected": "[Nowhere](does-not-exist.md)",
+      "expectError": true
+    },
+    {
+      "name": "relative path resolution from a subdirectory (../) lands on the correct target",
+      "sourcePath": "docs/sub/nested.md",
+      "input": "[[../wiki-doc.md]]",
+      "wikiModeExpected": "[Wiki-Doc](Wiki-Doc)",
+      "siteModeExpected": "[Wiki-Doc](https://github.com/ProxyPrints/ProxyPrints.github.io/wiki/Wiki-Doc)"
+    },
+    {
+      "name": "a #fragment on a link to a mapped page is dropped, not carried through, in either mode",
+      "sourcePath": "docs/site-doc.md",
+      "input": "[Section](wiki-doc.md#some-section)",
+      "wikiModeExpected": "[Section](Wiki-Doc)",
+      "siteModeExpected": "[Section](https://github.com/ProxyPrints/ProxyPrints.github.io/wiki/Wiki-Doc)"
+    },
+    {
+      "name": "a site-only target (no \"wiki\" key in the map at all) diverges by mode: wiki mode falls back to a blob URL (it's wiki-target-blind by design, repo_to_site=None), site mode resolves the real site route",
+      "sourcePath": "docs/wiki-doc.md",
+      "input": "[[site-only-doc.md]]",
+      "wikiModeExpected": "[site-only-doc.md](https://github.com/ProxyPrints/ProxyPrints.github.io/blob/master/docs/site-only-doc.md)",
+      "siteModeExpected": "[/guide/site-only](/guide/site-only)"
+    }
+  ]
+}

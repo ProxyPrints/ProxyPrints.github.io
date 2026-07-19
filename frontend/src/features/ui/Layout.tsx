@@ -6,8 +6,12 @@ import Container from "react-bootstrap/Container";
 import { Provider } from "react-redux";
 
 import { ContentMaxWidth, NavbarHeight } from "@/common/constants";
-import { getLocalStorageFavorites } from "@/common/cookies";
+import {
+  getLocalStorageFavorites,
+  getLocalStorageManualOverrides,
+} from "@/common/cookies";
 import { useAppDispatch } from "@/common/types";
+import { useChunkErrorRecovery } from "@/common/useChunkErrorRecovery";
 import { useBackendSetter } from "@/features/backend/useBackendSetter";
 import { ClientSearchContextProvider } from "@/features/clientSearch/clientSearchContext";
 import { clientSearchService } from "@/features/clientSearch/clientSearchService";
@@ -17,9 +21,11 @@ import {
 } from "@/features/download/download";
 import { Modals } from "@/features/modals/Modals";
 import { pdfRenderService } from "@/features/pdf/pdfRenderService";
+import { CryptoSessionProvider } from "@/features/savedDecks/cryptoSession";
 import { Toasts } from "@/features/toasts/Toasts";
 import ProjectNavbar from "@/features/ui/Navbar";
 import { setAllFavoriteRenders } from "@/store/slices/favoritesSlice";
+import { setAllManualOverrides } from "@/store/slices/projectSlice";
 import store from "@/store/store";
 
 const OverscrollProvider = styled(Provider)`
@@ -64,6 +70,7 @@ export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
   const downloadContext: DownloadContext = new Queue(10, 50);
   const [forceUpdateValue, forceUpdate] = useReducer((x: number) => x + 1, 0);
   useBackendSetter();
+  useChunkErrorRecovery();
   const dispatch = useAppDispatch();
 
   /**
@@ -74,6 +81,10 @@ export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
     if (Object.keys(favorites).length > 0) {
       dispatch(setAllFavoriteRenders(favorites));
     }
+    const manualOverrides = getLocalStorageManualOverrides();
+    if (Object.keys(manualOverrides).length > 0) {
+      dispatch(setAllManualOverrides(manualOverrides));
+    }
     clientSearchService.initialiseWorker();
     pdfRenderService.initialiseWorker();
   }, []);
@@ -83,10 +94,12 @@ export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
       <ClientSearchContextProvider
         value={{ clientSearchService, forceUpdate, forceUpdateValue }}
       >
-        <Toasts />
-        <Modals />
-        <ProjectNavbar />
-        {children}
+        <CryptoSessionProvider>
+          <Toasts />
+          <Modals />
+          <ProjectNavbar />
+          {children}
+        </CryptoSessionProvider>
       </ClientSearchContextProvider>
     </DownloadContextProvider>
   );

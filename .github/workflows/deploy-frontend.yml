@@ -1,10 +1,23 @@
 name: Deploy frontend to GitHub Pages
 
+# docs/** and the publish map trigger this too: a step below runs
+# .github/scripts/publish_site.py (Python - the single owner of ALL
+# link-rewrite/extraction logic, see docs/proposals/proposal-i-docs-as-
+# site-source.md) BEFORE `npm run build`, writing pre-transformed markdown
+# for every "site"-targeted docs/ page into frontend/generated-docs/ for
+# src/pages/guide/[[...slug]].tsx to read at build time. Without this
+# trigger, a docs/-only PR would regenerate the wiki (docs-wiki-
+# publish.yml) while the site silently stayed stale.
+
 on:
   push:
     branches: [master]
     paths:
       - "frontend/**"
+      - "docs/**"
+      - ".github/wiki-publish-map.json"
+      - ".github/scripts/publish_wiki.py"
+      - ".github/scripts/publish_site.py"
       - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch:
 
@@ -32,6 +45,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - name: Emit site docs from docs/ (single-transform Python pipeline)
+        working-directory: .
+        run: python3 .github/scripts/publish_site.py . frontend/generated-docs
+
       - run: npm ci
 
       - run: npm run build
@@ -41,6 +58,7 @@ jobs:
           NEXT_PUBLIC_IMAGE_BUCKET_URL: https://img.proxyprints.ca
           NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID }}
           NEXT_PUBLIC_GOOGLE_DRIVE_APP_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_DRIVE_APP_ID }}
+          NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED: ${{ vars.NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED }}
 
       - uses: actions/upload-pages-artifact@v3
         with:

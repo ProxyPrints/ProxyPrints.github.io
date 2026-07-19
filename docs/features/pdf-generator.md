@@ -78,6 +78,44 @@ a `HEAD` request had is gone — the body was going to be fetched by `<Image>`
 anyway on a hit, so fetching it once ourselves is a real efficiency win, not
 just a correctness one.
 
+## Full-resolution fetches are paced + retrying (mass export-image-failure incident)
+
+A large real export (~104 cards) failed almost every full-resolution image fetch, all reporting
+as blank in the confirm dialog. Root cause: the image-CDN Worker's full-resolution tier shares
+ONE global 3-req/s rate limiter across every caller (see [[image-cdn.md]]'s "What it does"
+section), enforced server-side with its own internal retry/backoff - but nothing on the CLIENT
+paced how many concurrent full-resolution fetches it fired at once.
+`@react-pdf/renderer`'s own internal scheduler resolves every card's `<Image src={async () => ...}>` callback with its own concurrency, entirely outside this codebase's control - a large
+export could trigger dozens of simultaneous fetches, each independently exhausting its own
+server-side retry budget under that contention and coming back as a permanent per-card failure.
+
+**Fix** (`pdfImage.ts`'s `fetchFullResolutionImageAsBlob`, used by both `getPDFImageURL`'s and
+`getPDFImageBlob`'s full-resolution branches - the risk applies to any full-resolution export,
+not just Proposal B's bleed-normalized cards):
+
+- A shared `Semaphore` (`common/semaphore.ts`, new - a plain acquire/release concurrency gate for
+  gating an unbounded stream of ad-hoc calls from a scheduler this codebase doesn't control,
+  distinct from `concurrencyLimit.ts`'s `mapWithConcurrencyLimit`, which needs a known, finite
+  item list) caps client-side full-resolution fetches to `FULL_RESOLUTION_FETCH_CONCURRENCY = 3`,
+  matching the server's own limit.
+- Retries a 429 or 5xx (transient) up to `FULL_RESOLUTION_FETCH_MAX_RETRIES = 3` times with
+  exponential backoff + jitter - a non-retryable 4xx (a real dead link) still fails on the first
+  attempt, so a genuinely broken image doesn't burn retry budget that delays every other card
+  queued behind the concurrency gate.
+- **Live progress**: a large export paced to 3 req/s can now take several minutes (honestly
+  reported, not hidden) - `PDFProps.reportImageProgress` (mirroring the existing
+  `reportImageFailure` pattern, threaded through `pdf.worker.ts` → comlink's `onImageProgress` →
+  `pdfRenderService` → `PDFGenerator.tsx`) drives a "Fetching images: N/M" indicator so the wait
+  reads as working, not hung. `total` is an approximation (unique card count, not slot count - a
+  duplicate card in the deck fetches once per slot, so `completed` can end up slightly ahead of
+  it), intentionally not presented as an exact fraction for that reason.
+- **In-app confirm modal, not `window.confirm()`**: the incident's own screenshot showed
+  Firefox's "allow notifications?" anti-spam chrome sitting next to the native confirm dialog -
+  a browser can silently start auto-suppressing FUTURE `window.confirm()` calls on an origin once
+  enough of them fire near other browser-level prompts, which would turn this safeguard off with
+  no visible warning. `ImageFailureConfirmModal` (a real React-rendered Bootstrap `Modal`,
+  `PDFGenerator.tsx`) can't be affected by that heuristic at all.
+
 ## "HEAD request fails" console noise — historical, no longer applies
 
 A cross-session report once flagged failed `HEAD` requests to
@@ -87,6 +125,18 @@ object, not a clean 404) that the existing bucket→worker fallback already
 absorbed harmlessly. The bug-4 fix above replaced the `HEAD` check with a
 real `GET`, so this specific console-noise pattern no longer occurs — kept
 here as a historical note in case an old bug report referencing it resurfaces.
+
+## Proposal B — export-time per-side bleed normalization
+
+Full spec + approval record: `docs/proposals/proposal-b-bleed-normalization.md`. Core algorithm (`bleedNormalize.ts`: probe-median measurement per side, IQR ambiguity, fallback + manual-override plan resolution) and canvas synthesis (`bleedExtension.ts`: pure crop/extend geometry + `normalizeCardBleed`'s decode→measure→plan→draw→encode→release pipeline) are built and unit tested (12 tests across the two modules, plus 4 new `pdfImage.test.ts` tests for the `getPDFImageBlob` split). Wired into `PDF.tsx`'s `PDFCardImage`: full-resolution Google Drive/local-file images run through normalization instead of the old uniform proportional rescale; SCM mode and the thumbnail tiers are untouched (out of scope per the proposal doc).
+
+**Shipped and tested**: the measurement/plan/extension math end-to-end, real per-card wiring in the standard (non-SCM) render path, `PDFProps.bleedPriors`/`bleedOverrides` (both optional maps keyed by card identifier, safely defaulting to `"unresolved"`/`"auto"` when absent), the main-thread batch resolution of `bleedPriors` from `APIGetTagConsensus` (bounded concurrency, per-card failure tolerance — `frontend/src/common/concurrencyLimit.ts` + `bleedPriorResolution.ts`), the manual-override UI (Auto/Force bleed/Force trimmed per card, `PDFGenerator.tsx`'s "Bleed Overrides" panel) with its `projectSlice`/localStorage persistence, and the hedged WYSIWYG preview badge ("bleed will be generated", `PagePreview.tsx` + `willLikelyGenerateBleed`). **Proposal B is complete end to end** — see `docs/proposals/proposal-b-bleed-normalization.md`'s "Shipped vs. not yet built" for the full per-PR breakdown.
+
+**Not yet built** (both intentionally out of scope, not silently dropped): the merge-time server-side calibration pass for the four named measurement constants, and the XML round-trip field for a persisted override (flagged per the owner's own instruction, not built).
+
+`PDFCardImage`'s effective-dpi derivation (`imageDPI` when it's set and lower than `cardDocument.dpi`, else `cardDocument.dpi`) handles the case where a lower `imageDPI` setting makes the Worker serve a downscaled image - measurement always converts px→mm against the resolution of what was actually decoded, not assumed.
+
+**A real crash caught only by running `tests/PDFGenerator.spec.ts`, not by `tsc`/`jest`**: the first version skipped the old proportional rescale by setting `transform: "none"` when normalized. `@react-pdf/renderer`'s own stylesheet parser (`@react-pdf/stylesheet`) has a bug where any single-token transform value throws deep inside its internals (see `docs/lessons.md`'s entry for the exact mechanism) - and their custom reconciler doesn't propagate that as a rejection anywhere, so `pdf(...).toBlob()` just hangs forever with zero console/page error. All 3 download-path Playwright tests hung at their timeout; a stashed pre-Proposal-B baseline confirmed they pass cleanly with no other changes. Fixed by using `transform: undefined` (omitting the key) instead of `"none"` - all 4 tests pass afterward, matching baseline timing.
 
 ## Key files
 
@@ -98,8 +148,9 @@ here as a historical note in case an old bug report referencing it resurfaces.
   `failures` array — see bug 4), `pdfRenderService.ts`, `useRenderPDF.ts`
 - `frontend/src/features/pdf/PDFCanvasPreview.tsx`
 - `frontend/scripts/copy-pdf-worker.js`
-- `frontend/src/components/PDFGeneratorModal.tsx`,
-  `FinishedMyProject.tsx`, `ProjectEditor.tsx`
+- `frontend/src/features/pdf/PDFGeneratorModal.tsx`,
+  `frontend/src/features/export/FinishedMyProject.tsx`,
+  `frontend/src/components/ProjectEditor.tsx`
 - `frontend/tests/PDFGenerator.spec.ts` — mocked-CDN Playwright coverage for
   bug 4 (preview warning, confirm-gated download/cancel, and a real-image
   success-path regression check)

@@ -20,6 +20,7 @@ import finishSettingsReducer from "@/store/slices/finishSettingsSlice";
 import invalidIdentifiersReducer from "@/store/slices/invalidIdentifiersSlice";
 import modalsReducer from "@/store/slices/modalsSlice";
 import projectReducer from "@/store/slices/projectSlice";
+import savedDeckSessionReducer from "@/store/slices/savedDeckSessionSlice";
 import searchResultsReducer from "@/store/slices/searchResultsSlice";
 import searchSettingsReducer from "@/store/slices/searchSettingsSlice";
 import sourceDocumentsReducer from "@/store/slices/sourceDocumentsSlice";
@@ -42,6 +43,7 @@ const rootReducer = combineReducers({
   invalidIdentifiers: invalidIdentifiersReducer,
   fileDownloads: fileDownloadsReducer,
   favorites: favoritesReducer,
+  savedDeckSession: savedDeckSessionReducer,
 });
 
 //# region middleware

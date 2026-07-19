@@ -278,7 +278,7 @@ for low-res / incorrect-info yet).
 
 Two more gaps found live during the first production OAuth attempt
 (2026-07-15), both now baked into the checked-in `docker/nginx/nginx.conf`
-and `MPCAutofill/settings.py` so a fresh checkout gets them automatically —
+and `MPCAutofill/MPCAutofill/settings.py` so a fresh checkout gets them automatically —
 documented here so the reasoning survives if either file is ever touched:
 
 - **Missing `/accounts/` proxy route.** `nginx.conf` only had `location`
@@ -315,7 +315,7 @@ documented here so the reasoning survives if either file is ever touched:
   (report review deliberately absent - see "Moderation tab" above),
   `cardpicker/views.py` (whoami / reportCard / moderationQueue /
   moderationDrives / moderationDriveCards / moderationRemoveCard /
-  moderationRemoveDrive), `accounts/adapter.py`, `MPCAutofill/settings.py`.
+  moderationRemoveDrive), `accounts/adapter.py`, `MPCAutofill/MPCAutofill/settings.py`.
 - Frontend: `features/reporting/ReportCardPanel.tsx`,
   `features/moderation/AuthWidget.tsx` (Discord-branded login button) +
   `ModerationTab.tsx` (Reports/Drives sub-tab switcher) + `ReportsPanel.tsx`
@@ -330,14 +330,16 @@ documented here so the reasoning survives if either file is ever touched:
 
 ## Known gaps / follow-ups
 
-- Live Discord OAuth verified working end-to-end in production 2026-07-15
-  (server-side plumbing via `curl` simulation, then a real moderator's
-  browser round-trip) — see "nginx routing and proxy headers for
-  `/accounts/`" above.
 - Discord guild-role sync for a federation-wide moderator roster (see "Who is
   a moderator").
 - Federation export/import of moderation verdicts is v1.1
   ([[../federation-v1.md]]) — explicitly out of scope here.
 - No consequences yet for resolved `low-res` / `incorrect-info`.
 - The rate limiter shares the existing single-gunicorn-worker in-process-cache
-  caveat ([[printing-tags.md]]).
+  caveat (documented as a code comment on `post_submit_printing_tag`,
+  `cardpicker/views.py:860-863` — not currently written up in any doc).
+
+**Verified, not a gap**: live Discord OAuth working end-to-end in production
+2026-07-15 (server-side plumbing via `curl` simulation, then a real
+moderator's browser round-trip) — see "nginx routing and proxy headers for
+`/accounts/`" above.

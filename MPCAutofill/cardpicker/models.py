@@ -1042,6 +1042,122 @@ class CardScanLog(models.Model):
         return f"card={self.card_id} anonymous_id={self.anonymous_id} skip_reason={self.skip_reason}"
 
 
+class SavedDeckKind(models.TextChoices):
+    """
+    See docs/proposals/proposal-g-user-accounts-saved-decks.md §3/decision 7. DECK rows are
+    what a user explicitly named and saved, subject to SAVED_DECK_MAX_PER_USER; SNAPSHOT rows
+    are the load-flow's auto-generated safety copies, deliberately outside that cap and pruned
+    to a fixed 5-per-user FIFO ring by the view layer (2/saveDeck/) rather than by a setting -
+    the ring size is an implementation safety valve, not a user-facing quota.
+    """
+
+    DECK = "deck"
+    SNAPSHOT = "snapshot"
+
+
+class UserCryptoProfile(models.Model):
+    """
+    Per-user zero-knowledge crypto parameters (docs/proposals/proposal-g-user-accounts-saved-decks.md
+    §8). Created at first save, alongside that first SavedDeck row. Everything stored here is
+    either public-safe (a salt/iteration-count strengthens key derivation - it isn't secret) or
+    itself opaque ciphertext (the two wrapped-master-key slots) - the server can retain all of
+    it forever without ever being able to derive or unwrap the actual master key.
+
+    TWO independent wrapped copies of the same master key: one wrapped by the user's
+    passphrase-derived key, one wrapped by their user-held recovery key. Both wrap the *same*
+    master key, so a passphrase change only re-wraps the passphrase slot (the recovery slot,
+    generated earlier, keeps unwrapping the same master key correctly - see §8's "Recovery key"
+    section). Losing both means every owned SavedDeck's ciphertext is permanently unreadable -
+    see §8's account-reset flow, which deletes rather than attempts recovery.
+    """
+
+    owner = models.OneToOneField(to=User, on_delete=models.CASCADE, related_name="saved_deck_crypto_profile")
+    # PBKDF2-SHA256 parameters. Not secret - salt defends against precomputation, not disclosure.
+    # iterations is stored per-profile (not read from a live setting) so raising the default
+    # later never invalidates an existing user's already-derived key.
+    salt = models.BinaryField()
+    kdf_iterations = models.PositiveIntegerField()
+    passphrase_wrapped_master_key = models.BinaryField()
+    passphrase_wrapped_master_key_nonce = models.BinaryField()
+    recovery_wrapped_master_key = models.BinaryField()
+    recovery_wrapped_master_key_nonce = models.BinaryField()
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"crypto profile for owner={self.owner_id}"
+
+
+class SavedDeck(models.Model):
+    """
+    A user's saved editor project, encrypted client-side (docs/proposals/proposal-g-user-
+    accounts-saved-decks.md §8 - supersedes this model's originally-specified plaintext
+    `name`/`state` fields). Deliberately a fresh model, not a resurrection of the dead
+    Project/ProjectMember pair above (see the proposal's §3 "note on prior art" for why - a
+    normalized per-card-row schema is a poor match for the frontend's actual Redux project
+    shape, and keeping a Django schema in lockstep with every future frontend change is the
+    wrong trade).
+
+    `ciphertext` is the ENTIRE frontend Project shape, including the deck's own title - the
+    server never sees a plaintext name anywhere, and therefore cannot enforce name-uniqueness
+    (that becomes a client-side-only check - see §8's Consequences). `wrapped_dek` is this
+    deck's own AES-256-GCM key, wrapped by the owner's master key (see UserCryptoProfile) -
+    every deck has its own DEK so a passphrase change only ever re-wraps small key material,
+    never re-encrypts any deck body. There is no separate "salt reference" field: the owner FK
+    already identifies which UserCryptoProfile (and therefore which salt/iteration-count) this
+    row's wrapped_dek was wrapped under.
+
+    Named "SavedDeck", not "Project", specifically to avoid a third meaning of "Project" in this
+    codebase (the frontend's own Project TypeScript type, and the legacy backend Project model
+    above, are the other two).
+    """
+
+    key = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    owner = models.ForeignKey(to=User, on_delete=models.CASCADE, related_name="saved_decks")
+    kind = models.CharField(max_length=20, choices=SavedDeckKind.choices, default=SavedDeckKind.DECK)
+    # opaque to the backend by design - never decrypted, inspected, or searched server-side.
+    ciphertext = models.BinaryField()
+    ciphertext_nonce = models.BinaryField()
+    wrapped_dek = models.BinaryField()
+    wrapped_dek_nonce = models.BinaryField()
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"SavedDeck {self.key} ({self.kind}): owner={self.owner_id}"
+
+
+class LandsAmbiguousResidue(models.Model):
+    """
+    Routing data, not votes (docs/features/catalog-completion-plan.md's Part 4 addendum,
+    2026-07-19): one row per LANDS card where artist extraction succeeded but phash still
+    couldn't pick a unique winner within the artist-narrowed candidate set
+    (local_lands_identify.identify_land_printing's "phash-*" skip reasons). The artist match
+    already paid the real cost of narrowing a name's full candidate pool (sometimes hundreds of
+    printings, see BASIC_LAND_NAMES) down to a handful sharing that artist - throwing that work
+    away and letting the human funnel start from the full pool again wastes it. Persisted here so
+    a future funnel surface can serve "which of these N?" directly from `candidate_pks` instead
+    of recomputing narrowing from scratch. Explicitly NOT a vote: no `AbstractWeightedVote`
+    subclass, no consensus/resolution-gate interaction, no anonymous_id - a resolver skimming
+    votes for this card sees nothing here, by design, until something explicitly reads this table.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="lands_ambiguous_residue")
+    run_id = models.CharField(max_length=64, db_index=True)
+    artist_name = models.CharField(max_length=200)
+    # the artist-matched surviving candidate set (CanonicalCard pks) - what the human funnel
+    # would narrow a "which of these?" prompt to, instead of the name's full candidate pool.
+    candidate_pks = models.JSONField()
+    # {str(candidate_pk): hamming_distance} for every candidate in candidate_pks that had a
+    # computable hash - lets a future consumer re-rank without recomputing phash distances,
+    # and shows directly why phash couldn't pick a winner (e.g. two candidates within margin).
+    phash_distances = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"LandsAmbiguousResidue card={self.card_id} artist={self.artist_name!r} candidates={self.candidate_pks}"
+
+
 __all__ = [
     "Faces",
     "CardTypes",
@@ -1060,4 +1176,8 @@ __all__ = [
     "ProjectMember",
     "PilotRunLedger",
     "CardScanLog",
+    "SavedDeckKind",
+    "SavedDeck",
+    "UserCryptoProfile",
+    "LandsAmbiguousResidue",
 ]

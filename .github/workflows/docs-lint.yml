@@ -1,0 +1,82 @@
+name: Docs lint
+
+# Mechanical checks over docs/: internal link resolution (both [[wiki-link]]
+# and markdown [text](path) styles) and backtick-quoted repo-path
+# existence. Annotates failures inline (::error file=...,line=...::) —
+# NEVER auto-fixes anything, and never touches doc content.
+#
+# KNOWN LIMITATION, stated plainly rather than buried: this can only catch
+# BROKEN links/paths. It cannot tell a stale STATUS CLAIM ("not yet built"
+# for something now shipped, a date stamp that's drifted, a claim
+# contradicted by a sibling doc) from a true one — that class of rot is
+# exactly what the quarterly judgment coherence pass exists for; see
+# docs/documentation-process.md. This workflow and that pass are
+# deliberately two different tools for two different problems.
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/scripts/**"
+      - ".github/wiki-publish-map.json"
+      - ".github/workflows/docs-lint.yml"
+      - "readme.md"
+  schedule:
+    # Weekly, independent of any PR — catches rot introduced by a change
+    # OUTSIDE docs/ (e.g. a component move that a doc's path reference
+    # didn't follow), which a docs/**-scoped PR trigger alone would miss.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint docs/ (links + path references)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run docs lint
+        run: python3 .github/scripts/docs_lint.py
+
+  link-rewrite-parity:
+    name: Link-rewrite parity fixtures (publish_wiki.py transform_links)
+    # Runs the shared fixture set (.github/scripts/testdata/link_rewrite/)
+    # through both modes of publish_wiki.py's transform_links() - the
+    # SINGLE link-rewrite implementation in this repo (single-transform
+    # architecture, docs/proposals/proposal-i-docs-as-site-source.md).
+    # frontend/src/features/guide/docsSite.test.ts separately smoke-tests
+    # that publish_site.py's emitted artifacts exist and render, via
+    # test-frontend.yml. This job needs nothing beyond stdlib Python -
+    # publish_wiki.py has no third-party dependencies.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run publish_wiki.py link-rewrite parity fixtures
+        run: python3 .github/scripts/tests/test_publish_wiki_link_rewrite.py
+
+  readme-parity:
+    name: readme.md parity (publish_readme.py)
+    # readme.md is generated-and-COMMITTED, not gitignored like the site
+    # emit — GitHub renders it directly from the default branch with no
+    # build step in between (docs/proposals/proposal-i-readme-pipeline.md
+    # §2). This job is the correctness gate in place of a build-time
+    # regenerate: run the emit fresh and fail the PR if the committed file
+    # has drifted from it, so a hand-edit to readme.md (should have gone
+    # into a docs/ source region) or a source-region edit whose author
+    # forgot to rerun the script are both caught here instead of shipping
+    # silently stale.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run publish_readme.py unit + parity tests
+        run: python3 .github/scripts/tests/test_publish_readme.py
+      - name: Regenerate readme.md and diff against the committed file
+        run: |
+          cp readme.md /tmp/readme-committed.md
+          python3 .github/scripts/publish_readme.py .
+          if ! diff -u /tmp/readme-committed.md readme.md; then
+            echo "::error::readme.md is out of date - rerun \`python3 .github/scripts/publish_readme.py .\` and commit the result"
+            exit 1
+          fi

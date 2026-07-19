@@ -11,7 +11,50 @@ from django.urls import reverse
 
 from cardpicker import views
 from cardpicker.tests.constants import Cards, DummyImportSite, Sources
-from cardpicker.tests.factories import SourceFactory, TagFactory
+from cardpicker.tests.factories import (
+    CanonicalArtistFactory,
+    CanonicalCardFactory,
+    CanonicalExpansionFactory,
+    CardFactory,
+    SourceFactory,
+    TagFactory,
+)
+
+# see test_local_identify_printing_tags.py's identical fixture for the full rationale -
+# factory.Sequence counters are process-global across the whole pytest run, so any test using
+# `populated_database` (function-scoped, recreates all_sources/all_cards fresh every call)
+# permanently shifts sequence-derived snapshot values for every test that runs after it in this
+# file (TestGetSampleCards, TestNewCardsFirstPages, TestNewCardsPage, TestPostExploreSearchResults
+# all hardcode artist names like "Artist 102"). Only the one new E-2 test below needs insulating -
+# existing tests in this file rely on the ambient cumulative count and must not be touched.
+#
+# Scoping this to a single test is non-trivial: `TestPostEditorSearchResults`'s own
+# `autouse_populated_database` (class-scoped autouse) always instantiates before a same-scope
+# fixture the test merely *requests* - by the time a normal requested fixture's body runs,
+# `populated_database` has already consumed its sequence numbers, so a naive capture-before/
+# restore-after fixture requested by the test is too late to see the true "before" value.
+# Module-level autouse fixtures instantiate before class-level autouse fixtures even at the same
+# effective (function) scope, so this is deliberately autouse=True at module level - but it is a
+# no-op for every test except the one named below, so it has zero effect on the rest of this file.
+_SHARED_FACTORIES = [
+    CardFactory,
+    SourceFactory,
+    CanonicalArtistFactory,
+    CanonicalExpansionFactory,
+    CanonicalCardFactory,
+]
+_SEQUENCE_INSULATED_TESTS = {"test_only_the_actually_degraded_query_is_flagged_among_several"}
+
+
+@pytest.fixture(autouse=True)
+def _preserve_shared_factory_sequences_for_insulated_tests(request):
+    if request.node.name not in _SEQUENCE_INSULATED_TESTS:
+        yield
+        return
+    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
+    yield
+    for f, n in before.items():
+        f.reset_sequence(n, force=True)
 
 
 def snapshot_response(response: Response, snapshot: SnapshotAssertion):
@@ -395,8 +438,14 @@ class TestPostEditorSearchResults:
         snapshot_response(response, snapshot)
         assert response.status_code == 200
         assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        # a real hit under the filter - exact-match behaviour, never degraded
+        assert response.json()["degradedQueries"] == []
 
     def test_filter_by_expansion_code_no_results(self, client, snapshot):
+        # name kept for snapshot continuity, but this is no longer a "no results" case since
+        # E-2: a zero-hit printing-specific search now retries without the filter and still
+        # finds the card by name, flagging the query as degraded rather than returning nothing
+        # for a card that genuinely exists (just not under this particular printing).
         response = client.post(
             reverse(views.post_editor_search),
             {
@@ -407,7 +456,8 @@ class TestPostEditorSearchResults:
         )
         snapshot_response(response, snapshot)
         assert response.status_code == 200
-        assert response.json()["results"]["key1"] == []
+        assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["degradedQueries"] == ["key1"]
 
     def test_filter_by_collector_number(self, client, snapshot):
         response = client.post(
@@ -423,8 +473,11 @@ class TestPostEditorSearchResults:
         snapshot_response(response, snapshot)
         assert response.status_code == 200
         assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["degradedQueries"] == []
 
     def test_filter_by_collector_number_no_results(self, client, snapshot):
+        # see test_filter_by_expansion_code_no_results's comment - same E-2 behaviour change,
+        # name kept for snapshot continuity.
         response = client.post(
             reverse(views.post_editor_search),
             {
@@ -437,7 +490,8 @@ class TestPostEditorSearchResults:
         )
         snapshot_response(response, snapshot)
         assert response.status_code == 200
-        assert response.json()["results"]["key1"] == []
+        assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["degradedQueries"] == ["key1"]
 
     def test_filter_by_expansion_code_and_collector_number(self, client, snapshot):
         response = client.post(
@@ -458,6 +512,28 @@ class TestPostEditorSearchResults:
         snapshot_response(response, snapshot)
         assert response.status_code == 200
         assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["degradedQueries"] == []
+
+    def test_only_the_actually_degraded_query_is_flagged_among_several(self, client, snapshot):
+        # E-2: `degradedQueries` must track degradation per query, not globally - a batch
+        # request with one real hit-under-filter and one zero-hit-then-fallback must flag only
+        # the second key, never both just because at least one query in the batch degraded.
+        response = client.post(
+            reverse(views.post_editor_search),
+            {
+                "searchSettings": BASE_SEARCH_SETTINGS,
+                "queries": {
+                    "key1": {"query": Cards.BRAINSTORM.value.name, "cardType": "CARD", "expansionCode": "ICE"},
+                    "key2": {"query": Cards.BRAINSTORM.value.name, "cardType": "CARD", "expansionCode": "ZZZ"},
+                },
+            },
+            content_type="application/json",
+        )
+        snapshot_response(response, snapshot)
+        assert response.status_code == 200
+        assert response.json()["results"]["key1"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["results"]["key2"] == [Cards.BRAINSTORM.value.identifier]
+        assert response.json()["degradedQueries"] == ["key2"]
 
     def test_page_equal_to_max_size(self, client, monkeypatch, snapshot):
         monkeypatch.setattr("cardpicker.views.EDITOR_SEARCH_MAX_QUERIES", 2)

@@ -37,6 +37,19 @@ export interface PagePreviewSlotContent {
   /** Rendered as the slot's accessible name; also shown as a fallback label when imageUrl is
    * undefined. */
   name: string;
+  /** Proposal B PR-3's hedged preview badge - "bleed will be generated", never confirmed-fact
+   * framing, since the real per-side measurement only happens at export (see this file's own
+   * module comment). Precomputed by the caller (`willLikelyGenerateBleed` in bleedNormalize.ts)
+   * rather than derived here, so this component stays a dumb renderer with no knowledge of the
+   * bleed-normalization algorithm itself. `undefined` renders no badge (bleed normalization
+   * doesn't apply to this card, or its signal hasn't resolved yet - never guess). */
+  willGenerateBleed?: boolean;
+  /** Proposal H, item 1 (owner's hands-on review) - a slot with no resolved image (no card
+   * selected yet, or its thumbnail hasn't loaded) shows this instead of a blank hole, since the
+   * page IS the print artifact and a blank slot reads as "this position was skipped" rather than
+   * "still waiting on art". Typically the slot's own search query text; `undefined` when there's
+   * genuinely no query to show (e.g. a shared-cardback slot). Ignored when imageUrl is set. */
+  queryText?: string;
 }
 
 export interface PagePreviewProps {
@@ -55,6 +68,14 @@ export interface PagePreviewProps {
   showCutLines: boolean;
   /** Width, in real CSS px, of the preview panel this scales down to fit. */
   maxWidthPx: number;
+  /** Proposal H (docs/proposals/proposal-h-unified-display-page.md): when provided, each slot
+   * becomes clickable and calls back with its row-major index - the unified display page's own
+   * slot-select interaction. Omitted by existing callers (PDFGenerator's fast preview), which
+   * stay non-interactive with zero behavior change. */
+  onSlotClick?: (index: number) => void;
+  /** Row-major index of the slot to render with a selected outline. Ignored when onSlotClick
+   * isn't provided. */
+  selectedSlotIndex?: number;
 }
 
 export function PagePreview({
@@ -66,6 +87,8 @@ export function PagePreview({
   slots,
   showCutLines,
   maxWidthPx,
+  onSlotClick,
+  selectedSlotIndex,
 }: PagePreviewProps) {
   const layout = useMemo(
     () =>
@@ -121,10 +144,17 @@ export function PagePreview({
       >
         {layout.slots.map((slot, index) => {
           const content = slots[index];
+          const isSelected = onSlotClick != null && selectedSlotIndex === index;
           return (
             <div
               key={index}
               data-testid="page-preview-slot"
+              onClick={
+                onSlotClick != null ? () => onSlotClick(index) : undefined
+              }
+              role={onSlotClick != null ? "button" : undefined}
+              aria-label={onSlotClick != null ? content?.name : undefined}
+              aria-pressed={onSlotClick != null ? isSelected : undefined}
               style={{
                 position: "absolute",
                 left: slot.xMM + "mm",
@@ -133,19 +163,66 @@ export function PagePreview({
                 height: slotHeightMM + "mm",
                 overflow: "hidden",
                 background: "#d9d9d9",
+                cursor: onSlotClick != null ? "pointer" : undefined,
+                outline: isSelected ? "3px solid #df691a" : undefined,
+                outlineOffset: isSelected ? "-3px" : undefined,
               }}
             >
               {content?.imageUrl != null && (
                 <img
                   src={content.imageUrl}
                   alt={content.name}
+                  loading="lazy"
+                  decoding="async"
                   style={{
                     width: "100%",
                     height: "100%",
                     objectFit: "cover",
                     display: "block",
+                    pointerEvents: "none",
                   }}
                 />
+              )}
+              {content != null && content.imageUrl == null && (
+                <div
+                  data-testid="page-preview-empty-slot-label"
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "1mm",
+                    padding: "2mm",
+                    textAlign: "center",
+                    color: "#4a4a4a",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "2.6mm",
+                      fontWeight: 600,
+                      lineHeight: 1.2,
+                      overflowWrap: "anywhere",
+                    }}
+                  >
+                    {content.name}
+                  </span>
+                  {content.queryText != null && (
+                    <span
+                      style={{
+                        fontSize: "2.2mm",
+                        fontStyle: "italic",
+                        lineHeight: 1.2,
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {content.queryText}
+                    </span>
+                  )}
+                </div>
               )}
               {showCutLines && (
                 <div
@@ -160,6 +237,26 @@ export function PagePreview({
                     pointerEvents: "none",
                   }}
                 />
+              )}
+              {content?.willGenerateBleed === true && (
+                <div
+                  data-testid="page-preview-bleed-badge"
+                  style={{
+                    position: "absolute",
+                    left: "1mm",
+                    top: "1mm",
+                    padding: "0.5mm 1.5mm",
+                    fontSize: "2.2mm",
+                    lineHeight: 1.2,
+                    color: "white",
+                    background: "rgba(0, 0, 0, 0.65)",
+                    borderRadius: "1mm",
+                    pointerEvents: "none",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Bleed will be generated
+                </div>
               )}
             </div>
           );

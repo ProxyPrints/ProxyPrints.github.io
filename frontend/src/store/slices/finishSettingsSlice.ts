@@ -31,10 +31,15 @@ export const finishSettingsSlice = createAppSlice({
         ? !state.foil
         : false;
     },
+    /** Used when loading a saved deck - see projectSlice's `loadProject`. */
+    loadFinishSettings: (state, action: PayloadAction<FinishSettingsState>) => {
+      state.cardstock = action.payload.cardstock;
+      state.foil = action.payload.foil;
+    },
   },
 });
 
-export const { setCardstock, setFoil, toggleFoil } =
+export const { setCardstock, setFoil, toggleFoil, loadFinishSettings } =
   finishSettingsSlice.actions;
 export default finishSettingsSlice.reducer;
 

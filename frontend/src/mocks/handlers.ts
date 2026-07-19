@@ -130,6 +130,25 @@ export const cardDocumentsOneResult = http.post(buildRoute("2/cards/"), () =>
   )
 );
 
+// Same as cardDocumentsOneResult, but with a canonicalArtist set - cardDocument1 itself has none
+// (exercises the "Unknown" no-link path in CardDetailedViewModal's Artist Support Link row),
+// so this variant exists specifically to exercise the has-a-known-artist path.
+export const cardDocumentsOneResultWithCanonicalArtist = http.post(
+  buildRoute("2/cards/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [cardDocument1.identifier]: {
+            ...cardDocument1,
+            canonicalArtist: canonicalArtist1,
+          },
+        },
+      },
+      { status: 200 }
+    )
+);
+
 export const cardDocumentsThreeResults = http.post(buildRoute("2/cards/"), () =>
   HttpResponse.json(
     {
@@ -511,6 +530,30 @@ export const searchResultsForDFCMatchedCards1And4 = http.post(
       },
       { status: 200 }
     )
+);
+
+// A printing-specific search whose filter found nothing and was retried unfiltered - the backend
+// reports this via degradedQueries (schema_types.ts), which the requested-printing badge's
+// degraded-style variant is keyed off (Proposal H, Step 2 PR 2b). cardDocument1 carries no
+// canonicalCard data, so this is deliberately independent of the printing-confirmation affordance
+// fixtures above - the two instruments are tested in isolation from each other.
+export const searchResultsDegradedPrinting = http.post(
+  buildRoute("3/editorSearch/"),
+  () => {
+    const hashKey = computeSearchQueryHashKey({
+      query: "my search query",
+      cardType: CardType.Card,
+      expansionCode: "XYZ",
+      collectorNumber: "999",
+    });
+    return HttpResponse.json(
+      {
+        results: { [hashKey]: [cardDocument1.identifier] },
+        degradedQueries: [hashKey],
+      },
+      { status: 200 }
+    );
+  }
 );
 
 export const searchResultsServerError = http.post(
@@ -951,6 +994,31 @@ export const questionFeedConfirmSuggestion = http.get(
     )
 );
 
+// Singleton variant of questionFeedConfirmSuggestion above - candidates contains ONLY the
+// suggested printing, exercising the case where rejecting it at Level 1 empties the remaining
+// set entirely (see QuestionFeed.tsx's suggestionRejectedWithNoneLeft / the double-asking fix).
+export const questionFeedConfirmSuggestionSingleton = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "confirm_suggestion",
+          card: cardDocument1,
+          suggestedPrinting: printingCandidate1,
+          candidates: [printingCandidate1],
+          tagConfidence: { "Full Art": 0, Borderless: 0 },
+        },
+        remainingEstimate: questionFeedCounts({
+          total: 5,
+          confirmable: 5,
+          fresh: 0,
+        }),
+      },
+      { status: 200 }
+    )
+);
+
 export const questionFeedIdentifyPrinting = http.get(
   buildRoute("2/questionFeed/"),
   () =>
@@ -1075,6 +1143,27 @@ export const tagConsensusTwoUnresolvedTags = http.post(
             tagName: "Extended",
             resolvedPolarity: null,
             netPolarity: 0,
+            tally: [],
+          },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
+// Proposal B PR-3: a clearly-negative "appropriate-bleed" lean, resolved via
+// resolveSingleBleedPrior to prior "trimmed" - the fallback case (extend the full target),
+// which willLikelyGenerateBleed maps to "the preview badge should show".
+export const tagConsensusAppropriateBleedTrimmed = http.post(
+  buildRoute("2/tagConsensus/"),
+  () =>
+    HttpResponse.json(
+      {
+        tags: [
+          {
+            tagName: "appropriate-bleed",
+            resolvedPolarity: -1,
+            netPolarity: -3,
             tally: [],
           },
         ],

@@ -64,8 +64,20 @@ this fixed and its follow-on hardening. Fixed by `eaece1fd` (#18,
   (~1GB each). See [[lessons.md]] for the general `du` gotcha. Net effect: a
   rebuild that previously spent 25+ minutes uploading a ~2GB context now
   uploads single-digit megabytes and finishes in ~5 minutes.
-- Postgres/ES ports are bound to `127.0.0.1` deliberately — they were
-  internet-exposed at one point.
+- Postgres/ES: `docker-compose.yml` (dev, base file) publishes
+  `127.0.0.1:5432`/`127.0.0.1:9200` deliberately - they were
+  internet-exposed at one point. `docker-compose.prod.yml` overrides both
+  services' `ports:` to `[]` (Compose replaces, not merges, list fields) -
+  a fresh `docker compose -f docker-compose.prod.yml up` publishes neither
+  port to the host at all, only `expose:` for container-to-container
+  access. The containers actually running on this box (as of 2026-07-18)
+  still answer on `127.0.0.1:5432`/`127.0.0.1:9200` regardless - they
+  predate the `ports: []` override and haven't been recreated since
+  (Docker doesn't retroactively apply a compose-file port change to an
+  already-running container). Don't rely on this from a fresh script: if
+  postgres/elasticsearch are ever recreated (version bump,
+  `--force-recreate`, etc.) under the current prod compose file, host-port
+  access silently disappears.
 - **After `docker compose up -d django worker` (or any command that
   recreates the `django` container), also restart `nginx`** — see
   [[troubleshooting.md]] ("nginx 502s everything after a django container
@@ -213,15 +225,16 @@ branch against `upstream/master` before pushing to confirm scope.
 
 Five PRs were opened this way (#463–467), all reviewed same-day by the
 upstream maintainer (ndepaola): #463 (lazy-load PDFGenerator) and #465
-(image-CDN CORS fix) are open; #464 (pdf.js canvas preview) and #466
-(bucket/worker thumbnail routing) were closed after the maintainer
-explained the existing behavior was deliberate design, not a bug; #467
-(frontend toSearchable "the"-stripping fix, completing backend PR #460)
-was opened 2026-07-13 and **merged 2026-07-18**. All reviews so far have
-asked for hand-written PR descriptions going forward, not AI-generated
-ones — none of #463/#465/#467's PR bodies contain an AI-disclosure
-paragraph; the actual AI-assistance signal in this workflow is the
-Co-Authored-By trailer on the commit itself, not PR body text.
+(image-CDN CORS fix) are open (live-checked 2026-07-18, unchanged since);
+#464 (pdf.js canvas preview) and #466 (bucket/worker thumbnail routing)
+were closed after the maintainer explained the existing behavior was
+deliberate design, not a bug; #467 (frontend toSearchable "the"-stripping
+fix, completing backend PR #460) was opened 2026-07-13 and **merged
+2026-07-18**. All reviews so far have asked for hand-written PR
+descriptions going forward, not AI-generated ones — none of #463/#465/#467's
+PR bodies contain an AI-disclosure paragraph; the actual AI-assistance
+signal in this workflow is the Co-Authored-By trailer on the commit
+itself, not PR body text.
 
 #467 is also a variant on the cherry-pick convention above: our own fork
 had already fixed the identical bug in its own processing.ts (commit
@@ -292,7 +305,12 @@ that freeze the pre-rewrite commits permanently, independent of anything
 done to the branches themselves — GitHub creates these server-side and
 they can't be force-pushed over. A GitHub Support request to purge those
 refs was drafted for manual filing (requires being logged into the
-account).
+account). Status not independently verifiable from a cloud/API session
+(support-ticket state isn't exposed via `gh`/the GitHub API, and checking
+whether the refs themselves were actually purged would require someone
+logged into the account to attempt fetching them) — last confirmed status
+is whatever the owner reports directly, not re-verified here as of
+2026-07-18.
 
 **If this ever needs to be done again for a different file**: never run
 `git filter-repo` (or filter-branch/BFG) with no `--refs` scoping on a fork

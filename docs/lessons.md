@@ -268,6 +268,30 @@ should be read as "a repeatable seeding step," not literally
 `migrations.RunPython`, when the target table has DB-wide list-all
 consumers).
 
+## A deterministic "Card Details" modal-open timeout is sandbox-environmental, not a real regression
+
+`openDetailedView`-style test helpers (`getByAltText(name).click()` then
+`expect(getByText("Card Details")).toBeVisible()`) can fail with a hard 5s
+timeout in a Claude Code cloud sandbox specifically — reproduced
+identically and deterministically (not flaky/intermittent) across
+`PrintingTagPicker.spec.ts`, `TagVotePicker.spec.ts`, and
+`visual/CardDetailedViewModal.visual.spec.ts`, including on unmodified
+`master` and in isolated `--workers=1` runs, while every other Playwright
+spec in the same run (including specs that also drive
+`GridSelectorModal`/`CanonicalCardFilter`) passes cleanly. All three
+failing specs share nothing but that one click-to-open helper, so the
+common factor is the sandbox's headless Chromium (launched via
+`executablePath: /opt/pw-browsers/chromium`, since the pinned Playwright
+version's own browser download is unavailable there — see the CLAUDE.md
+environment note) failing to register this specific modal-open
+interaction, not application code. Before spending time root-causing a
+change against this failure, first check whether it reproduces
+identically with the change reverted/stashed — if so, it's this sandbox
+quirk, not a regression, and isn't worth chasing further there. Not
+related to MSW/network state either — `loadPageWithDefaultBackend` points
+at a fake `127.0.0.1:8000` backend URL fully intercepted by mocks, so this
+has no relationship to whether any real backend is up or restarting.
+
 ## A call-count-based MSW mock breaks under React 18 Strict Mode's dev-time double-invoke
 
 A Playwright mock like "return item X on the first `GET`, then a
@@ -383,3 +407,324 @@ work is not evidence it addressed its actual assignment - check the report again
 directive, not just its internal coherence; (2) if a narrowly-scoped fork's task will outlive a
 likely compaction boundary, the directive text itself needs to be re-assertable / distinguishable
 from parent history at a glance, since compaction can flatten that distinction away.
+
+## @react-pdf/renderer: a single-token `transform` value (e.g. `"none"`) hangs the whole render silently
+
+`@react-pdf/renderer`'s style processor (`@react-pdf/stylesheet`'s `processTransform` → `parse`
+→ `normalizeTransformOperation`) has a real bug: `parse()`'s own code comment says its
+single-token branch is "for `initial`/`inherit`/`unset`", but it actually fires for ANY
+one-word transform string, including the legitimate CSS keyword `"none"`. That branch returns a
+bare 2-element array (`[token, true]`) instead of the `{operation, value}` shape every other
+branch produces; `normalizeTransformOperation` destructures `{operation, value}` from it, gets
+`value: undefined`, and calls `.map()` on that - a `TypeError` thrown deep inside their custom
+(non-react-dom) reconciler's layout pass. That reconciler doesn't propagate the throw as a
+rejection anywhere observable - `pdf(<Doc/>).toBlob()` just hangs forever: no thrown exception,
+no `page.on('pageerror')`, no `page.on('console')` output, nothing to grep for. The only visible
+symptom is every render that depends on that promise (a download, a preview) timing out with no
+diagnostic trail - confirmed via a real Playwright suite (3 tests hung at a 60s timeout) plus a
+stashed before/after comparison proving no other change was responsible. Fix: never pass a
+single-token transform string (`"none"`, `"initial"`, etc.) - if no transform is needed, OMIT
+the `transform` key from the style object entirely (`undefined`, not `"none"`); `processTransform`
+has its own early-return for non-string values that sidesteps the broken parser. Diagnosis
+method that actually worked after `page.on(console/pageerror)` came up empty: add `console.log`
+calls at the very top of each component in the suspect render tree (starting from the root) to
+binary-search how far the tree actually renders before going silent - the last log line reached
+pinpoints the synchronous throw's rough location even when nothing else in the stack reports it.
+
+## `page.reload()` (and a same-URL `page.goto()` waiting on `"load"`) hangs past the Playwright test timeout in this app
+
+Discovered writing a reload-persistence test for Proposal B PR-2 (full report:
+`docs/reports/proposal-b-pr2-bleed-override-ui.md`) - no test anywhere else in this suite
+reloads or renavigates a page mid-test, so there was no existing precedent to check first.
+`page.reload()` alone hung past the 30s test timeout waiting for the `"load"` event; a plain
+`page.goto()` back to the same URL hit the identical hang. This app's webworkers (client-search,
+PDF-render) appear not to settle a second `"load"` event cleanly within one Playwright page
+lifecycle - not investigated further since a workaround exists and the root cause is outside
+this repo's own code (Next.js/webworker/browser interaction, not app logic). Fix: navigate with
+`{ waitUntil: "domcontentloaded" }` instead of the default `"load"` - the DOM (and this app's
+React tree) is fully interactive well before whatever blocks a second `"load"` resolves, and a
+normal `page.getByText(...)` wait for real UI content afterward is sufficient to confirm the page
+is actually ready. Any future test that needs a real mid-test reload/renavigation should use this
+pattern from the start rather than rediscovering the hang.
+
+## A stacked PR's base branch gets deleted out from under it when the parent merges (squash-and-delete)
+
+If PR B is opened against PR A's branch (a stack) and PR A is later squash-merged with
+`--delete-branch`, GitHub does NOT retarget B to the repo's default branch - it auto-CLOSES B
+instead, the moment A's branch disappears (confirmed via `gh pr view`: `state: CLOSED`,
+`mergeStateStatus: DIRTY`, immediately after A's merge, not something B's author did). Worse:
+the GitHub API then refuses to reopen a PR whose base branch was deleted at all - a direct
+`state cannot be changed` 422, not a `gh` CLI limitation, not something worth retrying a
+different way. Confirmed live (`claude/e2-bleed-prior-batch-resolution`, PR #69, stacked on PR
+#66's branch): #66 merged, #69 auto-closed, reopen attempts 422'd twice (once for `state=open`
+alone, once combined with `base=master`). Recovery: the _head_ branch survives (only the base
+branch was deleted) - preserve the closed PR's title/body, open a brand-new PR from the same
+head branch against `master` directly (became #72), then resolve whatever real merge conflict
+appears (git sees the parent's squash commit as unrelated history to what the child branch was
+built on, even though the content is logically the same - expect at least one real conflict, not
+a fast-forward). **Prevention, the actual fix**: retarget the child PR to `master` (`gh pr edit --base master` / a REST `PATCH .../pulls/N -f base=master`) BEFORE merging+deleting the parent's
+branch, while the retarget API call still works normally - not after.
+
+## A rewrite that "extracts X verbatim" can still silently drop an element the old component rendered
+
+`QuestionFeed.tsx`'s Level 1 (the fast-path single-suggestion screen, PR #49/commit `b413252`)
+prompts "Is it this one?" for a suggested printing with **no image of the printing itself** -
+only text (a set icon + expansion code + collector number). This was a real regression, not a
+missing feature: the pre-funnel `PrintingTagQueue.tsx` (deleted in the "Queue redesign" commit
+`9d71851`) always showed a Scryfall reference render next to every candidate, no exceptions - a
+plain `<img src={candidate.mediumThumbnailUrl}>`, nothing fancier. That commit's own message
+claimed "candidate-grid mechanics extracted verbatim into cardPanel.tsx" - true for the grid
+_mechanics_ (starburst, sticky panel, hover-zoom), but the image-per-candidate rendering actually
+landed directly in `QuestionFeed.tsx`, not `cardPanel.tsx`, and at that point still worked (Level
+2's grid still renders `candidate.mediumThumbnailUrl` correctly today). The regression is narrower
+and later than the redesign commit itself: PR #49 introduced Level 1 as a **new** UI surface (a
+fast path for the common case of a confident suggestion) and built its confirmation prompt from
+scratch as text-only, never copying the image element over - "is it this one" being unanswerable
+without a picture to compare against went unnoticed because nothing tested for the image's
+presence, only that the _text_ prompt appeared. Level 0 (`DeckbuilderConfirmAffordance.tsx`, PR
+#50, built after #49) was independently checked and is NOT affected - it does its own
+`APIGetPrintingCandidates` fetch and correctly renders a real `<img>` inside `ComparePin`.
+
+**The lesson, generalized**: a commit message claiming "extracted verbatim" or "same mechanics,
+new home" is a claim about _behavior_, not a guarantee - verify it by diffing what the OLD
+component actually rendered (every `<img>`/data-bearing element, not just the interactive
+controls) against what the NEW one renders, element for element, rather than trusting the
+message. A rewrite's author naturally focuses on what changed (the new grid/filter/funnel-stage
+logic); an element that was simply _always there_ and never part of the story being told is
+exactly the kind of thing that quietly doesn't make the trip. When building a NEW fast-path/
+shortcut screen that shortcuts around an existing one (Level 1 shortcutting Level 2's grid here),
+explicitly inventory what the screen it's bypassing shows before deciding what the shortcut needs
+
+- "the user has to make the same judgment call, just with fewer clicks" is the actual design
+  intent in cases like this, and a judgment call needs the same evidence either way.
+
+## Cross-session branch-name collisions on a "standing convention" name
+
+Once a delivery pattern (e.g. "commit reports to a `report-relay` branch, relay the URL") gets
+adopted as a _standing_ convention rather than a one-off, multiple independent sessions on this
+box will reach for the exact same bare branch name for their own unrelated work - confirmed live:
+a second, unrelated session pushed 5 more commits (upstream-ladder CI, federation-v1 doc updates)
+on top of this session's own single report commit on a bare `report-relay` branch, with no
+warning or conflict at push time (git branches don't lock; two sessions can both fast-forward the
+same ref from their own local history without either one noticing the other's commits landed
+first, as long as neither force-pushes). Confirmed via `git log <branch> --oneline`: the last
+commit either session recognizes, followed by commits from a different narrative it never wrote.
+**Fix**: every session's first relay push must use a branch name unique to that session, not the
+convention's bare name - a numeric/date/session-id suffix, chosen so two concurrent sessions
+adopting the same convention independently can't collide (a fixed default like a bare
+`report-relay` is exactly the thing every session will reach for identically). The bare
+`report-relay` name itself is now retired for this reason - always suffix.
+
+## Color-run measurement cannot see frame-colored bleed - the invisibility is the feature's own design goal
+
+Proposal B's original probe-based bleed measurement (`bleedNormalize.ts`, walk a uniform-color
+run inward from each edge) shipped with real synthetic-fixture coverage but only a "starting
+guess" calibration caveat on its constants. Task #134's real-image calibration pass (30 catalog
+images, `docs/reports/2026-07-18-bleed-calibration-134.md`) found a ~2x measurement bias and,
+critically, root-caused it rather than stopping at "found a bug": sweeping
+`RGB_DISTANCE_THRESHOLD` across a 4x range (6 to 24) moved the sample median under 3% - ruling
+out "threshold too loose" as the cause before it could be mistaken for one. The real cause: a
+standard MTG card's own border is commonly a flat, uniform color, and the synthetic bleed
+extension sitting just outside it is _deliberately_ colored to match the frame so a print
+misalignment doesn't show a visible seam - meaning the probe's "uniform run = bleed" assumption
+can never distinguish bleed from border once both are the same color, **by the bleed extension's
+own design intent**. No amount of threshold tuning fixes a measurement whose blind spot is the
+feature's own success condition.
+
+**The lesson, generalized**: when a measurement's error turns out to be invariant across a wide
+sweep of its own tuning constants, stop tuning and ask whether the measurement's _core method_ -
+not its parameters - structurally cannot see the thing it's trying to see. Here, the fix wasn't a
+better threshold; it was picking an entirely different signal immune to the same confound. The
+source image's own pixel dimensions (checked against the standard trim/bleed aspect ratios, the
+same method the backend's already-validated `classify_bleed_edge` uses) carry the same
+information a color-run walk was trying to extract, but a card's _file dimensions_ have no
+dependency on its _border color_ - so the confound simply doesn't apply. Demoting the original
+measurement to an advisory role (ambiguity detection, an asymmetry flag) rather than discarding
+it outright preserved the real edge cases it still catches (a solid-background full-art card, a
+degenerate scan) while removing it from the one thing it was structurally unable to do reliably.
+See `docs/proposals/proposal-b-bleed-normalization.md`'s "Owner design decision" section and
+`bleedNormalize.ts`'s own module comment for the full resolution order.
+
+## Passing a plain callback through comlink's Remote proxy throws DataCloneError - and the failure disguises itself as a false-positive Playwright "element is visible" result
+
+`pdfRenderService.ts` added a method that called `this.worker.onImageProgress(cb)` - `cb` a plain
+JS function - across the comlink `Remote<PDFWorker>` boundary into `pdf.worker.ts`. Comlink's
+default RPC transfer is a structured-clone `postMessage`, and a bare function isn't
+structured-clone-able: this throws `DataCloneError: Failed to execute 'postMessage' on 'Worker': ... could not be cloned` the instant the call actually fires - not at compile time (TypeScript
+has no way to know), not synchronously at the call site either (the throw happens inside a
+promise chain comlink builds internally). Fix: wrap the callback in `Comlink.proxy(cb)` before
+passing it - comlink's own documented mechanism for passing a _live, callable_ remote reference
+instead of clonable data, backed by its own internal `MessagePort`. A pre-existing, structurally
+identical `onProgress(cb: typeof console.info)` method on the same worker interface has this same
+latent bug, undetected only because nothing in the codebase actually calls it.
+
+**The Playwright false positive this produced is worth its own note**: the thrown error surfaced
+as Next.js dev mode's full-screen `<nextjs-portal>` "Unhandled Runtime Error" overlay, rendered
+_on top of_ (not instead of) the real in-app Modal this session had just built to replace
+`window.confirm()` - Playwright's `toBeVisible()` on the Modal's own locator still reported true
+(the Modal element genuinely is visible, CSS-wise, underneath the overlay), so the assertion the
+test led with passed cleanly. The failure only surfaced two steps later, as a `.click()` timing
+out with `<nextjs-portal> intercepts pointer events` - which reads exactly like an unrelated
+z-index/stacking-context bug, not "there's a JS exception on this page." **Always check for a
+`dialog "Unhandled Runtime Error"` node in a failing test's saved `error-context.md` (or
+`page.on('pageerror')`) before assuming a pointer-interception failure is a CSS/layout problem** -
+in dev mode, Next's own error overlay is frequently the actual "invisible" thing eating the click,
+and it's a much faster diagnosis than auditing z-index stacking contexts by hand.
+
+## A feature-flagged page's dev-server test suite passing proves nothing about its production build
+
+Proposal H's `/display` route (behind `NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED`) had a full green
+Playwright suite against `next dev` and still failed `npm run build` in production the moment the
+flag actually flipped true in a real deploy (`deploy-frontend.yml` run #107) - a `tsc` type error
+(`Card | undefined` not assignable to `Card`) that plain `npx tsc --noEmit` on the feature branch
+never caught either. Two independent causes stacked: (1) `next dev`'s Playwright run never
+prerenders every route through the production compiler the way `next build`'s static export does
+
+- a type error only reachable via the real build pipeline is invisible to dev-mode testing no
+  matter how thorough; (2) the type error itself only existed once the feature branch merged
+  alongside an unrelated same-day PR that correctly widened `useCardDocumentsByIdentifier()`'s
+  return type to include `undefined` (fixing a real crash, task #135) - a cross-PR interaction, not
+  a bug in either PR alone, so neither branch's own pre-merge CI could have caught it in isolation.
+  Diagnosis trap avoided here: don't trust a clean local repro build at face value - confirm it's
+  actually running against the SAME commit the real CI run failed on (`git log -1`), and regenerate
+  any gitignored build-time artifacts (this repo's `frontend/src/common/generated/` keyrune assets,
+  produced by `npm install`'s postinstall, not committed) before concluding a build error doesn't
+  reproduce - a stale/incomplete local environment can silently "fix" a real failure with an
+  unrelated false negative.
+
+**New standing verification bar**: any flag-gated page must pass a real production build with the
+flag ON - `NEXT_PUBLIC_<FLAG>=true npx next build` (or the equivalent for whatever flag var) -
+before its PR ships, in addition to (not instead of) `tsc --noEmit`, the Jest suite, and Playwright
+against `next dev`. Add this to the pre-push checklist for every future PR touching a flagged
+route, not just this one's remaining build-out.
+
+## A rejected option must never re-appear as a selectable answer later in the same guided flow
+
+Caught live in `/whatsthat`'s Question Feed: Level 1 "Is it M21 203?" -> NO -> Level 2's grid
+contained only M21 203 again - the user's own just-given answer, re-offered as if it were new.
+General rule, not specific to this one screen: within a single multi-step guided flow (a funnel,
+a wizard, a question-by-question form), an option the user has explicitly rejected at an earlier
+step must never be re-presented as a selectable choice at a later step of the _same_ flow
+instance - each step's display set is "all options minus already-rejected-this-instance," and
+when rejecting the only remaining option would leave nothing to choose from, skip straight to
+whatever the flow's exit/fallback path is rather than rendering a choice screen with nothing
+new on it. See `docs/features/printing-tags.md`'s "No-re-presentation rule" for the concrete
+fix (`rejectedCandidateIds` client-side state, no backend change, no vote-semantics change -
+this is purely a display-filtering fix). Before applying a similar fix to any other guided flow,
+check what the rejecting action actually casts today (a vote, a mutation, nothing) - here Level
+1's NO already cast zero votes before the fix, which is what made this safe as a pure
+display-layer change with no risk of a double negative being recorded.
+
+## A value carried "verbatim" out of its old context can silently stop meaning what it meant
+
+Two independent instances, same underlying failure mode: something copied forward unchanged from
+a prior implementation, that was only ever correct _relative to_ a context which then changed
+without it.
+
+**Instance 1 (numeric constant, PR #91)**: `BurstSvg`'s `width: 140%` in `cardPanel.tsx` was sized
+relative to `CardPanel`'s own rendered width, tuned back when the card column was `Col md={4}`
+(33% of the row) in the pre-redesign `PrintingTagQueue.tsx`. The "Queue redesign" widened the card
+column to `Col md={7}` (58% of the row) and carried the `140%` constant forward unchanged - it was
+never wrong in isolation, only relative to a column width that had since roughly doubled, so the
+burst grew large enough to visually collide with the page's own heading and stats text. Nothing
+about `140%` looks suspicious on its own; the bug is only visible by knowing what it was originally
+tuned against.
+
+**Instance 2 (rendered element, PR #78)**: see "A rewrite that 'extracts X verbatim' can still
+silently drop an element the old component rendered" above - `PrintingTagQueue.tsx`'s "candidate-
+grid mechanics extracted verbatim" commit message was true for the grid mechanics themselves, but
+Level 1's later from-scratch confirmation prompt (PR #49) never carried the per-candidate reference
+image over at all, because nothing about "verbatim" flagged that the image was part of what needed
+preserving.
+
+**The lesson, generalized**: a value (a percentage, a pixel offset, a copied element, a duplicated
+handler) that was only ever correct _because of_ some other piece of context - a sibling's size, a
+parent's behavior, an assumption baked in at the point it was written - does not carry a warning
+label forward when it's copied, inherited, or left alone while everything around it changes. Two
+concrete checks this suggests for any future redesign/rewrite: (1) grep the component being resized
+or replaced for percentage/relative values and ask "relative to what, and did that reference just
+change"; (2) before trusting a commit message's "extracted/carried verbatim," diff what the OLD
+component actually rendered/computed against the NEW one, element for element and value for value,
+rather than trusting the claim.
+
+## Bootswatch Superhero hardcodes some component colors as literal properties, not CSS custom-property references
+
+`--bs-primary`/other Bootstrap custom-property overrides do not reliably reach every component
+under Superhero (this fork's Bootswatch theme, `frontend/src/styles/styles.scss`) - some components
+read the custom property correctly (`.btn-link`'s color, links via `--bs-link-color-rgb`), but
+Superhero's own compiled SCSS hardcodes a _literal_ `background-color` directly on `.btn-primary`
+(and other `$theme-colors`-loop components), at the same specificity as Bootstrap's own
+`var(--bs-btn-bg)`-based rule and later in the compiled source order - it wins the cascade
+regardless of what the custom property resolves to. Found in PR #91 (`/whatsthat`'s accent-color
+swap) by comparing the _computed_ `--bs-btn-bg` value (correctly overridden) against the actually-
+rendered `background-color` on a live element (still the old theme color) - the custom-property
+value being right proved nothing about what actually painted.
+
+**The check this implies**: when overriding a themed Bootstrap component's color via CSS custom
+properties, verify the browser's _computed_ `background-color`/`border-color`/etc. on a live
+rendered element, not just that the custom property itself resolved to the intended value - a
+custom-property override can silently no-op wherever the compiled theme hardcodes the literal
+property instead of referencing the variable. Fix is direct: set the literal property
+(`background-color`, `border-color`) alongside the custom properties for any component this affects — specificity alone wins the cascade, no `!important` needed. `.btn-link` was NOT affected in PR
+#91 (bootswatch's hardcoding loop only covers `$theme-colors`, not the link variant) — the
+hardcoding is per-component, not theme-wide, so check each component actually touched rather than
+assuming the pattern is universal or absent.
+
+## Components that each correctly render an anchor can compose into invalid nested-anchor HTML that silently swallows clicks
+
+`Navbar.tsx` wrapped `<AuthWidget />` in `<Nav.Link eventKey="auth">`. Both pieces were individually
+correct in isolation: `AuthWidget` renders a real `<a href={loginUrl}>`/`<a href={logoutUrl}>` for
+its two states, and react-bootstrap's `Nav.Link` renders a normal `<a>` too - but `Nav.Link` renders
+its OWN `<a href="#">` _around_ whatever children it's given whenever it carries an `eventKey` (its
+tab-selection machinery). Composing them nested one real anchor inside another, which is invalid
+HTML - the outer `<a>` silently intercepts every click at the DOM level, so the inner Discord
+login/logout link never actually navigated. No thrown error, no console warning, and the inner
+anchor's own `href` attribute was still completely correct the whole time - a render-only assertion
+("does the link have the right href?") passes cleanly right through this bug, because the bug is
+purely about which element _catches the click_, not what either element renders.
+
+**The check this implies**: a component that itself only ever renders real anchors is not
+automatically safe to nest inside another navigation/tab component (`Nav.Link`, `Tab.Link`, anything
+from a component library that renders its own wrapping `<a>`/interactive element based on a prop
+like `eventKey`/`href`) - check what THAT wrapper actually renders as, not just what the child does.
+Prefer a plain, non-interactive wrapper (a `<div>`/`<li>` carrying only the layout/spacing classes
+the interactive wrapper used to provide) around a child that already supplies its own real
+interactive element. **The test that actually catches this class of bug**: a real Playwright click
+on the rendered control asserting navigation/an action actually initiated (a request fired, the URL
+changed, a callback ran) - never just `toHaveAttribute("href", ...)` on the innermost element, since
+that assertion is blind to whatever intercepts the click before it reaches that element. Verified
+live for this fix (`tests/Navbar.spec.ts`): the new click-through tests fail deterministically
+(`page.waitForURL` times out) against the original nested-anchor markup and pass cleanly once the
+wrapper is removed - proof the test genuinely exercises the failure mode, not just incidental
+coverage.
+
+## A backgrounded Playwright run's dev server breaks if you `git checkout` the same working directory while it's still live
+
+Kicked off `npx playwright test ... ` in the background (it exceeded the foreground timeout and
+auto-backgrounded), then - without waiting for it to actually finish - ran `git checkout master`
+and `git checkout -b <new-branch>` in the SAME working directory to start a different, unrelated
+task. The backgrounded run's own `next dev` server was still live and still serving requests for
+its in-flight test suite; the checkout swapped the filesystem out from under it mid-serve. Next's
+dev server watches the filesystem for HMR, so a branch swap while it's live isn't a clean restart -
+it's a partial, inconsistent reload. Symptom: 2 of that run's ~43 tests failed at almost exactly the
+point in the run where the checkout happened (confirmed by cross-referencing the failure position
+against wall-clock timing), while everything before and after ran fine - looking exactly like a
+flaky pair of real test failures, not infrastructure corruption. A second, unrelated mistake
+compounded it: after seeing failures, immediately launching a SECOND `npx playwright test` in the
+same directory without confirming the first one had actually finished and its dev server had
+actually exited - `pgrep -fa "next dev"` showing no live process is not proof of that; a
+just-completed backgrounded task's own teardown can race with a check run moments later. The result
+was two Playwright invocations colliding over the same dev server port, producing
+`ERR_CONNECTION_REFUSED` on an unrelated, otherwise-passing spec.
+
+**The fix that actually resolved it**: re-run the SAME suite once more, uncontested (no other
+Playwright/git activity in that working directory for the run's entire duration) - it passed
+34/34 clean, confirming both prior failure sets were self-inflicted infrastructure noise, not real
+regressions. **The rule going forward**: once a `npx playwright test` invocation is running -
+foreground or auto-backgrounded - treat that working directory as locked until it completes: no
+`git checkout`/`git stash`/branch switches, and no launching a second Playwright invocation in the
+same directory in parallel. If a task genuinely needs to run something else while a Playwright suite
+is still in flight, use a separate worktree (see this doc's own worktree-port-collision entry) or
+just wait for a completion notification before touching git state again. A "no processes running"
+check via `pgrep` at one instant is not sufficient proof it's safe to proceed - the teardown of the
+task you just kicked off may not have landed yet.

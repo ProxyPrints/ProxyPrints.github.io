@@ -6,6 +6,22 @@
  * The user will be prompted on whether they want to use their uploaded file's
  * finish settings (e.g. foil/nonfoil, the selected cardstock) or retain the project's
  * finish settings.
+ *
+ * XML 2.0 import (closes downloadXML.ts's export-only half of the round trip - see that
+ * module's own header comment for the full design rationale): the optional `<set>`/
+ * `<collectorNumber>` elements a 2.0 file may carry per `<card>` are read into that card's
+ * `SearchQuery.expansionCode`/`collectorNumber`, alongside the `<id>` element 1.0 already
+ * read (unchanged - `<id>` still wins as the exact-image selection whenever it resolves). The
+ * value of also carrying the printing-level fields: if that exact image later turns out to be
+ * dead (source removed, no longer indexed - see `recordInvalidIdentifier`'s existing fallback
+ * path in `listenerMiddleware.ts`), the fallback search this app already runs stays
+ * constrained to the correct set + collector number instead of silently widening to "any
+ * printing of this name." `<scryfallId>` is deliberately left unread - there is no
+ * `SearchQuery` field to hold a printing UUID, and expansionCode + collectorNumber already
+ * fully specify search intent (the same reasoning that declined a scryfallId text token for
+ * plaintext decklist export). A 1.0 file simply has no `<set>`/`<collectorNumber>` elements to
+ * find, so this is purely additive - `getElementsByTagName` on a 1.0 `<card>` just returns an
+ * empty collection and `[0]` is `undefined`, same as it always was for any other optional field.
  */
 
 import React, { useState } from "react";
@@ -25,7 +41,7 @@ import {
 import { TextFileDropzone } from "@/common/dropzone";
 import { processSearchQuery } from "@/common/processing";
 import { useAppDispatch, useAppSelector } from "@/common/types";
-import { Cardstock, SlotProjectMembers } from "@/common/types";
+import { Cardstock, SearchQuery, SlotProjectMembers } from "@/common/types";
 import { RightPaddedIcon } from "@/components/icon";
 import { MakePlayingCardsLink } from "@/components/MakePlayingCardsLink";
 import { setCardstock, setFoil } from "@/store/slices/finishSettingsSlice";
@@ -34,6 +50,155 @@ import {
   selectProjectCardback,
   selectProjectSize,
 } from "@/store/slices/projectSlice";
+
+export interface ParsedXmlImport {
+  members: Array<Omit<SlotProjectMembers, "id">>;
+  stock?: string;
+  foil?: boolean;
+}
+
+/**
+ * Merge a `<card>` element's optional XML 2.0 `<set>`/`<collectorNumber>` elements into an
+ * already-parsed `searchQuery`, if both are present. Both-or-neither: `downloadXML.ts` only
+ * ever emits these two together (gated on a resolved `canonicalCard`), so a file carrying only
+ * one would already be malformed - requiring both here means a partial/corrupted pair is
+ * silently ignored rather than applied half-specified.
+ */
+function applyXml2PrintingInfo(
+  searchQuery: SearchQuery,
+  cardElement: Element
+): SearchQuery {
+  const expansionCode = cardElement.getElementsByTagName("set")[0]?.textContent;
+  const collectorNumber =
+    cardElement.getElementsByTagName("collectorNumber")[0]?.textContent;
+  return expansionCode != null && collectorNumber != null
+    ? { ...searchQuery, expansionCode, collectorNumber }
+    : searchQuery;
+}
+
+/**
+ * Parse an uploaded XML file's contents into project members ready to add to the store, plus
+ * whatever finish settings the file carries. Pure and side-effect-free (no dispatch) so it can
+ * be tested directly against XML text - see `ImportXML.test.ts`.
+ */
+export function parseXmlImport(
+  xmlString: string,
+  projectSize: number,
+  projectCardback: string | null | undefined,
+  useXMLCardback: boolean
+): ParsedXmlImport {
+  const parser = new DOMParser();
+  const xmlDocument = parser.parseFromString(xmlString, "application/xml");
+  const rootElement = xmlDocument.getElementsByTagName("order")[0];
+
+  const detailsElement = rootElement.getElementsByTagName("details")[0];
+  const stock = detailsElement.getElementsByTagName("stock")[0]?.textContent;
+  const foil =
+    detailsElement.getElementsByTagName("foil")[0]?.textContent === "true";
+  const frontsElement = rootElement.getElementsByTagName("fronts")[0];
+  const backsElement = rootElement.getElementsByTagName("backs")[0];
+
+  const frontCardElements = frontsElement.getElementsByTagName("card");
+  const backCardElements =
+    backsElement != null
+      ? backsElement.getElementsByTagName("card")
+      : undefined;
+
+  const xmlCardback =
+    rootElement.getElementsByTagName("cardback")[0]?.textContent ??
+    projectCardback;
+
+  // `newMembers` is initialised with the maximum length it might need to contain all cards
+  // the project can hold, then is truncated later according to `lastNonNullSlot`
+  let lastNonNullSlot = 0;
+  const newMembers: Array<Omit<SlotProjectMembers, "id">> = Array.from(
+    { length: ProjectMaxSize - projectSize },
+    () => {
+      return { front: null, back: null };
+    }
+  );
+
+  // it's actually important that we iterate over the backs before the fronts
+  // this way, we can determine if each card needs to be given the project cardback or not
+  if (backCardElements != null) {
+    // TODO: avoid copy/pasting this stuff?
+    for (const backCardElement of backCardElements) {
+      const slotsText =
+        backCardElement.getElementsByTagName("slots")[0]?.textContent;
+      if (slotsText == null) {
+        continue;
+      }
+      const searchQuery = applyXml2PrintingInfo(
+        processSearchQuery(
+          backCardElement.getElementsByTagName("query")[0].textContent ?? ""
+        ),
+        backCardElement
+      );
+      slotsText
+        .split(",")
+        .map((slotText) => parseInt(slotText))
+        .forEach((slot) => {
+          newMembers[slot].back = {
+            query: searchQuery,
+            selectedImage:
+              backCardElement.getElementsByTagName("id")[0].textContent ??
+              undefined,
+            selected: false,
+          };
+
+          lastNonNullSlot = Math.max(lastNonNullSlot, slot);
+        });
+    }
+  }
+
+  for (const frontCardElement of frontCardElements) {
+    const slotsText =
+      frontCardElement.getElementsByTagName("slots")[0].textContent;
+    if (slotsText == null) {
+      continue;
+    }
+    const searchQuery = applyXml2PrintingInfo(
+      processSearchQuery(
+        frontCardElement.getElementsByTagName("query")[0].textContent ?? ""
+      ),
+      frontCardElement
+    );
+
+    slotsText
+      .split(",")
+      .map((slotText) => parseInt(slotText))
+      .forEach((slot) => {
+        newMembers[slot].front = {
+          query: searchQuery,
+          selectedImage:
+            frontCardElement.getElementsByTagName("id")[0].textContent ??
+            undefined,
+          selected: false,
+        };
+
+        // apply the uploaded XML's cardback if the card doesn't have a matching back
+        // and if the user wants to retain the XML's cardback
+        // otherwise, default to the project's cardback
+        if (newMembers[slot].back == null) {
+          newMembers[slot].back = {
+            query: { query: null, cardType: Cardback },
+            selectedImage: useXMLCardback
+              ? xmlCardback ?? undefined
+              : undefined,
+            selected: false,
+          };
+        }
+
+        lastNonNullSlot = Math.max(lastNonNullSlot, slot);
+      });
+  }
+
+  return {
+    members: newMembers.slice(0, lastNonNullSlot + 1),
+    stock: stock ?? undefined,
+    foil,
+  };
+}
 
 interface ImportXMLProps {
   onImportComplete?: () => void;
@@ -56,104 +221,13 @@ export function ImportXML({ onImportComplete }: ImportXMLProps) {
     }
 
     // TODO: throw a user-visible error if the xml doc is malformed
-    const parser = new DOMParser();
-    const xmlDocument = parser.parseFromString(fileContents, "application/xml");
-    const rootElement = xmlDocument.getElementsByTagName("order")[0];
-
-    const detailsElement = rootElement.getElementsByTagName("details")[0];
-    const stock = detailsElement.getElementsByTagName("stock")[0]?.textContent;
-    const foil =
-      detailsElement.getElementsByTagName("foil")[0]?.textContent === "true";
-    const frontsElement = rootElement.getElementsByTagName("fronts")[0];
-    const backsElement = rootElement.getElementsByTagName("backs")[0];
-
-    const frontCardElements = frontsElement.getElementsByTagName("card");
-    const backCardElements =
-      backsElement != null
-        ? backsElement.getElementsByTagName("card")
-        : undefined;
-
-    const xmlCardback =
-      rootElement.getElementsByTagName("cardback")[0]?.textContent ??
-      projectCardback;
-
-    // `newMembers` is initialised with the maximum length it might need to contain all cards
-    // the project can hold, then is truncated later according to `lastNonNullSlot`
-    let lastNonNullSlot = 0;
-    const newMembers: Array<Omit<SlotProjectMembers, "id">> = Array.from(
-      { length: ProjectMaxSize - projectSize },
-      () => {
-        return { front: null, back: null };
-      }
+    const { members, stock, foil } = parseXmlImport(
+      fileContents,
+      projectSize,
+      projectCardback,
+      useXMLCardback
     );
-
-    // it's actually important that we iterate over the backs before the fronts
-    // this way, we can determine if each card needs to be given the project cardback or not
-    if (backCardElements != null) {
-      // TODO: avoid copy/pasting this stuff?
-      for (const backCardElement of backCardElements) {
-        const slotsText =
-          backCardElement.getElementsByTagName("slots")[0]?.textContent;
-        if (slotsText == null) {
-          continue;
-        }
-        const searchQuery = processSearchQuery(
-          backCardElement.getElementsByTagName("query")[0].textContent ?? ""
-        );
-        slotsText
-          .split(",")
-          .map((slotText) => parseInt(slotText))
-          .forEach((slot) => {
-            newMembers[slot].back = {
-              query: searchQuery,
-              selectedImage:
-                backCardElement.getElementsByTagName("id")[0].textContent ??
-                undefined,
-              selected: false,
-            };
-
-            lastNonNullSlot = Math.max(lastNonNullSlot, slot);
-          });
-      }
-    }
-
-    for (const frontCardElement of frontCardElements) {
-      const slotsText =
-        frontCardElement.getElementsByTagName("slots")[0].textContent;
-      if (slotsText == null) {
-        continue;
-      }
-      const searchQuery = processSearchQuery(
-        frontCardElement.getElementsByTagName("query")[0].textContent ?? ""
-      );
-
-      slotsText
-        .split(",")
-        .map((slotText) => parseInt(slotText))
-        .forEach((slot) => {
-          newMembers[slot].front = {
-            query: searchQuery,
-            selectedImage:
-              frontCardElement.getElementsByTagName("id")[0].textContent ??
-              undefined,
-            selected: false,
-          };
-
-          // apply the uploaded XML's cardback if the card doesn't have a matching back
-          // and if the user wants to retain the XML's cardback
-          // otherwise, default to the project's cardback
-          if (newMembers[slot].back == null) {
-            newMembers[slot].back = {
-              query: { query: null, cardType: Cardback },
-              selectedImage: useXMLCardback ? xmlCardback : undefined,
-              selected: false,
-            };
-          }
-
-          lastNonNullSlot = Math.max(lastNonNullSlot, slot);
-        });
-    }
-    dispatch(addMembers({ members: newMembers.slice(0, lastNonNullSlot + 1) }));
+    dispatch(addMembers({ members }));
 
     if (
       useXMLFinishSettings &&

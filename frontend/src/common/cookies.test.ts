@@ -1,23 +1,28 @@
 import {
   AnonymousIdKey,
+  ManualOverridesKey,
   MaximumDPI,
   MaximumSize,
   MinimumDPI,
   SearchSettingsKey,
 } from "@/common/constants";
 import {
+  getLocalStorageManualOverrides,
   getLocalStorageSearchSettings,
   getOrCreateAnonymousId,
+  setLocalStorageManualOverrides,
 } from "@/common/cookies";
 import { defaultSettings, sourceDocuments } from "@/common/test-constants";
 
 beforeEach(() => {
   window.localStorage.removeItem(SearchSettingsKey);
   window.localStorage.removeItem(AnonymousIdKey);
+  window.localStorage.removeItem(ManualOverridesKey);
 });
 afterEach(() => {
   window.localStorage.removeItem(SearchSettingsKey);
   window.localStorage.removeItem(AnonymousIdKey);
+  window.localStorage.removeItem(ManualOverridesKey);
 });
 
 //# region tests
@@ -209,6 +214,50 @@ test("getOrCreateAnonymousId respects an id already in localStorage", () => {
   window.localStorage.setItem(AnonymousIdKey, "existing-anonymous-id");
 
   expect(getOrCreateAnonymousId()).toEqual("existing-anonymous-id");
+});
+
+//# endregion
+
+//# region manual bleed overrides (Proposal B PR-2)
+
+test("getLocalStorageManualOverrides returns an empty object when nothing is stored", () => {
+  expect(getLocalStorageManualOverrides()).toStrictEqual({});
+});
+
+test("getLocalStorageManualOverrides returns an empty object for malformed JSON", () => {
+  window.localStorage.setItem(ManualOverridesKey, "not valid json{");
+
+  expect(getLocalStorageManualOverrides()).toStrictEqual({});
+});
+
+test("getLocalStorageManualOverrides returns an empty object for a value that isn't an object", () => {
+  window.localStorage.setItem(ManualOverridesKey, JSON.stringify(["a", "b"]));
+
+  expect(getLocalStorageManualOverrides()).toStrictEqual({});
+});
+
+test("getLocalStorageManualOverrides returns an empty object when a value isn't a recognised override", () => {
+  window.localStorage.setItem(
+    ManualOverridesKey,
+    JSON.stringify({ "card-1": "not-a-real-override" })
+  );
+
+  expect(getLocalStorageManualOverrides()).toStrictEqual({});
+});
+
+test("getLocalStorageManualOverrides round-trips a valid stored map", () => {
+  const overrides = { "card-1": "force-bleed", "card-2": "force-trimmed" };
+  window.localStorage.setItem(ManualOverridesKey, JSON.stringify(overrides));
+
+  expect(getLocalStorageManualOverrides()).toStrictEqual(overrides);
+});
+
+test("setLocalStorageManualOverrides persists the map for getLocalStorageManualOverrides to read back", () => {
+  setLocalStorageManualOverrides({ "card-1": "force-bleed" });
+
+  expect(getLocalStorageManualOverrides()).toStrictEqual({
+    "card-1": "force-bleed",
+  });
 });
 
 //# endregion

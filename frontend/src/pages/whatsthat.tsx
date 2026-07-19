@@ -6,7 +6,6 @@ import Tab from "react-bootstrap/Tab";
 
 import { ContentMaxWidth, ProjectName } from "@/common/constants";
 import { NoBackendDefault } from "@/components/NoBackendDefault";
-import { AuthWidget } from "@/features/moderation/AuthWidget";
 import { ModerationTab } from "@/features/moderation/ModerationTab";
 import { STARBURST_BACKGROUND_COLOR } from "@/features/printingTags/starburstShape";
 import { QuestionFeed } from "@/features/questionFeed/QuestionFeed";
@@ -19,6 +18,32 @@ import {
 } from "@/store/slices/backendSlice";
 
 type WhatsThatTab = "feed" | "moderation";
+
+// Page-scoped accent override (owner-directed, 2026-07-18, closing the /whatsthat visual
+// diagnosis's orange-background question): the loud #ff4719 background stays - it's the
+// page's deliberate identity - but the site-wide theme accent (--bs-primary/link color,
+// #4c9be8) measures a WCAG contrast ratio of just 1.16:1 against it, nowhere close to AA's
+// 4.5:1 for text. Even pure white only reaches 3.41:1 against this specific orange (a
+// mid-luminance, highly saturated color - no light tint of ANY hue clears 4.5:1 against it;
+// only a sufficiently dark one does, same reason StarburstBackground below already settled on
+// black body text over the white it started with). Derived from Superhero's own info/cyan
+// (#5bc0de) by uniform multiplicative darkening (preserves hue/saturation, only reduces
+// luminance) until AA-for-text is comfortably cleared: measured background-orange contrast
+// 4.60:1 (passes 4.5 AA-normal-text), white-on-it 15.68:1 (comfortably passes AA on the
+// button side too). The override lives ON StarburstBackground below (not a separate wrapper) -
+// exactly the element whose own background IS the orange, and NOT the Footer (a sibling
+// outside it, rendered by PrintingQueueOrDefault below), which sits on the standard dark body
+// background where the site-wide accent already has good contrast and must stay unchanged.
+// Nothing outside this page's own render tree is touched, so nothing leaks to other routes.
+// Bootstrap 5.2 reads --bs-link-color-rgb at the link's own point of use (so an ancestor
+// override reaches it directly), but bakes button/nav-pills colors into component-local custom
+// properties at SASS-compile time (--bs-btn-bg, --bs-nav-pills-link-active-bg etc. on
+// .btn-primary/.nav-pills themselves, not a var() reference to --bs-primary) - each needs its
+// own override here rather than a single --bs-primary swap covering everything.
+const ACCENT_NAVY = "#12262c";
+const ACCENT_NAVY_HOVER = "#1c343c";
+const ACCENT_NAVY_ACTIVE = "#0c1c21";
+const ACCENT_NAVY_RGB = "18, 38, 44";
 
 // Radiating starburst behind the game itself - a jagged
 // "explosion" burst (see starburstShape.ts, rendered inside QuestionFeed.tsx alongside
@@ -55,6 +80,55 @@ const StarburstBackground = styled.div`
   margin-left: calc(50% - 50vw);
   padding: 1.5rem 0;
   margin-bottom: 1rem;
+
+  --bs-link-color-rgb: ${ACCENT_NAVY_RGB};
+  --bs-link-hover-color-rgb: ${ACCENT_NAVY_RGB};
+
+  /* "Filter by attribute" / "Hide filters" (QuestionFeed.tsx) is a Button variant="link", not
+     a plain <a> - .btn-link reads its color from --bs-btn-color (not --bs-link-color-rgb), and
+     unlike .btn-primary this one genuinely IS custom-property-driven with no bootswatch
+     hardcode (bootswatch's per-variant background loop only covers $theme-colors, and "link"
+     isn't one), so no extra literal-property fallback is needed here. */
+  .btn-link {
+    --bs-btn-color: ${ACCENT_NAVY};
+    --bs-btn-hover-color: ${ACCENT_NAVY_HOVER};
+    --bs-btn-active-color: ${ACCENT_NAVY_ACTIVE};
+    --bs-btn-focus-shadow-rgb: ${ACCENT_NAVY_RGB};
+  }
+
+  /* Level 3's "Confirm & continue" (QuestionFeed.tsx) is this page's only variant="primary"
+     button - hover/active are simple lighten/darken steps off the AA-verified base, not
+     independently contrast-checked (the base and its white text are the two ratios that
+     matter for AA; interaction-state tints don't carry their own text-legibility burden).
+     background-color/border-color set directly (not just the --bs-btn-bg/-border-color custom
+     properties) because bootswatch's Superhero theme (_bootswatch.scss) hardcodes a LITERAL
+     background-color on .btn-primary itself, at the same specificity as Bootstrap's own
+     var(--bs-btn-bg)-based .btn rule and later in the compiled source order - it wins the
+     cascade over any custom-property override alone, found by comparing the queried
+     --bs-btn-bg value (correctly overridden) against the actually-rendered background-color
+     (still the old theme blue) on a live element. Hover/active/focus DON'T have this problem
+     (bootswatch only hardcodes the base fill, not those states), so those stay custom-property-
+     only. */
+  .btn-primary {
+    --bs-btn-color: #fff;
+    --bs-btn-bg: ${ACCENT_NAVY};
+    --bs-btn-border-color: ${ACCENT_NAVY};
+    --bs-btn-hover-color: #fff;
+    --bs-btn-hover-bg: ${ACCENT_NAVY_HOVER};
+    --bs-btn-hover-border-color: ${ACCENT_NAVY_HOVER};
+    --bs-btn-active-color: #fff;
+    --bs-btn-active-bg: ${ACCENT_NAVY_ACTIVE};
+    --bs-btn-active-border-color: ${ACCENT_NAVY_ACTIVE};
+    --bs-btn-focus-shadow-rgb: ${ACCENT_NAVY_RGB};
+    color: #fff;
+    background-color: ${ACCENT_NAVY};
+    border-color: ${ACCENT_NAVY};
+  }
+
+  /* The moderator tab switcher's active pill (Nav variant="pills" below). */
+  .nav-pills {
+    --bs-nav-pills-link-active-bg: ${ACCENT_NAVY};
+  }
 `;
 
 // Sits above the sticky card panel's stacking context (see CardPanel in
@@ -75,6 +149,24 @@ const IntroText = styled.div`
   text-align: right;
 `;
 
+// Branding integration (frontend-polish package) - the mark+wordmark lockup
+// (frontend/public/whatsthat-composite.svg, sourced from the assets/whatsthat-branding branch;
+// gradient id wtc-grad-comp is pre-namespaced there specifically so it can't collide with the
+// mark-only/wordmark-only SVGs' own wtc-grad-mark/wtc-grad-word ids if more than one ever ends
+// up on the same page at once - none currently do, but the namespacing was already done
+// upstream of this integration, not invented here). Replaces the plain text <h1> this page had
+// - wrapped in an actual <h1> (not just a bare <img>) so the page's semantic heading and its
+// accessible name both survive the swap to a screen reader/outline view, exactly as they were
+// before, just rendered as the real logo now. `right` alignment (inline like text, so IntroText's
+// own text-align: right lines it up with the paragraph below it, same as the text heading did).
+// Sized by width with a natural aspect-ratio height - the SVG's own viewBox is a wide ~2.34:1
+// lockup, comfortable up to the column's own max-width without ever forcing IntroText past it.
+const BrandLockup = styled.img`
+  width: min(480px, 100%);
+  height: auto;
+  vertical-align: middle;
+`;
+
 function PrintingQueueOrDefault() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   const [activeTab, setActiveTab] = useState<WhatsThatTab>("feed");
@@ -88,15 +180,20 @@ function PrintingQueueOrDefault() {
       <StarburstBackground>
         <StarburstContent>
           <IntroText>
-            <h1>What&apos;s That Card?</h1>
+            <h1 className="mb-2">
+              <BrandLockup
+                src="/whatsthat-composite.svg"
+                alt="What's That Card?"
+                data-testid="whatsthat-brand-lockup"
+              />
+            </h1>
             <p>
               Test your Magic: the Gathering knowledge! One card at a time, help
               identify which real-world printing, artist, or descriptor tag each
-              card image depicts - contested and AI-suggested cards come first,
-              since they need your eyes the most.
+              card image depicts - contested and machine-suggested cards come
+              first, since they need your eyes the most.
             </p>
           </IntroText>
-          <AuthWidget />
           {isModerator ? (
             <Tab.Container
               activeKey={activeTab}

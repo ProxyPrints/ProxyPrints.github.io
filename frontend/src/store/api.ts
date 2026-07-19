@@ -22,6 +22,9 @@ import {
   CardsRequest,
   CardsResponse,
   ContributionsResponse,
+  CryptoProfileResponse,
+  DeleteDeckRequest,
+  DeleteDeckResponse,
   DFCPairsResponse,
   EditorSearchRequest,
   EditorSearchResponse,
@@ -33,9 +36,10 @@ import {
   ImportSitesResponse,
   Info,
   InfoResponse,
-  Kind as VoteQueueKind,
   Language,
   LanguagesResponse,
+  LoadDeckRequest,
+  LoadDeckResponse,
   ModerationDriveCardsResponse,
   ModerationDrivesResponse,
   ModerationQueueResponse,
@@ -54,11 +58,19 @@ import {
   QuestionFeedResponse,
   Reason as ReportReason,
   ReportCardResponse,
+  ResetSavedDecksRequest,
+  ResetSavedDecksResponse,
   SampleCardsResponse,
+  SaveCryptoProfileRequest,
+  SaveCryptoProfileResponse,
+  SavedDecksResponse,
+  SaveDeckRequest,
+  SaveDeckResponse,
   SourcesResponse,
   Tag,
   TagConsensusResponse,
   TagsResponse,
+  VoteQueueRequestKind as VoteQueueKind,
   VoteQueueResponse,
   WhoamiResponse,
 } from "@/common/schema_types";
@@ -93,6 +105,8 @@ export const api = createApi({
     QueryTags.BackendSpecific,
     QueryTags.SearchResults,
     QueryTags.SampleCards,
+    QueryTags.SavedDecks,
+    QueryTags.CryptoProfile,
   ],
   endpoints: (builder) => ({
     getImportSites: builder.query<Array<ImportSite>, void>({
@@ -216,6 +230,81 @@ export const api = createApi({
       }),
       providesTags: [QueryTags.BackendSpecific],
     }),
+    // Saved decks (docs/proposals/proposal-g-user-accounts-saved-decks.md §8) - every field
+    // below is an opaque, already-encrypted blob as far as this file is concerned; nothing
+    // here ever sees deck contents in plaintext. credentials: "include" throughout, same
+    // reasoning as getWhoami - every endpoint is 403 without a session, moderator or not.
+    getSavedDecks: builder.query<SavedDecksResponse, void>({
+      query: () => ({
+        url: `2/savedDecks/`,
+        method: "GET",
+        credentials: "include",
+      }),
+      providesTags: [QueryTags.SavedDecks],
+    }),
+    saveDeck: builder.mutation<SaveDeckResponse, SaveDeckRequest>({
+      query: (body) => ({
+        url: `2/saveDeck/`,
+        method: "POST",
+        body: JSON.stringify(body),
+        credentials: "include",
+        headers: getCSRFHeader(),
+      }),
+      invalidatesTags: [QueryTags.SavedDecks],
+    }),
+    loadDeck: builder.mutation<LoadDeckResponse, LoadDeckRequest>({
+      query: (body) => ({
+        url: `2/loadDeck/`,
+        method: "POST",
+        body: JSON.stringify(body),
+        credentials: "include",
+        headers: getCSRFHeader(),
+      }),
+    }),
+    deleteDeck: builder.mutation<DeleteDeckResponse, DeleteDeckRequest>({
+      query: (body) => ({
+        url: `2/deleteDeck/`,
+        method: "POST",
+        body: JSON.stringify(body),
+        credentials: "include",
+        headers: getCSRFHeader(),
+      }),
+      invalidatesTags: [QueryTags.SavedDecks],
+    }),
+    getCryptoProfile: builder.query<CryptoProfileResponse, void>({
+      query: () => ({
+        url: `2/cryptoProfile/`,
+        method: "GET",
+        credentials: "include",
+      }),
+      providesTags: [QueryTags.CryptoProfile],
+    }),
+    saveCryptoProfile: builder.mutation<
+      SaveCryptoProfileResponse,
+      SaveCryptoProfileRequest
+    >({
+      query: (body) => ({
+        url: `2/saveCryptoProfile/`,
+        method: "POST",
+        body: JSON.stringify(body),
+        credentials: "include",
+        headers: getCSRFHeader(),
+      }),
+      invalidatesTags: [QueryTags.CryptoProfile],
+    }),
+    resetSavedDecks: builder.mutation<
+      ResetSavedDecksResponse,
+      ResetSavedDecksRequest
+    >({
+      query: (body) => ({
+        url: `2/resetSavedDecks/`,
+        method: "POST",
+        body: JSON.stringify(body),
+        credentials: "include",
+        headers: getCSRFHeader(),
+      }),
+      invalidatesTags: [QueryTags.SavedDecks, QueryTags.CryptoProfile],
+    }),
   }),
 });
 
@@ -238,6 +327,13 @@ const {
   useGetNewCardsPageQuery: useRawGetNewCardsPageQuery,
   usePostExploreSearchQuery: useRawPostExploreSearchQuery,
   useGetWhoamiQuery: useRawGetWhoamiQuery,
+  useGetSavedDecksQuery: useRawGetSavedDecksQuery,
+  useSaveDeckMutation: useRawSaveDeckMutation,
+  useLoadDeckMutation: useRawLoadDeckMutation,
+  useDeleteDeckMutation: useRawDeleteDeckMutation,
+  useGetCryptoProfileQuery: useRawGetCryptoProfileQuery,
+  useSaveCryptoProfileMutation: useRawSaveCryptoProfileMutation,
+  useResetSavedDecksMutation: useRawResetSavedDecksMutation,
 } = api;
 
 export function useGetWhoamiQuery() {
@@ -325,6 +421,32 @@ export function usePostExploreSearchQuery(
     skip: !remoteBackendConfigured,
   });
 }
+
+// Both saved-deck reads 403 without an authenticated session, so callers (My Decks page,
+// CryptoSessionProvider) pass skip: true until whoami confirms authenticated - otherwise every
+// anonymous page load would fire a doomed request and surface a spurious error toast (see
+// store.ts's rtkQueryErrorLogger, which toasts every rejected RTKQ call).
+export function useGetSavedDecksQuery(options?: { skip?: boolean }) {
+  const remoteBackendConfigured = useRemoteBackendConfigured();
+  return useRawGetSavedDecksQuery(undefined, {
+    skip: !remoteBackendConfigured || (options?.skip ?? false),
+  });
+}
+
+export function useGetCryptoProfileQuery(options?: { skip?: boolean }) {
+  const remoteBackendConfigured = useRemoteBackendConfigured();
+  return useRawGetCryptoProfileQuery(undefined, {
+    skip: !remoteBackendConfigured || (options?.skip ?? false),
+  });
+}
+
+// Mutations are triggered explicitly, not auto-fetched, so there's no `skip` gate to add here -
+// callers already only render the buttons that trigger these when a backend is configured.
+export const useSaveDeckMutation = useRawSaveDeckMutation;
+export const useLoadDeckMutation = useRawLoadDeckMutation;
+export const useDeleteDeckMutation = useRawDeleteDeckMutation;
+export const useSaveCryptoProfileMutation = useRawSaveCryptoProfileMutation;
+export const useResetSavedDecksMutation = useRawResetSavedDecksMutation;
 
 //# endregion
 
@@ -802,11 +924,19 @@ export async function APIGetVoteQueue(
   });
 }
 
+// The 2/editorSearch/ (legacy, pre-E-2) endpoint predates degradedQueries entirely - there is no
+// equivalent signal to report, so callers always see an empty array from this path, never a
+// false positive/negative about degraded status.
+export interface EditorSearchResult {
+  results: SearchResults;
+  degradedQueries: Array<string>;
+}
+
 async function APIEditorSearchLegacy(
   backendURL: string,
   searchSettings: SearchSettings,
   queriesToSearch: Array<SearchQuery>
-): Promise<SearchResults> {
+): Promise<EditorSearchResult> {
   const rawResponse = await fetch(formatURL(backendURL, "/2/editorSearch/"), {
     method: "POST",
     body: JSON.stringify({
@@ -834,7 +964,7 @@ async function APIEditorSearchLegacy(
             )
           )
         );
-      return transformedResults;
+      return { results: transformedResults, degradedQueries: [] };
     }
     throw { name: content.name, message: content.message };
   });
@@ -844,7 +974,7 @@ export async function APIEditorSearch(
   backendURL: string,
   searchSettings: SearchSettings,
   queriesToSearch: Array<SearchQuery>
-): Promise<SearchResults> {
+): Promise<EditorSearchResult> {
   try {
     const rawResponse = await fetch(formatURL(backendURL, "/3/editorSearch/"), {
       method: "POST",
@@ -866,7 +996,11 @@ export async function APIEditorSearch(
     }
     return rawResponse.json().then((content) => {
       if (rawResponse.status === 200 && content.results != null) {
-        return content.results as EditorSearchResponse["results"];
+        return {
+          results: content.results as EditorSearchResponse["results"],
+          degradedQueries: (content.degradedQueries ??
+            []) as EditorSearchResponse["degradedQueries"],
+        };
       }
       throw { name: content.name, message: content.message };
     });

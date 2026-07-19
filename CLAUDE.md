@@ -25,6 +25,10 @@ only) for deployment, hosting, and domain specifics.
   `docs/troubleshooting.md` before the task closes (grep it first before
   re-deriving a fix — recurring blockers live there, not buried in a
   changelog).
+- **Policy text dates**: any change to on-site policy text (Privacy
+  Policy, Terms, etc. in `frontend/src/pages/about.tsx` and similar) must
+  update that page's own "Last updated" date in the same change — it's
+  hardcoded, not derived, so it goes stale silently otherwise.
 - **Wiki maintenance**: task-end check — did this change what a USER sees
   or what an ADMIN does? If yes: server sessions update the wiki page in
   the same task; cloud sessions add "wiki: `<page>` needs `<change>`" to
@@ -54,6 +58,18 @@ only) for deployment, hosting, and domain specifics.
   repo to the upstream parent for a fork). `gh pr merge` is blocked by an
   auto-mode classifier absent unambiguous human review — don't work around
   it, offer the user the choice instead.
+- **Merge-duty branch deletion**: never delete a branch in the same action
+  as merging its PR. Precondition before deleting any branch:
+  `gh pr list --base <branch>` must return empty (a stacked child PR
+  targeting it would otherwise auto-close the moment the base disappears —
+  this is exactly how PR #88 was lost). When in doubt, don't delete; leave
+  the stale branch for a later, separate cleanup pass.
+- **Before rebuilding a lost/auto-closed PR**: search for an existing
+  recovery first (`search_issues`/`search_pull_requests` for the same
+  topic, check open PRs and recent branches) rather than assuming none
+  exists. Two independent sessions rebuilt #88 in parallel on the same day
+  or the second, #95, rebuilt what #94 had already re-shipped and closed
+  the duplicate.
 - **Cloud/web sessions**: `WORKERS.md` and `CLAUDE.local.md` are
   server-local and won't exist in your clone — skip them. You're isolated:
   work on your named branch, push to origin, never to `master`; the owner
@@ -83,7 +99,25 @@ partial work reports in the same structure ("WHAT SHIPPED: nothing —
 blocked at step N because X"). Applies to every hold point, completion,
 status update, and blocker report.
 
+For any report longer than ~10 lines, or whenever normal message
+delivery has been unreliable: commit the fenced block to a
+`docs/reports/<date>-<topic>.md` file on a short-lived, **per-session
+uniquely-suffixed** branch (never the bare `report-relay` — it's
+retired; two independent sessions collided on it with no push
+conflict to warn either one), push, and reply with only the branch
+name, file path, **and the full GitHub blob URL to the pushed file**
+(`https://github.com/ProxyPrints/ProxyPrints.github.io/blob/<branch>/<path>`)
+plus one header line — a bare branch/path pair makes the reader
+reconstruct the URL by hand; give them the working link. See
+[[docs/lessons.md]] for the collision this prevents.
+
 ## docs/ index
+
+This is a flat working index for Claude Code sessions. For an
+audience-grouped map (including `docs/proposals/`, `docs/audits/`,
+`docs/reports/`) see [`docs/README.md`](docs/README.md); for a cold
+external reader's orientation to the whole fork, see
+[`docs/overview.md`](docs/overview.md).
 
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — symptom-first
   index of recurring blockers (grep your error text here first, before
@@ -105,6 +139,9 @@ status update, and blocker report.
   — the "Print!" export page's ordering tabs and flag icons.
 - [`docs/features/printing-tags.md`](docs/features/printing-tags.md) — the
   "What's That Card?" printing-consensus tagging system, backend + frontend.
+- [`docs/features/moderation.md`](docs/features/moderation.md) — Discord
+  OAuth login, the `Moderators` group gate, sensitive-tag approval queue,
+  card reports.
 - [`docs/features/local-file-source.md`](docs/features/local-file-source.md)
   — backend `LOCAL_FILE` catalog source type.
 - [`docs/features/card-dom-api.md`](docs/features/card-dom-api.md) —
@@ -113,15 +150,19 @@ status update, and blocker report.
   — Google Drive picker, Local Folder, and Save-PDF-to-Drive.
 - [`docs/features/grid-selector.md`](docs/features/grid-selector.md) —
   the card-version-picker modal + `Card.tsx`'s image loading/error states.
+- [`docs/features/artist-support-links.md`](docs/features/artist-support-links.md)
+  — zero-crawl, deterministic link-out to MTG Artist Connection
+  (`ArtistSupportLink.tsx` + its two surfaces).
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
   Upstreaming workflow in `docs/infrastructure.md`); accurate through
   2026-07-13 only, see readiness-audit.md §5 for what's changed since.
 - [`docs/upstreaming/readiness-audit.md`](docs/upstreaming/readiness-audit.md)
   — full fork-vs-upstream diff decomposed into feature chunks, dependency
-  graph, the upstream-value/extraction-ease ladder, and the branch
-  architecture proposal. Phase 2 status (which branches are actually cut)
-  lives at the top of this file.
+  graph, the upstream-value/extraction-ease ladder (now with a
+  license-provenance column), and the branch architecture proposal. Phase
+  2 status (which branches are actually cut) lives at the top of this
+  file.
 - [`docs/upstreaming/drafts/`](docs/upstreaming/drafts/) — draft PR
   descriptions for cut-but-not-sent `upstream-*` branches, one file per
   branch, never opened without the owner sending it personally.
@@ -134,9 +175,19 @@ status update, and blocker report.
   auto-generated, edited in place weekly: does each `upstream-*` branch
   still apply cleanly onto current `upstream/master`, and how far has
   upstream moved. Detection only, never auto-rebases anything.
+- [`docs/upstreaming/upstream-wiki-drift.md`](docs/upstreaming/upstream-wiki-drift.md)
+  — weekly automated tracking of changes to chilli-axe/mpc-autofill's own
+  wiki (detection only, never copied in).
 - [`docs/federation-v1.md`](docs/federation-v1.md) — federation verdict
   exchange format v1 (spec, implementation pending).
+- [`docs/federation/public-export-v1.md`](docs/federation/public-export-v1.md)
+  — HOLD spec: publish-first federation export (signed verdict JSONL, no
+  peer required), consumable by mpc-autofill forks and MIT-lineage proxy
+  tools. Owner review pending; see `docs/README.md`'s Plans & proposals.
 - [`docs/theory.md`](docs/theory.md) — the printing-identification
   pipeline as candidate-constrained decoding: false-accept bound,
   prior-art comparison, soundness mechanisms, Sybil/Dawid-Skene
   addendum. Doubles as the federation pitch's technical annex.
+- [`docs/documentation-process.md`](docs/documentation-process.md) — docs/
+  as source of truth, the wiki as a generated view of it, mechanical lint
+  vs. the quarterly judgment pass, upstream wiki tracking.

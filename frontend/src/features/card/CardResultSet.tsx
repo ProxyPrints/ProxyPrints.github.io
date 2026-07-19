@@ -56,8 +56,22 @@ function CardGridCard({
   );
 }
 
-function CardRow({ children }: PropsWithChildren) {
-  return (
+// react-bootstrap's Row column-count props (xs/sm/md/.../xxl) key off *viewport* width via
+// media queries, not the row's actual container width - correct for the classic modal/page
+// contexts (CardRow's parent spans close to full viewport width there), but wrong once the
+// same grid is embedded in the display page rail's ~150-250px-wide results column (Proposal H,
+// PR 2a): at a typical desktop viewport, the viewport-driven breakpoints still pick 4-6 columns,
+// squeezing each card into a sliver only a few px wide. "embedded" pins a fixed 2-column count
+// that fits the rail regardless of viewport size.
+function CardRow({
+  children,
+  variant = "modal",
+}: PropsWithChildren<{ variant?: "modal" | "embedded" }>) {
+  return variant === "embedded" ? (
+    <Row className="g-0 p-1" xs={2}>
+      {children}
+    </Row>
+  ) : (
     <Row className="g-0 p-1" xxl={6} xl={6} lg={4} md={3} sm={2} xs={2}>
       {children}
     </Row>
@@ -74,6 +88,7 @@ interface CardGridDisplayProps {
   favoriteIdentifiers?: Array<string>;
   originalIndexMap?: Map<string, number>;
   compressed?: boolean;
+  variant?: "modal" | "embedded";
 }
 
 /**
@@ -87,9 +102,10 @@ function CardsGroupedTogether({
   selectedImage,
   originalIndexMap,
   compressed,
+  variant,
 }: CardGridDisplayProps) {
   return (
-    <CardRow>
+    <CardRow variant={variant}>
       {imageIdentifiers.map((identifier, visualIndex) => {
         const originalIndex = originalIndexMap?.get(identifier) ?? visualIndex;
         return (
@@ -135,6 +151,7 @@ function FacetedCards({
   favoriteIdentifiers = [],
   originalIndexMap,
   compressed,
+  variant,
   facetByCallable,
 }: CardGridDisplayProps & {
   facetByCallable: (card: CardDocument) => string | undefined;
@@ -170,7 +187,7 @@ function FacetedCards({
         favoriteItems.push([identifier, originalIndex]);
       }
 
-      const cardDocument: CardDocument | null = cardDocuments[identifier];
+      const cardDocument: CardDocument | undefined = cardDocuments[identifier];
       if (cardDocument != null) {
         const facet = facetByCallable(cardDocument);
         if (facet === undefined) {
@@ -251,7 +268,7 @@ function FacetedCards({
             }`}
             sticky
           >
-            <CardRow>
+            <CardRow variant={variant}>
               {section.items.map(([identifier, optionNumber]) => (
                 <RenderIfVisible
                   key={`gridSelector-${identifier}-wrapper-${
@@ -283,12 +300,14 @@ export function CardResultSet({
   handleClick,
   favoriteIdentifiers = [],
   originalIndexMap,
+  variant,
 }: {
   imageIdentifiers: Array<string>;
   selectedImage?: string;
   handleClick?: { (identifier: string): void };
   favoriteIdentifiers?: Array<string>;
   originalIndexMap?: Map<string, number>;
+  variant?: "modal" | "embedded";
 }) {
   const facetBy = useAppSelector(selectFacetBy);
   const compressed = useAppSelector(selectCompressed);
@@ -314,6 +333,7 @@ export function CardResultSet({
         favoriteIdentifiers={favoriteIdentifiers}
         originalIndexMap={originalIndexMap}
         compressed={compressed}
+        variant={variant}
         facetByCallable={facetByCallable}
       />
     );
@@ -327,6 +347,7 @@ export function CardResultSet({
       facetNamesByKey={facetNamesByKey}
       originalIndexMap={originalIndexMap}
       compressed={compressed}
+      variant={variant}
     />
   );
 }

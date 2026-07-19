@@ -1,0 +1,10 @@
+{
+  "title": "Save Crypto Profile Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "saved": { "type": "boolean" }
+  },
+  "required": ["saved"],
+  "additionalProperties": false
+}

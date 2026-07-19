@@ -15,6 +15,29 @@ export const NotMPCURL = "https://www.notmpc.com";
 export const PringlePrints = "PringlePrints";
 export const PringlePrintsURL = "https://pringleprints.ca";
 
+// The desktop tool itself isn't a ProxyPrints-specific build - it's chilli-axe/mpc-autofill's
+// own upstream project, unmodified in this fork (confirmed: no ProxyPrints-specific strings
+// anywhere under desktop-tool/, and it never talks to our backend at all - it's a browser-
+// automation tool driving MakePlayingCards.com directly from local files, so there's no
+// backend-API coupling to diverge on). It reads the XML this site exports, and XML 2.0's
+// additions are structurally invisible to its 1.0-era parser (see downloadXML.ts's header
+// comment for the full compat evidence), so upstream's own releases work here as-is. Every
+// link/button pointing at it should say so honestly rather than implying it's ours.
+export const UpstreamDesktopTool = "the upstream mpc-autofill desktop tool";
+export const UpstreamDesktopToolReleasesURL =
+  "https://github.com/chilli-axe/mpc-autofill/releases/latest/";
+export const UpstreamDesktopToolWikiURL =
+  "https://github.com/chilli-axe/mpc-autofill/wiki/Desktop-Tool";
+export const UpstreamDesktopToolSourceURL =
+  "https://github.com/chilli-axe/mpc-autofill/tree/master/desktop-tool/";
+
+// Community-maintained MTG artist directory - not affiliated with this project. See
+// ArtistSupportLink.tsx and docs/features/artist-support-links.md for the full v1 design
+// (deterministic link-out only, no per-artist database, no existence check).
+export const MTGArtistConnection = "MTG Artist Connection";
+export const MTGArtistConnectionArtistBaseURL =
+  "https://www.mtgartistconnection.com/artist/";
+
 export const Card: CardType = CardTypeSchema.Card;
 export const Cardback: CardType = CardTypeSchema.Cardback;
 export const Token: CardType = CardTypeSchema.Token;
@@ -66,6 +89,7 @@ export const SearchSettingsKey = "searchSettings";
 export const FavoritesKey = "favorites";
 export const BackendURLKey = "backendURL";
 export const AnonymousIdKey = "anonymousId";
+export const ManualOverridesKey = "manualOverrides";
 
 export const Brackets: Array<number> = [
   18, 36, 55, 72, 90, 108, 126, 144, 162, 180, 198, 216, 234, 396, 504, 612,
@@ -77,7 +101,15 @@ export enum QueryTags {
   BackendSpecific = "backendSpecific",
   SearchResults = "searchResults",
   SampleCards = "sampleCards",
+  SavedDecks = "savedDecks",
+  CryptoProfile = "cryptoProfile",
 }
+
+// docs/proposals/proposal-g-user-accounts-saved-decks.md §8 - matches the backend's
+// SAVED_DECK_MIN_KDF_ITERATIONS default (MPCAutofill/MPCAutofill/settings.py) as the iteration
+// count used for every NEW crypto profile this client creates. The backend independently
+// enforces its own floor server-side regardless of what a client sends.
+export const SavedDeckKdfIterations = 600_000;
 
 export const S27: Cardstock = "(S27) Smooth";
 export const S30: Cardstock = "(S30) Standard Smooth";

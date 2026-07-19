@@ -25,7 +25,14 @@ repos:
     rev: v1.7.0
     hooks:
       - id: mypy
-        args: [--config-file, mypy.ini, desktop-tool/, MPCAutofill/]
+        args:
+          [
+            --config-file,
+            mypy.ini,
+            desktop-tool/,
+            MPCAutofill/,
+            federation-hash-tool/,
+          ]
         additional_dependencies: [
             # typing
             "django-stubs[compatible-mypy]",

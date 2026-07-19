@@ -1,0 +1,22 @@
+{
+  "title": "Save Crypto Profile Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "salt": { "type": "string" },
+    "kdfIterations": { "type": "integer" },
+    "passphraseWrappedMasterKey": { "type": "string" },
+    "passphraseWrappedMasterKeyNonce": { "type": "string" },
+    "recoveryWrappedMasterKey": { "type": "string" },
+    "recoveryWrappedMasterKeyNonce": { "type": "string" }
+  },
+  "required": [
+    "salt",
+    "kdfIterations",
+    "passphraseWrappedMasterKey",
+    "passphraseWrappedMasterKeyNonce",
+    "recoveryWrappedMasterKey",
+    "recoveryWrappedMasterKeyNonce"
+  ],
+  "additionalProperties": false
+}

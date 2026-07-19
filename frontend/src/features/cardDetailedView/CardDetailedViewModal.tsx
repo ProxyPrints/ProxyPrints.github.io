@@ -15,6 +15,7 @@ import { PrintingConsensusResponse } from "@/common/schema_types";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
 import { imageSizeToMBString, toTitleCase } from "@/common/utils";
+import { ArtistSupportLink } from "@/components/ArtistSupportLink";
 import { AutofillTable } from "@/components/AutofillTable";
 import { ClickToCopy } from "@/components/ClickToCopy";
 import DisableSSR from "@/components/DisableSSR";
@@ -158,7 +159,15 @@ export function CardDetailedViewModal({
                   ],
                   [
                     "Canonical Aritst",
-                    cardDocument.canonicalArtist?.name ?? "Unknown",
+                    cardDocument.canonicalArtist != null ? (
+                      <ArtistSupportLink
+                        artistName={cardDocument.canonicalArtist.name}
+                      >
+                        {cardDocument.canonicalArtist.name}
+                      </ArtistSupportLink>
+                    ) : (
+                      "Unknown"
+                    ),
                   ],
                 ]}
                 hover={true}

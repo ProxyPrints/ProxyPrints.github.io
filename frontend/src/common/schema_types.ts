@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, DFCPairsResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, SampleCardsResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
+//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, CryptoProfileResponse, DFCPairsResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
@@ -47,7 +47,10 @@
 //   const cardsRequest = Convert.toCardsRequest(json);
 //   const cardsResponse = Convert.toCardsResponse(json);
 //   const contributionsResponse = Convert.toContributionsResponse(json);
+//   const cryptoProfileResponse = Convert.toCryptoProfileResponse(json);
 //   const dFCPairsResponse = Convert.toDFCPairsResponse(json);
+//   const deleteDeckRequest = Convert.toDeleteDeckRequest(json);
+//   const deleteDeckResponse = Convert.toDeleteDeckResponse(json);
 //   const editorSearchRequest = Convert.toEditorSearchRequest(json);
 //   const editorSearchResponse = Convert.toEditorSearchResponse(json);
 //   const errorResponse = Convert.toErrorResponse(json);
@@ -58,6 +61,8 @@
 //   const importSitesResponse = Convert.toImportSitesResponse(json);
 //   const infoResponse = Convert.toInfoResponse(json);
 //   const languagesResponse = Convert.toLanguagesResponse(json);
+//   const loadDeckRequest = Convert.toLoadDeckRequest(json);
+//   const loadDeckResponse = Convert.toLoadDeckResponse(json);
 //   const moderationDriveCardsRequest = Convert.toModerationDriveCardsRequest(json);
 //   const moderationDriveCardsResponse = Convert.toModerationDriveCardsResponse(json);
 //   const moderationDrivesRequest = Convert.toModerationDrivesRequest(json);
@@ -80,7 +85,15 @@
 //   const printingTagQueueResponse = Convert.toPrintingTagQueueResponse(json);
 //   const reportCardRequest = Convert.toReportCardRequest(json);
 //   const reportCardResponse = Convert.toReportCardResponse(json);
+//   const resetSavedDecksRequest = Convert.toResetSavedDecksRequest(json);
+//   const resetSavedDecksResponse = Convert.toResetSavedDecksResponse(json);
 //   const sampleCardsResponse = Convert.toSampleCardsResponse(json);
+//   const saveCryptoProfileRequest = Convert.toSaveCryptoProfileRequest(json);
+//   const saveCryptoProfileResponse = Convert.toSaveCryptoProfileResponse(json);
+//   const saveDeckRequest = Convert.toSaveDeckRequest(json);
+//   const saveDeckResponse = Convert.toSaveDeckResponse(json);
+//   const savedDeckSummary = Convert.toSavedDeckSummary(json);
+//   const savedDecksResponse = Convert.toSavedDecksResponse(json);
 //   const searchEngineHealthResponse = Convert.toSearchEngineHealthResponse(json);
 //   const sourcesResponse = Convert.toSourcesResponse(json);
 //   const submitArtistVoteRequest = Convert.toSubmitArtistVoteRequest(json);
@@ -359,8 +372,26 @@ export interface SourceContribution {
   sourceType: SourceType;
 }
 
+export interface CryptoProfileResponse {
+  exists: boolean;
+  kdfIterations: number | null;
+  passphraseWrappedMasterKey: null | string;
+  passphraseWrappedMasterKeyNonce: null | string;
+  recoveryWrappedMasterKey: null | string;
+  recoveryWrappedMasterKeyNonce: null | string;
+  salt: null | string;
+}
+
 export interface DFCPairsResponse {
   dfcPairs: { [key: string]: string };
+}
+
+export interface DeleteDeckRequest {
+  key: string;
+}
+
+export interface DeleteDeckResponse {
+  deleted: boolean;
 }
 
 export interface EditorSearchRequest {
@@ -376,6 +407,14 @@ export interface SearchQuery {
 }
 
 export interface EditorSearchResponse {
+  /**
+   * Hash keys (matching `results`' own keys) of queries whose printing-specific search
+   * (expansion_code and/or collector_number) found zero hits under that filter and were
+   * retried without it. Absence from this list means either the query carried no printing
+   * filter at all, or the filter found real hits - exact-match behaviour when hits exist is
+   * completely unaffected by this field.
+   */
+  degradedQueries: string[];
   results: { [key: string]: string[] };
 }
 
@@ -444,6 +483,25 @@ export interface LanguagesResponse {
 export interface Language {
   code: string;
   name: string;
+}
+
+export interface LoadDeckRequest {
+  key: string;
+}
+
+export interface LoadDeckResponse {
+  ciphertext: string;
+  ciphertextNonce: string;
+  createdAt: string;
+  kind: LoadDeckResponseKind;
+  updatedAt: string;
+  wrappedDek: string;
+  wrappedDekNonce: string;
+}
+
+export enum LoadDeckResponseKind {
+  Deck = "deck",
+  Snapshot = "snapshot",
 }
 
 export interface ModerationDriveCardsRequest {
@@ -625,6 +683,14 @@ export interface ReportCardResponse {
   voteCast: boolean;
 }
 
+export interface ResetSavedDecksRequest {
+  confirm: boolean;
+}
+
+export interface ResetSavedDecksResponse {
+  deletedDeckCount: number;
+}
+
 export interface SampleCardsResponse {
   cards: Cards;
   [property: string]: any;
@@ -635,6 +701,47 @@ export interface Cards {
   CARDBACK: Card[];
   TOKEN: Card[];
   [property: string]: any;
+}
+
+export interface SaveCryptoProfileRequest {
+  kdfIterations: number;
+  passphraseWrappedMasterKey: string;
+  passphraseWrappedMasterKeyNonce: string;
+  recoveryWrappedMasterKey: string;
+  recoveryWrappedMasterKeyNonce: string;
+  salt: string;
+}
+
+export interface SaveCryptoProfileResponse {
+  saved: boolean;
+}
+
+export interface SaveDeckRequest {
+  ciphertext: string;
+  ciphertextNonce: string;
+  key: null | string;
+  kind?: LoadDeckResponseKind;
+  wrappedDek: string;
+  wrappedDekNonce: string;
+}
+
+export interface SaveDeckResponse {
+  key: string;
+}
+
+export interface SavedDecksResponse {
+  decks: SavedDeckSummary[];
+}
+
+export interface SavedDeckSummary {
+  ciphertext: string;
+  ciphertextNonce: string;
+  createdAt: string;
+  key: string;
+  kind: LoadDeckResponseKind;
+  updatedAt: string;
+  wrappedDek: string;
+  wrappedDekNonce: string;
 }
 
 export interface SearchEngineHealthResponse {
@@ -712,11 +819,11 @@ export interface ChildElement {
 }
 
 export interface VoteQueueRequest {
-  kind: Kind;
+  kind: VoteQueueRequestKind;
   page: number;
 }
 
-export enum Kind {
+export enum VoteQueueRequestKind {
   Artist = "artist",
   Printing = "printing",
   Tag = "tag",
@@ -1117,12 +1224,38 @@ export class Convert {
     return JSON.stringify(uncast(value, r("ContributionsResponse")), null, 2);
   }
 
+  public static toCryptoProfileResponse(json: string): CryptoProfileResponse {
+    return cast(JSON.parse(json), r("CryptoProfileResponse"));
+  }
+
+  public static cryptoProfileResponseToJson(
+    value: CryptoProfileResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("CryptoProfileResponse")), null, 2);
+  }
+
   public static toDFCPairsResponse(json: string): DFCPairsResponse {
     return cast(JSON.parse(json), r("DFCPairsResponse"));
   }
 
   public static dFCPairsResponseToJson(value: DFCPairsResponse): string {
     return JSON.stringify(uncast(value, r("DFCPairsResponse")), null, 2);
+  }
+
+  public static toDeleteDeckRequest(json: string): DeleteDeckRequest {
+    return cast(JSON.parse(json), r("DeleteDeckRequest"));
+  }
+
+  public static deleteDeckRequestToJson(value: DeleteDeckRequest): string {
+    return JSON.stringify(uncast(value, r("DeleteDeckRequest")), null, 2);
+  }
+
+  public static toDeleteDeckResponse(json: string): DeleteDeckResponse {
+    return cast(JSON.parse(json), r("DeleteDeckResponse"));
+  }
+
+  public static deleteDeckResponseToJson(value: DeleteDeckResponse): string {
+    return JSON.stringify(uncast(value, r("DeleteDeckResponse")), null, 2);
   }
 
   public static toEditorSearchRequest(json: string): EditorSearchRequest {
@@ -1225,6 +1358,22 @@ export class Convert {
 
   public static languagesResponseToJson(value: LanguagesResponse): string {
     return JSON.stringify(uncast(value, r("LanguagesResponse")), null, 2);
+  }
+
+  public static toLoadDeckRequest(json: string): LoadDeckRequest {
+    return cast(JSON.parse(json), r("LoadDeckRequest"));
+  }
+
+  public static loadDeckRequestToJson(value: LoadDeckRequest): string {
+    return JSON.stringify(uncast(value, r("LoadDeckRequest")), null, 2);
+  }
+
+  public static toLoadDeckResponse(json: string): LoadDeckResponse {
+    return cast(JSON.parse(json), r("LoadDeckResponse"));
+  }
+
+  public static loadDeckResponseToJson(value: LoadDeckResponse): string {
+    return JSON.stringify(uncast(value, r("LoadDeckResponse")), null, 2);
   }
 
   public static toModerationDriveCardsRequest(
@@ -1525,12 +1674,98 @@ export class Convert {
     return JSON.stringify(uncast(value, r("ReportCardResponse")), null, 2);
   }
 
+  public static toResetSavedDecksRequest(json: string): ResetSavedDecksRequest {
+    return cast(JSON.parse(json), r("ResetSavedDecksRequest"));
+  }
+
+  public static resetSavedDecksRequestToJson(
+    value: ResetSavedDecksRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("ResetSavedDecksRequest")), null, 2);
+  }
+
+  public static toResetSavedDecksResponse(
+    json: string
+  ): ResetSavedDecksResponse {
+    return cast(JSON.parse(json), r("ResetSavedDecksResponse"));
+  }
+
+  public static resetSavedDecksResponseToJson(
+    value: ResetSavedDecksResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("ResetSavedDecksResponse")), null, 2);
+  }
+
   public static toSampleCardsResponse(json: string): SampleCardsResponse {
     return cast(JSON.parse(json), r("SampleCardsResponse"));
   }
 
   public static sampleCardsResponseToJson(value: SampleCardsResponse): string {
     return JSON.stringify(uncast(value, r("SampleCardsResponse")), null, 2);
+  }
+
+  public static toSaveCryptoProfileRequest(
+    json: string
+  ): SaveCryptoProfileRequest {
+    return cast(JSON.parse(json), r("SaveCryptoProfileRequest"));
+  }
+
+  public static saveCryptoProfileRequestToJson(
+    value: SaveCryptoProfileRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SaveCryptoProfileRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSaveCryptoProfileResponse(
+    json: string
+  ): SaveCryptoProfileResponse {
+    return cast(JSON.parse(json), r("SaveCryptoProfileResponse"));
+  }
+
+  public static saveCryptoProfileResponseToJson(
+    value: SaveCryptoProfileResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SaveCryptoProfileResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toSaveDeckRequest(json: string): SaveDeckRequest {
+    return cast(JSON.parse(json), r("SaveDeckRequest"));
+  }
+
+  public static saveDeckRequestToJson(value: SaveDeckRequest): string {
+    return JSON.stringify(uncast(value, r("SaveDeckRequest")), null, 2);
+  }
+
+  public static toSaveDeckResponse(json: string): SaveDeckResponse {
+    return cast(JSON.parse(json), r("SaveDeckResponse"));
+  }
+
+  public static saveDeckResponseToJson(value: SaveDeckResponse): string {
+    return JSON.stringify(uncast(value, r("SaveDeckResponse")), null, 2);
+  }
+
+  public static toSavedDeckSummary(json: string): SavedDeckSummary {
+    return cast(JSON.parse(json), r("SavedDeckSummary"));
+  }
+
+  public static savedDeckSummaryToJson(value: SavedDeckSummary): string {
+    return JSON.stringify(uncast(value, r("SavedDeckSummary")), null, 2);
+  }
+
+  public static toSavedDecksResponse(json: string): SavedDecksResponse {
+    return cast(JSON.parse(json), r("SavedDecksResponse"));
+  }
+
+  public static savedDecksResponseToJson(value: SavedDecksResponse): string {
+    return JSON.stringify(uncast(value, r("SavedDecksResponse")), null, 2);
   }
 
   public static toSearchEngineHealthResponse(
@@ -2097,10 +2332,40 @@ const typeMap: any = {
     ],
     false
   ),
+  CryptoProfileResponse: o(
+    [
+      { json: "exists", js: "exists", typ: true },
+      { json: "kdfIterations", js: "kdfIterations", typ: u(0, null) },
+      {
+        json: "passphraseWrappedMasterKey",
+        js: "passphraseWrappedMasterKey",
+        typ: u(null, ""),
+      },
+      {
+        json: "passphraseWrappedMasterKeyNonce",
+        js: "passphraseWrappedMasterKeyNonce",
+        typ: u(null, ""),
+      },
+      {
+        json: "recoveryWrappedMasterKey",
+        js: "recoveryWrappedMasterKey",
+        typ: u(null, ""),
+      },
+      {
+        json: "recoveryWrappedMasterKeyNonce",
+        js: "recoveryWrappedMasterKeyNonce",
+        typ: u(null, ""),
+      },
+      { json: "salt", js: "salt", typ: u(null, "") },
+    ],
+    false
+  ),
   DFCPairsResponse: o(
     [{ json: "dfcPairs", js: "dfcPairs", typ: m("") }],
     false
   ),
+  DeleteDeckRequest: o([{ json: "key", js: "key", typ: "" }], false),
+  DeleteDeckResponse: o([{ json: "deleted", js: "deleted", typ: true }], false),
   EditorSearchRequest: o(
     [
       { json: "queries", js: "queries", typ: m(r("SearchQuery")) },
@@ -2122,7 +2387,10 @@ const typeMap: any = {
     false
   ),
   EditorSearchResponse: o(
-    [{ json: "results", js: "results", typ: m(a("")) }],
+    [
+      { json: "degradedQueries", js: "degradedQueries", typ: a("") },
+      { json: "results", js: "results", typ: m(a("")) },
+    ],
     false
   ),
   ErrorResponse: o(
@@ -2190,6 +2458,19 @@ const typeMap: any = {
     [
       { json: "code", js: "code", typ: "" },
       { json: "name", js: "name", typ: "" },
+    ],
+    false
+  ),
+  LoadDeckRequest: o([{ json: "key", js: "key", typ: "" }], false),
+  LoadDeckResponse: o(
+    [
+      { json: "ciphertext", js: "ciphertext", typ: "" },
+      { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
+      { json: "createdAt", js: "createdAt", typ: "" },
+      { json: "kind", js: "kind", typ: r("LoadDeckResponseKind") },
+      { json: "updatedAt", js: "updatedAt", typ: "" },
+      { json: "wrappedDek", js: "wrappedDek", typ: "" },
+      { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
     ],
     false
   ),
@@ -2407,6 +2688,14 @@ const typeMap: any = {
     ],
     false
   ),
+  ResetSavedDecksRequest: o(
+    [{ json: "confirm", js: "confirm", typ: true }],
+    false
+  ),
+  ResetSavedDecksResponse: o(
+    [{ json: "deletedDeckCount", js: "deletedDeckCount", typ: 0 }],
+    false
+  ),
   SampleCardsResponse: o(
     [{ json: "cards", js: "cards", typ: r("Cards") }],
     "any"
@@ -2418,6 +2707,70 @@ const typeMap: any = {
       { json: "TOKEN", js: "TOKEN", typ: a(r("Card")) },
     ],
     "any"
+  ),
+  SaveCryptoProfileRequest: o(
+    [
+      { json: "kdfIterations", js: "kdfIterations", typ: 0 },
+      {
+        json: "passphraseWrappedMasterKey",
+        js: "passphraseWrappedMasterKey",
+        typ: "",
+      },
+      {
+        json: "passphraseWrappedMasterKeyNonce",
+        js: "passphraseWrappedMasterKeyNonce",
+        typ: "",
+      },
+      {
+        json: "recoveryWrappedMasterKey",
+        js: "recoveryWrappedMasterKey",
+        typ: "",
+      },
+      {
+        json: "recoveryWrappedMasterKeyNonce",
+        js: "recoveryWrappedMasterKeyNonce",
+        typ: "",
+      },
+      { json: "salt", js: "salt", typ: "" },
+    ],
+    false
+  ),
+  SaveCryptoProfileResponse: o(
+    [{ json: "saved", js: "saved", typ: true }],
+    false
+  ),
+  SaveDeckRequest: o(
+    [
+      { json: "ciphertext", js: "ciphertext", typ: "" },
+      { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
+      { json: "key", js: "key", typ: u(null, "") },
+      {
+        json: "kind",
+        js: "kind",
+        typ: u(undefined, r("LoadDeckResponseKind")),
+      },
+      { json: "wrappedDek", js: "wrappedDek", typ: "" },
+      { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
+    ],
+    false
+  ),
+  SaveDeckResponse: o([{ json: "key", js: "key", typ: "" }], false),
+  SavedDecksResponse: o(
+    [{ json: "decks", js: "decks", typ: a(r("SavedDeckSummary")) }],
+    false
+  ),
+  SavedDeckSummary: o(
+    [
+      { json: "ciphertext", js: "ciphertext", typ: "" },
+      { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
+      { json: "createdAt", js: "createdAt", typ: "" },
+      { json: "key", js: "key", typ: "" },
+      { json: "kind", js: "kind", typ: r("LoadDeckResponseKind") },
+      { json: "updatedAt", js: "updatedAt", typ: "" },
+      { json: "wrappedDek", js: "wrappedDek", typ: "" },
+      { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
+    ],
+    false
   ),
   SearchEngineHealthResponse: o(
     [{ json: "online", js: "online", typ: true }],
@@ -2542,7 +2895,7 @@ const typeMap: any = {
   ),
   VoteQueueRequest: o(
     [
-      { json: "kind", js: "kind", typ: r("Kind") },
+      { json: "kind", js: "kind", typ: r("VoteQueueRequestKind") },
       { json: "page", js: "page", typ: 0 },
     ],
     false
@@ -2586,6 +2939,7 @@ const typeMap: any = {
     "nameAscending",
     "nameDescending",
   ],
+  LoadDeckResponseKind: ["deck", "snapshot"],
   Reason: ["broken_image", "low_quality", "nsfw", "other", "wrong_card"],
-  Kind: ["artist", "printing", "tag"],
+  VoteQueueRequestKind: ["artist", "printing", "tag"],
 };

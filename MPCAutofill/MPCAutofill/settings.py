@@ -65,7 +65,11 @@ PREPEND_WWW = env("PREPEND_WWW", default=False)
 PRINTING_TAG_MIN_VOTES = env.float("PRINTING_TAG_MIN_VOTES", default=2)
 PRINTING_TAG_MIN_SHARE = env.float("PRINTING_TAG_MIN_SHARE", default=0.6)
 PRINTING_TAG_ADMIN_WEIGHT = env.float("PRINTING_TAG_ADMIN_WEIGHT", default=5)
-PRINTING_TAG_AI_WEIGHT = env.float("PRINTING_TAG_AI_WEIGHT", default=0.5)
+# PRINTING_TAG_AI_WEIGHT is the old name (a fossil of the pre-2026-07-15 VoteSource.AI split) -
+# still read as a fallback so an existing deployment's env doesn't silently regress on upgrade.
+PRINTING_TAG_MACHINE_WEIGHT = env.float(
+    "PRINTING_TAG_MACHINE_WEIGHT", default=env.float("PRINTING_TAG_AI_WEIGHT", default=0.5)
+)
 # weight of a vote cast by a privileged user (a Moderators-group member - see
 # cardpicker.moderation.privileged_weight). Defaults to the admin weight: a lone moderator
 # clears the consensus threshold the same way a lone admin does.
@@ -87,6 +91,18 @@ VOTE_FEDERATED_WEIGHT = env.float("VOTE_FEDERATED_WEIGHT", default=1.0)
 PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="300/h")
 # same mechanism for the card report button (see cardpicker.views.post_report_card).
 CARD_REPORT_RATE = env("CARD_REPORT_RATE", default="10/d")
+
+# Saved decks (see docs/proposals/proposal-g-user-accounts-saved-decks.md, decision 4). A
+# generous, configurable soft cap on named decks (SavedDeckKind.DECK rows only - snapshot rows
+# are deliberately uncapped, see cardpicker.models.SavedDeck) per user. Purely an abuse guard,
+# not a storage concern (a deck is ~15-35 KB) - stops a runaway script from becoming a
+# moderation problem, not a disk-management knob.
+SAVED_DECK_MAX_PER_USER = env.int("SAVED_DECK_MAX_PER_USER", default=100)
+# zero-knowledge encryption (see the proposal's §8 amendment) - a defensive floor against a
+# buggy/malicious client persisting a weak PBKDF2 iteration count into UserCryptoProfile. The
+# spec's own floor is 600,000; this is a settings knob only so it can be raised later without a
+# code change, never lowered below what's already been accepted from real users.
+SAVED_DECK_MIN_KDF_ITERATIONS = env.int("SAVED_DECK_MIN_KDF_ITERATIONS", default=600_000)
 
 # Fuzzy tag-matching confidence thresholds. See cardpicker.tags.Tags.match_tag_fuzzy.
 TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD = env.float("TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD", default=0.92)
@@ -177,8 +193,23 @@ AUTHENTICATION_BACKENDS = [
 ]
 ACCOUNT_EMAIL_VERIFICATION = "none"  # Discord is the identity authority; no verification emails
 SOCIALACCOUNT_AUTO_SIGNUP = True  # first Discord login auto-creates the Django user
-# Keep allauth's confirmation interstitial on the login link (default-secure; costs one click).
-SOCIALACCOUNT_LOGIN_ON_GET = False
+# Skip allauth's confirmation interstitial and go straight to the Discord redirect on GET.
+# Tradeoff (read from allauth's own source, socialaccount/providers/base/views.py +
+# base/utils.py): that interstitial exists as a login-CSRF guard - it's checked BEFORE any
+# OAuth session state is written, so without it a bare cross-site GET (<img src>, hidden
+# iframe, plain link) to this login URL immediately writes session state and redirects to
+# Discord with no same-site interaction required. Combined with AUTO_SIGNUP=True above, if
+# the victim's browser already holds a live, previously-authorized Discord session for this
+# app, that forced flow can complete silently on both sides. The ceiling on that is still low
+# for this app: Discord identity resolution isn't attacker-controlled, so the worst case is a
+# surprising silent login into the victim's OWN correctly-identified account - not the classic
+# login-CSRF account-substitution attack where an attacker's account ends up with the
+# victim's data. Skipping the interstitial is the near-universal convention for "Sign in with
+# X" buttons (the button click on OUR page is already the user's confirmation); one extra
+# click after that adds friction without closing a realistic gap for a zero-knowledge app with
+# no attacker-controlled account identity. Same category of call already made for logout
+# below (docs/features/moderation.md).
+SOCIALACCOUNT_LOGIN_ON_GET = True
 # Logout via a plain link so it can round-trip back to the frontend with ?next=. The tradeoff
 # (a hostile page could force-logout a moderator - a nuisance, not an escalation) is documented
 # in docs/features/moderation.md.

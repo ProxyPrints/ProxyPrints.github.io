@@ -30,7 +30,7 @@ file, a real peer able to verify and read it — with **zero
 catalog-integrity risk** on our side: nothing a bad or buggy peer
 publishes can ever reach our own `Card`/vote tables, because we never
 import. Consuming is a strictly later, separate decision, gated on both
-having a peer worth trusting *and* fixing the gate issue documented
+having a peer worth trusting _and_ fixing the gate issue documented
 below — not before either.
 
 **Expected onboarding path for any new participant: subscriber-first.**
@@ -51,13 +51,14 @@ beyond what signing itself needs), and a display badge surfacing "N peer
 instances agree" — is deliberately dependency-free: no vote system, no
 consensus engine, no moderation stack required. Any mpc-autofill instance
 could subscribe to a verdict feed and show peer-agreement badges without
-adopting anything else this fork has built. That makes it the *only*
+adopting anything else this fork has built. That makes it the _only_
 plausibly upstream-shaped piece of the whole federation program —
 everything on the publisher side assumes the vote/consensus/moderation
 stack this fork built that upstream doesn't have. Tracked as a deferred
-entry on `docs/upstreaming/readiness-audit.md`'s ladder, gated on
-federation actually having a live peer to subscribe to — there's nothing
-real to extract or offer before that exists to prove the format against.
+entry (Tier 6) on `docs/upstreaming/readiness-audit.md`'s ladder, gated
+on federation actually having a live peer to subscribe to — there's
+nothing real to extract or offer before that exists to prove the format
+against.
 
 ## File shape
 
@@ -123,7 +124,7 @@ real to extract or offer before that exists to prove the format against.
 
 **The bug**: `cardpicker/vote_consensus.py`'s `is_human_backed_source()`
 checks membership in `_MACHINE_DERIVED_SOURCES = {VoteSource.DEDUCTION,
-VoteSource.OCR}` — `VoteSource.FEDERATED` is *not* in that set, so
+VoteSource.OCR}` — `VoteSource.FEDERATED` is _not_ in that set, so
 `is_human_backed_source(VoteSource.FEDERATED)` returns `True` today
 (verified directly against current code at `vote_consensus.py:31`,
 2026-07-19 — not just asserted). If federation import is ever built by
@@ -141,10 +142,12 @@ the human-backed gate; promotable to a gate-clearing mode later),
 mirroring Proposal G's `AUTHED_VOTE_GATE_MODE` idiom exactly: an
 env-driven flag plus a dedicated weight/treatment function, never a
 hand-coded branch scattered through the consensus resolvers (see
-`docs/proposals/proposal-g-user-accounts-saved-decks.md` §7, on the
-`claude/user-accounts-saved-decks-m8eyf5` branch — not yet merged as of
-this writing, so treat that precedent as itself still subject to change
-until it lands). Promotion should be **per-peer**, not one global switch:
+`docs/proposals/proposal-g-user-accounts-saved-decks.md` §7 — verified
+current, not assumed: `AUTHED_VOTE_GATE_MODE` is actually shipped
+(resolved for v1 as `"status_quo"` default, a real setting routed through
+`authed_vote_weight()`), so this is a live pattern to mirror, not just a
+design precedent still waiting to land). Promotion should be **per-peer**,
+not one global switch:
 once a specific peer's verdicts have measured reliability — `docs/theory.md`'s
 "Relation to Dawid-Skene reliability estimation" section already frames a
 federation peer as exactly the kind of noisy source that model applies

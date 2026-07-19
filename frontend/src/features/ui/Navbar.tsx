@@ -12,7 +12,10 @@ import {
   ContentMaxWidth,
   NavbarHeight,
   NavbarLogoHeight,
+  UpstreamDesktopTool,
+  UpstreamDesktopToolReleasesURL,
 } from "@/common/constants";
+import { isUnifiedDisplayPageEnabled } from "@/common/featureFlags";
 import DisableSSR from "@/components/DisableSSR";
 import { RightPaddedIcon } from "@/components/icon";
 import { BackendConfig } from "@/features/backend/BackendConfig";
@@ -20,6 +23,8 @@ import {
   DownloadManager,
   OpenDownloadManagerButton,
 } from "@/features/download/DownloadManager";
+import { AuthWidget } from "@/features/moderation/AuthWidget";
+import { useGetWhoamiQuery } from "@/store/api";
 import {
   useAnyBackendConfigured,
   useProjectName,
@@ -51,6 +56,8 @@ export default function ProjectNavbar() {
 
   const projectName = useProjectName();
   const router = useRouter();
+  const whoami = useGetWhoamiQuery();
+  const isAuthenticated = whoami.data?.authenticated === true;
 
   return (
     <DisableSSR>
@@ -84,6 +91,16 @@ export default function ProjectNavbar() {
                   eventKey="/editor"
                 >
                   Editor
+                </Nav.Link>
+              )}
+              {anyBackendConfigured && isUnifiedDisplayPageEnabled() && (
+                <Nav.Link
+                  as={Link}
+                  href="/display"
+                  active={router.route === "/display"}
+                  eventKey="/display"
+                >
+                  Display (beta)
                 </Nav.Link>
               )}
               {remoteBackendConfigured && (
@@ -126,14 +143,41 @@ export default function ProjectNavbar() {
                   What&apos;s That Card?
                 </Nav.Link>
               )}
+              {remoteBackendConfigured && isAuthenticated && (
+                <Nav.Link
+                  as={Link}
+                  href="/myDecks"
+                  active={router.route === "/myDecks"}
+                  eventKey="/myDecks"
+                >
+                  My Decks
+                </Nav.Link>
+              )}
               <Nav.Link
-                href="https://github.com/chilli-axe/mpc-autofill/releases/latest"
+                href={UpstreamDesktopToolReleasesURL}
                 target="_blank"
+                title={`${UpstreamDesktopTool} (compatible with ${projectName} project files)`}
               >
                 Download
               </Nav.Link>
             </Nav>
-            <Nav className="ms-auto d-flex">
+            <Nav className="ms-auto d-flex align-items-center">
+              {/* Deliberately NOT a Nav.Link (unlike its siblings below) - react-bootstrap's
+                  Nav.Link-with-eventKey renders its own <a href="#"> around whatever children
+                  it's given, and AuthWidget already supplies a real <a> of its own for both the
+                  signed-in ("Sign out") and signed-out ("Sign in") states. Wrapping a real anchor
+                  in another anchor is invalid, nested-anchor HTML - the outer <a> silently
+                  intercepts every click, so the inner Discord/logout link never actually
+                  navigates (no error, no console warning - see docs/lessons.md's "components
+                  that each correctly render an anchor can compose into invalid nested-anchor
+                  HTML" entry). A plain wrapper carrying the same m-0 py-0 spacing the Nav.Link
+                  used to provide is all this needs - AuthWidget has no use for Nav.Link's
+                  active/eventKey tab machinery anyway. */}
+              {remoteBackendConfigured && (
+                <div className="m-0 py-0">
+                  <AuthWidget />
+                </div>
+              )}
               <Nav.Link className="m-0 py-0" eventKey="download-manager">
                 <OpenDownloadManagerButton
                   handleClick={handleShowDownloadManager}

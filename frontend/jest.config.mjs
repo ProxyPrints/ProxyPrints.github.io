@@ -32,7 +32,7 @@ const jestConfigWithOverrides = async (...args) => {
 
   res.transformIgnorePatterns = res.transformIgnorePatterns.map((pattern) => {
     if (pattern === "/node_modules/") {
-      return "node_modules/(?!(until-async)|(node-fetch)|(data-uri-to-buffer)|(fetch-blob)|(formdata-polyfill)/)";
+      return "node_modules/(?!(until-async)|(node-fetch)|(data-uri-to-buffer)|(fetch-blob)|(formdata-polyfill)|(marked)/)";
     }
     return pattern;
   });

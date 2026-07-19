@@ -181,6 +181,7 @@ frontend/public/mockServiceWorker.js
 frontend/public/pdf.worker.min.mjs
 frontend/public/keyrune/
 frontend/src/common/generated/
+frontend/generated-docs/
 /image-cdn/node_modules/*
 /image-cdn/.wrangler/*
 

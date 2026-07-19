@@ -1,6 +1,6 @@
 # Printing-aware card tagging ("What's That Card?" vote queue)
 
-_Current-state reference, as of 2026-07-16._ Full stage-by-stage build
+_Current-state reference, as of 2026-07-17._ Full stage-by-stage build
 history (Stages 1–7 below): `git log e4eb6cb3 -- docs/features/printing-tags.md`
 and earlier commits — that SHA is the last commit before this file was
 rewritten from a linear changelog into this reference.
@@ -33,14 +33,14 @@ printings, artists, tags, and moderation from one screen.
   directly to `CanonicalCard`.
 - **Consensus**: `cardpicker/printing_consensus.py::resolve_printing(card)`
   — weighted-vote formula, weight by source (user 1, admin
-  `PRINTING_TAG_ADMIN_WEIGHT` default 5, AI/deduction/OCR
-  `PRINTING_TAG_AI_WEIGHT` default 0.5; settings in
-  `MPCAutofill/settings.py`). `PRINTING_TAG_MIN_VOTES` compares against
+  `PRINTING_TAG_ADMIN_WEIGHT` default 5, machine (deduction/OCR)
+  `PRINTING_TAG_MACHINE_WEIGHT` default 0.5; settings in
+  `MPCAutofill/MPCAutofill/settings.py`). `PRINTING_TAG_MIN_VOTES` compares against
   _summed weight_, not row count. A winning group also needs
   `PRINTING_TAG_MIN_SHARE` (default 0.6) of total weight **and** at least
-  one non-AI vote — `vote_consensus.is_human_backed_source()` is the one
+  one non-machine vote — `vote_consensus.is_human_backed_source()` is the one
   place that knows which `VoteSource` values are machine-derived, so no
-  volume of AI-only votes can resolve a card alone.
+  volume of machine-only votes can resolve a card alone.
 - **Search consumption**: `printing_consensus.py::get_resolved_printings(identifiers)`
   is the single shared gate (`printing_tag_status == RESOLVED` only) that
   both the search re-rank (`search_functions.py::retrieve_card_identifiers`,
@@ -114,7 +114,7 @@ printings, artists, tags, and moderation from one screen.
   non-overlapping "cards needing review in any category" figure.
   `confirmable`/`contested`/`fresh` mirror the feed's own three tiers and
   are independent metrics, **not** a partition of `total` - a card can
-  count toward more than one bucket (e.g. AI-suggested-but-unconfirmed
+  count toward more than one bucket (e.g. machine-suggested-but-unconfirmed
   printing plus a still-fresh artist question). A fresh, untouched card
   defaults to `UNRESOLVED` on both `printing_tag_status` and
   `artist_vote_status` simultaneously, which is why a flat sum of the
@@ -130,6 +130,19 @@ printings, artists, tags, and moderation from one screen.
   `PrintingTagQueue.tsx`/`GenericVoteQueue.tsx`/`ModerationQueue.tsx` tab
   switcher was deleted, its mechanics extracted into `cardPanel.tsx` and
   reused directly.
+- **Per-question local state (`chipStates`/`revealed`/`filterExpanded`/etc)
+  resets inside the same `.then()` as `setItem(...)`**, not via a separate
+  `useEffect` keyed on `[item?.card.identifier, item?.type]` — that
+  dependency array silently skips the reset whenever two consecutive feed
+  items share both values (the same card can carry more than one pending
+  question, or the same question can be re-served), leaving a chip left
+  "positive" from the previous card filtering the new card's candidate
+  grid against an unrelated attribute — observed as the grid rendering
+  empty until the user happened to touch a chip themselves (the only
+  other thing that ever updated `chipStates`). Resetting unconditionally
+  alongside `setItem` removes the dependency array (and the class of bug
+  it enables) entirely, rather than trying to compute a "definitely always
+  changes" key.
 - `starburstShape.ts` — seeded PRNG (mulberry32) generates the animated
   starburst background, 5 precomputed frames per layer; skipped under
   `prefers-reduced-motion` (checked once via `matchMedia`).
@@ -222,8 +235,12 @@ printings, artists, tags, and moderation from one screen.
     no grid. YES casts the same vote Level 2's tap does; NOT SURE and NO
     both drop to Level 2 with no vote cast (per the state diagram, they're
     intentionally identical transitions — "an honest skip beats a coerced
-    guess"). `identify_printing` items (and `confirm_suggestion` items
-    without a `suggestedPrinting`) skip Level 1 entirely.
+    guess"), but NO additionally records the rejected candidate's
+    identifier client-side (`rejectedCandidateIds` — never NOT SURE, which
+    is genuine uncertainty, not a rejection) so Level 2 excludes it — see
+    the no-re-presentation rule below. `identify_printing` items (and
+    `confirm_suggestion` items without a `suggestedPrinting`) skip Level 1
+    entirely.
   - **Level 2** — the candidate grid. The attribute-chip ring is now an
     opt-in, collapsed-by-default "Filter by attribute" disclosure instead
     of always-on chrome — selecting a candidate ignores filter state
@@ -236,6 +253,37 @@ printings, artists, tags, and moderation from one screen.
     match" until a chip was explicitly set is gone — it existed only to
     force a description before a now-superseded flow, and directly
     conflicted with the filter panel defaulting to collapsed.
+  - **No-re-presentation rule** (owner-directed fix, was a real live bug:
+    Level 1 "Is it M21 203?" → NO → Level 2 grid containing only M21 203
+    again): within a single question item's flow, a candidate the user
+    has just rejected is never re-presented as a selectable answer at a
+    later level — each level's display set is candidates minus
+    already-rejected-this-item. Level 2's grid is computed from
+    `nonRejectedCandidates` (all candidates minus `rejectedCandidateIds`,
+    filtered _before_ the attribute-chip filter, so "N hidden by your
+    tags" doesn't conflate a rejection with a filter), and the singleton
+    case — rejecting the one and only candidate, or a rejection that
+    happens to empty the remaining set — skips the grid entirely: the
+    prompt swaps to a contextual "Got it — not that one. Is it any
+    official printing at all?" with the rejected candidate shown only as
+    grayed, non-interactive context (never a button), falling straight
+    through to the same classified-exit choice (None of these / custom
+    art / skip) that always rendered below the grid. `rejectedCandidateIds`
+    is per-item state, reset alongside every other per-question field in
+    the same fetch effect (see the module's own comment on why that reset
+    can't be a separate dependency-keyed effect). Vote semantics are
+    unchanged by this fix: Level 1's NO never cast a vote before (no
+    schema concept of "reject just this one candidate" — see Level 0's
+    identical constraint above), and still doesn't; `rejectSuggestion`
+    only changes what's _displayed_, the one real negative vote per item
+    still only happens once, at the eventual "None of these"/custom-art/
+    skip tap. Audited as clean for the same re-presentation pattern:
+    Level 0 below (NO opens the deckbuilder's general grid-selector
+    browse UI, a different paradigm from a guided funnel step — showing
+    the current image among many search results there is normal browse
+    behavior, not a re-ask) and Level 3 (only ever asks about attribute
+    groups `getOpenExclusionGroups` finds genuinely open on the _selected_
+    candidate — inherently already excludes anything already answered).
   - **Level 3** — conditional, not a standard stage. Selecting a candidate
     auto-tags everything derivable from it (see above); Level 3 only
     renders when `getOpenExclusionGroups` finds a genuinely open group,
@@ -279,6 +327,33 @@ printings, artists, tags, and moderation from one screen.
   `Set<identifier>`, not Redux, since it only needs to survive this
   browser session, not a reload. No banners, no counters, no review
   mode.
+- **Item (c) — requested-printing badge on editor slots** (frontend-
+  polish package), a sibling of Level 0 above but a distinct concept:
+  where Level 0 shows the _resolved canonical_ printing (confirm/deny
+  what indexing found), this badge shows the _requested_ printing —
+  the expansion code + collector number the slot's own search query
+  actually asked for (e.g. `MID 245`), which otherwise gets visually
+  "sanitized away" the moment an image is selected, with no at-a-glance
+  way to tell which specific printing was requested short of opening
+  the change-query modal. Not the resolved `canonicalCard`, and not
+  printing-tag consensus status. Originally built inline for Proposal
+  H Step 2 PR 2b's `/display` rail header; extracted into its own
+  `frontend/src/features/card/RequestedPrintingBadge.tsx` component so
+  both surfaces — the `/display` rail header and `CardSlot.tsx`'s own
+  editor slots — mount the exact same badge, one place the degraded-
+  style logic lives so the two can't drift apart. Gate: the slot's
+  query names a specific printing (`searchQuery.expansionCode != null`)
+  — always-visible when that's true (no hover gating; the point is
+  at-a-glance), nothing when it isn't. Style: normal (`bg-secondary`)
+  when resolved cleanly, degraded (`bg-warning`, warning-triangle icon,
+  hover tooltip) when the backend's `EditorSearchResponse.degradedQueries`
+  flagged this exact query — i.e. the printing-specific search found
+  nothing and the backend retried unfiltered, so what's shown is the
+  closest available match, not a guaranteed exact hit (see
+  `selectIsSearchQueryDegraded` in `searchResultsSlice.ts`). Unlike
+  Level 0 (gated on a _selected image_ existing to compare against),
+  this badge is independent of whether an image has been selected yet
+  — it's about what was asked for, not what's currently shown.
 - **Vote provenance (`voteSurface`)**: `AbstractWeightedVote.vote_surface`
   (backend PR #48, nullable additive field, already on
   `SubmitPrintingTagRequest`/`SubmitArtistVoteRequest`/
@@ -292,6 +367,30 @@ printings, artists, tags, and moderation from one screen.
   Every other voting surface (`PrintingTagPicker.tsx`, `TagVotePicker.tsx`,
   `ReportsPanel.tsx`) is untouched — `voteSurface` stays `undefined`
   there, not a guessed value.
+- **Branding integration** (frontend-polish package): the plain text
+  `<h1>What's That Card?</h1>` heading is now the mark+wordmark lockup
+  SVG (`frontend/public/whatsthat-composite.svg`) instead. Source assets
+  (`question-mark.svg`/mark, `wordmark.svg`/word, `composite.svg`/lockup
+  — gradient ids `wtc-grad-mark`/`wtc-grad-word`/`wtc-grad-comp`
+  pre-namespaced so more than one could coexist on a page without id
+  collision, though only the composite is used here) came from the
+  `assets/whatsthat-branding` branch, copied into `frontend/public/` as
+  `whatsthat-{mark,wordmark,composite}.svg` (renamed from the generic
+  source names to avoid colliding with this repo's existing flat
+  `public/*.svg` namespace — see `flags.tsx`'s identical `<img src="/...">`
+  pattern, followed here rather than inlining the SVG as a React
+  component). Still wrapped in a real `<h1>` (not a bare `<img>`) so the
+  page's semantic heading and its accessible name (the `alt` text)
+  survive the swap unchanged. Visually verified via real Playwright
+  screenshots at 1280px desktop and 390px mobile against the page's own
+  ratified palette (the `#ff4719` orange background + navy `#12262c`
+  accent from the visual-diagnosis pass above) — the gold gradient +
+  navy outline reads cleanly at both widths with no collision with the
+  candidate grid/stats text below it. `whatsthat-mark.svg` and
+  `whatsthat-wordmark.svg` are copied in too but not yet used on this
+  page — reserved for the queued PWA/manifest-icons pass (mark) and any
+  future compact-lockup surface (wordmark), not invented placements
+  here.
 
 ## Key files (Stages 1–7; Stage 8+ files are in [[catalog-completion-plan.md]])
 
@@ -1485,7 +1584,7 @@ unrelated to the OCR token-position bug above. Two separate fixes, not
 one parser fix arriving twice - the D2.5 deterministic tier is **not**
 implied by this OCR fix and was not built.
 
-## Key files
+## Key files (Stage 8 era, historical)
 
 - Backend: `cardpicker/printing_consensus.py`,
   `cardpicker/printing_metadata_import.py`,
@@ -1520,7 +1619,7 @@ implied by this OCR fix and was not built.
   `get_baked_git_sha`), `cardpicker/management/commands/purge_machine_votes.py`,
   migration `0061_pilotrunledger_cardartistvote_run_id_and_more.py`
 
-## Known gaps
+## Known gaps (Stage 8 era, historical)
 
 - The Stage 7 layout (starburst/card/chip-ring composition) was hand-tuned
   via iterative screenshot review, not built against a real design system -
@@ -1540,7 +1639,7 @@ implied by this OCR fix and was not built.
   server follow-up.
 - `netPolarity`'s optimistic client-side update (set to the tapped
   direction's extreme immediately, reconciled with the server's real
-  value once the response lands) isn't linear in vote count once AI/admin
+  value once the response lands) isn't linear in vote count once machine/admin
   weights are involved - can't fully verify the two never visibly diverge
   against MSW mocks alone.
 - Border Color's v1 chip set omits gold/yellow `border_color` values, and
@@ -1550,8 +1649,8 @@ implied by this OCR fix and was not built.
   feedback.
 - Stage numbering: Stage 4 (no-match reason tags, merged as PR #12),
   Stage 5 (tag identity/presentation decoupling via `Tag.display_name`,
-  merged as PR #14), and Stage 6 (this document's current stage —
-  deductive printing-tag backfill) reflect three concurrently-developed
+  merged as PR #14), and Stage 6 (deductive printing-tag backfill) reflect
+  three concurrently-developed
   branches sharing this one doc file, numbered in landing order to avoid
   collisions.
 - **Future work: anonymous_id trust scoring via honeypot questions**
@@ -1559,7 +1658,7 @@ implied by this OCR fix and was not built.
   serve a voter a card whose printing is already known with very high
   confidence — ideally an already-`RESOLVED` card (real human-backed
   consensus), Stage 6's D1 tier as a fallback pool (0 false positives
-  across 27,424 live cards, but still AI-derived, not independently
+  across 27,424 live cards, but still machine-derived, not independently
   human-verified, so using it as "trusted" ground truth to police other
   submissions has a circularity worth being honest about) — without
   telling the voter it's a check, and score their `anonymous_id` based on
@@ -1568,7 +1667,7 @@ implied by this OCR fix and was not built.
   pattern as reCAPTCHA/Mechanical-Turk gold-standard questions. Known
   limitation before this is worth building: `anonymous_id` is a
   client-generated, trivially rotatable value
-  (`frontend/src/common/anonymousId.ts`) with no persisted identity —
+  (`frontend/src/common/cookies.ts`) with no persisted identity —
   a trust score raises the cost of poisoning (a fresh ID needed per
   abuse attempt) but doesn't stop a determined actor, so it's a speed
   bump, not a hard Sybil defense. Also a genuinely new subsystem, not a
@@ -1709,8 +1808,9 @@ federation, deferred), item 5 (questionFeed ordering mirror, separate follow-up 
 Scryfall's own token detection), task #111 (unrelated CI noise in the thumbnail-refresh
 trigger), PR #19's disposition (owner's convenience).
 
-**Full-catalog run: not yet fired.** This report is the synthesizing deliverable requested
-before that authorization - awaiting explicit owner go-ahead.
+**Full-catalog run: since fired and completed** (see `catalog-completion-plan.md`'s Status
+section for final numbers). This report was the synthesizing deliverable requested before
+that authorization.
 
 ## Two fast-follows, built after HOLD #2 (2026-07-16)
 

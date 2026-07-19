@@ -201,7 +201,7 @@ turns out to be:
    of a hash-collision-driven error to "one wasted compute," never "one
    silently-wrong vote."
 2. **The human-backed gate** (`vote_consensus.is_human_backed_source`):
-   machine-sourced votes (`VoteSource.OCR`, `VoteSource.DEDUCTION`, AI
+   machine-sourced votes (`VoteSource.OCR`, `VoteSource.DEDUCTION`, machine
    weight 0.5 by default) can never _alone_ clear the resolution
    threshold (`PRINTING_TAG_MIN_VOTES=2`) — at least one human vote
    (weight 1.0) or admin vote (weight 5.0) must be present in the
@@ -254,6 +254,17 @@ cards:
 
 ## 6. Sybil/bad-actor unification (future work — nothing built)
 
+**Readiness re-checked 2026-07-18: still not ready.** Total vote rows
+now exceed 155,000, but that's almost entirely machine throughput from
+this pipeline's own trusted engines (`ocr`/`deduction`); real human
+participation is 4 distinct voters (largest single contribution: 22
+votes). The trigger below needs human-population volume or an observed
+attack, neither of which this represents — see
+`docs/reports/2026-07-18-dawid-skene-readiness-recheck.md` for the full
+numbers and reasoning. One exception: the cluster-consistency detector
+(third bullet below) isn't actually gated by human volume and could be
+built independently.
+
 Added as an addendum, not a build item: the identification machinery
 above already treats every vote — human or machine — as **noisy
 evidence to be weighed, never ground truth to be trusted outright**. That
@@ -297,7 +308,11 @@ reliability, and estimate the _true_ label jointly with each source's
 reliability, rather than trusting any single source's raw output — is
 exactly the **Dawid-Skene** model from crowdsourced-label aggregation.
 This pipeline currently uses _fixed_, hand-set per-source weights
-(`PRINTING_TAG_AI_WEIGHT=0.5`, human `1.0`, admin `5.0`,
+(`PRINTING_TAG_AI_WEIGHT` (a legacy name — it weights machine-derived
+sources: OCR and deduction; no generative AI is involved) `=0.5` — now
+`PRINTING_TAG_MACHINE_WEIGHT` in settings.py, with the old name kept as a
+backward-compatible env-var fallback so an existing deployment's config
+can't silently break — human `1.0`, admin `5.0`,
 `VOTE_FEDERATED_WEIGHT=1.0`) rather than weights estimated from the data
 itself — a simplification, not an oversight, appropriate while per-source
 volume is still low enough that a hand-set prior is more stable than a

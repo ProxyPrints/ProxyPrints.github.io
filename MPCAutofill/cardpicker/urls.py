@@ -40,4 +40,11 @@ urlpatterns = [
     path("2/questionFeed/", views.get_question_feed),
     path("2/reportCard/", views.post_report_card),
     path("2/whoami/", views.get_whoami),
+    path("2/savedDecks/", views.get_saved_decks),
+    path("2/saveDeck/", views.post_save_deck),
+    path("2/loadDeck/", views.post_load_deck),
+    path("2/deleteDeck/", views.post_delete_deck),
+    path("2/cryptoProfile/", views.get_crypto_profile),
+    path("2/saveCryptoProfile/", views.post_save_crypto_profile),
+    path("2/resetSavedDecks/", views.post_reset_saved_decks),
 ]

@@ -51,7 +51,7 @@ otherwise be direct Google Drive image URLs.
 ## Key files
 
 - `image-cdn/src/index.ts` (Worker), `image-cdn/wrangler.toml`
-- `frontend/src/common/image.ts`, `frontend/src/components/Card.tsx`
+- `frontend/src/common/image.ts`, `frontend/src/features/card/Card.tsx`
 - `frontend/src/features/pdf/pdfImage.ts`
 
 ## Status / verification

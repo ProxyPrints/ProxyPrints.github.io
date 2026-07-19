@@ -311,7 +311,7 @@ export class ClientSearchService {
   }
 
   public async getFileHandlesByIdentifier(cardDocumentsByIdentifier: {
-    [identifier: string]: CardDocument;
+    [identifier: string]: CardDocument | undefined;
   }): Promise<{ [identifier: string]: FileSystemFileHandle }> {
     if (this.worker === undefined) {
       throw new Error("clientSearchService was not initialised!");

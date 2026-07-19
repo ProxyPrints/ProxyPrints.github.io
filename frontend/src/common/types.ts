@@ -13,6 +13,7 @@ import {
   Source,
   SourceType,
 } from "@/common/schema_types";
+import { ManualOverride } from "@/features/pdf/bleedNormalize";
 import type { AppDispatch, AppStore, RootState } from "@/store/store";
 export type {
   Campaign,
@@ -110,6 +111,11 @@ export interface SearchResults {
 
 export interface SearchResultsState extends ThunkStateBase {
   searchResults: SearchResults;
+  // Hash keys (matching `searchResults`' own keys) of queries whose printing-specific filter
+  // (expansionCode/collectorNumber) found nothing and were retried unfiltered by the backend -
+  // mirrors EditorSearchResponse.degradedQueries (schema_types.ts). Client-side search results
+  // never populate this - only the remote backend can report a degraded search.
+  degradedQueryHashKeys: Array<string>;
 }
 
 export interface BackendState {
@@ -141,6 +147,12 @@ export type Project = {
   nextMemberId: number;
   cardback: string | null;
   mostRecentlySelectedSlot: Slot | null;
+  /** Per-card PDF export bleed override (Proposal B PR-2, decision 4: persists in project
+   * state, not session-only - see `getLocalStorageManualOverrides`/`setLocalStorageManualOverrides`
+   * in `common/cookies.ts`). Keyed by card identifier, matching `PDFProps.bleedOverrides`
+   * exactly; an entry is only ever present for a non-"auto" choice - see projectSlice's
+   * `setManualOverride`. */
+  manualOverrides: { [identifier: string]: ManualOverride };
 };
 
 export interface DFCPairs {
