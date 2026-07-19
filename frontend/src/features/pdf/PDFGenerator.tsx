@@ -93,7 +93,7 @@ import { useRenderPDF } from "./useRenderPDF";
  * FUTURE window.confirm() calls on that origin without any visible warning - silently turning
  * this safeguard off. An in-app modal can't be affected by that browser-level heuristic at all.
  */
-type ConfirmDespiteFailures = (
+export type ConfirmDespiteFailures = (
   failures: Array<ImageFetchFailure>
 ) => Promise<boolean>;
 
@@ -162,7 +162,7 @@ const downloadPDF = async (
   return true;
 };
 
-const useDownloadPDF = (
+export const useDownloadPDF = (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
@@ -270,7 +270,7 @@ const saveToDrivePDF = async (
   return true;
 };
 
-const useSaveToDrivePDF = (
+export const useSaveToDrivePDF = (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
@@ -1102,7 +1102,7 @@ const BleedOverrideSettings = ({
   );
 };
 
-interface ImageFailureConfirmModalProps {
+export interface ImageFailureConfirmModalProps {
   failures: Array<ImageFetchFailure> | null;
   onCancel: () => void;
   onContinue: () => void;
@@ -1111,8 +1111,10 @@ interface ImageFailureConfirmModalProps {
 /** In-app replacement for window.confirm() - see the module comment above
  * ConfirmDespiteFailures for why. `failures === null` means "nothing pending," rendered as a
  * closed Modal rather than not rendering the component at all, so it can animate closed rather
- * than vanishing abruptly. */
-const ImageFailureConfirmModal = ({
+ * than vanishing abruptly. Exported (Proposal H item 2) so the display page's own inline export
+ * reuses this exact modal instead of forking it - same failure-confirmation UX everywhere a PDF
+ * gets generated. */
+export const ImageFailureConfirmModal = ({
   failures,
   onCancel,
   onContinue,
