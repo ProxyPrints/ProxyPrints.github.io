@@ -755,18 +755,49 @@ same process-wide ceiling automatically; Part 2's own
 conflicting with it (two gates in series, effective rate is whichever
 is stricter — unchanged in practice at Part 2's 3.0/s default).
 
-**Item 3 — measured, not projected**: Stage A's probe re-run under the
-split limiter, real network cost, no votes written. See the report at
-HOLD for the actual before/after wall-clock numbers.
+**Item 3 — measured, real numbers, 2026-07-19** (`probe_harvest_pipeline --sample-size=30`, real network cost, no votes written): total
+521.76s across 30 fetched cards — fetch 25.10s (4.8%, mean
+0.837s/card), OCR 8.35s (1.6%, mean 0.278s/card), **phash 488.17s
+(93.6%, mean 16.272s/card)**, DB 0.14s (~0%). Stage A's original
+pre-Stage-B run was never written to a durable location (only existed
+in prior chat context, since compacted away) — a real process gap,
+not repeated here: this doc entry is the actual number going forward,
+and no literal side-by-side delta against the original unpaced run is
+possible from written record.
 
-**Item 4 — reprojected wall-clock (owner directive, 2026-07-19)**: at
-the Google tier's ≤5/s aggregate ceiling, the full 218k-image harvest
-is **fetch-bound**, not OCR-bound — a ~12h floor from fetch pacing
-alone, dominating whatever the OCR/phash/DB stages themselves cost.
-This reverses Stage A's original single-digit-hours, OCR-bound
-projection. Consequence for worker topology: fewer OCR workers may
-suffice, since cores spend most of their time idle waiting on Google
-rather than CPU-bound on OCR — sized properly once Stage C/D land.
+**Surprise finding, corrects the item-4 framing below as first
+drafted**: phash, not fetch, dominates the paced wall-clock — and not
+because of Google. `SCRYFALL_REST` (2.0 req/s, deliberately set low as
+"a guard against volume this call site shouldn't have," per this
+doc's own limiter description above) is now the real bottleneck:
+`get_or_compute_canonical_hash` still makes one REST call per
+not-yet-hashed candidate (the module docstring's own caveat, now
+confirmed with real numbers) and **65.5% of `CanonicalCard` rows have
+a populated `image_hash` today (74,144/113,224)** — meaning 34.5% of
+candidates hit anywhere in the catalog still pay a real, first-time
+Scryfall REST+CDN round-trip, now correctly paced instead of running
+unthrottled as it did before Stage B. This is a persistent cost at
+full-harvest scale, not a one-off backfill artifact — every
+not-yet-hashed candidate any future run touches pays it again.
+
+**Item 4 — reprojected wall-clock, corrected**: the ≤5/s Google
+ceiling alone would put the harvest at a ~12h fetch-bound floor as
+originally projected, but item 3's real measurement shows Scryfall
+REST pacing, not Google fetch, as the actual dominant cost today.
+Which one governs the real 218k-card wall-clock depends on how much
+of the remaining 34.5% unhashed `CanonicalCard` population this
+harvest's own candidate pool actually touches — not yet computed.
+**Open item for HOLD, not resolved here**: either (a) run a
+dedicated `CanonicalCard.image_hash` backfill (mirroring Part 2's own
+`content_phash` backfill shape) ahead of the full harvest so the
+harvest itself doesn't repeatedly pay this tax, or (b) accept the
+Scryfall-bound cost as part of the harvest's own wall-clock and raise
+`SCRYFALL_REST`'s ceiling with real justification (it was set low as a
+deliberate guard, not tuned for measured throughput). Worker-topology
+consequence (fewer OCR workers may suffice, cores idle waiting on a
+network ceiling) still holds — just against whichever destination
+turns out to actually govern, confirmed with real numbers before
+Stage C/D topology is sized.
 
 **Write-through hedge (owner amendment, 2026-07-19, tracked as task
 #150)**: conditional on the resolution/tier investigation below
@@ -788,7 +819,32 @@ preferred design is a new R2-cached harvest tier (~1200px, above the
 pipeline's own ~925px working height) added to image-cdn's existing
 small/large R2 branch, with the hopper semantics in task #150 (write-
 through, content-hash canonicalization, resilience to dead source
-Drives). Not started; results pending.
+Drives).
+
+**Baseline facts confirmed before any measurement** (both were open
+questions, now resolved against primary sources, not assumed): "full
+resolution" in every existing phash calibration doc in this project
+(the n=2 test, the 300+300 harvested-pair validation underlying the
+d=0/d≤2 thresholds) means **250dpi/~925px**
+(`docs/features/printing-tags.md:1987`, "hashed at full res
+(250dpi/~925px)"), NOT literal native — native is a distinct, higher
+baseline (`dpi=None` sends no `h=` resize param to Google's lh4
+endpoint at all, confirmed against `image-cdn/src/url.ts` +
+`GoogleDriveService.ts`). T2 therefore needs to report distance
+against BOTH baselines separately, not one number, since they answer
+different questions (native = "how much does resolution matter at
+all," 925px = "does the calibration transfer to a new tier").
+
+**Harness built** (`cardpicker/resolution_tier_probe.py` +
+`manage.py probe_resolution_tiers [--sample-size N]`, 13 tests,
+pre-commit clean): fetches each sampled card at four tiers — `native`
+(dpi=None), `1200px` (dpi=320 → 1184px), `925px` (dpi=250,
+`DEFAULT_FETCH_DPI`), `800px` (dpi=220, `OCR_FETCH_DPI`, already
+shipped in Part 4/LANDS) — and for each tier runs the real OCR
+validation path (T1: match rate) and computes the real art-crop phash
+(T2: reports Hamming distance vs. both `native` and `925px`
+separately). Not yet run against real data — the live run is the next
+step, real network cost, no votes ever persisted.
 
 ### Stages C–F (extractors, calculators, streaming assembly, consumers) — not started
 
