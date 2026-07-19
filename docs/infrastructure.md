@@ -319,7 +319,14 @@ of that `run_id`.
 
 **Who can override.** The owner, always — this project escalates every
 gate exception to the owner; no session grants itself an exception to a
-live freeze.
+live freeze. This is distinct from the soak test's own `kill -9`
+above: that action is pre-authorized by the resume contract's own spec
+(it's the acceptance test the gate itself requires), not a fresh
+override to seek approval for each time — "override" here means
+bypassing the freeze for something the frozen-actions list above
+actually forbids (a deploy, a migration, a Worker redeploy, an ES
+reindex) while a run is active, which always needs the owner's
+explicit sign-off.
 
 **How a freeze is signaled.** One canonical, repo-visible marker: a
 GitHub label — `deploy-freeze-active` — applied to the tracking issue
