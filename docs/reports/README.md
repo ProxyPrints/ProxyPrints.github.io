@@ -27,6 +27,9 @@ own "as of" date before trusting anything in it as current.
 - `2026-07-18-wiki-review-findings.md` — publish-script link-rewrite
   fix, Part 3 write-pass status update, and a targeted staleness
   mini-pass across proposal docs and docs/README.md.
+- `2026-07-19-extractable-primitives-ledger.md` — repo-wide
+  extractable-primitives audit (27 rows), the mechanical tether added
+  to `docs_lint.py`, and the CLAUDE.md convention line.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
