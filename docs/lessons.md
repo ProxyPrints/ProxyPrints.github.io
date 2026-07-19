@@ -7,7 +7,24 @@ tasks, not a one-off narrative (those belong in `journal/` or a feature doc
 under `docs/features/`).
 
 See also [[troubleshooting.md]] — same source material, indexed by the
-symptom you'd actually search for instead of by cause.
+symptom you'd actually search for instead of by cause. See also
+[`../corrections/`](../corrections/README.md) — the blameless incident
+ledger this list's entries sometimes get promoted from.
+
+## Triage ritual: this list is a queue, not an archive
+
+Prose here relies on a future reader noticing it before repeating the
+mistake — that's real, but weaker than a check that fires automatically.
+Periodically re-read this file with one question per entry: has this
+recurred, or is it phrased as an "always/never" rule? If so, promote it —
+turn it into a hook (`.claude/hooks/`), a lint rule, a CI check, or at
+minimum a test case — and trim the prose entry down to a pointer at the
+gate that replaced it, rather than deleting the history. The heuristic,
+verbatim: **if you're typing "always/never" in CLAUDE.md, that's a hook.**
+This repo's own no-self-merge convention going from a CLAUDE.md sentence to
+`.claude/hooks/guard_master.py` (2026-07-19) is the worked example — see
+`corrections/CORR-0004-guard-hook-word-boundary-false-positive.md` for what
+was caught fixing it.
 
 ## Trust CI history, not a matching local venv, once a change touches Django's model-import chain
 
@@ -43,6 +60,21 @@ capability rather than assuming) instead of failing outright. A PR with no
 genuine failures now shows Backend tests **green**, full stop — do not
 reintroduce a "known failure count" mental model; if Backend tests is red,
 something is actually wrong.
+
+**Update, 2026-07-19 (same day)**: `GOOGLE_DRIVE_API_KEY` was rotated to a
+new, presumably-valid value; confirmed via `gh secret list`'s updated
+timestamp. A re-run of Backend tests immediately after (PR #137, run
+29697208916, job 88223425164) still showed **4 skipped**, identical to
+before the rotation — the 2 Google-Drive-gated tests did NOT start
+running. Do not assume a secret rotation alone fixes this: `conftest.py`'s
+`google_drive_credentials_available()` also requires a working pyOpenSSL
+signing path (`OpenSSL.crypto.sign`), and #135's own commit message notes
+pyOpenSSL isn't installed in this CI runner at all ("CI's failure path
+never needs it") — the capability probe likely still fails on that half
+of the check regardless of the secret's validity. Confirming this needs
+either installing pyOpenSSL in the CI runner too, or checking the probe's
+actual failure point directly (a verbose pytest run showing per-test skip
+reasons, not just the summary count) — neither done yet.
 
 ## Concurrent worktree dev servers collide on port 3000
 
