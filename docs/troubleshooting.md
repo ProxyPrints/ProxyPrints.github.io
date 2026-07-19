@@ -569,3 +569,42 @@ helper's contract honest. For a one-off local verification, prefer
 
 **Refs**: `frontend/src/features/questionFeed/QuestionFeed.test.tsx`'s
 `revealCard()`.
+
+## A Playwright click-through-navigation test fails locally on the first attempt but is genuinely green in CI
+
+**Symptom**: `npx playwright test` (default `retries: 0` locally,
+since `playwright.config.ts` only sets `retries: 2` when `CI` is set)
+fails a real-browser click test deterministically — `page.click()`
+succeeds (correct single `<a href>`, no nested-anchor interception,
+click lands exactly on the target element per
+`document.elementFromPoint`) but `expect(page).toHaveURL(...)`
+times out, URL never changes. A `[Fast Refresh] rebuilding` console
+line lands right around the click. CI's own check-run for the same
+commit shows green, and its merged Playwright HTML report doesn't
+even surface the test by name for grepping (CI's `reporter: "blob"`
+prints no per-test lines to the job log at all — its silence isn't
+evidence either way).
+
+**Cause**: Next.js dev mode (`next dev`, used by both local and CI
+Playwright runs per `playwright.config.ts`'s `webServer.command`)
+compiles each page on first visit, not at server start. A test that
+navigates and clicks immediately can land its click while that
+first-visit compile/HMR cycle is still settling, interrupting the
+pending client-side `next/link` transition. This is a real, first-
+attempt flake, not a nested-anchor bug (rule that class out first via
+`document.elementFromPoint`/DOM inspection before spending time here)
+and not a mock/CI-status-lying situation.
+
+**Fix**: don't chase it as an app bug once `npx playwright test <file> --retries=2` (matching CI's own configured retry count exactly) shows
+the failing tests passing on retry, marked `flaky` rather than
+`failed` — that's the confirming test. CI's `retries: 2` is an
+existing, deliberate project policy (not something to second-guess
+per-PR); a test passing via that policy is a legitimate CI green, not
+a masked failure. Don't try to verify a specific test's CI outcome by
+grepping job logs when the workflow uses `reporter: "blob"` — it
+prints nothing per-test regardless of pass/fail; download the merged
+`playwright-report` artifact (`gh run download <run-id> -n playwright-report`) if a real per-test read is needed, though its
+`index.html` is a JS-rendered SPA, not plain-text-greppable either.
+
+**Refs**: `frontend/tests/HomepagePanel.spec.ts`,
+`frontend/playwright.config.ts`'s `retries`/`webServer`.
