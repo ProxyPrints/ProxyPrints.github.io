@@ -50,6 +50,15 @@ The methodology and the systems it governs.
 - [`upstreaming/upstream-wiki-drift.md`](upstreaming/upstream-wiki-drift.md)
   — weekly, automated, detection-only tracking of what's changed on
   chilli-axe/mpc-autofill's own wiki since we last looked.
+- [`upstreaming/extractable-primitives.md`](upstreaming/extractable-primitives.md)
+  — repo-wide ledger of generic, no-fork-dependency code an outside
+  consumer (upstream, the proxies-at-home lineage, federation peers) could
+  lift wholesale, versus what's honestly entangled. HOLD: seeded audit
+  awaiting owner review, not yet a to-do list. `CLEAN` claims are checked
+  by a mechanical tether riding `docs-lint`. Deliberately left out of
+  `wiki-publish-map.json` while HOLD, same reasoning
+  `documentation-process.md` gives for excluding `docs/proposals/` — add
+  it once the owner review clears.
 - [`features/printing-tags.md`](features/printing-tags.md) — the "What's
   That Card?" printing-consensus tagging system and vote-queue funnel,
   backend + frontend. Stages 1–7 are the current-state reference; Stage 8
@@ -138,11 +147,9 @@ and, per [`documentation-process.md`](documentation-process.md), never
 published to the wiki (the wiki is a generated view of "Understanding the
 system" + "Using it" + "Operating it" only).
 
-- **`audits/`** — not yet on this branch. `docs/audits/ui-content-audit.md`
-  (12 UI content-accuracy findings, HOLD) exists on the unmerged
-  `claude/ui-content-audit` branch; that PR (#56) is deliberately held open
-  until the audit worker adds a per-row disposition column reflecting the
-  build pass (PRs #64/#65). Not this pass's to merge — will appear here
-  once #56 lands.
+- **`audits/`** — [`ui-content-audit.md`](audits/ui-content-audit.md) (12
+  UI content-accuracy findings) landed via #56 and its Disposition column
+  was filled in after the build pass (#64) shipped 11 of 12 findings (#11
+  got a process fix instead — see `CLAUDE.md`'s policy-text-dates rule).
 - [`reports/`](reports/README.md) — the report-relay convention (see that
   directory's own README, which indexes every report currently merged).

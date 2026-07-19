@@ -192,10 +192,193 @@ def check_file(path: Path) -> list[str]:
     return findings
 
 
+EXTRACTABLE_PRIMITIVES_DOC = DOCS_DIR / "upstreaming" / "extractable-primitives.md"
+
+# The fork-only-module allowlist for check_extractable_primitives_tether().
+# Kept here, not duplicated in extractable-primitives.md, so there's one
+# place this can go stale, not two. Add to these sets whenever a new
+# fork-only module is added to the vote system / CanonicalPrinting-consensus
+# / auth surface — an omission here is a silent CI blind spot, not a safe
+# default, so prefer over-including a borderline module.
+FORK_ONLY_PY_MODULES = {
+    # vote system
+    "cardpicker.vote_consensus",
+    "cardpicker.printing_consensus",
+    "cardpicker.artist_consensus",
+    "cardpicker.tag_consensus",
+    "cardpicker.moderation",
+    "cardpicker.question_feed",
+    "cardpicker.deductive_backfill",
+    "cardpicker.local_identify_printing_tags",
+    "cardpicker.local_residual_classify",
+    "cardpicker.local_lands_identify",
+    "cardpicker.local_fallback",
+    # CanonicalPrinting / consensus
+    "cardpicker.printing_candidates",
+    "cardpicker.printing_metadata_import",
+    # auth / Discord OAuth / Moderators gate
+    "cardpicker.security",
+    "cardpicker.sensitive_tags",
+    "accounts.adapter",
+}
+# `from cardpicker.models import X` / `from cardpicker.schema_types import X`
+# — models.py and schema_types.py are shared files extended by the fork, so
+# they can't be allowlisted wholesale; these are the fork-only symbols
+# within them.
+FORK_ONLY_PY_MODEL_SYMBOLS = {
+    "AbstractWeightedVote",
+    "CardPrintingTag",
+    "CardArtistVote",
+    "CardTagVote",
+    "VoteSource",
+    "VotePolarity",
+    "PrintingTagStatus",
+    "ArtistVoteStatus",
+    "TagVoteStatus",
+    "TagModerationClass",
+    "Tag",
+    "CanonicalCard",
+    "CanonicalArtist",
+    "CanonicalExpansion",
+    "CanonicalPrintingMetadata",
+}
+FORK_ONLY_TS_PATH_PREFIXES = (
+    "@/features/questionFeed/",
+    "@/features/attributeVoting/",
+    "@/features/printingTags/",
+    "@/features/attributeChips/",
+    "@/features/moderation/",
+    "@/features/reporting/",
+    "@/features/filters/CanonicalCardFilter",
+    "@/features/filters/MatureContentFilter",
+    "@/pages/whatsthat",
+    "@/pages/printingQueue",
+)
+# Named imports from shared files (store/api.ts, common/schema_types.ts)
+# that are fork-only even though the file they're imported from isn't.
+FORK_ONLY_TS_SYMBOLS = {
+    "APIGetTagConsensus",
+    "APIGetPrintingConsensus",
+    "APIGetVoteQueue",
+    "APISubmitPrintingTag",
+    "APISubmitArtistVote",
+    "APISubmitTagVote",
+    "APIGetPrintingCandidates",
+    "useGetWhoamiQuery",
+    "APIReportCard",
+    "APIGetModerationQueue",
+    "APIGetModerationDrives",
+    "APIGetModerationDriveCards",
+    "APIRemoveModerationCard",
+    "APIRemoveModerationDrive",
+    "CanonicalArtistClass",
+    "CanonicalCardClass",
+    "PrintingCandidate",
+    "WhoamiResponse",
+    "ModerationQueueResponse",
+    "ModerationDrivesResponse",
+    "ModerationDriveCardsResponse",
+    "ReportCardResponse",
+}
+
+TABLE_ROW_RE = re.compile(r"^\|(.+)\|\s*$", re.MULTILINE)
+BACKTICK_RE = re.compile(r"`([^`]+)`")
+TYPE_CHECKING_BLOCK_RE = re.compile(r"if TYPE_CHECKING:\n((?:[ \t]+.*\n?)+)")
+PY_IMPORT_RE = re.compile(
+    # `[^)]*` (not `.*`) so this also matches multi-line parenthesized
+    # imports (`from x import (\n    a,\n    b,\n)`) without needing DOTALL.
+    r"^\s*(?:from\s+([\w.]+)\s+import\s+(\([^)]*\)|[^\n#]+)|import\s+([\w.]+))",
+    re.MULTILINE,
+)
+TS_IMPORT_RE = re.compile(
+    r'^\s*import\s+(?:type\s+)?(?:\{([^}]*)\}|(\w+))?\s*(?:,\s*\{([^}]*)\})?\s*from\s+["\']([^"\']+)["\']',
+    re.MULTILINE,
+)
+
+
+def _strip_type_checking_blocks(text: str) -> str:
+    return TYPE_CHECKING_BLOCK_RE.sub(lambda m: _blank(m), text)
+
+
+def _py_file_entanglement(text: str) -> list[str]:
+    text = _strip_type_checking_blocks(text)
+    findings = []
+    for m in PY_IMPORT_RE.finditer(text):
+        module = m.group(1) or m.group(3)
+        names = m.group(2) or ""
+        if module and any(module == fo or module.startswith(fo + ".") for fo in FORK_ONLY_PY_MODULES):
+            findings.append(f"imports fork-only module `{module}`")
+        if module in {"cardpicker.models", "cardpicker.schema_types"}:
+            imported = {n.strip().split(" as ")[0] for n in names.split(",") if n.strip()}
+            hit = imported & FORK_ONLY_PY_MODEL_SYMBOLS
+            if hit:
+                findings.append(f"imports fork-only symbol(s) {sorted(hit)} from `{module}`")
+    return findings
+
+
+def _ts_file_entanglement(text: str) -> list[str]:
+    findings = []
+    for m in TS_IMPORT_RE.finditer(text):
+        names = ", ".join(g for g in (m.group(1), m.group(2), m.group(3)) if g)
+        target = m.group(4)
+        if any(target.startswith(prefix) for prefix in FORK_ONLY_TS_PATH_PREFIXES):
+            findings.append(f"imports fork-only path `{target}`")
+        imported = {n.strip().split(" as ")[0] for n in names.split(",") if n.strip()}
+        hit = imported & FORK_ONLY_TS_SYMBOLS
+        if hit:
+            findings.append(f"imports fork-only symbol(s) {sorted(hit)} from `{target}`")
+    return findings
+
+
+def check_extractable_primitives_tether() -> list[str]:
+    """
+    For every row in extractable-primitives.md's tables marked CLEAN in its
+    Entanglement column, verify the row's own File(s) column imports nothing
+    from the fork-only vote-system/CanonicalPrinting-consensus/auth modules
+    above. One level deep only (see the doc's own "mechanical tether"
+    section for why) — this is a backstop against direct-import drift, not
+    a transitive import-graph analysis.
+    """
+    findings = []
+    if not EXTRACTABLE_PRIMITIVES_DOC.is_file():
+        return findings
+    raw = EXTRACTABLE_PRIMITIVES_DOC.read_text()
+    doc_rel = EXTRACTABLE_PRIMITIVES_DOC.relative_to(REPO_ROOT)
+
+    for m in TABLE_ROW_RE.finditer(raw):
+        cells = [c.strip() for c in m.group(1).split("|")]
+        if len(cells) < 5:
+            continue
+        if set(cells[0]) <= {"-", ":"}:
+            continue  # header separator row
+        files_cell, entanglement_cell = cells[1], cells[4]
+        if not entanglement_cell.startswith("CLEAN"):
+            continue
+        for fm in BACKTICK_RE.finditer(files_cell):
+            rel_path = fm.group(1)
+            file_path = REPO_ROOT / rel_path
+            if not file_path.is_file():
+                continue  # already reported by the generic path-existence check
+            file_text = file_path.read_text()
+            if rel_path.endswith(".py"):
+                hits = _py_file_entanglement(file_text)
+            elif rel_path.endswith((".ts", ".tsx")):
+                hits = _ts_file_entanglement(file_text)
+            else:
+                continue
+            for hit in hits:
+                findings.append(
+                    f"::error file={doc_rel},line={line_of(raw, m.start())}::"
+                    f"extractable-primitives row claims CLEAN but `{rel_path}` {hit}"
+                )
+    return findings
+
+
 def main() -> int:
     all_findings = []
     for path in sorted(DOCS_DIR.rglob("*.md")):
         all_findings.extend(check_file(path))
+    all_findings.extend(check_extractable_primitives_tether())
 
     for finding in all_findings:
         print(finding)
