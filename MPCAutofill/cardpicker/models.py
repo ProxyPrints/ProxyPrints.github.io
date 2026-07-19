@@ -19,7 +19,30 @@ from cardpicker.schema_types import PrintingTagStatus as SerialisedPrintingTagSt
 from cardpicker.schema_types import Source as SerialisedSource
 from cardpicker.schema_types import SourceContribution, SourceType
 from cardpicker.schema_types import Tag as SerialisedTag
+from cardpicker.schema_types import (
+    TagVoteDisplayStatus as SerialisedTagVoteDisplayStatus,
+)
 from cardpicker.sources.source_types import SourceTypeChoices
+
+# Card.tag_vote_statuses' 5-way DB status collapsed to the 2-way distinction the frontend
+# needs (Proposal H §4.4′, issue #184) - resolved_apply/resolved_reject both read as
+# "resolved" (consensus has spoken, whichever direction), contested/unresolved both read as
+# "suggested" (votes exist but haven't cleared consensus). Deliberately a closed mapping, not
+# a fallback default - a status this dict doesn't cover (i.e. pending_approval) must be
+# excluded from the serialised payload entirely (sensitive-tag co-sign queue, see
+# docs/features/moderation.md), never guessed into one bucket or the other.
+_TAG_VOTE_DISPLAY_STATUS_BY_DB_STATUS = {
+    "resolved_apply": SerialisedTagVoteDisplayStatus.resolved,
+    "resolved_reject": SerialisedTagVoteDisplayStatus.resolved,
+    "contested": SerialisedTagVoteDisplayStatus.suggested,
+    "unresolved": SerialisedTagVoteDisplayStatus.suggested,
+    # "pending_approval" intentionally absent - see docstring above.
+}
+
+# Attribute name `Prefetch(..., to_attr=...)` writes the per-card list of machine-suggested
+# printing votes to - see `suggested_printing_votes_prefetch()` below. Shared constant so the
+# prefetch call site and `Card.serialise()`'s read site can't drift on the attribute name.
+SUGGESTED_PRINTING_VOTES_ATTR = "_suggested_printing_votes"
 
 
 class Games(models.TextChoices):
@@ -440,7 +463,54 @@ class Card(models.Model):
             f"Priority: {self.priority}]"
         )
 
-    def serialise(self) -> SerialisedCard:
+    def _suggested_canonical_card(self) -> Optional[SerialisedCanonicalCard]:
+        """
+        The catalog's own best unconfirmed guess at this card's printing (Proposal H §4.4′,
+        issue #184) - the printing named by a machine-cast (`VoteSource.DEDUCTION`/`OCR`)
+        `CardPrintingTag` vote, mirroring `question_feed.py`'s `_confirm_suggestion_item`
+        `ai_vote` lookup exactly (same filter, same "first" semantics) so the two surfaces
+        can't drift on what counts as "machine-suggested." Exposes an already-cast vote,
+        never computes a new ranking/consensus - `get_ranked_printing_candidates()`'s
+        Levenshtein-ranked candidate search is a distinct, deliberately NOT-reused mechanism
+        here (too expensive to run per-card across a bulk result set; see
+        docs/features/printing-tags.md).
+
+        Only populated while `printing_tag_status != RESOLVED` (never redundant with the
+        already-resolved `canonicalCard`), and only when this `Card` came from a queryset
+        that attached `suggested_printing_votes_prefetch()` - deliberately does NOT fall back
+        to a live per-card query when that prefetch is absent, so forgetting to attach it on
+        a new bulk call site fails safe (silently `None`) rather than silently reintroducing
+        an N+1 query across the whole result set. Falls back to a single bounded query only
+        when called directly on an un-prefetched instance outside a bulk context (e.g. a
+        one-off shell/test lookup) - never the code path any bulk endpoint should exercise.
+        """
+        if self.printing_tag_status == PrintingTagStatus.RESOLVED:
+            return None
+        votes = getattr(self, SUGGESTED_PRINTING_VOTES_ATTR, None)
+        if votes is None:
+            votes = list(
+                self.printing_tags.filter(source__in=[VoteSource.DEDUCTION, VoteSource.OCR], is_no_match=False)
+                .select_related("printing__expansion")
+                .order_by("pk")[:1]
+            )
+        if not votes or votes[0].printing is None:
+            return None
+        return votes[0].printing.serialise()
+
+    def _serialise_tag_vote_statuses(self) -> dict[str, SerialisedTagVoteDisplayStatus]:
+        """
+        Collapses `tag_vote_statuses` (5-way DB status) to the 2-way suggested/resolved
+        distinction the frontend needs (Proposal H §4.4′'s "Looks retro-frame? ✓" confirm
+        chip, issue #184) - see `_TAG_VOTE_DISPLAY_STATUS_BY_DB_STATUS`'s own docstring for
+        the mapping and why `pending_approval` tags are dropped rather than bucketed.
+        """
+        return {
+            tag_name: _TAG_VOTE_DISPLAY_STATUS_BY_DB_STATUS[status]
+            for tag_name, status in self.tag_vote_statuses.items()
+            if status in _TAG_VOTE_DISPLAY_STATUS_BY_DB_STATUS
+        }
+
+    def serialise(self, *, include_suggested_printing: bool = False) -> SerialisedCard:
         # Explicit if/elif chain (rather than a nested-ternary fallback) so the rung that
         # actually supplied the artist is captured as it's found, not re-derived afterwards by
         # checking which other fields are empty - that "all others empty" style of check would
@@ -492,6 +562,8 @@ class Card(models.Model):
             canonicalArtistIsFromVoteOnly=artist_source == "inferred_canonical_artist",
             canonicalArtistSource=artist_source,
             printingTagStatus=SerialisedPrintingTagStatus(self.printing_tag_status),
+            suggestedCanonicalCard=(self._suggested_canonical_card() if include_suggested_printing else None),
+            tagVoteStatuses=self._serialise_tag_vote_statuses(),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -667,6 +739,31 @@ class CardPrintingTag(AbstractWeightedVote):
     def __str__(self) -> str:
         outcome = "NO MATCH" if self.is_no_match else str(self.printing)
         return f"[{self.source}] {self.card.name} -> {outcome}"
+
+
+def suggested_printing_votes_prefetch() -> models.Prefetch:
+    """
+    `Prefetch` object for `Card.objects.prefetch_related(...)`, making
+    `Card.serialise(include_suggested_printing=True)` populate `suggestedCanonicalCard`
+    without an extra query per card (Proposal H §4.4′, issue #184) - attach this to any
+    queryset feeding `serialise(include_suggested_printing=True)` across more than a single
+    row (today: `post_cards`/`post_explore_search` in views.py, the two endpoints that serve
+    bulk Card payloads to the search/picker surface this field is for).
+
+    Filters to `VoteSource.DEDUCTION`/`OCR` (machine-cast votes only - "machine-suggested" per
+    the issue's own wording, deliberately not any contested-but-human-voted state) and orders
+    by `pk` to match Django's own implicit `.first()` ordering (what
+    `question_feed.py::_confirm_suggestion_item`'s equivalent, un-prefetched `ai_vote` lookup
+    uses), so a card with more than one machine vote surfaces the same "first" vote via either
+    code path.
+    """
+    return models.Prefetch(
+        "printing_tags",
+        queryset=CardPrintingTag.objects.filter(source__in=[VoteSource.DEDUCTION, VoteSource.OCR], is_no_match=False)
+        .select_related("printing__expansion")
+        .order_by("pk"),
+        to_attr=SUGGESTED_PRINTING_VOTES_ATTR,
+    )
 
 
 class CardArtistVote(AbstractWeightedVote):

@@ -1,0 +1,7 @@
+{
+  "title": "Tag Vote Display Status",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Two-way collapse of Card.tag_vote_statuses' five-way DB status for frontend consumption: resolved_apply/resolved_reject both collapse to 'resolved', contested/unresolved both collapse to 'suggested'. pending_approval is never represented here - see Card.json's tagVoteStatuses field docs for why.",
+  "type": "string",
+  "enum": ["resolved", "suggested"]
+}

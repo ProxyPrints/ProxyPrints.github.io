@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, CryptoProfileResponse, DFCPairsResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
+//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, CryptoProfileResponse, DFCPairsResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
@@ -35,6 +35,7 @@
 //   const supporterTier = Convert.toSupporterTier(json);
 //   const tag = Convert.toTag(json);
 //   const tagConsensusEntry = Convert.toTagConsensusEntry(json);
+//   const tagVoteDisplayStatus = Convert.toTagVoteDisplayStatus(json);
 //   const tagVoteTallyEntry = Convert.toTagVoteTallyEntry(json);
 //   const voteQueueItem = Convert.toVoteQueueItem(json);
 //   const voteTallyEntry = Convert.toVoteTallyEntry(json);
@@ -194,7 +195,27 @@ export interface Card {
   sourceName: string;
   sourceType?: SourceType;
   sourceVerbose: string;
+  /**
+   * The catalog's own best unconfirmed guess at this card's printing - a machine-cast
+   * (VoteSource.DEDUCTION/OCR) CardPrintingTag vote's printing, surfaced only while
+   * printingTagStatus is not 'resolved' (never redundant with the already-resolved
+   * canonicalCard). null when no machine vote exists yet, printingTagStatus is already
+   * 'resolved', or the serializing endpoint didn't request this field (see
+   * cardpicker/models.py Card.serialise's include_suggested_printing kwarg - opt-in per
+   * endpoint to keep this a zero-cost no-op everywhere it isn't needed).
+   */
+  suggestedCanonicalCard?: CanonicalCard | null;
   tags: string[];
+  /**
+   * Suggested-vs-resolved status for every tag with at least one cast vote against this card
+   * (Card.tag_vote_statuses collapsed from its 5-way DB status to the 2-way distinction the
+   * frontend needs - see TagVoteDisplayStatus.json). A tag absent from this object has zero
+   * votes cast, same convention as the DB field it derives from. pending_approval tags are
+   * deliberately excluded entirely (sensitive-tag co-sign queue, docs/features/moderation.md)
+   * - never leaked ahead of that review, same reason they're excluded from the `tags` field
+   * today.
+   */
+  tagVoteStatuses?: { [key: string]: TagVoteDisplayStatus };
 }
 
 export interface CanonicalArtist {
@@ -234,6 +255,17 @@ export enum SourceType {
   AwsS3 = "AWS S3",
   GoogleDrive = "Google Drive",
   LocalFile = "Local File",
+}
+
+/**
+ * Two-way collapse of Card.tag_vote_statuses' five-way DB status for frontend consumption:
+ * resolved_apply/resolved_reject both collapse to 'resolved', contested/unresolved both
+ * collapse to 'suggested'. pending_approval is never represented here - see Card.json's
+ * tagVoteStatuses field docs for why.
+ */
+export enum TagVoteDisplayStatus {
+  Resolved = "resolved",
+  Suggested = "suggested",
 }
 
 export enum Type {
@@ -1106,6 +1138,16 @@ export class Convert {
 
   public static tagConsensusEntryToJson(value: TagConsensusEntry): string {
     return JSON.stringify(uncast(value, r("TagConsensusEntry")), null, 2);
+  }
+
+  public static toTagVoteDisplayStatus(json: string): TagVoteDisplayStatus {
+    return cast(JSON.parse(json), r("TagVoteDisplayStatus"));
+  }
+
+  public static tagVoteDisplayStatusToJson(
+    value: TagVoteDisplayStatus
+  ): string {
+    return JSON.stringify(uncast(value, r("TagVoteDisplayStatus")), null, 2);
   }
 
   public static toTagVoteTallyEntry(json: string): TagVoteTallyEntry {
@@ -2178,7 +2220,17 @@ const typeMap: any = {
         typ: u(undefined, r("SourceType")),
       },
       { json: "sourceVerbose", js: "sourceVerbose", typ: "" },
+      {
+        json: "suggestedCanonicalCard",
+        js: "suggestedCanonicalCard",
+        typ: u(undefined, u(r("CanonicalCard"), null)),
+      },
       { json: "tags", js: "tags", typ: a("") },
+      {
+        json: "tagVoteStatuses",
+        js: "tagVoteStatuses",
+        typ: u(undefined, m(r("TagVoteDisplayStatus"))),
+      },
     ],
     false
   ),
@@ -2930,6 +2982,7 @@ const typeMap: any = {
   CardType: ["CARD", "CARDBACK", "TOKEN"],
   PrintingTagStatus: ["no_match", "resolved", "unresolved"],
   SourceType: ["AWS S3", "Google Drive", "Local File"],
+  TagVoteDisplayStatus: ["resolved", "suggested"],
   Type: ["artist", "confirm_suggestion", "identify_printing", "tag"],
   SortBy: [
     "dateCreatedAscending",

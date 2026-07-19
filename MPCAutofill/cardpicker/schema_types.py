@@ -47,6 +47,11 @@ def from_list(f: Callable[[Any], T], x: Any) -> List[T]:
     return [f(y) for y in x]
 
 
+def from_dict(f: Callable[[Any], T], x: Any) -> Dict[str, T]:
+    assert isinstance(x, dict)
+    return {k: f(v) for (k, v) in x.items()}
+
+
 def to_enum(c: Type[EnumT], x: Any) -> EnumT:
     assert isinstance(x, c)
     return x.value
@@ -55,11 +60,6 @@ def to_enum(c: Type[EnumT], x: Any) -> EnumT:
 def to_class(c: Type[T], x: Any) -> dict:
     assert isinstance(x, c)
     return cast(Any, x).to_dict()
-
-
-def from_dict(f: Callable[[Any], T], x: Any) -> Dict[str, T]:
-    assert isinstance(x, dict)
-    return {k: f(v) for (k, v) in x.items()}
 
 
 def from_float(x: Any) -> float:
@@ -240,6 +240,17 @@ class SourceType(str, Enum):
     LocalFile = "Local File"
 
 
+class TagVoteDisplayStatus(str, Enum):
+    """Two-way collapse of Card.tag_vote_statuses' five-way DB status for frontend consumption:
+    resolved_apply/resolved_reject both collapse to 'resolved', contested/unresolved both
+    collapse to 'suggested'. pending_approval is never represented here - see Card.json's
+    tagVoteStatuses field docs for why.
+    """
+
+    resolved = "resolved"
+    suggested = "suggested"
+
+
 class Card(BaseModel):
     cardType: CardType
     dateCreated: str
@@ -283,6 +294,24 @@ class Card(BaseModel):
     canonicalCard: Optional[CanonicalCardClass] = None
     sourceExternalLink: Optional[str] = None
     sourceType: Optional[SourceType] = None
+    suggestedCanonicalCard: Optional[CanonicalCardClass] = None
+    """The catalog's own best unconfirmed guess at this card's printing - a machine-cast
+    (VoteSource.DEDUCTION/OCR) CardPrintingTag vote's printing, surfaced only while
+    printingTagStatus is not 'resolved' (never redundant with the already-resolved
+    canonicalCard). null when no machine vote exists yet, printingTagStatus is already
+    'resolved', or the serializing endpoint didn't request this field (see
+    cardpicker/models.py Card.serialise's include_suggested_printing kwarg - opt-in per
+    endpoint to keep this a zero-cost no-op everywhere it isn't needed).
+    """
+    tagVoteStatuses: Optional[Dict[str, TagVoteDisplayStatus]] = None
+    """Suggested-vs-resolved status for every tag with at least one cast vote against this card
+    (Card.tag_vote_statuses collapsed from its 5-way DB status to the 2-way distinction the
+    frontend needs - see TagVoteDisplayStatus.json). A tag absent from this object has zero
+    votes cast, same convention as the DB field it derives from. pending_approval tags are
+    deliberately excluded entirely (sensitive-tag co-sign queue, docs/features/moderation.md)
+    - never leaked ahead of that review, same reason they're excluded from the `tags` field
+    today.
+    """
 
     @staticmethod
     def from_dict(obj: Any) -> "Card":
@@ -312,6 +341,12 @@ class Card(BaseModel):
         canonicalCard = from_union([from_none, CanonicalCardClass.from_dict], obj.get("canonicalCard"))
         sourceExternalLink = from_union([from_str, from_none], obj.get("sourceExternalLink"))
         sourceType = from_union([SourceType, from_none], obj.get("sourceType"))
+        suggestedCanonicalCard = from_union(
+            [from_none, CanonicalCardClass.from_dict], obj.get("suggestedCanonicalCard")
+        )
+        tagVoteStatuses = from_union(
+            [lambda x: from_dict(TagVoteDisplayStatus, x), from_none], obj.get("tagVoteStatuses")
+        )
         return Card(
             cardType,
             dateCreated,
@@ -338,6 +373,8 @@ class Card(BaseModel):
             canonicalCard,
             sourceExternalLink,
             sourceType,
+            suggestedCanonicalCard,
+            tagVoteStatuses,
         )
 
     def to_dict(self) -> dict:
@@ -379,6 +416,14 @@ class Card(BaseModel):
             result["sourceExternalLink"] = from_union([from_str, from_none], self.sourceExternalLink)
         if self.sourceType is not None:
             result["sourceType"] = from_union([lambda x: to_enum(SourceType, x), from_none], self.sourceType)
+        if self.suggestedCanonicalCard is not None:
+            result["suggestedCanonicalCard"] = from_union(
+                [from_none, lambda x: to_class(CanonicalCardClass, x)], self.suggestedCanonicalCard
+            )
+        if self.tagVoteStatuses is not None:
+            result["tagVoteStatuses"] = from_union(
+                [lambda x: from_dict(lambda x: to_enum(TagVoteDisplayStatus, x), x), from_none], self.tagVoteStatuses
+            )
         return result
 
 
@@ -2685,6 +2730,14 @@ def TagConsensusEntryfromdict(s: Any) -> TagConsensusEntry:
 
 def TagConsensusEntrytodict(x: TagConsensusEntry) -> Any:
     return to_class(TagConsensusEntry, x)
+
+
+def TagVoteDisplayStatusfromdict(s: Any) -> TagVoteDisplayStatus:
+    return TagVoteDisplayStatus(s)
+
+
+def TagVoteDisplayStatustodict(x: TagVoteDisplayStatus) -> Any:
+    return to_enum(TagVoteDisplayStatus, x)
 
 
 def TagVoteTallyEntryfromdict(s: Any) -> TagVoteTallyEntry:

@@ -31,6 +31,51 @@ printings, artists, tags, and moderation from one screen.
   lang), populated by `cardpicker/printing_metadata_import.py` +
   `import_scryfall_printing_metadata`. `CardPrintingTag.printing` FKs
   directly to `CanonicalCard`.
+- **Card payload — machine-suggested printing + tag vote status** (Proposal H
+  §4.4′, issue #184, backend-only; frontend consumer is the not-yet-built
+  Select Version section): `Card.serialise()` (`cardpicker/models.py`) takes
+  a keyword-only `include_suggested_printing: bool = False` argument.
+  When `True`, `SerialisedCard.suggestedCanonicalCard` is populated with the
+  printing named by a machine-cast (`VoteSource.DEDUCTION`/`OCR`)
+  `CardPrintingTag` vote — mirroring `question_feed.py`'s
+  `_confirm_suggestion_item` `ai_vote` lookup exactly (same filter, same
+  "first" ordering) so the two surfaces can't drift on what counts as
+  "machine-suggested" — but only while `printing_tag_status != RESOLVED`
+  (never redundant with the already-resolved `canonicalCard`). Deliberately
+  does **not** reuse `get_ranked_printing_candidates()` (Levenshtein-ranked
+  candidate search) here — that's a distinct, much more expensive mechanism,
+  fine per-slot-on-demand but not for a bulk result set. The flag defaults
+  `False` (a zero-cost no-op) everywhere except the two bulk endpoints that
+  actually need it — `post_cards`/`post_explore_search` in `views.py`, both
+  paired with `models.suggested_printing_votes_prefetch()` on their queryset
+  (a `Prefetch("printing_tags", ...)` filtered to machine votes, ordered by
+  `pk`) so populating this field across a page of results costs **one extra
+  query total, not one per card**. `_suggested_canonical_card()` reads that
+  prefetch cache and, if the instance wasn't prefetched (e.g. a one-off
+  shell/test lookup), falls back to a single bounded per-instance query
+  rather than silently returning stale data — but any new bulk call site
+  MUST attach the prefetch itself; the method will never do it for you, by
+  design, so a forgotten prefetch fails safe (quietly `None`-heavy) rather
+  than silently reintroducing an N+1 across a whole page.
+
+  Separately, `SerialisedCard.tagVoteStatuses` (always populated, no flag,
+  zero extra query cost — it's just `Card.tag_vote_statuses`, an
+  already-loaded JSONField) collapses that field's 5-way DB status
+  (`resolved_apply`/`resolved_reject`/`contested`/`unresolved`/
+  `pending_approval`) down to the 2-way `"resolved"`/`"suggested"`
+  distinction the frontend needs for the "Looks retro-frame? ✓" inline
+  confirm-chip moment: `resolved_apply`/`resolved_reject` → `"resolved"`,
+  `contested`/`unresolved` → `"suggested"`. `pending_approval` tags are
+  **excluded from the object entirely** (never bucketed either way) — same
+  reason they're excluded from `Card.tags` today: they're gated behind the
+  sensitive-tag co-sign queue ([[moderation.md]]) and must not leak to
+  ordinary users ahead of that review. A tag absent from the object has zero
+  votes cast against it at all, same convention as the DB field it derives
+  from. Schema source: `schemas/schemas/Card.json`'s `suggestedCanonicalCard`
+  (references `CanonicalCard.json`, same shape as `canonicalCard`) and
+  `tagVoteStatuses` (references the new `TagVoteDisplayStatus.json` enum) —
+  both purely additive, no existing field renamed or removed.
+
 - **Consensus**: `cardpicker/printing_consensus.py::resolve_printing(card)`
   — weighted-vote formula, weight by source (user 1, admin
   `PRINTING_TAG_ADMIN_WEIGHT` default 5, machine (deduction/OCR)
