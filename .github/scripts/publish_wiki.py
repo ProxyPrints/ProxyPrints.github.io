@@ -77,7 +77,11 @@ def load_mapping(repo_root: Path) -> dict:
 
 
 def build_repo_to_wiki_map(mapping: dict) -> dict:
-    return {page["source"]: page["wiki"] for group in mapping["groups"] for page in group["pages"]}
+    # page.get("wiki"), not page["wiki"]: a page can be site-only (per
+    # docs/proposals/proposal-i-docs-as-site-source.md's targets schema
+    # extension) with no "wiki" key at all - skip those rather than
+    # KeyError on every publish once one exists in the mapping.
+    return {page["source"]: page["wiki"] for group in mapping["groups"] for page in group["pages"] if page.get("wiki")}
 
 
 def resolve_repo_relative(repo_root: Path, source_rel: str, target: str) -> str | None:
@@ -242,6 +246,10 @@ def main() -> int:
             if not source_path.is_file():
                 print(f"::error::wiki-publish-map.json references missing source {source_rel}")
                 return 1
+            if not page.get("wiki"):
+                # site-only page (see build_repo_to_wiki_map) - nothing for
+                # this script to publish.
+                continue
             write_page(wiki_dir, page["wiki"], source_path, source_rel, repo_root, repo_to_wiki, errors)
             managed_names.add(page["wiki"])
             print(f"wrote {page['wiki']}.md <- {source_rel}")

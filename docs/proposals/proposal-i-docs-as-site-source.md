@@ -317,6 +317,40 @@ built output, not assumed from the script's logic alone. The one branch
 page, since it's currently the only one — untested for lack of a second
 site page to link to, not skipped.
 
+**Parity fixtures (this pass, added before merge) — shipped**: a shared
+fixture set, `.github/scripts/testdata/link_rewrite/` (a synthetic
+fixture repo + `map.json` + `cases.json`, deliberately independent of the
+real `wiki-publish-map.json` so fixtures stay stable as real docs are
+added/removed), run by both
+`.github/scripts/tests/test_publish_wiki_link_rewrite.py` (against
+`publish_wiki.py`'s `transform_links`) and
+`frontend/scripts/generate-docs-site.test.js` (against
+`generate-docs-site.js`'s `transformLinks`) — 14 cases covering every link
+form the transform handles (fence/inline-code skip, image-link skip,
+external/mailto/anchor pass-through, the `[[routes]]`-literal skip,
+fragment-dropping, subdirectory-relative resolution, the unmapped-real-file
+and nonexistent-file branches) plus two implementation-specific regression
+checks. Cases that are genuinely identical between the two implementations
+(most of them) assert one shared `expected` value; cases where they
+legitimately diverge (a wiki-only target: `publish_wiki.py` links to the
+same-wiki page name, `generate-docs-site.js` links to the external wiki
+URL, since it isn't itself inside the wiki) assert a `pythonExpected`/
+`jsExpected` pair instead of pretending the divergence away. Building this
+fixture set found and fixed a real, previously-latent bug:
+`build_repo_to_wiki_map` did `page["wiki"]` unconditionally, which would
+`KeyError` the moment any site-only page (no `"wiki"` key at all) entered
+the mapping — `main()`'s own publish loop had the identical bug. Both
+fixed (`page.get("wiki")`, filtering falsy values; `main()` skips a page
+with no wiki target instead of writing it). Wired into CI:
+`docs-lint.yml` gets a new `link-rewrite-parity` job (Python side, stdlib
+only, triggered by `.github/scripts/**` changes) and `test-frontend.yml`'s
+trigger paths gained `.github/scripts/testdata/link_rewrite/**` (JS side
+runs via the existing Jest sweep, no new job needed) — so a future
+edge-case fix to either implementation that doesn't also update
+`cases.json` fails a pre-merge check, not a silent divergence discovered
+later. Same rationale as the federation hash tool's permanent parity test
+(`MPCAutofill/cardpicker/tests/test_federation_hash_tool_parity.py`).
+
 **Not yet built** (concrete next steps per the owner's staged order, not
 silently dropped):
 
@@ -324,20 +358,14 @@ silently dropped):
    doesn't exist yet (still the ALLOWLIST-flagged path in `docs_lint.py`).
    Waits on PR-I-2+'s source restructures per §0 — building the extractor
    ahead of a real marked-table source to extract would mean testing it
-   against nothing real.
+   against nothing real. Once it exists, it'll need its own parity story
+   if it ever grows a second implementation — not a concern yet with only
+   one.
 2. **Widening §2's site-target list** beyond `overview.md` — `user-guide.md`,
    `self-hosting.md`, `theory.md` per this doc's own proposed initial
    mapping — deliberately deferred, per "prove the plumbing before
    widening it."
-3. **A pre-merge CI check for the site-page mechanism** (mirroring
-   `docs_lint.py`'s pre-merge posture rather than only failing at the
-   post-merge `deploy-frontend.yml` build) — not built this pass; the
-   existing wiki pipeline has this same accepted gap (§4's own text notes
-   `publish_wiki.py`'s link-resolution errors also only surface post-merge)
-   and PR-I-1 doesn't widen that gap, just doesn't close it either. Worth
-   revisiting once §1(b) exists and there's more than one doc's worth of
-   links to break.
-4. **A nav link to `/guide`** — no entry was added to `Navbar.tsx`; the
+3. **A nav link to `/guide`** — no entry was added to `Navbar.tsx`; the
    route works and is reachable by direct URL, but isn't discoverable from
    the site's own chrome yet. Left out deliberately (a nav change is a
    real, visible UX decision this pass's "prove the plumbing" scope didn't

@@ -1,0 +1,33 @@
+{
+  "//": "Fixture map for the link-rewrite parity fixture set (see cases.json in this directory and docs/lessons.md's mechanical-tether rationale). NOT the real wiki-publish-map.json - a small, fixed, standalone mapping so fixtures stay stable independent of the real map's evolution. Paths are relative to ./fixture_repo, which stands in for the repo root during these tests.",
+  "groups": [
+    {
+      "title": "Fixture group",
+      "pages": [
+        {
+          "source": "docs/site-doc.md",
+          "wiki": "Site-Doc",
+          "targets": ["wiki", "site"],
+          "sitePath": "/guide/site-doc"
+        },
+        {
+          "source": "docs/wiki-doc.md",
+          "wiki": "Wiki-Doc",
+          "targets": ["wiki"]
+        },
+        {
+          "source": "docs/site-only-doc.md",
+          "targets": ["site"],
+          "sitePath": "/guide/site-only"
+        },
+        {
+          "source": "docs/sub/nested.md",
+          "wiki": "Nested",
+          "targets": ["wiki"]
+        }
+      ]
+    }
+  ],
+  "pointer_pages": [],
+  "legacy_pages": []
+}

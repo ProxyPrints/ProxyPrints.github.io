@@ -12,6 +12,16 @@
 // documents for the frontend's own hand-maintained copy of backend
 // sanitisation logic — not a new pattern this script introduces.
 //
+// The link-rewrite CONTRACT the two implementations share (which link
+// forms get touched vs. skipped, how a relative path resolves, when a
+// broken link is an error) is pinned by a shared fixture set — see
+// .github/scripts/testdata/link_rewrite/, exercised here by
+// generate-docs-site.test.js and on the Python side by
+// .github/scripts/tests/test_publish_wiki_link_rewrite.py. Any edge-case
+// fix to either implementation's parsing/resolution logic should update
+// that fixture set, so a silent divergence between the two becomes a red
+// build instead.
+//
 // Runs as an npm "prebuild" step (see package.json) — NOT postinstall,
 // since docs/ changes have nothing to do with npm install. Fails the whole
 // build (non-zero exit) on any unresolvable link, a missing mapped source
@@ -30,10 +40,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(dirname, "..", "..");
-const GITHUB_WIKI_BASE =
+const defaultRepoRoot = path.resolve(dirname, "..", "..");
+export const GITHUB_WIKI_BASE =
   "https://github.com/ProxyPrints/ProxyPrints.github.io/wiki/";
-const GITHUB_BLOB_BASE =
+export const GITHUB_BLOB_BASE =
   "https://github.com/ProxyPrints/ProxyPrints.github.io/blob/master/";
 const outDir = path.join(
   dirname,
@@ -48,18 +58,14 @@ const outDir = path.join(
 // is never rewritten (mirrors publish_wiki.py's LINK_TOKEN_RE exactly).
 // Capture groups, in order: (1) fenced block, (2) inline code, (3) wikilink
 // body, (4) markdown link text, (5) markdown link path.
-const LINK_TOKEN_RE =
+export const LINK_TOKEN_RE =
   /(```[\s\S]*?```)|(`[^`\n]+`)|\[\[([^\]]+)\]\]|(?<!!)\[([^\]]*)\]\(([^)]+)\)/g;
 
-function loadMapping() {
-  const raw = fs.readFileSync(
-    path.join(repoRoot, ".github", "wiki-publish-map.json"),
-    "utf-8"
-  );
-  return JSON.parse(raw);
+export function loadMapping(mappingPath) {
+  return JSON.parse(fs.readFileSync(mappingPath, "utf-8"));
 }
 
-function buildTargetMaps(mapping) {
+export function buildTargetMaps(mapping) {
   const repoToSite = new Map();
   const repoToWiki = new Map();
   for (const group of mapping.groups) {
@@ -76,7 +82,7 @@ function buildTargetMaps(mapping) {
 // Mirrors publish_wiki.py's resolve_repo_relative: resolves a link target
 // against the source doc's own directory, returns a repo-relative posix
 // path, or null if it isn't a local-file reference at all.
-function resolveRepoRelative(sourceRel, target) {
+export function resolveRepoRelative(repoRoot, sourceRel, target) {
   if (/^(https?:|mailto:)/.test(target) || target.startsWith("#")) return null;
   const pathPart = target.split("#")[0];
   if (!pathPart) return null;
@@ -87,8 +93,15 @@ function resolveRepoRelative(sourceRel, target) {
   return rel.split(path.sep).join("/");
 }
 
-function rewriteLink(sourceRel, target, displayText, maps, errors) {
-  const resolvedRel = resolveRepoRelative(sourceRel, target);
+export function rewriteLink(
+  repoRoot,
+  sourceRel,
+  target,
+  displayText,
+  maps,
+  errors
+) {
+  const resolvedRel = resolveRepoRelative(repoRoot, sourceRel, target);
   if (resolvedRel === null) return null; // not a local path - leave untouched
 
   if (maps.repoToSite.has(resolvedRel)) {
@@ -110,34 +123,47 @@ function rewriteLink(sourceRel, target, displayText, maps, errors) {
   return null;
 }
 
-function transformLinks(sourceRel, text, maps, errors) {
+export function transformLinks(repoRoot, sourceRel, text, maps, errors) {
   return text.replace(
     LINK_TOKEN_RE,
     (whole, fence, inline, wikilink, mdtext, mdpath) => {
       if (fence !== undefined || inline !== undefined) return whole;
       if (wikilink !== undefined) {
         if (!wikilink.endsWith(".md") && !wikilink.includes("/")) return whole; // e.g. [[routes]] - a literal, not a doc link
-        return rewriteLink(sourceRel, wikilink, null, maps, errors) ?? whole;
+        return (
+          rewriteLink(repoRoot, sourceRel, wikilink, null, maps, errors) ??
+          whole
+        );
       }
       return (
-        rewriteLink(sourceRel, mdpath, mdtext || null, maps, errors) ?? whole
+        rewriteLink(
+          repoRoot,
+          sourceRel,
+          mdpath,
+          mdtext || null,
+          maps,
+          errors
+        ) ?? whole
       );
     }
   );
 }
 
-function deriveTitle(markdown, fallback) {
+export function deriveTitle(markdown, fallback) {
   const match = markdown.match(/^#\s+(.+)$/m);
   return match ? match[1].trim() : fallback;
 }
 
-function slugFromSitePath(sitePath) {
+export function slugFromSitePath(sitePath) {
   const trimmed = sitePath.replace(/^\/guide\/?/, "");
   return trimmed.length === 0 ? "index" : trimmed.replace(/\//g, "__");
 }
 
 function main() {
-  const mapping = loadMapping();
+  const repoRoot = defaultRepoRoot;
+  const mapping = loadMapping(
+    path.join(repoRoot, ".github", "wiki-publish-map.json")
+  );
   const maps = buildTargetMaps(mapping);
   const errors = [];
   const manifest = [];
@@ -163,7 +189,13 @@ function main() {
       }
       const raw = fs.readFileSync(sourceAbs, "utf-8");
       const title = deriveTitle(raw, page.wiki ?? page.source);
-      const transformed = transformLinks(page.source, raw, maps, errors);
+      const transformed = transformLinks(
+        repoRoot,
+        page.source,
+        raw,
+        maps,
+        errors
+      );
       const html = marked.parse(transformed);
       const slug = slugFromSitePath(page.sitePath);
       fs.writeFileSync(
@@ -202,4 +234,9 @@ function main() {
   console.log(`wrote docsSite/manifest.json (${manifest.length} page(s))`);
 }
 
-main();
+// Only run when executed directly (`node generate-docs-site.js`), not when
+// imported for testing (generate-docs-site.test.js imports the exported
+// functions above without wanting main()'s filesystem side effects).
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main();
+}

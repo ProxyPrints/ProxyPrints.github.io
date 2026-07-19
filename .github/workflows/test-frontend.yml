@@ -3,6 +3,10 @@ on:
   pull_request:
     paths:
       - "frontend/**"
+      # generate-docs-site.test.js's half of the shared link-rewrite
+      # fixture set (.github/scripts/testdata/link_rewrite/) - the
+      # Python half (publish_wiki.py) runs via docs-lint.yml instead.
+      - ".github/scripts/testdata/link_rewrite/**"
   workflow_dispatch:
 jobs:
   test:
