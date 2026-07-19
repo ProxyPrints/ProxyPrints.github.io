@@ -13,6 +13,7 @@ from cardpicker.sources.source_types import SourceTypeChoices
 from cardpicker.sources.update_database import bulk_sync_objects, update_database
 from cardpicker.tags import Tags
 from cardpicker.tests import factories
+from cardpicker.tests.conftest import google_drive_credentials_available
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
@@ -358,10 +359,27 @@ class TestAPI:
 class TestUpdateDatabase:
     # region tests
 
+    # CI baseline cleanup, 2026-07-19: both tests below call update_database() against real
+    # Google-Drive-backed Source fixtures (all_sources -> example_drive_1/2, conftest.py) with
+    # no mocking of that layer - they need REAL, working Google Drive credentials, which this
+    # fork's CI doesn't have configured (no GOOGLE_DRIVE_API_KEY repo secret) and a local dev
+    # venv may not have either (a drifted pyOpenSSL transitive dependency can break JWT signing
+    # even with a valid client_secrets.json present) - see
+    # google_drive_credentials_available()'s own docstring for exactly how each environment
+    # fails differently for the same root cause. Named skip, not an un-diagnosed xfail: an
+    # environment with real, working credentials runs these for real.
+    _GOOGLE_DRIVE_SKIP_REASON = (
+        "Google Drive credentials unavailable in this environment (missing/invalid"
+        " client_secrets.json, or a broken pyOpenSSL signing path) - see"
+        " docs/troubleshooting.md"
+    )
+
+    @pytest.mark.skipif(not google_drive_credentials_available(), reason=_GOOGLE_DRIVE_SKIP_REASON)
     def test_comprehensive_snapshot(self, snapshot, django_settings, elasticsearch, all_sources, tag_in_data):
         update_database()
         assert list(Card.objects.all().order_by("identifier")) == snapshot(name="cards")
 
+    @pytest.mark.skipif(not google_drive_credentials_available(), reason=_GOOGLE_DRIVE_SKIP_REASON)
     def test_upsert(self, django_settings, elasticsearch, all_sources):
         update_database()
         pk_to_identifier_1 = {x.pk: x.identifier for x in Card.objects.all()}
