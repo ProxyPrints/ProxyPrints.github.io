@@ -1,13 +1,22 @@
 As of: 2026-07-18
-What this is: Proposal I — DOCS-AS-SITE-SOURCE. SPEC + HOLD, no build. Extends
-the existing `docs/` → wiki publish pipeline
+What this is: Proposal I — DOCS-AS-SITE-SOURCE. **APPROVED, staged build
+order.** Extends the existing `docs/` → wiki publish pipeline
 (`.github/scripts/publish_wiki.py` + `.github/wiki-publish-map.json`,
 documented in `docs/documentation-process.md`) with a second, parallel
 target: the site itself consuming `docs/` the same single-source way the
 wiki already does. Two concrete outputs — rendered site pages, and small
 structured JSON "data extracts" — both build-time only, both driven by an
-extended version of the existing publish map. Nothing in this doc is
-implemented; it's a design for the owner to review, amend, or reject.
+extended version of the existing publish map.
+
+**PR-I-1 — shipped**: the pipeline itself (§1a's site-page mechanism, §2's
+map schema extension, §4's `deploy-frontend.yml` trigger fix), proven
+end-to-end against exactly one doc (`docs/overview.md`, live at `/guide`)
+per the owner's own "prove the plumbing before widening it" scope — see
+"Shipped vs. not yet built" below for the real detail. **PR-I-2+ — not yet
+started**: the §0 source restructures (`catalog-completion-plan.md`'s
+status prose → a marked table, `theory.md`'s constant citations → a marked
+block), each landing as an ordinary docs PR that unlocks its own data
+extract per §3's mechanism, which itself is not yet built (§1b).
 
 ## 0. Grounding: what actually exists today (read before the rest of this doc)
 
@@ -277,7 +286,59 @@ Stated so nothing here reads as more than it is:
   existing wiki pipeline — `publish_wiki.py`'s own logic changes only to
   the extent §1(a) shares its link-rewrite helper functions (a refactor
   for reuse, not a behavior change to the wiki's own output).
-- **No decision made here on markdown-rendering library choice, exact
-  route naming (`/docs` vs `/guide`), or the initial mapping table in
-  §2** beyond flagging them as open calls — this is a HOLD spec awaiting
-  owner review, not an implementation.
+- **The open calls this doc originally flagged (markdown library, route
+  naming, §2's mapping table) were resolved during PR-I-1's build** —
+  `marked` and `/guide`, specifically; see "Shipped vs. not yet built"
+  below for what that build actually did and didn't decide.
+
+## Shipped vs. not yet built
+
+**PR-I-1 (this pass) — shipped**: `.github/wiki-publish-map.json`'s schema
+extended with `targets`/`sitePath` per §2 (every existing entry given an
+explicit `targets: ["wiki"]`, `docs/overview.md` given
+`targets: ["wiki", "site"], "sitePath": "/guide"` — the ONE doc this pass
+proves the mechanism against, per the owner's own scope, not a wider
+rollout). `frontend/scripts/generate-docs-site.js`: the §1(a) link-rewrite
+mechanism, reimplemented in JS against `marked` (the open library-choice
+call, resolved) rather than shared with `publish_wiki.py`'s Python — see
+the script's own header comment for why that's a deliberate, precedented
+divergence from this doc's original "shared refactor" framing, not an
+oversight. `frontend/src/pages/guide/[[...slug]].tsx`: the SSG route (the
+open `/docs` vs. `/guide` naming call, resolved as `/guide`), wired via a
+new `prebuild` npm script (not `postinstall`, exactly per §4's reasoning).
+`.github/workflows/deploy-frontend.yml`'s trigger `paths:` extended with
+`docs/**` and the map file, per §4 item 1. Verified end-to-end: `npm run build` produces a real `/guide` page (title "Overview — ProxyPrints
+Guide", real HTML body, zero new lint/type errors) whose links exercise
+all three resolution branches this spec's §1(a) called for — a wiki-only
+target (`theory.md` → the external wiki URL), a real-but-unmapped file
+(`README.md` → a GitHub blob URL) — confirmed by inspecting the actual
+built output, not assumed from the script's logic alone. The one branch
+`overview.md` doesn't happen to exercise is a link to ANOTHER site-targeted
+page, since it's currently the only one — untested for lack of a second
+site page to link to, not skipped.
+
+**Not yet built** (concrete next steps per the owner's staged order, not
+silently dropped):
+
+1. **§1(b)/§3 — data extracts.** `frontend/scripts/generate-docs-data.js`
+   doesn't exist yet (still the ALLOWLIST-flagged path in `docs_lint.py`).
+   Waits on PR-I-2+'s source restructures per §0 — building the extractor
+   ahead of a real marked-table source to extract would mean testing it
+   against nothing real.
+2. **Widening §2's site-target list** beyond `overview.md` — `user-guide.md`,
+   `self-hosting.md`, `theory.md` per this doc's own proposed initial
+   mapping — deliberately deferred, per "prove the plumbing before
+   widening it."
+3. **A pre-merge CI check for the site-page mechanism** (mirroring
+   `docs_lint.py`'s pre-merge posture rather than only failing at the
+   post-merge `deploy-frontend.yml` build) — not built this pass; the
+   existing wiki pipeline has this same accepted gap (§4's own text notes
+   `publish_wiki.py`'s link-resolution errors also only surface post-merge)
+   and PR-I-1 doesn't widen that gap, just doesn't close it either. Worth
+   revisiting once §1(b) exists and there's more than one doc's worth of
+   links to break.
+4. **A nav link to `/guide`** — no entry was added to `Navbar.tsx`; the
+   route works and is reachable by direct URL, but isn't discoverable from
+   the site's own chrome yet. Left out deliberately (a nav change is a
+   real, visible UX decision this pass's "prove the plumbing" scope didn't
+   ask for) rather than added silently.

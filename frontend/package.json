@@ -7,6 +7,7 @@
   "scripts": {
     "postinstall": "patch-package && node scripts/copy-pdf-worker.js && node scripts/generate-keyrune-assets.js",
     "dev": "next dev",
+    "prebuild": "node scripts/generate-docs-site.js",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -80,6 +81,7 @@
     "jest": "^30.2.0",
     "jest-fixed-jsdom": "^0.0.11",
     "jsdom": "^28.1.0",
+    "marked": "^18.0.6",
     "mini-css-extract-plugin": "^2.7.5",
     "msw": "^2.12.7",
     "patch-package": "^8.0.1",
