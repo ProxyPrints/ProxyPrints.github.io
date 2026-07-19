@@ -85,9 +85,10 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.getByRole("link", { name: "Display (beta)" }).click();
 
     await expect(page.getByTestId("display-page")).toBeVisible();
-    await expect(page.getByTestId("display-page-indicator")).toContainText(
-      "Page 1 of 1"
+    await expect(page.getByTestId("display-sheet-indicator")).toContainText(
+      "Sheet 1 of 1"
     );
+    await expect(page.getByTestId("display-sheet-wrapper")).toHaveCount(1);
     // A4 landscape at the default bleed edge greedy-fits to 4 columns x 2 rows - see the
     // design doc's §1 for the computeLayout() math this matches.
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
@@ -429,5 +430,51 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     const label = sheetSlot.getByTestId("page-preview-empty-slot-label");
     await expect(label).toBeVisible();
     await expect(label).toContainText("an unfindable card");
+  });
+
+  test("a deck spanning multiple sheets renders as one continuous vertical stack, with the far-off sheet deferred until scrolled into view (Item 3, flat scroll + virtualization)", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    // 20 slots at 8-per-sheet (the same 4x2 A4-landscape default the other tests rely on)
+    // chunks into 3 sheets: 8, 8, 4.
+    await importText(page, "20x my search query");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+
+    await expect(page.getByTestId("display-page")).toBeVisible();
+    const sheetWrappers = page.getByTestId("display-sheet-wrapper");
+    await expect(sheetWrappers).toHaveCount(3);
+    await expect(page.getByTestId("display-sheet-indicator")).toContainText(
+      "Sheet 1 of 3"
+    );
+
+    // The last sheet starts well outside RenderIfVisible's visibleOffset band at this scroll
+    // position - it hasn't been asked to mount any real card images yet, which is the whole
+    // point of sheet-level virtualization (see this page's own module comment). PagePreview
+    // always renders one page-preview-slot div per grid position regardless of how many are
+    // actually filled (see PagePreview.tsx - every cell gets a slot, only some get an <img>), so
+    // "not mounted at all" means zero of *either*, not just zero filled ones.
+    const lastSheet = sheetWrappers.last();
+    await expect(lastSheet.getByTestId("page-preview-slot")).toHaveCount(0);
+    await expect(lastSheet.locator("img")).toHaveCount(0);
+
+    // The page's real scroll container is Layout.tsx's fixed-position, overflow-y:scroll
+    // ContentContainer, not the window/body (see docs/lessons.md's sticky/z-index entry) - so
+    // window.scrollTo() here would silently no-op. scrollIntoViewIfNeeded() finds whichever
+    // ancestor actually scrolls and moves it, which is what's needed regardless of which
+    // element that turns out to be.
+    await lastSheet.scrollIntoViewIfNeeded();
+
+    // Now mounted: the full 4x2 grid's worth of slot divs (8, same as every other sheet), but
+    // only 4 of them are real project slots (20 cards - 8 - 8 already placed on the first two
+    // sheets) - the remaining 4 grid cells on this last sheet render empty, same as the
+    // baseline single-sheet "leaves a slot empty" case.
+    await expect(lastSheet.getByTestId("page-preview-slot")).toHaveCount(8);
+    await expect(lastSheet.locator("img")).toHaveCount(4);
+    await expect(page.getByTestId("display-sheet-indicator")).toContainText(
+      "Sheet 3 of 3"
+    );
   });
 });

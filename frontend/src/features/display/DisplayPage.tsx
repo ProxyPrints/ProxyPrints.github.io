@@ -14,6 +14,15 @@
  * renders a labeled stub - see each section's own comment for which later PR fills it in, per
  * the design doc's §6 migration/sequencing plan.
  *
+ * Item 3 (owner's hands-on review, flat-scroll amendment) replaced the original one-page-at-a-
+ * time pager with a continuous vertical stack of every sheet (`sheets`, derived from
+ * displayPagination.ts's `paginateSlotsForDisplay`) - each sheet's PagePreview mounts only when
+ * on/near screen via RenderIfVisible (components/RenderIfVisible.tsx, already proven in
+ * CardResultSet.tsx), so a large deck never holds more real <img> elements in memory than what's
+ * actually near the viewport. The toolbar's old prev/next pager is gone; what remains is a
+ * passive "Sheet N of M" readout driven by its own, tighter-band IntersectionObserver (distinct
+ * from RenderIfVisible's own broader mount/unmount one - see the two effects' own comments).
+ *
  * Deliberately NOT built here (see the design doc + this task's relay reports for the full
  * reasoning): the tablet off-canvas drawer and mobile bottom-sheet overlay interaction patterns
  * (§3) - below `md` the rail stacks in plain document flow below the sheet, which is usable but
@@ -24,7 +33,7 @@
  */
 import styled from "@emotion/styled";
 import Link from "next/link";
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Button from "react-bootstrap/Button";
 import Form from "react-bootstrap/Form";
 
@@ -43,6 +52,7 @@ import {
   useAppSelector,
 } from "@/common/types";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
+import { RenderIfVisible } from "@/components/RenderIfVisible";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { GridSelectorResults } from "@/features/gridSelector/GridSelectorResults";
@@ -89,6 +99,11 @@ const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   bleedEdgeMM: BleedEdgeMM,
   showCutLines: true,
 };
+
+// Width, in real CSS px, every sheet in the flat-scroll stack renders at - was PagePreview's own
+// inline maxWidthPx={960} prop before Item 3; hoisted to a shared constant since sheetPixelHeightPx
+// below needs the exact same value to estimate each sheet's rendered height for virtualization.
+const SHEET_MAX_WIDTH_PX = 960;
 
 //# endregion
 
@@ -481,7 +496,6 @@ export function DisplayPage() {
   const [settings, setSettings] = useState<DisplaySheetSettings>(
     DEFAULT_SHEET_SETTINGS
   );
-  const [pageIndex, setPageIndex] = useState(0);
   const [selectedSlotRef, setSelectedSlotRef] =
     useState<SelectedSlotRef | null>(null);
 
@@ -494,6 +508,12 @@ export function DisplayPage() {
   const portraitSize = getPageSizeMM(settings.pageSize, undefined, undefined);
   const sheetWidthMM = portraitSize.height;
   const sheetHeightMM = portraitSize.width;
+  // Matches PagePreview's own internal scale-to-fit math exactly (scale = maxWidthPx /
+  // pageWidthMM-in-px, height = pageHeightMM-in-px * scale - the px-per-mm factor cancels out),
+  // so this estimate is exact, not approximate - RenderIfVisible's defaultHeight/visibleOffset
+  // never has to correct a wrong guess via its own ResizeObserver fallback.
+  const sheetPixelHeightPx =
+    SHEET_MAX_WIDTH_PX * (sheetHeightMM / sheetWidthMM);
 
   const margins = useMemo(() => ({ top: 5, bottom: 5, left: 5, right: 5 }), []);
   const spacing = useMemo(() => ({ row: 0, col: 0 }), []);
@@ -521,54 +541,109 @@ export function DisplayPage() {
     () => paginateSlotsForDisplay(projectMembers, cardsPerPage),
     [projectMembers, cardsPerPage]
   );
-  const pageCount = Math.max(pages.length, 1);
-  const clampedPageIndex = Math.min(pageIndex, pageCount - 1);
-  const currentPageEntries = pages[clampedPageIndex] ?? [];
+  // Item 3 (owner's hands-on review, flat scroll amendment) - EVERY sheet's slots get resolved
+  // here now, not just one page's, since the whole deck renders as one continuous vertical
+  // stack. This is still cheap index/string bookkeeping, not image work - the actual per-slot
+  // <img> only mounts once RenderIfVisible below decides a given sheet is on/near-screen, which
+  // is what keeps this in line with the design doc's original "don't hold more image memory
+  // than what's already on screen" rule. Always at least one sheet, even for an empty page's
+  // worth of grid capacity - matches the page-shell's pre-flat-scroll behaviour of always
+  // showing one (possibly all-placeholder) sheet rather than rendering nothing.
+  const sheets = useMemo(
+    () =>
+      (pages.length > 0 ? pages : [[]]).map((entries, pageIndex) => ({
+        pageIndex,
+        entries,
+        slots: entries.map((entry) => {
+          const projectMember = entry.member[activeFace];
+          const identifier = projectMember?.selectedImage;
+          const cardDocument =
+            identifier != null
+              ? cardDocumentsByIdentifier[identifier]
+              : undefined;
+          const query = projectMember?.query;
+          // Item 1 (owner's hands-on review) - a slot with no resolved thumbnail shows this on
+          // the sheet itself instead of a blank hole. `undefined` only for a genuinely
+          // query-less slot (a shared-cardback back face) - PagePreview then falls back to
+          // `name`'s own "Slot N".
+          const queryText =
+            query?.query != null && query.query.length > 0
+              ? `${query.query}${
+                  query.expansionCode != null
+                    ? ` (${query.expansionCode.toUpperCase()}${
+                        query.collectorNumber ? " " + query.collectorNumber : ""
+                      })`
+                    : ""
+                }`
+              : undefined;
+          const content: PagePreviewSlotContent = {
+            imageUrl: cardDocument?.mediumThumbnailUrl,
+            name: cardDocument?.name ?? `Slot ${entry.slot + 1}`,
+            queryText,
+          };
+          return content;
+        }),
+      })),
+    [pages, activeFace, cardDocumentsByIdentifier]
+  );
 
-  // Only this one page's slots ever get resolved to thumbnail URLs and handed to
-  // PagePreview - the performance rule from the design doc ("render only the current sheet
-  // page"). `pages` above is cheap index bookkeeping, not image work.
-  const currentPageSlots: Array<PagePreviewSlotContent> =
-    currentPageEntries.map((entry) => {
-      const projectMember = entry.member[activeFace];
-      const identifier = projectMember?.selectedImage;
-      const cardDocument =
-        identifier != null ? cardDocumentsByIdentifier[identifier] : undefined;
-      const query = projectMember?.query;
-      // Item 1 (owner's hands-on review) - a slot with no resolved thumbnail shows this on the
-      // sheet itself instead of a blank hole. `undefined` only for a genuinely query-less slot
-      // (a shared-cardback back face) - PagePreview then falls back to `name`'s own "Slot N".
-      const queryText =
-        query?.query != null && query.query.length > 0
-          ? `${query.query}${
-              query.expansionCode != null
-                ? ` (${query.expansionCode.toUpperCase()}${
-                    query.collectorNumber ? " " + query.collectorNumber : ""
-                  })`
-                : ""
-            }`
-          : undefined;
-      return {
-        imageUrl: cardDocument?.mediumThumbnailUrl,
-        name: cardDocument?.name ?? `Slot ${entry.slot + 1}`,
-        queryText,
-      };
-    });
-
-  const handleSlotClick = (indexOnPage: number) => {
-    const entry = currentPageEntries[indexOnPage];
+  const handleSlotClick = (pageIndex: number, indexOnPage: number) => {
+    const entry = sheets[pageIndex]?.entries[indexOnPage];
     if (entry == null) {
       return;
     }
     setSelectedSlotRef({ face: activeFace, slot: entry.slot });
   };
 
-  const selectedSlotIndexOnPage =
+  // Which sheet (not just which slot-on-a-page) currently holds the selected slot - needed now
+  // that every sheet renders simultaneously, rather than only ever having "the current page"'s
+  // own local index to check.
+  const selectedSheetIndex =
     selectedSlotRef != null && selectedSlotRef.face === activeFace
-      ? currentPageEntries.findIndex(
-          (entry) => entry.slot === selectedSlotRef.slot
+      ? sheets.findIndex((sheet) =>
+          sheet.entries.some((entry) => entry.slot === selectedSlotRef.slot)
         )
       : -1;
+
+  // Passive "Sheet N of M" scroll-position indicator (design doc's flat-scroll amendment - a
+  // read-only reflection of scroll position, not a navigation control like the old prev/next
+  // pager). Deliberately its own IntersectionObserver, distinct from RenderIfVisible's below -
+  // that one asks "should this sheet's images be mounted at all" (generous, ±1-sheet-ish
+  // rootMargin); this one asks "which single sheet is the user currently looking at" (a thin
+  // band near vertical centre), and the two thresholds are unrelated by design.
+  const sheetRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const [visibleSheetIndex, setVisibleSheetIndex] = useState(0);
+
+  useEffect(() => {
+    const indexByElement = new Map<Element, number>();
+    sheetRefs.current.forEach((element, index) => {
+      if (element != null) {
+        indexByElement.set(element, index);
+      }
+    });
+    if (indexByElement.size === 0) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const intersectingIndices = entries
+          .filter((entry) => entry.isIntersecting)
+          .map((entry) => indexByElement.get(entry.target))
+          .filter((index): index is number => index != null);
+        if (intersectingIndices.length > 0) {
+          setVisibleSheetIndex(Math.min(...intersectingIndices));
+        }
+      },
+      { rootMargin: "-45% 0px -45% 0px", threshold: 0 }
+    );
+    indexByElement.forEach((_index, element) => observer.observe(element));
+    return () => observer.disconnect();
+  }, [sheets.length]);
+
+  const clampedVisibleSheetIndex = Math.min(
+    visibleSheetIndex,
+    sheets.length - 1
+  );
 
   if (isProjectEmpty) {
     return (
@@ -589,27 +664,12 @@ export function DisplayPage() {
         data-testid="display-toolbar"
       >
         <div className="d-flex align-items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline-secondary"
-            onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
-            disabled={clampedPageIndex === 0}
-            aria-label="Previous page"
-          >
-            ◀
-          </Button>
-          <span data-testid="display-page-indicator">
-            Page {clampedPageIndex + 1} of {pageCount}
+          {/* Passive scroll-position readout, not a control - see the visibleSheetIndex
+              IntersectionObserver above. The whole deck is one continuous vertical stack now
+              (Item 3, flat scroll amendment); there's nothing left here to page between. */}
+          <span data-testid="display-sheet-indicator">
+            Sheet {clampedVisibleSheetIndex + 1} of {sheets.length}
           </span>
-          <Button
-            size="sm"
-            variant="outline-secondary"
-            onClick={() => setPageIndex((i) => Math.min(pageCount - 1, i + 1))}
-            disabled={clampedPageIndex >= pageCount - 1}
-            aria-label="Next page"
-          >
-            ▶
-          </Button>
         </div>
 
         <Button
@@ -691,23 +751,60 @@ export function DisplayPage() {
         style={{ position: "relative", zIndex: 0 }}
       >
         <div
-          className="flex-grow-1 d-flex justify-content-center p-3"
+          className="flex-grow-1 d-flex flex-column align-items-center p-3"
           data-testid="display-sheet-region"
         >
-          <PagePreview
-            pageWidthMM={sheetWidthMM}
-            pageHeightMM={sheetHeightMM}
-            bleedEdgeMM={settings.bleedEdgeMM}
-            margins={margins}
-            spacing={spacing}
-            slots={currentPageSlots}
-            showCutLines={settings.showCutLines}
-            maxWidthPx={960}
-            onSlotClick={handleSlotClick}
-            selectedSlotIndex={
-              selectedSlotIndexOnPage >= 0 ? selectedSlotIndexOnPage : undefined
-            }
-          />
+          {sheets.map((sheet) => (
+            <div
+              key={sheet.pageIndex}
+              ref={(element) => {
+                sheetRefs.current[sheet.pageIndex] = element;
+              }}
+              data-sheet-index={sheet.pageIndex}
+              data-testid="display-sheet-wrapper"
+              className="d-flex flex-column align-items-center mb-4 p-2 border rounded"
+            >
+              <div
+                className="text-muted small mb-2"
+                data-testid="display-sheet-label"
+              >
+                Sheet {sheet.pageIndex + 1} of {sheets.length}
+              </div>
+              {/* Sheet-level virtualization (Item 3's benchmark-gated requirement): only the
+                  sheet(s) within one sheet-height of the viewport actually mount their
+                  PagePreview (real <img> tags); everything further away is a fixed-height
+                  placeholder div, per RenderIfVisible's own contract - see this component's
+                  module comment for why a from-scratch IntersectionObserver wasn't needed here.
+                  The first sheet starts mounted unconditionally so the common single-sheet case
+                  never waits on an observer round-trip. */}
+              <RenderIfVisible
+                initialVisible={sheet.pageIndex === 0}
+                defaultHeight={sheetPixelHeightPx}
+                visibleOffset={sheetPixelHeightPx}
+              >
+                <PagePreview
+                  pageWidthMM={sheetWidthMM}
+                  pageHeightMM={sheetHeightMM}
+                  bleedEdgeMM={settings.bleedEdgeMM}
+                  margins={margins}
+                  spacing={spacing}
+                  slots={sheet.slots}
+                  showCutLines={settings.showCutLines}
+                  maxWidthPx={SHEET_MAX_WIDTH_PX}
+                  onSlotClick={(indexOnPage) =>
+                    handleSlotClick(sheet.pageIndex, indexOnPage)
+                  }
+                  selectedSlotIndex={
+                    selectedSheetIndex === sheet.pageIndex
+                      ? sheet.entries.findIndex(
+                          (entry) => entry.slot === selectedSlotRef?.slot
+                        )
+                      : undefined
+                  }
+                />
+              </RenderIfVisible>
+            </div>
+          ))}
         </div>
 
         {/* Sticky + its own scroll container only from md up; plain document flow below md -
