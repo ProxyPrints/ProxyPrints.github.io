@@ -6,9 +6,9 @@
   had just written in the same session, and that a newly-committed
   `.claude/settings.json` hook would immediately start firing in the
   same already-running session.
-- **How caught**: both by direct failure, not inference. (1) Spawning
-  `worker-backend` right after creating `.claude/agents/worker-backend.md`
-  failed outright: `Agent type 'worker-backend' not found`. (2) This
+- **How caught**: both by direct failure, not inference. (1) Spawning a
+  worker agent right after creating its `.claude/agents/*.md` definition
+  failed outright: `Agent type '<name>' not found`. (2) This
   session's own `git merge --ff-only origin/master` on the main
   checkout (current branch master at the time) should have been
   denied by `guard_master.py`'s unconditional git-merge-into-master
