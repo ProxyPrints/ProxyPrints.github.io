@@ -1001,20 +1001,25 @@ marginal per-stream gain instead says ~9 streams — a 2x spread on the
 answer to "how many streams," which is itself the honest finding, not
 a number to average away.
 
-**Sustained-viability verdict**: technically viable and quota-safe
-(zero 429/403 across every fetch attempted, spanning the overwhelming
-majority of available community sources) but **not clearly
-competitive on throughput** at either concurrency level actually
-tested. This doesn't cleanly resolve either branch of the pre-set
-decision standard — it isn't "quota trouble" (the explicit fallback
-trigger), but it also doesn't "sustain ≥ the scraper's effective
-deduped rate" at any level measured. Owner call, not resolved here:
-(a) invest in a real higher-N measurement (ideally via separate OS
-processes, not threads, to test whether GIL contention is really the
-ceiling) before deciding, or (b) treat this as sufficient evidence to
-stay on the scraper+dedupe path and revive the previously-cancelled
-ramp probe (task #152 item 1) to push its own ceiling past 3.0/s with
-real evidence, per the original sequencing.
+**FINAL VERDICT (owner decision, 2026-07-19) — option (b), dual
+conclusion, task #152 closed**: scraper+dedupe stays the bulk fetch
+path. Drive's ~30x bandwidth tax (raw originals, ~6.68 MiB/file
+measured, vs. the scraper path's server-resized ~925px output) makes
+it structurally wrong for bulk regardless of concurrency — no
+process-based follow-up measurement is warranted, since no realistic
+concurrency level closes a 30x-per-file gap. **Drive API's PROVEN
+role going forward**: delta/gap-fill fetches, dead-link recovery, and
+targeted re-extraction — plus lazy-mode one-offs (task #161) — where a
+single accurate fetch matters more than bulk throughput. The clean
+quota behavior measured across 3,136 downloads (zero 429/403,
+spanning 247/248 available community sources) is the evidence backing
+this role: Drive is safe and reliable for the low-volume, high-value
+cases the bulk path doesn't need to reach for. The previously-
+cancelled ramp probe (task #152's former item 1) is **REVIVED** —
+tracked as task #163, pending an owner-named low-traffic window — to
+push `GOOGLE_IMAGE`'s scraper-path ceiling past 3.0/s with real
+evidence, since that's now confirmed as the only lever left for
+moving the bulk-harvest floor.
 
 ### Governing posture: we index, we do not store images (owner FINAL POSTURE + PRIORITIZATION directive, 2026-07-19)
 
