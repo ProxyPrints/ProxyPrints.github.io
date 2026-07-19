@@ -728,3 +728,19 @@ is still in flight, use a separate worktree (see this doc's own worktree-port-co
 just wait for a completion notification before touching git state again. A "no processes running"
 check via `pgrep` at one instant is not sufficient proof it's safe to proceed - the teardown of the
 task you just kicked off may not have landed yet.
+
+## Verification must run against the committed/pushed state, not the working tree
+
+A local pass (tsc/jest/eslint/build, screenshots) that runs before the final `git add`/commit can
+pass against a working tree that silently differs from what actually gets pushed - an auto-fixer
+(prettier, a pre-commit hook, `eslint --fix`) that runs during `git commit` can rewrite files after
+the verification already ran against the pre-hook copy, and a report claiming "tsc clean, tests
+green" for that commit is then describing a state that was never actually pushed. CI caught this
+gap live, not a pre-push check. Fix: after any commit whose pre-commit hooks can rewrite files
+(check `.pre-commit-config.yaml` / `package.json`'s `lint-staged`/husky config for auto-fixing
+hooks, not just linting ones), run `git status --short` immediately after the commit and confirm it
+reports clean before treating the pre-commit verification run as still valid - a non-empty status
+means a hook changed something post-verification and the affected checks need to be re-run against
+the new committed content, not assumed still-passing. Applies to every "VERIFICATION" section of
+this repo's standing report format: state what was actually verified against the pushed SHA, not
+against a working-tree snapshot that predates the final commit.
