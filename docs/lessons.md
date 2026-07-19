@@ -697,3 +697,31 @@ live for this fix (`tests/Navbar.spec.ts`): the new click-through tests fail det
 (`page.waitForURL` times out) against the original nested-anchor markup and pass cleanly once the
 wrapper is removed - proof the test genuinely exercises the failure mode, not just incidental
 coverage.
+
+## Switching git branches while a background Playwright/dev-server process is still live in the same working directory corrupts that run
+
+Started a `npx playwright test ...` run in the background (a genuine multi-minute suite), then -
+while it was still executing - ran `git checkout`/`git checkout -b` in the exact same working
+directory to start unrelated work on a different branch. Two tests near the end of that
+backgrounded run failed with plain navigation timeouts, in a suite that had nothing to do with
+either branch's actual changes. Root cause: Playwright's own `webServer` (a real `next dev`
+process) was still live and serving requests for the backgrounded run at the moment the branch
+switch rewrote the working directory's files out from under it - Next dev watches the filesystem
+for hot-reload, and a branch switch is a large, instantaneous, non-incremental file-tree mutation
+that a live dev server has no graceful way to reconcile mid-request. This is a stricter version of
+the already-documented "concurrent worktree dev servers collide on port 3000" lesson - not a
+different worktree colliding with this one, but a single working directory's own still-running
+process getting corrupted by its own controlling session's next action.
+
+**The check this implies**: before running `git checkout`/`git switch`/`git stash` (anything that
+rewrites the working tree) in a directory where you *might* have a backgrounded Bash task still
+running, check for one first (the task list, or `pgrep -fa "next dev\|playwright"`) rather than
+assuming a prior `npx playwright test` call already finished just because a new prompt arrived -
+background tasks and turn boundaries are not the same thing. If a relevant background task is
+still active, wait for its actual completion notification before touching git state, even if
+other work feels ready to start. Recovery, if it already happened: the dev server does not linger
+forever in a broken state (Playwright's own teardown eventually reaps it once the run genuinely
+ends) - re-run the affected suite from a clean state (confirm via `pgrep` that nothing `next dev`-
+shaped survives first) rather than trusting the corrupted run's failures as real regressions, but
+don't assume "no error output" means nothing was affected either - diff the specific failures
+against what the change under test could plausibly cause before writing them off.
