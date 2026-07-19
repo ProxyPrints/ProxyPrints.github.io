@@ -61,27 +61,48 @@ the next regeneration, then silently vanishes — not a data-loss risk
   are a separate git repo the default `GITHUB_TOKEN` can't push to); see
   that workflow's own header for exact setup steps.
 
-## The site is a second generated target, same source
+## The site is a second generated target, same source, ONE transform
 
 Per [`proposals/proposal-i-docs-as-site-source.md`](proposals/proposal-i-docs-as-site-source.md)
 (APPROVED, staged build — PR-I-1 shipped, PR-I-2+ not yet started), the
 same `docs/` files can also publish as real pages on the site itself, at
 `/guide`, via a second per-page target (`"site"` in `wiki-publish-map.json`'s
 `targets` array) alongside — not instead of — the existing wiki target.
-Mechanism: `frontend/scripts/generate-docs-site.js`, an npm `prebuild`
-step (see `frontend/package.json`) that reads every `"site"`-targeted
-entry, rewrites its links (a doc-to-doc link resolves to another site
-page, a wiki page, or a GitHub blob URL — never a raw `docs/` filename,
-the same problem `publish_wiki.py` already solves for the wiki, solved
-again here in JS since this step runs inside the Next.js build rather
-than as a separate Python process), and writes pre-rendered HTML into
-`frontend/src/common/generated/docsSite/` for
-`frontend/src/pages/guide/[[...slug]].tsx` to serve at build time — no
-runtime fetch, matching this frontend's static-export constraint.
+
+**Single-transform architecture**: `.github/scripts/publish_wiki.py` is the
+ONLY place link-rewrite logic exists, for both outputs. Its
+`transform_links()`/`rewrite_link()` take an optional `repo_to_site` map —
+absent (the default), it's exactly the original wiki-only 2-way resolution
+(same-wiki link or GitHub blob URL); given a real map, it adds a 3rd
+resolution branch (a link to a `"site"`-targeted page becomes that page's
+own route) and changes how a wiki-only target resolves (an ABSOLUTE wiki
+URL rather than a same-repo link, since the site itself doesn't host that
+page). `.github/scripts/publish_site.py`, a thin sibling script, imports
+this shared logic (no reimplementation) and writes pre-transformed
+markdown for every `"site"`-targeted page into `frontend/generated-docs/`
+(gitignored). `frontend/src/pages/guide/[[...slug]].tsx` has no transform
+logic of its own — it only reads that markdown and renders it to HTML via
+a JS markdown library at Next.js build time (a rendering concern, kept
+separate from the transform concern above). Run locally via
+`npm run docs:generate` (from `frontend/`); `next build`/`next dev` degrade
+gracefully with a console warning, not a crash, if that hasn't been run
+yet — `/guide` simply has no pages until it has.
+
 Currently live for exactly one doc (`docs/overview.md`); widening the
 list is normal, low-risk work (add `"site"` + `sitePath` to a
 `wiki-publish-map.json` entry) explicitly deferred past PR-I-1's
 "prove the plumbing first" scope, not a technical blocker.
+
+**Link-rewrite parity fixtures**: since one function now serves two output
+shapes (wiki mode vs. site mode) rather than two separate implementations,
+[`.github/scripts/tests/test_publish_wiki_link_rewrite.py`](../.github/scripts/tests/test_publish_wiki_link_rewrite.py)
+runs a shared fixture set
+([`.github/scripts/testdata/link_rewrite/cases.json`](../.github/scripts/testdata/link_rewrite/cases.json))
+through both modes and pins which cases are expected to produce identical
+output versus legitimately diverge by mode — a future edge-case fix that
+doesn't also update the fixture fails this test, rather than silently
+diverging. Same rationale as the federation hash tool's permanent parity
+test.
 
 ## Lint catches mechanical rot
 

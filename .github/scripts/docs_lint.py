@@ -39,10 +39,13 @@ ALLOWLIST = {
         "regression.md cite it deliberately as git archaeology, not a "
         "live reference"
     ),
-    "frontend/scripts/generate-docs-data.js": (
-        "docs/proposals/proposal-i-docs-as-site-source.md is a HOLD spec, "
-        "not yet built — this is the proposed script's path, cited for "
-        "when/if the spec is approved, not a claim it exists today"
+    "frontend/scripts/generate-docs-site.js": (
+        "docs/proposals/proposal-i-docs-as-site-source.md's 'Shipped vs. "
+        "not yet built' section cites this deliberately as history — PR-I-1's "
+        "first pass built it (a JS reimplementation of link-rewrite logic), "
+        "the owner's restructure deleted it in favor of the single-transform "
+        "architecture (publish_wiki.py/publish_site.py) — not a live "
+        "reference, not a forward-reference to something not yet built"
     ),
 }
 

@@ -8,11 +8,13 @@
  * surfaces share one real search implementation). The always-visible header now carries the real
  * requested-printing badge (Step 2 PR 2b - degraded-style variant keyed off
  * EditorSearchResponse.degradedQueries, wired end to end through searchResultsSlice's
- * selectIsSearchQueryDegraded) and the real DeckbuilderConfirmAffordance (same component
- * CardSlot.tsx mounts, adapted only via its onOpenGridSelector prop - the rail has no modal to
- * open, so N expands the Choose Image section instead). Every other accordion section still
- * renders a labeled stub - see each section's own comment for which later PR fills it in, per
- * the design doc's §6 migration/sequencing plan.
+ * selectIsSearchQueryDegraded; later extracted into its own RequestedPrintingBadge.tsx component
+ * - item (c) of the frontend-polish package - so CardSlot.tsx's editor slots could mount the
+ * exact same badge, one component instead of two copies that could drift) and the real
+ * DeckbuilderConfirmAffordance (same component CardSlot.tsx mounts, adapted only via its
+ * onOpenGridSelector prop - the rail has no modal to open, so N expands the Choose Image section
+ * instead). Every other accordion section still renders a labeled stub - see each section's own
+ * comment for which later PR fills it in, per the design doc's §6 migration/sequencing plan.
  *
  * Item 3 (owner's hands-on review, flat-scroll amendment) replaced the original one-page-at-a-
  * time pager with a continuous vertical stack of every sheet (`sheets`, derived from
@@ -36,6 +38,7 @@ import Link from "next/link";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Button from "react-bootstrap/Button";
 import Form from "react-bootstrap/Form";
+import ProgressBar from "react-bootstrap/ProgressBar";
 
 import {
   Back,
@@ -53,8 +56,12 @@ import {
 } from "@/common/types";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { RenderIfVisible } from "@/components/RenderIfVisible";
+import { Spinner } from "@/components/Spinner";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
+import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
+import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
+import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { GridSelectorResults } from "@/features/gridSelector/GridSelectorResults";
 import { useGridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
 import { computeLayout } from "@/features/pdf/layout";
@@ -62,19 +69,24 @@ import {
   PagePreview,
   PagePreviewSlotContent,
 } from "@/features/pdf/PagePreview";
-import { getPageSizeMM, PageSize } from "@/features/pdf/PDF";
+import { getPageSizeMM, PageSize, PDFProps } from "@/features/pdf/PDF";
+import {
+  ImageFailureConfirmModal,
+  useDownloadPDF,
+  useSaveToDrivePDF,
+} from "@/features/pdf/PDFGenerator";
+import { ImageFetchFailure } from "@/features/pdf/pdfImage";
+import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
   selectIsProjectEmpty,
+  selectManualOverrides,
   selectProjectCardback,
   selectProjectMember,
   selectProjectMembers,
   setSelectedImages,
 } from "@/store/slices/projectSlice";
-import {
-  selectIsSearchQueryDegraded,
-  selectSearchResultsForQueryOrDefault,
-} from "@/store/slices/searchResultsSlice";
+import { selectSearchResultsForQueryOrDefault } from "@/store/slices/searchResultsSlice";
 import {
   selectFrontsVisible,
   toggleFaces,
@@ -163,12 +175,6 @@ interface RailHeaderProps {
   face: Faces;
   slot: number;
   cardName: string | undefined;
-  printingBadge: string | undefined;
-  // Whether this slot's printing-specific search (expansionCode/collectorNumber) found nothing
-  // and the backend retried it unfiltered - EditorSearchResponse.degradedQueries, wired end to
-  // end in Step 2's second instrument PR (see selectIsSearchQueryDegraded). Meaningless when
-  // printingBadge is undefined (no printing filter to have degraded in the first place).
-  isDegraded: boolean;
   cardIdentifier: string | undefined;
   searchQuery: SearchQuery | undefined;
   onOpenChooseImage: () => void;
@@ -178,8 +184,6 @@ const RailHeader = ({
   face,
   slot,
   cardName,
-  printingBadge,
-  isDegraded,
   cardIdentifier,
   searchQuery,
   onOpenChooseImage,
@@ -194,24 +198,12 @@ const RailHeader = ({
         <span className="text-muted fst-italic">No art selected yet</span>
       )}
     </div>
-    {printingBadge != null && (
-      <span
-        className={`badge mt-1 ${
-          isDegraded ? "bg-warning text-dark" : "bg-secondary"
-        }`}
-        style={{ fontFamily: "monospace" }}
-        data-testid="display-printing-badge"
-        data-degraded={isDegraded}
-        title={
-          isDegraded
-            ? "This printing wasn't found - showing the closest available match instead."
-            : undefined
-        }
-      >
-        {isDegraded && <i className="bi bi-exclamation-triangle-fill me-1" />}
-        {printingBadge}
-      </span>
-    )}
+    {/* Item (c) of the frontend-polish package extracted this into its own shared component
+        (RequestedPrintingBadge.tsx) so CardSlot.tsx's editor slots could mount the identical
+        badge - one place the degraded-style logic lives, so the two surfaces can't drift. */}
+    <div className="mt-1">
+      <RequestedPrintingBadge query={searchQuery} />
+    </div>
     {/* Adapts CardSlot.tsx's own mount of this component (same props, same gating logic inside
         DeckbuilderConfirmAffordance itself - not forked) for the rail's status header: N's
         "open the grid selector" becomes "expand (or keep expanded, if already open) the Choose
@@ -363,19 +355,6 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
       : undefined
   );
   const query = projectMember?.query;
-  // Hooks must run unconditionally on every render (same order regardless of selectedSlotRef),
-  // so this - like the projectMember selector above - is called before the idle-state early
-  // return below, with the "nothing selected yet" case handled inside the selector itself
-  // rather than by skipping the call.
-  const isDegraded = useAppSelector((state) =>
-    selectIsSearchQueryDegraded(
-      state,
-      query?.query,
-      query?.cardType,
-      query?.expansionCode,
-      query?.collectorNumber
-    )
-  );
 
   if (selectedSlotRef == null) {
     return (
@@ -392,12 +371,6 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
   const cardName =
     selectedImage != null
       ? cardDocumentsByIdentifier[selectedImage]?.name
-      : undefined;
-  const printingBadge =
-    query?.expansionCode != null
-      ? `${query.expansionCode.toUpperCase()}${
-          query.collectorNumber ? " " + query.collectorNumber : ""
-        }`
       : undefined;
 
   const onToggle = (key: AccordionSectionKey) =>
@@ -417,8 +390,6 @@ const Rail = ({ selectedSlotRef, cardDocumentsByIdentifier }: RailProps) => {
         face={selectedSlotRef.face}
         slot={selectedSlotRef.slot}
         cardName={cardName}
-        printingBadge={printingBadge}
-        isDegraded={isDegraded}
         cardIdentifier={selectedImage}
         searchQuery={query}
         onOpenChooseImage={onOpenChooseImage}
@@ -517,6 +488,122 @@ export function DisplayPage() {
 
   const margins = useMemo(() => ({ top: 5, bottom: 5, left: 5, right: 5 }), []);
   const spacing = useMemo(() => ({ row: 0, col: 0 }), []);
+
+  //# region inline export (item 2, owner's hands-on review) - the real export pipeline, run
+  // in-page rather than navigating to the classic PDF tab. Reuses PDFGenerator.tsx's own
+  // useDownloadPDF/useSaveToDrivePDF/ImageFailureConfirmModal verbatim (exported for this, not
+  // forked) - same #81 paced-fetcher/retry machinery, same in-app failure-confirm modal, same
+  // Google Drive upload path. Only this page's own settings feed it (paper size, bleed edge,
+  // guides, the sheet's current fronts/backs view) - every other PDFProps field neither exposed
+  // here nor meaningful for this page's default "export what you see" use case (card selection
+  // mode, cut-line geometry, quality/DPI, spacing/margins, SCM mode) takes PDFGenerator's own
+  // documented default, matching its classic-tab behavior exactly for anyone who hasn't touched
+  // those settings there either.
+
+  const { clientSearchService } = useClientSearchContext();
+  const backendURL = useAppSelector(selectRemoteBackendURL);
+  const manualOverrides = useAppSelector(selectManualOverrides);
+
+  const [isDownloading, setIsDownloading] = useState<boolean>(false);
+  const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
+  const [imageFetchProgress, setImageFetchProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
+  // Determinate while images are still being fetched (a real count, "N of ~M"); indeterminate
+  // once every image has resolved but @react-pdf/renderer is still assembling the file itself -
+  // pdfRenderService/pdf.worker.ts only report per-image progress, so "assembling" is inferred
+  // the moment completed reaches total, not a separate signal the worker sends.
+  const [exportPhase, setExportPhase] = useState<
+    "fetching" | "assembling" | null
+  >(null);
+  const [pendingFailureConfirm, setPendingFailureConfirm] = useState<{
+    failures: Array<ImageFetchFailure>;
+    resolve: (value: boolean) => void;
+  } | null>(null);
+  const confirmDespiteFailures = (
+    failures: Array<ImageFetchFailure>
+  ): Promise<boolean> =>
+    new Promise((resolve) => setPendingFailureConfirm({ failures, resolve }));
+
+  const setExportProgress = (
+    progress: { completed: number; total: number } | null
+  ) => {
+    setImageFetchProgress(progress);
+    if (progress == null) {
+      setExportPhase(null);
+    } else {
+      setExportPhase(
+        progress.total > 0 && progress.completed >= progress.total
+          ? "assembling"
+          : "fetching"
+      );
+    }
+  };
+
+  // CUSTOM + explicit width/height, not the named pageSize alone - PDF.tsx's getPageSizeMM only
+  // honours pageWidth/pageHeight when pageSize is "CUSTOM" (otherwise it returns that name's own
+  // portrait dimensions), so this is what makes the exported file match this page's own
+  // landscape sheet (sheetWidthMM/sheetHeightMM, computed just below) rather than silently
+  // reverting to portrait.
+  const exportPdfProps: Omit<PDFProps, "fileHandles"> = {
+    cardSelectionMode: "frontsAndDistinctBacks",
+    pageSize: "CUSTOM",
+    pageWidth: sheetWidthMM,
+    pageHeight: sheetHeightMM,
+    bleedEdgeMM: settings.bleedEdgeMM,
+    roundCorners: false,
+    drawCardCutLines: settings.showCutLines,
+    drawPageCutLines: true,
+    cutLineLengthMM: 2,
+    cutLineOffsetMM: 0,
+    cutLineThicknessMM: 0.2,
+    cutLineColor: "#FF0000",
+    cutLinePlacement: "Inside",
+    cutLineShape: "InsideOnly",
+    cardSpacingRowMM: spacing.row,
+    cardSpacingColMM: spacing.col,
+    pageMarginTopMM: margins.top,
+    pageMarginBottomMM: margins.bottom,
+    pageMarginLeftMM: margins.left,
+    pageMarginRightMM: margins.right,
+    cardDocumentsByIdentifier: cardDocumentsByIdentifier,
+    projectMembers: projectMembers,
+    projectCardback: projectCardback,
+    bleedOverrides: manualOverrides,
+    scmMode: false,
+    scmPaperSize: "letter",
+    scmVariant: "default",
+    scmRegistration: 3,
+    scmDuplex: true,
+    scmOffsetXMM: 0,
+    scmOffsetYMM: 0,
+    scmOffsetAngleDeg: 0,
+    imageQuality: "full-resolution",
+    imageDPI: 600,
+    jpgQuality: 100,
+  };
+
+  const generatePdf = useDownloadPDF(
+    exportPdfProps,
+    clientSearchService,
+    dispatch,
+    setIsDownloading,
+    backendURL,
+    setExportProgress,
+    confirmDespiteFailures
+  );
+  const saveToDrive = useSaveToDrivePDF(
+    exportPdfProps,
+    clientSearchService,
+    dispatch,
+    setIsSavingToDrive,
+    backendURL,
+    setExportProgress,
+    confirmDespiteFailures
+  );
+
+  //# endregion
 
   const layout = useMemo(
     // Mirrors PagePreview's own computeLayout() call so cardsPerPage here matches exactly
@@ -731,16 +818,67 @@ export function DisplayPage() {
           }
         />
 
-        <div className="ms-auto">
-          {/* Full inline export (Generate PDF/Save to Drive wired directly off this page's own
-              state) is Step 3 (switchover) in the design doc's §6 - not built here. For now
-              this is a real, working link to the classic editor's Print tab, not a dead
-              placeholder. */}
-          <Link href="/editor" className="btn btn-primary btn-sm">
-            Generate PDF (opens classic Print tab)
-          </Link>
+        <div className="ms-auto d-flex align-items-center gap-2">
+          {isGoogleDriveAppConfigured() && (
+            <Button
+              size="sm"
+              variant="outline-primary"
+              onClick={saveToDrive}
+              disabled={isSavingToDrive || isDownloading}
+              data-testid="display-save-to-drive"
+            >
+              {isSavingToDrive ? (
+                <Spinner size={1.2} />
+              ) : (
+                "Save PDF to Google Drive"
+              )}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={generatePdf}
+            disabled={isDownloading || isSavingToDrive}
+            data-testid="display-generate-pdf"
+          >
+            {isDownloading ? <Spinner size={1.2} /> : "Generate PDF"}
+          </Button>
         </div>
       </div>
+
+      {/* Item 2 (owner's hands-on review): a real determinate progress bar, not a spinner - a
+          large export paced to the image CDN's shared rate limit (see pdfImage.ts) can take
+          several minutes, and this is what turns that wait into "fetching images: N of ~M"
+          instead of something that looks hung. Switches to an indeterminate "Assembling PDF…"
+          bar once every image has resolved but the file itself is still being built - see
+          setExportProgress's own comment for how that phase is inferred. */}
+      {exportPhase != null && (
+        <div
+          className="px-3 py-2 border-bottom"
+          data-testid="display-export-progress"
+        >
+          {exportPhase === "fetching" && imageFetchProgress != null ? (
+            <ProgressBar
+              now={
+                imageFetchProgress.total > 0
+                  ? (imageFetchProgress.completed / imageFetchProgress.total) *
+                    100
+                  : 0
+              }
+              label={`Fetching images: ${imageFetchProgress.completed} of ~${imageFetchProgress.total}`}
+              data-testid="display-export-progress-bar"
+            />
+          ) : (
+            <ProgressBar
+              now={100}
+              animated
+              striped
+              label="Assembling PDF…"
+              data-testid="display-export-progress-bar"
+            />
+          )}
+        </div>
+      )}
 
       {/* position: relative + an explicit non-auto z-index together, on the sticky rail's own
           PARENT - the specific fix docs/lessons.md's sticky/z-index entry documents (part 3):
@@ -834,6 +972,17 @@ export function DisplayPage() {
           />
         </RailWrapper>
       </div>
+      <ImageFailureConfirmModal
+        failures={pendingFailureConfirm?.failures ?? null}
+        onCancel={() => {
+          pendingFailureConfirm?.resolve(false);
+          setPendingFailureConfirm(null);
+        }}
+        onContinue={() => {
+          pendingFailureConfirm?.resolve(true);
+          setPendingFailureConfirm(null);
+        }}
+      />
     </div>
   );
 }

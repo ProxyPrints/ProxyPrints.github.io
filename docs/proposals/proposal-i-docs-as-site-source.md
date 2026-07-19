@@ -70,53 +70,70 @@ Other facts this spec is built on, verified directly:
   spirit to "site page" content — both already migrated wiki pages,
   both audience-facing rather than process-internal.
 
-## 1. Architecture
+## 1. Architecture — SINGLE-TRANSFORM (owner-restructured before merge)
 
-Two independent build-time mechanisms, both reading the extended publish
-map (§2), both composing with the existing pipeline rather than replacing
-it:
+**This section describes the RESTRUCTURED design, superseding this doc's
+own original two-mechanism draft** (a separate JS reimplementation of
+link-rewrite logic, kept only as history in "Shipped vs. not yet built"
+below). The owner's call, stated plainly: `.github/scripts/publish_wiki.py`
+is the ONLY owner of link-rewrite/extraction logic, for both outputs.
+Nothing in `frontend/` re-derives, re-parses, or reimplements any of it —
+`frontend/` only ever reads Python's output and renders markdown to HTML,
+a rendering concern kept deliberately separate from the transform concern
+above it.
 
-**(a) Rendered site pages** — a new catch-all route,
-`frontend/src/pages/docs/[...slug].tsx` (or `/guide/[...slug].tsx`; naming
-is an owner call, not resolved here — "docs" risks reading as
-developer-facing given the existing `docs/` repo convention, "guide"
-matches `user-guide.md`'s own name more closely). Uses Next's standard
-static-export SSG shape: `getStaticPaths` enumerates every doc in the map
-with a `site` target; `getStaticProps` reads that doc's source file
-directly off disk via Node's `fs` (the build runs inside the checked-out
-repo, same as `generate-keyrune-assets.js` already does), converts
-markdown to HTML with the new dependency from §0, and returns the HTML
-string as a prop. The page component wraps it in normal site chrome
-(`Layout.tsx`, Superhero styling — no new visual system) and injects the
-HTML via `dangerouslySetInnerHTML`, exactly `about.tsx`'s existing pattern
-for pre-rendered content it doesn't own token-by-token.
+**The transform, one function, two modes**: `transform_links()`/
+`rewrite_link()` (in `publish_wiki.py`) take an optional `repo_to_site`
+map. Absent (`None`, the default) — this script's own wiki-publish mode —
+it's exactly the original 2-way resolution (same-wiki link or GitHub blob
+URL), unchanged. A real dict — site-emit mode — adds a 3rd resolution
+branch (a link to a `"site"`-targeted page becomes that page's own route)
+and changes how a wiki-only target resolves: an ABSOLUTE wiki URL rather
+than a same-repo link, since the site doesn't host that page. Same
+function, same regex, same fence/inline/image/anchor/external-link
+gating logic — only the final link-formatting differs by mode.
 
-**Link rewriting is a real, separate problem here, not an afterthought.**
-`publish_wiki.py`'s whole second half exists because copying a doc's `[[..]]`/
-markdown links verbatim into a different target reinterprets them wrong —
-the exact same problem recurs for site pages, with a third possible
-resolution instead of two: a link inside a doc being rendered as a site
-page must resolve to (i) another site page's route, if the target is also
-mapped to `site`; (ii) a wiki page, if the target is `wiki`-only (arguably
-correct to send a reader to the wiki rather than a GitHub blob for
-another _doc_, unlike `publish_wiki.py`'s own blob-URL fallback, since the
-site is now also a home for docs content); (iii) a GitHub blob URL,
-identical to `publish_wiki.py`'s existing fallback, for anything unmapped
-entirely. This is naturally a small, mostly-shared refactor of
-`publish_wiki.py`'s existing `transform_links`/`rewrite_link` functions
-into something both the wiki script and the new site build step import,
-rather than a second, independently-drifting reimplementation — flagged
-as the right shape, not designed in full here.
+**`.github/scripts/publish_site.py`** — a thin sibling script (not a
+CLI flag on `publish_wiki.py` itself, to keep each script's own simple
+positional-arg CLI simple) that imports `publish_wiki.py`'s functions
+and, for every `"site"`-targeted page in the map: reads the source file,
+calls `transform_links()` in site-emit mode, and writes
+`{sourcePath, sitePath, title, markdown}` (link-rewritten MARKDOWN, not
+HTML — rendering is `frontend/`'s job) to
+`frontend/generated-docs/<slug>.json`, plus a `manifest.json` listing
+every emitted page. Idempotent (rerunning with no doc changes produces
+byte-identical output — verified, not just claimed) and fails
+(non-zero exit, `::error::`-annotated) on the same class of problem
+`publish_wiki.py` fails on: a missing mapped source file, a `"site"`
+target with no `sitePath`, or any link resolving to neither a site/wiki
+page nor a real file.
 
-**(b) Structured data extracts** — a new Node script,
-`frontend/scripts/generate-docs-data.js`, following
-`generate-keyrune-assets.js`'s exact precedent: parses MARKED regions
-(§3) out of specific `docs/` files per the map, and writes one small JSON
-file per extract into `frontend/src/common/generated/docsData/<name>.json`
-(gitignored, regenerated, never hand-edited — same convention as the
-keyrune codepoints file). Site (and, if ever useful, editor-app)
-components `import` these directly as ordinary static JSON — no runtime
-fetch, no API route, consistent with the static-export constraint.
+**`frontend/src/pages/guide/[[...slug]].tsx`** reads
+`frontend/generated-docs/` directly (via
+`frontend/src/features/guide/docsSite.ts`, kept in its own module — a
+page file's exports get bundled for the client by Next's Pages Router,
+and `fs` has no browser polyfill; only functions reachable exclusively
+from `getStaticPaths`/`getStaticProps`, which Next strips from the client
+bundle, are safe to touch `fs`). `getStaticPaths` builds routes from
+`manifest.json`; `getStaticProps` reads the matching page JSON and calls
+`marked.parse(markdown)` for the HTML, injected via `dangerouslySetInnerHTML`
+— exactly `about.tsx`'s existing pattern for pre-rendered content it
+doesn't own token-by-token. **Graceful degradation**: if
+`frontend/generated-docs/manifest.json` is absent (a fresh checkout that
+hasn't run the emit yet, or a `next dev`/`next build` in an environment
+that skipped it), `getStaticPaths` logs a `console.warn` and returns zero
+paths — `/guide` simply has no pages that build, never a crash.
+
+**Local dev**: `npm run docs:generate` (from `frontend/`) shells directly
+to `python3 ../.github/scripts/publish_site.py .. generated-docs` — no
+Node-side generation step exists to wrap it.
+
+**(b) Structured data extracts (§3) — not yet built, same owner (once it
+exists)**: when PR-I-2+ makes a real marked-table source available (§0),
+data extracts extend `publish_site.py` itself rather than a separate
+script — keeping the "one Python owner" property this restructure exists
+for, not reintroducing a second transform surface for a second output
+shape.
 
 ## 2. The map decides what publishes where
 
@@ -184,30 +201,35 @@ and therefore not yet valid sources at all, by this same contract.
 ```
 
 - The extract name (`catalog-status` above) is the contract between the
-  doc and the map — `generate-docs-data.js` looks for exactly the name(s)
-  listed in that doc's `extracts` array (§2) and nothing else; an
-  unlisted marked region in the same file is ignored (a doc can carry
-  scratch/example marker blocks not meant for extraction, e.g. this very
-  doc's own illustrative marker example two paragraphs up, which
-  intentionally carries no real extract name and must never be picked up).
+  doc and the map — `publish_site.py`, once extended to build this (§1b),
+  looks for exactly the name(s) listed in that doc's `extracts` array
+  (§2) and nothing else; an unlisted marked region in the same file is
+  ignored (a doc can carry scratch/example marker blocks not meant for
+  extraction, e.g. this very doc's own illustrative marker example two
+  paragraphs up, which intentionally carries no real extract name and
+  must never be picked up).
 - **Only markdown tables are parsed** inside a marked region v1 — header
   row + separator row + data rows, straightforward and already
   battle-tested prior art in this repo (`docs_lint.py` and
   `publish_wiki.py` both already do line-oriented markdown parsing without
   a heavyweight AST library; this follows the same lightweight-regex
   philosophy rather than introducing a full markdown-table-parsing
-  dependency for one narrow job). Output shape: `{extract: "catalog-status", headers: [...], rows: [[...], ...]}`, written to
-  `frontend/src/common/generated/docsData/catalog-status.json`.
+  dependency for one narrow job). Output shape:
+  `{extract: "catalog-status", headers: [...], rows: [[...], ...]}`,
+  written alongside `publish_site.py`'s existing per-page markdown output
+  in `frontend/generated-docs/` — same script, same output directory,
+  per §1's "one Python owner" property; exact filename not resolved here
+  since nothing has driven the decision yet.
 - **A broken or missing marker is a hard build error**, exactly
   `publish_wiki.py`'s own link-resolution-error philosophy (fail the
-  publish, never ship a wrong or empty page silently): an `extracts` entry
+  emit, never ship a wrong or empty page silently): an `extracts` entry
   in the map naming a marker that doesn't exist in the source file, a
   `<!-- DATA-EXTRACT: x -->` with no matching `<!-- END DATA-EXTRACT -->`,
   or a marked region that isn't a well-formed markdown table (per the
-  narrow v1 parser above) all fail `generate-docs-data.js` with a clear
+  narrow v1 parser above) all fail `publish_site.py` with a clear
   message naming the doc, the extract name, and what's wrong — the same
-  `::error::`-annotated, non-zero-exit convention `publish_wiki.py`
-  already uses.
+  `::error::`-annotated, non-zero-exit convention it already uses for
+  broken links.
 - **A doc edit outside the markers can never silently break a site
   component** — the whole point of markers over prose-parsing. Reordering
   paragraphs, adding a new subsection, rewording surrounding prose: none
@@ -220,50 +242,48 @@ and therefore not yet valid sources at all, by this same contract.
 ## 4. Sequencing — composing with the existing pipeline and the site deploy
 
 Builds on `publish_wiki.py`'s established conventions directly: idempotent
-(rerunning with no doc changes produces byte-identical output — both
-`generate-docs-data.js` and the new site-page build step must hold this
-property the same way `publish_wiki.py` does), lint-guarded (see below),
-fires on merge to `master`.
+(rerunning `publish_site.py` with no doc changes produces byte-identical
+output — verified), fires on merge to `master`.
 
 **What's genuinely new, not just "the same pipeline again"**:
 
 1. `.github/workflows/deploy-frontend.yml`'s trigger `paths:` filter
-   currently reads `frontend/**` only — **this must be extended** to
-   include at minimum `docs/**` (or, more precisely, every path that could
-   change a `site`/`data`-targeted doc or the map itself) plus
-   `.github/wiki-publish-map.json`, mirroring `docs-wiki-publish.yml`'s own
-   trigger shape exactly. Without this, a `docs/`-only PR would merge and
-   the wiki would regenerate (existing pipeline) while the site silently
-   would not — the "everything updates per-merge" goal in the task's own
-   stated intent fails quietly unless this specific trigger gap is closed.
-   Flagged concretely rather than assumed away, since it was found by
-   reading the actual workflow file, not inferred.
-2. **`generate-docs-data.js` runs as part of `npm run build` itself**
-   (a new step ahead of `next build` in `package.json`'s `build` script,
-   or a `prebuild` script Next.js/npm already runs automatically before
-   `build` — either works; `prebuild` is the more idiomatic npm hook and
-   avoids editing the `build` script's own command string), **not**
-   `postinstall` — `postinstall` only fires on dependency changes, and
-   `docs/` changing has nothing to do with `npm install`. This is a
-   deliberate divergence from the keyrune precedent's exact trigger, even
-   though the output-location convention (`generated/`, gitignored) is
-   kept identical.
-3. **`docs_lint.py` already runs on every PR touching `docs/**`** — no change needed there, but its scope should extend to catch one new failure class for free: a `docs-wiki-publish.yml`-style dry run of `generate-docs-data.js`(or the script itself, run with a`--check`/no-write mode) added to CI on the same trigger, so a broken marker fails the PR check *before* merge, not only at the post-merge build step. This mirrors `docs-wiki-publish.yml`'s own posture (`publish_wiki.py`'s link-resolution errors currently only surface at
-   the post-merge publish step, not pre-merge — an existing, accepted gap
-   in the wiki pipeline this proposal doesn't need to fix, but shouldn't
-   quietly repeat if a pre-merge check is cheap to add here).
-4. **Full sequence once built**: PR touching `docs/**` merges to
+   originally read `frontend/**` only — **extended** to include `docs/**`,
+   `.github/wiki-publish-map.json`, `.github/scripts/publish_wiki.py`, and
+   `.github/scripts/publish_site.py`, mirroring `docs-wiki-publish.yml`'s
+   own trigger shape. Without this, a `docs/`-only PR would merge and the
+   wiki would regenerate (existing pipeline) while the site silently
+   would not.
+2. **`publish_site.py` runs as a dedicated step in
+   `deploy-frontend.yml`, BEFORE `npm ci`/`npm run build`** — Python is
+   already on the `ubuntu-latest` runner (no `setup-python` step needed,
+   matching `docs-wiki-publish.yml`/`docs-lint.yml`'s own existing
+   convention of calling bare `python3`). This is a CI-workflow step, not
+   an npm lifecycle hook (`prebuild`/`postinstall`) — there is no
+   Node-side generation step left to hook one onto; `frontend/`'s only
+   job is reading the already-emitted output. Local dev gets the
+   equivalent via `npm run docs:generate`, a direct shell-out to the same
+   script (§1).
+3. **Graceful degradation, not a pre-merge CI check, is the chosen
+   safety net for the site-page mechanism** (owner's restructure): rather
+   than a separate pre-merge dry-run job, a missing `generated-docs/`
+   simply yields zero `/guide` pages with a console warning (§1) — the
+   real correctness check is `publish_site.py`'s own hard-error behavior
+   inside the `deploy-frontend.yml` step itself (item 2), which fails the
+   whole deploy on a broken link, and the link-rewrite parity fixtures
+   (`.github/scripts/tests/test_publish_wiki_link_rewrite.py`, run via
+   `docs-lint.yml`'s `link-rewrite-parity` job on every
+   `.github/scripts/**` change) which catch a logic regression before
+   it ever reaches a real doc.
+4. **Full sequence, as built**: PR touching `docs/**` merges to
    `master` → `docs-wiki-publish.yml` regenerates the wiki (unchanged,
-   existing) → `deploy-frontend.yml` fires (newly triggered by the `docs/**`
-   path per item 1) → `npm ci` → `prebuild` runs `generate-docs-data.js`
-   (fails the whole build on a broken marker, per §3) → `next build`
-   statically renders every `site`-targeted doc via `getStaticProps`
-   (§1a) and every component that imports a `data` extract picks up the
-   freshly regenerated JSON automatically, since it's a plain build-time
-   `import` → `actions/upload-pages-artifact` + `deploy-pages`, identical
-   to today. One Pages build, two publish targets (wiki, site) both
-   current as of the same merge — matching the task's stated goal exactly,
-   contingent on item 1's trigger fix actually landing.
+   existing) → `deploy-frontend.yml` fires (triggered by `docs/**` per
+   item 1) → `publish_site.py` emits `frontend/generated-docs/` (fails
+   the whole deploy on a broken link, per §1) → `npm ci` → `npm run build`
+   statically renders every `site`-targeted doc via `getStaticProps` (§1)
+   → `actions/upload-pages-artifact` + `deploy-pages`, identical to
+   today. One Pages build, two publish targets (wiki, site) both current
+   as of the same merge — verified end-to-end, not assumed.
 
 ## 5. What v1 explicitly is not
 
@@ -293,74 +313,87 @@ Stated so nothing here reads as more than it is:
 
 ## Shipped vs. not yet built
 
-**PR-I-1 (this pass) — shipped**: `.github/wiki-publish-map.json`'s schema
-extended with `targets`/`sitePath` per §2 (every existing entry given an
-explicit `targets: ["wiki"]`, `docs/overview.md` given
-`targets: ["wiki", "site"], "sitePath": "/guide"` — the ONE doc this pass
-proves the mechanism against, per the owner's own scope, not a wider
-rollout). `frontend/scripts/generate-docs-site.js`: the §1(a) link-rewrite
-mechanism, reimplemented in JS against `marked` (the open library-choice
-call, resolved) rather than shared with `publish_wiki.py`'s Python — see
-the script's own header comment for why that's a deliberate, precedented
-divergence from this doc's original "shared refactor" framing, not an
-oversight. `frontend/src/pages/guide/[[...slug]].tsx`: the SSG route (the
-open `/docs` vs. `/guide` naming call, resolved as `/guide`), wired via a
-new `prebuild` npm script (not `postinstall`, exactly per §4's reasoning).
-`.github/workflows/deploy-frontend.yml`'s trigger `paths:` extended with
-`docs/**` and the map file, per §4 item 1. Verified end-to-end: `npm run build` produces a real `/guide` page (title "Overview — ProxyPrints
-Guide", real HTML body, zero new lint/type errors) whose links exercise
-all three resolution branches this spec's §1(a) called for — a wiki-only
-target (`theory.md` → the external wiki URL), a real-but-unmapped file
-(`README.md` → a GitHub blob URL) — confirmed by inspecting the actual
-built output, not assumed from the script's logic alone. The one branch
-`overview.md` doesn't happen to exercise is a link to ANOTHER site-targeted
-page, since it's currently the only one — untested for lack of a second
-site page to link to, not skipped.
+**PR-I-1, first pass — superseded before merge, kept here as real
+history rather than erased**: the first working version of PR-I-1 shipped
+a JS reimplementation of link-rewrite logic
+(`frontend/scripts/generate-docs-site.js`, against `marked`) alongside
+`publish_wiki.py`'s existing Python implementation, plus a
+`pythonExpected`/`jsExpected`-labeled parity fixture set proving the two
+stayed in sync. It worked, was fully tested (14 fixture cases, a full
+`npm run build` producing a real `/guide` page, Jest passing), and shipped
+as PRs #106 (spec)/#108 (build) — but the owner reviewed it before merge
+and called for the restructure below instead, judging two independently-
+drifting implementations of the same link-rewrite contract as more risk
+than the alternative was worth, even with a fixture tether in place.
+Superseded, not merged as-is; nothing from that version survives in the
+current architecture (§1) except the fixture set itself, adapted.
 
-**Parity fixtures (this pass, added before merge) — shipped**: a shared
-fixture set, `.github/scripts/testdata/link_rewrite/` (a synthetic
-fixture repo + `map.json` + `cases.json`, deliberately independent of the
-real `wiki-publish-map.json` so fixtures stay stable as real docs are
-added/removed), run by both
-`.github/scripts/tests/test_publish_wiki_link_rewrite.py` (against
-`publish_wiki.py`'s `transform_links`) and
-`frontend/scripts/generate-docs-site.test.js` (against
-`generate-docs-site.js`'s `transformLinks`) — 14 cases covering every link
-form the transform handles (fence/inline-code skip, image-link skip,
-external/mailto/anchor pass-through, the `[[routes]]`-literal skip,
-fragment-dropping, subdirectory-relative resolution, the unmapped-real-file
-and nonexistent-file branches) plus two implementation-specific regression
-checks. Cases that are genuinely identical between the two implementations
-(most of them) assert one shared `expected` value; cases where they
-legitimately diverge (a wiki-only target: `publish_wiki.py` links to the
-same-wiki page name, `generate-docs-site.js` links to the external wiki
-URL, since it isn't itself inside the wiki) assert a `pythonExpected`/
-`jsExpected` pair instead of pretending the divergence away. Building this
-fixture set found and fixed a real, previously-latent bug:
-`build_repo_to_wiki_map` did `page["wiki"]` unconditionally, which would
-`KeyError` the moment any site-only page (no `"wiki"` key at all) entered
-the mapping — `main()`'s own publish loop had the identical bug. Both
-fixed (`page.get("wiki")`, filtering falsy values; `main()` skips a page
-with no wiki target instead of writing it). Wired into CI:
-`docs-lint.yml` gets a new `link-rewrite-parity` job (Python side, stdlib
-only, triggered by `.github/scripts/**` changes) and `test-frontend.yml`'s
-trigger paths gained `.github/scripts/testdata/link_rewrite/**` (JS side
-runs via the existing Jest sweep, no new job needed) — so a future
-edge-case fix to either implementation that doesn't also update
-`cases.json` fails a pre-merge check, not a silent divergence discovered
-later. Same rationale as the federation hash tool's permanent parity test
-(`MPCAutofill/cardpicker/tests/test_federation_hash_tool_parity.py`).
+**PR-I-1, restructured (this pass) — shipped, single-transform
+architecture**: `.github/scripts/publish_wiki.py`'s `transform_links()`/
+`rewrite_link()` extended with an optional `repo_to_site` parameter (§1) —
+`None` preserves the original wiki-only behavior exactly (regression-
+checked against the real `wiki-publish-map.json`, byte-identical output);
+a real map adds site-mode resolution. `.github/scripts/publish_site.py`:
+new sibling script, imports `publish_wiki.py`'s functions (no
+reimplementation), emits `frontend/generated-docs/*.json` (link-rewritten
+markdown, not HTML) + `manifest.json` — verified idempotent (two
+consecutive runs, byte-identical output, diffed). `frontend/scripts/generate-docs-site.js` and its Jest mirror are DELETED, not merely
+unused — there is no JS-side transform code anywhere in this repo anymore.
+`frontend/src/features/guide/docsSite.ts`: new module owning the
+`fs`-touching reads of `generated-docs/` (kept out of the page file
+itself — a real build failure, `Module not found: Can't resolve 'fs'`,
+is why: a page file's own exports get bundled for the Pages Router client
+build, and only code reachable exclusively from
+`getStaticPaths`/`getStaticProps` is safe to touch `fs`). `frontend/src/pages/guide/[[...slug]].tsx`: slimmed to routing + `marked.parse()` rendering
+only. `package.json`: `prebuild` script removed (no Node-side generation
+step left to hook); `docs:generate` added, shelling directly to
+`publish_site.py`. `.github/workflows/deploy-frontend.yml`: the emit now
+runs as a dedicated Python step before `npm ci`/`npm run build`, not an
+npm lifecycle hook. Verified end-to-end, both paths: (1) `generated-docs/`
+present → `npm run build` produces a real `/guide` page (confirmed via the
+actual output HTML: correct title, real body, correctly-rewritten links);
+(2) `generated-docs/` absent → build still succeeds, `console.warn` fires,
+`/guide` has zero pages, confirmed via the actual build log line, not
+assumed from the code.
+
+**Link-rewrite parity fixtures — kept, relabeled, strengthened**: the
+same 14-case fixture set (`.github/scripts/testdata/link_rewrite/`)
+survives the restructure, since the WIKI-MODE/SITE-MODE divergence it was
+already modeling (a wiki-only target's link format legitimately differs by
+output target) is now a mode distinction on one function rather than an
+implementation distinction between two — cases relabeled
+`pythonExpected`/`jsExpected` → `wikiModeExpected`/`siteModeExpected`,
+same values, same coverage.
+`.github/scripts/tests/test_publish_wiki_link_rewrite.py` now runs every
+case through BOTH modes of the single `transform_links()` (4 subTest-
+covered test methods total, including the 2 regression guards for the
+`site-only-doc.md`/`build_repo_to_wiki_map` bug this fixture set found
+while first being built — see below). The Jest mirror is gone; in its
+place, `frontend/src/features/guide/docsSite.test.ts` is a genuine
+integration smoke test — it shells out to the real `publish_site.py` (via
+`child_process.execFileSync`, into a scratch temp directory, never the
+real `frontend/generated-docs/`) and asserts the real emitted artifacts
+exist, parse, and render to non-empty HTML with a real `<h1>` — "emitted
+artifacts exist and render," not a second copy of the fixture-case
+coverage the Python suite already owns exclusively. Wired into CI:
+`docs-lint.yml`'s `link-rewrite-parity` job (Python, triggered by
+`.github/scripts/**`) is unchanged; `test-frontend.yml`'s trigger paths
+were updated to reflect what the JS smoke test actually depends on now
+(`publish_wiki.py`, `publish_site.py`, the map file) rather than the
+retired fixture-mirror path. **The KeyError bug this fixture set found
+while being built the first time** (`build_repo_to_wiki_map`/`main()`
+both did `page["wiki"]` unconditionally, crashing the moment any
+site-only page entered the mapping) is fixed in `publish_wiki.py` and
+locked in by a dedicated regression test, unaffected by the restructure.
 
 **Not yet built** (concrete next steps per the owner's staged order, not
 silently dropped):
 
-1. **§1(b)/§3 — data extracts.** `frontend/scripts/generate-docs-data.js`
-   doesn't exist yet (still the ALLOWLIST-flagged path in `docs_lint.py`).
+1. **§1(b)/§3 — data extracts.** Extends `publish_site.py` itself once
+   built (not a separate script — see §1's "one Python owner" framing).
    Waits on PR-I-2+'s source restructures per §0 — building the extractor
    ahead of a real marked-table source to extract would mean testing it
-   against nothing real. Once it exists, it'll need its own parity story
-   if it ever grows a second implementation — not a concern yet with only
-   one.
+   against nothing real.
 2. **Widening §2's site-target list** beyond `overview.md` — `user-guide.md`,
    `self-hosting.md`, `theory.md` per this doc's own proposed initial
    mapping — deliberately deferred, per "prove the plumbing before
