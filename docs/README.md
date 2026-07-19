@@ -99,8 +99,8 @@ Deployment, incidents, and cross-session lessons.
 
 One-word status per doc; see each file for the full survey/spec.
 
-| Doc                                                                                                                                                                                                                                                                     | Status   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| Doc                                                                                                                                                                                                                                                                   | Status   |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | [`proposals/proposal-b-bleed-normalization.md`](proposals/proposal-b-bleed-normalization.md) — export-time per-side bleed normalization                                                                                                                               | BUILDING |
 | [`proposals/proposal-c-context-menu-restyle.md`](proposals/proposal-c-context-menu-restyle.md) — right-click/long-press context menu (shipped); restyle direction (HOLD)                                                                                              | PARTIAL  |
 | [`proposals/proposal-f-public-stats-page.md`](proposals/proposal-f-public-stats-page.md) — public `/stats` transparency page                                                                                                                                          | HOLD     |
