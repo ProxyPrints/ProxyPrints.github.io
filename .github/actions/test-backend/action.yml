@@ -14,6 +14,14 @@ runs:
       uses: actions/setup-python@v6
       with:
         python-version: 3.13
+    - name: Install tesseract-ocr
+      # CI baseline cleanup, 2026-07-19: OCR-touching backend tests were failing with
+      # pytesseract.TesseractNotFoundError - the runner never had the binary, only Python deps.
+      # Matches docker/django/Dockerfile's own `tesseract-ocr tesseract-ocr-eng` install so CI
+      # actually exercises real tesseract the same way production does, instead of silently
+      # needing every OCR-touching test to be mocked or skipped.
+      run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
+      shell: bash
     - name: Install Python dependencies
       working-directory: MPCAutofill
       run: |

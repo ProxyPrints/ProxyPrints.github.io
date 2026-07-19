@@ -40,6 +40,27 @@ count," check `gh run list`/`gh run view --log` for the actual CI history,
 not just a local re-run — especially for anything on the models.py import
 chain.
 
+## The "known CI baseline" tolerance rule is retired (2026-07-19) — red means red now
+
+For a long stretch, Backend-tests CI on this fork carried a "known baseline"
+of environmental failures (tesseract missing on the runner, 2 Moxfield
+tests needing a `MOXFIELD_SECRET` repo secret this fork doesn't have, 2
+sources tests needing real Google Drive credentials this fork's CI also
+doesn't have) that every session was expected to recognize by exact test
+name/exception type and wave through rather than treat as a real
+regression. That judgment call was real, necessary work while it lasted,
+but it made an automated merge-on-green classifier structurally unable to
+trust a "fail" status, since "fail" was normal. Fixed by making each
+failure honest instead of tolerated: tesseract is now installed in CI
+(`.github/actions/test-backend/action.yml`, matching
+`docker/django/Dockerfile`'s own install); the Moxfield and Google-Drive
+tests now carry a real `pytest.mark.skipif` with a named reason
+(`conftest.py`'s `google_drive_credentials_available()` probes the actual
+capability rather than assuming) instead of failing outright. A PR with no
+genuine failures now shows Backend tests **green**, full stop — do not
+reintroduce a "known failure count" mental model; if Backend tests is red,
+something is actually wrong.
+
 ## Concurrent worktree dev servers collide on port 3000
 
 Multiple Claude Code sessions/worktrees on this box can and do run `next dev` at the same time; Playwright's `webServer.reuseExistingServer: true`

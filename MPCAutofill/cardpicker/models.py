@@ -1166,6 +1166,81 @@ class LandsAmbiguousResidue(models.Model):
         return f"LandsAmbiguousResidue card={self.card_id} artist={self.artist_name!r} candidates={self.candidate_pks}"
 
 
+class ImageEvidence(models.Model):
+    """
+    Stage C's evidence store (docs/features/catalog-completion-plan.md's "Harvest-calculate
+    pipeline" section, task #145, built per the owner's FINAL POSTURE directive 2026-07-19):
+    persists ONLY derived facts about a card's image - hashes, OCR text, geometry, quality
+    signals - never the image pixels themselves ("we index, we do not store images", see
+    CLAUDE.md's "Governing premise"). Crop PIXELS exist only in memory during an extraction
+    pass and are discarded; crop COORDINATES (geometry + TSV terms) are what persist here.
+
+    Keyed by (card, content_hash) rather than card alone - `content_hash` is a copy of
+    `Card.content_phash` taken AT EXTRACTION TIME, not a live reference. If the card's own
+    uploaded image later changes (a new content_phash), a NEW row is created for the new hash
+    rather than overwriting this one - the old row simply stops being "current" for that card
+    (found by comparing against the card's live `content_phash`), it is not deleted or mutated.
+    This is what makes the evidence store genuinely "computed-once-forever": re-extraction is
+    only ever triggered by a real content change, and the audit trail of what was measured for
+    a prior version of a card's image is preserved for free, matching CardScanLog/
+    PilotRunLedger's own append-only conventions elsewhere in this file.
+
+    `extractor_versions` is a per-field completion/versioning map (`{extractor_name: version}`)
+    - no precedent for this existed in the codebase before this model; the closest prior art is
+    `VoteSource`'s single flat `anonymous_id` version tag (e.g. "local-ocr-v1"), generalized here
+    to one entry per extractor so a single extractor's failure or version bump degrades only its
+    own fields, never blocks or invalidates fields other extractors already wrote (task #145's
+    "extractor failure degrades only that field"). A field written by extractor X should only be
+    trusted by a reader if `extractor_versions` contains a current-enough entry for X - readers
+    that skip this check risk trusting a stale or partially-written field.
+
+    RECONCILIATION LEDGER (owner directive 2026-07-19, task #155's fields folded into this
+    substrate now rather than retrofitted per-extractor): "attempted = voted + each named
+    skip-reason + dropped" is computed, not separately stored, from two existing sources - no
+    parallel ledger table. "Voted" = a card whose `extractor_versions` contains that extractor's
+    key AND has no matching `CardScanLog` row. "Skipped" = `extractor_versions` contains the key
+    AND a `CardScanLog` row exists (`anonymous_id=<extractor name>`, `skip_reason=<why>`) -
+    CardScanLog is reused as-is (its own docstring already anticipates exactly this: "a durable
+    negative record existing somewhere, not just a positive one"), not duplicated. "Dropped" = a
+    card in the attempted set with NEITHER an `extractor_versions` entry nor a `CardScanLog` row
+    for that extractor (it crashed before completing). See `image_evidence.build_reconciliation_
+    report()` for the query that assembles this and asserts it sums correctly.
+
+    `run_id` records which run most recently wrote this row (Part 1's run_id convention,
+    reused) - unlike `AbstractWeightedVote`/`CardScanLog`'s append-only "one row per event"
+    use of run_id, this is a single mutable "last writer" field, since ImageEvidence itself is
+    not append-only (see the content_hash-keyed "computed-once-forever" design above). It exists
+    for reconciliation-report scoping ("what did run X actually touch"), not as a full history.
+
+    This PR intentionally ships the model, the per-card callable extraction unit (see
+    `image_evidence.py`), and the golden-set fixture (`cardpicker/golden_set.py`) together, with
+    only the trivial `fetch_health` extractor riding along as end-to-end proof - NOT the full
+    extractor manifest. Every subsequent extractor (geometry/bleed, OCR, phash, etc.) lands as
+    its own PR, golden-set-tested before merge, per task #145's explicit hard-gate sequencing.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
+    content_hash = models.BigIntegerField(db_index=True)
+    extractor_versions = models.JSONField(default=dict, blank=True)
+    run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+
+    # fetch_health (the first, trivial extractor - see image_evidence.py)
+    fetch_ok = models.BooleanField(null=True, blank=True)
+    fetch_error_class = models.CharField(max_length=64, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["card", "content_hash"], name="unique_image_evidence_per_card_hash")
+        ]
+        indexes = [models.Index(fields=["card", "content_hash"])]
+
+    def __str__(self) -> str:
+        return f"ImageEvidence card={self.card_id} content_hash={self.content_hash} extractors={sorted(self.extractor_versions)}"
+
+
 __all__ = [
     "Faces",
     "CardTypes",
@@ -1188,4 +1263,5 @@ __all__ = [
     "SavedDeck",
     "UserCryptoProfile",
     "LandsAmbiguousResidue",
+    "ImageEvidence",
 ]

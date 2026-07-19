@@ -33,6 +33,12 @@ not described here so it doesn't get re-derived.)
 
 ## Tooling rules
 
+- **Backend tests CI must be genuinely green** (2026-07-19 — the prior
+  "known baseline" tolerance rule is retired, see
+  [[docs/lessons.md]]): tesseract is installed in CI, and the
+  Moxfield/Google-Drive-credential tests carry real named skips instead
+  of failing. A red Backend-tests check on a PR now means something
+  real — investigate it, don't wave it through as expected noise.
 - **Docs convention**: task-end doc updates EDIT the relevant reference
   file in place — never append a dated section. If a blocker costs more
   than 15 minutes to resolve, add a symptom-first entry to

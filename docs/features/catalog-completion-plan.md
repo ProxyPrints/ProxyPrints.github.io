@@ -1001,20 +1001,25 @@ marginal per-stream gain instead says ~9 streams — a 2x spread on the
 answer to "how many streams," which is itself the honest finding, not
 a number to average away.
 
-**Sustained-viability verdict**: technically viable and quota-safe
-(zero 429/403 across every fetch attempted, spanning the overwhelming
-majority of available community sources) but **not clearly
-competitive on throughput** at either concurrency level actually
-tested. This doesn't cleanly resolve either branch of the pre-set
-decision standard — it isn't "quota trouble" (the explicit fallback
-trigger), but it also doesn't "sustain ≥ the scraper's effective
-deduped rate" at any level measured. Owner call, not resolved here:
-(a) invest in a real higher-N measurement (ideally via separate OS
-processes, not threads, to test whether GIL contention is really the
-ceiling) before deciding, or (b) treat this as sufficient evidence to
-stay on the scraper+dedupe path and revive the previously-cancelled
-ramp probe (task #152 item 1) to push its own ceiling past 3.0/s with
-real evidence, per the original sequencing.
+**FINAL VERDICT (owner decision, 2026-07-19) — option (b), dual
+conclusion, task #152 closed**: scraper+dedupe stays the bulk fetch
+path. Drive's ~30x bandwidth tax (raw originals, ~6.68 MiB/file
+measured, vs. the scraper path's server-resized ~925px output) makes
+it structurally wrong for bulk regardless of concurrency — no
+process-based follow-up measurement is warranted, since no realistic
+concurrency level closes a 30x-per-file gap. **Drive API's PROVEN
+role going forward**: delta/gap-fill fetches, dead-link recovery, and
+targeted re-extraction — plus lazy-mode one-offs (task #161) — where a
+single accurate fetch matters more than bulk throughput. The clean
+quota behavior measured across 3,136 downloads (zero 429/403,
+spanning 247/248 available community sources) is the evidence backing
+this role: Drive is safe and reliable for the low-volume, high-value
+cases the bulk path doesn't need to reach for. The previously-
+cancelled ramp probe (task #152's former item 1) is **REVIVED** —
+tracked as task #163, pending an owner-named low-traffic window — to
+push `GOOGLE_IMAGE`'s scraper-path ceiling past 3.0/s with real
+evidence, since that's now confirmed as the only lever left for
+moving the bulk-harvest floor.
 
 ### Governing posture: we index, we do not store images (owner FINAL POSTURE + PRIORITIZATION directive, 2026-07-19)
 
@@ -1094,7 +1099,53 @@ session re-invents a storage tier.
    (push/pull) — our instance runs eager because we can, federation
    peers run pull because the design permits it.
 
-### Stages C–F (extractors, calculators, streaming assembly, consumers) — not started
+### Stages C–F (extractors, calculators, streaming assembly, consumers)
+
+**Stage C: GO NOW (owner directive, 2026-07-19)** — the measurement
+hold is cleared (Fetch Acceleration Study closed, task #152). First
+PR is the substrate, not an extractor (advisor-confirmed sequencing:
+the "one PR per extractor, golden-set-tested before merge" gate isn't
+executable until this exists):
+
+- **`ImageEvidence` model** (`cardpicker/models.py`) — metadata-only
+  per task #145's amended spec (hashes, geometry, quality signals;
+  crop coordinates yes, crop pixels never), keyed `(card, content_hash)` with a `unique_together` constraint so a content
+  change creates a new row rather than overwriting the old one.
+  `extractor_versions` JSONField is the per-field completion map.
+  **Reconciliation ledger fields folded in now** (owner directive,
+  same day — task #155's fields, not retrofitted per-extractor):
+  `run_id` (last-writer, for report scoping) plus reuse of the
+  existing `CardScanLog` model for named skips (`anonymous_id` set to
+  the extractor name) — no new ledger table. Migration `0068`.
+- **`cardpicker/image_evidence.py`** — the per-card callable
+  extraction unit (`extract_card_evidence`, pure, no DB writes) and
+  its separate persistence step (`persist_evidence`), satisfying
+  FINAL POSTURE item 8a's binding requirement that this be
+  independent of the bulk runner. `build_reconciliation_report`
+  computes attempted/voted/skipped-by-reason/dropped by querying
+  `ImageEvidence` + `CardScanLog` directly (never a separately
+  maintained counter, so it can't drift from what was actually
+  persisted). Only extractor riding along: `fetch_health` (trivial,
+  end-to-end proof only — not the manifest).
+- **`cardpicker/golden_set.py`** (new infrastructure — no prior
+  precedent existed in this codebase) — 30 real card ids, stratified
+  by source (28 distinct sources, drawn 2026-07-19, seeded), pinned
+  rather than re-randomized per test run. `GOLDEN_EXPECTATIONS` is
+  populated incrementally, one extractor at a time, by whichever PR
+  builds that extractor.
+- 21 new tests (`test_image_evidence.py`, `test_golden_set.py`), all
+  passing; full suite 979 passed / 4 failed (the known pre-existing
+  baseline: moxfield x2, sources OpenSSL x2 — nothing new broke);
+  `makemigrations --check` clean. Tests run from the host venv
+  (`~/.venvs/mpcautofill-pilot`), not inside the django container —
+  the container has no Docker socket access, and pytest-django's `db`
+  fixture setup needs one; this was hit and diagnosed this session,
+  not previously documented.
+
+Every subsequent extractor (geometry/bleed, OCR/collector-line,
+artist OCR, phash, border color, symbol-strip, legal-line, etc.)
+lands as its own PR against this substrate, golden-set-tested before
+merge, per task #145's manifest and its freeze rule.
 
 Queued behind Stage B per the paced task sequence (#145–148). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
