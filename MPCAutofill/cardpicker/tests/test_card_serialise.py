@@ -7,12 +7,14 @@ pin down.
 """
 import pytest
 
+from django.core.management import call_command
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from cardpicker import views
 from cardpicker.models import (
+    CardTypes,
     PrintingTagStatus,
     TagVoteStatus,
     VoteSource,
@@ -257,3 +259,95 @@ class TestBulkPayloadQueryCount:
         # same query count for 2 cards as for 8 - if suggestedCanonicalCard ever regressed to
         # a per-card query, this would instead scale linearly with the batch size.
         assert small_query_count == large_query_count
+
+
+class TestPostExploreSearchBulkPayload:
+    """
+    `POST 2/exploreSearch/` (`views.post_explore_search`) is the second of the two bulk
+    Card-payload endpoints this feature targets (issue #184) - it's ES-backed (unlike
+    `post_cards`), so this exercises the real `get_search()` -> identifier lookup ->
+    `Card.objects....serialise(include_suggested_printing=True)` path end-to-end, rather than
+    unit-testing the serialise() call in isolation.
+
+    Deliberately self-contained (own `SourceFactory`/`CardFactory` calls, own
+    `search_index --rebuild` call) rather than reusing `test_views.py`'s shared
+    `all_sources`/`all_cards`/`populated_database` fixtures or its `Cards`/`Sources` test
+    constants - this module's own `_preserve_shared_factory_sequences` autouse fixture (see
+    top of file) keeps these tests from perturbing that file's sequence-dependent snapshot
+    assertions, and no snapshot assertion is used here at all (explicit field assertions
+    only), per the "avoid --snapshot-update against a subset" trap documented in
+    docs/troubleshooting.md.
+    """
+
+    @staticmethod
+    def _search_settings(source_pk: int) -> dict:
+        return {
+            "searchTypeSettings": {"fuzzySearch": False, "filterCardbacks": False},
+            "sourceSettings": {"sources": [[source_pk, True]]},
+            "filterSettings": {
+                "minimumDPI": 0,
+                "maximumDPI": 1500,
+                "maximumSize": 30,
+                "languages": [],
+                "includesTags": [],
+                "excludesTags": [],
+                "fullArtOnly": False,
+                "borderlessOnly": False,
+            },
+        }
+
+    def _explore_search(self, client, source, query):
+        return client.post(
+            reverse(views.post_explore_search),
+            {
+                "searchSettings": self._search_settings(source.pk),
+                "query": query,
+                "cardTypes": ["CARD"],
+                "sortBy": "dateCreatedDescending",
+                "pageSize": 20,
+                "pageStart": 0,
+            },
+            content_type="application/json",
+        )
+
+    def test_suggested_canonical_card_and_tag_vote_statuses_present(self, db, client, django_settings, elasticsearch):
+        source = SourceFactory()
+        card = CardFactory(
+            source=source,
+            card_type=CardTypes.CARD,
+            printing_tag_status=PrintingTagStatus.UNRESOLVED,
+            tag_vote_statuses={
+                "full-art": TagVoteStatus.RESOLVED_APPLY,
+                "retro-frame": TagVoteStatus.CONTESTED,
+                "sensitive-thing": TagVoteStatus.PENDING_APPROVAL,
+            },
+        )
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION)
+        call_command("search_index", "--rebuild", "-f")
+
+        response = self._explore_search(client, source, card.name)
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["count"] == 1
+        [result] = payload["cards"]
+        assert result["identifier"] == card.identifier
+        assert result["suggestedCanonicalCard"] is not None
+        assert result["suggestedCanonicalCard"]["identifier"] == str(printing.identifier)
+        assert result["tagVoteStatuses"] == {"full-art": "resolved", "retro-frame": "suggested"}
+
+    def test_suggested_canonical_card_absent_when_resolved(self, db, client, django_settings, elasticsearch):
+        # never redundant with the already-resolved canonicalCard, end-to-end through the
+        # real ES-backed endpoint (not just the model-level unit test above).
+        source = SourceFactory()
+        card = CardFactory(source=source, card_type=CardTypes.CARD, printing_tag_status=PrintingTagStatus.RESOLVED)
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION)
+        call_command("search_index", "--rebuild", "-f")
+
+        response = self._explore_search(client, source, card.name)
+
+        assert response.status_code == 200
+        [result] = response.json()["cards"]
+        assert result["suggestedCanonicalCard"] is None
