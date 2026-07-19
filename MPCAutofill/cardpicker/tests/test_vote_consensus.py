@@ -13,18 +13,24 @@ from cardpicker.vote_consensus import (
 class TestIsHumanBackedSource:
     """Direct coverage of the 2026-07-15 AI->DEDUCTION/OCR split's single source of truth for
     the human-backed gate - both new machine-derived values must read as non-human-backed,
-    same as the old single AI value did; everything else (including a future FEDERATED vote,
-    whose human-backed-ness is reported by the exporting peer, not derived from `source`) is
-    human-backed by default."""
+    same as the old single AI value did. FEDERATED is also non-human-backed by default (a
+    defensive fix, not the real mechanism - see docs/federation-v1.md's "Known gate issue" and
+    the comment on _MACHINE_DERIVED_SOURCES): without this, a single imported federated verdict
+    could singlehandedly clear the gate, since nothing yet distinguishes a measured-reliable
+    peer from an unmeasured one. Only USER/ADMIN are human-backed by default."""
 
     def test_deduction_and_ocr_are_not_human_backed(self):
         assert is_human_backed_source(VoteSource.DEDUCTION) is False
         assert is_human_backed_source(VoteSource.OCR) is False
 
-    def test_user_admin_federated_are_human_backed(self):
+    def test_federated_is_not_human_backed_by_default(self):
+        # Regression guard for docs/federation-v1.md's "Known gate issue": before this fix,
+        # a single federated verdict could singlehandedly clear the human-backed gate.
+        assert is_human_backed_source(VoteSource.FEDERATED) is False
+
+    def test_user_admin_are_human_backed(self):
         assert is_human_backed_source(VoteSource.USER) is True
         assert is_human_backed_source(VoteSource.ADMIN) is True
-        assert is_human_backed_source(VoteSource.FEDERATED) is True
 
 
 class TestResolveWeightedConsensus:

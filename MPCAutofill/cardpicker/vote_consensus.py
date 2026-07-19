@@ -28,7 +28,17 @@ _SOURCE_WEIGHTS: dict[str, float] = {
 # consensus.py/artist_consensus.py/tag_consensus.py (as it was before the AI->DEDUCTION/OCR
 # split) - deliberately centralized here: a future new machine-derived source only ever needs
 # to be added to this one set, not remembered at every comparison site.
-_MACHINE_DERIVED_SOURCES: set[str] = {VoteSource.DEDUCTION, VoteSource.OCR}
+#
+# FEDERATED is included here as a defensive default, not the real fix: docs/federation-v1.md's
+# "Known gate issue" documents that a single imported federated verdict could otherwise
+# singlehandedly clear this gate, since nothing currently distinguishes "trusted enough to
+# gate-clear" from "not yet measured" per peer. The real mechanism - a settings-driven
+# FEDERATED_VOTE_GATE_MODE, promotable per-peer once a peer's reliability is measured - is
+# still design-only (federation-v1.md, mirroring Proposal G's AUTHED_VOTE_GATE_MODE idiom).
+# Until that lands, treating FEDERATED as machine-derived (never gate-clearing on its own)
+# is the safe default - there is no importer yet for this to affect in practice, but the
+# default is deliberately safe before one exists rather than after.
+_MACHINE_DERIVED_SOURCES: set[str] = {VoteSource.DEDUCTION, VoteSource.OCR, VoteSource.FEDERATED}
 
 
 def is_human_backed_source(source: str) -> bool:
