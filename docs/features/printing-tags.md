@@ -260,7 +260,7 @@ printings, artists, tags, and moderation from one screen.
     later level — each level's display set is candidates minus
     already-rejected-this-item. Level 2's grid is computed from
     `nonRejectedCandidates` (all candidates minus `rejectedCandidateIds`,
-    filtered *before* the attribute-chip filter, so "N hidden by your
+    filtered _before_ the attribute-chip filter, so "N hidden by your
     tags" doesn't conflate a rejection with a filter), and the singleton
     case — rejecting the one and only candidate, or a rejection that
     happens to empty the remaining set — skips the grid entirely: the
@@ -275,14 +275,14 @@ printings, artists, tags, and moderation from one screen.
     unchanged by this fix: Level 1's NO never cast a vote before (no
     schema concept of "reject just this one candidate" — see Level 0's
     identical constraint above), and still doesn't; `rejectSuggestion`
-    only changes what's *displayed*, the one real negative vote per item
+    only changes what's _displayed_, the one real negative vote per item
     still only happens once, at the eventual "None of these"/custom-art/
     skip tap. Audited as clean for the same re-presentation pattern:
     Level 0 below (NO opens the deckbuilder's general grid-selector
     browse UI, a different paradigm from a guided funnel step — showing
     the current image among many search results there is normal browse
     behavior, not a re-ask) and Level 3 (only ever asks about attribute
-    groups `getOpenExclusionGroups` finds genuinely open on the *selected*
+    groups `getOpenExclusionGroups` finds genuinely open on the _selected_
     candidate — inherently already excludes anything already answered).
   - **Level 3** — conditional, not a standard stage. Selecting a candidate
     auto-tags everything derivable from it (see above); Level 3 only

@@ -820,8 +820,8 @@ export function QuestionFeed() {
                                 non-interactive context (never a button) rather than vanishing
                                 without explanation. */}
                             <p data-testid="question-feed-suggestion-prompt">
-                              Got it - not that one. Is it any official
-                              printing at all?
+                              Got it - not that one. Is it any official printing
+                              at all?
                             </p>
                             <div
                               className="d-flex align-items-center gap-2 mb-3 opacity-50"
@@ -829,7 +829,9 @@ export function QuestionFeed() {
                             >
                               <div style={{ width: 40, flexShrink: 0 }}>
                                 <img
-                                  src={item.suggestedPrinting.mediumThumbnailUrl}
+                                  src={
+                                    item.suggestedPrinting.mediumThumbnailUrl
+                                  }
                                   alt=""
                                   style={{ width: "100%" }}
                                 />

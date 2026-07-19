@@ -604,7 +604,7 @@ Caught live in `/whatsthat`'s Question Feed: Level 1 "Is it M21 203?" -> NO -> L
 contained only M21 203 again - the user's own just-given answer, re-offered as if it were new.
 General rule, not specific to this one screen: within a single multi-step guided flow (a funnel,
 a wizard, a question-by-question form), an option the user has explicitly rejected at an earlier
-step must never be re-presented as a selectable choice at a later step of the *same* flow
+step must never be re-presented as a selectable choice at a later step of the _same_ flow
 instance - each step's display set is "all options minus already-rejected-this-instance," and
 when rejecting the only remaining option would leave nothing to choose from, skip straight to
 whatever the flow's exit/fallback path is rather than rendering a choice screen with nothing
