@@ -948,20 +948,75 @@ construction, not luck of a random draw. Abort conditions: first 429 →
 note the threshold + sticky exponential backoff (doubling, capped 16x,
 mirrors `harvest_fetch_limiter.py`'s existing design); any 403 → full
 stop. Bytes discarded per the no-image-storage posture below — sizes
-and timings only. **In progress as this line is written**; results
-land in this section once the run completes. Pre-set decision
-standard: if Drive sustains ≥ the scraper's effective deduped rate
-(3.0/s × (1 - 0.1682) ≈ 2.5/s equivalent) with clean quota behavior,
-ADOPT Drive as primary fetch path (no R2 write-through of originals —
-see the governing posture below, which postdates and overrides the
-original "$15/mo accepted" framing of that option); if Drive shows
-quota trouble, fall back to scraper + dedupe + the still-cancelled-
-pending-this-result ramp probe. Item 1 (ramp probe) stays cancelled
-unless this test fails.
+and timings only.
 
-### Governing posture: we index, we do not store images (owner FINAL
+**Results, single-stream (measured 2026-07-19)**: 2,347 files
+attempted over 2400.3s (40min budget), 2,345 ok, 1 error (a single
+network read-timeout at file 1087 — not a 429/403, no quota signal).
+**Zero 429/403 across the entire run.** 16,418,161,171 bytes (~15.29
+GiB) transferred, **6.523 MiB/s** sustained, **0.977 files/s**
+effective rate. Sample spanned 247/248 available community sources
+plus the project's own. Average file size **~6.68 MiB** — confirms
+the feasibility spike's flagged trade-off with a much larger, more
+reliable sample: Drive originals are far bigger than the lh4-resized
+Worker output the existing scraper path fetches.
 
-### POSTURE + PRIORITIZATION directive, 2026-07-19)
+**Results, two-stream tail run (owner-authorized follow-up, same day,
+conditional on the main run finishing with clean quota — it did)**:
+10-minute, 2-concurrent-thread run, same per-stream pacing/
+stratification/abort rules. 791/791 ok, **zero errors, zero
+429/403**. 5,561,646,519 bytes (~5.18 GiB) in 602.2s, **8.808 MiB/s**,
+**1.314 files/s** effective — average file size ~6.70 MiB, consistent
+with the main run (cross-check that the stratified sample is
+representative). **Combined: 3,136 successful real downloads across
+~50 minutes of combined test time with zero quota events** — a far
+more definitive quota-safety data point than the original 6-file
+spike.
+
+**Headline finding — throughput does NOT scale linearly with
+concurrency**: 2 streams delivered only **1.35x** the single-stream
+throughput (8.808 / 6.523), not 2x — roughly a third of the expected
+gain from doubling parallelism was lost to some shared bottleneck.
+Plausible cause (untested): the tail run used Python **threads**
+within one process/container, which share the GIL — response
+deserialization inside `googleapiclient` has real CPU cost that can
+serialize across threads; separate OS processes would be the natural
+next experiment if pushing this further is worthwhile, since GIL
+contention wouldn't apply there.
+
+**Full-harvest projection** (218,192 fetch targets, using the
+main run's ~7.00 MB/file average): **~1.53 TB / ~1.42 TiB total raw
+transfer** — well above the feasibility spike's rough "890GB-1TB+"
+guess (that estimate was based on only 6 files; this is now measured
+across 2,345+791). Wall-clock: **~62.0h at N=1**, **~45.9h at N=2**
+(both measured, not extrapolated) — both **worse than the existing
+scraper+dedupe path's ~16.8h floor** (181,483 unique targets ÷ 3.0/s).
+Against the pre-set decision standard's ~2.5 files/s threshold: N=1
+achieves 0.977/s (39%), N=2 achieves 1.314/s (53%) — **neither
+measured concurrency level clears the bar**, and the sub-linear
+scaling means extrapolating how many additional streams would close
+the gap is unreliable: a naive-linear model says ~4 streams could
+match the scraper's 16.8h, but continuing the observed (much weaker)
+marginal per-stream gain instead says ~9 streams — a 2x spread on the
+answer to "how many streams," which is itself the honest finding, not
+a number to average away.
+
+**Sustained-viability verdict**: technically viable and quota-safe
+(zero 429/403 across every fetch attempted, spanning the overwhelming
+majority of available community sources) but **not clearly
+competitive on throughput** at either concurrency level actually
+tested. This doesn't cleanly resolve either branch of the pre-set
+decision standard — it isn't "quota trouble" (the explicit fallback
+trigger), but it also doesn't "sustain ≥ the scraper's effective
+deduped rate" at any level measured. Owner call, not resolved here:
+(a) invest in a real higher-N measurement (ideally via separate OS
+processes, not threads, to test whether GIL contention is really the
+ceiling) before deciding, or (b) treat this as sufficient evidence to
+stay on the scraper+dedupe path and revive the previously-cancelled
+ramp probe (task #152 item 1) to push its own ceiling past 3.0/s with
+real evidence, per the original sequencing.
+
+### Governing posture: we index, we do not store images (owner FINAL POSTURE + PRIORITIZATION directive, 2026-07-19)
 
 **Constitutional premise**: the catalog persists knowledge about card
 images, never the images themselves — the project's legal protection
@@ -1051,6 +1106,25 @@ zero unexplained divergence; a full knowledge-inventory sweep (every
 empirically-derived constant/threshold/override/skip-reason mapped to
 its home in the new pipeline, or flagged missing) must be clean. Both
 gate task #148 (the owner HOLD deliverable) and any full-catalog fire.
+
+**Stage E resume contract (owner directive, 2026-07-19 — full spec on
+task #147, acceptance test folded into task #156's soak gate)**:
+resumability is a TESTED requirement, not an assumed property — this
+is what Part 4's original kill lacked (its "zero polluted rows"
+conclusion came from architecture reading, not a ledger, exactly the
+gap this closes). Four binding pieces: (1) kill-and-restart at ANY
+point with zero manual cleanup, proven via a blocking `kill -9`
+mid-batch acceptance test during the soak; (2) resume filter = "cards
+lacking an `ImageEvidence` row for this extractor-version set" (+
+`run_id` scoping) — idempotent by construction; (3) evidence + votes +
+residue for a batch commit in ONE transaction, or (if impractical)
+evidence-first with idempotent calculator re-derivation on resume,
+whichever is chosen stated explicitly when built; (4) a durable run
+ledger (run_id, started_at, last_batch_at, batches_flushed,
+cards_processed, per-destination fetch counts, state, heartbeat) —
+likely extends Part 1's existing `PilotRunLedger` rather than a new
+model. Applies to the shared runner, so Stage C golden runs and the
+fidelity replay inherit it for free.
 
 ---
 

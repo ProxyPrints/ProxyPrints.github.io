@@ -346,6 +346,42 @@ cherry-pick-based upstreaming workflow entirely. Always scope to
 is also why force-push is banned as a routine action (see Push policy
 above).
 
+## Database footprint (baseline snapshot)
+
+One-query snapshot, 2026-07-19, before `ImageEvidence` (Stage C of the
+harvest-calculate pipeline, `docs/features/catalog-completion-plan.md`)
+adds any rows — a known starting point so that table's future growth is
+measured against something, not guessed:
+
+```sql
+SELECT pg_size_pretty(pg_database_size('mpcautofill'));
+-- total_db_size: 427 MB
+
+SELECT relname, pg_total_relation_size(c.oid), pg_relation_size(c.oid)
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = 'r' AND n.nspname = 'public'
+ORDER BY pg_total_relation_size(c.oid) DESC LIMIT 10;
+```
+
+| relation                               | total  | table  | index  |
+| -------------------------------------- | ------ | ------ | ------ |
+| `cardpicker_card`                      | 211 MB | 112 MB | 99 MB  |
+| `cardpicker_cardscanlog`               | 85 MB  | 42 MB  | 43 MB  |
+| `cardpicker_canonicalcard`             | 62 MB  | 36 MB  | 26 MB  |
+| `cardpicker_cardprintingtag`           | 25 MB  | 10 MB  | 15 MB  |
+| `cardpicker_cardtagvote`               | 17 MB  | 7.9 MB | 9.2 MB |
+| `cardpicker_canonicalprintingmetadata` | 12 MB  | 9.8 MB | 2.5 MB |
+| `cardpicker_cardartistvote`            | 2.5 MB | 1.0 MB | 1.4 MB |
+| `cardpicker_canonicalartist`           | 784 kB | 272 kB | 512 kB |
+| `cardpicker_canonicalexpansion`        | 752 kB | 184 kB | 568 kB |
+| `cardpicker_tagaliassuggestion`        | 688 kB | 288 kB | 400 kB |
+
+`cardpicker_card` (the fetch-target table, 218k rows) and
+`cardpicker_cardscanlog` (abstention evidence, growing with every pilot
+run) already dominate — a useful sanity check for `ImageEvidence`'s own
+eventual size, since it will carry meaningfully more per-row data (OCR
+TSV, multiple hashes, geometry) than either.
+
 ## Testing infrastructure fixes
 
 - `tests/global-setup.ts` used to click a cookie-consent toast's "Opt out"
