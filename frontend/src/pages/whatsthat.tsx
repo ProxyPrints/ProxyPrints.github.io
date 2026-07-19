@@ -149,6 +149,24 @@ const IntroText = styled.div`
   text-align: right;
 `;
 
+// Branding integration (frontend-polish package) - the mark+wordmark lockup
+// (frontend/public/whatsthat-composite.svg, sourced from the assets/whatsthat-branding branch;
+// gradient id wtc-grad-comp is pre-namespaced there specifically so it can't collide with the
+// mark-only/wordmark-only SVGs' own wtc-grad-mark/wtc-grad-word ids if more than one ever ends
+// up on the same page at once - none currently do, but the namespacing was already done
+// upstream of this integration, not invented here). Replaces the plain text <h1> this page had
+// - wrapped in an actual <h1> (not just a bare <img>) so the page's semantic heading and its
+// accessible name both survive the swap to a screen reader/outline view, exactly as they were
+// before, just rendered as the real logo now. `right` alignment (inline like text, so IntroText's
+// own text-align: right lines it up with the paragraph below it, same as the text heading did).
+// Sized by width with a natural aspect-ratio height - the SVG's own viewBox is a wide ~2.34:1
+// lockup, comfortable up to the column's own max-width without ever forcing IntroText past it.
+const BrandLockup = styled.img`
+  width: min(480px, 100%);
+  height: auto;
+  vertical-align: middle;
+`;
+
 function PrintingQueueOrDefault() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   const [activeTab, setActiveTab] = useState<WhatsThatTab>("feed");
@@ -162,7 +180,13 @@ function PrintingQueueOrDefault() {
       <StarburstBackground>
         <StarburstContent>
           <IntroText>
-            <h1>What&apos;s That Card?</h1>
+            <h1 className="mb-2">
+              <BrandLockup
+                src="/whatsthat-composite.svg"
+                alt="What's That Card?"
+                data-testid="whatsthat-brand-lockup"
+              />
+            </h1>
             <p>
               Test your Magic: the Gathering knowledge! One card at a time, help
               identify which real-world printing, artist, or descriptor tag each

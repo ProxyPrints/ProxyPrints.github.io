@@ -193,8 +193,23 @@ AUTHENTICATION_BACKENDS = [
 ]
 ACCOUNT_EMAIL_VERIFICATION = "none"  # Discord is the identity authority; no verification emails
 SOCIALACCOUNT_AUTO_SIGNUP = True  # first Discord login auto-creates the Django user
-# Keep allauth's confirmation interstitial on the login link (default-secure; costs one click).
-SOCIALACCOUNT_LOGIN_ON_GET = False
+# Skip allauth's confirmation interstitial and go straight to the Discord redirect on GET.
+# Tradeoff (read from allauth's own source, socialaccount/providers/base/views.py +
+# base/utils.py): that interstitial exists as a login-CSRF guard - it's checked BEFORE any
+# OAuth session state is written, so without it a bare cross-site GET (<img src>, hidden
+# iframe, plain link) to this login URL immediately writes session state and redirects to
+# Discord with no same-site interaction required. Combined with AUTO_SIGNUP=True above, if
+# the victim's browser already holds a live, previously-authorized Discord session for this
+# app, that forced flow can complete silently on both sides. The ceiling on that is still low
+# for this app: Discord identity resolution isn't attacker-controlled, so the worst case is a
+# surprising silent login into the victim's OWN correctly-identified account - not the classic
+# login-CSRF account-substitution attack where an attacker's account ends up with the
+# victim's data. Skipping the interstitial is the near-universal convention for "Sign in with
+# X" buttons (the button click on OUR page is already the user's confirmation); one extra
+# click after that adds friction without closing a realistic gap for a zero-knowledge app with
+# no attacker-controlled account identity. Same category of call already made for logout
+# below (docs/features/moderation.md).
+SOCIALACCOUNT_LOGIN_ON_GET = True
 # Logout via a plain link so it can round-trip back to the frontend with ?next=. The tradeoff
 # (a hostile page could force-logout a moderator - a nuisance, not an escalation) is documented
 # in docs/features/moderation.md.

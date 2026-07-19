@@ -367,6 +367,30 @@ printings, artists, tags, and moderation from one screen.
   Every other voting surface (`PrintingTagPicker.tsx`, `TagVotePicker.tsx`,
   `ReportsPanel.tsx`) is untouched — `voteSurface` stays `undefined`
   there, not a guessed value.
+- **Branding integration** (frontend-polish package): the plain text
+  `<h1>What's That Card?</h1>` heading is now the mark+wordmark lockup
+  SVG (`frontend/public/whatsthat-composite.svg`) instead. Source assets
+  (`question-mark.svg`/mark, `wordmark.svg`/word, `composite.svg`/lockup
+  — gradient ids `wtc-grad-mark`/`wtc-grad-word`/`wtc-grad-comp`
+  pre-namespaced so more than one could coexist on a page without id
+  collision, though only the composite is used here) came from the
+  `assets/whatsthat-branding` branch, copied into `frontend/public/` as
+  `whatsthat-{mark,wordmark,composite}.svg` (renamed from the generic
+  source names to avoid colliding with this repo's existing flat
+  `public/*.svg` namespace — see `flags.tsx`'s identical `<img src="/...">`
+  pattern, followed here rather than inlining the SVG as a React
+  component). Still wrapped in a real `<h1>` (not a bare `<img>`) so the
+  page's semantic heading and its accessible name (the `alt` text)
+  survive the swap unchanged. Visually verified via real Playwright
+  screenshots at 1280px desktop and 390px mobile against the page's own
+  ratified palette (the `#ff4719` orange background + navy `#12262c`
+  accent from the visual-diagnosis pass above) — the gold gradient +
+  navy outline reads cleanly at both widths with no collision with the
+  candidate grid/stats text below it. `whatsthat-mark.svg` and
+  `whatsthat-wordmark.svg` are copied in too but not yet used on this
+  page — reserved for the queued PWA/manifest-icons pass (mark) and any
+  future compact-lockup surface (wordmark), not invented placements
+  here.
 - **Mobile funnel pass: thumb-native tap targets** (frontend-polish
   package). Audited via real Playwright screenshots + `boundingBox()`
   measurements at 390px, not assumption: Bootstrap's own default `.btn`
