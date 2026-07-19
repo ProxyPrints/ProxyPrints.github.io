@@ -120,19 +120,22 @@ against.
 - Weight: settings.VOTE_FEDERATED_WEIGHT, per-peer override permitted.
 - Skip verdicts whose artist/tag can't be matched locally.
 
-## Known gate issue (tracked, not built)
+## Known gate issue (defensive default fixed 2026-07-19; full per-peer design still not built)
 
-**The bug**: `cardpicker/vote_consensus.py`'s `is_human_backed_source()`
-checks membership in `_MACHINE_DERIVED_SOURCES = {VoteSource.DEDUCTION, VoteSource.OCR}` — `VoteSource.FEDERATED` is _not_ in that set, so
-`is_human_backed_source(VoteSource.FEDERATED)` returns `True` today
-(verified directly against current code at `vote_consensus.py:31`,
-2026-07-19 — not just asserted). If federation import is ever built by
-following the existing per-source-wrapper pattern naively, a single
-imported federated verdict could singlehandedly clear the "at least one
-human-backed vote" resolution gate — contradicting this document's own
-contract that federated verdicts arrive as suggestions into the
-importing instance's own review gate, not as a vote that can clear it
-alone.
+**The bug (fixed)**: `cardpicker/vote_consensus.py`'s
+`is_human_backed_source()` checks membership in
+`_MACHINE_DERIVED_SOURCES` — `VoteSource.FEDERATED` was not in that
+set, so `is_human_backed_source(VoteSource.FEDERATED)` returned `True`.
+Fixed: `_MACHINE_DERIVED_SOURCES` now includes `VoteSource.FEDERATED`
+(`vote_consensus.py:38`, verified directly against current code,
+2026-07-19), so `is_human_backed_source(VoteSource.FEDERATED)` returns
+`False` — a federated vote can no longer singlehandedly clear the "at
+least one human-backed vote" resolution gate. This is the safe,
+defensive default; `VoteTuple.is_human_backed` is still caller-supplied
+per the existing design, so a real importer can still override this
+explicitly if a peer's own review process has already made a federated
+verdict genuinely human-backed. The per-peer-promotable design below
+remains the eventual real mechanism and is still not built.
 
 **The fix (design only, not implemented)**: route federated gate
 treatment through a settings-driven mode, `FEDERATED_VOTE_GATE_MODE`
@@ -155,11 +158,12 @@ an unmeasured new peer stays suggestion-tier by default. Same
 "defaults off, config not migration" shape `require_privileged` and the
 proposed `AUTHED_VOTE_GATE_MODE` both already use.
 
-**Status: flagged, not built.** Consuming federated votes at all is
-gated on having a live peer in the first place (see "Participation
-modes" above) — this fix needs to land before that happens, not before.
-Recorded here so it isn't rediscovered from scratch whenever import
-actually gets built.
+**Status: defensive default shipped (2026-07-19), full per-peer design
+not built.** Consuming federated votes at all is gated on having a live
+peer in the first place (see "Participation modes" above) — the
+per-peer promotion mechanism needs to land before that happens, not
+before. Recorded here so it isn't rediscovered from scratch whenever
+import actually gets built.
 
 Status: format committed ahead of code. Export/import commands, keygen, and
 the peer registry are future work; the schema stub (source='federated',
