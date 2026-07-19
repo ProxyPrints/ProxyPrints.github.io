@@ -1069,6 +1069,71 @@ deliberate follow-up per the standing "measure, don't assume" rule) —
 flagged as a cheap, separate option the owner may want to take before
 or independent of the larger concurrency-raise probe.
 
+**Concurrency-raise probe results (task #165, completed 2026-07-19)**:
+rate held fixed at 10.0/s (above the reachable concurrency=3 ceiling,
+so concurrency - not pacing - was the dimension under test),
+`max_concurrency` stepped 3→6→10, ~25min/step, same breaker as the
+rate probe plus a live-site canary (a separate, unthrottled thread
+sampling real Worker-path image latency every 15s throughout each
+step, independent of the probe's own traffic).
+
+**Zero 429/403 across all three steps and 32,889 total requests —
+Google's own quota was never triggered, even at concurrency=10.** But
+the canary caught something the quota signal alone would have missed
+entirely:
+
+| `max_concurrency`  | achieved rate | canary p95                   | error count | verdict                              |
+| ------------------ | ------------- | ---------------------------- | ----------- | ------------------------------------ |
+| 3 (today's config) | 4.32/s        | 0.81s (**baseline**)         | 2           | clean                                |
+| 6                  | 8.12/s        | 0.39s (better than baseline) | 14          | **clean**                            |
+| 10                 | 9.59/s        | 1.97s (**2.43x baseline**)   | 186         | **live-site regression — NOT clean** |
+
+Concurrency=10 hit the fixed 10.0/s pacing target almost exactly
+(9.59/s, matching the near-linear throughput-vs-concurrency curve
+from 3→6 flattening out as it approaches the pacing ceiling) with
+literally zero quota events — by the quota signal alone it would look
+like a clean pass. The canary's own real-request latency sampling is
+what actually caught the problem: **p95 image-serving latency through
+the shared Worker path regressed 2.43x over the concurrency=3
+baseline**, alongside a large jump in the probe's own error count (186
+vs. 2-14 at lower concurrency) - both signs of real contention on
+shared infrastructure that no 429/403 ever surfaced. This is exactly
+why the canary was added rather than trusting the quota signal alone.
+
+**Two ceilings, confirmed distinct, as the owner's framing
+anticipated**: the throughput-vs-concurrency curve is near-linear from
+3→6 (4.32/s → 8.12/s, ~1.88x for 2x concurrency) then flattens 6→10 as
+it approaches the fixed pacing target - a pacing artifact, not a real
+finding about concurrency=10 itself. The FIRST real degradation signal
+of any kind (429/403 or otherwise) across both probes combined
+(55,641 total requests) was the concurrency=10 canary regression -
+Google's own rate ceiling remains entirely unmeasured; this was a
+live-site-latency ceiling, found before ever reaching Google's.
+
+**Deliverable — recommended config value: `max_concurrency=6`,
+`rate_per_sec≈8.0`** (a touch under the measured 8.116/s ceiling for
+margin), NOT concurrency=10 despite it numerically matching the
+owner's own "~10/s achieved" framing - it does not "hold clean" per
+the owner's own pre-set standard, since the live-site regression is
+itself a stop condition. Final wall-clock table for the 181,483
+deduped fetch targets:
+
+| Config                                           | Achieved rate | Wall-clock |
+| ------------------------------------------------ | ------------- | ---------- |
+| Current (3.0/s, concurrency=3)                   | 2.94/s        | ~17.15h    |
+| Rate-only bump (~4.2/s, concurrency=3)           | 4.2/s         | ~12.00h    |
+| **Recommended (~8.0/s, concurrency=6)**          | **8.116/s**   | **~6.21h** |
+| Concurrency=10 (rejected - live-site regression) | 9.586/s       | ~5.26h     |
+
+The "single evening" framing doesn't quite land - concurrency=6 gets
+the bulk harvest to ~6.2h (a 2.76x improvement over today, and the
+largest concurrency step that stayed clean on every dimension
+measured: quota, error rate, and live-site latency), not the ~5h a
+clean concurrency=10 would have given. Owner decides whether to apply
+`max_concurrency=6`/`rate_per_sec≈8.0` to `harvest_fetch_limiter.py`'s
+`GOOGLE_IMAGE` config - not applied here, per the standing "config
+values land only from measurement, not automatically" rule.
+
 ### Governing posture: we index, we do not store images (owner FINAL POSTURE + PRIORITIZATION directive, 2026-07-19)
 
 **Constitutional premise**: the catalog persists knowledge about card
