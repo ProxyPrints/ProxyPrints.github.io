@@ -38,6 +38,20 @@ class PrintingMetadataRow(BaseModel):
     frame_effects: list[str] = []
     promo_types: list[str] = []
     edhrec_rank: int | None = None
+    # Scryfall's bulk-data card object already carries this - single-faced cards have it
+    # top-level, double-faced cards nest it under the first face instead (Scryfall's own
+    # documented convention). Extra top-level keys the model doesn't declare (name, mana_cost,
+    # etc.) are silently ignored by pydantic, same as every other field on this row.
+    image_uris: dict[str, str] | None = None
+    card_faces: list[dict[str, Any]] | None = None
+
+    @property
+    def art_crop_url(self) -> str:
+        if self.image_uris is not None:
+            return self.image_uris.get("art_crop", "")
+        if self.card_faces:
+            return self.card_faces[0].get("image_uris", {}).get("art_crop", "")
+        return ""
 
 
 def _cache_path() -> Path:
@@ -138,6 +152,7 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
                 printings_count=printings_count,
                 released_at=row.released_at,
                 lang=row.lang,
+                art_crop_url=row.art_crop_url,
             )
         )
 

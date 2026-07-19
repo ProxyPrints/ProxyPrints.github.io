@@ -28,7 +28,7 @@ from cardpicker.harvest_fetch_limiter import (
 )
 from cardpicker.image_cdn_fetch import fetch_card_image
 from cardpicker.local_fallback import classify_bleed_edge, normalize_crop_box
-from cardpicker.models import CanonicalCard, Card
+from cardpicker.models import CanonicalCard, CanonicalPrintingMetadata, Card
 from cardpicker.utils import twos_complement
 
 if TYPE_CHECKING:
@@ -105,6 +105,21 @@ def _fetch_and_hash(url: str) -> Optional[int]:
         return None
 
 
+def _local_art_crop_url(canonical: CanonicalCard) -> Optional[str]:
+    """The art-crop URL already sitting in CanonicalPrintingMetadata (Stage B, 2026-07-19,
+    docs/features/catalog-completion-plan.md) - parsed from the same weekly bulk-data file
+    import_scryfall_printing_metadata already reads, zero network. Returns None (not "") for
+    "genuinely not available locally", covering both a missing sidecar row (a card that predates
+    this field, or whose metadata import hasn't run yet) and a present-but-empty URL (a real gap
+    in Scryfall's own data for this printing) - both fall through to the live REST call below,
+    which is exactly SCRYFALL_REST's own "guard for true gaps only" contract."""
+    try:
+        url = canonical.printing_metadata.art_crop_url
+    except CanonicalPrintingMetadata.DoesNotExist:
+        return None
+    return url or None
+
+
 def get_or_compute_canonical_hash(canonical: CanonicalCard) -> Optional[int]:
     """
     Returns canonical.image_hash, computing and persisting it first if it's still the unset
@@ -113,11 +128,18 @@ def get_or_compute_canonical_hash(canonical: CanonicalCard) -> Optional[int]:
     (an all-white or otherwise-degenerate phash of 0 is possible in principle but vanishingly
     unlikely for real card art - not specially handled, matching upstream's own use of the same
     sentinel in import_canonical_card_data).
+
+    Art-crop URL source, local-first (Stage B, 2026-07-19): CanonicalPrintingMetadata.art_crop_url
+    if present (zero network - the same bulk-data file the weekly metadata import already reads),
+    else one live Scryfall REST call as a genuine-gap fallback - see _local_art_crop_url and
+    SCRYFALL_REST's own docstring in harvest_fetch_limiter.py. Previously always took the REST
+    path; measured as the dominant cost (93.6% of a 30-card Stage B wall-clock probe) before this
+    change.
     """
     if canonical.image_hash != 0:
         return canonical.image_hash
 
-    art_crop_url = _fetch_scryfall_art_crop_url(str(canonical.identifier))
+    art_crop_url = _local_art_crop_url(canonical) or _fetch_scryfall_art_crop_url(str(canonical.identifier))
     if art_crop_url is None:
         return None
     computed = _fetch_and_hash(art_crop_url)
