@@ -1052,6 +1052,25 @@ empirically-derived constant/threshold/override/skip-reason mapped to
 its home in the new pipeline, or flagged missing) must be clean. Both
 gate task #148 (the owner HOLD deliverable) and any full-catalog fire.
 
+**Stage E resume contract (owner directive, 2026-07-19 — full spec on
+task #147, acceptance test folded into task #156's soak gate)**:
+resumability is a TESTED requirement, not an assumed property — this
+is what Part 4's original kill lacked (its "zero polluted rows"
+conclusion came from architecture reading, not a ledger, exactly the
+gap this closes). Four binding pieces: (1) kill-and-restart at ANY
+point with zero manual cleanup, proven via a blocking `kill -9`
+mid-batch acceptance test during the soak; (2) resume filter = "cards
+lacking an `ImageEvidence` row for this extractor-version set" (+
+`run_id` scoping) — idempotent by construction; (3) evidence + votes +
+residue for a batch commit in ONE transaction, or (if impractical)
+evidence-first with idempotent calculator re-derivation on resume,
+whichever is chosen stated explicitly when built; (4) a durable run
+ledger (run_id, started_at, last_batch_at, batches_flushed,
+cards_processed, per-destination fetch counts, state, heartbeat) —
+likely extends Part 1's existing `PilotRunLedger` rather than a new
+model. Applies to the shared runner, so Stage C golden runs and the
+fidelity replay inherit it for free.
+
 ---
 
 ## Part 5 — Residual classification (existing tags only)
