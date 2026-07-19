@@ -130,6 +130,25 @@ export const cardDocumentsOneResult = http.post(buildRoute("2/cards/"), () =>
   )
 );
 
+// Same as cardDocumentsOneResult, but with a canonicalArtist set - cardDocument1 itself has none
+// (exercises the "Unknown" no-link path in CardDetailedViewModal's Artist Support Link row),
+// so this variant exists specifically to exercise the has-a-known-artist path.
+export const cardDocumentsOneResultWithCanonicalArtist = http.post(
+  buildRoute("2/cards/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [cardDocument1.identifier]: {
+            ...cardDocument1,
+            canonicalArtist: canonicalArtist1,
+          },
+        },
+      },
+      { status: 200 }
+    )
+);
+
 export const cardDocumentsThreeResults = http.post(buildRoute("2/cards/"), () =>
   HttpResponse.json(
     {

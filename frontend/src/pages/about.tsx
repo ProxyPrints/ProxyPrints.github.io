@@ -1,7 +1,7 @@
 import styled from "@emotion/styled";
 import Head from "next/head";
 
-import { ProjectName } from "@/common/constants";
+import { MTGArtistConnection, ProjectName } from "@/common/constants";
 import Footer from "@/features/ui/Footer";
 import { ProjectContainer } from "@/features/ui/Layout";
 import { useGetBackendInfoQuery } from "@/store/api";
@@ -69,6 +69,17 @@ export default function About() {
         </a>
       </CentreAligned>
       <BackendDescription />
+      <p>
+        Confirmed artist credits link out to{" "}
+        <a href="https://www.mtgartistconnection.com" target="_blank">
+          {MTGArtistConnection}
+        </a>
+        , a community-maintained directory of Magic: the Gathering artists - not
+        affiliated with {ProjectName}. These links are built directly from the
+        artist&apos;s name with no verification that a matching page exists; if
+        you&apos;re an artist and want a richer, project-blessed way to link
+        your own storefront, get in touch.
+      </p>
       <h3>Disclaimer</h3>
       <p>
         Custom card images displayed on {ProjectName} are subject to the license
