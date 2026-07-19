@@ -21,6 +21,14 @@ on:
       - ".github/wiki-publish-map.json"
       - ".github/workflows/docs-lint.yml"
       - "readme.md"
+      - "NOTICE"
+      - "MPCAutofill/cardpicker/vote_consensus.py"
+      - "MPCAutofill/cardpicker/printing_consensus.py"
+      - "MPCAutofill/cardpicker/tag_consensus.py"
+      - "MPCAutofill/cardpicker/artist_consensus.py"
+      - "MPCAutofill/cardpicker/local_phash.py"
+      - "MPCAutofill/cardpicker/local_fallback.py"
+      - "federation-hash-tool/**"
   schedule:
     # Weekly, independent of any PR — catches rot introduced by a change
     # OUTSIDE docs/ (e.g. a component move that a doc's path reference
@@ -80,3 +88,21 @@ jobs:
             echo "::error::readme.md is out of date - rerun \`python3 .github/scripts/publish_readme.py .\` and commit the result"
             exit 1
           fi
+
+  protected-core-license:
+    name: PROTECTED CORE license lint (docs/upstreaming/license-provenance.md)
+    # Fails if a PROTECTED CORE file (federation/hash-tool/vote-consensus
+    # modules) carries, or locally imports, code marked AGPL via a
+    # `# PROVENANCE:` header comment - see license-provenance.md §2 for the
+    # exact file list and why "no AGPL-derived code" is the real invariant,
+    # not "everything here must be GPL-3.0" (the hash tool is deliberately
+    # MIT). AST-based, stdlib only - reads source text, never imports or
+    # executes it, so no Django/third-party deps needed in this job.
+    # Passes with zero findings today; exists to catch the day that changes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run protected-core license lint unit tests
+        run: python3 .github/scripts/tests/test_check_protected_core_license.py
+      - name: Run protected-core license lint against the real repo
+        run: python3 .github/scripts/check_protected_core_license.py

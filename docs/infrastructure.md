@@ -252,7 +252,7 @@ Our `master` already carries the identical frontend fix (`121b5c06`,
 above), and cross-layer: the backend's `to_searchable()`
 (`cardpicker/search/sanitisation.py`) stopped stripping "the" via the
 literal shared upstream commit `4e960183` ("do not sanitise 'the' in card
-names", PR #460), merged into our `master` around 2026-07-04 — *before*
+names", PR #460), merged into our `master` around 2026-07-04 — _before_
 our own frontend fix, which was written specifically to restore parity
 with it. Confirmed today both layers still agree by running the actual
 current `toSearchable`/`to_searchable` functions (Node + Python, not a

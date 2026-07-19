@@ -31,7 +31,22 @@ The methodology and the systems it governs.
   system (printing/artist/tag weighted consensus) as a cherry-pick
   extraction manifest for upstreaming to `chilli-axe/mpc-autofill`; also
   the clearest single write-up of how that system is built, commit by
-  commit.
+  commit. Accurate through 2026-07-13 only — see
+  `upstreaming/readiness-audit.md` §5 for what's changed since.
+- [`upstreaming/readiness-audit.md`](upstreaming/readiness-audit.md) —
+  full fork-vs-upstream diff decomposed into feature chunks (with a
+  license-provenance column), dependency graph, the upstream-value/
+  extraction-ease ladder, and the branch architecture proposal.
+- [`upstreaming/license-provenance.md`](upstreaming/license-provenance.md)
+  — the one-time external-code provenance sweep, the PROTECTED CORE
+  module list + its CI license lint, and the absorption protocol for any
+  future external-code intake.
+- [`upstreaming/conventions.md`](upstreaming/conventions.md) — one-page
+  checklist any `upstream-fix-*`/`upstream-feat-*` branch must satisfy
+  before it's PR-ready.
+- [`upstreaming/drift-log.md`](upstreaming/drift-log.md) — auto-generated,
+  edited in place weekly: does each `upstream-*` branch still apply
+  cleanly onto current `upstream/master`. Detection only.
 - [`upstreaming/upstream-wiki-drift.md`](upstreaming/upstream-wiki-drift.md)
   — weekly, automated, detection-only tracking of what's changed on
   chilli-axe/mpc-autofill's own wiki since we last looked.

@@ -55,7 +55,7 @@ that gap.
 forward**:
 
 - **Shallow-clone false alarm.** A shallow clone (the default for this
-  session) makes the merge-base gap look *total* — `git cat-file -t` on
+  session) makes the merge-base gap look _total_ — `git cat-file -t` on
   every SHA in `docs/upstreaming/vote-system.md` fails, `git merge-base`
   returns nothing, and it reads exactly like the history-rewrite incident
   happened again. It didn't. `git fetch --unshallow origin` (fetching
@@ -103,19 +103,26 @@ into its own branch.
 
 ### 1.1 Backend (`MPCAutofill/`, `schemas/`)
 
-| Chunk | What | LOC | Value | Risk | Depends on |
-|---|---|---|---|---|---|
-| **A. Printing-tag vote system (core)** | Weighted-consensus engine (`AbstractWeightedVote`, `VoteSource`) + `CanonicalPrintingMetadata`/`CardPrintingTag`, printing-candidate search, ES re-rank hook | ~700 (migrations `0050`–`0051`) | **(a)** | Low | none — foundation |
-| **B. Artist + tag weighted voting, unified queue** | Extends A to artist/tag attributes, `2/voteQueue/` | ~1,300 (migrations `0052`–`0055`, `0057`) | **(a)** | Medium | A |
-| **C. Tag taxonomy (Stage 3)** | Seeded `Tag` rows + fuzzy filename matching, `display_name` split | ~500 (migration `0056`) | **(b)** | Low | none (functional dep on B) |
-| **D. Unified question feed** | `2/questionFeed/`, single prioritized review stream replacing the 3-tab switcher | ~600 | **(a)** | Medium | A, B, F |
-| **E. Moderation layer** | Discord OAuth, privileged-vote co-sign gate, `CardReport`, Reports/Drives admin queue | ~1,300 (migrations `0057`–`0059`) | **(b)**, mechanism only | Medium-high | A, B, C |
-| **F. Deductive printing-tag backfill** | Logic-only vote casting (D1/D2 tiers) for logically-entailed printings | ~600 | **(a)** | Low | A, C |
-| **G. Local OCR/phash identification pilot** | Tesseract + perceptual-hash + fallback engines, run-cohort revocability | **~6,700** (migrations `0060`–`0064`) | **(a) with caveats** — pilot-status, fork-tuned constants | **High** | A, F, I |
-| **H. `LOCAL_FILE` source type** | Real implementation of upstream's already-anticipated stub; local-disk cataloging + path-traversal-safe image serving | ~320 | **(a)** | **Low** | none — most self-contained chunk in the diff |
-| **I. Image-CDN backend fetch helper** | `image_cdn_fetch.py`, server-side full-res fetch for OCR/hashing | ~77 | (c) as written | Medium | Worker/R2 infra (out of scope) |
-| **J. Decklist printing-aware line formatting** | `format_decklist_line()` appends `(SET) NUM` when the import API gave printing data | ~50 (entangled in a 107-line file diff) | **(a)** | Low, but needs hunk-split | none |
-| **K. Ours-only operational settings** | Sentry removal, CORS branding, Discord/session-cookie env wiring | interleaved in `settings.py` | (c) | N/A — strip, don't port | — |
+**Provenance** column added per the owner's license-provenance amendment
+(§9) — `own-work` (net-new fork code, no upstream equivalent) or
+`upstream-GPL3` (a modification/extension of an existing upstream file,
+same license, same repo tree — not a third-party import). See §9 for the
+one-time external-origin sweep this ladder itself is exempt from (none of
+these 11 chunks involve code from outside the fork/upstream tree).
+
+| Chunk                                              | What                                                                                                                                                         | LOC                                       | Value                                                     | Risk                      | Depends on                                   | Provenance                                                                                       |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- | --------------------------------------------------------- | ------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **A. Printing-tag vote system (core)**             | Weighted-consensus engine (`AbstractWeightedVote`, `VoteSource`) + `CanonicalPrintingMetadata`/`CardPrintingTag`, printing-candidate search, ES re-rank hook | ~700 (migrations `0050`–`0051`)           | **(a)**                                                   | Low                       | none — foundation                            | own-work                                                                                         |
+| **B. Artist + tag weighted voting, unified queue** | Extends A to artist/tag attributes, `2/voteQueue/`                                                                                                           | ~1,300 (migrations `0052`–`0055`, `0057`) | **(a)**                                                   | Medium                    | A                                            | own-work                                                                                         |
+| **C. Tag taxonomy (Stage 3)**                      | Seeded `Tag` rows + fuzzy filename matching, `display_name` split                                                                                            | ~500 (migration `0056`)                   | **(b)**                                                   | Low                       | none (functional dep on B)                   | upstream-GPL3 (extends upstream's existing `Tag` model)                                          |
+| **D. Unified question feed**                       | `2/questionFeed/`, single prioritized review stream replacing the 3-tab switcher                                                                             | ~600                                      | **(a)**                                                   | Medium                    | A, B, F                                      | own-work                                                                                         |
+| **E. Moderation layer**                            | Discord OAuth, privileged-vote co-sign gate, `CardReport`, Reports/Drives admin queue                                                                        | ~1,300 (migrations `0057`–`0059`)         | **(b)**, mechanism only                                   | Medium-high               | A, B, C                                      | own-work                                                                                         |
+| **F. Deductive printing-tag backfill**             | Logic-only vote casting (D1/D2 tiers) for logically-entailed printings                                                                                       | ~600                                      | **(a)**                                                   | Low                       | A, C                                         | own-work                                                                                         |
+| **G. Local OCR/phash identification pilot**        | Tesseract + perceptual-hash + fallback engines, run-cohort revocability                                                                                      | **~6,700** (migrations `0060`–`0064`)     | **(a) with caveats** — pilot-status, fork-tuned constants | **High**                  | A, F, I                                      | own-work (uses the real `pytesseract`/`imagehash` PyPI deps, not copied algorithm code — see §9) |
+| **H. `LOCAL_FILE` source type**                    | Real implementation of upstream's already-anticipated stub; local-disk cataloging + path-traversal-safe image serving                                        | ~320                                      | **(a)**                                                   | **Low**                   | none — most self-contained chunk in the diff | upstream-GPL3 (completes a stub upstream's own schema/enum already defined)                      |
+| **I. Image-CDN backend fetch helper**              | `image_cdn_fetch.py`, server-side full-res fetch for OCR/hashing                                                                                             | ~77                                       | (c) as written                                            | Medium                    | Worker/R2 infra (out of scope)               | own-work                                                                                         |
+| **J. Decklist printing-aware line formatting**     | `format_decklist_line()` appends `(SET) NUM` when the import API gave printing data                                                                          | ~50 (entangled in a 107-line file diff)   | **(a)**                                                   | Low, but needs hunk-split | none                                         | upstream-GPL3 (edits an existing upstream file)                                                  |
+| **K. Ours-only operational settings**              | Sentry removal, CORS branding, Discord/session-cookie env wiring                                                                                             | interleaved in `settings.py`              | (c)                                                       | N/A — strip, don't port   | —                                            | upstream-GPL3 (edits upstream's existing `settings.py`)                                          |
 
 Full per-chunk detail (files, tests, exact dependency chains,
 entanglement notes) is in the backend research pass; the table above is
@@ -126,28 +133,33 @@ both are 100% frontend-only (confirmed: zero `xml` matches anywhere in
 
 ### 1.2 Frontend (`frontend/`)
 
-| Chunk | What | LOC | Value | Risk | Depends on |
-|---|---|---|---|---|---|
-| **I.1 PDF layout extraction (`computeLayout`)** | Pure, side-effect-free page-layout math pulled out of render components | 336, both new files | **(a)** | **Very low** | none |
-| **I.2 WYSIWYG page preview** | Canvas preview using I.1, no real PDF render needed | 541 + `pdfjs-dist` build step | **(a)** | Low | I.1 |
-| **I.3 PDF dead-image blocking** | Blocks/warns instead of silently shipping blank cards on a failed image fetch | ~739 | **(a)** | Low | none |
-| **I.4 XML 2.0 export + decklist round-trip** | Versioned, backward-compatible XML with optional printing data; `stripFoilMarker` import fix | ~360 | split (a)/(b) | Low (format/foil-fix) / Medium (suffix payload) | suffix payload needs A/D |
-| **II.1 Grid-selector UX/a11y pass** | Keyboard nav, modal autofocus fix, mobile filters default | 285 | **(a)** | **Very low** | none |
-| **II.2 Card image error/loading states** | "Still loading…" hint, styled error placeholder replacing a harsh black 404 PNG — the display-side of dead-link handling | 404 | **(a)** | **Very low** | none |
-| **II.3 Card DOM API** | `data-card-*` attributes + `mpc:card-selected` event, additive/generic | ~300 | **(a)** | **Very low** | none — already flagged "pending upstream" in fork memory |
-| **II.4 DeckbuilderConfirmAffordance** | In-context printing-confirm badge in the editor | 650 | (b) | High | IV.3, I.4, A |
-| **II.5 General UI/mobile/a11y polish** | Mobile stacking, scroll-chain fix, a11y sweep | ~424 | **(a)** | Low (verify `Navbar.tsx` isolation) | none |
-| **III.1–III.8 "What's That Card?" frontend** | QuestionFeed, PrintingTagPicker, attribute voting/chips, reporting, moderation UI, `/whatsthat` page | ~6,300 | (b)/(c) mixed | **High** | A, B, C, D, E |
-| **III.2 questionFeed count-semantics fix** | The specifically-requested candidate — confirmed real historically (`a0e2aa08`), but **fully subsumed into III.1's current 970-line file, not separable today** | n/a now | (b)/(c), inherits III.1 | N/A — would need reconstruction from git history if pursued alone | III.1 |
-| **IV.1 Google Drive "Save PDF to Drive"** | Write-scoped OAuth flow, independent of the existing read-only picker | 174 | **(a)** | **Very low** | none |
-| **IV.2 Search filters** | Mature-content toggle (generic) + resolved-attribute filters (needs backend) | 511 | split (a)/(b) | Low / Medium | ResolvedAttributeFilter needs A/D |
-| **IV.3 API error surfacing + toasts** | Real backend error messages + friendly 429 handling | 250 | **(a)** | Low | none |
-| **IV.4 Keyrune set-icon rendering** | Real MTG expansion-symbol glyphs via icon font | ~115 | **(a)** | **Very low** | none |
-| **IV.5 Print-export ordering tabs + flags** | NotMPC/PringlePrints tabs, vendored flag SVGs | 227 | **(c)** unambiguously | High (vendor content) | none |
-| **IV.6 Telemetry/Sentry removal** | Deletes fork's own error-tracking opt-out | −64 | (c) | None to extract | — |
-| **IV.7 Branding & site identity** | About page, logo, footer, nav copy | ~148 | (c) | N/A | — |
-| **IV.8 Support-modal removal** | Deletes upstream's donate/support-developer modals | −180 | (c) | None | — |
-| **IV.9 Build/tooling & test-infra** | Mostly ours-only config; one candidate: `msw`+`playwright` patch | ~110 + lockfile | mostly (c), one (a) | Low | verify upstream has same dep pair first |
+Same Provenance convention as §1.1. **IV.5 is the one row that's genuinely
+mixed** — the ordering-tab logic is own-work, but its flag icon assets are
+real external-origin content, already found and fully triaged by §9's
+sweep (not a new finding this table introduces).
+
+| Chunk                                           | What                                                                                                                                                            | LOC                           | Value                   | Risk                                                              | Depends on                                               | Provenance                                                                                                                                                                                                                                              |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | ----------------------- | ----------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **I.1 PDF layout extraction (`computeLayout`)** | Pure, side-effect-free page-layout math pulled out of render components                                                                                         | 336, both new files           | **(a)**                 | **Very low**                                                      | none                                                     | own-work                                                                                                                                                                                                                                                |
+| **I.2 WYSIWYG page preview**                    | Canvas preview using I.1, no real PDF render needed                                                                                                             | 541 + `pdfjs-dist` build step | **(a)**                 | Low                                                               | I.1                                                      | own-work                                                                                                                                                                                                                                                |
+| **I.3 PDF dead-image blocking**                 | Blocks/warns instead of silently shipping blank cards on a failed image fetch                                                                                   | ~739                          | **(a)**                 | Low                                                               | none                                                     | upstream-GPL3 (modifies existing image-fetch/render logic)                                                                                                                                                                                              |
+| **I.4 XML 2.0 export + decklist round-trip**    | Versioned, backward-compatible XML with optional printing data; `stripFoilMarker` import fix                                                                    | ~360                          | split (a)/(b)           | Low (format/foil-fix) / Medium (suffix payload)                   | suffix payload needs A/D                                 | upstream-GPL3 (extends upstream's existing XML export)                                                                                                                                                                                                  |
+| **II.1 Grid-selector UX/a11y pass**             | Keyboard nav, modal autofocus fix, mobile filters default                                                                                                       | 285                           | **(a)**                 | **Very low**                                                      | none                                                     | upstream-GPL3 (modifies the existing grid-selector component)                                                                                                                                                                                           |
+| **II.2 Card image error/loading states**        | "Still loading…" hint, styled error placeholder replacing a harsh black 404 PNG — the display-side of dead-link handling                                        | 404                           | **(a)**                 | **Very low**                                                      | none                                                     | upstream-GPL3 (modifies the existing `Card` component)                                                                                                                                                                                                  |
+| **II.3 Card DOM API**                           | `data-card-*` attributes + `mpc:card-selected` event, additive/generic                                                                                          | ~300                          | **(a)**                 | **Very low**                                                      | none — already flagged "pending upstream" in fork memory | own-work                                                                                                                                                                                                                                                |
+| **II.4 DeckbuilderConfirmAffordance**           | In-context printing-confirm badge in the editor                                                                                                                 | 650                           | (b)                     | High                                                              | IV.3, I.4, A                                             | own-work                                                                                                                                                                                                                                                |
+| **II.5 General UI/mobile/a11y polish**          | Mobile stacking, scroll-chain fix, a11y sweep                                                                                                                   | ~424                          | **(a)**                 | Low (verify `Navbar.tsx` isolation)                               | none                                                     | upstream-GPL3 (modifies existing components)                                                                                                                                                                                                            |
+| **III.1–III.8 "What's That Card?" frontend**    | QuestionFeed, PrintingTagPicker, attribute voting/chips, reporting, moderation UI, `/whatsthat` page                                                            | ~6,300                        | (b)/(c) mixed           | **High**                                                          | A, B, C, D, E                                            | own-work                                                                                                                                                                                                                                                |
+| **III.2 questionFeed count-semantics fix**      | The specifically-requested candidate — confirmed real historically (`a0e2aa08`), but **fully subsumed into III.1's current 970-line file, not separable today** | n/a now                       | (b)/(c), inherits III.1 | N/A — would need reconstruction from git history if pursued alone | III.1                                                    | own-work                                                                                                                                                                                                                                                |
+| **IV.1 Google Drive "Save PDF to Drive"**       | Write-scoped OAuth flow, independent of the existing read-only picker                                                                                           | 174                           | **(a)**                 | **Very low**                                                      | none                                                     | own-work                                                                                                                                                                                                                                                |
+| **IV.2 Search filters**                         | Mature-content toggle (generic) + resolved-attribute filters (needs backend)                                                                                    | 511                           | split (a)/(b)           | Low / Medium                                                      | ResolvedAttributeFilter needs A/D                        | upstream-GPL3 (modifies existing filter UI)                                                                                                                                                                                                             |
+| **IV.3 API error surfacing + toasts**           | Real backend error messages + friendly 429 handling                                                                                                             | 250                           | **(a)**                 | Low                                                               | none                                                     | upstream-GPL3 (modifies existing API-error handling)                                                                                                                                                                                                    |
+| **IV.4 Keyrune set-icon rendering**             | Real MTG expansion-symbol glyphs via icon font                                                                                                                  | ~115                          | **(a)**                 | **Very low**                                                      | none                                                     | own-work (rendering code only — draws on the real `keyrune` npm package as a normal, gitignored install-time dependency; not the same thing as §9's finding of a _second_, separately-vendored copy of keyrune's font+license in the backend OCR pilot) |
+| **IV.5 Print-export ordering tabs + flags**     | NotMPC/PringlePrints tabs, vendored flag SVGs                                                                                                                   | 227                           | **(c)** unambiguously   | High (vendor content)                                             | none                                                     | **own-work (tab logic) + external (flag SVGs: `lipis/flag-icons`, MIT — §9 finding, already attributed in-repo)**                                                                                                                                       |
+| **IV.6 Telemetry/Sentry removal**               | Deletes fork's own error-tracking opt-out                                                                                                                       | −64                           | (c)                     | None to extract                                                   | —                                                        | upstream-GPL3 (removes upstream's own integration)                                                                                                                                                                                                      |
+| **IV.7 Branding & site identity**               | About page, logo, footer, nav copy                                                                                                                              | ~148                          | (c)                     | N/A                                                               | —                                                        | own-work (original identity content; no external-origin assets found here per §9)                                                                                                                                                                       |
+| **IV.8 Support-modal removal**                  | Deletes upstream's donate/support-developer modals                                                                                                              | −180                          | (c)                     | None                                                              | —                                                        | upstream-GPL3 (removes upstream's own modals)                                                                                                                                                                                                           |
+| **IV.9 Build/tooling & test-infra**             | Mostly ours-only config; one candidate: `msw`+`playwright` patch                                                                                                | ~110 + lockfile               | mostly (c), one (a)     | Low                                                               | verify upstream has same dep pair first                  | upstream-GPL3 (modifies existing config)                                                                                                                                                                                                                |
 
 ### 1.3 CI / tooling / infra (everything outside `frontend/`, `MPCAutofill/`, `schemas/`)
 
@@ -157,18 +169,18 @@ root config file (`readme.md`, `pyproject.toml`, `mypy.ini`,
 to upstream — zero drift, nothing to reconcile there. All branding lives
 in `frontend/`.
 
-| Chunk | What | Value | Risk |
-|---|---|---|---|
-| **`restart: unless-stopped` on all 5 compose services** | Host-reboot resilience, live-verified with a real reboot test | **(a)** | **Very low** |
-| **Postgres/ES bound to `127.0.0.1` not `0.0.0.0`** | Security hardening, stops exposing DB/search ports to the internet | **(a)** | **Very low** |
-| **nginx `Host`/`X-Forwarded-Proto` header fix** | Fixes nginx's `proxy_pass` defaulting `Host` to the upstream container's own name, breaking absolute-URL construction behind a reverse proxy | **(a)** (the 2-line header fix specifically) | **Very low** |
-| **image-cdn full-tier rate limiter + CORS fix** | The "client-side rate pacer" from the original brief — **it's a Cloudflare Worker chunk in `image-cdn/`, not `frontend/`.** Adds real rate limiting + an intentional (not accidental) CORS header for `lh4.googleusercontent.com` full-res fetches | **(a)** | **Low** |
-| **`desktop-tool` `PIL.Image` → `PILImage` `TYPE_CHECKING` rename** | Avoids an import-shadowing footgun | **(a)** | **Trivial** |
-| **`.dockerignore`** | Stops uploading the whole repo (incl. gigabyte+ `node_modules`) as Docker build context | **(a)**, minus one `.claude` line | Low |
-| **CI mypy numpy-pin lesson** | "An unpinned transitive dep can resolve differently in CI's mypy sandbox than local dev" — a portable insight, not a standalone diff | **(a)** as a lesson only | N/A alone |
-| **`GIT_SHA` build-arg baking + staleness gate** | Detects a deployed image running stale migrations | **(b)** | Medium — split across Docker + backend |
-| **`entrypoint.sh`: always migrate, drop blocking first-boot catalog bootstrap** | Real behavior change — a fresh instance no longer auto-populates on first boot | **(b)** | Medium-high, must be opt-in not a silent default flip |
-| GA/Sentry removal from CI, GH Pages deploy pipeline, `docker-compose.prod.yml` env branding, `test-backend` dropped from `build-frontend`'s needs | Fork hosting/telemetry choices | **(c)** | N/A |
+| Chunk                                                                                                                                             | What                                                                                                                                                                                                                                               | Value                                        | Risk                                                  | Provenance                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------- |
+| **`restart: unless-stopped` on all 5 compose services**                                                                                           | Host-reboot resilience, live-verified with a real reboot test                                                                                                                                                                                      | **(a)**                                      | **Very low**                                          | upstream-GPL3 (edits existing compose files)              |
+| **Postgres/ES bound to `127.0.0.1` not `0.0.0.0`**                                                                                                | Security hardening, stops exposing DB/search ports to the internet                                                                                                                                                                                 | **(a)**                                      | **Very low**                                          | upstream-GPL3 (edits existing compose files)              |
+| **nginx `Host`/`X-Forwarded-Proto` header fix**                                                                                                   | Fixes nginx's `proxy_pass` defaulting `Host` to the upstream container's own name, breaking absolute-URL construction behind a reverse proxy                                                                                                       | **(a)** (the 2-line header fix specifically) | **Very low**                                          | upstream-GPL3 (edits existing nginx config)               |
+| **image-cdn full-tier rate limiter + CORS fix**                                                                                                   | The "client-side rate pacer" from the original brief — **it's a Cloudflare Worker chunk in `image-cdn/`, not `frontend/`.** Adds real rate limiting + an intentional (not accidental) CORS header for `lh4.googleusercontent.com` full-res fetches | **(a)**                                      | **Low**                                               | own-work                                                  |
+| **`desktop-tool` `PIL.Image` → `PILImage` `TYPE_CHECKING` rename**                                                                                | Avoids an import-shadowing footgun                                                                                                                                                                                                                 | **(a)**                                      | **Trivial**                                           | upstream-GPL3 (edits an existing upstream file)           |
+| **`.dockerignore`**                                                                                                                               | Stops uploading the whole repo (incl. gigabyte+ `node_modules`) as Docker build context                                                                                                                                                            | **(a)**, minus one `.claude` line            | Low                                                   | upstream-GPL3 (edits an existing upstream file)           |
+| **CI mypy numpy-pin lesson**                                                                                                                      | "An unpinned transitive dep can resolve differently in CI's mypy sandbox than local dev" — a portable insight, not a standalone diff                                                                                                               | **(a)** as a lesson only                     | N/A alone                                             | N/A — no diff, nothing to classify                        |
+| **`GIT_SHA` build-arg baking + staleness gate**                                                                                                   | Detects a deployed image running stale migrations                                                                                                                                                                                                  | **(b)**                                      | Medium — split across Docker + backend                | own-work                                                  |
+| **`entrypoint.sh`: always migrate, drop blocking first-boot catalog bootstrap**                                                                   | Real behavior change — a fresh instance no longer auto-populates on first boot                                                                                                                                                                     | **(b)**                                      | Medium-high, must be opt-in not a silent default flip | upstream-GPL3 (edits upstream's existing `entrypoint.sh`) |
+| GA/Sentry removal from CI, GH Pages deploy pipeline, `docker-compose.prod.yml` env branding, `test-backend` dropped from `build-frontend`'s needs | Fork hosting/telemetry choices                                                                                                                                                                                                                     | **(c)**                                      | N/A                                                   | upstream-GPL3 (edits existing upstream CI/deploy files)   |
 
 ## 2. Dependency graph
 
@@ -287,13 +299,13 @@ review as one PR each — these are what Phase 2 should draw from.
 ### Tier 3 — high value, needs a real feature-sized pitch
 
 - **Printing-tag vote system**: Chunk A (+ optionally B, D) — the
-  single most upstream-pitchable *big* idea in this fork (community
+  single most upstream-pitchable _big_ idea in this fork (community
   disambiguation of which Scryfall printing a catalog image depicts),
   but it's feature-sized, not quick-win-shaped, and its frontend half
   (Cluster III) is ~6,300 LOC that doesn't work without it. This is
   `docs/upstreaming/vote-system.md`'s territory — see §5 below for that
   doc's current accuracy.
-- **Moderation layer** (E) — the *mechanism* (privileged-vote co-sign,
+- **Moderation layer** (E) — the _mechanism_ (privileged-vote co-sign,
   pluggable moderator grant) generalizes; the Discord-specific wiring
   doesn't, and would need reframing as provider-agnostic OAuth first.
 - **`GIT_SHA` build-arg + staleness gate** (CI + backend) — needs the
@@ -385,15 +397,14 @@ vote system" now means on current `master` — it predates:
   superseded it as the primary review surface.
 - **Chunks F and G** (~7,300 combined lines: deductive backfill + the
   local OCR/phash pilot) — not mentioned at all.
-- Its own §5 re-verification command (`git merge-base upstream/master
-  origin/master` should show 0 commits ahead) needs the two-dot-diff
+- Its own §5 re-verification command (`git merge-base upstream/master origin/master` should show 0 commits ahead) needs the two-dot-diff
   method substituted for the range-diff it suggests, and the
   shallow-clone caveat from §0 above applied before trusting the result.
 - Its specific cherry-pick recipe for `PrintingTagQueue.tsx` now targets
   a **file that no longer exists** — that logic was redistributed into
   `cardPanel.tsx`/`whatsthat.tsx`/`QuestionFeed.tsx` during the queue
-  redesign. The doc's *warning* (don't cherry-pick that file's history
-  commit-by-commit) is still directionally correct; its *recipe* needs
+  redesign. The doc's _warning_ (don't cherry-pick that file's history
+  commit-by-commit) is still directionally correct; its _recipe_ needs
   redoing against the new files if ever acted on.
 
 Recommendation: keep the doc as-is for the slice it accurately covers
@@ -457,8 +468,7 @@ ports cleanly; hand-reapply against upstream's current tree when it
 doesn't (references "our fork"/"our master", etc. — exactly the #467
 precedent).
 
-**Before every push**, not just the first cut: `git fetch upstream
-master`, re-run `git merge-base upstream/master origin/master`
+**Before every push**, not just the first cut: `git fetch upstream master`, re-run `git merge-base upstream/master origin/master`
 (unshallow first if needed — §0), `git diff upstream/master <branch>` to
 confirm the branch contains nothing but the intended change, rebase onto
 the new tip if it moved, re-run `pre-commit run --all-files` plus
@@ -483,3 +493,37 @@ zero-dependency, backend-only shape gave it the best survival odds
 regardless of how that answer lands) is preserved here since it's why
 that specific chunk was picked first among Tier 1's near-equally-ready
 options.
+
+## 9. License provenance (owner amendment, 2026-07-19)
+
+Every row across §1.1–1.3's three tables now carries a **Provenance**
+column: `own-work` (net-new fork code) or `upstream-GPL3` (a
+modification of an existing upstream file — same repo tree, same
+license, not a third-party import). **41 rows total** (11 backend + 20
+frontend + 10 CI/tooling), not the 27 the commission estimated — stated
+plainly rather than force-fit to match; every row was individually
+classified from its own already-recorded "What" description, not
+independently re-diffed line-by-line (that would be its own multi-hour
+pass — flag any misclassification for correction).
+
+**Uniform, as expected, with exactly one flagged exception**: no ladder
+chunk involves code copied in from outside the fork/upstream tree — IV.5
+(print-export flag icons) is the one row that's genuinely mixed, and
+that's a pre-existing, already-attributed finding (the tab logic is
+own-work; the flag SVG assets are `lipis/flag-icons`, MIT), not a new
+problem this pass introduced.
+
+**A separate, one-time sweep of the WHOLE repo** (not just these 41
+ladder rows — everything under `MPCAutofill/`, `frontend/`, `schemas/`,
+`image-cdn/`, `desktop-tool/`, `cloudflare-static-site/`,
+`github-release-reverse-proxy/`, `docker/`, `.github/`) for vendored
+files, copied snippets, and dependency-adjacent copies found 4 real
+external-origin items — **not** "expected clean, confirmed clean": two
+of the four are missing full license-notice compliance, a real,
+previously-unnoticed gap this pass closes. Full findings, the
+PROTECTED CORE policy, the absorption protocol, and the disclosure
+mechanics this amendment also ships are in the new companion doc,
+[`license-provenance.md`](license-provenance.md) — kept separate from
+this file since it's forward-looking policy + a point-in-time sweep
+result, not chunk-decomposition data, matching how `conventions.md`
+already sits alongside this doc for a related-but-distinct concern.

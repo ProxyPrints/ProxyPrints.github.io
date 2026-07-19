@@ -123,8 +123,7 @@ against.
 ## Known gate issue (tracked, not built)
 
 **The bug**: `cardpicker/vote_consensus.py`'s `is_human_backed_source()`
-checks membership in `_MACHINE_DERIVED_SOURCES = {VoteSource.DEDUCTION,
-VoteSource.OCR}` — `VoteSource.FEDERATED` is _not_ in that set, so
+checks membership in `_MACHINE_DERIVED_SOURCES = {VoteSource.DEDUCTION, VoteSource.OCR}` — `VoteSource.FEDERATED` is _not_ in that set, so
 `is_human_backed_source(VoteSource.FEDERATED)` returns `True` today
 (verified directly against current code at `vote_consensus.py:31`,
 2026-07-19 — not just asserted). If federation import is ever built by

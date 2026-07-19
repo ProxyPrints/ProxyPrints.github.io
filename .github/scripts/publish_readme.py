@@ -86,6 +86,7 @@ def build_readme(repo_root: Path) -> str:
     identity = extract_region(repo_root, IDENTITY_SOURCE, "identity")
     desktop_tool = extract_region(repo_root, SECTIONS_SOURCE, "desktop-tool-pointer")
     license_notice = extract_region(repo_root, SECTIONS_SOURCE, "license")
+    license_provenance = extract_region(repo_root, SECTIONS_SOURCE, "license-provenance")
     documentation = extract_region(repo_root, SECTIONS_SOURCE, "documentation-pointer")
 
     parts = [
@@ -102,6 +103,8 @@ def build_readme(repo_root: Path) -> str:
         "## License",
         "",
         license_notice,
+        "",
+        license_provenance,
         "",
         "## Documentation",
         "",

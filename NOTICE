@@ -1,0 +1,113 @@
+ProxyPrints — third-party notices
+
+This project is licensed under the GNU General Public License v3.0
+(GPL-3.0) — see LICENSE.md for the full text. Complete corresponding
+source: this repository, https://github.com/ProxyPrints/ProxyPrints.github.io.
+
+This file lists content vendored into this repository from third-party
+projects under a different license, per
+docs/upstreaming/license-provenance.md's absorption protocol. Everything
+not listed below is either this fork's own original work or a direct
+modification of chilli-axe/mpc-autofill's own GPL-3.0-licensed code
+(the upstream project this repository is forked from) — see that doc's
+§1 for the full one-time sweep this file summarizes.
+
+--------------------------------------------------------------------------
+
+1. Flag icons
+
+   Files: frontend/public/flag-usa.svg, frontend/public/flag-canada.svg,
+   frontend/public/flag-china.svg
+   Source: https://github.com/lipis/flag-icons
+   License: MIT
+
+   Copyright (c) 2016 Panayiotis Lipiridis
+
+   Permission is hereby granted, free of charge, to any person obtaining a
+   copy of this software and associated documentation files (the
+   "Software"), to deal in the Software without restriction, including
+   without limitation the rights to use, copy, modify, merge, publish,
+   distribute, sublicense, and/or sell copies of the Software, and to
+   permit persons to whom the Software is furnished to do so, subject to
+   the following conditions:
+
+   The above copyright notice and this permission notice shall be included
+   in all copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+   CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--------------------------------------------------------------------------
+
+2. RenderIfVisible
+
+   File: frontend/src/components/RenderIfVisible.tsx
+   Source: https://github.com/NightCafeStudio/react-render-if-visible
+   License: Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+
+   Copyright NightCafe Creative Inc.
+
+   Licensed under the Apache License, Version 2.0 (the "License"); you may
+   not use this file except in compliance with the License. You may obtain
+   a copy of the License at http://www.apache.org/licenses/LICENSE-2.0.
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+   implied.
+
+   Changes made: vendored on 2025-04-06 with the fix from
+   https://github.com/NightCafeStudio/react-render-if-visible/pull/21
+   applied (see the file's own header comment).
+
+--------------------------------------------------------------------------
+
+3. OverflowList
+
+   File: frontend/src/components/OverflowList.tsx
+   Source: https://github.com/mattrothenberg/react-overflow-list
+   License: MIT
+
+   Copyright (c) Matt Rothenberg
+
+   Permission is hereby granted, free of charge, to any person obtaining a
+   copy of this software and associated documentation files (the
+   "Software"), to deal in the Software without restriction, including
+   without limitation the rights to use, copy, modify, merge, publish,
+   distribute, sublicense, and/or sell copies of the Software, and to
+   permit persons to whom the Software is furnished to do so, subject to
+   the following conditions:
+
+   The above copyright notice and this permission notice shall be included
+   in all copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+   CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+   Changes made: minor tweaks to reduce flickering (see the file's own
+   header comment).
+
+--------------------------------------------------------------------------
+
+4. Keyrune (server-side OCR/phash set-symbol font + codepoint data)
+
+   Directory: MPCAutofill/cardpicker/local_pilot_data/keyrune/
+   Source: the `keyrune` npm package, https://github.com/andrewgioia/keyrune
+   License: SIL Open Font License 1.1 (fonts), GPL-3.0 (code/icons) — see
+   that directory's own LICENSE.md for the complete, original text; not
+   duplicated here since it's already a complete, correct standalone file.
+
+   Note: the frontend has a separate, independent, gitignored copy of the
+   same keyrune font, generated at `npm install` time from the real
+   `keyrune` npm dependency in frontend/package.json — ordinary dependency
+   management with its own license metadata already tracked by npm, not a
+   second vendoring covered by this entry.

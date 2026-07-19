@@ -70,6 +70,17 @@ only) for deployment, hosting, and domain specifics.
   exists. Two independent sessions rebuilt #88 in parallel on the same day
   or the second, #95, rebuilt what #94 had already re-shipped and closed
   the duplicate.
+- **External code provenance**: external code enters this repo ONLY via
+  the absorption protocol (`docs/upstreaming/license-provenance.md` §3) —
+  bounded module, verbatim license header, `# PROVENANCE:` comment,
+  ledger row, `NOTICE` entry. PROTECTED CORE (federation/verdict/hash/
+  consensus modules — see that doc's §2 for the exact file list) accepts
+  _patterns_ from external code, never the code itself; if a needed
+  capability exists only as AGPL code elsewhere, reimplement from a
+  written description of its behavior, never from the source file.
+  Default posture repo-wide: referencing patterns from any public
+  codebase is always fine; actual code reuse is case-by-case and needs
+  owner sign-off, every time.
 - **Cloud/web sessions**: `WORKERS.md` and `CLAUDE.local.md` are
   server-local and won't exist in your clone — skip them. You're isolated:
   work on your named branch, push to origin, never to `master`; the owner
@@ -175,6 +186,10 @@ external reader's orientation to the whole fork, see
   auto-generated, edited in place weekly: does each `upstream-*` branch
   still apply cleanly onto current `upstream/master`, and how far has
   upstream moved. Detection only, never auto-rebases anything.
+- [`docs/upstreaming/license-provenance.md`](docs/upstreaming/license-provenance.md)
+  — the ladder's provenance sweep findings, the PROTECTED CORE module
+  list + its CI license lint, and the absorption protocol for any future
+  external-code intake (see "External code provenance" above).
 - [`docs/upstreaming/upstream-wiki-drift.md`](docs/upstreaming/upstream-wiki-drift.md)
   — weekly automated tracking of changes to chilli-axe/mpc-autofill's own
   wiki (detection only, never copied in).
