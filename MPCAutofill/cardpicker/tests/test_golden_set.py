@@ -25,6 +25,20 @@ class TestGoldenExpectations:
     def test_fetch_health_expects_true_for_every_card(self):
         assert all(e.value is True for e in GOLDEN_EXPECTATIONS["fetch_health"])
 
+    def test_geometry_bleed_expectation_covers_every_golden_card(self):
+        geometry_bleed_card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["geometry_bleed"]}
+        assert geometry_bleed_card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_geometry_bleed_values_are_a_known_bleed_class(self):
+        # Recorded 2026-07-19 against a real extract_card_evidence() run over all 30 golden
+        # cards (see golden_set.py's own comment for the real fetched dims/counts) - NOT
+        # re-verified live here, matching this file's own documented scope (real production Card
+        # rows don't exist in pytest's isolated testcontainers DB, so get_golden_cards() can't
+        # run against real network/data inside this test suite; re-running the real extraction
+        # against these pinned ids is a host-venv/manual check, done when this expectation was
+        # populated and whenever it's next revisited, not a per-CI-run network call).
+        assert all(e.value in ("bleed", "trimmed") for e in GOLDEN_EXPECTATIONS["geometry_bleed"])
+
 
 class TestGetGoldenCards:
     def test_raises_when_pinned_ids_are_missing_from_the_db(self, db):

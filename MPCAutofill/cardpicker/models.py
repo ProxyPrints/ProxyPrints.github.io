@@ -1217,6 +1217,17 @@ class ImageEvidence(models.Model):
     only the trivial `fetch_health` extractor riding along as end-to-end proof - NOT the full
     extractor manifest. Every subsequent extractor (geometry/bleed, OCR, phash, etc.) lands as
     its own PR, golden-set-tested before merge, per task #145's explicit hard-gate sequencing.
+
+    geometry_bleed (task #147, first real manifest extractor, merged after this substrate PR):
+    raw pixel dimensions + the SAME geometric aspect-ratio bleed classification
+    `local_fallback.classify_bleed_edge` already uses for the live pilot/harvest vote path -
+    called from `image_evidence.py`, not re-derived, so this extractor's output is guaranteed
+    consistent with the shipped classifier rather than a second implementation that could drift
+    from it. Deliberately first in the manifest order (docs/features/catalog-completion-plan.md):
+    every later crop-coordinate extractor (#148+) needs `width`/`height` (to turn a fixed-fraction
+    crop box into pixel coordinates) and `bleed_class` (to remap that box via
+    `local_fallback.normalize_crop_box` before converting) - this extractor is what makes those
+    two inputs available from stored evidence instead of a live re-fetch.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -1227,6 +1238,19 @@ class ImageEvidence(models.Model):
     # fetch_health (the first, trivial extractor - see image_evidence.py)
     fetch_ok = models.BooleanField(null=True, blank=True)
     fetch_error_class = models.CharField(max_length=64, blank=True, default="")
+
+    # geometry_bleed (task #147) - width/height are the fetched image's own pixel dimensions
+    # (a function of the dpi the extraction pass fetched at, not a fixed catalog constant);
+    # aspect_ratio is width/height, stored alongside rather than only derivable, since later
+    # readers comparing against BLEED_ASPECT_RATIO/TRIM_ASPECT_RATIO shouldn't need to redo the
+    # division themselves. bleed_class mirrors local_fallback.classify_bleed_edge's own return
+    # convention ("bleed"/"trimmed"), stored as "" rather than null for the ambiguous/
+    # not-yet-run case, matching fetch_error_class's own blank-string-as-sentinel convention
+    # above.
+    width = models.IntegerField(null=True, blank=True)
+    height = models.IntegerField(null=True, blank=True)
+    aspect_ratio = models.FloatField(null=True, blank=True)
+    bleed_class = models.CharField(max_length=16, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
