@@ -36,7 +36,7 @@ preference across all 5 of this fork's upstream PRs so far.
    #467. Upstream has no squash-merge policy (full PR history is
    preserved as-is), so what you push is what stays.
 5. **`git diff upstream/master <branch>` before every push** — confirm
-   it contains *only* the intended change. No `CLAUDE.md`, no `docs/`,
+   it contains _only_ the intended change. No `CLAUDE.md`, no `docs/`,
    no branding, no fork CI/deploy files, no unrelated hunks from a
    shared file (e.g. `settings.py`, `views.py` — several fork chunks
    share these files with unrelated changes; hand-split, don't take the
@@ -50,7 +50,7 @@ preference across all 5 of this fork's upstream PRs so far.
    number if one exists, exactly what the diff changes. Keep the
    `Co-Authored-By: Claude Sonnet 5` trailer on the commit itself.
 8. **`pre-commit run --all-files` clean, locally, before pushing.**
-   Upstream's hook *versions* already match this fork's — ruff
+   Upstream's hook _versions_ already match this fork's — ruff
    `v0.0.257`, isort `5.12.0` (`--profile black`), `pre-commit-hooks`
    `v2.3.0`, black `22.8.0`, mypy `v1.7.0`, prettier `v2.7.1`, eslint
    `v8.24.0` — nothing to reconcile there. **Only the mypy hook's
@@ -114,7 +114,7 @@ branches by name pattern alone, with no way to know a PR's status, so a
 stale branch just keeps getting harmlessly re-checked forever otherwise.
 
 **Back-absorption is a tracked task, not an assumption.** A fix born on
-an `upstream-fix-*` branch merging upstream doesn't mean *our* fork picked
+an `upstream-fix-*` branch merging upstream doesn't mean _our_ fork picked
 it up — author ≠ absorbed; check explicitly (cross-layer, not just the
 one file the PR touched) rather than assuming parity, the same discipline
 `upstream-fix-frontend-searchable-the`/#467's own absorption check

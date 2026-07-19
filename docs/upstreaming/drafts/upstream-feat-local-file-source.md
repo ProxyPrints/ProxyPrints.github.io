@@ -3,8 +3,7 @@
 **Status: branch cut and verified, PR NOT opened.** This is an in-repo
 draft only, per the standing rule that nothing touches upstream's repo
 without the owner personally sending it. When/if the owner decides to
-send it: `gh pr create -R chilli-axe/mpc-autofill --head
-ProxyPrints:upstream-feat-local-file-source` (or the GitHub UI), pasting
+send it: `gh pr create -R chilli-axe/mpc-autofill --head ProxyPrints:upstream-feat-local-file-source` (or the GitHub UI), pasting
 the "PR body" section below verbatim into the description field.
 
 - **Branch**: `upstream-feat-local-file-source`, pushed to `origin`
@@ -38,8 +37,8 @@ Since the frontend only loads images by URL, this adds a
 card's underlying file. That's a real security surface, so it's treated
 as one: symlinked files and directories are never traversed during
 indexing, and at serve time every request independently re-resolves the
-requested path and verifies it's still inside the source's *currently
-configured* root directory (`resolve_within_root` in
+requested path and verifies it's still inside the source's _currently
+configured_ root directory (`resolve_within_root` in
 `cardpicker/sources/api.py`) before anything is read from disk — covering
 both `../`-style directory traversal and symlink escape, and re-checked
 at serve time (not just trusted from indexing) in case a source's root
@@ -95,12 +94,12 @@ the same, since either seemed reasonable to offer.
 fork-only feature (no vote system, no moderation, no OCR pipeline —
 confirmed in `readiness-audit.md` §1.1/§2), fills a gap upstream's own
 schema already anticipated, and the originating fork commit was already
-a single clean unit — the best available test of the extraction *process*
+a single clean unit — the best available test of the extraction _process_
 itself before investing in a harder chunk.
 
 **Two small hand-fixes were needed**, both because the original fork
 commit (`5cb438b2`, made 2026-07-12) was written against a version of
-these files that already carried *other, unrelated* fork commits' changes
+these files that already carried _other, unrelated_ fork commits' changes
 — cherry-picking it alone onto pristine `upstream/master` exposed the gap:
 
 1. `views.py` used `logger.warning(...)` in the new
@@ -116,7 +115,7 @@ these files that already carried *other, unrelated* fork commits' changes
 
 Both are exactly the kind of gap `docs/upstreaming/conventions.md` item 5
 asks to watch for ("no unrelated hunks from a shared file") — in this
-case not extra content leaking in, but *implicit* context the original
+case not extra content leaking in, but _implicit_ context the original
 commit silently depended on. Worth remembering for every future
 extraction: a commit that looks self-contained by `git show --stat` can
 still assume names introduced elsewhere in the fork's history.
@@ -125,7 +124,7 @@ still assume names introduced elsewhere in the fork's history.
 Docker daemon (`docker.sock` missing) and no live Postgres/Elasticsearch,
 consistent with `CLAUDE.md`'s standing note for cloud sessions. That
 matters more than usual here because upstream's own `cardpicker/tests/conftest.py`
-gates its *entire* test session behind an `autouse=True`,
+gates its _entire_ test session behind an `autouse=True`,
 session-scoped `elasticsearch` fixture backed by `testcontainers` (real
 Docker containers for both Postgres and ES) — so literally no test in
 `test_local_file_source.py` could be collected via `pytest`, not even the
@@ -134,6 +133,7 @@ upstream's own test-harness design, unmodified by this branch, not
 something introduced here.
 
 What was actually done instead, to get real signal rather than none:
+
 - `django.setup()` + direct imports confirmed the whole app registry
   loads cleanly with this branch's code in place (proves no import-time
   or syntax errors anywhere the diff touches, including files it doesn't
