@@ -667,7 +667,11 @@ every write pass, the human-backed gate untouched, no new tags
 doc). HOLD for owner GO before any full-catalog fire, gated on
 real numbers, not projections — see each stage below and the
 pipeline-fidelity gate (task #151, blocks Stage D's HOLD) for what
-"real" means here.
+"real" means here. **Deploy-freeze protocol** (task #156): while any
+run in this pipeline is active (its soak test or a full-catalog fire),
+the deploy/CI/push surface is frozen — see
+[[../infrastructure.md]]'s "Deploy-freeze protocol" section for what's
+frozen, when, and how the freeze is signaled; not restated here.
 
 ### Stage A — instrumented wall-clock probe (merged, PR #128)
 

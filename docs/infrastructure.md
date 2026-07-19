@@ -237,6 +237,116 @@ deprecation error (a known `gh` CLI bug unrelated to the edit itself), fall
 back to `gh api repos/<owner>/<repo>/pulls/<n> -X PATCH -f body="..."`,
 which hits the REST API directly and isn't affected.
 
+## Deploy-freeze protocol (long-running batch runs)
+
+A stated gate for a while with no written protocol behind it (public
+issue #156) — this section is that protocol. It governs the
+deploy/CI/push surface this file already covers; it does not restate
+the run-lifecycle mechanics (run states, resume semantics) that live in
+[[features/catalog-completion-plan.md]] — it points at them.
+
+**Trigger — what counts as a long-running batch run.** Any invocation
+that (a) creates a `PilotRunLedger` row (the run-cohort mechanism from
+that doc's Part 1) and (b) is started as an unattended, multi-hour
+`screen`/`tmux` session per that doc's own "documented manual step, not
+an unattended trigger" convention (Part 2's backfill, Part 4's LANDS
+write run, and the harvest-calculate pipeline's Stage E run — including
+its soak test and any eventual full-catalog fire — are all instances of
+this same shape). A short, attended command (a dry-run sample, a probe
+like `probe_harvest_pipeline`/`probe_resolution_tiers`) is not a
+trigger, regardless of whether it happens to also create a ledger row.
+
+**What's frozen.** Everything below is frozen for the run's `run_id` for
+the duration of the freeze window (defined next):
+
+- **Deploys that recreate the persistent `django`/`worker` containers**
+  (`docker compose -f docker-compose.prod.yml up -d --build`,
+  `--force-recreate`, or any nginx restart that follows one — see
+  "After `docker compose up -d django worker`..." above). The run's own
+  job executes in a _separate_, one-off `docker compose run --rm worker ...` container per that same convention, so a persistent-
+  container recreate doesn't kill the job directly, but it competes for
+  the same host CPU/RAM ceiling documented above and risks a DB
+  connection blip the run has no retry logic for.
+- **Migrations of any kind** — not only the persistent-container-
+  recreating path, but also the normally-safe one-off `docker compose run --rm django python manage.py migrate` pattern that Part 3's
+  migration-deploy-sequencing note treats as safe "regardless of when
+  it lands." That note's safety argument is about _other_ running
+  containers surviving the migration; it says nothing about a schema
+  change landing mid-batch under the very process that's writing to
+  the affected tables. Land any migration a run depends on _before_ the
+  freeze starts, never during it — this is a stricter rule than that
+  existing note, deliberately, for this one case.
+- **Any Cloudflare Worker redeploy touching `image-cdn/`** — the run's
+  entire fetch path (`GOOGLE_IMAGE` in `harvest_fetch_limiter.py`)
+  routes through this Worker's "full" tier; a redeploy mid-run can
+  change or reset its own rate-limiter/backoff behavior underneath a
+  run that has already established a `last_confirmed_safe_rate`.
+- **ES reindexes** — the directive names this category explicitly;
+  reasoning is that ES sits on shared DB-adjacent infra the run also
+  depends on (Postgres/ES both live in the same `docker-compose.prod.yml`
+  stack), not a specific measured interaction the way the two items
+  above are.
+- **Config changes to the run's own settings** (e.g.
+  `harvest_fetch_limiter.py`'s `GOOGLE_IMAGE.rate_per_sec`/
+  `max_concurrency`, currently the settled `8.0`/`6` values from the
+  concurrency-raise probe) fall under "deploys that recreate the
+  containers" above, not a separate item — a code/config change only
+  takes effect through the same container recreate.
+
+**Not frozen, explicitly**: docs-only PRs (`web-ci`'s own path filters
+already skip these), read-only `git`/`gh` operations, and anything on a
+branch/worktree that never touches `docker/`, `image-cdn/`, or a
+migration file. Whether **frontend Pages deploys**
+(`deploy-frontend.yml`) are in scope is an open question, deliberately
+not decided here and flagged for the owner rather than assumed; the
+default posture until the owner says otherwise is "not frozen" (a
+separate static-export pipeline, no shared resource with the backend
+run).
+
+**When the freeze starts and lifts.** Starts the moment the run's
+`PilotRunLedger` row is created with `status=RUNNING` — i.e. the same
+moment the operator launches the `screen`/`tmux` session, so starting
+the run and raising the freeze marker (below) is one operator action,
+not two. Lifts when that run's ledger status reaches `COMPLETED`, or
+reaches `FAILED` **and** the owner has confirmed no resume is intended
+for that `run_id` (mirroring how Part 4's owner-stopped run was closed
+`FAILED` deliberately rather than resumed). A `kill -9` performed as
+part of the Stage E resume contract's own soak-test acceptance test
+(catalog-completion-plan.md, task #147/#156) does **not** lift the
+freeze — kill-and-resume is an in-freeze operation by design; the
+freeze only lifts on a genuine finish or an owner-confirmed abandonment
+of that `run_id`.
+
+**Who can override.** The owner, always — this project escalates every
+gate exception to the owner; no session grants itself an exception to a
+live freeze.
+
+**How a freeze is signaled.** One canonical, repo-visible marker: a
+GitHub label — `deploy-freeze-active` — applied to the tracking issue
+for the run in progress (issue #156 during its own soak test; whichever
+issue tracks a later full-catalog fire) by whoever starts the run, and
+removed by whoever confirms the freeze lifts. Checked with:
+
+```bash
+gh issue list -R ProxyPrints/ProxyPrints.github.io --label deploy-freeze-active --state all
+```
+
+before any of the frozen actions above — a non-empty result means stop
+and escalate to the owner rather than proceed. This is a manual check
+(no hook/CI enforces it yet — see OPEN ITEMS below); it works
+identically for a same-machine session and a cloud/worktree session,
+unlike a gitignored file such as `WORKERS.md` would. A same-machine
+session may additionally note the freeze in its own `WORKERS.md` row as
+a courtesy, but the label is the check every session — including one
+with no local filesystem access to this machine — can and must run.
+
+**Not built here (documentation only)**: a `PreToolUse`-style hook or
+docs-lint job that checks the label automatically before a session runs
+a frozen command, and a `deploy-freeze-active` label pre-created on the
+repo (`gh label create`) so the first real use isn't blocked on that
+one-time setup step. Both are proposed follow-ups for a dedicated
+issue, not built in this change.
+
 ## Branch protection (GitHub-side backstop)
 
 No branch protection exists on `master` today (confirmed via
