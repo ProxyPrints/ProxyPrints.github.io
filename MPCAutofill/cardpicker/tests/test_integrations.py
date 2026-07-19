@@ -130,7 +130,35 @@ class TestMTGIntegration:
     def test_get_meld_pairs(self):
         assert len(MTGIntegration.get_meld_pairs()) > 0
 
-    @pytest.mark.parametrize("url", [item.value for item in Decks], ids=[item.name.lower() for item in Decks])
+    # CI baseline cleanup, 2026-07-19: MOXFIELD/MOXFIELD_WITHOUT_WWW make a real network call
+    # gated behind settings.MOXFIELD_SECRET (see MTGIntegration.get_import_sites) - this fork's
+    # CI has no MOXFIELD_SECRET repo secret configured, so without this skip the two cases fail
+    # as `assert None` (Moxfield silently excluded from get_import_sites, not a code bug - see
+    # docs/infrastructure.md). Named skip, not an un-diagnosed xfail: a fork WITH the secret
+    # configured runs these for real. (The reason string is inlined, not a class attribute -
+    # a class-body list comprehension can't see other class-body names, only the loop's own
+    # iterable, a well-known Python scoping quirk.)
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param(
+                item.value,
+                id=item.name.lower(),
+                marks=(
+                    pytest.mark.skipif(
+                        not conf_settings.MOXFIELD_SECRET,
+                        reason=(
+                            "MOXFIELD_SECRET not configured in this fork's CI (missing repo"
+                            " secret, not a code bug - see docs/infrastructure.md)"
+                        ),
+                    )
+                    if item.name.startswith("MOXFIELD")
+                    else ()
+                ),
+            )
+            for item in Decks
+        ],
+    )
     def test_valid_url(self, client, django_settings, snapshot, url: str):
         decklist = MTGIntegration.query_import_site(url)
         assert decklist
