@@ -23,6 +23,13 @@ them.
 - Server clock: UTC (confirmed via `timedatectl` — `Etc/UTC`, `+0000`).
   All container logs, cron/`qcluster` schedules, and DB timestamps are
   UTC — no per-session guessing needed.
+- Hardware (confirmed via `nproc`/`free -h`/`lscpu`, 2026-07-19): 8 OCPU
+  (`aarch64`, `Neoverse-N1` — matches Oracle's "Ampere" tier naming),
+  23Gi total RAM. Any pipeline sizing (worker-process counts, batch
+  sizes, thread-pool widths) should confirm against these live numbers
+  rather than an assumed instance size — this box's own docker/host
+  processes (live django/worker/nginx/postgres/elasticsearch, plus
+  whatever pilot/backfill job is running) already share this ceiling.
 
 ### Startup vs. scheduled catalog sync
 
