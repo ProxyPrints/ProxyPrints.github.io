@@ -4,11 +4,15 @@ ordinary users and letting any logged-in user save/load named decks
 server-side, encrypted client-side so the server operator cannot read deck
 contents (see the zero-knowledge amendment below, decision 10 — this
 supersedes §2/§3's originally-specified plaintext storage model).
-**BUILDING** — build in progress (PR1/schema #85, PR2/sign-in relocation #86
-opened; the ZK amendment lands in a schema revision to #85 before it merges,
-then PRs 3-4). **Spec CLOSED: no open decisions remain** (see Decisions).
+**BUILT AND MERGED** — all 5 sequenced PRs landed on master: schema+backend
+(#85), sign-in relocation (#86), the opaque-blob saved-decks API (#94,
+recreated after #88's stacked-PR base-deletion auto-close — see
+docs/lessons.md), the client-side ZK crypto module (#89), and the frontend
+UI wiring (#93). **Spec CLOSED: no open decisions remain** (see Decisions).
 §7 (authed vote tier) is fully specified but remains a deliberately separate,
-later build — not part of this HOLD's core scope.
+later build — not part of this HOLD's core scope. PR-5 (share links),
+PR-6 (deck portability), and PR-7 (art provenance) are design-only,
+post-v1 addenda — nothing built for any of them yet.
 
 ## Context — prior art outside this codebase
 
@@ -686,11 +690,34 @@ without waiting for a session to end.
   server, so a share link's server-side request never carries key material.
   Expanded into a full design below (see "PR-5, post-v1: per-deck share
   links").
+- **Deck roaming** (cross-instance blob sync, explicitly out of scope for
+  now): syncing a user's saved decks automatically between two different
+  instances is **ZK-compatible in principle** — only ciphertext would ever
+  travel between instances, never key material, so it wouldn't violate
+  anything this amendment establishes. It is nonetheless a **full protocol**
+  in its own right — instance discovery, per-instance consent, surfacing
+  (not silently resolving) conflicts between two instances' copies of the
+  same deck, and propagating deletions across instances — and is explicitly
+  out of scope until federation ([`../federation-v1.md`](../federation-v1.md))
+  has real peers to sync between. Manual export/import (PR-6, above) is the
+  supported cross-instance path today; PR-6's `revision`/`modifiedAt` fields
+  exist in part to make that manual path safe (a user can tell which copy
+  is newer) without committing to any of automatic sync's unsolved protocol
+  questions.
 - **WebAuthn passkey PRF** as an **optional additional** unwrap method
   someday — it would wrap the same master key a passphrase (or recovery
   key) does, not a separate one. Withdrawn as the primary/only mechanism;
   no survey needed now, since the passphrase + recovery-key design alone
   satisfies the goal.
+- **Deck portability** (export/import, a standalone decrypt tool) as a
+  formalization of what the zero-knowledge, server-unbound design already
+  implies rather than a new capability. Expanded into a full design below
+  (see "PR-6, post-v1: deck portability").
+- **Art provenance** — recording per-slot where a selected card image came
+  from, so un-indexed slots can still render (from the source drive
+  directly) instead of breaking, with a clear hard line against that data
+  ever entering the federation verdict export. Expanded into a full design
+  below (see "PR-7: art provenance").
 
 ### PR-5, post-v1: per-deck share links (design only — owner-directed addendum, 2026-07-18; nothing built here)
 
@@ -753,6 +780,145 @@ already built in PR-1's schema.
   ciphertext; a leaked `shareKey` cannot decrypt or unwrap anything for
   any _other_ deck, shared or not.
 
+### PR-6, post-v1: deck portability (design only — owner-directed addendum, 2026-07-18; nothing built here)
+
+Formalizes what the ZK envelope already implies rather than adding new
+capability: the crypto is deliberately **server-unbound** — no key
+material anywhere in the wrap chain is held by, or derived from, anything
+the server controls (Discord identity is identity-only; see "Key design"
+above). Portability is a direct consequence of that design, embraced here
+rather than something a later PR would need to retrofit or patch around.
+
+- **Export**: an "Export my decks" action downloads the user's complete
+  encrypted bundle — every `SavedDeck` row's ciphertext + wrapped DEK +
+  nonces, both wrapped-master-key slots (passphrase and recovery) + their
+  nonces, the salt and iteration count, and a `formatVersion` field — as
+  one JSON file. Requires **no unlock**: it's the same opaque bytes the
+  server already holds, so a user who has forgotten their passphrase can
+  still export (they may remember it later, or still hold the recovery
+  key; their data shouldn't be hostage to this site's own UI state).
+- **Import**: accepts a previously-exported bundle on this instance or any
+  compatible one (see "Format" below). Decryption happens entirely
+  client-side, same passphrase-or-recovery-key flow as ever — the import
+  step itself never needs server involvement beyond the ordinary
+  `saveDeck`/`saveCryptoProfile` calls to persist what it decrypts.
+  **Conflict rule for a same-instance re-import**: always import-as-new
+  (each imported deck lands as its own row, snapshot-like), never silently
+  overwrite an existing deck by matching key or name — there is no
+  server-visible name to match against anyway (§8's Consequences), and
+  overwriting would risk destroying newer data with a stale export.
+- **Format**: the envelope is versioned from day one — every record
+  carries `formatVersion` (starting at `1`) so a later format change
+  never breaks reading an older export. The format itself is documented
+  **publicly** in this spec (not just in code) specifically so that a
+  fork, or a completely independent reimplementation, could read a user's
+  exported bundle without needing this codebase at all. The format _is_
+  the portability contract, not an implementation detail.
+- **Revision tracking**: the encrypted payload itself (not the outer
+  wire-format envelope — private, like everything else inside it) gains
+  two fields per deck: `revision` (an integer, incremented on every save)
+  and `modifiedAt` (a timestamp). Bumps `formatVersion` like any other
+  envelope change (PR-6/PR-7's shared versioning rule). Purpose: makes an
+  export/import round-trip **self-describing** — comparing an imported
+  bundle's `revision`/`modifiedAt` against the server's current copy of
+  that same deck answers "is this bundle older or newer than what's
+  already saved" without needing any server-side comparison (the server
+  never sees either field's plaintext value either). This also seeds any
+  future cross-instance sync (see "Deck roaming" below) with
+  conflict-detection for free, at the cost of two small fields added now
+  rather than retrofitted later.
+- **Standalone decrypt tool** (the trust anchor for this whole promise,
+  mirroring the federation reference-hash tool's role for that feature): a
+  tiny, single-file, dependency-minimal script — bundle in, passphrase (or
+  recovery key) in, plaintext decks out — that a user can run **without
+  this site, this codebase, or any server existing at all**. This is what
+  makes "if this site vanishes tomorrow, your decks are still yours" a
+  verifiable claim rather than a slogan. Specified now; built alongside
+  PR-6.
+- **Honest limits** (stated plainly, in-product and here): an exported
+  bundle is offline-attackable — an attacker with the file can attempt
+  unlimited offline passphrase guesses, so the bundle's real protection is
+  passphrase strength plus PBKDF2 at ≥600,000 iterations. This is **not a
+  new exposure** introduced by export — it's identical to what a server
+  breach already exposes today (the server already stores exactly these
+  same bytes); export just makes the existing exposure available to the
+  user too, on purpose.
+- **Explicitly rejected**: any form of server-bound key material (e.g. a
+  server-held wrapping key, or tying decryption to a live session) to
+  "simplify" export/import. That would introduce a new catastrophic-loss
+  mode (the server becomes a single point of failure for data that's
+  supposed to survive it), create hostage dynamics (the server operator
+  could, even if only in principle, gate access to a user's own data), and
+  directly contradict the zero-knowledge trust story this entire amendment
+  is built on. Rejected outright, not just deprioritized.
+
+### PR-7: art provenance (design only — owner-directed addendum, 2026-07-18; nothing built here)
+
+Records, per slot, where a selected card image actually came from — so a
+deck payload stays a faithful, self-contained record of what the user
+picked even when the slot's source card isn't (or is no longer) indexed in
+this instance's own catalog. **Design only in this pass**, same as PR-5/6:
+this section specifies a later PR; nothing here is built by any of the 5
+already-merged Proposal G PRs.
+
+- **`deckPayload` v-next**: each slot gains an optional provenance record —
+  `{driveId, sourceName, sourceType, contentPhash?, indexedBy}`, where
+  `indexedBy` is the origin URL of the catalog instance that indexed this
+  card (may differ from the instance the user is currently using, in a
+  federated future). `contentPhash` is optional since not every source
+  type computes one. Adding this bumps `formatVersion` (PR-6's own
+  versioning rule: any format change is a version bump, added now while
+  it's one field, not deferred until it's a breaking one) — existing
+  encrypted payloads at the current version remain valid and readable;
+  nothing about this requires migrating already-saved decks.
+- **Un-indexed-slot rendering**: if a slot's provenance exists but the
+  `driveId` isn't present in this instance's own catalog (or the whole
+  provenance record is present but the instance never indexed that source
+  at all), the client fetches a thumbnail **directly from the source
+  drive**, client-side, and renders it with a "not in this catalog — shown
+  from source drive" badge plus an "indexed at `<origin>` →" link back to
+  wherever it _is_ indexed.
+- **Moderation-bypass rationale (stated explicitly, not left implicit)**:
+  this direct-drive fetch deliberately bypasses this instance's own
+  catalog/moderation pipeline (the same pipeline [`moderation.md`](../features/moderation.md)
+  describes) for that one thumbnail. Justified because it is the user's
+  own private data (a card slot inside their own encrypted, already-saved
+  deck), the fetch happens entirely client-side (this server never proxies,
+  serves, or caches the image), and nothing about it publishes the image
+  anywhere this instance's moderation surfaces would ever show it. This is
+  a narrow, deliberate exception scoped to "rendering a user's own saved
+  choice back to them," not a general moderation bypass.
+- **XML 2.0 export**: gains three optional, backwards-compatible
+  attributes — `sourceName`, `indexedBy`, `contentPhash` — on the existing
+  per-card element. Backwards-compatible because they're optional: any
+  existing XML 2.0 consumer that doesn't know about them simply ignores
+  them. Purpose: enables any third-party consumer to join a phash against
+  federation verdict data ([`../federation-v1.md`](../federation-v1.md))
+  without needing anything from this codebase beyond the exported file
+  itself. Specced here; built later, in the frontend export lane (not
+  bundled with the saved-decks PRs).
+- **Hard line (stated in-doc, not just implied)**: provenance data **never
+  enters the federation verdict export** ([`../federation-v1.md`](../federation-v1.md)).
+  That export carries conclusions only (printing/artist/tag consensus
+  verdicts) — no drive IDs, no image routes, nothing that identifies where
+  a specific user's card image came from. Provenance is a per-user,
+  per-deck rendering convenience; it must never leak into the
+  cross-instance verdict-exchange format, which is deliberately scoped to
+  consensus outcomes and nothing else.
+- **XML import, any version**: importing an XML file (2.0 or earlier) that
+  references un-indexed drive IDs still leaves those slots **viewable** —
+  the same client-side direct-drive rendering as above (public files only;
+  the "not in this catalog" badge + "indexed at `<origin>` →" link appear
+  only when 2.0-or-later provenance attributes are actually present in the
+  imported file, since earlier XML versions carry no `indexedBy` to link
+  to).
+- **Web PDF export of un-indexed slots is explicitly OUT of scope for
+  PR-7.** The v1 answer is: the slot is viewable in the editor, with
+  guidance to print it via the desktop tool instead. A direct-drive-fetch
+  fallback for the web PDF exporter itself is a separate, tracked posture
+  decision — not resolved here, and not assumed as a foregone conclusion
+  just because viewing works.
+
 ### Consequences (written honestly)
 
 - No server-side deck-derived feature is possible, ever: no deck search, no
@@ -804,7 +970,10 @@ immediately and permanently. If both the passphrase and the recovery key
 are lost, the affected decks are permanently unrecoverable by design; the
 server operator has no admin-side decryption or escrow path and cannot
 assist beyond a destructive account reset that deletes the unreadable data
-and lets the user start fresh."_
+and lets the user start fresh. Users may export their complete encrypted
+data at any time (see PR-6, post-v1); the export format is public,
+documented in this spec, so the user's data remains usable independent of
+this site or its operator."_
 
 ## Effort estimate
 
