@@ -224,6 +224,12 @@ class TestExpansionHintNarrowing:
         # printings gets skipped entirely ("too-many-candidates") - but if this card's own
         # expansion_hint narrows it down to a small handful, phash gets a real shot instead.
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - the fetched image below is blank, so a real read
+        # would also find nothing, but the frame classifier's unconditional detect_illus_anchor()
+        # call must not depend on the real binary being present to do so.
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         for i in range(module.PHASH_MAX_CANDIDATES + 3):
             CanonicalCardFactory(name="Beast", expansion=CanonicalExpansionFactory(code=f"e{i:02}"))
@@ -1387,6 +1393,10 @@ class TestScanLog:
         CanonicalCardFactory(name="Forest")
         card = CardFactory(name="Forest")
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - see the identical note on the sibling test above
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
         run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)  # -> unfetchable-image, rescannable
@@ -1418,6 +1428,10 @@ class TestScanLog:
         skipped_card = CardFactory(name="Forest")
         rescannable_card = CardFactory(name="Forest")
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - see the identical note on the sibling test above
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         fetch_calls: dict[int, int] = collections.defaultdict(int)
 
@@ -1931,7 +1945,13 @@ class TestConcurrency:
         # half (Scryfall art_crop fetch/hash) is mocked, pinned to exactly what the real
         # compute_card_art_hash(card_image) will produce, guaranteeing a distance=0 match.
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
         import cardpicker.local_phash as phash_module
+
+        # no real tesseract binary in CI - the card_image below is a solid fill with no text,
+        # so a real read would also find nothing, but the frame classifier's unconditional
+        # detect_illus_anchor() call must not depend on the real binary being present to do so.
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
         card = CardFactory(name="Forest")
@@ -1949,7 +1969,11 @@ class TestConcurrency:
 
     def test_workers_one_and_workers_two_agree_on_the_same_real_input(self, transactional_db, monkeypatch):
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
         import cardpicker.local_phash as phash_module
+
+        # no real tesseract binary in CI - see the identical note on the sibling test above
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
         cards = [CardFactory(name="Forest") for _ in range(6)]
@@ -1975,7 +1999,11 @@ class TestConcurrency:
         # minutes. Reusing one pool for the whole run means each worker thread (and its DB
         # connection) is created at most once, regardless of chunk count.
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
         import cardpicker.local_phash as phash_module
+
+        # no real tesseract binary in CI - see the identical note on the sibling test above
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
         for _ in range(9):
@@ -2098,6 +2126,12 @@ class TestClusterDedup:
         card_b = CardFactory(name="Forest", content_phash=123)
 
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - the identical_image below is a solid fill with no
+        # text, so a real read would also find nothing, but the frame classifier's unconditional
+        # detect_illus_anchor() call must not depend on the real binary being present to do so.
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         identical_image = Image.new("RGB", (750, 1050), (5, 5, 5))
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: identical_image)
@@ -2139,6 +2173,10 @@ class TestClusterDedup:
         )
 
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - see the identical note on the sibling test above
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         identical_image = Image.new("RGB", (750, 1050), (5, 5, 5))
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: identical_image)
@@ -2176,6 +2214,10 @@ class TestClusterDedup:
         assert card_a.pk < card_b.pk
 
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - see the identical note on the sibling test above
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         identical_image = Image.new("RGB", (750, 1050), (5, 5, 5))
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: identical_image)
@@ -2202,6 +2244,10 @@ class TestClusterDedup:
         card_b = CardFactory(name="Forest", content_phash=123)
 
         import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # no real tesseract binary in CI - see the identical note on the sibling test above
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         identical_image = Image.new("RGB", (750, 1050), (5, 5, 5))
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: identical_image)

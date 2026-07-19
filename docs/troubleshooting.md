@@ -128,14 +128,28 @@ after any command that recreates the `django` container. See
 container, or OCR-dependent tests fail in CI specifically (not locally).
 
 **Cause**: tesseract-ocr wasn't originally in the Docker image's build
-stage, and CI test runners also lack the real binary.
+stage, and CI test runners also lack the real binary. Important
+distinction: the `mpcautofill_django` Docker image DOES have the real
+binary baked in now, but the "Backend tests" GitHub Actions job
+(`.github/actions/test-backend/action.yml`) never uses that image — it's
+a bare `ubuntu-latest` runner with `pip install -r requirements.txt` and
+nothing else, so it never has tesseract and never will unless that
+action is changed. A local check against the Docker image (which has the
+binary) will not catch a missing mock; only CI, or a local repro with
+`pytesseract.pytesseract.tesseract_cmd` pointed at a bogus path, will.
 
-**Fix**: tesseract is now baked into the Dockerfile's shared builder
-stage — don't reach for a host-venv workaround. Tests mock tesseract
-directly rather than requiring the real binary in CI (`ddb6dce9`, "Fix
-CI: mock tesseract in tests"). See [[features/printing-tags.md]]'s build
-history (`git log e4eb6cb3 -- docs/features/printing-tags.md`) for the
-full timeline if you need it.
+**Fix**: tests mock tesseract directly rather than requiring the real
+binary in CI (`ddb6dce9`, "Fix CI: mock tesseract in tests") — any test
+whose code path reaches `local_ocr.run_tesseract` (directly, or
+transitively via `local_fallback.detect_illus_anchor`'s unconditional
+call whenever `fetch_card_image` returns a non-`None` image) must
+`monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "<expected text>")`. This has already recurred once past the original
+fix: 10 tests added in `test_local_identify_printing_tags.py` across
+2026-07-15 to -17 (`e6b09d14`, `3b2b5b7d`, `c7010bd8`) called `run_pilot`
+with a real fetched image and skipped the mock, passing locally (host
+venv/Docker image both have the binary) but failing CI outright — fixed
+2026-07-19. See [[features/printing-tags.md]]'s build history (`git log e4eb6cb3 -- docs/features/printing-tags.md`) for the full timeline if you
+need it.
 
 ## prettier rewrites already-correct markdown into broken text
 
