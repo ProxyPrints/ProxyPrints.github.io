@@ -22,7 +22,11 @@ from typing import TYPE_CHECKING, Optional
 
 from django.conf import settings
 
-from cardpicker.harvest_fetch_limiter import GOOGLE_IMAGE, rate_limited_get
+from cardpicker.harvest_fetch_limiter import (
+    GOOGLE_IMAGE,
+    GoogleFetchLockoutError,
+    rate_limited_get,
+)
 from cardpicker.sources.source_types import SourceTypeChoices
 
 if TYPE_CHECKING:
@@ -74,6 +78,13 @@ def fetch_card_image(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Op
         response = rate_limited_get(GOOGLE_IMAGE, url, timeout=15)
         response.raise_for_status()
         return Image.open(BytesIO(response.content))
+    except GoogleFetchLockoutError:
+        # Deliberately NOT caught by the broad except below - a 403 lockout is a hard stop
+        # (see GoogleFetchLockoutError's own docstring), not an ordinary per-card fetch failure.
+        # Swallowing this here would silently let a long-running harvest keep hammering a
+        # destination that has already locked us out, risking the live site's own image
+        # serving (which shares this same Google endpoint) for an extended cooldown window.
+        raise
     except Exception:
         logger.exception("Failed to fetch image for card %s", card.identifier)
         return None
