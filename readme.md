@@ -1,34 +1,39 @@
-# MPC Autofill
+<!-- GENERATED FILE — do not edit directly.
+     Assembled from marked regions in docs/ (see
+     docs/proposals/proposal-i-readme-pipeline.md) by
+     .github/scripts/publish_readme.py — edit the source region,
+     then rerun that script and commit the result.
+     GitHub hides this comment when rendering the file. -->
 
-<p align="center">
-  <img width="500px" src="https://i.imgur.com/ERl8IKO.png" alt="MPC Autofill Logo" />
-</p>
+# ProxyPrints
 
-MPC Autofill is image aggregation & print automation software for your tabletop gaming community.
+**ProxyPrints** is a free card catalog and proxy-printing tool for
+Magic: The Gathering, built for players who want to print custom or
+proxy cards at home. Search a huge community-sourced catalog of card
+images, arrange them into a print-ready sheet, and export a PDF sized
+for your printer — no account, no paywall.
+
+- **Live site**: [proxyprints.ca](https://proxyprints.ca/)
+- **Source code**: this repository (frontend + backend)
+
+ProxyPrints is a fork of
+[mpc-autofill](https://github.com/chilli-axe/mpc-autofill) by
+**chilli_axe** — the search catalog, the autofill/PDF pipeline, and the
+original project design are their work. This fork adds its own catalog
+sourcing, printing-identification tooling, and hosting, and is
+maintained independently.
 
 ---
 
-![desktop-tool-ci](https://github.com/chilli-axe/mpc-autofill/actions/workflows/desktop-tool-ci.yml/badge.svg)
-![web-ci](https://github.com/chilli-axe/mpc-autofill/actions/workflows/web-ci.yml/badge.svg)
-![cloudflare-workers-ci](https://github.com/chilli-axe/mpc-autofill/actions/workflows/cloudflare-workers-ci.yml/badge.svg)
-[![Github all releases](https://img.shields.io/github/downloads/chilli-axe/mpc-autofill/total.svg)](https://GitHub.com/chilli-axe/mpc-autofill/releases/)
+![web-ci](https://github.com/ProxyPrints/ProxyPrints.github.io/actions/workflows/web-ci.yml/badge.svg)
+![cloudflare-workers-ci](https://github.com/ProxyPrints/ProxyPrints.github.io/actions/workflows/cloudflare-workers-ci.yml/badge.svg)
 
-<a href="https://www.buymeacoffee.com/chilli.axe" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+ProxyPrints is web-only and does not build or distribute the desktop autofill client. For that tool, see the upstream project: [chilli-axe/mpc-autofill](https://github.com/chilli-axe/mpc-autofill).
 
-If you're here to download the desktop client, check the [Releases]("https://github.com/chilli-axe/mpc-autofill/releases") tab.
+## License
 
-# Sponsors
+This project is licensed under the [GNU General Public License 3](https://www.gnu.org/licenses/gpl-3.0.en.html) — see [`LICENSE.md`](https://github.com/ProxyPrints/ProxyPrints.github.io/blob/master/LICENSE.md) for the full text. It is free to use, modify, and distribute.
 
-| ![signpath](https://signpath.org/assets/favicon-50x50.png) | Free code signing on Windows provided by [SignPath.io](https://about.signpath.io/), certficate by [SignPath Foundation](https://signpath.org/) |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+## Documentation
 
-# Code Signing Policy
-
-- Committers and reviewers: [Members team](https://github.com/chilli-axe/mpc-autofill/graphs/contributors)
-- Approvers: [Owners](https://github.com/orgs/mpcautofill/people)
-- [Privacy Policy](https://mpcautofill.github.io/about)
-- This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
-
-# Documentation
-
-Our docs are available in the repo's [Wiki](https://github.com/chilli-axe/mpc-autofill/wiki).
+Full documentation lives on this repo's [Wiki](https://github.com/ProxyPrints/ProxyPrints.github.io/wiki), generated from [`docs/`](https://github.com/ProxyPrints/ProxyPrints.github.io/tree/master/docs).

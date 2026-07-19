@@ -386,6 +386,32 @@ both did `page["wiki"]` unconditionally, crashing the moment any
 site-only page entered the mapping) is fixed in `publish_wiki.py` and
 locked in by a dedicated regression test, unaffected by the restructure.
 
+**`readme.md` — third (`readme`) emit mode, shipped** (owner GO after
+reviewing the audit's merge map — see
+`docs/proposals/proposal-i-readme-pipeline.md` for the full design and
+final decisions on its five open items): a new sibling script,
+`.github/scripts/publish_readme.py`, assembles `readme.md` (repo root)
+from `README-REGION`-marked prose regions in `docs/wiki-home-intro.md`
+(identity/lineage) and a new `docs/readme-sections.md` (license,
+documentation pointer, desktop-tool pointer) — a deliberately DIFFERENT
+marker name from `DATA-EXTRACT` (§3's contract there is table-only; these
+are prose). Region content is copied verbatim, never link-rewritten:
+`readme.md` lives at the repo root, not in `docs/`, so every region
+author uses absolute GitHub URLs rather than relative paths, sidestepping
+the resolve-differently-once-copied-out problem entirely instead of
+teaching the script a second, output-relative link mode. Generated AND
+COMMITTED, not gitignored like the site emit — `readme.md` has no build
+step between a commit and a reader seeing it. `docs-lint.yml` gained a
+`readme-parity` job: runs `publish_readme.py`'s own unit tests, then
+regenerates `readme.md` into a scratch copy and diffs it against the
+committed file, failing the PR check on drift — the same
+generate-and-diff pattern the link-rewrite parity job already
+established, not build-time regeneration. Verified: idempotent (two
+consecutive runs, byte-identical), `docs_lint.py` clean, the real wiki
+publish still succeeds with the new marker comments present in
+`wiki-home-intro.md` (GitHub hides HTML comments when rendering, so the
+wiki Home page's visible content is unchanged).
+
 **Not yet built** (concrete next steps per the owner's staged order, not
 silently dropped):
 
@@ -403,8 +429,3 @@ silently dropped):
    the site's own chrome yet. Left out deliberately (a nav change is a
    real, visible UX decision this pass's "prove the plumbing" scope didn't
    ask for) rather than added silently.
-4. **`readme.md` folded into the pipeline as a third (`readme`) emit
-   mode** — audited (`docs/proposals/proposal-i-readme-pipeline.md`,
-   HOLD, content merge map + architecture sketch only) but not built;
-   gated on the owner reviewing that map's open items before any
-   restructure of `readme.md` itself begins.

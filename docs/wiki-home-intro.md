@@ -1,3 +1,5 @@
+<!-- README-REGION: identity -->
+
 # ProxyPrints
 
 **ProxyPrints** is a free card catalog and proxy-printing tool for
@@ -15,3 +17,5 @@ ProxyPrints is a fork of
 original project design are their work. This fork adds its own catalog
 sourcing, printing-identification tooling, and hosting, and is
 maintained independently.
+
+<!-- END README-REGION -->
