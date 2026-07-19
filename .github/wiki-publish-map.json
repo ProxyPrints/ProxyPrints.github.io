@@ -27,6 +27,26 @@
           "targets": ["wiki"]
         },
         {
+          "source": "docs/upstreaming/readiness-audit.md",
+          "wiki": "Readiness-Audit",
+          "targets": ["wiki"]
+        },
+        {
+          "source": "docs/upstreaming/license-provenance.md",
+          "wiki": "License-Provenance",
+          "targets": ["wiki"]
+        },
+        {
+          "source": "docs/upstreaming/conventions.md",
+          "wiki": "Upstreaming-Conventions",
+          "targets": ["wiki"]
+        },
+        {
+          "source": "docs/upstreaming/drift-log.md",
+          "wiki": "Drift-Log",
+          "targets": ["wiki"]
+        },
+        {
           "source": "docs/upstreaming/upstream-wiki-drift.md",
           "wiki": "Upstream-Wiki-Drift",
           "targets": ["wiki"]
