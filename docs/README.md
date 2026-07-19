@@ -24,7 +24,9 @@ The methodology and the systems it governs.
   2026-07-17.**
 - [`federation-v1.md`](federation-v1.md) — federation verdict exchange
   format v1 (spec; no implementation yet — instances would share resolved
-  consensus verdicts as signed JSON, never raw votes).
+  consensus verdicts as signed JSON, never raw votes). Companion HOLD
+  spec for the concrete publish-first artifact: see "Plans & proposals"
+  below.
 - [`upstreaming/vote-system.md`](upstreaming/vote-system.md) — the vote
   system (printing/artist/tag weighted consensus) as a cherry-pick
   extraction manifest for upstreaming to `chilli-axe/mpc-autofill`; also
@@ -61,6 +63,9 @@ The methodology and the systems it governs.
   bucket image CDN.
 - [`features/local-file-source.md`](features/local-file-source.md) —
   backend `LOCAL_FILE` catalog source type.
+- [`features/saved-decks.md`](features/saved-decks.md) — zero-knowledge
+  user accounts + server-side saved decks: the crypto design, backend
+  endpoints, frontend wiring, and the still-design-only PR-5/6/7 addenda.
 
 ## Using it
 
@@ -94,13 +99,14 @@ Deployment, incidents, and cross-session lessons.
 
 One-word status per doc; see each file for the full survey/spec.
 
-| Doc                                                                                                                                                                                                          | Status   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
-| [`proposals/proposal-b-bleed-normalization.md`](proposals/proposal-b-bleed-normalization.md) — export-time per-side bleed normalization                                                                      | BUILDING |
-| [`proposals/proposal-c-context-menu-restyle.md`](proposals/proposal-c-context-menu-restyle.md) — right-click/long-press context menu (shipped); restyle direction (HOLD)                                     | PARTIAL  |
-| [`proposals/proposal-f-public-stats-page.md`](proposals/proposal-f-public-stats-page.md) — public `/stats` transparency page                                                                                 | HOLD     |
-| [`proposals/proposal-g-user-accounts-saved-decks.md`](proposals/proposal-g-user-accounts-saved-decks.md) — user accounts + saved decks via Discord OAuth                                                     | HOLD     |
-| [`proposals/proposal-h-unified-display-page.md`](proposals/proposal-h-unified-display-page.md) — one page merging the "Choose Art" editor and PDF export into a live print-sheet preview + card-details rail | HOLD     |
+| Doc                                                                                                                                                                                                                                                                   | Status   |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| [`proposals/proposal-b-bleed-normalization.md`](proposals/proposal-b-bleed-normalization.md) — export-time per-side bleed normalization                                                                                                                               | BUILDING |
+| [`proposals/proposal-c-context-menu-restyle.md`](proposals/proposal-c-context-menu-restyle.md) — right-click/long-press context menu (shipped); restyle direction (HOLD)                                                                                              | PARTIAL  |
+| [`proposals/proposal-f-public-stats-page.md`](proposals/proposal-f-public-stats-page.md) — public `/stats` transparency page                                                                                                                                          | HOLD     |
+| [`proposals/proposal-g-user-accounts-saved-decks.md`](proposals/proposal-g-user-accounts-saved-decks.md) — user accounts + saved decks via Discord OAuth (core build shipped; see [`features/saved-decks.md`](features/saved-decks.md) — PR-5/6/7 addenda still HOLD) | PARTIAL  |
+| [`proposals/proposal-h-unified-display-page.md`](proposals/proposal-h-unified-display-page.md) — one page merging the "Choose Art" editor and PDF export into a live print-sheet preview + card-details rail                                                          | HOLD     |
+| [`federation/public-export-v1.md`](federation/public-export-v1.md) — publish-first federation: signed verdict export consumable by mpc-autofill forks and the MIT-lineage proxy tools, no peer required                                                               | HOLD     |
 
 Not every shipped proposal-lettered feature has a survey doc here — some
 (e.g. Proposal A, Proposal D) went straight from idea to shipped PR without

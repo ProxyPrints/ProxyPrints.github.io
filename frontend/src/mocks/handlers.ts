@@ -513,6 +513,30 @@ export const searchResultsForDFCMatchedCards1And4 = http.post(
     )
 );
 
+// A printing-specific search whose filter found nothing and was retried unfiltered - the backend
+// reports this via degradedQueries (schema_types.ts), which the requested-printing badge's
+// degraded-style variant is keyed off (Proposal H, Step 2 PR 2b). cardDocument1 carries no
+// canonicalCard data, so this is deliberately independent of the printing-confirmation affordance
+// fixtures above - the two instruments are tested in isolation from each other.
+export const searchResultsDegradedPrinting = http.post(
+  buildRoute("3/editorSearch/"),
+  () => {
+    const hashKey = computeSearchQueryHashKey({
+      query: "my search query",
+      cardType: CardType.Card,
+      expansionCode: "XYZ",
+      collectorNumber: "999",
+    });
+    return HttpResponse.json(
+      {
+        results: { [hashKey]: [cardDocument1.identifier] },
+        degradedQueries: [hashKey],
+      },
+      { status: 200 }
+    );
+  }
+);
+
 export const searchResultsServerError = http.post(
   buildRoute("3/editorSearch/"),
   () => HttpResponse.json(createError("3/editorSearch"), { status: 200 })

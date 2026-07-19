@@ -58,6 +58,18 @@ only) for deployment, hosting, and domain specifics.
   repo to the upstream parent for a fork). `gh pr merge` is blocked by an
   auto-mode classifier absent unambiguous human review — don't work around
   it, offer the user the choice instead.
+- **Merge-duty branch deletion**: never delete a branch in the same action
+  as merging its PR. Precondition before deleting any branch:
+  `gh pr list --base <branch>` must return empty (a stacked child PR
+  targeting it would otherwise auto-close the moment the base disappears —
+  this is exactly how PR #88 was lost). When in doubt, don't delete; leave
+  the stale branch for a later, separate cleanup pass.
+- **Before rebuilding a lost/auto-closed PR**: search for an existing
+  recovery first (`search_issues`/`search_pull_requests` for the same
+  topic, check open PRs and recent branches) rather than assuming none
+  exists. Two independent sessions rebuilt #88 in parallel on the same day
+  or the second, #95, rebuilt what #94 had already re-shipped and closed
+  the duplicate.
 - **Cloud/web sessions**: `WORKERS.md` and `CLAUDE.local.md` are
   server-local and won't exist in your clone — skip them. You're isolated:
   work on your named branch, push to origin, never to `master`; the owner
@@ -93,8 +105,11 @@ delivery has been unreliable: commit the fenced block to a
 uniquely-suffixed** branch (never the bare `report-relay` — it's
 retired; two independent sessions collided on it with no push
 conflict to warn either one), push, and reply with only the branch
-name, file path, and one header line. See [[docs/lessons.md]] for the
-collision this prevents.
+name, file path, **and the full GitHub blob URL to the pushed file**
+(`https://github.com/ProxyPrints/ProxyPrints.github.io/blob/<branch>/<path>`)
+plus one header line — a bare branch/path pair makes the reader
+reconstruct the URL by hand; give them the working link. See
+[[docs/lessons.md]] for the collision this prevents.
 
 ## docs/ index
 
@@ -143,6 +158,10 @@ external reader's orientation to the whole fork, see
   wiki (detection only, never copied in).
 - [`docs/federation-v1.md`](docs/federation-v1.md) — federation verdict
   exchange format v1 (spec, implementation pending).
+- [`docs/federation/public-export-v1.md`](docs/federation/public-export-v1.md)
+  — HOLD spec: publish-first federation export (signed verdict JSONL, no
+  peer required), consumable by mpc-autofill forks and MIT-lineage proxy
+  tools. Owner review pending; see `docs/README.md`'s Plans & proposals.
 - [`docs/theory.md`](docs/theory.md) — the printing-identification
   pipeline as candidate-constrained decoding: false-accept bound,
   prior-art comparison, soundness mechanisms, Sybil/Dawid-Skene
