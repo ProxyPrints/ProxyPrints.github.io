@@ -153,6 +153,9 @@ external reader's orientation to the whole fork, see
 - [`docs/features/artist-support-links.md`](docs/features/artist-support-links.md)
   — zero-crawl, deterministic link-out to MTG Artist Connection
   (`ArtistSupportLink.tsx` + its two surfaces).
+- [`docs/features/homepage-panel.md`](docs/features/homepage-panel.md) —
+  the "what is this, really?" landing panel (`HomepagePanel.tsx`), its
+  gating, and the reserved-not-built catalog-stats chart slot.
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
   Upstreaming workflow in `docs/infrastructure.md`).

@@ -8,6 +8,7 @@ import Row from "react-bootstrap/Row";
 import { ProjectName } from "@/common/constants";
 import { DynamicLogo } from "@/features/ui/DynamicLogo";
 import Footer from "@/features/ui/Footer";
+import { HomepagePanel } from "@/features/ui/HomepagePanel";
 import { ProjectContainer } from "@/features/ui/Layout";
 import {
   useAnyBackendConfigured,
@@ -108,6 +109,8 @@ export default function Index() {
       <DynamicLogo />
       <br />
       <JumpIntoEditorButton />
+      <hr />
+      <HomepagePanel />
       <hr />
       <ProjectOverview />
       <Footer />
