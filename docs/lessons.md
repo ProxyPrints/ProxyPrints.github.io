@@ -69,12 +69,11 @@ pyOpenSSL isn't installed in this CI runner at all ("CI's failure path
 never needs it") — the capability probe likely still fails on that half
 of the check regardless of the secret's validity.
 
-**Decision, 2026-07-19 (owner, logged in `proxyprints-orchestration`'s
-`DECISIONS.md`)**: not chasing this further. Accept the 2 skips as a
-named, honest skip — CI has no business doing real JWT signing. Don't
-install pyOpenSSL in the CI runner to chase this; if the skip count
-ever changes unexpectedly, that's the signal to look again, not a
-scheduled follow-up.
+**Decision, 2026-07-19 (owner)**: not chasing this further. Accept the 2
+skips as a named, honest skip — CI has no business doing real JWT
+signing. Don't install pyOpenSSL in the CI runner to chase this; if the
+skip count ever changes unexpectedly, that's the signal to look again,
+not a scheduled follow-up.
 
 ## Concurrent worktree dev servers collide on port 3000
 

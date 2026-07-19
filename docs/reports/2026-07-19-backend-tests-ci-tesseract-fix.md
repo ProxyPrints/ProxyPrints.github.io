@@ -72,8 +72,8 @@ WHAT SHIPPED:
    test_local_identify_printing_tags.py`. No production code touched -
    `local_ocr.py` and `local_fallback.py` are untouched (both are
    listed but not need to be modified; neither is PROTECTED CORE per
-   worker-backend.md's list, but the fix didn't require touching them
-   regardless - it's test-only).
+   the repo's PROTECTED CORE list, but the fix didn't require touching
+   them regardless - it's test-only).
 
 4. Updated `docs/troubleshooting.md`'s existing "TesseractNotFoundError"
    entry in place (edited, not appended) to: (a) explicitly distinguish
@@ -111,7 +111,7 @@ VERIFICATION:
   ALREADY-RUNNING production `mpcautofill_postgres`/`mpcautofill_
   elasticsearch` containers - was deliberately not attempted, since
   that risks writing to a live index/DB (explicitly disallowed by
-  worker-backend.md's guardrails), even though pytest-django's own
+  the repo's contributor guardrails), even though pytest-django's own
   `test_` -prefixed DB would likely have been safe; the ES side was
   the less certain half of that risk, so the whole path was skipped.
 - In place of the full suite, directly reproduced the exact CI failure
