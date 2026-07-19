@@ -567,5 +567,43 @@ eliminate resource-contention timeouts entirely, but keeps the
 helper's contract honest. For a one-off local verification, prefer
 `npx jest --runInBand` over chasing the parallel-worker flake.
 
+## Nearly the entire Playwright suite fails at once, every test stuck on "Loading..." or timing out
+
+**Symptom**: `npx playwright test` fails 90%+ of specs (e.g. 236/243),
+with no obvious pattern connecting them — different features, different
+components. Inspecting a failure's page snapshot shows a card slot (or
+equivalent async UI) permanently stuck in a loading/spinner state, never
+resolving. No Playwright/webServer startup error; the dev server starts
+and is reachable.
+
+**Cause**: `frontend/.env.local`'s `NEXT_PUBLIC_BACKEND_URL` doesn't
+match `http://127.0.0.1:8000` — the origin MSW's mock handlers are
+hardcoded to intercept (`frontend/src/common/test-constants.ts`'s
+`localBackendURL`). Every spec imports the shared `network` fixture
+(`playwright.setup.ts`) and registers per-test MSW handlers via
+`network.use(...)`, but MSW only intercepts requests to the exact origin
+its handlers were built against — if the app's real configured backend
+URL differs (e.g. `http://localhost:80`, left over from pointing a local
+dev server at a real production/staging backend for unrelated manual
+verification work), every request silently falls through to the real
+network instead of being mocked, and the app hangs waiting on a response
+that either never comes back in the expected shape or never comes back
+at all. This produces **no error message pointing at the cause** — just
+mass, unrelated-looking timeouts.
+
+**Fix**: check `frontend/.env.local` (gitignored, machine-local) for
+`NEXT_PUBLIC_BACKEND_URL` — either delete/comment the line, or set it to
+exactly `http://127.0.0.1:8000`, before trusting any local Playwright
+result. To confirm the diagnosis without editing the file: run a small
+spec with an inline override,
+`NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:8000 npx playwright test tests/CardSlot.spec.ts`
+— if that passes cleanly while the bare `npx playwright test` fails
+broadly, this is the cause. `playwright.config.ts`'s `webServer.env`
+block does not currently set `NEXT_PUBLIC_BACKEND_URL` itself, so the
+dev server it spawns always inherits whatever `.env.local` has, for
+better or worse. (Confirmed 2026-07-19: 236/243 failing with a stale
+`http://localhost:80` value, all 27 spot-checked specs passing once
+corrected.)
+
 **Refs**: `frontend/src/features/questionFeed/QuestionFeed.test.tsx`'s
 `revealCard()`.
