@@ -35,6 +35,7 @@ import {
   getCardSlotMenuActions,
 } from "@/features/card/CardSlotMenuActions";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
+import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
 import { GridSelectorModal } from "@/features/gridSelector/GridSelectorModal";
 import { selectCardDocumentByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import { showChangeQueryModal } from "@/store/slices/modalsSlice";
@@ -346,6 +347,14 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
           searchResultsForQueryOrDefault.length === 0
         }
       />
+
+      {/* Item (c) of the frontend-polish package - the same badge DisplayPage.tsx's rail header
+          shows (RequestedPrintingBadge.tsx), gated on the slot's own query naming a specific
+          printing, independent of whether an image has been selected yet (unlike
+          DeckbuilderConfirmAffordance below, which needs a selected image to compare against). */}
+      <div className="text-center">
+        <RequestedPrintingBadge query={searchQuery} />
+      </div>
 
       {selectedImage != null && (
         <DeckbuilderConfirmAffordance

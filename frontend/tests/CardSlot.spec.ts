@@ -13,8 +13,11 @@ import {
   cardDocumentsOneResult,
   cardDocumentsSixResults,
   cardDocumentsThreeResults,
+  cardDocumentsWithResolvedPrintingMatch,
   defaultHandlers,
+  searchResultsDegradedPrinting,
   searchResultsOneResult,
+  searchResultsResolvedPrintingMatch,
   searchResultsSixResults,
   searchResultsThreeResults,
   sourceDocumentsOneResult,
@@ -645,6 +648,77 @@ test.describe("CardSlot", () => {
         page.getByTestId("card-slot-context-menu")
       ).not.toBeVisible();
       await expectCardSlotToExist(page, 1);
+    });
+  });
+
+  // Item (c) of the frontend-polish package - the same RequestedPrintingBadge.tsx component
+  // DisplayPage.tsx's rail header shows (see its own equivalent tests in DisplayPage.spec.ts),
+  // now also mounted directly on the standard editor's own slots.
+  test.describe("requested-printing badge", () => {
+    test("shows the plain style for a resolved, non-degraded printing-specific import", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsWithResolvedPrintingMatch,
+        sourceDocumentsOneResult,
+        searchResultsResolvedPrintingMatch,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(page, "1 Lightning Bolt (2ED) 162");
+
+      const badge = page.getByTestId("front-slot0").getByTestId(
+        "requested-printing-badge"
+      );
+      await expect(badge).toBeVisible();
+      await expect(badge).toContainText("2ED 162");
+      await expect(badge).toHaveAttribute("data-degraded", "false");
+      await expect(badge).not.toHaveAttribute("title");
+    });
+
+    test("switches to the degraded style when the backend reports the printing filter as degraded", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsThreeResults,
+        sourceDocumentsOneResult,
+        searchResultsDegradedPrinting,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(page, "1 my search query (XYZ) 999");
+
+      const badge = page.getByTestId("front-slot0").getByTestId(
+        "requested-printing-badge"
+      );
+      await expect(badge).toBeVisible();
+      await expect(badge).toContainText("XYZ 999");
+      await expect(badge).toHaveAttribute("data-degraded", "true");
+      await expect(badge).toHaveAttribute("title", /closest available match/);
+    });
+
+    test("shows nothing when the slot's query names no specific printing", async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        cardDocumentsThreeResults,
+        sourceDocumentsOneResult,
+        searchResultsThreeResults,
+        ...defaultHandlers
+      );
+      await loadPageWithDefaultBackend(page);
+
+      await importText(page, "my search query");
+
+      await expect(page.getByTestId("front-slot0")).toBeVisible();
+      await expect(
+        page.getByTestId("front-slot0").getByTestId("requested-printing-badge")
+      ).toHaveCount(0);
     });
   });
 });

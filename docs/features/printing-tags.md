@@ -292,6 +292,33 @@ printings, artists, tags, and moderation from one screen.
   `Set<identifier>`, not Redux, since it only needs to survive this
   browser session, not a reload. No banners, no counters, no review
   mode.
+- **Item (c) — requested-printing badge on editor slots** (frontend-
+  polish package), a sibling of Level 0 above but a distinct concept:
+  where Level 0 shows the *resolved canonical* printing (confirm/deny
+  what indexing found), this badge shows the *requested* printing —
+  the expansion code + collector number the slot's own search query
+  actually asked for (e.g. `MID 245`), which otherwise gets visually
+  "sanitized away" the moment an image is selected, with no at-a-glance
+  way to tell which specific printing was requested short of opening
+  the change-query modal. Not the resolved `canonicalCard`, and not
+  printing-tag consensus status. Originally built inline for Proposal
+  H Step 2 PR 2b's `/display` rail header; extracted into its own
+  `frontend/src/features/card/RequestedPrintingBadge.tsx` component so
+  both surfaces — the `/display` rail header and `CardSlot.tsx`'s own
+  editor slots — mount the exact same badge, one place the degraded-
+  style logic lives so the two can't drift apart. Gate: the slot's
+  query names a specific printing (`searchQuery.expansionCode != null`)
+  — always-visible when that's true (no hover gating; the point is
+  at-a-glance), nothing when it isn't. Style: normal (`bg-secondary`)
+  when resolved cleanly, degraded (`bg-warning`, warning-triangle icon,
+  hover tooltip) when the backend's `EditorSearchResponse.degradedQueries`
+  flagged this exact query — i.e. the printing-specific search found
+  nothing and the backend retried unfiltered, so what's shown is the
+  closest available match, not a guaranteed exact hit (see
+  `selectIsSearchQueryDegraded` in `searchResultsSlice.ts`). Unlike
+  Level 0 (gated on a *selected image* existing to compare against),
+  this badge is independent of whether an image has been selected yet
+  — it's about what was asked for, not what's currently shown.
 - **Vote provenance (`voteSurface`)**: `AbstractWeightedVote.vote_surface`
   (backend PR #48, nullable additive field, already on
   `SubmitPrintingTagRequest`/`SubmitArtistVoteRequest`/
