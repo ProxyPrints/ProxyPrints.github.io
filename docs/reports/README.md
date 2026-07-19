@@ -27,6 +27,11 @@ own "as of" date before trusting anything in it as current.
 - `2026-07-18-wiki-review-findings.md` — publish-script link-rewrite
   fix, Part 3 write-pass status update, and a targeted staleness
   mini-pass across proposal docs and docs/README.md.
+- `2026-07-19-backend-tests-ci-tesseract-fix.md` — "Backend tests" CI
+  root-caused to three failure classes (live Moxfield network call,
+  empty Google Drive secret, 10 tests missing the established
+  tesseract-mock convention); the tesseract gap fixed, the other two
+  flagged as owner-only, plus worktree/guard tool-access signal.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
