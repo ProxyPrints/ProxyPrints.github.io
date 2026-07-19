@@ -39,13 +39,6 @@ a `detail` object read only when the summary signals it's needed.
   empty Google Drive secret, 10 tests missing the established
   tesseract-mock convention); the tesseract gap fixed, the other two
   flagged as owner-only, plus worktree/guard tool-access signal.
-- `2026-07-19-reconciliation-sweep.md` — full inventory of open PRs,
-  the 59-branch backlog, and parked HOLD items, classified
-  awaiting-owner-merge / mid-flight-resumable / superseded-close.
-- `2026-07-19-issue-board-migration.md` — public-repo half of the
-  GitHub-native issue board migration: labels, milestone, and 6 issues
-  built from the reconciliation sweep's open items. Draft, pending
-  owner INTAKE confirmation.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc

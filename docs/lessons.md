@@ -7,9 +7,7 @@ tasks, not a one-off narrative (those belong in `journal/` or a feature doc
 under `docs/features/`).
 
 See also [[troubleshooting.md]] — same source material, indexed by the
-symptom you'd actually search for instead of by cause. See also
-[`../corrections/`](../corrections/README.md) — the blameless incident
-ledger this list's entries sometimes get promoted from.
+symptom you'd actually search for instead of by cause.
 
 ## Triage ritual: this list is a queue, not an archive
 
@@ -22,9 +20,7 @@ minimum a test case — and trim the prose entry down to a pointer at the
 gate that replaced it, rather than deleting the history. The heuristic,
 verbatim: **if you're typing "always/never" in CLAUDE.md, that's a hook.**
 This repo's own no-self-merge convention going from a CLAUDE.md sentence to
-`.claude/hooks/guard_master.py` (2026-07-19) is the worked example — see
-`corrections/CORR-0004-guard-hook-word-boundary-false-positive.md` for what
-was caught fixing it.
+`.claude/hooks/guard_master.py` (2026-07-19) is the worked example.
 
 ## Trust CI history, not a matching local venv, once a change touches Django's model-import chain
 
@@ -73,12 +69,11 @@ pyOpenSSL isn't installed in this CI runner at all ("CI's failure path
 never needs it") — the capability probe likely still fails on that half
 of the check regardless of the secret's validity.
 
-**Decision, 2026-07-19 (owner, logged in `proxyprints-orchestration`'s
-`DECISIONS.md`)**: not chasing this further. Accept the 2 skips as a
-named, honest skip — CI has no business doing real JWT signing. Don't
-install pyOpenSSL in the CI runner to chase this; if the skip count
-ever changes unexpectedly, that's the signal to look again, not a
-scheduled follow-up.
+**Decision, 2026-07-19 (owner)**: not chasing this further. Accept the 2
+skips as a named, honest skip — CI has no business doing real JWT
+signing. Don't install pyOpenSSL in the CI runner to chase this; if the
+skip count ever changes unexpectedly, that's the signal to look again,
+not a scheduled follow-up.
 
 ## Concurrent worktree dev servers collide on port 3000
 
