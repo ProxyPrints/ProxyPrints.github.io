@@ -779,43 +779,51 @@ only when the sidecar row is missing or the field is genuinely empty —
 matching `SCRYFALL_REST`'s own "guard for true gaps only" design
 intent for the first time.
 
-**Item 3 — measured, real numbers, 2026-07-19** (`probe_harvest_pipeline --sample-size=30`, real network cost, no votes written, run BEFORE the
-Scryfall REST fix above): total 521.76s across 30 fetched cards —
-fetch 25.10s (4.8%, mean 0.837s/card), OCR 8.35s (1.6%, mean
-0.278s/card), **phash 488.17s (93.6%, mean 16.272s/card)**, DB 0.14s
-(~0%). Stage A's original pre-Stage-B run was never written to a
-durable location (only existed in prior chat context, since compacted
-away) — a real process gap, not repeated here: this doc entry is the
-actual number going forward, and no literal side-by-side delta
-against the original unpaced run is possible from written record.
+**Item 3 — measured, real numbers, both before and after the fix
+(2026-07-19)**: `probe_harvest_pipeline --sample-size=30`, real network
+cost against production, no votes written, run twice on the same
+methodology.
 
-**Root cause identified and fixed** (see the Scryfall REST fix
-above): phash dominated because `SCRYFALL_REST` (2.0 req/s,
-deliberately low as "a guard against volume this call site shouldn't
-have") was absorbing a live REST call for every not-yet-hashed
-candidate, and **65.5% of `CanonicalCard` rows had a populated
-`image_hash` at measurement time (74,144/113,224)** — meaning 34.5%
-of candidates hit anywhere in the catalog paid a real, first-time
-Scryfall REST+CDN round-trip, now correctly paced instead of running
-unthrottled as it did before Stage B. This was a persistent cost at
-full-harvest scale, not a one-off backfill artifact. The fix above
-eliminates the REST leg for any candidate the bulk-data dump already
-covers (the large majority) — a re-measurement under the fixed code is
-still owed before Stage C, not yet run.
+- **Before** the Scryfall REST fix (and before the red-team's Google
+  rate correction, still at 5.0/s): total 521.76s across 30 fetched
+  cards — fetch 25.10s (4.8%, mean 0.837s/card), OCR 8.35s (1.6%, mean
+  0.278s/card), **phash 488.17s (93.6%, mean 16.272s/card)**, DB
+  0.14s (~0%). Root cause: `SCRYFALL_REST` (2.0 req/s, deliberately
+  low as "a guard against volume this call site shouldn't have") was
+  absorbing a live REST call for every not-yet-hashed candidate, and
+  **65.5% of `CanonicalCard` rows had a populated `image_hash` at
+  measurement time (74,144/113,224)** — 34.5% of candidates hit
+  anywhere in the catalog paid a real, first-time Scryfall REST+CDN
+  round-trip, now correctly paced instead of running unthrottled as
+  it did pre-Stage-B.
+- **After** both fixes (local-first art-crop URL + corrected 3.0/s
+  Google rate), immediately post-merge (PR #131, `65df7d8d`): total
+  **85.79s** across the same 30-card methodology — fetch 22.05s
+  (25.7%, mean 0.735s/card), OCR 8.59s (10.0%, mean 0.286s/card),
+  phash **55.02s (64.1%, mean 1.834s/card)**, DB 0.13s (~0.1%). **A
+  6.1x total speedup**; phash specifically dropped **8.9x** (16.272s
+  → 1.834s mean/card), confirming the Scryfall fix eliminated the
+  REST bottleneck as designed. Stage A's original pre-Stage-B baseline
+  (before either fix) was never written to a durable location — a
+  real process gap, not repeated here; both numbers above are now the
+  permanent record.
 
-**Item 4 — reprojected wall-clock, corrected twice**: first for the
-Scryfall finding (item 3), then for the red-team review's Google-rate
-correction. At `GOOGLE_IMAGE`'s corrected 3.0/s ceiling, the full
-218k-image harvest has a **~20.2h fetch-bound floor** (218,164 ÷ 3.0),
-not the ~12h figure an uncorrected 5.0/s would project — matching
-Part 2's own documented backfill wall-clock at the same rate. Whether
-Google fetch or Scryfall REST actually dominates the real 218k-card
-run depends on how much of the (now much smaller, post-fix)
-still-unhashed `CanonicalCard` population this harvest's own candidate
-pool touches — not yet re-measured under the fixed code. Worker-topology
-consequence (fewer OCR workers may suffice, cores idle waiting on a
-network ceiling) still holds, now against the corrected ~20h Google
-floor specifically unless Scryfall re-measures as dominant again.
+**Item 4 — reprojected wall-clock, now grounded in the real post-fix
+number**: phash at 1.834s/card mean (post-fix) is fast enough that the
+per-card sequential probe no longer reflects the real governing
+constraint — `GOOGLE_IMAGE`'s corrected 3.0/s rate ceiling is
+unambiguously the dominant cost again, exactly as Stage A's original
+projection assumed before the Scryfall finding complicated it. The
+**~20.2h fetch-bound floor** (218,164 ÷ 3.0) for the full 218k-image
+harvest stands as the real headline number, not the ~12h an
+uncorrected 5.0/s would project — matching Part 2's own documented
+backfill wall-clock at the same rate. Worker-topology consequence
+holds cleanly now: fewer OCR workers likely suffice, since cores will
+spend most of their time idle waiting on the Google rate ceiling
+rather than CPU-bound on OCR/phash compute, which the post-fix numbers
+confirm is now a minor fraction of per-card cost (10.0% + 64.1% of a
+much smaller total, only ~2.1s/card combined — comfortably parallel
+against a 3/s fetch ceiling with room to spare).
 
 **Fetch Acceleration Study (owner directive, 2026-07-19, amends but
 does not yet change the ≤3/s figure above — findings owed before the
