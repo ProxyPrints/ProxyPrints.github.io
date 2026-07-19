@@ -391,6 +391,53 @@ printings, artists, tags, and moderation from one screen.
   page — reserved for the queued PWA/manifest-icons pass (mark) and any
   future compact-lockup surface (wordmark), not invented placements
   here.
+- **Mobile funnel pass: thumb-native tap targets** (frontend-polish
+  package). Audited via real Playwright screenshots + `boundingBox()`
+  measurements at 390px, not assumption: Bootstrap's own default `.btn`
+  height (~38px, measured) and the attribute chips' original padding
+  (~30px, measured) both fell short of the 44px minimum both Apple's HIG
+  and WCAG 2.5.5 (Target Size, AA) call for — the "Filter by attribute"
+  toggle was worse still (`variant="link" className="p-0"`, ~26px, since
+  `p-0` zeroes Bootstrap's own padding entirely). Fixed via two new
+  `QuestionFeed.tsx` styled wrappers around react-bootstrap's `Button` —
+  `ThumbButton` (`min-height: 44px`, flex-centered, for every stacked
+  full-width action across Level 1/2/3: YES/NOT SURE/NO/SKIP, None of
+  these/Art matches/Skip, Confirm & continue/Skip, plus the artist
+  question's Skip and the fetch-error retry) and `FilterToggleButton`
+  (same floor, `padding: 0.5rem 0` restoring a real hit area without
+  looking like a filled button — its own `p-0` had to be removed, not
+  just supplemented, since Bootstrap's utility class carries `!important`
+  and would otherwise silently win over any styled-component override) —
+  and one change to `AttributeChipPanel.tsx`'s own `Chip` styled-button
+  (`min-height`/`min-width: 44px`, flex-centered). Level 3's
+  Confirm/Skip pair also gained `flex-column flex-sm-row` (previously
+  always side-by-side, squeezed to half-width each on a phone) to match
+  the stacking-to-full-width pattern every other level already used.
+  Regression coverage: `tests/QuestionFeedTapTargets.spec.ts` asserts
+  real measured heights (not just that a CSS rule exists) at 390px.
+  Chip-ring reflow itself (the single-column stack below `sm` - see
+  `AttributeChipPanel.tsx`'s own "MOBILE OVERRIDE" comment) was audited
+  and found already correct; not touched.
+- **`/whatsthat` PWA installability** (frontend-polish package). A
+  manifest + icon set scoped to `/whatsthat` alone — `start_url`/`scope`
+  both `"/whatsthat"` in `frontend/public/whatsthat-manifest.json` — not
+  a site-wide manifest on `_document.tsx`: the game is the installable
+  "app" here, not the whole catalog/editor. Linked from `whatsthat.tsx`'s
+  own `next/head` `<Head>` (`<link rel="manifest">`, a `theme-color` meta
+  matching the page's own `#ff4719`, and an `apple-touch-icon`) — under
+  `output: "export"`'s per-page static HTML, that `<Head>` content lands
+  only in `whatsthat.html`'s own generated markup, confirmed via
+  `tests/WhatsThatPWA.spec.ts`'s negative assertion on a different page.
+  Icons (`whatsthat-icon-192.png`/`-512.png`, Chrome's own minimum
+  installability sizes) rasterized from `whatsthat-mark.svg` (the
+  branding integration's source asset) centered on the page's own
+  orange background via a one-off Playwright screenshot script - not a
+  new build-time asset pipeline, the PNGs are checked in directly like
+  the SVGs themselves. No service worker/offline caching added -
+  explicitly out of scope per the owner's brief ("no offline scope
+  beyond the default"); Chrome's own install-prompt heuristics may want
+  one for the full native "Add to Home Screen" banner in the strictest
+  case, a gap noted here rather than silently built around.
 
 ## Key files (Stages 1–7; Stage 8+ files are in [[catalog-completion-plan.md]])
 

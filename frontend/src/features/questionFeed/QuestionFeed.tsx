@@ -34,6 +34,7 @@
  * question types, unforked.
  */
 
+import styled from "@emotion/styled";
 import React, { useEffect, useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Badge from "react-bootstrap/Badge";
@@ -100,6 +101,44 @@ import { setNotification } from "@/store/slices/toastsSlice";
 
 type FollowUp = "none" | "no-match-reason";
 type CandidateStage = "level1" | "level2" | "level3";
+
+// Mobile funnel pass (thumb-native tap targets): Bootstrap's own default .btn height is
+// ~38px (0.375rem vertical padding + 1.5 line-height + border) - short of the 44px minimum
+// both Apple's HIG and WCAG 2.5.5 (Target Size, AA) call for. Every stacked full-width action
+// button in the funnel (Level 1's YES/NOT SURE/NO, Level 2's None of these/Art matches/Skip,
+// Level 3's Confirm & continue/Skip) goes through this wrapper instead of bare react-bootstrap
+// Button - one place enforcing the floor rather than a min-height style prop repeated at every
+// call site (and one place to revisit if the target size guidance ever changes). flex centering
+// keeps short labels ("No", "Skip") vertically centered once the box is taller than its text,
+// rather than leaving them pinned to the button's own top-padding baseline.
+const ThumbButton = styled(Button)`
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+`;
+
+// "Filter by attribute" / "Hide filters" - a variant="link" toggle, not one of the stacked
+// action buttons above (ThumbButton doesn't apply here; it isn't full-width or button-styled).
+// The plain-link version used p-0 (zero padding), collapsing its tap target to just the text's
+// own line-height (~24px, measured) - well under the 44px floor despite being the ONLY way to
+// reach the attribute-chip filter on Level 2. Padding restores a real hit area without
+// resembling a filled button (still variant="link" - text + underline, no background/border).
+const FilterToggleButton = styled(Button)`
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.5rem 0;
+`;
+
+// Level 3's per-attribute chip picker (a wrapped row of inline pills, not stacked full-width -
+// ThumbButton's flex-stack styling doesn't fit here). Was Button size="sm", the smallest
+// Bootstrap variant - shorter still than the already-under-target default. min-height alone
+// (not ThumbButton's display/alignment) since these need to stay inline-sized to their own
+// label, wrapping naturally in the row.
+const ThumbChip = styled(Button)`
+  min-height: 44px;
+`;
 
 // Frontend and backend deploy independently (GitHub Pages vs. a separate Django API) - there's
 // a real window where this frontend build can be live against a not-yet-deployed backend still
@@ -454,13 +493,13 @@ export function QuestionFeed() {
         <p className="text-danger">
           Something went wrong loading the next question.
         </p>
-        <Button
+        <ThumbButton
           variant="outline-secondary"
           onClick={fetchNext}
           data-testid="question-feed-retry"
         >
           Try again
-        </Button>
+        </ThumbButton>
       </div>
     );
   }
@@ -685,7 +724,7 @@ export function QuestionFeed() {
                         </p>
                       </div>
                       <div className="d-flex flex-column gap-2">
-                        <Button
+                        <ThumbButton
                           variant="success"
                           disabled={submitting}
                           onClick={() =>
@@ -695,31 +734,31 @@ export function QuestionFeed() {
                           data-testid="question-feed-level1-yes"
                         >
                           {submitting ? <Spinner size={1} /> : "Yes, that's it"}
-                        </Button>
-                        <Button
+                        </ThumbButton>
+                        <ThumbButton
                           variant="outline-secondary"
                           disabled={submitting}
                           onClick={() => setStage("level2")}
                           data-testid="question-feed-level1-not-sure"
                         >
                           Not sure
-                        </Button>
-                        <Button
+                        </ThumbButton>
+                        <ThumbButton
                           variant="outline-danger"
                           disabled={submitting}
                           onClick={rejectSuggestion}
                           data-testid="question-feed-level1-no"
                         >
                           No
-                        </Button>
-                        <Button
+                        </ThumbButton>
+                        <ThumbButton
                           variant="link"
                           disabled={submitting}
                           onClick={skip}
                           data-testid="question-feed-level1-skip"
                         >
                           Skip
-                        </Button>
+                        </ThumbButton>
                       </div>
                     </>
                   )}
@@ -753,9 +792,8 @@ export function QuestionFeed() {
                         const state =
                           level3ChipStates[chip.tagName] ?? "untouched";
                         return (
-                          <Button
+                          <ThumbChip
                             key={chip.tagName}
-                            size="sm"
                             variant={
                               state === "positive"
                                 ? "primary"
@@ -765,29 +803,31 @@ export function QuestionFeed() {
                             data-testid={`question-feed-level3-chip-${chip.tagName}`}
                           >
                             {chip.label}
-                          </Button>
+                          </ThumbChip>
                         );
                       })}
                     </div>
                   </div>
                 ))}
-                <div className="mt-3 d-flex gap-2">
-                  <Button
+                <div className="mt-3 d-flex flex-column flex-sm-row gap-2">
+                  <ThumbButton
                     variant="primary"
                     disabled={submitting}
                     onClick={confirmLevel3}
                     data-testid="question-feed-level3-confirm"
+                    className="flex-fill"
                   >
                     Confirm &amp; continue
-                  </Button>
-                  <Button
+                  </ThumbButton>
+                  <ThumbButton
                     variant="outline-secondary"
                     disabled={submitting}
                     onClick={() => advance()}
                     data-testid="question-feed-level3-skip"
+                    className="flex-fill"
                   >
                     Skip this question
-                  </Button>
+                  </ThumbButton>
                 </div>
               </Col>
             ) : (
@@ -872,9 +912,8 @@ export function QuestionFeed() {
                         ))}
                       {!suggestionRejectedWithNoneLeft && (
                         <div className="mb-2">
-                          <Button
+                          <FilterToggleButton
                             variant="link"
-                            className="p-0"
                             onClick={() =>
                               setFilterExpanded((previous) => !previous)
                             }
@@ -883,7 +922,7 @@ export function QuestionFeed() {
                             {filterExpanded
                               ? "Hide filters"
                               : "Filter by attribute"}
-                          </Button>
+                          </FilterToggleButton>
                         </div>
                       )}
                       {hiddenCount > 0 && (
@@ -992,7 +1031,7 @@ export function QuestionFeed() {
                       )}
                       {followUp === "none" && (
                         <div className="mt-3 d-flex flex-column gap-2">
-                          <Button
+                          <ThumbButton
                             variant="outline-secondary"
                             disabled={submitting}
                             onClick={() => selectCandidate(undefined, true)}
@@ -1004,8 +1043,8 @@ export function QuestionFeed() {
                             ) : (
                               "None of these"
                             )}
-                          </Button>
-                          <Button
+                          </ThumbButton>
+                          <ThumbButton
                             variant="outline-secondary"
                             disabled={submitting}
                             onClick={classifyAsCustomArt}
@@ -1017,15 +1056,15 @@ export function QuestionFeed() {
                             ) : (
                               "\u{1F3A8} Art matches, not an official printing"
                             )}
-                          </Button>
-                          <Button
+                          </ThumbButton>
+                          <ThumbButton
                             variant="outline-secondary"
                             disabled={submitting}
                             onClick={skip}
                             data-testid="question-feed-skip"
                           >
                             Skip
-                          </Button>
+                          </ThumbButton>
                         </div>
                       )}
                     </>
@@ -1077,9 +1116,9 @@ export function QuestionFeed() {
                       </div>
                     )}
                     <div className="mt-3">
-                      <Button variant="outline-secondary" onClick={skip}>
+                      <ThumbButton variant="outline-secondary" onClick={skip}>
                         Skip
-                      </Button>
+                      </ThumbButton>
                     </div>
                   </>
                 )}

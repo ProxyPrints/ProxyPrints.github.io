@@ -41,6 +41,11 @@ function confidenceFill(netPolarity: number): string {
   return `rgba(${rgb}, ${alpha})`;
 }
 
+// Mobile funnel pass (thumb-native tap targets): measured at ~30px tall against the previous
+// 0.35rem/0.6rem padding - short of the 44px minimum both Apple's HIG and WCAG 2.5.5 (Target
+// Size, AA) call for, on the ring's own answer controls. min-height/min-width guarantee the real
+// hit area regardless of label length; flex centering keeps the (unchanged, still compact) text
+// centered in the now-taller box rather than pinned to its old top-padding baseline.
 const Chip = styled.button<{ fill: string; impliedNegative: boolean }>`
   border: 2px solid rgba(0, 0, 0, 0.25);
   border-radius: 0.5rem;
@@ -50,6 +55,11 @@ const Chip = styled.button<{ fill: string; impliedNegative: boolean }>`
   padding: 0.35rem 0.6rem;
   font-size: 0.85rem;
   white-space: nowrap;
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 
   &:disabled {
     opacity: 0.5;
