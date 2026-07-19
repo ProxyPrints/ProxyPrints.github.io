@@ -840,3 +840,26 @@ degraded live-site image serving with no warning from the metric it was watching
 **The rule going forward**: every future load probe against a destination shared with the live
 site carries an independent, user-facing canary as a first-class stop condition - never the remote
 quota/error-rate signal alone. A clean quota reading is necessary, not sufficient.
+
+## Squash-merge is the right default, but it discards a branch's own commits - anything stacked on them can be silently orphaned
+
+Squash is correct for a self-contained, single-purpose PR: it collapses review noise into one
+clean commit on the target branch, and nothing is lost because there's nothing else to lose. The
+risk shows up specifically once a branch stops being flat - a follow-up commit pushed after the
+PR's own review/approval, or a second PR stacked on top of the first one's branch. Squash builds
+one brand-new commit from the diff at merge time; it does not walk the branch's actual commit
+history, so a commit that arrived on that branch after the point squash captured isn't "carried
+along" by the merge - it just never lands on the target branch at all, and once the source branch
+is deleted there's nothing left pointing to it either. Two confirmed instances: PR #115's
+squash-merge shipped without a benchmark-script commit its own branch had picked up as an
+owner-requested follow-up, orphaning it outright - recovered only by pushing the surviving head
+branch and opening a fresh PR (#178) directly from it. PR #88 was lost the same way at the branch
+level: PR #69 was stacked on PR #66's branch, and squash-merging #66 with `--delete-branch`
+auto-closed #69 the moment its base branch vanished (see this file's separate stacked-PR
+base-branch-deletion entry for the mechanism and the recovery steps).
+
+**The check**: after any squash-merge involving more than a single flat PR - a branch with
+post-approval follow-up commits, or one with a PR stacked on it - verify the merged tree actually
+contains the follow-up work (`git show <merge-commit> --stat`, or just checking the expected file/
+line is present on the target branch) instead of assuming "merged" means everything on the branch
+landed.
