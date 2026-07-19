@@ -25,7 +25,7 @@ from cardpicker.local_lands_identify import (
     is_lands_target,
     run_lands_identify,
 )
-from cardpicker.models import CardPrintingTag, CardScanLog
+from cardpicker.models import CardPrintingTag, CardScanLog, LandsAmbiguousResidue
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
@@ -86,8 +86,8 @@ class TestIdentifyLandPrinting:
     def test_no_artist_extracted_skips_before_any_query(self, db):
         card = CardFactory(name="Forest", content_phash=1)
         selected = SelectedCard(card=card, candidates=[])
-        printing_pk, confidence, reason, matched = identify_land_printing(selected, artist_name=None)
-        assert (printing_pk, confidence, reason, matched) == (None, None, "no-artist-extracted", None)
+        printing_pk, confidence, reason, matched, distances = identify_land_printing(selected, artist_name=None)
+        assert (printing_pk, confidence, reason, matched, distances) == (None, None, "no-artist-extracted", None, None)
 
     def test_singleton_artist_match_with_confirming_phash_gets_singleton_confidence(self, db):
         artist = CanonicalArtistFactory(name="Rebecca Guay")
@@ -96,12 +96,15 @@ class TestIdentifyLandPrinting:
         index = CandidateNameIndex()
         selected = SelectedCard(card=card, candidates=index.candidates_for("Forest"))
 
-        printing_pk, confidence, reason, matched = identify_land_printing(selected, artist_name="Rebecca Guay")
+        printing_pk, confidence, reason, matched, distances = identify_land_printing(
+            selected, artist_name="Rebecca Guay"
+        )
 
         assert printing_pk == printing.pk
         assert confidence == LANDS_SINGLETON_CONFIDENCE
         assert reason == ""
         assert matched == frozenset({printing.pk})
+        assert distances == {printing.pk: 0}
 
     def test_singleton_artist_match_but_bad_phash_distance_does_not_get_singleton_confidence(self, db):
         artist = CanonicalArtistFactory(name="Rebecca Guay")
@@ -110,12 +113,15 @@ class TestIdentifyLandPrinting:
         index = CandidateNameIndex()
         selected = SelectedCard(card=card, candidates=index.candidates_for("Forest"))
 
-        printing_pk, confidence, reason, matched = identify_land_printing(selected, artist_name="Rebecca Guay")
+        printing_pk, confidence, reason, matched, distances = identify_land_printing(
+            selected, artist_name="Rebecca Guay"
+        )
 
         assert printing_pk is None
         assert confidence is None
         assert reason.startswith("phash-")
         assert matched is not None  # artist match itself still succeeded and is reported
+        assert distances is not None and len(distances) == 1  # ambiguous residue's own input
 
     def test_multi_candidate_artist_match_with_clear_phash_winner_gets_tiebreak_confidence(self, db):
         artist = CanonicalArtistFactory(name="Rebecca Guay")
@@ -125,11 +131,14 @@ class TestIdentifyLandPrinting:
         index = CandidateNameIndex()
         selected = SelectedCard(card=card, candidates=index.candidates_for("Forest"))
 
-        printing_pk, confidence, reason, matched = identify_land_printing(selected, artist_name="Rebecca Guay")
+        printing_pk, confidence, reason, matched, distances = identify_land_printing(
+            selected, artist_name="Rebecca Guay"
+        )
 
         assert printing_pk == winner.pk
         assert confidence == LANDS_TIEBREAK_CONFIDENCE
         assert len(matched) == 2
+        assert distances is not None and len(distances) == 2
 
     def test_artist_name_matching_nothing_in_this_names_own_candidates_is_no_match(self, db):
         CanonicalArtistFactory(name="Rebecca Guay")
@@ -138,9 +147,17 @@ class TestIdentifyLandPrinting:
         index = CandidateNameIndex()
         selected = SelectedCard(card=card, candidates=index.candidates_for("Forest"))
 
-        printing_pk, confidence, reason, matched = identify_land_printing(selected, artist_name="Rebecca Guay")
+        printing_pk, confidence, reason, matched, distances = identify_land_printing(
+            selected, artist_name="Rebecca Guay"
+        )
 
-        assert (printing_pk, confidence, reason, matched) == (None, None, "artist-no-match", None)
+        assert (printing_pk, confidence, reason, matched, distances) == (
+            None,
+            None,
+            "artist-no-match",
+            None,
+            None,
+        )
 
     def test_no_content_phash_still_reports_the_artist_match(self, db):
         artist = CanonicalArtistFactory(name="Rebecca Guay")
@@ -149,10 +166,13 @@ class TestIdentifyLandPrinting:
         index = CandidateNameIndex()
         selected = SelectedCard(card=card, candidates=index.candidates_for("Forest"))
 
-        printing_pk, confidence, reason, matched = identify_land_printing(selected, artist_name="Rebecca Guay")
+        printing_pk, confidence, reason, matched, distances = identify_land_printing(
+            selected, artist_name="Rebecca Guay"
+        )
 
         assert (printing_pk, confidence, reason) == (None, None, "no-content-phash")
         assert matched is not None
+        assert distances is None  # no card hash to compare against yet
 
 
 class TestRunLandsIdentify:
@@ -227,6 +247,41 @@ class TestRunLandsIdentify:
         assert vote.printing_id == printing.pk
         assert vote.anonymous_id == LANDS_ANONYMOUS_ID
         assert vote.confidence == LANDS_SINGLETON_CONFIDENCE
+
+    def test_ambiguous_phash_persists_residue_row_under_write_mode(self, db, monkeypatch):
+        artist = CanonicalArtistFactory(name="Rebecca Guay")
+        far = CanonicalCardFactory(name="Plains", artist=artist, image_hash=1)
+        card = CardFactory(name="Plains", content_phash=-1)  # maximally far, per local_phash's twos-complement range
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda c, dpi=None: object())
+        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, **kw: OcrCardResult())
+        monkeypatch.setattr(module, "detect_illus_anchor", lambda image, raw_texts: (True, "Rebecca Guay"))
+
+        result = run_lands_identify(dry_run=False, sample_size=300, fetch_budget=10)
+
+        assert result.ambiguous_phash == 1
+        assert result.votes_written == 0  # no vote - this is routing data, not a vote
+        assert result.residue_written == 1
+        residue = LandsAmbiguousResidue.objects.get()
+        assert residue.card_id == card.pk
+        assert residue.artist_name == "Rebecca Guay"
+        assert residue.candidate_pks == [far.pk]
+        assert str(far.pk) in residue.phash_distances
+
+    def test_ambiguous_phash_writes_no_residue_row_under_dry_run(self, db, monkeypatch):
+        artist = CanonicalArtistFactory(name="Rebecca Guay")
+        CanonicalCardFactory(name="Plains", artist=artist, image_hash=1)
+        CardFactory(name="Plains", content_phash=-1)  # maximally far, per local_phash's twos-complement range
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda c, dpi=None: object())
+        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, **kw: OcrCardResult())
+        monkeypatch.setattr(module, "detect_illus_anchor", lambda image, raw_texts: (True, "Rebecca Guay"))
+
+        result = run_lands_identify(dry_run=True, sample_size=300, fetch_budget=10)
+
+        assert result.ambiguous_phash == 1
+        assert result.residue_written == 0
+        assert LandsAmbiguousResidue.objects.count() == 0
 
     def test_fetch_uses_the_s800_ocr_tier_not_the_full_dpi_default(self, db, monkeypatch):
         CanonicalCardFactory(name="Plains")

@@ -150,6 +150,9 @@ external reader's orientation to the whole fork, see
   — Google Drive picker, Local Folder, and Save-PDF-to-Drive.
 - [`docs/features/grid-selector.md`](docs/features/grid-selector.md) —
   the card-version-picker modal + `Card.tsx`'s image loading/error states.
+- [`docs/features/artist-support-links.md`](docs/features/artist-support-links.md)
+  — zero-crawl, deterministic link-out to MTG Artist Connection
+  (`ArtistSupportLink.tsx` + its two surfaces).
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
   Upstreaming workflow in `docs/infrastructure.md`).

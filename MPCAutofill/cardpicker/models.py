@@ -1127,6 +1127,37 @@ class SavedDeck(models.Model):
         return f"SavedDeck {self.key} ({self.kind}): owner={self.owner_id}"
 
 
+class LandsAmbiguousResidue(models.Model):
+    """
+    Routing data, not votes (docs/features/catalog-completion-plan.md's Part 4 addendum,
+    2026-07-19): one row per LANDS card where artist extraction succeeded but phash still
+    couldn't pick a unique winner within the artist-narrowed candidate set
+    (local_lands_identify.identify_land_printing's "phash-*" skip reasons). The artist match
+    already paid the real cost of narrowing a name's full candidate pool (sometimes hundreds of
+    printings, see BASIC_LAND_NAMES) down to a handful sharing that artist - throwing that work
+    away and letting the human funnel start from the full pool again wastes it. Persisted here so
+    a future funnel surface can serve "which of these N?" directly from `candidate_pks` instead
+    of recomputing narrowing from scratch. Explicitly NOT a vote: no `AbstractWeightedVote`
+    subclass, no consensus/resolution-gate interaction, no anonymous_id - a resolver skimming
+    votes for this card sees nothing here, by design, until something explicitly reads this table.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="lands_ambiguous_residue")
+    run_id = models.CharField(max_length=64, db_index=True)
+    artist_name = models.CharField(max_length=200)
+    # the artist-matched surviving candidate set (CanonicalCard pks) - what the human funnel
+    # would narrow a "which of these?" prompt to, instead of the name's full candidate pool.
+    candidate_pks = models.JSONField()
+    # {str(candidate_pk): hamming_distance} for every candidate in candidate_pks that had a
+    # computable hash - lets a future consumer re-rank without recomputing phash distances,
+    # and shows directly why phash couldn't pick a winner (e.g. two candidates within margin).
+    phash_distances = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"LandsAmbiguousResidue card={self.card_id} artist={self.artist_name!r} candidates={self.candidate_pks}"
+
+
 __all__ = [
     "Faces",
     "CardTypes",
@@ -1148,4 +1179,5 @@ __all__ = [
     "SavedDeckKind",
     "SavedDeck",
     "UserCryptoProfile",
+    "LandsAmbiguousResidue",
 ]

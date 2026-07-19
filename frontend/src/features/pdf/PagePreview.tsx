@@ -44,6 +44,12 @@ export interface PagePreviewSlotContent {
    * bleed-normalization algorithm itself. `undefined` renders no badge (bleed normalization
    * doesn't apply to this card, or its signal hasn't resolved yet - never guess). */
   willGenerateBleed?: boolean;
+  /** Proposal H, item 1 (owner's hands-on review) - a slot with no resolved image (no card
+   * selected yet, or its thumbnail hasn't loaded) shows this instead of a blank hole, since the
+   * page IS the print artifact and a blank slot reads as "this position was skipped" rather than
+   * "still waiting on art". Typically the slot's own search query text; `undefined` when there's
+   * genuinely no query to show (e.g. a shared-cardback slot). Ignored when imageUrl is set. */
+  queryText?: string;
 }
 
 export interface PagePreviewProps {
@@ -176,6 +182,47 @@ export function PagePreview({
                     pointerEvents: "none",
                   }}
                 />
+              )}
+              {content != null && content.imageUrl == null && (
+                <div
+                  data-testid="page-preview-empty-slot-label"
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "1mm",
+                    padding: "2mm",
+                    textAlign: "center",
+                    color: "#4a4a4a",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "2.6mm",
+                      fontWeight: 600,
+                      lineHeight: 1.2,
+                      overflowWrap: "anywhere",
+                    }}
+                  >
+                    {content.name}
+                  </span>
+                  {content.queryText != null && (
+                    <span
+                      style={{
+                        fontSize: "2.2mm",
+                        fontStyle: "italic",
+                        lineHeight: 1.2,
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {content.queryText}
+                    </span>
+                  )}
+                </div>
               )}
               {showCutLines && (
                 <div

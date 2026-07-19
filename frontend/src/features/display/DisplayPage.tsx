@@ -493,9 +493,24 @@ export function DisplayPage() {
       const identifier = projectMember?.selectedImage;
       const cardDocument =
         identifier != null ? cardDocumentsByIdentifier[identifier] : undefined;
+      const query = projectMember?.query;
+      // Item 1 (owner's hands-on review) - a slot with no resolved thumbnail shows this on the
+      // sheet itself instead of a blank hole. `undefined` only for a genuinely query-less slot
+      // (a shared-cardback back face) - PagePreview then falls back to `name`'s own "Slot N".
+      const queryText =
+        query?.query != null && query.query.length > 0
+          ? `${query.query}${
+              query.expansionCode != null
+                ? ` (${query.expansionCode.toUpperCase()}${
+                    query.collectorNumber ? " " + query.collectorNumber : ""
+                  })`
+                : ""
+            }`
+          : undefined;
       return {
         imageUrl: cardDocument?.mediumThumbnailUrl,
         name: cardDocument?.name ?? `Slot ${entry.slot + 1}`,
+        queryText,
       };
     });
 

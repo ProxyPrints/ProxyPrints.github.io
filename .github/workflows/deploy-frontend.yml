@@ -1,10 +1,20 @@
 name: Deploy frontend to GitHub Pages
 
+# docs/** and the publish map trigger this too: frontend/scripts/generate-
+# docs-site.js runs as an npm "prebuild" step (see frontend/package.json)
+# and renders any docs/ file whose wiki-publish-map.json entry lists "site"
+# in its targets into a real page under /guide — see
+# docs/proposals/proposal-i-docs-as-site-source.md. Without this trigger, a
+# docs/-only PR would regenerate the wiki (docs-wiki-publish.yml) while the
+# site silently stayed stale.
+
 on:
   push:
     branches: [master]
     paths:
       - "frontend/**"
+      - "docs/**"
+      - ".github/wiki-publish-map.json"
       - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch:
 

@@ -1,42 +1,85 @@
 {
-  "//": "Curated mapping from docs/ source files to wiki pages. Hand-maintained — the publish workflow (.github/workflows/docs-wiki-publish.yml) does NOT parse docs/README.md's prose; update this file whenever docs/README.md's own audience groups change. Groups mirror docs/README.md exactly. docs/proposals/ (drafts/HOLD specs), docs/reports/, and docs/audits/ are deliberately excluded from wiki publication. Renaming a published doc updates this file's 'wiki' value in the SAME PR as the rename — prefer stable wiki names once picked; wiki URLs have no redirects, so a rename here breaks every existing link to the old page name.",
+  "//": "Curated mapping from docs/ source files to publish targets (wiki, site, data — see docs/proposals/proposal-i-docs-as-site-source.md). Hand-maintained — the publish workflows do NOT parse docs/README.md's prose; update this file whenever docs/README.md's own audience groups change. Groups mirror docs/README.md exactly. docs/proposals/ (drafts/HOLD specs), docs/reports/, and docs/audits/ are deliberately excluded from every publish target. Renaming a published doc updates this file's 'wiki'/'sitePath' values in the SAME PR as the rename — prefer stable names once picked; neither wiki URLs nor site routes have redirects, so a rename here breaks every existing link to the old name.",
   "groups": [
     {
       "title": "Understanding the system",
       "pages": [
-        { "source": "docs/overview.md", "wiki": "Overview" },
+        {
+          "source": "docs/overview.md",
+          "wiki": "Overview",
+          "targets": ["wiki", "site"],
+          "sitePath": "/guide"
+        },
         {
           "source": "docs/documentation-process.md",
-          "wiki": "Documentation-Process"
+          "wiki": "Documentation-Process",
+          "targets": ["wiki"]
         },
-        { "source": "docs/theory.md", "wiki": "Theory" },
-        { "source": "docs/federation-v1.md", "wiki": "Federation-v1" },
-        { "source": "docs/upstreaming/vote-system.md", "wiki": "Vote-System" },
+        { "source": "docs/theory.md", "wiki": "Theory", "targets": ["wiki"] },
+        {
+          "source": "docs/federation-v1.md",
+          "wiki": "Federation-v1",
+          "targets": ["wiki"]
+        },
+        {
+          "source": "docs/upstreaming/vote-system.md",
+          "wiki": "Vote-System",
+          "targets": ["wiki"]
+        },
         {
           "source": "docs/upstreaming/upstream-wiki-drift.md",
-          "wiki": "Upstream-Wiki-Drift"
+          "wiki": "Upstream-Wiki-Drift",
+          "targets": ["wiki"]
         },
-        { "source": "docs/features/printing-tags.md", "wiki": "Printing-Tags" },
+        {
+          "source": "docs/features/printing-tags.md",
+          "wiki": "Printing-Tags",
+          "targets": ["wiki"]
+        },
         {
           "source": "docs/features/catalog-completion-plan.md",
-          "wiki": "Catalog-Completion-Plan"
+          "wiki": "Catalog-Completion-Plan",
+          "targets": ["wiki"]
         },
-        { "source": "docs/features/moderation.md", "wiki": "Moderation" },
-        { "source": "docs/features/card-dom-api.md", "wiki": "Card-DOM-API" },
-        { "source": "docs/features/pdf-generator.md", "wiki": "PDF-Generator" },
+        {
+          "source": "docs/features/moderation.md",
+          "wiki": "Moderation",
+          "targets": ["wiki"]
+        },
+        {
+          "source": "docs/features/card-dom-api.md",
+          "wiki": "Card-DOM-API",
+          "targets": ["wiki"]
+        },
+        {
+          "source": "docs/features/pdf-generator.md",
+          "wiki": "PDF-Generator",
+          "targets": ["wiki"]
+        },
         {
           "source": "docs/features/print-export-page.md",
-          "wiki": "Print-Export-Page"
+          "wiki": "Print-Export-Page",
+          "targets": ["wiki"]
         },
         {
           "source": "docs/features/google-drive-connect.md",
-          "wiki": "Google-Drive-Connect"
+          "wiki": "Google-Drive-Connect",
+          "targets": ["wiki"]
         },
-        { "source": "docs/features/grid-selector.md", "wiki": "Grid-Selector" },
-        { "source": "docs/features/image-cdn.md", "wiki": "Image-CDN" },
+        {
+          "source": "docs/features/grid-selector.md",
+          "wiki": "Grid-Selector",
+          "targets": ["wiki"]
+        },
+        {
+          "source": "docs/features/image-cdn.md",
+          "wiki": "Image-CDN",
+          "targets": ["wiki"]
+        },
         {
           "source": "docs/features/local-file-source.md",
-          "wiki": "Local-File-Source"
+          "wiki": "Local-File-Source",
+          "targets": ["wiki"]
         }
       ]
     },
@@ -45,20 +88,30 @@
       "pages": [
         {
           "source": "docs/user-guide.md",
-          "wiki": "User-Guide"
+          "wiki": "User-Guide",
+          "targets": ["wiki"]
         },
         {
           "source": "docs/self-hosting.md",
-          "wiki": "Instance-Admin-Guide"
+          "wiki": "Instance-Admin-Guide",
+          "targets": ["wiki"]
         }
       ]
     },
     {
       "title": "Operating it",
       "pages": [
-        { "source": "docs/infrastructure.md", "wiki": "Infrastructure" },
-        { "source": "docs/troubleshooting.md", "wiki": "Troubleshooting" },
-        { "source": "docs/lessons.md", "wiki": "Lessons" }
+        {
+          "source": "docs/infrastructure.md",
+          "wiki": "Infrastructure",
+          "targets": ["wiki"]
+        },
+        {
+          "source": "docs/troubleshooting.md",
+          "wiki": "Troubleshooting",
+          "targets": ["wiki"]
+        },
+        { "source": "docs/lessons.md", "wiki": "Lessons", "targets": ["wiki"] }
       ]
     }
   ],

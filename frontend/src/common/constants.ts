@@ -31,6 +31,13 @@ export const UpstreamDesktopToolWikiURL =
 export const UpstreamDesktopToolSourceURL =
   "https://github.com/chilli-axe/mpc-autofill/tree/master/desktop-tool/";
 
+// Community-maintained MTG artist directory - not affiliated with this project. See
+// ArtistSupportLink.tsx and docs/features/artist-support-links.md for the full v1 design
+// (deterministic link-out only, no per-artist database, no existence check).
+export const MTGArtistConnection = "MTG Artist Connection";
+export const MTGArtistConnectionArtistBaseURL =
+  "https://www.mtgartistconnection.com/artist/";
+
 export const Card: CardType = CardTypeSchema.Card;
 export const Cardback: CardType = CardTypeSchema.Cardback;
 export const Token: CardType = CardTypeSchema.Token;

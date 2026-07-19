@@ -61,6 +61,28 @@ the next regeneration, then silently vanishes — not a data-loss risk
   are a separate git repo the default `GITHUB_TOKEN` can't push to); see
   that workflow's own header for exact setup steps.
 
+## The site is a second generated target, same source
+
+Per [`proposals/proposal-i-docs-as-site-source.md`](proposals/proposal-i-docs-as-site-source.md)
+(APPROVED, staged build — PR-I-1 shipped, PR-I-2+ not yet started), the
+same `docs/` files can also publish as real pages on the site itself, at
+`/guide`, via a second per-page target (`"site"` in `wiki-publish-map.json`'s
+`targets` array) alongside — not instead of — the existing wiki target.
+Mechanism: `frontend/scripts/generate-docs-site.js`, an npm `prebuild`
+step (see `frontend/package.json`) that reads every `"site"`-targeted
+entry, rewrites its links (a doc-to-doc link resolves to another site
+page, a wiki page, or a GitHub blob URL — never a raw `docs/` filename,
+the same problem `publish_wiki.py` already solves for the wiki, solved
+again here in JS since this step runs inside the Next.js build rather
+than as a separate Python process), and writes pre-rendered HTML into
+`frontend/src/common/generated/docsSite/` for
+`frontend/src/pages/guide/[[...slug]].tsx` to serve at build time — no
+runtime fetch, matching this frontend's static-export constraint.
+Currently live for exactly one doc (`docs/overview.md`); widening the
+list is normal, low-risk work (add `"site"` + `sitePath` to a
+`wiki-publish-map.json` entry) explicitly deferred past PR-I-1's
+"prove the plumbing first" scope, not a technical blocker.
+
 ## Lint catches mechanical rot
 
 [`docs-lint.yml`](../.github/workflows/docs-lint.yml) runs
