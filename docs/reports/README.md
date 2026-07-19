@@ -39,6 +39,9 @@ a `detail` object read only when the summary signals it's needed.
   empty Google Drive secret, 10 tests missing the established
   tesseract-mock convention); the tesseract gap fixed, the other two
   flagged as owner-only, plus worktree/guard tool-access signal.
+- `2026-07-19-extractable-primitives-ledger.md` — repo-wide
+  extractable-primitives audit (27 rows), the mechanical tether added
+  to `docs_lint.py`, and the CLAUDE.md convention line.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
