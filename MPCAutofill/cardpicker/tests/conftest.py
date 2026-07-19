@@ -40,12 +40,19 @@ def google_drive_credentials_available() -> bool:
     credential-parse time, which is why the two environments fail with different exception
     types for the same root problem: "no working real Google Drive credentials here").
 
-    No network call is made - `hasattr` catches the local case directly, and credential
+    No network call is made - the OpenSSL check catches the local case directly, and credential
     *parsing* (not signing) already fails before any request would be sent in the CI case.
+    pyOpenSSL itself may not even be installed in a given environment (confirmed in this fork's
+    CI - it's only pulled in transitively by whatever locally resolves oauth2client's optional
+    signing backend, and CI's failure happens at JSON-parse time, before OpenSSL would ever be
+    imported for real) - that is itself a valid "credentials unavailable" state, not an error.
     """
-    import OpenSSL.crypto
+    try:
+        import OpenSSL.crypto
 
-    if not hasattr(OpenSSL.crypto, "sign"):
+        if not hasattr(OpenSSL.crypto, "sign"):
+            return False
+    except ImportError:
         return False
     try:
         from cardpicker.sources.api import find_or_create_google_drive_service
