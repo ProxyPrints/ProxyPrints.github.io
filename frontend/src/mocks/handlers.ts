@@ -24,6 +24,12 @@ import {
   cardDocument10,
   cardDocument11,
   cardDocument12,
+  cardDocument13,
+  cardDocument14,
+  cardDocument15,
+  cardDocument16,
+  cardDocument17,
+  cardDocument18,
   localBackend,
   printingCandidate1,
   printingCandidate2,
@@ -241,6 +247,29 @@ export const cardDocumentsWithResolvedPrintingMatch = http.post(
     )
 );
 
+// Issue #167 (Select Version section) - a mixed result set covering all three of the spec's
+// groups: two copies of one suggested printing (13/14, "+1 more" once grouped), one resolved
+// printing (15), one non-canonical custom-art card (16), and two "unknown" cards (17 plain, 18
+// carrying a resolved Full Art tag + a separate suggested Old Border vote for the filter-chip/
+// confirm-chip tests).
+export const cardDocumentsSelectVersionMixedResults = http.post(
+  buildRoute("2/cards/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [cardDocument13.identifier]: cardDocument13,
+          [cardDocument14.identifier]: cardDocument14,
+          [cardDocument15.identifier]: cardDocument15,
+          [cardDocument16.identifier]: cardDocument16,
+          [cardDocument17.identifier]: cardDocument17,
+          [cardDocument18.identifier]: cardDocument18,
+        },
+      },
+      { status: 200 }
+    )
+);
+
 //# endregion
 
 //# region cardback
@@ -437,6 +466,30 @@ export const searchResultsUnresolvedCanonicalImport = http.post(
             expansionCode: "XYZ",
             collectorNumber: "001",
           })]: [cardDocument8.identifier, cardDocument9.identifier],
+        },
+      },
+      { status: 200 }
+    )
+);
+
+// Issue #167 (Select Version section) - pairs with cardDocumentsSelectVersionMixedResults.
+export const searchResultsSelectVersionMixedResults = http.post(
+  buildRoute("3/editorSearch/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [computeSearchQueryHashKey({
+            query: "my search query",
+            cardType: CardType.Card,
+          })]: [
+            cardDocument13.identifier,
+            cardDocument14.identifier,
+            cardDocument15.identifier,
+            cardDocument16.identifier,
+            cardDocument17.identifier,
+            cardDocument18.identifier,
+          ],
         },
       },
       { status: 200 }

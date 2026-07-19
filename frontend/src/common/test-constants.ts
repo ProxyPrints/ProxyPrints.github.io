@@ -9,6 +9,7 @@ import {
   PrintingCandidate,
   PrintingTagStatus,
   SourceType,
+  TagVoteDisplayStatus,
 } from "@/common/schema_types";
 import {
   BackendState,
@@ -408,6 +409,189 @@ export const cardDocument12: CardDocument = {
     identifier: "2ed-162",
     smallThumbnailUrl: "",
     mediumThumbnailUrl: "",
+  },
+};
+
+// Issue #167 (Select Version section, unified spec) fixtures below. Two copies of the same
+// suggested printing (sv-001), differing DPI, so grouping/representative-selection tests have a
+// real "+N more of this printing" cluster to expand.
+export const cardDocument13: CardDocument = {
+  identifier: "1gG2hH3iI4jJ5kK6lL7mM8nN9oO0pP",
+  cardType: CardTypeSchema.Card,
+  name: "Card 13 (suggested printing, lower DPI copy)",
+  priority: 0,
+  source: sourceDocument1.key,
+  sourceName: sourceDocument1.name,
+  sourceId: sourceDocument1.pk,
+  sourceVerbose: sourceDocument1.name,
+  sourceType: SourceType.GoogleDrive,
+  sourceExternalLink: undefined,
+  dpi: 600,
+  searchq: "card 13",
+  extension: "png",
+  dateCreated: "1st January, 2000",
+  dateModified: "1st January, 2000",
+  size: 10_000_000,
+  smallThumbnailUrl: "",
+  mediumThumbnailUrl: "",
+  language: "EN",
+  tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
+  suggestedCanonicalCard: {
+    identifier: "sv-001",
+    expansionCode: "sv1",
+    expansionName: "Select Version Set One",
+    collectorNumber: "010",
+    smallThumbnailUrl: "",
+    mediumThumbnailUrl: "",
+  },
+};
+
+export const cardDocument14: CardDocument = {
+  identifier: "1hH2iI3jJ4kK5lL6mM7nN8oO9pP0qQ",
+  cardType: CardTypeSchema.Card,
+  name: "Card 14 (suggested printing, higher DPI copy)",
+  priority: 0,
+  source: sourceDocument1.key,
+  sourceName: sourceDocument1.name,
+  sourceId: sourceDocument1.pk,
+  sourceVerbose: sourceDocument1.name,
+  sourceType: SourceType.GoogleDrive,
+  sourceExternalLink: undefined,
+  dpi: 1200,
+  searchq: "card 14",
+  extension: "png",
+  dateCreated: "1st January, 2000",
+  dateModified: "1st January, 2000",
+  size: 10_000_000,
+  smallThumbnailUrl: "",
+  mediumThumbnailUrl: "",
+  language: "EN",
+  tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
+  suggestedCanonicalCard: {
+    identifier: "sv-001",
+    expansionCode: "sv1",
+    expansionName: "Select Version Set One",
+    collectorNumber: "010",
+    smallThumbnailUrl: "",
+    mediumThumbnailUrl: "",
+  },
+};
+
+// A resolved printing (sv-002) - sole member of its own canonical group.
+export const cardDocument15: CardDocument = {
+  identifier: "1iI2jJ3kK4lL5mM6nN7oO8pP9qQ0rR",
+  cardType: CardTypeSchema.Card,
+  name: "Card 15 (resolved printing)",
+  priority: 0,
+  source: sourceDocument1.key,
+  sourceName: sourceDocument1.name,
+  sourceId: sourceDocument1.pk,
+  sourceVerbose: sourceDocument1.name,
+  sourceType: SourceType.GoogleDrive,
+  sourceExternalLink: undefined,
+  dpi: 800,
+  searchq: "card 15",
+  extension: "png",
+  dateCreated: "1st January, 2000",
+  dateModified: "1st January, 2000",
+  size: 10_000_000,
+  smallThumbnailUrl: "",
+  mediumThumbnailUrl: "",
+  language: "EN",
+  tags: [],
+  printingTagStatus: PrintingTagStatus.Resolved,
+  canonicalCard: {
+    identifier: "sv-002",
+    expansionCode: "sv2",
+    expansionName: "Select Version Set Two",
+    collectorNumber: "020",
+    smallThumbnailUrl: "",
+    mediumThumbnailUrl: "",
+  },
+};
+
+// No printing data at all, but a resolved no-match reason tag - group 2 (non-canonical).
+export const cardDocument16: CardDocument = {
+  identifier: "1jJ2kK3lL4mM5nN6oO7pP8qQ9rR0sS",
+  cardType: CardTypeSchema.Card,
+  name: "Card 16 (custom art, no printing)",
+  priority: 0,
+  source: sourceDocument1.key,
+  sourceName: sourceDocument1.name,
+  sourceId: sourceDocument1.pk,
+  sourceVerbose: sourceDocument1.name,
+  sourceType: SourceType.GoogleDrive,
+  sourceExternalLink: undefined,
+  dpi: 800,
+  searchq: "card 16",
+  extension: "png",
+  dateCreated: "1st January, 2000",
+  dateModified: "1st January, 2000",
+  size: 10_000_000,
+  smallThumbnailUrl: "",
+  mediumThumbnailUrl: "",
+  language: "EN",
+  tags: ["custom-art"],
+  printingTagStatus: PrintingTagStatus.NoMatch,
+};
+
+// Neither printing data nor a classifying reason tag - the "unknown" residue group.
+export const cardDocument17: CardDocument = {
+  identifier: "1kK2lL3mM4nN5oO6pP7qQ8rR9sS0tT",
+  cardType: CardTypeSchema.Card,
+  name: "Card 17 (unknown)",
+  priority: 0,
+  source: sourceDocument1.key,
+  sourceName: sourceDocument1.name,
+  sourceId: sourceDocument1.pk,
+  sourceVerbose: sourceDocument1.name,
+  sourceType: SourceType.GoogleDrive,
+  sourceExternalLink: undefined,
+  dpi: 800,
+  searchq: "card 17",
+  extension: "png",
+  dateCreated: "1st January, 2000",
+  dateModified: "1st January, 2000",
+  size: 10_000_000,
+  smallThumbnailUrl: "",
+  mediumThumbnailUrl: "",
+  language: "EN",
+  tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
+};
+
+// Carries a resolved "Full Art" attribute tag (for moment (b)'s "More like this" seeding) AND an
+// unresolved/suggested "Old Border" vote (for moment (c)'s filtered-selection confirm chip, once
+// a caller manually activates the "Old Border" filter - it's a different tag from the resolved
+// one on purpose, since a resolved tag could never surface the confirm chip - see
+// SelectVersionResults.tsx's own module comment for why).
+export const cardDocument18: CardDocument = {
+  identifier: "1lL2mM3nN4oO5pP6qQ7rR8sS9tT0uU",
+  cardType: CardTypeSchema.Card,
+  name: "Card 18 (resolved Full Art, suggested Old Border)",
+  priority: 0,
+  source: sourceDocument1.key,
+  sourceName: sourceDocument1.name,
+  sourceId: sourceDocument1.pk,
+  sourceVerbose: sourceDocument1.name,
+  sourceType: SourceType.GoogleDrive,
+  sourceExternalLink: undefined,
+  dpi: 800,
+  searchq: "card 18",
+  extension: "png",
+  dateCreated: "1st January, 2000",
+  dateModified: "1st January, 2000",
+  size: 10_000_000,
+  smallThumbnailUrl: "",
+  mediumThumbnailUrl: "",
+  language: "EN",
+  tags: ["Full Art"],
+  printingTagStatus: PrintingTagStatus.Unresolved,
+  tagVoteStatuses: {
+    "Full Art": TagVoteDisplayStatus.Resolved,
+    "Old Border": TagVoteDisplayStatus.Suggested,
   },
 };
 
