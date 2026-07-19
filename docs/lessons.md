@@ -61,6 +61,21 @@ genuine failures now shows Backend tests **green**, full stop — do not
 reintroduce a "known failure count" mental model; if Backend tests is red,
 something is actually wrong.
 
+**Update, 2026-07-19 (same day)**: `GOOGLE_DRIVE_API_KEY` was rotated to a
+new, presumably-valid value; confirmed via `gh secret list`'s updated
+timestamp. A re-run of Backend tests immediately after (PR #137, run
+29697208916, job 88223425164) still showed **4 skipped**, identical to
+before the rotation — the 2 Google-Drive-gated tests did NOT start
+running. Do not assume a secret rotation alone fixes this: `conftest.py`'s
+`google_drive_credentials_available()` also requires a working pyOpenSSL
+signing path (`OpenSSL.crypto.sign`), and #135's own commit message notes
+pyOpenSSL isn't installed in this CI runner at all ("CI's failure path
+never needs it") — the capability probe likely still fails on that half
+of the check regardless of the secret's validity. Confirming this needs
+either installing pyOpenSSL in the CI runner too, or checking the probe's
+actual failure point directly (a verbose pytest run showing per-test skip
+reasons, not just the summary count) — neither done yet.
+
 ## Concurrent worktree dev servers collide on port 3000
 
 Multiple Claude Code sessions/worktrees on this box can and do run `next dev` at the same time; Playwright's `webServer.reuseExistingServer: true`
