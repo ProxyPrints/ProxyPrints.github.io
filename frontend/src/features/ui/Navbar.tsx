@@ -162,10 +162,21 @@ export default function ProjectNavbar() {
               </Nav.Link>
             </Nav>
             <Nav className="ms-auto d-flex align-items-center">
+              {/* Deliberately NOT a Nav.Link (unlike its siblings below) - react-bootstrap's
+                  Nav.Link-with-eventKey renders its own <a href="#"> around whatever children
+                  it's given, and AuthWidget already supplies a real <a> of its own for both the
+                  signed-in ("Sign out") and signed-out ("Sign in") states. Wrapping a real anchor
+                  in another anchor is invalid, nested-anchor HTML - the outer <a> silently
+                  intercepts every click, so the inner Discord/logout link never actually
+                  navigates (no error, no console warning - see docs/lessons.md's "components
+                  that each correctly render an anchor can compose into invalid nested-anchor
+                  HTML" entry). A plain wrapper carrying the same m-0 py-0 spacing the Nav.Link
+                  used to provide is all this needs - AuthWidget has no use for Nav.Link's
+                  active/eventKey tab machinery anyway. */}
               {remoteBackendConfigured && (
-                <Nav.Link className="m-0 py-0" eventKey="auth">
+                <div className="m-0 py-0">
                   <AuthWidget />
-                </Nav.Link>
+                </div>
               )}
               <Nav.Link className="m-0 py-0" eventKey="download-manager">
                 <OpenDownloadManagerButton
