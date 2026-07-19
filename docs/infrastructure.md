@@ -30,6 +30,21 @@ them.
   rather than an assumed instance size — this box's own docker/host
   processes (live django/worker/nginx/postgres/elasticsearch, plus
   whatever pilot/backfill job is running) already share this ceiling.
+- Node versions (2026-07-19): the system default is still `/usr/bin/node`
+  v20.20.2 — unchanged, and a fresh login shell resolves to it
+  (confirmed via `bash -lc 'which node; node --version'`). A second
+  Node 22 LTS (v22.23.1) is installed alongside it via
+  [nvm](https://github.com/nvm-sh/nvm) (`$HOME/.nvm`, sourced from
+  `~/.bashrc` — the sourcing lines make `nvm` available in every new
+  interactive shell, but do NOT switch which `node` binary is on PATH
+  by default; that only happens if a shell explicitly runs `nvm use 22`/`nvm use default`). Reason: `wrangler` (image-cdn/, and the other
+  two Worker projects) requires Node >=22 and silently refuses to run
+  under v20 — confirmed fixed (`nvm use 22 && npx wrangler --version`
+  now succeeds; it errors under the bare system node). Use `nvm use 22`
+  in any shell/script that needs wrangler; everything else on this box
+  (the frontend's own `npm run dev`/`npm run build`, pre-commit's
+  eslint/prettier hooks, etc.) continues to run fine under the v20
+  default and was not touched.
 
 ### Startup vs. scheduled catalog sync
 
