@@ -97,6 +97,27 @@ def main():
                 worker_master,
                 False,
             ),
+            (
+                "git merge --ff-only origin/master, main checkout -> ALLOW (sync, not a merge decision)",
+                "Bash",
+                "git merge --ff-only origin/master",
+                main_master,
+                False,
+            ),
+            (
+                "git merge --ff-only origin/master, worker on master -> ALLOW",
+                "Bash",
+                "git merge --ff-only origin/master",
+                worker_master,
+                False,
+            ),
+            (
+                "git merge (no --ff-only) into master, worker on master -> DENY (still unconditional)",
+                "Bash",
+                "git merge origin/feature-x",
+                worker_master,
+                True,
+            ),
             ("non-Bash tool -> ALLOW regardless of content", "Edit", "gh pr merge", worker_task, False),
         ]
 

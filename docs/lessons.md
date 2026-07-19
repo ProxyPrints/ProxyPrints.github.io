@@ -7,7 +7,24 @@ tasks, not a one-off narrative (those belong in `journal/` or a feature doc
 under `docs/features/`).
 
 See also [[troubleshooting.md]] — same source material, indexed by the
-symptom you'd actually search for instead of by cause.
+symptom you'd actually search for instead of by cause. See also
+[`../corrections/`](../corrections/README.md) — the blameless incident
+ledger this list's entries sometimes get promoted from.
+
+## Triage ritual: this list is a queue, not an archive
+
+Prose here relies on a future reader noticing it before repeating the
+mistake — that's real, but weaker than a check that fires automatically.
+Periodically re-read this file with one question per entry: has this
+recurred, or is it phrased as an "always/never" rule? If so, promote it —
+turn it into a hook (`.claude/hooks/`), a lint rule, a CI check, or at
+minimum a test case — and trim the prose entry down to a pointer at the
+gate that replaced it, rather than deleting the history. The heuristic,
+verbatim: **if you're typing "always/never" in CLAUDE.md, that's a hook.**
+This repo's own no-self-merge convention going from a CLAUDE.md sentence to
+`.claude/hooks/guard_master.py` (2026-07-19) is the worked example — see
+`corrections/CORR-0004-guard-hook-word-boundary-false-positive.md` for what
+was caught fixing it.
 
 ## Trust CI history, not a matching local venv, once a change touches Django's model-import chain
 

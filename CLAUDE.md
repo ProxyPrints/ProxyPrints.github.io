@@ -67,11 +67,15 @@ not described here so it doesn't get re-derived.)
   end, distill any durable, reusable fact into the relevant `docs/` file
   below. Never append journal entries or historical narrative to this file
   — CLAUDE.md is orientation only.
-- `gh pr create`/`gh pr merge` against this repo: pass
-  `-R ProxyPrints/ProxyPrints.github.io` (GitHub's UI/CLI default the base
-  repo to the upstream parent for a fork). `gh pr merge` is blocked by an
-  auto-mode classifier absent unambiguous human review — don't work around
-  it, offer the user the choice instead.
+- `gh` CLI against this repo — pass `-R ProxyPrints/ProxyPrints.github.io`
+  explicitly. Confirmed broader than just `gh pr create`/`gh pr merge`:
+  `gh pr list` and `gh repo view` with no `-R` also default to the
+  upstream parent repo, not this fork (GitHub's fork-repo resolution, not
+  a `gh pr create`/`merge`-specific quirk). `git remote get-url origin`
+  is unaffected and is the reliable way to derive the slug in a script.
+  `gh pr merge` is blocked by an auto-mode classifier absent unambiguous
+  human review — don't work around it, offer the user the choice
+  instead.
 - **Merge-duty branch deletion**: never delete a branch in the same action
   as merging its PR. Precondition before deleting any branch:
   `gh pr list --base <branch>` must return empty (a stacked child PR
