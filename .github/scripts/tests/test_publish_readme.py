@@ -94,7 +94,10 @@ class TestBuildReadmeAgainstRealRepo(unittest.TestCase):
         """
         for source, names in (
             (publish_readme.IDENTITY_SOURCE, ["identity"]),
-            (publish_readme.SECTIONS_SOURCE, ["license", "documentation-pointer", "desktop-tool-pointer"]),
+            (
+                publish_readme.SECTIONS_SOURCE,
+                ["license", "license-provenance", "documentation-pointer", "desktop-tool-pointer"],
+            ),
         ):
             for name in names:
                 region = publish_readme.extract_region(REPO_ROOT, source, name)

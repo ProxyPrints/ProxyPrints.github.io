@@ -34,6 +34,8 @@ ProxyPrints is web-only and does not build or distribute the desktop autofill cl
 
 This project is licensed under the [GNU General Public License 3](https://www.gnu.org/licenses/gpl-3.0.en.html) — see [`LICENSE.md`](https://github.com/ProxyPrints/ProxyPrints.github.io/blob/master/LICENSE.md) for the full text. It is free to use, modify, and distribute.
 
+GPL-3.0. Complete corresponding source: this repository. Third-party-derived modules are listed in [`NOTICE`](https://github.com/ProxyPrints/ProxyPrints.github.io/blob/master/NOTICE).
+
 ## Documentation
 
 Full documentation lives on this repo's [Wiki](https://github.com/ProxyPrints/ProxyPrints.github.io/wiki), generated from [`docs/`](https://github.com/ProxyPrints/ProxyPrints.github.io/tree/master/docs).

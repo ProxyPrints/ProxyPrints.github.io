@@ -70,6 +70,17 @@ only) for deployment, hosting, and domain specifics.
   exists. Two independent sessions rebuilt #88 in parallel on the same day
   or the second, #95, rebuilt what #94 had already re-shipped and closed
   the duplicate.
+- **External code provenance**: external code enters this repo ONLY via
+  the absorption protocol (`docs/upstreaming/license-provenance.md` §3) —
+  bounded module, verbatim license header, `# PROVENANCE:` comment,
+  ledger row, `NOTICE` entry. PROTECTED CORE (federation/verdict/hash/
+  consensus modules — see that doc's §2 for the exact file list) accepts
+  _patterns_ from external code, never the code itself; if a needed
+  capability exists only as AGPL code elsewhere, reimplement from a
+  written description of its behavior, never from the source file.
+  Default posture repo-wide: referencing patterns from any public
+  codebase is always fine; actual code reuse is case-by-case and needs
+  owner sign-off, every time.
 - **Cloud/web sessions**: `WORKERS.md` and `CLAUDE.local.md` are
   server-local and won't exist in your clone — skip them. You're isolated:
   work on your named branch, push to origin, never to `master`; the owner
@@ -161,7 +172,30 @@ external reader's orientation to the whole fork, see
   gating, and the reserved-not-built catalog-stats chart slot.
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
-  Upstreaming workflow in `docs/infrastructure.md`).
+  Upstreaming workflow in `docs/infrastructure.md`); accurate through
+  2026-07-13 only, see readiness-audit.md §5 for what's changed since.
+- [`docs/upstreaming/readiness-audit.md`](docs/upstreaming/readiness-audit.md)
+  — full fork-vs-upstream diff decomposed into feature chunks, dependency
+  graph, the upstream-value/extraction-ease ladder (now with a
+  license-provenance column), and the branch architecture proposal. Phase
+  2 status (which branches are actually cut) lives at the top of this
+  file.
+- [`docs/upstreaming/drafts/`](docs/upstreaming/drafts/) — draft PR
+  descriptions for cut-but-not-sent `upstream-*` branches, one file per
+  branch, never opened without the owner sending it personally.
+- [`docs/upstreaming/conventions.md`](docs/upstreaming/conventions.md) —
+  one-page checklist any `upstream-fix-*`/`upstream-feat-*` branch must
+  satisfy, mined from our merged PR #467 and upstream's own recent PRs;
+  also covers the CI (`upstream-branch-verification.yml`,
+  `upstream-drift-monitor.yml`) that watches the ladder.
+- [`docs/upstreaming/drift-log.md`](docs/upstreaming/drift-log.md) —
+  auto-generated, edited in place weekly: does each `upstream-*` branch
+  still apply cleanly onto current `upstream/master`, and how far has
+  upstream moved. Detection only, never auto-rebases anything.
+- [`docs/upstreaming/license-provenance.md`](docs/upstreaming/license-provenance.md)
+  — the ladder's provenance sweep findings, the PROTECTED CORE module
+  list + its CI license lint, and the absorption protocol for any future
+  external-code intake (see "External code provenance" above).
 - [`docs/upstreaming/upstream-wiki-drift.md`](docs/upstreaming/upstream-wiki-drift.md)
   — weekly automated tracking of changes to chilli-axe/mpc-autofill's own
   wiki (detection only, never copied in).

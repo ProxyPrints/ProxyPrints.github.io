@@ -248,13 +248,33 @@ itself, not PR body text.
 
 #467 is also a variant on the cherry-pick convention above: our own fork
 had already fixed the identical bug in its own processing.ts (commit
-206a0266, mirroring backend PR #460), but that fork commit was not
-cherry-picked upstream — its message/context was fork-specific
-(references "our fork", "our master"). Instead the same two-line logical
-fix was hand-reapplied directly against upstream/master's own current
-tree. Cherry-pick remains the right default when a fix commit's content
-and narrative both port cleanly; hand-reapply when the original commit's
-framing doesn't.
+206a0266, merged as PR #20 / `121b5c06`, mirroring backend PR #460), but
+that fork commit was not cherry-picked upstream — its message/context was
+fork-specific (references "our fork", "our master"). Instead the same
+two-line logical fix was hand-reapplied directly against upstream/master's
+own current tree. Cherry-pick remains the right default when a fix
+commit's content and narrative both port cleanly; hand-reapply when the
+original commit's framing doesn't.
+
+**Absorption check, done at #467's merge (2026-07-18)**: does merging
+#467 upstream require anything on our side? No — verified, not assumed.
+Our `master` already carries the identical frontend fix (`121b5c06`,
+above), and cross-layer: the backend's `to_searchable()`
+(`cardpicker/search/sanitisation.py`) stopped stripping "the" via the
+literal shared upstream commit `4e960183` ("do not sanitise 'the' in card
+names", PR #460), merged into our `master` around 2026-07-04 — _before_
+our own frontend fix, which was written specifically to restore parity
+with it. Confirmed today both layers still agree by running the actual
+current `toSearchable`/`to_searchable` functions (Node + Python, not a
+re-read of the source) against 8 names including substring-only "the"
+cases ("Theros", "Bother") that a careless word-boundary bug could
+mishandle differently per-layer — byte-identical output on every case.
+Net: #467 merging upstream is upstream catching up to parity we already
+had via a different path (an earlier backend sync + our own independent
+frontend mirror); zero action required here. Recorded so this doesn't
+need re-deriving from git archaeology next time — see
+`docs/upstreaming/conventions.md`'s "back-absorption is a tracked task"
+note for the general habit this is an instance of.
 
 Notes if #463/#465 are revisited: #463's description incorrectly claimed a
 `{show && <PDFGenerator/>}` gate in `PDFGeneratorModal.tsx` was pre-existing

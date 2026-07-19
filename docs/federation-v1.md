@@ -55,11 +55,10 @@ adopting anything else this fork has built. That makes it the _only_
 plausibly upstream-shaped piece of the whole federation program —
 everything on the publisher side assumes the vote/consensus/moderation
 stack this fork built that upstream doesn't have. Tracked as a deferred
-entry on the upstream-readiness audit's own extraction ladder (that
-audit doc is on a sibling unmerged branch as of this writing, not yet a
-path this file can link to), gated on federation actually having a live
-peer to subscribe to — there's nothing real to extract or offer before
-that exists to prove the format against.
+entry (Tier 6) on `docs/upstreaming/readiness-audit.md`'s ladder, gated
+on federation actually having a live peer to subscribe to — there's
+nothing real to extract or offer before that exists to prove the format
+against.
 
 ## File shape
 
@@ -142,10 +141,11 @@ the human-backed gate; promotable to a gate-clearing mode later),
 mirroring Proposal G's `AUTHED_VOTE_GATE_MODE` idiom exactly: an
 env-driven flag plus a dedicated weight/treatment function, never a
 hand-coded branch scattered through the consensus resolvers (see
-`docs/proposals/proposal-g-user-accounts-saved-decks.md` §7 — note as of
-this writing that doc's own `AUTHED_VOTE_GATE_MODE` is itself still a
-HOLD spec, not yet built, so treat it as a design precedent, not proof
-the pattern is already live in code). Promotion should be **per-peer**,
+`docs/proposals/proposal-g-user-accounts-saved-decks.md` §7 — verified
+current, not assumed: `AUTHED_VOTE_GATE_MODE` is actually shipped
+(resolved for v1 as `"status_quo"` default, a real setting routed through
+`authed_vote_weight()`), so this is a live pattern to mirror, not just a
+design precedent still waiting to land). Promotion should be **per-peer**,
 not one global switch:
 once a specific peer's verdicts have measured reliability — `docs/theory.md`'s
 "Relation to Dawid-Skene reliability estimation" section already frames a

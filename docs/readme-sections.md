@@ -24,6 +24,12 @@ This project is licensed under the [GNU General Public License 3](https://www.gn
 
 <!-- END README-REGION -->
 
+<!-- README-REGION: license-provenance -->
+
+GPL-3.0. Complete corresponding source: this repository. Third-party-derived modules are listed in [`NOTICE`](https://github.com/ProxyPrints/ProxyPrints.github.io/blob/master/NOTICE).
+
+<!-- END README-REGION -->
+
 <!-- README-REGION: documentation-pointer -->
 
 Full documentation lives on this repo's [Wiki](https://github.com/ProxyPrints/ProxyPrints.github.io/wiki), generated from [`docs/`](https://github.com/ProxyPrints/ProxyPrints.github.io/tree/master/docs).

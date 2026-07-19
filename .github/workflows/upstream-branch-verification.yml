@@ -1,0 +1,161 @@
+name: Upstream branch verification
+
+# Verifies that our upstream-feat-*/upstream-fix-* branches (each a
+# self-contained extraction cut from upstream/master - see
+# docs/upstreaming/conventions.md) still pass upstream's OWN pre-commit
+# config and backend test suite when checked out in isolation. Mirrors
+# upstream's own test-pre-commit.yml / test-backend.yml recipes as
+# closely as possible rather than reinventing the checks.
+#
+# TRIGGER NOTE: GitHub Actions only evaluates a workflow file's triggers
+# against the ref that file exists on. Our upstream-feat-*/upstream-fix-*
+# branches are intentionally clean extractions with NO fork-only files
+# (including this one) - so a native `on: push: branches: [...]` scoped
+# to them can never fire; there's nothing on that ref for GitHub to read
+# a trigger from. The real substitute for "on push": fire
+# `workflow_dispatch` (with the `branch` input) right after cutting or
+# updating a branch - see conventions.md. The weekly schedule below is
+# the unattended catch-all for branches nobody re-triggers by hand.
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Monday 07:00 UTC, weekly
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: >-
+          Single upstream-feat-*/upstream-fix-* branch to verify. Leave
+          blank to verify every matching branch (same set the weekly run covers).
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      branches: ${{ steps.list.outputs.branches }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: list
+        run: |
+          if [ -n "${{ inputs.branch }}" ]; then
+            echo "branches=[\"${{ inputs.branch }}\"]" >> "$GITHUB_OUTPUT"
+          else
+            BRANCHES=$(git ls-remote --heads origin 'upstream-feat-*' 'upstream-fix-*' \
+              | sed 's#.*refs/heads/##' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            echo "branches=$BRANCHES" >> "$GITHUB_OUTPUT"
+          fi
+
+  verify:
+    needs: discover
+    if: needs.discover.outputs.branches != '[]'
+    strategy:
+      fail-fast: false
+      max-parallel: 1 # keeps the report-relay push step below race-free
+      matrix:
+        branch: ${{ fromJson(needs.discover.outputs.branches) }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_USER: mpcautofill
+          POSTGRES_PASSWORD: mpcautofill
+          POSTGRES_DB: mpcautofill
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - name: Checkout branch under test
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.branch }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Upstream pre-commit (mirrors upstream's test-pre-commit.yml)
+        id: precommit
+        run: |
+          pip install pre-commit
+          set +e
+          pre-commit run --all-files 2>&1 | tee precommit-output.txt
+          CODE=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Write Google Drive credentials (mirrors upstream's test-backend action)
+        uses: jsdaniell/create-json@v1.2.3
+        with:
+          name: "client_secrets.json"
+          json: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
+          dir: "MPCAutofill/"
+
+      - name: Upstream backend tests (mirrors upstream's test-backend.yml)
+        id: backend
+        working-directory: MPCAutofill
+        env:
+          MOXFIELD_SECRET: ${{ secrets.MOXFIELD_SECRET }}
+        run: |
+          pip install -r requirements.txt
+          set +e
+          pytest . 2>&1 | tee ../pytest-output.txt
+          CODE=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Build relay report
+        if: always()
+        run: |
+          mkdir -p report
+          {
+            echo '```'
+            echo "TASK: Upstream branch verification (automated) — ${{ matrix.branch }}"
+            echo "Ref checked: ${{ matrix.branch }} @ $(git rev-parse HEAD)"
+            echo "Trigger: ${{ github.event_name }}, run ${{ github.run_id }}"
+            echo
+            echo "WHAT RAN:"
+            echo "1. pre-commit run --all-files (upstream's pinned hook versions) — exit ${{ steps.precommit.outputs.exit_code }}"
+            echo "2. pytest . in MPCAutofill/ (upstream's test-backend recipe) — exit ${{ steps.backend.outputs.exit_code }}"
+            echo
+            echo "PRE-COMMIT OUTPUT (tail):"
+            echo '```'
+            tail -c 4000 precommit-output.txt 2>/dev/null || echo "(no output captured)"
+            echo '```'
+            echo
+            echo "BACKEND TEST OUTPUT (tail):"
+            echo '```'
+            tail -c 4000 pytest-output.txt 2>/dev/null || echo "(no output captured)"
+            echo '```'
+            echo
+            echo "INTERPRETATION: do not treat a failure here as a regression"
+            echo "without first cross-referencing this branch's own draft doc"
+            echo "(docs/upstreaming/drafts/<branch>.md) for its documented"
+            echo "expected-green baseline — known environmental gaps in this"
+            echo "fork's own CI (e.g. missing GOOGLE_DRIVE_API_KEY/"
+            echo "MOXFIELD_SECRET secrets) produce real, expected failures"
+            echo "unrelated to the branch's own code."
+            echo '```'
+          } > report/output.md
+
+      - name: Commit report to report-relay
+        if: always()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          SAFE_BRANCH=$(echo "${{ matrix.branch }}" | tr '/' '-')
+          for attempt in 1 2 3 4; do
+            rm -rf /tmp/relay
+            git clone --branch report-relay --depth 50 \
+              "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" /tmp/relay
+            mkdir -p /tmp/relay/docs/reports
+            cp report/output.md "/tmp/relay/docs/reports/$(date -u +%Y-%m-%d)-ci-${SAFE_BRANCH}.md"
+            (cd /tmp/relay && git add docs/reports && \
+              git commit -m "Upstream CI relay: ${{ matrix.branch }} (run ${{ github.run_id }})" && \
+              git push origin HEAD:report-relay) && break
+            sleep $((attempt * 5))
+          done
