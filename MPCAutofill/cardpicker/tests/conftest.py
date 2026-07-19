@@ -27,6 +27,35 @@ POSTGRES_PORT = 47000
 ELASTICSEARCH_PORT = 9300  # this is the default expected by `elasticsearch_nooproc`
 
 
+def google_drive_credentials_available() -> bool:
+    """
+    CI baseline cleanup, 2026-07-19: a real capability probe (mirrors the
+    `shutil.which("tesseract") is None` pattern already used for the OCR skip below) for the
+    two independent things known to break a real Google Drive call in this codebase (see
+    docs/troubleshooting.md) - a missing/invalid `client_secrets.json` (CI, no
+    GOOGLE_DRIVE_API_KEY repo secret configured -> `jsdaniell/create-json` writes an empty
+    file -> `json.decoder.JSONDecodeError` at credential-parse time) and a pyOpenSSL version
+    without `OpenSSL.crypto.sign` (local dev venvs, a drifted transitive dependency -> that
+    specific `AttributeError` only surfaces on the FIRST REAL API CALL's JWT signing, not at
+    credential-parse time, which is why the two environments fail with different exception
+    types for the same root problem: "no working real Google Drive credentials here").
+
+    No network call is made - `hasattr` catches the local case directly, and credential
+    *parsing* (not signing) already fails before any request would be sent in the CI case.
+    """
+    import OpenSSL.crypto
+
+    if not hasattr(OpenSSL.crypto, "sign"):
+        return False
+    try:
+        from cardpicker.sources.api import find_or_create_google_drive_service
+
+        find_or_create_google_drive_service()
+    except Exception:
+        return False
+    return True
+
+
 @pytest.fixture(scope="session")
 def postgres_container():
     postgres = PostgresContainer("postgres:16.0-alpine").with_bind_ports(5432, POSTGRES_PORT)
