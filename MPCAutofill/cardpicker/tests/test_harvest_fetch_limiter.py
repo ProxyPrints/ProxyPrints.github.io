@@ -256,11 +256,16 @@ class TestConfiguredDestinations:
     are policy, not something to lock down as a snapshot), but the invariants Stage B's design
     depends on."""
 
-    def test_google_image_paced_at_the_empirically_safe_rate(self):
-        # 3.0/s, not a higher number - Part 2's backfill is the only empirically-proven-safe
-        # sustained rate against this destination (see the module's own red-team-correction
-        # docstring).
-        assert GOOGLE_IMAGE.rate_per_sec == 3.0
+    def test_google_image_paced_at_probe_measured_ceiling(self):
+        # 8.0/s + max_concurrency=6, not a higher number - task #165's concurrency-raise probe
+        # (2026-07-19, docs/features/catalog-completion-plan.md's concurrency-probe table) is the
+        # empirical basis: concurrency=6 achieved 8.116/s clean on every dimension including its
+        # independent live-site canary, while concurrency=10's higher raw throughput (9.59/s) was
+        # REJECTED for a 2.43x canary-p95 latency regression despite zero Google quota events (see
+        # the module's own docstring). 8.0 sits a touch under the measured 8.116/s ceiling for
+        # margin.
+        assert GOOGLE_IMAGE.rate_per_sec == 8.0
+        assert GOOGLE_IMAGE.max_concurrency == 6
 
     def test_google_image_has_both_lockout_and_backoff_configured(self):
         assert GOOGLE_IMAGE.lockout_status_codes == frozenset({403})

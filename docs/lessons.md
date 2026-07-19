@@ -822,3 +822,21 @@ reason to accept the same gap again.
 `run_lands_identify` (the single end-of-loop `bulk_create()` calls),
 `docs/features/catalog-completion-plan.md`'s Part 1 (run-cohort
 safety).
+
+## A load probe that only watches the remote quota signal can still ship a config that degrades the live site
+
+Task #165's concurrency-raise probe (2026-07-19) stepped `GOOGLE_IMAGE.max_concurrency` 3→6→10
+while holding rate fixed. The remote quota signal alone said concurrency=10 was fine - zero Google
+429/403 events across the entire step. But an independent, unthrottled canary thread (sampling real
+live-site Worker-path image latency every 15s, separate from the probe's own traffic) caught what
+the quota signal missed: concurrency=10's p95 latency was 1.97s, a 2.43x regression over the
+concurrency=3 baseline's 0.81s, on the Worker path the harvest shares with live PDF export/bulk
+download. concurrency=6 (8.116/s achieved) was clean on both signals - zero lockout/backoff events
+AND a canary p95 of 0.39s, better than baseline - and became the chosen config
+(`harvest_fetch_limiter.GOOGLE_IMAGE`, docs/features/catalog-completion-plan.md's concurrency-probe
+table). Had the probe judged pass/fail on quota alone, it would have shipped concurrency=10 and
+degraded live-site image serving with no warning from the metric it was watching.
+
+**The rule going forward**: every future load probe against a destination shared with the live
+site carries an independent, user-facing canary as a first-class stop condition - never the remote
+quota/error-rate signal alone. A clean quota reading is necessary, not sufficient.
