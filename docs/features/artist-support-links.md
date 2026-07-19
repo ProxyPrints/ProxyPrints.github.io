@@ -48,8 +48,7 @@ started.
   with the link-etiquette attributes fixed regardless of caller:
   `target="_blank"`, `rel="noopener noreferrer"` (opening an
   attacker-controllable-by-nobody but still third-party page shouldn't
-  hand it a `window.opener` reference), `title="via MTG Artist
-  Connection"` (a hover disclosure of where the link goes, since the
+  hand it a `window.opener` reference), `title="via MTG Artist Connection"` (a hover disclosure of where the link goes, since the
   domain itself doesn't appear in the link text on either surface below),
   and a trailing `box-arrow-up-right` Bootstrap Icon so it reads as
   external at a glance. `data-testid="artist-support-link"` on the anchor
@@ -73,8 +72,7 @@ pending or unknown artist, since there'd be no name to build a URL from.
    place of the plain name text; `null` still renders `"Unknown"` as
    before, unchanged.
 2. **`/whatsthat`'s post-answer moment** (`QuestionFeed.tsx`'s `"artist"`
-   item type). `ArtistVotePicker` gained an optional `onArtistConfirmed?:
-   (artistName: string) => void` prop, called from inside its own
+   item type). `ArtistVotePicker` gained an optional `onArtistConfirmed?: (artistName: string) => void` prop, called from inside its own
    `submit()`'s success handler only when a real named artist was voted
    for (`!isUnknown && artistName != null` - "Unknown artist" never
    calls it, there's nothing to link). `QuestionFeed.tsx` wires this to
@@ -82,7 +80,7 @@ pending or unknown artist, since there'd be no name to build a URL from.
    rest of the per-question state - see the fetch effect's own comment on
    why that reset has to be unconditional, not dependency-array-keyed)
    and renders `"Art by <Name> - support them"` with the link right below
-   the picker once set. `ArtistVotePicker`'s *other* caller
+   the picker once set. `ArtistVotePicker`'s _other_ caller
    (`AttributeVotingPanel`, the Card Detail Modal's own voting surface)
    doesn't pass this prop, so its behaviour is unchanged - the confirm
    banner is specific to the `/whatsthat` funnel's own post-answer moment,
@@ -100,7 +98,7 @@ built, but that's a follow-on, not part of this change.
 
 `frontend/src/pages/about.tsx` credits MTG Artist Connection by name,
 right after the existing contributors section, explaining the link-out-
-only nature of the integration (traffic flows *to* their directory, not
+only nature of the integration (traffic flows _to_ their directory, not
 the other way) and inviting the actual site operator to reach out for a
 richer, blessed integration later.
 

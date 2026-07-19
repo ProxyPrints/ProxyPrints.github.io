@@ -163,9 +163,9 @@ export function QuestionFeed() {
   // "artist"-type item, via ArtistVotePicker's onArtistConfirmed below. Drives the post-answer
   // "Art by <Name> - support them" banner (see the artist item's render block) - reset on every
   // new item alongside the other per-question state, so it can't bleed into the next question.
-  const [confirmedArtistName, setConfirmedArtistName] = useState<
-    string | null
-  >(null);
+  const [confirmedArtistName, setConfirmedArtistName] = useState<string | null>(
+    null
+  );
   // A 429 from any vote-casting call below (printing, tag, artist) sets this instead of firing
   // the usual error toast - see the banner rendered near the top of the item below. In a
   // one-tap funnel, a rate-limit pause is an expected, honest condition, not a failure, so it

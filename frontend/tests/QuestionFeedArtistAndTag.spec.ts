@@ -82,9 +82,9 @@ test.describe("question feed - artist question type", () => {
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await expect(
-      page.getByTestId("question-feed-artist-support")
-    ).toHaveCount(0);
+    await expect(page.getByTestId("question-feed-artist-support")).toHaveCount(
+      0
+    );
 
     await page
       .getByTestId("artist-vote-picker")
@@ -100,7 +100,9 @@ test.describe("question feed - artist question type", () => {
     const link = banner.getByTestId("artist-support-link");
     await expect(link).toHaveAttribute(
       "href",
-      `https://www.mtgartistconnection.com/artist/${encodeURIComponent(canonicalArtist1.name)}`
+      `https://www.mtgartistconnection.com/artist/${encodeURIComponent(
+        canonicalArtist1.name
+      )}`
     );
     await expect(link).toHaveAttribute("target", "_blank");
     await expect(link).toHaveAttribute("rel", "noopener noreferrer");
@@ -122,9 +124,9 @@ test.describe("question feed - artist question type", () => {
     await page.getByRole("button", { name: "Unknown artist" }).click();
     await expect(page.getByText("Vote submitted")).toBeVisible();
 
-    await expect(
-      page.getByTestId("question-feed-artist-support")
-    ).toHaveCount(0);
+    await expect(page.getByTestId("question-feed-artist-support")).toHaveCount(
+      0
+    );
   });
 });
 

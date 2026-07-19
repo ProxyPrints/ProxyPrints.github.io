@@ -18,7 +18,10 @@
  */
 import React from "react";
 
-import { MTGArtistConnection, MTGArtistConnectionArtistBaseURL } from "@/common/constants";
+import {
+  MTGArtistConnection,
+  MTGArtistConnectionArtistBaseURL,
+} from "@/common/constants";
 import { Icon } from "@/components/icon";
 
 export function buildArtistSupportURL(artistName: string): string {

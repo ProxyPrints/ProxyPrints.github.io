@@ -51,7 +51,9 @@ test.describe("Artist Support Link - Card Detail Modal", () => {
     await expect(link).toContainText(canonicalArtist1.name);
     await expect(link).toHaveAttribute(
       "href",
-      `https://www.mtgartistconnection.com/artist/${encodeURIComponent(canonicalArtist1.name)}`
+      `https://www.mtgartistconnection.com/artist/${encodeURIComponent(
+        canonicalArtist1.name
+      )}`
     );
     await expect(link).toHaveAttribute("target", "_blank");
     await expect(link).toHaveAttribute("rel", "noopener noreferrer");
@@ -79,8 +81,8 @@ test.describe("Artist Support Link - Card Detail Modal", () => {
     await openDetailedView(page, cardDocument1.name);
 
     await expect(page.getByTestId("artist-support-link")).toHaveCount(0);
-    await expect(page.locator("tr", { hasText: "Canonical Aritst" })).toContainText(
-      "Unknown"
-    );
+    await expect(
+      page.locator("tr", { hasText: "Canonical Aritst" })
+    ).toContainText("Unknown");
   });
 });

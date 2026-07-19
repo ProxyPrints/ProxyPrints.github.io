@@ -74,11 +74,11 @@ export default function About() {
         <a href="https://www.mtgartistconnection.com" target="_blank">
           {MTGArtistConnection}
         </a>
-        , a community-maintained directory of Magic: the Gathering artists -
-        not affiliated with {ProjectName}. These links are built directly
-        from the artist&apos;s name with no verification that a matching page
-        exists; if you&apos;re an artist and want a richer, project-blessed
-        way to link your own storefront, get in touch.
+        , a community-maintained directory of Magic: the Gathering artists - not
+        affiliated with {ProjectName}. These links are built directly from the
+        artist&apos;s name with no verification that a matching page exists; if
+        you&apos;re an artist and want a richer, project-blessed way to link
+        your own storefront, get in touch.
       </p>
       <h3>Disclaimer</h3>
       <p>
