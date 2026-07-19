@@ -283,9 +283,7 @@ FORK_ONLY_TS_SYMBOLS = {
 
 TABLE_ROW_RE = re.compile(r"^\|(.+)\|\s*$", re.MULTILINE)
 BACKTICK_RE = re.compile(r"`([^`]+)`")
-TYPE_CHECKING_BLOCK_RE = re.compile(
-    r"if TYPE_CHECKING:\n((?:[ \t]+.*\n?)+)"
-)
+TYPE_CHECKING_BLOCK_RE = re.compile(r"if TYPE_CHECKING:\n((?:[ \t]+.*\n?)+)")
 PY_IMPORT_RE = re.compile(
     # `[^)]*` (not `.*`) so this also matches multi-line parenthesized
     # imports (`from x import (\n    a,\n    b,\n)`) without needing DOTALL.
@@ -308,17 +306,13 @@ def _py_file_entanglement(text: str) -> list[str]:
     for m in PY_IMPORT_RE.finditer(text):
         module = m.group(1) or m.group(3)
         names = m.group(2) or ""
-        if module and any(
-            module == fo or module.startswith(fo + ".") for fo in FORK_ONLY_PY_MODULES
-        ):
+        if module and any(module == fo or module.startswith(fo + ".") for fo in FORK_ONLY_PY_MODULES):
             findings.append(f"imports fork-only module `{module}`")
         if module in {"cardpicker.models", "cardpicker.schema_types"}:
             imported = {n.strip().split(" as ")[0] for n in names.split(",") if n.strip()}
             hit = imported & FORK_ONLY_PY_MODEL_SYMBOLS
             if hit:
-                findings.append(
-                    f"imports fork-only symbol(s) {sorted(hit)} from `{module}`"
-                )
+                findings.append(f"imports fork-only symbol(s) {sorted(hit)} from `{module}`")
     return findings
 
 
