@@ -96,7 +96,9 @@ class Command(BaseCommand):
             print(
                 f"[lands] singleton_votes({'would_cast' if dry_run else 'written'})={result.singleton_votes} "
                 f"tiebreak_votes({'would_cast' if dry_run else 'written'})={result.tiebreak_votes} "
-                f"ambiguous_phash={result.ambiguous_phash}"
+                f"ambiguous_phash={result.ambiguous_phash} "
+                f"residue_rows({'would_write' if dry_run else 'written'})="
+                f"{result.ambiguous_phash if dry_run else result.residue_written}"
             )
             print("[lands] per_name_candidate_counts (pre-artist-filter, full pool):")
             for name, count in sorted(result.per_name_candidate_counts.items(), key=lambda kv: -kv[1])[:20]:

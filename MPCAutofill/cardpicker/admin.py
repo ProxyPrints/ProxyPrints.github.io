@@ -18,6 +18,7 @@ from .models import (
     CardScanLog,
     CardTagVote,
     DFCPair,
+    LandsAmbiguousResidue,
     PilotRunLedger,
     Project,
     ProjectMember,
@@ -270,6 +271,14 @@ class AdminCardScanLog(admin.ModelAdmin[CardScanLog]):
     list_filter = ("anonymous_id", "skip_reason")
     search_fields = ("run_id",)
     ordering = ("-scanned_at",)
+
+
+@admin.register(LandsAmbiguousResidue)
+class AdminLandsAmbiguousResidue(admin.ModelAdmin[LandsAmbiguousResidue]):
+    list_display = ("card", "artist_name", "run_id", "candidate_pks", "created_at")
+    list_filter = ("run_id",)
+    search_fields = ("run_id", "artist_name")
+    ordering = ("-created_at",)
 
 
 @admin.register(SavedDeck)
