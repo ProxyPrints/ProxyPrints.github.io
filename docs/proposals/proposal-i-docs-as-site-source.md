@@ -403,3 +403,8 @@ silently dropped):
    the site's own chrome yet. Left out deliberately (a nav change is a
    real, visible UX decision this pass's "prove the plumbing" scope didn't
    ask for) rather than added silently.
+4. **`readme.md` folded into the pipeline as a third (`readme`) emit
+   mode** — audited (`docs/proposals/proposal-i-readme-pipeline.md`,
+   HOLD, content merge map + architecture sketch only) but not built;
+   gated on the owner reviewing that map's open items before any
+   restructure of `readme.md` itself begins.
