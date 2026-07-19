@@ -20,6 +20,9 @@ them.
   manual invocation after a rebuild — see "Startup vs. scheduled catalog
   sync" below; run it manually only if you want synchronous confirmation
   the catalog is populated before considering a rebuild done.
+- Server clock: UTC (confirmed via `timedatectl` — `Etc/UTC`, `+0000`).
+  All container logs, cron/`qcluster` schedules, and DB timestamps are
+  UTC — no per-session guessing needed.
 
 ### Startup vs. scheduled catalog sync
 

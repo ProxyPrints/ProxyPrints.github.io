@@ -97,7 +97,10 @@ block is the entire deliverable. Never reference session context ("as
 discussed above") without restating the fact inside the block. Blocked/
 partial work reports in the same structure ("WHAT SHIPPED: nothing —
 blocked at step N because X"). Applies to every hold point, completion,
-status update, and blocker report.
+status update, and blocker report. Timestamps in reports are UTC with
+the `Z` suffix (server clock is UTC — see
+[[docs/infrastructure.md]]); any time stated FOR THE OWNER also gets a
+local conversion in parentheses (owner is America/Toronto).
 
 For any report longer than ~10 lines, or whenever normal message
 delivery has been unreliable: commit the fenced block to a
