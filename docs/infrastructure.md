@@ -544,6 +544,35 @@ run) already dominate — a useful sanity check for `ImageEvidence`'s own
 eventual size, since it will carry meaningfully more per-row data (OCR
 TSV, multiple hashes, geometry) than either.
 
+### Stage C migration state (updated 2026-07-20)
+
+Migrations `0068`–`0072` are now applied to the **live production
+Postgres**, taking it from `0067` (the baseline above) to `0072`:
+`0068` creates the `ImageEvidence` table itself (Stage C's substrate,
+`content_hash`/`extractor_versions`/`run_id`/fetch-health columns);
+`0069`–`0071` add that table's geometry/bleed (issue #147),
+geometry-group layout/crop (issue #148), and OCR-group (issue #149)
+extractor fields respectively; `0072` adds `CardScanLog`'s
+`evidence_types_used`/`survivor_pks` instrumentation fields from issue
+#209's negative-vote work. All five are additive-only (`CreateModel`/
+`AddField`, no column drops or type changes), matching every other
+migration in this range's own stated additive-only property.
+
+Applied ad hoc, 2026-07-20, during the first `ImageEvidence`
+dataset-population run — a schema deploy step taken outside the
+documented `docker compose run --rm django python manage.py migrate`
+sequencing above, stated here as a factual departure, not silently
+folded into the normal deploy narrative. The `ImageEvidence` table
+itself, empty (0 rows) since the baseline snapshot above, now holds its
+first real cohort from that same run: `run_id=stagec-cohort-20260720-full`,
+~3,000+ rows and growing toward a 15,000-card target.
+
+**Not covered by this note**: migration `0073`
+(`imageevidence_symbol_crop_px_and_more`, the symbol-region extractor
+from issue #160) also exists in the repo as of this writing — its own
+production-deploy status is a separate, unconfirmed question, flagged
+as an open item rather than assumed either way.
+
 ## Testing infrastructure fixes
 
 - `tests/global-setup.ts` used to click a cookie-consent toast's "Opt out"
