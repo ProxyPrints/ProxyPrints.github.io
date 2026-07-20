@@ -727,3 +727,47 @@ immediately before and after any deploy/rebuild that's supposed to
 apply migrations, so a stale doc claim is caught by direct evidence
 rather than propagating silently through a chain of secondhand PR/doc
 narration.
+
+## A management-command test file is missing from the deployed prod container even though the command's own code fix is present
+
+**Symptom** (found 2026-07-20, during the Stage C fetch/compute timing
+diagnostic — `docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md`):
+`cardpicker/tests/test_run_image_evidence_cohort.py` (added by commit
+`0226a4de`, the `manager.shutdown()`-ordering fix) does not exist anywhere
+under `/MPCAutofill/MPCAutofill/cardpicker/tests/` inside the running
+`mpcautofill_django` container, confirmed via `find`. This is NOT simply
+"the container predates that commit" — the SAME commit's actual code fix
+(reading `stop_event.is_set()` into a local before `manager.shutdown()`) IS
+present in the container's own `run_image_evidence_cohort.py`, byte-verified
+via `docker cp` + diff against the current `master` checkout. So one file
+from a single commit is live in the deployed image and a second file from
+the identical commit is absent.
+
+**Ruled out, not confirmed**: `.dockerignore` does not exclude `tests/` (checked
+directly — only `frontend/test-results` and `test-results` are listed); the
+`Dockerfile`'s `COPY MPCAutofill /MPCAutofill/MPCAutofill` copies the whole
+directory unconditionally, with no stage-specific exclusion of `tests/` for
+the `webserver`/`worker` targets. Neither explains a single-file gap within
+one commit.
+
+**Cause: not determined this session** — plausible candidates (an
+out-of-band hotfix of just the command file without a full rebuild; a build
+that ran from a checkout mid-commit; some other test-discovery quirk) were
+not investigated further, since this diagnostic's own actual verification
+need (does the new `--profile` code run correctly against a real prod
+cohort) was satisfiable directly via live `--dry-run` invocations instead of
+via this specific unit test. Left open rather than guessed at.
+
+**Workaround used this session**: `docker cp` the test file (along with the
+two modified source files) into the running container before testing, then
+`docker cp` the pre-diagnostic originals back afterward (diff-verified
+clean) — see the report above for the full sequence. This is a workaround
+for verifying a specific change against a live container, not a fix for the
+underlying gap.
+
+**If you hit this again**: before assuming a rebuild will restore parity,
+diff the deployed container's file tree against the exact commit `git log`
+says built it (`get_baked_git_sha`/`GIT_SHA` file, `cardpicker.utils`) file
+list, not just a spot-check of the files you happen to be touching — this
+gap was found by accident (checking whether a stub needed updating), not by
+a systematic audit, so other quietly-missing files may exist unnoticed.

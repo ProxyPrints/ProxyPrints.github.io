@@ -54,10 +54,15 @@ class _SyncPoolStub:
         return future
 
 
-def _stub_process_one_card(card_id: int, dry_run: bool, run_id: str, stop_event: Any) -> tuple[int, str]:
+def _stub_process_one_card(
+    card_id: int, dry_run: bool, run_id: str, stop_event: Any, profile: bool = False
+) -> tuple[int, str, Any]:
     """Replaces the real per-card work unit - no DB fetch, no `extract_card_evidence`/
-    `persist_evidence` call, just the (card_id, outcome) tuple `handle()` consumes."""
-    return card_id, "ok"
+    `persist_evidence` call, just the (card_id, outcome, profile) tuple `handle()` consumes.
+    `profile` (2026-07-20 diagnostic addition) is accepted but unused here - the stub never
+    produces a real timing breakdown, matching the real function's own `None` when --profile is
+    not passed."""
+    return card_id, "ok", None
 
 
 @pytest.mark.django_db
