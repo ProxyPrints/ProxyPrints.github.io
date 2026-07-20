@@ -67,6 +67,21 @@ DEDUCTIVE_BACKFILL_ANONYMOUS_ID = "deductive-backfill-v1"
 OCR_CONFIDENCE_BOTH = 0.85  # set code + collector number both parsed and matched
 OCR_CONFIDENCE_COLLECTOR_ONLY = 0.75  # pre-M15 cards: no set code printed on the collector line
 PHASH_CONFIDENCE = 0.8
+# issue #207: confidence for a real is_no_match vote cast from a validated-but-unmatched OCR
+# read ("parsed-but-no-match", post-ambiguous-split) - deliberately below the match-tier
+# confidences above. Purely informational (vote_consensus weights by `source`, never
+# `confidence` - see local_fallback.GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE's own comment for the
+# same point made about attribute votes), but an honest record that a validated non-match is a
+# somewhat weaker conclusion than a validated match: the parse could still be a misread of a
+# candidate that does exist but wasn't captured correctly, whereas a real match's exact-string
+# agreement is stronger positive confirmation.
+OCR_NO_MATCH_CONFIDENCE = 0.6
+# issue #207: same rationale as OCR_NO_MATCH_CONFIDENCE, for fallback's "eliminated" outcome
+# (every sub-check that produced a reading agrees no candidate fits) - below
+# FALLBACK_CONFIDENCE_SINGLE_EVIDENCE/MULTI_EVIDENCE (0.7/0.8, see local_fallback.py) for the
+# same reason: a negative conclusion from noisy sub-checks is weaker evidence than a positive
+# one landing on a single specific candidate.
+FALLBACK_NO_MATCH_CONFIDENCE = 0.6
 # Basic lands and staple commons can carry hundreds of printings (Forest alone: 944 in the
 # live pilot's own eligible pool, confirmed live 2026-07-15) - and "multi-candidate names
 # first" ordering puts exactly those names first, meaning an uncapped pilot run would try to
@@ -96,9 +111,14 @@ EXCLUDED_RESOLVED_TAGS = ["custom-art", "non-english"]
 # "frame-mismatch" is deliberately re-scannable because Part 3's own dual-yield design needs to
 # revisit these cards for artist extraction even though the printing vote stays withheld - a
 # permanent skip here would silently starve that future consumer of its own input. Every OTHER
-# skip_reason ("no-text", "parsed-but-no-match", "no-clear-winner", etc.) represents a genuine,
-# repeatable negative conclusion against the same deterministic image/candidates - re-scanning
-# those would just burn CDN budget to re-derive the identical answer.
+# skip_reason ("no-text", "no-clear-winner-distance"/"no-clear-winner-margin", "ambiguous",
+# "no-evidence", "too-many-candidates", etc.) represents a genuine, repeatable negative
+# conclusion against the same deterministic image/candidates - re-scanning those would just burn
+# CDN budget to re-derive the identical answer. Two of the reasons that USED to live in this
+# category ("parsed-but-no-match", "eliminated") no longer appear as a skip_reason at all as of
+# issue #207 - they're strong enough negative evidence to cast a real `is_no_match` vote instead,
+# which already excludes the card from re-selection via its own anonymous_id (see
+# _eligible_base_queryset), no scan-log/rescannability bookkeeping needed for them any more.
 RESCANNABLE_SKIP_REASONS = frozenset({"unfetchable-image", "frame-mismatch"})
 
 Engine = Literal["ocr", "phash"]
@@ -427,6 +447,12 @@ class CardOutcome:
     # symbol strip, border-sample bands) gets normalized against this reading via
     # local_fallback.normalize_crop_box, so it has to be known before any of them run, not after.
     bleed_class: Optional[str] = None
+    # issue #207 instrumentation: the (possibly expansion_hint-narrowed, see
+    # _narrow_candidates_by_expansion_hint) candidate pks this card's engines actually matched
+    # against - captured here so the write loop can record fallback's trivially-known "no
+    # candidate survived any filter" (no-evidence) survivor set without re-querying or
+    # re-narrowing anything itself.
+    candidate_pks_considered: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -468,6 +494,16 @@ def run_ocr_for_card(
     variants = local_ocr.preprocess_variants(cropped)
 
     result = OcrCardResult()
+    # PREREQUISITE (issue #207): local_ocr.validate_against_candidates already returns a
+    # distinct "ambiguous" outcome (>1 candidate on a collector-number-only match) separately
+    # from "parsed-but-no-match" (0 candidates) - this loop used to discard that distinction
+    # entirely (only ever inspecting `matched`, never `reason`, on a non-match), silently
+    # folding a genuinely different outcome into "parsed-but-no-match" below. Tracked across
+    # every preprocessing variant (not just the last one tried) and given priority over
+    # "parsed-but-no-match" if any variant produced it: "ambiguous" means the read DID match
+    # something (more than one something), which is real evidence the parse was plausible, not
+    # the same as every variant failing to match anything at all.
+    saw_ambiguous = False
     for variant in variants:
         raw_text = local_ocr.run_tesseract(variant)
         result.raw_texts.append(raw_text)
@@ -481,8 +517,60 @@ def run_ocr_for_card(
                 engine="ocr", printing_pk=matched.pk, confidence=confidence, detail=raw_text.strip()
             )
             return result
-    result.skip_reason = "parsed-but-no-match" if result.parsed_a_collector_number else "no-text"
+        if reason == "ambiguous":
+            saw_ambiguous = True
+    if saw_ambiguous:
+        result.skip_reason = "ambiguous"
+    elif result.parsed_a_collector_number:
+        result.skip_reason = "parsed-but-no-match"
+    else:
+        result.skip_reason = "no-text"
     return result
+
+
+def _hamming_distance(a: int, b: int, bits: int = 64) -> int:
+    """Standard Hamming distance (popcount of XOR) between two `bits`-wide two's-complement
+    ints - mathematically identical to `imagehash.ImageHash.__sub__` on the two hashes those
+    ints encode (verified empirically against imagehash's own subtraction across 20 random
+    64-bit hash pairs before use, not assumed), but computed here as pure integer arithmetic
+    with no dependency on any of local_phash.py's own (PROTECTED CORE, see
+    docs/upstreaming/license-provenance.md §2) private helpers or decision logic."""
+    mask = (1 << bits) - 1
+    return bin((a & mask) ^ (b & mask)).count("1")
+
+
+def _classify_no_clear_winner(
+    card_hash: int,
+    candidates_with_hashes: list[tuple["CandidatePrinting", int]],
+    distance_threshold: int,
+    margin: int,
+) -> str:
+    """Issue #207 instrumentation: local_phash.find_best_match (PROTECTED CORE) deliberately
+    folds two different reasons a card fails to produce a phash vote into one "no-clear-winner"
+    skip_reason - the best distance was over threshold, or the runner-up was too close behind it.
+    Splitting them for a future ranked-vote decision needs to know which applies, without editing
+    that function's own decision logic. This re-derives the same distance ranking from the exact
+    same inputs the caller already computed and passed to find_best_match (`card_hash`,
+    `candidates_with_hashes`) using only pure arithmetic (_hamming_distance, not a re-tuned or
+    independently-invented comparison) - `distance_threshold`/`margin` are still find_best_match's
+    own values, passed straight through, just re-applied here to classify which branch fired.
+    Only ever called when find_best_match itself already returned "no-clear-winner" (i.e.
+    `candidates_with_hashes` is non-empty - "no-hashable-candidates" is find_best_match's own
+    distinct outcome for the empty case and is never reclassified)."""
+    scored = sorted(
+        (
+            (candidate, _hamming_distance(card_hash, candidate_hash))
+            for candidate, candidate_hash in candidates_with_hashes
+        ),
+        key=lambda pair: pair[1],
+    )
+    best_distance = scored[0][1]
+    runner_up_distance = scored[1][1] if len(scored) > 1 else None
+    if best_distance > distance_threshold:
+        return "no-clear-winner-distance"
+    assert runner_up_distance is not None and (runner_up_distance - best_distance) <= margin  # the only other way
+    # find_best_match returns "no-clear-winner" - a margin-too-tight runner-up, not a threshold miss.
+    return "no-clear-winner-margin"
 
 
 def run_phash_for_card(
@@ -518,6 +606,8 @@ def run_phash_for_card(
 
     match, reason = local_phash.find_best_match(card_hash, candidates_with_hashes, distance_threshold, margin)
     if match is None:
+        if reason == "no-clear-winner":
+            reason = _classify_no_clear_winner(card_hash, candidates_with_hashes, distance_threshold, margin)
         return None, reason
     detail = f"distance={match.distance} runner_up={match.runner_up_distance}"
     return EngineVote(engine="phash", printing_pk=match.candidate.pk, confidence=PHASH_CONFIDENCE, detail=detail), ""
@@ -603,6 +693,7 @@ def _compute_card(
     # card's own expansion_hint if it has one - `selected.card`/`card_id` above still reference
     # the ORIGINAL card either way; only the candidate list used for matching changes.
     selected = _narrow_candidates_by_expansion_hint(selected)
+    outcome.candidate_pks_considered = [c.pk for c in selected.candidates]
 
     outcome.image_fetched = image is not None
     bleed_class = local_fallback.classify_bleed_edge(image) if image is not None else None
@@ -661,6 +752,12 @@ class PilotResult:
     # for this engine (a PilotResult can exist as a placeholder before any work happens).
     run_id: str = ""
     votes_written: int = 0
+    # issue #207: real is_no_match votes cast from a genuine whole-candidate-set no-match
+    # conclusion (OCR's "parsed-but-no-match", fallback's "eliminated") - counted separately
+    # from votes_written (which names a specific printing) rather than folded into it, so
+    # existing callers/tests reading votes_written as "a printing was identified" don't silently
+    # change meaning.
+    no_match_votes_written: int = 0
     skip_counts: dict[str, int] = field(default_factory=lambda: collections.defaultdict(int))
     disagreements: list[dict[str, object]] = field(default_factory=list)
     audit: list[dict[str, object]] = field(default_factory=list)  # per-card checkpoint detail
@@ -1121,15 +1218,44 @@ def run_pilot(
                                 card_id, outcome.ocr_vote.printing_pk, OCR_ANONYMOUS_ID, outcome.ocr_vote.confidence
                             )
                     elif outcome.ocr_skip_reason and result_ocr is not None:
-                        result_ocr.skip_counts[outcome.ocr_skip_reason] += 1
-                        scan_log_batch.append(
-                            CardScanLog(
-                                card_id=card_id,
-                                anonymous_id=OCR_ANONYMOUS_ID,
-                                run_id=run_id,
-                                skip_reason=outcome.ocr_skip_reason,
+                        if outcome.ocr_skip_reason == "parsed-but-no-match":
+                            # issue #207: a syntactically valid collector-line read that matches
+                            # NONE of this card's own candidates is genuine evidence against the
+                            # WHOLE candidate set (unlike "ambiguous", split out above, which is
+                            # evidence FOR more than one candidate, not against the set) - cast as
+                            # a real is_no_match vote, not merely logged as an abstention. Same
+                            # "the vote IS the record, no scan-log row needed" convention a
+                            # positive vote already follows (see
+                            # TestScanLog.test_a_voted_card_gets_no_scan_log_row) - the
+                            # anonymous_id exclusion in _eligible_base_queryset already covers
+                            # this row for idempotence, no separate scan-log-based exclusion
+                            # needed.
+                            votes_batch.append(
+                                CardPrintingTag(
+                                    card_id=card_id,
+                                    printing_id=None,
+                                    is_no_match=True,
+                                    anonymous_id=OCR_ANONYMOUS_ID,
+                                    source=VoteSource.OCR,
+                                    confidence=OCR_NO_MATCH_CONFIDENCE,
+                                    run_id=run_id,
+                                )
                             )
-                        )
+                            result_ocr.no_match_votes_written += 1
+                            result_ocr.audit.append({"card_id": card_id, "no_match_reason": "parsed-but-no-match"})
+                            if card_id not in written_card_ids:
+                                written_card_ids.append(card_id)
+                                batch_written_card_ids.append(card_id)
+                        else:
+                            result_ocr.skip_counts[outcome.ocr_skip_reason] += 1
+                            scan_log_batch.append(
+                                CardScanLog(
+                                    card_id=card_id,
+                                    anonymous_id=OCR_ANONYMOUS_ID,
+                                    run_id=run_id,
+                                    skip_reason=outcome.ocr_skip_reason,
+                                )
+                            )
 
                     if outcome.phash_vote is not None and result_phash is not None:
                         if printing_vote_withheld_for_frame_mismatch:
@@ -1211,15 +1337,61 @@ def run_pilot(
                                 outcome.fallback_vote.confidence,
                             )
                     elif outcome.fallback_skip_reason:
-                        result_fallback.skip_counts[outcome.fallback_skip_reason] += 1
-                        scan_log_batch.append(
-                            CardScanLog(
-                                card_id=card_id,
-                                anonymous_id=FALLBACK_ANONYMOUS_ID,
-                                run_id=run_id,
-                                skip_reason=outcome.fallback_skip_reason,
+                        if outcome.fallback_skip_reason == "eliminated":
+                            # issue #207: the evidence-combination intersection narrowed to ZERO
+                            # surviving candidates - every sub-check that produced a reading
+                            # agrees none of this card's own candidates fit, which is genuine
+                            # whole-set no-match evidence (unlike "ambiguous", more than one
+                            # candidate still fits, or "no-evidence", no sub-check produced a
+                            # reading at all - both stay abstentions, below). Same "the vote IS
+                            # the record" convention as the OCR branch above.
+                            votes_batch.append(
+                                CardPrintingTag(
+                                    card_id=card_id,
+                                    printing_id=None,
+                                    is_no_match=True,
+                                    anonymous_id=FALLBACK_ANONYMOUS_ID,
+                                    source=VoteSource.OCR,
+                                    confidence=FALLBACK_NO_MATCH_CONFIDENCE,
+                                    run_id=run_id,
+                                )
                             )
-                        )
+                            result_fallback.no_match_votes_written += 1
+                            result_fallback.audit.append(
+                                {
+                                    "card_id": card_id,
+                                    "no_match_reason": "eliminated",
+                                    "evidence": outcome.fallback_evidence_types,
+                                }
+                            )
+                            if card_id not in written_card_ids:
+                                written_card_ids.append(card_id)
+                                batch_written_card_ids.append(card_id)
+                        else:
+                            result_fallback.skip_counts[outcome.fallback_skip_reason] += 1
+                            # issue #207 instrumentation (code-only, no ranked-vote schema built
+                            # here): survivor_pks is the trivial, zero-recomputation case for
+                            # "no-evidence" (nothing filtered anything, so every candidate this
+                            # card's engines considered "survived" by definition) - left `null`
+                            # for "ambiguous", where the actual narrowed survivor set isn't
+                            # recoverable without either reimplementing local_fallback's
+                            # border/artist/symbol sub-checks a second time here, or having
+                            # FallbackOutcome expose it directly (a protected-core change, open
+                            # item - see this PR's body, not built in this change).
+                            scan_log_batch.append(
+                                CardScanLog(
+                                    card_id=card_id,
+                                    anonymous_id=FALLBACK_ANONYMOUS_ID,
+                                    run_id=run_id,
+                                    skip_reason=outcome.fallback_skip_reason,
+                                    evidence_types_used=outcome.fallback_evidence_types,
+                                    survivor_pks=(
+                                        outcome.candidate_pks_considered
+                                        if outcome.fallback_skip_reason == "no-evidence"
+                                        else None
+                                    ),
+                                )
+                            )
 
                 # border/frame attribute votes are independent of printing-vote success or the
                 # consistency-check outcome above - they fire for any card a border/frame reading
