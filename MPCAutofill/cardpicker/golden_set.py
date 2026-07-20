@@ -86,12 +86,53 @@ class GoldenExpectation:
 # 30 (task #145 allows waiving cards per extractor, e.g. a pre-M15-frame case a not-yet-built
 # frame-aware extractor doesn't apply to yet).
 GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
-    # fetch_health's only real expectation is "the fetch succeeds" - a golden card that starts
-    # 404ing would mean the set itself has gone stale (see get_golden_cards()'s own docstring
-    # about deliberate replacement), not a fetch_health regression, so this list exists mostly
-    # to establish the convention other extractors will follow, not because fetch_health has
-    # anything subtle to assert.
-    "fetch_health": [GoldenExpectation(card_id=cid, value=True) for cid in GOLDEN_CARD_IDS],
+    # fetch_health (completed by issue #150's re-spec, #215/#216): the original expectation was
+    # a bare `True` ("the fetch succeeds is the only real expectation") - #215 adds
+    # `fetch_image_format`, a discrete/stable fact (the fetched image's own PIL-reported format,
+    # e.g. "PNG"/"JPEG" - not a measurement subject to library-version drift), so it's pinned
+    # alongside `fetch_ok` in the same dict-value style legal_line/artist_ocr already use for a
+    # multi-field extractor. `fetch_latency_ms` is NOT pinned here - real wall-clock timing,
+    # the most volatile value this whole module gathers (178ms-1074ms across this same real run,
+    # 2026-07-20) - same "exclude the continuous/brittle" rationale every prior extractor's own
+    # comment gives for width/height/aspect_ratio/raw OCR text/the raw phash int. Recorded
+    # 2026-07-20 (issue #216) against a real, no-persistence extract_card_evidence() run over all
+    # 30 golden cards, same host-venv/real-network-fetch method as every extractor above -
+    # 30/30 fetched cleanly (PNG or JPEG, no fetch_failed on this real run).
+    "fetch_health": [
+        GoldenExpectation(card_id=cid, value=value)
+        for cid, value in {
+            35: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            37: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            40: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            37962: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            39520: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            41039: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            102138: {"fetch_ok": True, "fetch_image_format": "JPEG"},
+            128981: {"fetch_ok": True, "fetch_image_format": "JPEG"},
+            144933: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            145081: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            145532: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            147855: {"fetch_ok": True, "fetch_image_format": "JPEG"},
+            150472: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            159175: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            161020: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            175889: {"fetch_ok": True, "fetch_image_format": "JPEG"},
+            189166: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            189921: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            190895: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            193523: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            194684: {"fetch_ok": True, "fetch_image_format": "JPEG"},
+            199986: {"fetch_ok": True, "fetch_image_format": "JPEG"},
+            200330: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            200668: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            204427: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            207913: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            208337: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            208569: {"fetch_ok": True, "fetch_image_format": "JPEG"},
+            214113: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            217783: {"fetch_ok": True, "fetch_image_format": "PNG"},
+        }.items()
+    ],
     # geometry_bleed (task #147, recorded 2026-07-19 against a real extract_card_evidence() run
     # over all 30 golden cards at DEFAULT_FETCH_DPI - no persistence, see the task's own
     # VERIFICATION notes for how this was gathered). `value` is only `bleed_class` - the single
@@ -542,6 +583,154 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
             208569: {"legal_line_copyright_year": "2025", "legal_line_proxy_marker_detected": True},
             214113: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
             217783: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
+        }.items()
+    ],
+    # quality_signals (public issue #150's re-spec, closes the golden-gate gap public issue #216
+    # tracked - #215 shipped this extractor without golden expectations since the isolated
+    # worktree it built in had no route to prod credentials; recorded 2026-07-20 against a real,
+    # no-persistence extract_card_evidence() run over all 30 golden cards - same host-venv/real-
+    # network-fetch method as every extractor above). `value` is only `image_is_truncated` - the
+    # one discrete/stable fact this extractor produces; `blur_variance`/`image_entropy` are real
+    # but continuous, computed-float signals (same "exclude the continuous/brittle" rationale
+    # geometry_bleed's own comment gives for omitting width/height/aspect_ratio) and are
+    # deliberately NOT part of the golden assertion. 0/30 truncated on this real run - a genuine
+    # all-negative outcome (real fetched production images essentially never arrive
+    # part-way-downloaded), not a placeholder - kept as-is per every prior extractor's own "don't
+    # discard a real all-negative/all-positive outcome" rationale (see e.g. artist_ocr's comment).
+    "quality_signals": [GoldenExpectation(card_id=cid, value=False) for cid in GOLDEN_CARD_IDS],
+    # color_profile (public issue #150's re-spec, same #216 golden-gate closure as quality_signals
+    # above, recorded the same 2026-07-20 run). Unlike every other extractor in this module,
+    # color_profile has NO discrete signal at all - `color_mean_rgb`/`color_stddev_rgb` are both
+    # inherently continuous per-channel floats, so - matching the "exclude the continuous/brittle"
+    # rationale used everywhere else - no per-card numeric value is hard-pinned as a golden
+    # assertion here; the real recorded mean/stddev pair per card is kept below purely as a
+    # documentation/audit artifact (so a future reader can see what this real run actually
+    # produced), not as something `test_golden_set.py` compares for exact equality - that test
+    # only checks shape/type/range, the same structural-only bar `crop_coordinates`'s own test
+    # applies to its pixel-coordinate lists.
+    "color_profile": [
+        GoldenExpectation(card_id=cid, value=value)
+        for cid, value in {
+            35: {
+                "color_mean_rgb": [139.81012241653417, 140.19508903020667, 135.60421780604133],
+                "color_stddev_rgb": [99.1119555446108, 96.75477321041289, 95.15856582033364],
+            },
+            37: {
+                "color_mean_rgb": [111.77959777424483, 105.00459141494436, 105.54835135135136],
+                "color_stddev_rgb": [103.92755072475939, 101.13609218607814, 96.17868845881169],
+            },
+            40: {
+                "color_mean_rgb": [80.36252305246423, 56.73456120826709, 33.64837519872814],
+                "color_stddev_rgb": [75.21870718710677, 62.861961234348755, 51.32968758338313],
+            },
+            37962: {
+                "color_mean_rgb": [68.91262769377308, 58.54482994007223, 48.21256657538596],
+                "color_stddev_rgb": [67.2164901045425, 50.10949742702105, 42.43850129571073],
+            },
+            39520: {
+                "color_mean_rgb": [92.87160966276011, 119.68808419038507, 116.37506976002551],
+                "color_stddev_rgb": [83.30097020314668, 91.67270626087823, 95.11230037297078],
+            },
+            41039: {
+                "color_mean_rgb": [54.56448377581121, 47.22069361396795, 51.61741369688272],
+                "color_stddev_rgb": [54.761924243268844, 53.9299069131776, 54.20238018224016],
+            },
+            102138: {
+                "color_mean_rgb": [71.3525294117647, 62.1296279809221, 46.57954848966614],
+                "color_stddev_rgb": [86.27136368466799, 79.16854832547676, 64.36630281085428],
+            },
+            128981: {
+                "color_mean_rgb": [119.46929888712242, 98.3749427662957, 88.18945310015899],
+                "color_stddev_rgb": [96.06247383542262, 94.11121093496446, 85.84653356617774],
+            },
+            144933: {
+                "color_mean_rgb": [75.15981717011128, 87.9813227344992, 68.31494435612083],
+                "color_stddev_rgb": [64.61337304889078, 62.9701860786877, 59.29480774061844],
+            },
+            145081: {
+                "color_mean_rgb": [94.22175237184086, 105.44589651598501, 97.484960535757],
+                "color_stddev_rgb": [64.11770334884149, 68.39404762813933, 75.49383214499166],
+            },
+            145532: {
+                "color_mean_rgb": [96.02053237527558, 88.13167959500286, 87.32272719849759],
+                "color_stddev_rgb": [79.38523526098373, 75.87565089585176, 76.79290135625058],
+            },
+            147855: {
+                "color_mean_rgb": [65.42386486486487, 81.48272337042926, 96.4989920508744],
+                "color_stddev_rgb": [50.48388866016572, 51.12573702252875, 58.161586153684766],
+            },
+            150472: {
+                "color_mean_rgb": [97.49457641127366, 86.77417307215472, 70.29346392263824],
+                "color_stddev_rgb": [86.17073737264721, 79.36523002530849, 67.09319354188236],
+            },
+            159175: {
+                "color_mean_rgb": [116.18824324324325, 96.68753577106519, 52.06923529411765],
+                "color_stddev_rgb": [85.44946004901945, 70.34514077272553, 44.3022600397525],
+            },
+            161020: {
+                "color_mean_rgb": [162.43479231443834, 128.22652316032847, 113.1832352706689],
+                "color_stddev_rgb": [82.07103528957988, 89.53020924558147, 96.75845322495883],
+            },
+            175889: {
+                "color_mean_rgb": [100.36596025437201, 104.42405246422894, 108.96277106518284],
+                "color_stddev_rgb": [75.079743710934, 74.805056577236, 77.75792455957433],
+            },
+            189166: {
+                "color_mean_rgb": [131.28133669814392, 116.78950993161837, 97.8120205144904],
+                "color_stddev_rgb": [101.44753298455727, 94.64573240945515, 83.75318342246561],
+            },
+            189921: {
+                "color_mean_rgb": [40.7265470780515, 42.71297137845811, 39.28782747349119],
+                "color_stddev_rgb": [44.88836695836624, 47.13738338459261, 45.816211066433546],
+            },
+            190895: {
+                "color_mean_rgb": [69.2739761526232, 86.35349443561208, 91.3556025437202],
+                "color_stddev_rgb": [65.97877008863992, 69.73554548438791, 69.91237378232972],
+            },
+            193523: {
+                "color_mean_rgb": [91.07454689984102, 108.35074562798093, 118.5264626391097],
+                "color_stddev_rgb": [73.6384340152774, 77.11219305484074, 84.36171318246258],
+            },
+            194684: {
+                "color_mean_rgb": [85.09677424483307, 76.70618759936407, 75.3964387917329],
+                "color_stddev_rgb": [77.2904222040174, 71.21991693167683, 68.46083113052676],
+            },
+            199986: {
+                "color_mean_rgb": [108.30441176470588, 89.4982972972973, 69.06582193958664],
+                "color_stddev_rgb": [87.02539778541448, 76.09858999565338, 68.73331640136028],
+            },
+            200330: {
+                "color_mean_rgb": [131.10427821939587, 125.57856756756756, 126.2096279809221],
+                "color_stddev_rgb": [114.59752376712568, 113.11297504899525, 114.20828777845365],
+            },
+            200668: {
+                "color_mean_rgb": [53.12328457869634, 72.9197106518283, 79.25840699523053],
+                "color_stddev_rgb": [61.071697781468835, 54.655283065547295, 68.19629212216118],
+            },
+            204427: {
+                "color_mean_rgb": [48.611402225755164, 46.993928457869636, 64.57454848966614],
+                "color_stddev_rgb": [42.8013908853691, 40.13769344786066, 49.11375301329059],
+            },
+            207913: {
+                "color_mean_rgb": [60.56637519872814, 97.81293640699523, 103.29409220985691],
+                "color_stddev_rgb": [62.27593656283416, 55.44016609599147, 56.35158866215091],
+            },
+            208337: {
+                "color_mean_rgb": [182.71590461049286, 182.85239268680445, 183.12251669316376],
+                "color_stddev_rgb": [101.07173338678653, 101.14467645190832, 101.038053303768],
+            },
+            208569: {
+                "color_mean_rgb": [107.01079173290938, 99.43802066772655, 83.21376311605724],
+                "color_stddev_rgb": [86.57085105494764, 81.17918183849709, 71.79625614160007],
+            },
+            214113: {
+                "color_mean_rgb": [113.78214785373609, 110.42997297297298, 104.8512813990461],
+                "color_stddev_rgb": [84.2341363395036, 90.59206631578364, 96.22817470028288],
+            },
+            217783: {
+                "color_mean_rgb": [127.6038839427663, 63.581697933227346, 61.16596979332274],
+                "color_stddev_rgb": [77.73490862500094, 64.19205305338997, 64.10318813497071],
+            },
         }.items()
     ],
 }

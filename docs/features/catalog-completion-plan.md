@@ -1676,18 +1676,21 @@ under the same `"fetch_failed"` skip reason `quality_signals`/`color_profile` sh
 predates these two fields, per `ImageEvidence`'s own "per-field completion/versioning map" design
 intent.
 
-**Golden-set gathering — NOT completed in this PR, open item**: every prior Stage C extractor's
-`GOLDEN_EXPECTATIONS` entry was populated against a real, no-persistence `extract_card_evidence()`
-run over all 30 golden cards, requiring both a live production `Card` read (the golden set's 30
-pinned ids) and a real network fetch through the shared `GOOGLE_IMAGE`-paced Worker path. This
-session's isolated worktree has neither production DB credentials nor a route to that fetch path
-(no `docker/.env`, and reaching into the live containers to work around that was declined — see
-this PR's own report). `GOLDEN_EXPECTATIONS` therefore has NO new entries for `quality_signals`/
-`color_profile`/`fetch_health`'s completed fields yet, unlike every extractor before it — flagged
-here plainly rather than shipped with fabricated numbers or silently skipped. A follow-up pass (a
-session with production access, or the owner directly) needs to run the same read-only
-`extract_card_evidence()` sweep this PR's own predecessors used and add the entries before this is
-truly done to the same bar as #147–#151/#160. 18 new tests (10 in a new
+**Golden-set gathering — closed by public issue #216 (2026-07-20)**: this PR's own worktree had
+neither production DB credentials nor a route to the real network fetch path (no `docker/.env`,
+and reaching into the live containers to work around that was declined), so it shipped without
+`GOLDEN_EXPECTATIONS` entries for `quality_signals`/`color_profile`/`fetch_health`'s completed
+fields — the owner relaxed the golden gate for this one PR on condition it was confirmed sooner
+than later, tracked as issue #216. A follow-up session with prod docker access ran the same
+read-only, no-persistence `extract_card_evidence()` sweep every prior extractor used (30/30 golden
+cards fetched cleanly, PNG/JPEG, 0/30 truncated) and populated `GOLDEN_EXPECTATIONS["quality_signals"]`/`["color_profile"]`/`fetch_health`'s new `fetch_image_format` field — bringing this PR
+to the same golden bar as #147–#151/#160. `blur_variance`/`image_entropy`/`fetch_latency_ms` are
+real continuous/timing values this run also produced but are deliberately NOT hard-pinned (same
+"exclude the continuous/brittle" rationale every prior extractor's own golden-set comment gives for
+width/height/aspect_ratio/the raw phash int); `color_profile` in particular has no discrete signal
+at all, so its real recorded per-card mean/stddev values are kept in `golden_set.py` as a
+documentation artifact only — `test_golden_set.py` checks shape/type/range, not exact equality,
+against them. 18 new tests (10 in a new
 `test_local_image_quality.py` - the pure math functions, tested in isolation with real PIL images;
 `is_image_truncated` specifically tested there rather than through the full pipeline, since a
 genuinely truncated real file would also trip up earlier real-pixel-reading extractors that run

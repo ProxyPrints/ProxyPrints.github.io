@@ -22,8 +22,16 @@ class TestGoldenExpectations:
         fetch_health_card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["fetch_health"]}
         assert fetch_health_card_ids == set(GOLDEN_CARD_IDS)
 
-    def test_fetch_health_expects_true_for_every_card(self):
-        assert all(e.value is True for e in GOLDEN_EXPECTATIONS["fetch_health"])
+    def test_fetch_health_expects_ok_for_every_card(self):
+        # Completed by issue #150's re-spec (#215/#216) - value is now a dict (fetch_ok +
+        # fetch_image_format), not a bare bool - see golden_set.py's own comment.
+        assert all(e.value["fetch_ok"] is True for e in GOLDEN_EXPECTATIONS["fetch_health"])
+
+    def test_fetch_health_image_format_is_a_known_format(self):
+        # Recorded 2026-07-20 against a real extract_card_evidence() run over all 30 golden cards
+        # (issue #216) - see TestGeometryBleed's own note above for why this isn't re-verified
+        # live in CI. Only PNG/JPEG appeared on this real run.
+        assert all(e.value["fetch_image_format"] in ("PNG", "JPEG") for e in GOLDEN_EXPECTATIONS["fetch_health"])
 
     def test_geometry_bleed_expectation_covers_every_golden_card(self):
         geometry_bleed_card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["geometry_bleed"]}
@@ -132,6 +140,38 @@ class TestGoldenExpectations:
             assert set(expectation.value) == {"legal_line_copyright_year", "legal_line_proxy_marker_detected"}
             assert isinstance(expectation.value["legal_line_copyright_year"], str)
             assert isinstance(expectation.value["legal_line_proxy_marker_detected"], bool)
+
+    def test_quality_signals_expectation_covers_every_golden_card(self):
+        card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["quality_signals"]}
+        assert card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_quality_signals_values_are_bool(self):
+        # Recorded 2026-07-20 against a real extract_card_evidence() run over all 30 golden cards
+        # (issue #216, closing the golden-gate gap #215 shipped without) - see TestGeometryBleed's
+        # own note above for why this isn't re-verified live in CI. False (not truncated) for
+        # every card on this real run - a genuine all-negative outcome (see golden_set.py's own
+        # comment), not a placeholder.
+        assert all(isinstance(e.value, bool) for e in GOLDEN_EXPECTATIONS["quality_signals"])
+
+    def test_color_profile_expectation_covers_every_golden_card(self):
+        card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["color_profile"]}
+        assert card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_color_profile_values_have_mean_and_stddev_rgb_keys(self):
+        # Recorded the same run as quality_signals above. No exact-value comparison here -
+        # color_profile has no discrete signal at all (see golden_set.py's own comment for why
+        # the real recorded numbers are kept as a documentation artifact, not a hard-pinned
+        # assertion) - only structure/type/range are checked, the same bar
+        # test_crop_coordinates_values_have_all_three_boxes_as_four_int_lists applies to its own
+        # pixel-coordinate lists above.
+        for expectation in GOLDEN_EXPECTATIONS["color_profile"]:
+            assert set(expectation.value) == {"color_mean_rgb", "color_stddev_rgb"}
+            for key in ("color_mean_rgb", "color_stddev_rgb"):
+                channel_values = expectation.value[key]
+                assert len(channel_values) == 3
+                for channel_value in channel_values:
+                    assert isinstance(channel_value, float)
+                    assert 0.0 <= channel_value <= 255.0
 
 
 class TestGetGoldenCards:
