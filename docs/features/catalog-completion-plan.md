@@ -1948,6 +1948,50 @@ materially better than the canary's measured ~15.7–16h. Risks:
   this hardware profile didn't budget compute for — worth keeping in mind
   for whoever implements this, not a problem today since decoding is lazy).
 
+**Stage C: fetch/compute decoupling — implemented (2026-07-20)**, on top of
+the confirming re-profile (PR #235's fetch/compute timing diagnostic — not
+yet merged to master as of this writing, so its own report file isn't
+referenced by path here; fetch measured at 36.5% of mean per-card
+wall-clock, cross-validated against cgroup CPU-seconds — the same number as
+the canary's "missing" ~37% efficiency within noise, not two separate
+findings). `run_image_evidence_cohort.py`
+now runs a `ThreadPoolExecutor` fetch stage (`--fetch-threads`/
+`STAGE_C_FETCH_THREADS`, default 8) concurrently with the `ProcessPoolExecutor`
+compute stage (`--workers`/`STAGE_C_WORKERS`, unchanged, default 7), joined by
+a windowed handoff (`--queue-depth`/`STAGE_C_QUEUE_DEPTH`, default
+`workers * 2`) that bounds how many fetched-but-not-yet-computed buffers can
+be outstanding at once — the design doc's own "counting semaphore around
+handoff to the compute pool" example, implemented as a `wait(..., FIRST_COMPLETED)` sliding window over the compute futures instead (easier to
+drive deterministically in tests, same bounding effect). One deviation from
+the literal architecture description above, reasoned through rather than
+incidental: the buffer crossing the fetch/compute process boundary is the
+RAW, still-encoded fetch response (`image_cdn_fetch.fetch_card_image_bytes`,
+new — a bytes-returning sibling of the existing `fetch_card_image`), not a
+decoded `PIL.Image`, because pickling an already-loaded `Image` for
+`ProcessPoolExecutor.submit()` forces a full pixel decode at submit time
+(`Image.__getstate__` calls `tobytes()`) — on whichever thread calls
+`submit()`, which would silently move real CPU work onto the fetch side,
+exactly what the design doc's own "network-pinned core" risk item warned
+against. Decoding (`Image.open`) now happens inside the compute worker itself,
+right before `image_evidence.compute_card_evidence` (new — the compute-only
+continuation of `extract_card_evidence`, split so a `ProcessPoolExecutor`
+worker can call it directly against an already-fetched buffer without
+`extract_card_evidence`'s own single-call behavior changing for its existing
+callers/tests). Two pieces of process-local state the bundled design needed
+are gone rather than kept as dead code: the rate-limiter descaling in
+`_init_worker` (fetching now lives in one thread pool in one process, so
+`harvest_fetch_limiter`'s own process-wide singleton applies unscaled), and
+the `multiprocessing.Manager().Event()` used to signal a lockout across N
+compute processes (replaced by a plain `threading.Event`, since a
+`GoogleFetchLockoutError` can now only ever originate in the fetch stage) —
+this structurally eliminates the PR #225 bug class (calling a manager proxy's
+`is_set()` after `manager.shutdown()`) rather than continuing to carefully
+order around it, verified by keeping (and updating) that regression test
+against the new architecture. Full backend suite green (1199 passed / 4
+skipped, same CI-documented named skips); `makemigrations --check` clean (no
+model change). Not yet re-profiled against live prod — that's the owner's
+next authorized run, not part of this change.
+
 **Stage D — join-key calculator (framework + first slice, built 2026-07-20,
 public issue #152, "Stage D: calculators D1-D6")**: the owner directive
 dispatching this work named "calculators D1-D6", but no numbered D1-D6 spec
