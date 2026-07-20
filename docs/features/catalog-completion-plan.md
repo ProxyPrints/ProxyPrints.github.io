@@ -1410,13 +1410,14 @@ text itself is NOT pinned (too verbose/brittle across a tesseract
 version bump), nor is the exact word-box list (same reasoning) — only
 the discrete parsed fields and a `word_boxes_present` bool are, matching
 `geometry_bleed`'s own precedent of excluding continuous/brittle values
-from the hard gate. 24 new tests (17 in `test_image_evidence.py`'s new
+from the hard gate. 19 new tests (13 in `test_image_evidence.py`'s new
 `TestExtractCardEvidenceCollectorLineOcr`/`ArtistOcr`/`CollectorLineTsv`
 classes — all three run against real PIL images + the real tesseract
 binary, no monkeypatching of tesseract itself, per CLAUDE.md's "no new
-skips" rule — 7 pre-existing `TestExtractCardEvidence*` tests updated
-for the three new extractors' presence, 6 in `test_golden_set.py`); full
-suite 1037 passed / 4 skipped (the same CI-documented named skips —
+skips" rule — plus 6 in `test_golden_set.py`), and 13 pre-existing
+`TestExtractCardEvidence*` tests updated for the three new extractors'
+presence; full suite 1037 passed / 4 skipped (the same CI-documented
+named skips —
 nothing newly broken); `makemigrations --check` clean.
 
 `back_face_flag` remains an open question for the owner (see the
