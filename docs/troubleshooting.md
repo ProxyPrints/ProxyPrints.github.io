@@ -695,3 +695,35 @@ what keeps it that way regardless of what the bots commit next.
 **Refs**: `.pre-commit-config.yaml`'s `prettier` hook,
 `.github/workflows/docs-upstream-wiki-drift.yml`,
 `.github/workflows/upstream-drift-monitor.yml`.
+
+## Docs record a migration as "live on production" but `showmigrations` disagrees
+
+**Symptom**: `docs/infrastructure.md` and `docs/features/catalog-completion-plan.md`
+recorded Stage C migrations `0068`–`0072` as applied to the persistent
+production Postgres (commit `d1860257`, issue #211); a separate PR's
+own notes additionally described migrations `0073`–`0075` as having
+auto-applied via a one-off `docker compose run --rm django ...`
+container's normal entrypoint `migrate` step. Neither matched the
+persistent DB's actual state: running `manage.py showmigrations`
+directly against the live containers, both before and after the
+2026-07-20 django/worker rebuild, showed only `0068` applied
+beforehand — `0069`–`0075` landed only once the containers were
+recreated from a fresh `master` image.
+
+**Cause**: "the migrate step should have run" is a plausible-sounding
+inference, not a verification step — it was narrated secondhand in a
+PR's own notes and then copied into docs as fact, never checked
+against the persistent DB directly. A one-off `run --rm` container's
+entrypoint genuinely does run `migrate` against whatever Postgres its
+compose resolution points at, but that's a claim about mechanism, not
+evidence about what actually happened on this specific run against
+this specific database.
+
+**Fix**: before recording ANY migration as "live on production" in
+docs, run `showmigrations` (e.g. `docker compose -f docker-compose.prod.yml exec django python manage.py showmigrations cardpicker`) directly against the persistent containers and quote its
+real output — don't infer live status from "the migrate step should
+have applied it" reasoning, however mechanically plausible. Re-check
+immediately before and after any deploy/rebuild that's supposed to
+apply migrations, so a stale doc claim is caught by direct evidence
+rather than propagating silently through a chain of secondhand PR/doc
+narration.
