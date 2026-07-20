@@ -1935,6 +1935,50 @@ clean (no model change — every field these checks read already existed on
 `ImageEvidence`/`CanonicalPrintingMetadata`); `pre-commit`
 (ruff/isort/black/mypy/prettier) clean.
 
+**Command flags, rollback, and testing posture (2026-07-20, issue
+#152)**:
+
+- **Command flags** (`manage.py local_calculate_verdicts`, both
+  `run_join_key_calculator` and `run_slow_path_calculator` share the one
+  invocation/run_id): `--write` (`action="store_true", default=False`) —
+  the command defaults to dry-run and requires this explicit flag to
+  persist any `CardPrintingTag`/`CardScanLog` row; dry-run computes every
+  verdict and reports `would_cast` counts (`total_votes=would_cast=N` in
+  the final summary line) while writing nothing. `--run-id` (`default=None`)
+  reuses/pins a specific `run_id`; the default is a freshly generated one
+  (`generate_run_id()`). `--chunk-size` (`type=int, default=500`) is the
+  `.iterator()` chunk size for both calculators' eligibility querysets.
+- **Rollback / poisoning containment**: writes are `run_id`-scoped (Part
+  1's mechanism, unchanged), so a bad batch is revertible by deleting that
+  `run_id`'s rows — `manage.py purge_machine_votes --run-id <id>` — with
+  no separate DB snapshot required. This `run_id`-batching is the same
+  poisoning-containment mechanism carried over from the first backfill
+  round (Part 1 §5 above), not a Stage-D-specific addition.
+- **Caveat, honest**: `purge_machine_votes --run-id` cleanly reverts the
+  vote ROWS (and, in the same invocation, re-resolves affected cards'
+  consensus status — `purge_run` calls `resolve_and_persist_printing`/
+  `resolve_and_persist_artist`/`resolve_and_persist_tag_votes` right after
+  the `.delete()`), but this is two sequential calls, not one atomic
+  transaction — a consensus resolution computed from a bad vote can
+  already have been live (served, reindexed to ES via
+  `reindex_card_safely`) for the entire interval between the bad write and
+  someone noticing and running the purge; deleting the row afterward does
+  not erase that it was live. Separately, `purge_run`'s own query touches
+  only `CardPrintingTag`/`CardArtistVote`/`CardTagVote` — it never touches
+  `CardScanLog`, so Stage D's own skip markers for that `run_id`
+  (`no-evidence`, `ambiguous`, `to-review`, etc.) survive a purge intact.
+  Since `_eligible_cards_queryset`/`_slow_path_eligible_cards_queryset`
+  both exclude any card already carrying a non-rescannable `CardScanLog`
+  row for the relevant `anonymous_id`, a purged card does not
+  automatically become re-eligible for a redo under the same
+  `anonymous_id` — fully unwinding a written run so it can be re-run
+  cleanly needs more than the batch-delete alone. Not transaction-perfect
+  downstream; named here rather than assumed.
+- **Testing posture**: the 20k-card test run uses dry-run only — no
+  writes, no interaction with the pre-existing 165k-run's own machine
+  votes, no backup needed, since nothing is persisted. Production cutover
+  is the only phase that uses `--write --run-id <fresh>`.
+
 **Stage E resume contract (owner directive, 2026-07-19 — full spec on
 task #147, acceptance test folded into task #156's soak gate)**:
 resumability is a TESTED requirement, not an assumed property — this
