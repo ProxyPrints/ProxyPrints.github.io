@@ -1491,26 +1491,36 @@ identical rationale) for the new extractor's presence; full suite 1069
 passed / 4 skipped (the same CI-documented named skips — nothing newly
 broken); `makemigrations --check` clean.
 
-**Migrations 0068–0072 now live on production; first real dataset
-population launched (2026-07-20)**: per `docs/infrastructure.md`'s "Stage
-C migration state" note, these five migrations — the `ImageEvidence`
-substrate itself (`0068`) plus the geometry/bleed (#147, `0069`),
-geometry-group (#148, `0070`), and OCR-group (#149, `0071`) extractor
-fields documented above, plus the `CardScanLog` instrumentation fields
+**Migration 0068 (only) live on production at this point; first real
+dataset population launched (2026-07-20)** — **corrected 2026-07-20**:
+this paragraph originally claimed migrations `0068`–`0072` were live,
+taking production from `0067` to `0072`. That was wrong; see
+`docs/infrastructure.md`'s "Stage C migration state" note (also
+corrected) for the verified history. Only `0068` — the `ImageEvidence`
+substrate itself — was actually applied to the persistent production
+Postgres at this point, ad hoc during this run rather than through the
+documented deploy sequencing. `0069`–`0072` (the geometry/bleed (#147),
+geometry-group (#148), and OCR-group (#149) extractor fields documented
+above, plus the `CardScanLog` instrumentation fields
 (`evidence_types_used`/`survivor_pks`, `0072`) from issue #209's
-negative-vote work — took production from migration `0067` to `0072`,
-applied ad hoc during this run rather than through the documented deploy
-sequencing (see that doc for the departure). Every golden-set run
+negative-vote work) were merged to the codebase but did not stick to
+the persistent DB despite the original claim. Every golden-set run
 described in this section (the 27/30, 30/30, 10/30, and this extractor's
-own 30/30 samples) was explicitly "zero DB writes" validation against the
-pinned 30-card golden set, not population — the evidence store itself
-held 0 rows in production until this run. It now holds its first real
-cohort: `run_id=stagec-cohort-20260720-full`, ~3,000+ rows and growing
-toward a 15,000-card target. Migration `0073` (this section's own
-symbol_region extractor, #160) is also merged to the codebase as of this
-writing, but its own production-deploy status is a separate, unconfirmed
-question — not covered by the `0068`–`0072` range above, flagged as an
-open item rather than assumed either way.
+own 30/30 samples) was, as originally stated, explicitly "zero DB
+writes" validation against the pinned 30-card golden set, not
+population — the evidence store itself held 0 rows in production until
+this run. It wrote its full cohort against a DB with only `0068`
+applied: `run_id=stagec-cohort-20260720-full`, 18,072 rows total — all
+predating the `0069`–`0075` columns, which are NULL on these rows until
+re-extracted.
+
+Migration `0073` (this section's own symbol_region extractor, #160) was
+also merged to the codebase as of this writing; its production-deploy
+status was flagged here as a separate, unconfirmed open item — **now
+resolved**: `0073`, along with `0074`/`0075` (built in later sections
+below), was applied only by the 2026-07-20 rebuild-from-master, not
+before it. See `docs/infrastructure.md` for the full corrected
+timeline.
 
 **legal-line extractor + moderator flag — next manifest extractor, built**
 (public issue #151, "Legal-line extractor + moderator flag + volume report

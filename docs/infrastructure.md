@@ -544,34 +544,48 @@ run) already dominate — a useful sanity check for `ImageEvidence`'s own
 eventual size, since it will carry meaningfully more per-row data (OCR
 TSV, multiple hashes, geometry) than either.
 
-### Stage C migration state (updated 2026-07-20)
+### Stage C migration state (corrected 2026-07-20)
 
-Migrations `0068`–`0072` are now applied to the **live production
-Postgres**, taking it from `0067` (the baseline above) to `0072`:
+**This note originally claimed migrations `0068`–`0072` were live on
+the production Postgres, taking it from `0067` to `0072` — that was
+wrong.** Verified directly against the persistent containers via
+`showmigrations`, both before and after the rebuild described below:
+the persistent production Postgres actually had migrations applied
+only through **`0068`** at the point this note was first written.
 `0068` creates the `ImageEvidence` table itself (Stage C's substrate,
-`content_hash`/`extractor_versions`/`run_id`/fetch-health columns);
-`0069`–`0071` add that table's geometry/bleed (issue #147),
-geometry-group layout/crop (issue #148), and OCR-group (issue #149)
-extractor fields respectively; `0072` adds `CardScanLog`'s
-`evidence_types_used`/`survivor_pks` instrumentation fields from issue
-#209's negative-vote work. All five are additive-only (`CreateModel`/
-`AddField`, no column drops or type changes), matching every other
-migration in this range's own stated additive-only property.
-
-Applied ad hoc, 2026-07-20, during the first `ImageEvidence`
+`content_hash`/`extractor_versions`/`run_id`/fetch-health columns) and
+was applied ad hoc, 2026-07-20, during the first `ImageEvidence`
 dataset-population run — a schema deploy step taken outside the
 documented `docker compose run --rm django python manage.py migrate`
 sequencing above, stated here as a factual departure, not silently
-folded into the normal deploy narrative. The `ImageEvidence` table
-itself, empty (0 rows) since the baseline snapshot above, now holds its
-first real cohort from that same run: `run_id=stagec-cohort-20260720-full`,
-~3,000+ rows and growing toward a 15,000-card target.
+folded into the normal deploy narrative.
 
-**Not covered by this note**: migration `0073`
-(`imageevidence_symbol_crop_px_and_more`, the symbol-region extractor
-from issue #160) also exists in the repo as of this writing — its own
-production-deploy status is a separate, unconfirmed question, flagged
-as an open item rather than assumed either way.
+`0069`–`0072` — that table's geometry/bleed (issue #147),
+geometry-group layout/crop (issue #148), and OCR-group (issue #149)
+extractor fields, plus `CardScanLog`'s `evidence_types_used`/
+`survivor_pks` instrumentation fields from issue #209 — were merged to
+the codebase well before this note was written, but did **not** stick
+to the persistent DB at that point despite the earlier claim. Along
+with `0073`–`0075` (symbol-region #160, legal-line #151, and
+quality-signal/color-profile/fetch-health completion #150,
+respectively — all additive-only `CreateModel`/`AddField`, no column
+drops or type changes), they were only actually applied by the
+**2026-07-20 rebuild-from-master** (django + worker recreated on a
+fresh `master` image, not an ad hoc `migrate` invocation) — the event
+that took production from `0068` to `0075` in one step. Production is
+now genuinely at `0075`.
+
+**Consequence**: the `ImageEvidence` cohort written by the pre-rebuild
+dataset-population run (`run_id=stagec-cohort-20260720-full`, 18,072
+rows) was written against a DB with only `0068` applied — every field
+added by `0069`–`0075` (geometry/bleed, crop coordinates, OCR/artist
+text, symbol hash, legal-line, and quality/color-profile fields) is
+NULL on those rows until re-extracted.
+
+**Resolves the open item this note previously flagged**: migration
+`0073`'s production-deploy status, left here as "unconfirmed," is
+settled by the above — it was not live at the time, and is live now,
+via the rebuild.
 
 ## Testing infrastructure fixes
 
