@@ -105,6 +105,19 @@ ambiguous outcome here, only fetch_failed" - see that section's comment) - it ex
 mechanical guard against a real crash risk, not a tuned classification threshold, and is not
 expected to fire against the golden set.
 
+legal_line (public issue #151, "Legal-line extractor + moderator flag + volume report (task
+#159)" - this PR builds the extractor + moderator-flag signal only, per that issue's own SCOPE;
+the volume report half (task #159) is out of scope, tracked separately): a NEW, dedicated crop
+region (`local_ocr.LEGAL_LINE_CROP_BOX`, NOT a reuse of `collector_line_crop_px` - verified
+against real fetched production images before being locked in, see that constant's own comment),
+turned into pixel coordinates the same way `crop_coordinates`/`symbol_region` derive their own
+boxes. `local_ocr.parse_legal_line`'s tolerant parse (`legal_line_copyright_year`,
+`legal_line_proxy_marker_detected`) - no candidate matching here either, same Stage-D-territory
+reasoning every other OCR-adjacent extractor in this module gives. `legal_line_proxy_marker_
+detected` is the moderator-flag signal: a raw True/False fact this extractor emits, consumed by
+Stage D's calculator (task #151's pipeline-fidelity gate) - never acted on directly here, matching
+every prior extractor's "emit signals, don't act on them" discipline.
+
 RECONCILIATION LEDGER (owner directive 2026-07-19, task #155): `build_reconciliation_report`
 answers "attempted = voted + each named skip-reason + dropped" for one extractor over one set
 of cards, by querying ImageEvidence.extractor_versions + CardScanLog directly - see
@@ -129,7 +142,9 @@ from cardpicker.local_fallback import (
 )
 from cardpicker.local_ocr import (
     DEFAULT_CROP_BOX,
+    LEGAL_LINE_CROP_BOX,
     parse_collector_line,
+    parse_legal_line,
     preprocess_variants,
     run_tesseract,
     run_tesseract_tsv,
@@ -148,6 +163,7 @@ COLLECTOR_LINE_OCR_EXTRACTOR_VERSION = "collector-line-ocr-v1"
 ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v1"
 COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v1"
 SYMBOL_REGION_EXTRACTOR_VERSION = "symbol-region-v1"
+LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v1"
 
 # Bit width for the perceptual-hash int representation - matches local_phash.py's own private
 # _hash_to_int/_HASH_BITS exactly (imagehash's default hash_size=8 -> a 64-bit hash), reproduced
@@ -364,6 +380,40 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
             fields["symbol_phash"] = _compute_region_phash(image, symbol_crop_px)
     extractor_versions["symbol_region"] = SYMBOL_REGION_EXTRACTOR_VERSION
 
+    # legal_line (issue #151, task #159's extractor half): a NEW, dedicated crop region (not a
+    # reuse of collector_line_crop_px - see module docstring), OCR'd fresh (no reuse-before-
+    # recompute here, unlike artist_ocr - the legal/copyright line's overlap with the collector
+    # line region is coincidental, not the primary design point the way "Illus." credit's overlap
+    # with the collector-line crop is), then a tolerant parse for copyright year + the proxy/
+    # not-for-sale moderator-flag signal. No candidate matching (Stage D's job, same as every
+    # other OCR-adjacent extractor above).
+    if image is None:
+        skip_reasons["legal_line"] = "fetch_failed"
+    else:
+        fields["legal_line_crop_px"] = _crop_box_to_pixels(LEGAL_LINE_CROP_BOX, bleed_class, width, height)
+        legal_crop = image.crop(tuple(fields["legal_line_crop_px"]))
+        legal_variants = preprocess_variants(legal_crop)
+        legal_raw_texts: list[str] = [run_tesseract(variant) for variant in legal_variants]
+
+        # prefer the first variant whose parse actually found something (a year OR a proxy
+        # marker) over the first variant's raw (possibly empty) parse - same "first variant that
+        # produces something" precedence collector_line_ocr's own selection above uses.
+        selected_index = 0
+        legal_parsed = parse_legal_line(legal_raw_texts[0]) if legal_raw_texts else parse_legal_line("")
+        for i, raw_text in enumerate(legal_raw_texts):
+            legal_candidate_parse = parse_legal_line(raw_text)
+            if legal_candidate_parse.copyright_year is not None or legal_candidate_parse.proxy_marker_detected:
+                legal_parsed = legal_candidate_parse
+                selected_index = i
+                break
+
+        fields["legal_line_raw_text"] = legal_raw_texts[selected_index] if legal_raw_texts else ""
+        fields["legal_line_copyright_year"] = legal_parsed.copyright_year or ""
+        fields["legal_line_proxy_marker_detected"] = legal_parsed.proxy_marker_detected
+        if legal_parsed.copyright_year is None and not legal_parsed.proxy_marker_detected:
+            skip_reasons["legal_line"] = "no-text"
+    extractor_versions["legal_line"] = LEGAL_LINE_EXTRACTOR_VERSION
+
     return ExtractionResult(
         card_id=card.pk,
         content_hash=card.content_phash,
@@ -476,4 +526,5 @@ __all__ = [
     "ARTIST_OCR_EXTRACTOR_VERSION",
     "COLLECTOR_LINE_TSV_EXTRACTOR_VERSION",
     "SYMBOL_REGION_EXTRACTOR_VERSION",
+    "LEGAL_LINE_EXTRACTOR_VERSION",
 ]

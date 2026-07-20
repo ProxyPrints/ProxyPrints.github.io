@@ -60,12 +60,46 @@ TESSERACT_CONFIG = "--psm 6"
 _SET_CODE_RE = re.compile(r"\b([A-Za-z0-9]{3,5})\b")
 _COLLECTOR_NUMBER_RE = re.compile(r"★?(\d{1,4}[A-Za-z]?)\b")
 
+# legal/copyright line (Stage C issue #151/task #159): same y-band DEFAULT_CROP_BOX was tuned
+# against (bottom 90-96.5% height - see that constant's own comment for the tuning history),
+# widened to the FULL card width rather than DEFAULT_CROP_BOX's narrow left-hand 6-35% window -
+# a real MTG copyright legend ("™ & © 2023 Wizards of the Coast") sits on the same physical
+# print row as the collector line but commonly runs further right than DEFAULT_CROP_BOX's own
+# crop captures. Verified against real fetched production images (golden-set gathering, see
+# golden_set.py's own "legal_line" comment) before being locked in, per the same "don't invent a
+# box from memory" discipline every other *_crop_px field in this pipeline followed.
+LEGAL_LINE_CROP_BOX: tuple[float, float, float, float] = (0.0, 0.90, 1.0, 0.965)
+
+# copyright year: prefer a year anchored to an actual copyright glyph/word ("©", "(c)",
+# "copyright") over a bare 4-digit run elsewhere in the line - a 4-digit collector number (e.g. a
+# Secret Lair/promo product's numbering) could otherwise be misread as a year. \D{0,10} tolerates
+# the "&"/"™"/whitespace noise tesseract commonly inserts between the glyph and the digits.
+_COPYRIGHT_YEAR_RE = re.compile(r"(?:©|\(c\)|copyright)\D{0,10}((?:19|20)\d{2})", re.IGNORECASE)
+_BARE_YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
+
+# Proxy/non-authentic markers (the real motivating case, task #151/#159: a "MTG★EN ... NOT FOR
+# SALE ©2022" watermark misparsed as a genuine collector line). Deliberately a plain, easy-to-audit
+# literal match rather than a fuzzier OCR-noise-tolerant pattern (unlike _COLLECTOR_NUMBER_RE's
+# no-space tolerance, which fixed a real missed-match case) - a missed marker here silently drops
+# the moderator flag with no other downstream signal to catch it, so a pattern that could start
+# matching genuine legal text this taxonomy hasn't seen is a worse trade than an occasional miss
+# on garbled OCR. Case-insensitive, tolerant of "NOT-FOR-SALE"/"NOT   FOR SALE" spacing/hyphen
+# variants only - not of letter-substitution noise.
+_PROXY_MARKER_RE = re.compile(r"not[\s-]*for[\s-]*sale|\bproxy\b", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class OcrParseResult:
     raw_text: str
     set_code: Optional[str]  # lowercased, or None if nothing plausible was found
     collector_number: Optional[str]  # lowercased, or None
+
+
+@dataclass(frozen=True)
+class LegalLineParseResult:
+    raw_text: str
+    copyright_year: Optional[str]  # 4-digit string, or None if nothing plausible was found
+    proxy_marker_detected: bool  # "NOT FOR SALE" / "PROXY" - see _PROXY_MARKER_RE's own comment
 
 
 def _normalize_collector_number(number: str) -> str:
@@ -178,6 +212,24 @@ def parse_collector_line(raw_text: str) -> OcrParseResult:
     return OcrParseResult(raw_text=raw_text, set_code=set_code, collector_number=collector_number)
 
 
+def parse_legal_line(raw_text: str) -> LegalLineParseResult:
+    """
+    Tolerant extraction, not validation - matches parse_collector_line's own "extract, don't
+    validate" contract. No candidate matching happens here (that's Stage D's job, same as every
+    other extractor's raw parse - see image_evidence.py's module docstring); `copyright_year`/
+    `proxy_marker_detected` are raw signals for Stage D's calculator to weigh, most notably the
+    moderator-flag case: a proxy/not-for-sale marker detected here is exactly what lets Stage D
+    reject a false-accept a tolerant collector-line parse would otherwise wave through (the real
+    motivating case, task #151/#159's own "MTG★EN ... NOT FOR SALE ©2022" watermark).
+    """
+    year_match = _COPYRIGHT_YEAR_RE.search(raw_text) or _BARE_YEAR_RE.search(raw_text)
+    copyright_year = year_match.group(1) if year_match else None
+    proxy_marker_detected = bool(_PROXY_MARKER_RE.search(raw_text))
+    return LegalLineParseResult(
+        raw_text=raw_text, copyright_year=copyright_year, proxy_marker_detected=proxy_marker_detected
+    )
+
+
 def validate_against_candidates(
     parsed: OcrParseResult, candidates: list["CandidatePrinting"]
 ) -> tuple["Optional[CandidatePrinting]", str]:
@@ -216,11 +268,14 @@ def validate_against_candidates(
 
 __all__ = [
     "DEFAULT_CROP_BOX",
+    "LEGAL_LINE_CROP_BOX",
     "OcrParseResult",
+    "LegalLineParseResult",
     "crop_collector_line",
     "preprocess_variants",
     "run_tesseract",
     "run_tesseract_tsv",
     "parse_collector_line",
+    "parse_legal_line",
     "validate_against_candidates",
 ]

@@ -492,6 +492,58 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
             217783: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
         }.items()
     ],
+    # legal_line (public issue #151, "Legal-line extractor + moderator flag + volume report
+    # (task #159)" - this PR builds the extractor + moderator-flag signal only, recorded
+    # 2026-07-20 against a real, no-persistence extract_card_evidence() run over all 30 golden
+    # cards - same host-venv/real-network-fetch method as every extractor above). `value` is
+    # {"legal_line_copyright_year", "legal_line_proxy_marker_detected"} - the raw text itself is
+    # NOT pinned (same "exclude the continuous/brittle" rationale collector_line_ocr's own
+    # comment gives). Only 10/30 produced a plausible copyright year on this real run (a lower
+    # yield than collector_line_ocr's own 10/30, but genuinely different cards fired - this crop
+    # region is a NEW, dedicated area, not a reuse), and this catalog being specifically an
+    # MTG-proxy print catalog (not a scan archive) means the proxy/not-for-sale marker fires far
+    # more often than a random sample of authentic scans would (10/30, not a rare edge case) -
+    # confirmed genuine on inspection, not a detector bug: real hits include "NOT FOR SALE"
+    # (145081), "Custom Proxy *NOTFORSALE" (161020), "MTG PROXY" (190895), "Proxy - <username>"
+    # community-credit watermarks baked into the source image (37962), and combined "Proxy / Not
+    # for Sale" legends with a real year (128981: 1998). Kept as-is per the same "don't discard a
+    # real all-negative OR all-positive outcome" rationale every prior extractor's own golden-set
+    # comment gives.
+    "legal_line": [
+        GoldenExpectation(card_id=cid, value=value)
+        for cid, value in {
+            35: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            37: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            40: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            37962: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
+            39520: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            41039: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            102138: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            128981: {"legal_line_copyright_year": "1998", "legal_line_proxy_marker_detected": True},
+            144933: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            145081: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
+            145532: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            147855: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            150472: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            159175: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            161020: {"legal_line_copyright_year": "2020", "legal_line_proxy_marker_detected": True},
+            175889: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            189166: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            189921: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            190895: {"legal_line_copyright_year": "2024", "legal_line_proxy_marker_detected": True},
+            193523: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
+            194684: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            199986: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            200330: {"legal_line_copyright_year": "2024", "legal_line_proxy_marker_detected": False},
+            200668: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            204427: {"legal_line_copyright_year": "2024", "legal_line_proxy_marker_detected": False},
+            207913: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
+            208337: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            208569: {"legal_line_copyright_year": "2025", "legal_line_proxy_marker_detected": True},
+            214113: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
+            217783: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
+        }.items()
+    ],
 }
 
 

@@ -41,6 +41,7 @@ from cardpicker.local_identify_printing_tags import (
 from cardpicker.local_ocr import (
     crop_collector_line,
     parse_collector_line,
+    parse_legal_line,
     preprocess_variants,
     run_tesseract,
     validate_against_candidates,
@@ -551,6 +552,77 @@ class TestOcrParsing:
         parsed = parse_collector_line("MOM 158")
         assert parsed.collector_number == "158"
         assert parsed.set_code == "mom"
+
+
+class TestLegalLineParsing:
+    """public issue #151, "Legal-line extractor + moderator flag + volume report (task #159)" -
+    pure string-parsing unit tests for local_ocr.parse_legal_line, mirroring TestOcrParsing's own
+    style above. The real motivating case (real production example, gathered via Stage C's
+    golden-set run - see golden_set.py's own "legal_line" comment): a "MTG★EN ... NOT FOR SALE
+    ©2022" watermark reads as plausible-looking legal-line text to a tolerant parser - this class
+    exercises the marker-detection regex directly against synthetic strings, separate from the
+    golden set (which reflects whatever real production images happen to contain, not every
+    boundary case this parser needs to handle)."""
+
+    def test_copyright_year_anchored_to_symbol(self):
+        parsed = parse_legal_line("™ & © 2023 Wizards of the Coast. All Rights Reserved.")
+        assert parsed.copyright_year == "2023"
+        assert parsed.proxy_marker_detected is False
+
+    def test_copyright_year_anchored_to_c_in_parens(self):
+        parsed = parse_legal_line("TM and (c) 2019 Wizards of the Coast")
+        assert parsed.copyright_year == "2019"
+
+    def test_bare_year_used_when_no_copyright_anchor_present(self):
+        parsed = parse_legal_line("some noise 2021 more noise")
+        assert parsed.copyright_year == "2021"
+
+    def test_no_year_anywhere_parses_to_none(self):
+        parsed = parse_legal_line("asdf jkl qwerty !!@#")
+        assert parsed.copyright_year is None
+        assert parsed.proxy_marker_detected is False
+
+    def test_empty_string(self):
+        parsed = parse_legal_line("")
+        assert parsed.copyright_year is None
+        assert parsed.proxy_marker_detected is False
+
+    def test_detects_not_for_sale_with_spaces(self):
+        parsed = parse_legal_line("MTG★EN A25 279/281 NOT FOR SALE ©2022")
+        assert parsed.proxy_marker_detected is True
+        assert parsed.copyright_year == "2022"
+
+    def test_detects_not_for_sale_with_no_separator(self):
+        # real OCR noise case, gathered live (card 161020) - tesseract sometimes drops all
+        # whitespace between words.
+        parsed = parse_legal_line("Custom Proxy *NOTFORSALE* 2020")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_not_for_sale_with_hyphens(self):
+        parsed = parse_legal_line("NOT-FOR-SALE")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_bare_proxy_word(self):
+        parsed = parse_legal_line("MTG PROXY - MidJourney 2024")
+        assert parsed.proxy_marker_detected is True
+
+    def test_case_insensitive(self):
+        parsed = parse_legal_line("not for sale")
+        assert parsed.proxy_marker_detected is True
+
+    def test_ordinary_legal_text_has_no_false_positive(self):
+        # a genuine, clean Wizards copyright legend contains neither phrase - the negative case
+        # this detector must not false-positive on.
+        parsed = parse_legal_line("™ & © 2023 Wizards of the Coast LLC.")
+        assert parsed.proxy_marker_detected is False
+
+    def test_garbled_ocr_of_not_for_sale_is_not_matched(self):
+        # a real, badly-OCR'd read (card 39520, gathered live) - "NOT HOY SLE" is close to "NOT
+        # FOR SALE" to a human eye but does NOT match this deliberately literal regex (see
+        # local_ocr.py's own comment on _PROXY_MARKER_RE for why a fuzzier pattern was rejected).
+        # A documented, accepted miss, not a bug.
+        parsed = parse_legal_line("NOT HOY SLE")
+        assert parsed.proxy_marker_detected is False
 
 
 class TestOcrValidationRail:

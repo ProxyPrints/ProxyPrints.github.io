@@ -118,6 +118,21 @@ class TestGoldenExpectations:
             assert all(isinstance(coord, int) for coord in box)
             assert isinstance(expectation.value["phash_present"], bool)
 
+    def test_legal_line_expectation_covers_every_golden_card(self):
+        card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["legal_line"]}
+        assert card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_legal_line_values_have_copyright_year_and_proxy_marker_keys(self):
+        # Recorded 2026-07-20 against a real extract_card_evidence() run over all 30 golden cards
+        # (issue #151) - see TestGeometryBleed's own note above for why this isn't re-verified
+        # live in CI. 10/30 detected a proxy/not-for-sale marker on this real run (this catalog is
+        # specifically an MTG-proxy print catalog, so this is a genuinely common real outcome, not
+        # a rare edge case) - see golden_set.py's own comment for the real per-card breakdown.
+        for expectation in GOLDEN_EXPECTATIONS["legal_line"]:
+            assert set(expectation.value) == {"legal_line_copyright_year", "legal_line_proxy_marker_detected"}
+            assert isinstance(expectation.value["legal_line_copyright_year"], str)
+            assert isinstance(expectation.value["legal_line_proxy_marker_detected"], bool)
+
 
 class TestGetGoldenCards:
     def test_raises_when_pinned_ids_are_missing_from_the_db(self, db):
