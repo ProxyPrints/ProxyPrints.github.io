@@ -103,6 +103,11 @@ SAVED_DECK_MAX_PER_USER = env.int("SAVED_DECK_MAX_PER_USER", default=100)
 # spec's own floor is 600,000; this is a settings knob only so it can be raised later without a
 # code change, never lowered below what's already been accepted from real users.
 SAVED_DECK_MIN_KDF_ITERATIONS = env.int("SAVED_DECK_MIN_KDF_ITERATIONS", default=600_000)
+# per-deck share links ("PR-5, post-v1" in the proposal doc) - same abuse-guard reasoning as
+# SAVED_DECK_MAX_PER_USER above, scoped per-deck rather than per-user since a share is cheap
+# (a frozen ciphertext copy the same size as the deck it snapshots, see cardpicker.models.
+# SavedDeckShare) but still shouldn't be creatable without bound.
+SAVED_DECK_SHARE_MAX_PER_DECK = env.int("SAVED_DECK_SHARE_MAX_PER_DECK", default=20)
 
 # Fuzzy tag-matching confidence thresholds. See cardpicker.tags.Tags.match_tag_fuzzy.
 TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD = env.float("TAG_MATCH_HIGH_CONFIDENCE_THRESHOLD", default=0.92)

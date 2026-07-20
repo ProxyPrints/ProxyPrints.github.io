@@ -47,4 +47,8 @@ urlpatterns = [
     path("2/cryptoProfile/", views.get_crypto_profile),
     path("2/saveCryptoProfile/", views.post_save_crypto_profile),
     path("2/resetSavedDecks/", views.post_reset_saved_decks),
+    path("2/createDeckShare/", views.post_create_deck_share),
+    path("2/deckShares/", views.get_deck_shares),
+    path("2/revokeDeckShare/", views.post_revoke_deck_share),
+    path("2/getSharedDeck/", views.post_get_shared_deck),
 ]

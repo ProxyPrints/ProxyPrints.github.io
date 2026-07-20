@@ -1,0 +1,10 @@
+{
+  "title": "Get Shared Deck Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "shareId": { "type": "string" }
+  },
+  "required": ["shareId"],
+  "additionalProperties": false
+}

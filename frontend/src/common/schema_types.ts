@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, CryptoProfileResponse, DFCPairsResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
+//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
@@ -48,8 +48,12 @@
 //   const cardsRequest = Convert.toCardsRequest(json);
 //   const cardsResponse = Convert.toCardsResponse(json);
 //   const contributionsResponse = Convert.toContributionsResponse(json);
+//   const createDeckShareRequest = Convert.toCreateDeckShareRequest(json);
+//   const createDeckShareResponse = Convert.toCreateDeckShareResponse(json);
 //   const cryptoProfileResponse = Convert.toCryptoProfileResponse(json);
 //   const dFCPairsResponse = Convert.toDFCPairsResponse(json);
+//   const deckShareSummary = Convert.toDeckShareSummary(json);
+//   const deckSharesResponse = Convert.toDeckSharesResponse(json);
 //   const deleteDeckRequest = Convert.toDeleteDeckRequest(json);
 //   const deleteDeckResponse = Convert.toDeleteDeckResponse(json);
 //   const editorSearchRequest = Convert.toEditorSearchRequest(json);
@@ -57,6 +61,8 @@
 //   const errorResponse = Convert.toErrorResponse(json);
 //   const exploreSearchRequest = Convert.toExploreSearchRequest(json);
 //   const exploreSearchResponse = Convert.toExploreSearchResponse(json);
+//   const getSharedDeckRequest = Convert.toGetSharedDeckRequest(json);
+//   const getSharedDeckResponse = Convert.toGetSharedDeckResponse(json);
 //   const importSiteDecklistRequest = Convert.toImportSiteDecklistRequest(json);
 //   const importSiteDecklistResponse = Convert.toImportSiteDecklistResponse(json);
 //   const importSitesResponse = Convert.toImportSitesResponse(json);
@@ -88,6 +94,8 @@
 //   const reportCardResponse = Convert.toReportCardResponse(json);
 //   const resetSavedDecksRequest = Convert.toResetSavedDecksRequest(json);
 //   const resetSavedDecksResponse = Convert.toResetSavedDecksResponse(json);
+//   const revokeDeckShareRequest = Convert.toRevokeDeckShareRequest(json);
+//   const revokeDeckShareResponse = Convert.toRevokeDeckShareResponse(json);
 //   const sampleCardsResponse = Convert.toSampleCardsResponse(json);
 //   const saveCryptoProfileRequest = Convert.toSaveCryptoProfileRequest(json);
 //   const saveCryptoProfileResponse = Convert.toSaveCryptoProfileResponse(json);
@@ -404,6 +412,18 @@ export interface SourceContribution {
   sourceType: SourceType;
 }
 
+export interface CreateDeckShareRequest {
+  deckKey: string;
+  expiresInDays: number | null;
+  wrappedDek: string;
+  wrappedDekNonce: string;
+}
+
+export interface CreateDeckShareResponse {
+  createdAt: string;
+  shareId: string;
+}
+
 export interface CryptoProfileResponse {
   exists: boolean;
   kdfIterations: number | null;
@@ -416,6 +436,17 @@ export interface CryptoProfileResponse {
 
 export interface DFCPairsResponse {
   dfcPairs: { [key: string]: string };
+}
+
+export interface DeckSharesResponse {
+  shares: DeckShareSummary[];
+}
+
+export interface DeckShareSummary {
+  createdAt: string;
+  deckKey: string;
+  expiresAt: null | string;
+  shareId: string;
 }
 
 export interface DeleteDeckRequest {
@@ -477,6 +508,18 @@ export enum SortBy {
 export interface ExploreSearchResponse {
   cards: Card[];
   count: number;
+}
+
+export interface GetSharedDeckRequest {
+  shareId: string;
+}
+
+export interface GetSharedDeckResponse {
+  ciphertext: string;
+  ciphertextNonce: string;
+  createdAt: string;
+  wrappedDek: string;
+  wrappedDekNonce: string;
 }
 
 export interface ImportSiteDecklistRequest {
@@ -721,6 +764,14 @@ export interface ResetSavedDecksRequest {
 
 export interface ResetSavedDecksResponse {
   deletedDeckCount: number;
+}
+
+export interface RevokeDeckShareRequest {
+  shareId: string;
+}
+
+export interface RevokeDeckShareResponse {
+  deleted: boolean;
 }
 
 export interface SampleCardsResponse {
@@ -1266,6 +1317,28 @@ export class Convert {
     return JSON.stringify(uncast(value, r("ContributionsResponse")), null, 2);
   }
 
+  public static toCreateDeckShareRequest(json: string): CreateDeckShareRequest {
+    return cast(JSON.parse(json), r("CreateDeckShareRequest"));
+  }
+
+  public static createDeckShareRequestToJson(
+    value: CreateDeckShareRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("CreateDeckShareRequest")), null, 2);
+  }
+
+  public static toCreateDeckShareResponse(
+    json: string
+  ): CreateDeckShareResponse {
+    return cast(JSON.parse(json), r("CreateDeckShareResponse"));
+  }
+
+  public static createDeckShareResponseToJson(
+    value: CreateDeckShareResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("CreateDeckShareResponse")), null, 2);
+  }
+
   public static toCryptoProfileResponse(json: string): CryptoProfileResponse {
     return cast(JSON.parse(json), r("CryptoProfileResponse"));
   }
@@ -1282,6 +1355,22 @@ export class Convert {
 
   public static dFCPairsResponseToJson(value: DFCPairsResponse): string {
     return JSON.stringify(uncast(value, r("DFCPairsResponse")), null, 2);
+  }
+
+  public static toDeckShareSummary(json: string): DeckShareSummary {
+    return cast(JSON.parse(json), r("DeckShareSummary"));
+  }
+
+  public static deckShareSummaryToJson(value: DeckShareSummary): string {
+    return JSON.stringify(uncast(value, r("DeckShareSummary")), null, 2);
+  }
+
+  public static toDeckSharesResponse(json: string): DeckSharesResponse {
+    return cast(JSON.parse(json), r("DeckSharesResponse"));
+  }
+
+  public static deckSharesResponseToJson(value: DeckSharesResponse): string {
+    return JSON.stringify(uncast(value, r("DeckSharesResponse")), null, 2);
   }
 
   public static toDeleteDeckRequest(json: string): DeleteDeckRequest {
@@ -1344,6 +1433,26 @@ export class Convert {
     value: ExploreSearchResponse
   ): string {
     return JSON.stringify(uncast(value, r("ExploreSearchResponse")), null, 2);
+  }
+
+  public static toGetSharedDeckRequest(json: string): GetSharedDeckRequest {
+    return cast(JSON.parse(json), r("GetSharedDeckRequest"));
+  }
+
+  public static getSharedDeckRequestToJson(
+    value: GetSharedDeckRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("GetSharedDeckRequest")), null, 2);
+  }
+
+  public static toGetSharedDeckResponse(json: string): GetSharedDeckResponse {
+    return cast(JSON.parse(json), r("GetSharedDeckResponse"));
+  }
+
+  public static getSharedDeckResponseToJson(
+    value: GetSharedDeckResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("GetSharedDeckResponse")), null, 2);
   }
 
   public static toImportSiteDecklistRequest(
@@ -1736,6 +1845,28 @@ export class Convert {
     value: ResetSavedDecksResponse
   ): string {
     return JSON.stringify(uncast(value, r("ResetSavedDecksResponse")), null, 2);
+  }
+
+  public static toRevokeDeckShareRequest(json: string): RevokeDeckShareRequest {
+    return cast(JSON.parse(json), r("RevokeDeckShareRequest"));
+  }
+
+  public static revokeDeckShareRequestToJson(
+    value: RevokeDeckShareRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("RevokeDeckShareRequest")), null, 2);
+  }
+
+  public static toRevokeDeckShareResponse(
+    json: string
+  ): RevokeDeckShareResponse {
+    return cast(JSON.parse(json), r("RevokeDeckShareResponse"));
+  }
+
+  public static revokeDeckShareResponseToJson(
+    value: RevokeDeckShareResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("RevokeDeckShareResponse")), null, 2);
   }
 
   public static toSampleCardsResponse(json: string): SampleCardsResponse {
@@ -2384,6 +2515,22 @@ const typeMap: any = {
     ],
     false
   ),
+  CreateDeckShareRequest: o(
+    [
+      { json: "deckKey", js: "deckKey", typ: "" },
+      { json: "expiresInDays", js: "expiresInDays", typ: u(0, null) },
+      { json: "wrappedDek", js: "wrappedDek", typ: "" },
+      { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
+    ],
+    false
+  ),
+  CreateDeckShareResponse: o(
+    [
+      { json: "createdAt", js: "createdAt", typ: "" },
+      { json: "shareId", js: "shareId", typ: "" },
+    ],
+    false
+  ),
   CryptoProfileResponse: o(
     [
       { json: "exists", js: "exists", typ: true },
@@ -2414,6 +2561,19 @@ const typeMap: any = {
   ),
   DFCPairsResponse: o(
     [{ json: "dfcPairs", js: "dfcPairs", typ: m("") }],
+    false
+  ),
+  DeckSharesResponse: o(
+    [{ json: "shares", js: "shares", typ: a(r("DeckShareSummary")) }],
+    false
+  ),
+  DeckShareSummary: o(
+    [
+      { json: "createdAt", js: "createdAt", typ: "" },
+      { json: "deckKey", js: "deckKey", typ: "" },
+      { json: "expiresAt", js: "expiresAt", typ: u(null, "") },
+      { json: "shareId", js: "shareId", typ: "" },
+    ],
     false
   ),
   DeleteDeckRequest: o([{ json: "key", js: "key", typ: "" }], false),
@@ -2472,6 +2632,17 @@ const typeMap: any = {
     [
       { json: "cards", js: "cards", typ: a(r("Card")) },
       { json: "count", js: "count", typ: 0 },
+    ],
+    false
+  ),
+  GetSharedDeckRequest: o([{ json: "shareId", js: "shareId", typ: "" }], false),
+  GetSharedDeckResponse: o(
+    [
+      { json: "ciphertext", js: "ciphertext", typ: "" },
+      { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
+      { json: "createdAt", js: "createdAt", typ: "" },
+      { json: "wrappedDek", js: "wrappedDek", typ: "" },
+      { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
     ],
     false
   ),
@@ -2746,6 +2917,14 @@ const typeMap: any = {
   ),
   ResetSavedDecksResponse: o(
     [{ json: "deletedDeckCount", js: "deletedDeckCount", typ: 0 }],
+    false
+  ),
+  RevokeDeckShareRequest: o(
+    [{ json: "shareId", js: "shareId", typ: "" }],
+    false
+  ),
+  RevokeDeckShareResponse: o(
+    [{ json: "deleted", js: "deleted", typ: true }],
     false
   ),
   SampleCardsResponse: o(

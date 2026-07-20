@@ -1256,6 +1256,63 @@ class SavedDeck(models.Model):
         return f"SavedDeck {self.key} ({self.kind}): owner={self.owner_id}"
 
 
+class SavedDeckShare(models.Model):
+    """
+    A per-deck, key-in-URL-fragment share link (docs/proposals/proposal-g-user-accounts-saved-
+    decks.md's "PR-5, post-v1: per-deck share links"). Additive to the §3/§8 schema - does not
+    touch SavedDeck/UserCryptoProfile.
+
+    `id` is the public, unauthenticated-lookup `shareId` embedded in the share URL's path; the
+    `shareKey` that actually unwraps `wrapped_dek` travels only in that URL's fragment (`#...`),
+    which browsers never send to the server (see the spec section) - this row, and every view
+    that serves it, never sees or stores that key.
+
+    DELIBERATE DEVIATION from the spec's literal prose ("unwraps that deck's existing DEK ...
+    re-wraps that same DEK with the new shareKey", implying a share reads the deck's *live*
+    ciphertext going forward): `ciphertext`/`ciphertext_nonce` here are a FROZEN COPY taken from
+    the referenced SavedDeck at share-creation time, not a live reference. This is required, not
+    optional, given an already-shipped invariant this table builds on top of - every ordinary
+    deck save (post_save_deck, via the frontend's encryptDeckPayloadForSave) unconditionally
+    mints a FRESH DEK, including on an ordinary content-editing update, not just first save. A
+    share that wrapped the deck's DEK once and then re-read the deck's current ciphertext on
+    every future fetch would silently break the instant the owner made one ordinary edit to a
+    shared deck - ordinary editing is expected far more often than an explicit share-revoke, so
+    that would make sharing a deck you might ever edit again effectively unusable. Precedent for
+    a frozen point-in-time ciphertext copy already exists in this schema (SavedDeckKind.SNAPSHOT
+    rows on SavedDeck itself); this table applies the same idea. One consequence, also
+    deliberate: revoking-with-rotation (re-encrypting the live deck under a fresh DEK, done via
+    the ordinary saveDeck path - see MyDecksPage's rotate flow) does NOT invalidate any other
+    still-outstanding share on that same deck, since each share's snapshot is fully self-
+    contained and was never coupled to the live deck's key material in the first place. See
+    docs/features/saved-decks.md and docs/troubleshooting.md for the full writeup.
+    """
+
+    id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, primary_key=True)
+    deck = models.ForeignKey(to=SavedDeck, on_delete=models.CASCADE, related_name="shares")
+    # frozen at share-creation time - a copy of `deck.ciphertext`/`deck.ciphertext_nonce` as they
+    # stood at that moment, deliberately decoupled from any later edit to the live deck (see the
+    # deviation note above).
+    ciphertext = models.BinaryField()
+    ciphertext_nonce = models.BinaryField()
+    # this share's own DEK wrapping - the SAME deck DEK that was current at share-creation time,
+    # wrapped under a fresh, share-specific `shareKey` that never reaches the server (only its
+    # wrapping result does). Independent of every other share's wrapping and of the owner's own
+    # master-key-wrapped copy - leaking one share's key material reveals nothing about any other.
+    wrapped_dek = models.BinaryField()
+    wrapped_dek_nonce = models.BinaryField()
+    created_at = models.DateTimeField(default=timezone.now)
+    # optional - null means "never expires". Enforced at fetch time only (get_shared_deck), not
+    # by a proactive cleanup job; an expired-but-not-yet-deleted row still shows up in the
+    # owner's own share listing (get_deck_shares) so they can see and revoke it like any other.
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"SavedDeckShare {self.id} for deck={self.deck_id}"
+
+    def is_expired(self) -> bool:
+        return self.expires_at is not None and self.expires_at < timezone.now()
+
+
 class LandsAmbiguousResidue(models.Model):
     """
     Routing data, not votes (docs/features/catalog-completion-plan.md's Part 4 addendum,

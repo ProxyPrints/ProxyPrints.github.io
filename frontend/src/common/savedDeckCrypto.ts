@@ -24,6 +24,10 @@ const AES_KEY_LENGTH = 256;
 const GCM_NONCE_LENGTH_BYTES = 12;
 const SALT_LENGTH_BYTES = 16;
 const RECOVERY_KEY_LENGTH_BYTES = 32; // 256 bits
+// per-deck share links ("PR-5, post-v1" in the proposal doc) - same size as the recovery key
+// (256 bits of true randomness, no KDF involved), but a semantically distinct key: a share key
+// only ever wraps ONE deck's DEK for ONE share, never the master key.
+const SHARE_KEY_LENGTH_BYTES = 32;
 
 //# region base64 <-> bytes (the wire format every API field uses)
 
@@ -44,6 +48,26 @@ export function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
+/**
+ * base64url (RFC 4648 §5) - the share URL's fragment format the spec names explicitly
+ * ("`/shared/<shareId>#<shareKey-base64url>`"), distinct from the plain base64 every other
+ * field on this module's wire format uses. Fragment-safe: no `+`/`/` that would otherwise be
+ * fine literally in a URI fragment, but base64url is what's specified, so that's what a share
+ * link's fragment gets.
+ */
+export function bytesToBase64Url(bytes: Uint8Array<ArrayBuffer>): string {
+  return bytesToBase64(bytes)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+export function base64UrlToBytes(base64url: string): Uint8Array<ArrayBuffer> {
+  const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+  return base64ToBytes(padded);
+}
+
 //# endregion
 
 //# region random generation
@@ -59,6 +83,16 @@ function generateNonce(): Uint8Array<ArrayBuffer> {
 /** A user-held recovery key (§8) - 256 bits of randomness, never derived from anything else. */
 export function generateRecoveryKey(): Uint8Array<ArrayBuffer> {
   return crypto.getRandomValues(new Uint8Array(RECOVERY_KEY_LENGTH_BYTES));
+}
+
+/**
+ * A fresh, per-share `shareKey` ("PR-5, post-v1: per-deck share links") - freshly random every
+ * call, NOT derived from the master key or from any other share's key. This is the ONLY key
+ * material that ever travels in a share URL's fragment; every other value on the wire is opaque
+ * ciphertext or a wrapped key blob.
+ */
+export function generateShareKey(): Uint8Array<ArrayBuffer> {
+  return crypto.getRandomValues(new Uint8Array(SHARE_KEY_LENGTH_BYTES));
 }
 
 //# endregion
@@ -98,6 +132,20 @@ async function importRecoveryKey(
   recoveryKeyBytes: Uint8Array<ArrayBuffer>
 ): Promise<CryptoKey> {
   return crypto.subtle.importKey("raw", recoveryKeyBytes, AES_ALGO, false, [
+    "wrapKey",
+    "unwrapKey",
+  ]);
+}
+
+/**
+ * A share key IS the key material too, same reasoning as importRecoveryKey - it's already 256
+ * bits of true randomness. Used ONLY to wrap/unwrap one deck's DEK for one share, never
+ * anything else - see generateShareKey's header comment.
+ */
+async function importShareKey(
+  shareKeyBytes: Uint8Array<ArrayBuffer>
+): Promise<CryptoKey> {
+  return crypto.subtle.importKey("raw", shareKeyBytes, AES_ALGO, false, [
     "wrapKey",
     "unwrapKey",
   ]);
@@ -341,6 +389,38 @@ export async function unlockDeckKey(
   masterKey: CryptoKey
 ): Promise<CryptoKey> {
   return unwrapKey(wrappedDek.wrapped, wrappedDek.nonce, masterKey, [
+    "encrypt",
+    "decrypt",
+  ]);
+}
+
+/**
+ * The share-creation step ("PR-5, post-v1: per-deck share links"): re-wraps an ALREADY-UNWRAPPED
+ * deck DEK (from `unlockDeckKey`, using the owner's own already-unlocked master key) under a
+ * fresh, independent `shareKey` - a SECOND wrapping of the same DEK, alongside the owner's own
+ * master-key-wrapped copy. Callers are responsible for sending `shareKeyBytes` ONLY in the share
+ * URL's fragment, never in the request body that accompanies the returned `WrappedKey`.
+ */
+export async function wrapDeckKeyForShare(
+  dek: CryptoKey,
+  shareKeyBytes: Uint8Array<ArrayBuffer>
+): Promise<WrappedKey> {
+  const shareKey = await importShareKey(shareKeyBytes);
+  return wrapKey(dek, shareKey);
+}
+
+/**
+ * The recipient-side unwrap: reverses `wrapDeckKeyForShare` using the `shareKey` bytes from the
+ * share URL's fragment alone - no account, master key, or passphrase involved. Throws (AES-GCM
+ * authentication failure) on a wrong/tampered `shareKey`/wrapped-DEK, exactly like every other
+ * unwrap in this module.
+ */
+export async function unwrapDeckKeyFromShare(
+  wrappedDek: WrappedKey,
+  shareKeyBytes: Uint8Array<ArrayBuffer>
+): Promise<CryptoKey> {
+  const shareKey = await importShareKey(shareKeyBytes);
+  return unwrapKey(wrappedDek.wrapped, wrappedDek.nonce, shareKey, [
     "encrypt",
     "decrypt",
   ]);
