@@ -40,7 +40,9 @@ from cardpicker.local_identify_printing_tags import (
 )
 from cardpicker.local_ocr import (
     crop_collector_line,
+    find_matching_candidates,
     parse_collector_line,
+    parse_legal_line,
     preprocess_variants,
     run_tesseract,
     validate_against_candidates,
@@ -553,6 +555,77 @@ class TestOcrParsing:
         assert parsed.set_code == "mom"
 
 
+class TestLegalLineParsing:
+    """public issue #151, "Legal-line extractor + moderator flag + volume report (task #159)" -
+    pure string-parsing unit tests for local_ocr.parse_legal_line, mirroring TestOcrParsing's own
+    style above. The real motivating case (real production example, gathered via Stage C's
+    golden-set run - see golden_set.py's own "legal_line" comment): a "MTG★EN ... NOT FOR SALE
+    ©2022" watermark reads as plausible-looking legal-line text to a tolerant parser - this class
+    exercises the marker-detection regex directly against synthetic strings, separate from the
+    golden set (which reflects whatever real production images happen to contain, not every
+    boundary case this parser needs to handle)."""
+
+    def test_copyright_year_anchored_to_symbol(self):
+        parsed = parse_legal_line("™ & © 2023 Wizards of the Coast. All Rights Reserved.")
+        assert parsed.copyright_year == "2023"
+        assert parsed.proxy_marker_detected is False
+
+    def test_copyright_year_anchored_to_c_in_parens(self):
+        parsed = parse_legal_line("TM and (c) 2019 Wizards of the Coast")
+        assert parsed.copyright_year == "2019"
+
+    def test_bare_year_used_when_no_copyright_anchor_present(self):
+        parsed = parse_legal_line("some noise 2021 more noise")
+        assert parsed.copyright_year == "2021"
+
+    def test_no_year_anywhere_parses_to_none(self):
+        parsed = parse_legal_line("asdf jkl qwerty !!@#")
+        assert parsed.copyright_year is None
+        assert parsed.proxy_marker_detected is False
+
+    def test_empty_string(self):
+        parsed = parse_legal_line("")
+        assert parsed.copyright_year is None
+        assert parsed.proxy_marker_detected is False
+
+    def test_detects_not_for_sale_with_spaces(self):
+        parsed = parse_legal_line("MTG★EN A25 279/281 NOT FOR SALE ©2022")
+        assert parsed.proxy_marker_detected is True
+        assert parsed.copyright_year == "2022"
+
+    def test_detects_not_for_sale_with_no_separator(self):
+        # real OCR noise case, gathered live (card 161020) - tesseract sometimes drops all
+        # whitespace between words.
+        parsed = parse_legal_line("Custom Proxy *NOTFORSALE* 2020")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_not_for_sale_with_hyphens(self):
+        parsed = parse_legal_line("NOT-FOR-SALE")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_bare_proxy_word(self):
+        parsed = parse_legal_line("MTG PROXY - MidJourney 2024")
+        assert parsed.proxy_marker_detected is True
+
+    def test_case_insensitive(self):
+        parsed = parse_legal_line("not for sale")
+        assert parsed.proxy_marker_detected is True
+
+    def test_ordinary_legal_text_has_no_false_positive(self):
+        # a genuine, clean Wizards copyright legend contains neither phrase - the negative case
+        # this detector must not false-positive on.
+        parsed = parse_legal_line("™ & © 2023 Wizards of the Coast LLC.")
+        assert parsed.proxy_marker_detected is False
+
+    def test_garbled_ocr_of_not_for_sale_is_not_matched(self):
+        # a real, badly-OCR'd read (card 39520, gathered live) - "NOT HOY SLE" is close to "NOT
+        # FOR SALE" to a human eye but does NOT match this deliberately literal regex (see
+        # local_ocr.py's own comment on _PROXY_MARKER_RE for why a fuzzier pattern was rejected).
+        # A documented, accepted miss, not a bug.
+        parsed = parse_legal_line("NOT HOY SLE")
+        assert parsed.proxy_marker_detected is False
+
+
 class TestOcrValidationRail:
     CANDIDATES = [
         CandidatePrinting(pk=1, expansion_code="mom", collector_number="158"),
@@ -615,6 +688,132 @@ class TestOcrValidationRail:
         assert reason == ""
 
 
+class TestFindMatchingCandidates:
+    """Stage D (docs/features/catalog-completion-plan.md, public issue #152): the candidate-
+    narrowing filter extracted out of validate_against_candidates so a caller with independent
+    tie-break evidence (the join-key calculator's symbol-phash tie-break, for the pre-M15
+    ambiguous case) can inspect the full ambiguous match set directly. Mirrors
+    TestOcrValidationRail's own fixtures/cases exactly - a behavior-preserving extraction should
+    agree with validate_against_candidates on every one of them."""
+
+    CANDIDATES = [
+        CandidatePrinting(pk=1, expansion_code="mom", collector_number="158"),
+        CandidatePrinting(pk=2, expansion_code="vow", collector_number="158"),
+    ]
+
+    def test_no_collector_number_returns_empty(self):
+        parsed = parse_collector_line("")
+        assert find_matching_candidates(parsed, self.CANDIDATES) == []
+
+    def test_set_and_collector_match_returns_the_one_candidate(self):
+        parsed = parse_collector_line("158/287 R MOM EN")
+        matches = find_matching_candidates(parsed, self.CANDIDATES)
+        assert [c.pk for c in matches] == [1]
+
+    def test_parsed_but_no_matching_candidate_returns_empty(self):
+        parsed = parse_collector_line("999/287 R MOM EN")
+        assert find_matching_candidates(parsed, self.CANDIDATES) == []
+
+    def test_collector_only_returns_every_ambiguous_candidate(self):
+        parsed = parse_collector_line("158")
+        matches = find_matching_candidates(parsed, self.CANDIDATES)
+        assert {c.pk for c in matches} == {1, 2}
+
+    def test_agrees_with_validate_against_candidates_on_every_outcome(self):
+        """The refactor must be behavior-preserving: validate_against_candidates's own decision
+        (matched/no-match/ambiguous) is fully derivable from this function's own output alone."""
+        for raw_text in ["", "158/287 R MOM EN", "999/287 R MOM EN", "158"]:
+            parsed = parse_collector_line(raw_text)
+            matched, reason = validate_against_candidates(parsed, self.CANDIDATES)
+            matches = find_matching_candidates(parsed, self.CANDIDATES)
+            if parsed.collector_number is None:
+                assert matches == [] and reason == "no-text"
+            elif len(matches) == 0:
+                assert matched is None and reason == "parsed-but-no-match"
+            elif len(matches) == 1:
+                assert matched is matches[0] and reason == ""
+            else:
+                assert matched is None and reason == "ambiguous"
+
+
+class TestOcrAmbiguousSplit:
+    """PREREQUISITE (issue #207): validate_against_candidates' own "ambiguous" outcome must
+    surface as its own distinct run_ocr_for_card skip_reason, never folded into
+    "parsed-but-no-match" - the loop used to discard `reason` entirely on a non-match."""
+
+    def test_ambiguous_read_is_reported_as_ambiguous_not_parsed_but_no_match(self, db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+
+        printing_a = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        printing_b = CanonicalCardFactory(
+            name="Forest", collector_number=printing_a.collector_number, expansion=CanonicalExpansionFactory(code="bbb")
+        )
+        card = CardFactory(name="Forest")
+        candidates = [
+            CandidatePrinting(pk=printing_a.pk, expansion_code="aaa", collector_number=printing_a.collector_number),
+            CandidatePrinting(pk=printing_b.pk, expansion_code="bbb", collector_number=printing_a.collector_number),
+        ]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        # collector-number-only text (no set code) matching both candidates' shared number -
+        # the real "ambiguous" case validate_against_candidates itself already returns.
+        monkeypatch.setattr(module.local_ocr, "run_tesseract", lambda image: printing_a.collector_number)
+
+        result = module.run_ocr_for_card(selected, Image.new("RGB", (750, 1050)))
+        assert result.vote is None
+        assert result.skip_reason == "ambiguous"
+
+    def test_genuine_no_match_is_still_reported_as_parsed_but_no_match(self, db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+
+        card = CardFactory(name="Forest")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        monkeypatch.setattr(module.local_ocr, "run_tesseract", lambda image: "999/287 R MOM EN")
+
+        result = module.run_ocr_for_card(selected, Image.new("RGB", (750, 1050)))
+        assert result.vote is None
+        assert result.skip_reason == "parsed-but-no-match"
+
+    def test_no_text_at_all_is_still_reported_as_no_text(self, db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+
+        card = CardFactory(name="Forest")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        monkeypatch.setattr(module.local_ocr, "run_tesseract", lambda image: "")
+
+        result = module.run_ocr_for_card(selected, Image.new("RGB", (750, 1050)))
+        assert result.vote is None
+        assert result.skip_reason == "no-text"
+
+    def test_ambiguous_on_one_preprocessing_variant_wins_over_no_match_on_another(self, db, monkeypatch):
+        # the two preprocess_variants (dark-on-light/light-on-dark) can read differently -
+        # "ambiguous" from either variant must take priority over "parsed-but-no-match" from
+        # the other, since it's real (if incomplete) positive evidence the parse was plausible.
+        import cardpicker.local_identify_printing_tags as module
+
+        printing_a = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        printing_b = CanonicalCardFactory(
+            name="Forest", collector_number=printing_a.collector_number, expansion=CanonicalExpansionFactory(code="bbb")
+        )
+        card = CardFactory(name="Forest")
+        candidates = [
+            CandidatePrinting(pk=printing_a.pk, expansion_code="aaa", collector_number=printing_a.collector_number),
+            CandidatePrinting(pk=printing_b.pk, expansion_code="bbb", collector_number=printing_a.collector_number),
+        ]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        texts = iter(["999/287 R MOM EN", printing_a.collector_number])
+        monkeypatch.setattr(module.local_ocr, "run_tesseract", lambda image: next(texts))
+
+        result = module.run_ocr_for_card(selected, Image.new("RGB", (750, 1050)))
+        assert result.vote is None
+        assert result.skip_reason == "ambiguous"
+
+
 class TestPhashThresholdAndMargin:
     def test_clear_winner_within_threshold_and_margin(self):
         candidate_a = CandidatePrinting(pk=1, expansion_code="mom", collector_number="1")
@@ -655,6 +854,75 @@ class TestPhashThresholdAndMargin:
         match, reason = find_best_match(card_hash=0, candidates_with_hashes=[], distance_threshold=10, margin=6)
         assert match is None
         assert reason == "no-hashable-candidates"
+
+
+class TestPhashNoClearWinnerSplit:
+    """issue #207 instrumentation: local_phash.find_best_match (PROTECTED CORE, see
+    docs/upstreaming/license-provenance.md §2) folds two different reasons a card fails to
+    produce a phash vote into one "no-clear-winner" skip_reason. `_classify_no_clear_winner`
+    re-derives which one fired from the exact same inputs, via pure arithmetic, without editing
+    find_best_match's own decision logic."""
+
+    def test_over_threshold_classifies_as_distance(self):
+        from cardpicker.local_identify_printing_tags import _classify_no_clear_winner
+
+        candidate = CandidatePrinting(pk=1, expansion_code="mom", collector_number="1")
+        reason = _classify_no_clear_winner(
+            card_hash=0, candidates_with_hashes=[(candidate, (1 << 20) - 1)], distance_threshold=10, margin=6
+        )
+        assert reason == "no-clear-winner-distance"
+
+    def test_margin_too_tight_classifies_as_margin(self):
+        from cardpicker.local_identify_printing_tags import _classify_no_clear_winner
+
+        candidate_a = CandidatePrinting(pk=1, expansion_code="mom", collector_number="1")
+        candidate_b = CandidatePrinting(pk=2, expansion_code="mom", collector_number="2")
+        reason = _classify_no_clear_winner(
+            card_hash=0b11,
+            candidates_with_hashes=[(candidate_a, 0), (candidate_b, 0b1111)],
+            distance_threshold=10,
+            margin=6,
+        )
+        assert reason == "no-clear-winner-margin"
+
+    def test_run_phash_for_card_surfaces_the_distance_reason_end_to_end(self, db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_phash as phash_module
+
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card = CardFactory(name="Forest")
+        candidates = [
+            CandidatePrinting(pk=printing.pk, expansion_code="aaa", collector_number=printing.collector_number)
+        ]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        monkeypatch.setattr(phash_module, "compute_card_art_hash", lambda image, bleed_class=None: 0)
+        monkeypatch.setattr(phash_module, "get_or_compute_canonical_hash", lambda canonical: (1 << 20) - 1)
+
+        vote, reason = module.run_phash_for_card(selected, Image.new("RGB", (10, 10)), distance_threshold=10, margin=6)
+        assert vote is None
+        assert reason == "no-clear-winner-distance"
+
+    def test_run_phash_for_card_surfaces_the_margin_reason_end_to_end(self, db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_phash as phash_module
+
+        printing_a = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        printing_b = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        card = CardFactory(name="Forest")
+        candidates = [
+            CandidatePrinting(pk=printing_a.pk, expansion_code="aaa", collector_number=printing_a.collector_number),
+            CandidatePrinting(pk=printing_b.pk, expansion_code="bbb", collector_number=printing_b.collector_number),
+        ]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        hashes_by_pk = {printing_a.pk: 0, printing_b.pk: 0b1111}
+        monkeypatch.setattr(phash_module, "compute_card_art_hash", lambda image, bleed_class=None: 0b11)
+        monkeypatch.setattr(phash_module, "get_or_compute_canonical_hash", lambda canonical: hashes_by_pk[canonical.pk])
+
+        vote, reason = module.run_phash_for_card(selected, Image.new("RGB", (10, 10)), distance_threshold=10, margin=6)
+        assert vote is None
+        assert reason == "no-clear-winner-margin"
 
 
 class TestPhashCandidateCap:
@@ -1467,6 +1735,253 @@ class TestScanLog:
         assert fetch_calls[skipped_card.pk] == 1
         # the rescannable card is genuinely re-fetched - this is the point of leaving it eligible
         assert fetch_calls[rescannable_card.pk] == 2
+
+
+class TestOcrNoMatchVoteCasting:
+    """issue #207 part 2: OCR's "parsed-but-no-match" (post-ambiguous-split, TestOcrAmbiguousSplit
+    above) is genuine whole-candidate-set no-match evidence and casts a real
+    `CardPrintingTag(is_no_match=True)` vote instead of a mere CardScanLog abstention row - every
+    OTHER OCR skip_reason (a pure abstention, or evidence against a single candidate/pair rather
+    than the whole set) must NOT cast one."""
+
+    def test_parsed_but_no_match_casts_is_no_match_vote_not_a_scan_log_row(self, db, monkeypatch):
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        import cardpicker.local_identify_printing_tags as module
+
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(skip_reason="parsed-but-no-match"),
+        )
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=OCR_ANONYMOUS_ID)
+        assert vote.is_no_match is True
+        assert vote.printing is None
+        assert vote.source == VoteSource.OCR
+        assert not CardScanLog.objects.filter(card=card).exists()
+        assert results["ocr"].no_match_votes_written == 1
+        assert results["ocr"].votes_written == 0
+        # the vote itself already excludes the card from re-selection - no separate scan-log
+        # bookkeeping needed (same idempotence mechanism a positive vote already relies on)
+        assert select_candidates("ocr") == []
+
+    @pytest.mark.parametrize("skip_reason", ["no-text", "ambiguous", "unfetchable-image"])
+    def test_pure_abstention_reasons_never_cast_is_no_match(self, db, monkeypatch, skip_reason):
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        import cardpicker.local_identify_printing_tags as module
+
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(skip_reason=skip_reason),
+        )
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert not CardPrintingTag.objects.filter(card=card).exists()
+        row = CardScanLog.objects.get(card=card, anonymous_id=OCR_ANONYMOUS_ID)
+        assert row.skip_reason == skip_reason
+        assert results["ocr"].no_match_votes_written == 0
+        assert results["ocr"].skip_counts[skip_reason] == 1
+
+    def test_frame_mismatch_never_casts_is_no_match(self, db, monkeypatch):
+        # OCR nominally "succeeded" (a vote WAS produced), but the consistency check withholds
+        # it - real evidence FOR one candidate that turned out inconsistent, never whole-set
+        # no-match evidence. Companion to TestPass2Wiring::
+        # test_frame_mismatch_withholds_the_printing_vote, asserting the is_no_match angle
+        # specifically.
+        printing = CanonicalCardFactory(name="Forest")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, frame="1993")
+        card = CardFactory(name="Forest")
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
+
+        def fake_ocr(selected, image, crop_box, bleed_class=None):
+            return module.OcrCardResult(
+                vote=module.EngineVote(
+                    engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="158/281 R MOM EN"
+                ),
+                parsed_a_collector_number=True,
+            )
+
+        monkeypatch.setattr(module, "run_ocr_for_card", fake_ocr)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
+
+        run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert not CardPrintingTag.objects.filter(card=card).exists()
+
+    def test_engine_disagreement_never_casts_is_no_match(self, db, monkeypatch):
+        # companion to TestRunPilotAgreementAndDisagreement::test_both_engines_disagree_writes_
+        # neither, asserting the is_no_match angle specifically - two engines each finding a
+        # DIFFERENT specific candidate is evidence FOR two candidates, never evidence against
+        # the whole set.
+        printing_a = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        printing_b = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        card = CardFactory(name="Forest")
+        import cardpicker.local_identify_printing_tags as module
+
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+                vote=module.EngineVote(engine="ocr", printing_pk=printing_a.pk, confidence=0.85, detail="a")
+            ),
+        )
+        monkeypatch.setattr(
+            module,
+            "run_phash_for_card",
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (
+                module.EngineVote(engine="phash", printing_pk=printing_b.pk, confidence=0.8, detail="b"),
+                "",
+            ),
+        )
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
+
+        run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
+
+        assert not CardPrintingTag.objects.filter(card=card).exists()
+
+
+class TestFallbackNoMatchVoteCasting:
+    """issue #207 part 2: fallback's "eliminated" outcome (the evidence-combination
+    intersection narrowed to ZERO surviving candidates) is genuine whole-candidate-set no-match
+    evidence and casts a real `CardPrintingTag(is_no_match=True)` vote instead of a mere
+    CardScanLog row - "no-evidence" and "ambiguous" (a real, not-yet-eliminated candidate set)
+    must NOT."""
+
+    @staticmethod
+    def _wire_pass_1_miss_and_fallback(module, fallback_outcome, image=None):
+        image = image or Image.new("RGB", (750, 1050), (5, 5, 5))
+        monkeypatch_targets = [
+            (module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()),
+            (
+                module,
+                "run_phash_for_card",
+                lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (
+                    None,
+                    "no-clear-winner-distance",
+                ),
+            ),
+            (module, "fetch_card_image", lambda card, dpi=None: image),
+            (
+                module.local_fallback,
+                "run_fallback_for_card",
+                lambda selected, image, ocr_raw_texts, bleed_class=None: fallback_outcome,
+            ),
+        ]
+        return monkeypatch_targets
+
+    def test_eliminated_casts_is_no_match_vote_not_a_scan_log_row(self, db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+        from cardpicker.local_fallback import FallbackOutcome
+
+        CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
+
+        for target, name, fn in self._wire_pass_1_miss_and_fallback(
+            module, FallbackOutcome(skip_reason="eliminated", evidence_types_used=["border"])
+        ):
+            monkeypatch.setattr(target, name, fn)
+
+        results, _attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
+
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID)
+        assert vote.is_no_match is True
+        assert vote.printing is None
+        assert not CardScanLog.objects.filter(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID).exists()
+        assert results["fallback"].no_match_votes_written == 1
+        assert results["fallback"].votes_written == 0
+
+    def test_no_evidence_does_not_cast_is_no_match_and_records_full_candidate_set_as_survivors(self, db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+        from cardpicker.local_fallback import FallbackOutcome
+
+        printing = CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
+
+        for target, name, fn in self._wire_pass_1_miss_and_fallback(module, FallbackOutcome(skip_reason="no-evidence")):
+            monkeypatch.setattr(target, name, fn)
+
+        run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
+
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID).exists()
+        row = CardScanLog.objects.get(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID)
+        assert row.skip_reason == "no-evidence"
+        assert row.evidence_types_used == []
+        assert row.survivor_pks == [printing.pk]
+
+    def test_ambiguous_does_not_cast_is_no_match_and_leaves_survivor_pks_unknown(self, db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+        from cardpicker.local_fallback import FallbackOutcome
+
+        CanonicalCardFactory(name="Forest")
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        card = CardFactory(name="Forest")
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
+
+        for target, name, fn in self._wire_pass_1_miss_and_fallback(
+            module, FallbackOutcome(skip_reason="ambiguous", evidence_types_used=["border", "artist"])
+        ):
+            monkeypatch.setattr(target, name, fn)
+
+        run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
+
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID).exists()
+        row = CardScanLog.objects.get(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID)
+        assert row.skip_reason == "ambiguous"
+        assert row.evidence_types_used == ["border", "artist"]
+        # the OPEN ITEM this PR's body flags: the actual narrowed survivor set for "ambiguous"
+        # isn't recoverable without touching local_fallback.py (PROTECTED CORE) - left null
+        # rather than guessed at.
+        assert row.survivor_pks is None
+
+    def test_frame_mismatch_never_casts_is_no_match(self, db, monkeypatch):
+        # companion to TestPass2Wiring::test_frame_mismatch_withholds_the_printing_vote,
+        # asserting the is_no_match angle specifically.
+        printing = CanonicalCardFactory(
+            name="Forest",
+            expansion=CanonicalExpansionFactory(code="aaa"),
+            artist=CanonicalArtistFactory(name="Marie Magny"),
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black", frame="2015")
+        card = CardFactory(name="Forest")
+        TagFactory(name="Black Border")
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "Illus. Marie Magny")
+        monkeypatch.setattr(
+            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+        )
+        monkeypatch.setattr(
+            module,
+            "run_phash_for_card",
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (
+                None,
+                "no-clear-winner-distance",
+            ),
+        )
+        monkeypatch.setattr(
+            module, "fetch_card_image", lambda card, dpi=None: _black_bordered_image_with_artist_text("Marie Magny")
+        )
+
+        run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
+
+        assert not CardPrintingTag.objects.filter(card=card).exists()
 
 
 class TestAbstentionAwareOrdering:

@@ -7,29 +7,13 @@ rebase a branch onto the new upstream tip (see
 `conventions.md`'s automation-composition note — this workflow
 never rebases anything itself).
 
-Seeded manually 2026-07-18 with the same computation the workflow runs,
-before the workflow has had a chance to run for real (it only fires once
-merged to `master`, since GitHub only schedules workflows that exist on
-the default branch). Includes `upstream-fix-*` branches predating this
-audit for completeness — two are already merged/closed upstream
-(`upstream-fix-frontend-searchable-the` → merged as #467;
-`upstream-fix-pdf-canvas-preview` and `upstream-fix-pdf-thumbnail-worker-route`
-→ closed, not bugs) and this monitor has no way to know that
-automatically (it only reads branch existence, not PR status) — delete
-the `origin` branch once its PR resolves and it drops out of this table
-on its own. Until then it'll keep showing up here, harmlessly.
+Last run: 2026-07-20 10:54 UTC, upstream/master @ c3d10253e581a1e4fc52b7c4efd9d150b00de026
 
-Last run: 2026-07-18 18:27 UTC (manual freshness re-check, absorption-check
-task — see `docs/reports/` on `report-relay`), upstream/master @
-`c3d10253e581a1e4fc52b7c4efd9d150b00de026` — **unchanged** since the
-2026-07-18 seed: `upstream/master` has not moved (0 new commits, `git rev-list --count c3d10253..upstream/master` = 0). All six branches'
-figures re-verified identical to the seed; only this timestamp updated.
-
-| Branch                                    | Applies clean onto upstream/master?               | Upstream commits since fork point | Files upstream touched that this branch also touches | Last checked |
-| ----------------------------------------- | ------------------------------------------------- | --------------------------------- | ---------------------------------------------------- | ------------ |
-| `upstream-feat-local-file-source`         | yes                                               | 0                                 | 0 file(s)                                            | 2026-07-18   |
-| `upstream-fix-frontend-searchable-the`    | yes (already merged as #467 — safe to delete)     | 1                                 | 0 file(s)                                            | 2026-07-18   |
-| `upstream-fix-image-cdn-cors`             | yes                                               | 2                                 | 0 file(s)                                            | 2026-07-18   |
-| `upstream-fix-pdf-canvas-preview`         | yes (closed upstream, not a bug — safe to delete) | 2                                 | 0 file(s)                                            | 2026-07-18   |
-| `upstream-fix-pdf-eager-wasm-load`        | yes                                               | 2                                 | 0 file(s)                                            | 2026-07-18   |
-| `upstream-fix-pdf-thumbnail-worker-route` | yes (closed upstream, not a bug — safe to delete) | 2                                 | 0 file(s)                                            | 2026-07-18   |
+| Branch                                    | Applies clean onto upstream/master? | Upstream commits since fork point | Files upstream touched that this branch also touches | Last checked |
+| ----------------------------------------- | ----------------------------------- | --------------------------------- | ---------------------------------------------------- | ------------ |
+| `upstream-feat-local-file-source`         | yes                                 | 0                                 | 0 file(s)                                            | 2026-07-20   |
+| `upstream-fix-frontend-searchable-the`    | yes                                 | 1                                 | 0 file(s)                                            | 2026-07-20   |
+| `upstream-fix-image-cdn-cors`             | yes                                 | 2                                 | 0 file(s)                                            | 2026-07-20   |
+| `upstream-fix-pdf-canvas-preview`         | yes                                 | 2                                 | 0 file(s)                                            | 2026-07-20   |
+| `upstream-fix-pdf-eager-wasm-load`        | yes                                 | 2                                 | 0 file(s)                                            | 2026-07-20   |
+| `upstream-fix-pdf-thumbnail-worker-route` | yes                                 | 2                                 | 0 file(s)                                            | 2026-07-20   |

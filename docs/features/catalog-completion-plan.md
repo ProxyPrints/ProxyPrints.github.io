@@ -1356,7 +1356,382 @@ presence, 4 in `test_golden_set.py`); full suite 1024 passed / 4
 skipped (the same CI-documented named skips — nothing newly broken);
 `makemigrations --check` clean.
 
-Queued behind Stage B per the paced task sequence (#145–148). Stage D
+**OCR-group — third manifest extractor group, built** (public issue
+#149, 2026-07-20): adds `collector_line_raw_text`,
+`collector_line_set_code`, `collector_line_collector_number`,
+`artist_ocr_raw_text`, `artist_ocr_name`, `illus_anchor_fired`, and
+`collector_line_word_boxes`
+to `ImageEvidence` (migration `0071`, additive-only `AddField`s, no
+freeze conflict — checked `gh issue list --label deploy-freeze-active`
+fresh immediately before both the migration and the golden-set
+gathering run, empty both times). All three extractors consume
+`collector_line_crop_px`/`artist_crop_px` — the pixel boxes issue #148's
+crop_coordinates already computed earlier in the same pass — directly
+(`image.crop(...)`), rather than recomputing them from the fixed-fraction
+constants a second time. None of the three perform candidate matching:
+`local_ocr.validate_against_candidates`/`local_fallback.match_artist`
+both require a card's real `CandidatePrinting` list, which the per-card
+`extract_card_evidence(card)` function never receives — that comparison
+is Stage D calculator territory (task #151's pipeline-fidelity gate),
+not Stage C extraction. What's stored is raw OCR text plus
+`local_ocr.parse_collector_line`/`local_fallback.extract_artist_name`'s
+existing tolerant parses (both called, not reimplemented) plus word-level
+bounding boxes from a new `local_ocr.run_tesseract_tsv` wrapper around
+`pytesseract.image_to_data` — metadata per FINAL POSTURE item 2 ("full
+OCR text + TSV word boxes, parsed fields"), never a verdict about which
+printing this is. `artist_ocr` reuses `collector_line_ocr`'s own raw
+texts first (an old-border card's "Illus. <artist>" credit frequently
+lands inside the same crop region a modern card's collector line
+occupies), the same reuse-before-recompute convention
+`local_fallback.detect_illus_anchor` already uses — only cropping+OCR-
+ing `artist_crop_px` if that reuse finds nothing. No changes to
+`local_fallback.py` itself (PROTECTED CORE; calling its existing
+exported `extract_artist_name` from new code is not "changing" it, per
+`docs/upstreaming/license-provenance.md`); `local_ocr.py` is not
+PROTECTED CORE, so `run_tesseract_tsv` was added there directly.
+
+`GOLDEN_EXPECTATIONS["collector_line_ocr"]`/`["artist_ocr"]`/
+`["collector_line_tsv"]` populated against a real, no-persistence
+`extract_card_evidence()` run over all 30 golden cards (host venv, real
+network fetch through the shared `GOOGLE_IMAGE`-paced Worker path, zero
+DB writes): only 10/30 produced a parseable collector number (several a
+4-digit "year" number on `mtg`/`proxy`-coded promos rather than a
+classic 3-digit one); `illus_anchor_fired` came back `False` for all 30
+— genuine, not a placeholder, since "Illus. <artist>" is an
+old-border-only convention (pre-2003) and this source-stratified sample
+happened to draw zero old-border cards, consistent with issue #148's
+own layout_class results (14 black/13 borderless/1 white/1 ambiguous,
+no old-border signal either); 25/30 found at least one non-blank
+tesseract word in the collector-line crop, including several cards
+where the word(s) found didn't fit the collector-number regex — a
+genuinely different (weaker) outcome than a fully blank crop, and worth
+keeping distinct in the golden set for exactly that reason. Raw OCR
+text itself is NOT pinned (too verbose/brittle across a tesseract
+version bump), nor is the exact word-box list (same reasoning) — only
+the discrete parsed fields and a `word_boxes_present` bool are, matching
+`geometry_bleed`'s own precedent of excluding continuous/brittle values
+from the hard gate. 19 new tests (13 in `test_image_evidence.py`'s new
+`TestExtractCardEvidenceCollectorLineOcr`/`ArtistOcr`/`CollectorLineTsv`
+classes — all three run against real PIL images + the real tesseract
+binary, no monkeypatching of tesseract itself, per CLAUDE.md's "no new
+skips" rule — plus 6 in `test_golden_set.py`), and 13 pre-existing
+`TestExtractCardEvidence*` tests updated for the three new extractors'
+presence; full suite 1037 passed / 4 skipped (the same CI-documented
+named skips —
+nothing newly broken); `makemigrations --check` clean.
+
+`back_face_flag` remained an open question for the owner as of this PR
+(see the geometry-group paragraph above) — settled afterward, see the
+"back-face flag" paragraph following the legal-line extractor below.
+
+**symbol_region — fourth manifest extractor, built** (public issue #160,
+"Part 4b: symbol harness", 2026-07-20): adds `symbol_crop_px` and
+`symbol_phash` to `ImageEvidence` (migration `0073`, additive-only
+`AddField`s, no freeze conflict — checked
+`gh issue list --label deploy-freeze-active --state all` fresh
+immediately before both the migration and the golden-set gathering run,
+empty both times, despite a concurrent live dataset-population run
+writing `ImageEvidence` rows in the background — this PR's own
+migration/tests/golden-set run all targeted the throwaway pytest
+testcontainers DB or read-only production `Card` reads, never a write to
+that live data). `symbol_crop_px` turns `local_fallback.SYMBOL_STRIP_BOX`
+— the same right-side vertical strip that module's own
+`find_symbol_matches` sub-check scans — into pixel coordinates exactly
+the way issue #148's `crop_coordinates` derives its own three boxes
+(`normalize_crop_box` remap, then scaled by width/height); `symbol_phash`
+is a perceptual hash (`imagehash.phash`) of that region ONLY — the
+cropped pixels are hashed in memory and discarded, never persisted (the
+Governing posture section's own "the symbol-strip diagnosis re-plans as
+in-pass hash/feature-vector math — store the math, not the strip"
+directive this task closes out). Deliberately NOT
+`find_symbol_matches` itself: that sub-check compares the strip against
+a rendered keyrune glyph for each of a card's real `CandidatePrinting`s,
+which this per-card function never receives — candidate matching (and
+the actual set identification/lookup) is Stage D calculator territory,
+same reasoning issue #149's own OCR-group paragraph gives for why no
+candidate matching happens in Stage C. `symbol_phash` is stored as a
+signed 64-bit int via `twos_complement` (`cardpicker.utils`, not
+protected core) — the same representation `local_phash.py`'s own private
+`_hash_to_int` uses for `Card.content_phash`/`CanonicalCard.image_hash`,
+reproduced rather than imported since that helper isn't exported from
+that PROTECTED CORE module. No changes to `local_fallback.py` itself
+(PROTECTED CORE; importing its existing `SYMBOL_STRIP_BOX` constant from
+new code is not "changing" it, per
+`docs/upstreaming/license-provenance.md` — note `SYMBOL_STRIP_BOX` isn't
+in that module's own `__all__`, which restricts `from ... import *` only,
+not a direct named import).
+
+The only named skip is a degenerate crop box (zero/negative width or
+height) — the same "sub-floor" input category `geometry_bleed`'s own
+`test_zero_height_image_guards_aspect_ratio_division` guards against for
+its aspect-ratio division, applied here before `PIL.Image.crop`/
+`imagehash.phash` would raise on an empty region. An earlier design
+considered gating on `imagehash.phash` returning the literal all-zero
+sentinel `local_phash.py`'s own docstring names for
+`CanonicalCard.image_hash` ("vanishingly unlikely for real card art") —
+rejected on advisor review as an ungrounded heuristic near-guaranteed
+never to fire (the same failure mode issue #148's own `back_face_flag`
+rejection names), in favor of the degenerate-box guard actually built:
+mechanically necessary regardless (a real crash risk on a sub-floor-
+resolution fetch), constructible in a real test (fed a zero-height stub
+image), and not a tuned classification threshold.
+`GOLDEN_EXPECTATIONS["symbol_region"]` populated against a real,
+no-persistence `extract_card_evidence()` run over all 30 golden cards
+(host venv, real network fetch through the shared `GOOGLE_IMAGE`-paced
+Worker path, zero DB writes): 30/30 produced a real (non-degenerate)
+hash, zero "ambiguous" skips — a genuine outcome for this
+source-stratified real-image sample, not a placeholder; the degenerate-
+box guard is not expected to fire against the golden set, stated plainly
+in both the golden-set comment and this extractor's own module docstring
+rather than left implicit. 8 new tests (`TestExtractCardEvidenceSymbolRegion`
+in `test_image_evidence.py`, plus 2 in `test_golden_set.py`), and existing
+`_StubImage`-based `TestExtractCardEvidence*` tests updated (a new
+`_stub_symbol_region` helper, mirroring `_stub_border_color`/`_stub_ocr`'s
+identical rationale) for the new extractor's presence; full suite 1069
+passed / 4 skipped (the same CI-documented named skips — nothing newly
+broken); `makemigrations --check` clean.
+
+**Migrations 0068–0072 now live on production; first real dataset
+population launched (2026-07-20)**: per `docs/infrastructure.md`'s "Stage
+C migration state" note, these five migrations — the `ImageEvidence`
+substrate itself (`0068`) plus the geometry/bleed (#147, `0069`),
+geometry-group (#148, `0070`), and OCR-group (#149, `0071`) extractor
+fields documented above, plus the `CardScanLog` instrumentation fields
+(`evidence_types_used`/`survivor_pks`, `0072`) from issue #209's
+negative-vote work — took production from migration `0067` to `0072`,
+applied ad hoc during this run rather than through the documented deploy
+sequencing (see that doc for the departure). Every golden-set run
+described in this section (the 27/30, 30/30, 10/30, and this extractor's
+own 30/30 samples) was explicitly "zero DB writes" validation against the
+pinned 30-card golden set, not population — the evidence store itself
+held 0 rows in production until this run. It now holds its first real
+cohort: `run_id=stagec-cohort-20260720-full`, ~3,000+ rows and growing
+toward a 15,000-card target. Migration `0073` (this section's own
+symbol_region extractor, #160) is also merged to the codebase as of this
+writing, but its own production-deploy status is a separate, unconfirmed
+question — not covered by the `0068`–`0072` range above, flagged as an
+open item rather than assumed either way.
+
+**legal-line extractor + moderator flag — next manifest extractor, built**
+(public issue #151, "Legal-line extractor + moderator flag + volume report
+(task #159)", 2026-07-20 — this PR builds the extractor + moderator-flag
+signal only; task #159's volume-report half is out of scope, tracked
+separately, not folded into this PR): adds `legal_line_crop_px`,
+`legal_line_raw_text`, `legal_line_copyright_year`,
+`legal_line_proxy_marker_detected` to `ImageEvidence` (migration `0074`,
+additive-only `AddField`s, no freeze conflict — checked
+`gh issue list --label deploy-freeze-active` fresh immediately before both
+the migration and the golden-set gathering run, empty both times; depends
+on `0073`, per the note above also not yet confirmed live on
+production — this PR's own dev/test work targeted the throwaway pytest
+testcontainers DB or read-only production `Card` reads only, never a
+write, so this dependency doesn't block merging ahead of that deploy).
+A NEW,
+dedicated crop region (`local_ocr.LEGAL_LINE_CROP_BOX` — same y-band
+`DEFAULT_CROP_BOX` was tuned against, widened to the full card width since
+a real copyright legend commonly runs further right than the collector
+line's own narrow window), verified against real fetched production images
+before being locked in — a quick probe against 18 real golden cards
+confirmed the box genuinely captures legal/proxy-marker text (including
+several real "NOT FOR SALE"/"PROXY" hits) rather than being invented from
+memory, per the same discipline every other `*_crop_px` field followed.
+`local_ocr.parse_legal_line` (new, `local_ocr.py` is not PROTECTED CORE)
+extracts a copyright year (anchored to a `©`/`(c)`/"copyright" glyph in
+preference to a bare 4-digit run elsewhere in the line, avoiding a
+collector-number-shaped false read) and detects a proxy/not-for-sale
+marker via a deliberately plain, literal (not fuzzy) regex — no candidate
+matching happens here (Stage D's job, same as every other OCR-adjacent
+extractor). `legal_line_proxy_marker_detected` is the moderator-flag
+signal (task #151's real motivating case: a "MTG★EN … NOT FOR SALE
+©2022" watermark reads as plausible collector-line-shaped text to a
+tolerant parser — this signal is what lets Stage D's calculator reject
+that false-accept instead of trusting it); this extractor only emits the
+raw True/False fact, it never acts on it directly, matching every other
+extractor's "emit signals, don't act on them" discipline. No changes to
+`local_fallback.py`/`local_phash.py` (both PROTECTED CORE; not touched by
+this extractor at all).
+`GOLDEN_EXPECTATIONS["legal_line"]` populated against a real,
+no-persistence `extract_card_evidence()` run over all 30 golden cards
+(host venv, real network fetch through the shared `GOOGLE_IMAGE`-paced
+Worker path, zero DB writes): 10/30 produced a plausible copyright year,
+10/30 detected a proxy/not-for-sale marker — genuinely common on this
+real sample, not a rare edge case, since this catalog is specifically an
+MTG-proxy print catalog rather than a scan archive (real hits include
+"NOT FOR SALE", `Custom Proxy *NOTFORSALE*`, "MTG PROXY", and a
+community-credit "Proxy - `<username>`" watermark baked into the source
+image) — kept as-is per the same "don't discard a real outcome" rationale
+every prior extractor's own golden-set comment gives. 21 new tests (7 in
+`test_image_evidence.py`'s new `TestExtractCardEvidenceLegalLine` class —
+real PIL images + the real tesseract binary, no monkeypatching of
+tesseract itself; 12 in `test_local_identify_printing_tags.py`'s new
+`TestLegalLineParsing` class — pure string-parsing unit tests of the
+marker-detection regex against synthetic strings, including the exact
+motivating watermark text, separate from the golden set which only
+reflects whatever real production images happen to contain; 2 in
+`test_golden_set.py`), plus 4 pre-existing `TestExtractCardEvidence*`
+tests updated for the new extractor's presence (including one call-count
+assertion in `TestExtractCardEvidenceArtistOcr` that legitimately changes
+from 1 to 2, since legal_line — unlike `artist_ocr` — always crops+OCRs
+its own dedicated region rather than reusing another extractor's already-
+computed raw text); full suite 1088 passed / 4 skipped (the same
+CI-documented named skips — nothing newly broken); `makemigrations --check` clean.
+
+**back-face flag — settled by owner decision, built as a name lookup, NOT an
+`ImageEvidence` extractor** (public issue #199, 2026-07-20): the owner settled
+the open question the geometry-group PR left hanging — back-face is
+determined from a card's NAME via Scryfall, not from image analysis, which
+makes it name/identity metadata rather than a Stage C image extractor.
+`printing_metadata_import.py` gains `get_back_face_names()`/`is_back_face()`:
+a deterministic name → back-face lookup built entirely from the Scryfall
+bulk data already on disk (`scryfall_cache/default_cards.json`, the same
+file that function's own `import_scryfall_printing_metadata` already
+parses) — no network fetch, no downloader, per the owner's own wording
+("reads the EXISTING on-disk bulk data... a small addition to the existing
+metadata-import path, not new plumbing"). For every row whose Scryfall
+`layout` is a genuine double-faced layout (`DOUBLE_FACED_LAYOUTS`:
+`transform`/`modal_dfc`/`double_faced_token`/`battle`/`reversible_card`),
+the second face's name (`card_faces[1]["name"]`) is a back face.
+Deliberately narrower than "any row with 2+ `card_faces`": split/flip/
+adventure/aftermath/mutate/prototype layouts also nest multiple named
+modes under `card_faces`, but those modes are printed on the SAME single
+face of the card, not front/back — an unfiltered check would misflag e.g.
+Adventure's spell side ("Stomp") as a back face of "Bonecrusher Giant".
+`art_series` is excluded for the same reason `MTGIntegration. DFC_SCRYFALL_QUERY` already excludes it for its own (live-API-sourced)
+`DFCPair` table. **Scope gap, by the owner's own card_faces-based
+definition, not an oversight**: meld back faces are NOT covered — meld
+pieces carry no `card_faces` on their own bulk-data row at all (Scryfall
+represents the merged result via `all_parts` on the _meld_result_ card
+instead, which is why `MTGIntegration.get_meld_pairs` reads a completely
+different shape) — this on-disk, name/card_faces-based definition
+structurally cannot see them. No `ImageEvidence`/`CanonicalCard`/
+`CanonicalPrintingMetadata` field was added: `CanonicalCard.name` for a
+double-faced print is Scryfall's own combined `"A // B"` name (one row per
+print, both faces embedded), so a per-print boolean doesn't correspond to
+"is this a back face" the way it does for a physical uploaded `Card.name`
+(which is single-face, e.g. "Insectile Aberration") — no real caller needs
+a persisted flag yet, so none was speculatively added; "additive migration
+if a field is added" resolved to no migration this round. 11 new tests in
+`test_printing_metadata_import.py`'s new `TestGetBackFaceNames` class
+(known DFC back face → True, its own front face → False, a normal card →
+False, an Adventure/split second mode → False, an art_series row → False,
+a missing bulk file → empty set without raising, caching); no real
+golden-set expectations gathered for this one — the real
+`default_cards.json` isn't present on any dev machine this PR was built on
+(no network fetch in scope to obtain it), so the three required cases
+(known back face/normal card/front face) are covered by synthetic
+bulk-data fixtures instead, per the task's own "if golden-set expectations
+fit" conditional wording; full suite 1099 passed / 4 skipped (the same
+CI-documented named skips — nothing newly broken); `makemigrations --check`
+clean (no model change).
+
+**color_profile / quality_signals / fetch-health completion — LAST Stage C manifest
+extractor group, built** (public issue #150's re-spec, 2026-07-20 — the phash half of the
+original issue is DROPPED per the owner's same-day re-spec comment on #150, superseded by
+user-submitted phash on the art-similarity flag, task #203; set-symbol phash already shipped
+separately as `symbol_region`, issue #160): adds `fetch_latency_ms`, `fetch_image_format`,
+`image_is_truncated`, `blur_variance`, `image_entropy`, `color_mean_rgb`, `color_stddev_rgb` to
+`ImageEvidence` (migration `0075`, additive-only `AddField`s, no freeze conflict — checked
+`gh issue list --label deploy-freeze-active --state all` fresh immediately before writing the
+migration, empty). New, NOT-protected-core module `cardpicker/local_image_quality.py`
+(`docs/upstreaming/license-provenance.md` §2's file list doesn't include it — new helpers land
+there directly, same convention `local_ocr.py` already established for OCR-adjacent additions):
+`is_image_truncated` (forces a full pixel decode via `Image.load()`, catching the `OSError`
+Pillow raises for a genuinely truncated download — verified empirically against a real
+half-written JPEG before being wired in), `compute_blur_variance` (variance of a Laplacian-kernel
+edge response over the grayscale image, cropping out `PIL.ImageFilter.Kernel`'s own documented
+1-pixel unprocessed border first — verified empirically that a flat solid-color image reports an
+exact-zero interior response only after that crop, not before), `compute_entropy` (Pillow's own
+built-in `Image.entropy()`, not reimplemented), and `compute_color_profile` (per-channel R/G/B
+mean + population stddev via `PIL.ImageStat.Stat`, not a hand-rolled pixel loop) — all first-party
+Pillow APIs, no external code ported (matching this repo's own provenance-sweep precedent for
+`local_phash.py`/`local_fallback.py`, `docs/upstreaming/license-provenance.md` §1.7). No changes
+to `local_fallback.py`/`local_phash.py` themselves (both PROTECTED CORE; not touched by this PR).
+
+`quality_signals` runs `is_image_truncated` first and shares that finding with `color_profile`
+just below it (an explicit cross-extractor dependency, documented in `image_evidence.py`'s module
+docstring the same way `artist_ocr` reusing `collector_line_ocr`'s raw text already is) rather than
+re-attempting the same decode twice; `blur_variance`/`image_entropy` are only computed once the
+image has loaded cleanly, since a truncated image's partial pixel data would produce meaningless
+numbers, not a real reading. Both extractors share a degenerate-size (zero/negative width or
+height) guard with `skip_reason="ambiguous"`, the same "sub-floor input" category
+`geometry_bleed`'s own zero-height guard and `symbol_region`'s degenerate-crop-box guard handle for
+their own divisions/crops — real fetched images essentially never hit this. A truncated image is
+reported through the SAME `"fetch_failed"` skip reason `fetch_health` already uses, deliberately —
+see the vocabulary note below.
+
+**Vocabulary discipline, advisor-reviewed before building**: the initial design considered
+widening `fetch_error_class`'s value space (distinguishing an unsupported source type from a
+generic fetch failure) and inventing a new skip-reason string for a truncated download
+(`"unfetchable-image"`, an existing but different subsystem's term). Both were dropped after
+review: the task asked to complete fetch-health's _fields_ (plural — i.e. add columns), not widen
+what values an existing field can take, and `docs/features/catalog-completion-plan.md`'s own
+`CardScanLog` design explicitly warns against a separately-invented skip-reason vocabulary ("the
+pipeline's own existing strings verbatim... not a separately-invented vocabulary"). The simpler,
+fully-precedented path shipped instead: `fetch_error_class` stays `""`/`"fetch_failed"` only, new
+fields (`fetch_latency_ms`, measured around the SAME `fetch_card_image` call this extractor
+already made — no second fetch; `fetch_image_format`, the fetched image's own `PIL.Image.format`)
+complete the trivial substrate-PR version of this extractor, and a truncated image is bucketed
+under the same `"fetch_failed"` skip reason `quality_signals`/`color_profile` share above.
+`FETCH_HEALTH_EXTRACTOR_VERSION` is bumped `v1` → `v2` to signal that a row bearing the old tag
+predates these two fields, per `ImageEvidence`'s own "per-field completion/versioning map" design
+intent.
+
+**Golden-set gathering — closed by public issue #216 (2026-07-20)**: this PR's own worktree had
+neither production DB credentials nor a route to the real network fetch path (no `docker/.env`,
+and reaching into the live containers to work around that was declined), so it shipped without
+`GOLDEN_EXPECTATIONS` entries for `quality_signals`/`color_profile`/`fetch_health`'s completed
+fields — the owner relaxed the golden gate for this one PR on condition it was confirmed sooner
+than later, tracked as issue #216. A follow-up session with prod docker access ran the same
+read-only, no-persistence `extract_card_evidence()` sweep every prior extractor used (30/30 golden
+cards fetched cleanly, PNG/JPEG, 0/30 truncated) and populated `GOLDEN_EXPECTATIONS["quality_signals"]`/`["color_profile"]`/`fetch_health`'s new `fetch_image_format` field — bringing this PR
+to the same golden bar as #147–#151/#160. `blur_variance`/`image_entropy`/`fetch_latency_ms` are
+real continuous/timing values this run also produced but are deliberately NOT hard-pinned (same
+"exclude the continuous/brittle" rationale every prior extractor's own golden-set comment gives for
+width/height/aspect_ratio/the raw phash int); `color_profile` in particular has no discrete signal
+at all, so its real recorded per-card mean/stddev values are kept in `golden_set.py` as a
+documentation artifact only — `test_golden_set.py` checks shape/type/range, not exact equality,
+against them. 18 new tests (10 in a new
+`test_local_image_quality.py` - the pure math functions, tested in isolation with real PIL images;
+`is_image_truncated` specifically tested there rather than through the full pipeline, since a
+genuinely truncated real file would also trip up earlier real-pixel-reading extractors that run
+before `quality_signals` in `extract_card_evidence`'s own order, a pre-existing, out-of-scope gap
+in those extractors, not something to route around by picking a "safe" truncation point - 8 in
+`test_image_evidence.py`'s new `TestExtractCardEvidenceQualitySignals`/`ColorProfile` classes),
+plus 13 pre-existing `TestExtractCardEvidence`/`GeometryBleed`/`CropCoordinates` `_StubImage`-based
+tests updated for the two new extractors' presence (`_stub_quality_signals`/`_stub_color_profile`
+helpers, mirroring `_stub_symbol_region`'s own identical rationale); full suite (host venv) 1106
+passed / 4 skipped (the same CI-documented named skips - nothing newly broken); `makemigrations --check` clean.
+
+**Stage C bulk driver: compute profile + concurrency/OCR-cost fix (2026-07-20)** —
+`docs/reports/2026-07-20-pipeline-compute-profile.md` measured the bulk cohort driver
+(`run_image_evidence_cohort.py`, previously landed on an unmerged worktree branch only, ported to
+master in this same pass) at 71–378h projected wall-clock for the full ~218k-card harvest against
+a 6.2h reference budget (11.5x–61x over), concentrated in the two Tesseract-backed extractors
+(`ocr_group` 41.7%, `legal_line` 16.2%, together 58%), with the driver's `ThreadPoolExecutor (concurrency=6)` measured 3.25x SLOWER than sequential (CPU-bound OCR oversubscribing a fixed core
+count, not the I/O-bound case that concurrency level was validated for on the fetch stage). Fixed
+two ways: (1) the driver now uses a `ProcessPoolExecutor` sized to the host's USABLE compute cores
+(owner-confirmed hardware: 8 OCPU total, 1 pinned to network traffic, 7 usable — `--workers`/
+`STAGE_C_WORKERS` env-tunable, default 7), each worker forcing `OMP_THREAD_LIMIT=1` so N processes
+don't ALSO nest-oversubscribe tesseract's own internal OpenMP threading; a local synthetic
+micro-benchmark (not the authoritative re-profile — that happens after deploy) reproduced the
+qualitative finding directly: `ThreadPoolExecutor` at 0.24–0.29x vs sequential, `ProcessPoolExecutor`
+at 4.0–4.9x. Converting to a process pool required re-deriving three pieces of state threads were
+sharing for free (DB connections, the stop-on-lockout flag, and `harvest_fetch_limiter`'s
+process-local rate limiter singleton) — see `docs/lessons.md`'s new entry on this for the general
+pattern, and `run_image_evidence_cohort.py`'s own module docstring for the specific fix to each.
+(2) `local_ocr.run_tesseract_text_and_words` (new) derives BOTH a variant's raw text and its
+TSV word boxes from a single `pytesseract.image_to_data` call, replacing collector_line_ocr's old
+separate `run_tesseract` + `run_tesseract_tsv` calls on the same winning variant (measured 2.01x
+speedup for that call site alone, local micro-benchmark); both collector_line_ocr's and
+legal_line's own multi-variant loops now short-circuit at the first variant that parses something
+usable, instead of always OCR-ing every variant. No `ImageEvidence` field or its semantics
+changed — same signal set, cheaper to compute; full backend suite green (1184 passed / 4 skipped,
+same CI-documented named skips) including the real-tesseract
+`TestExtractCardEvidenceArtistOcr::test_finds_artist_within_collector_line_crop_without_a_second_ocr_pass`
+reuse test, run explicitly to confirm the short-circuit doesn't starve `artist_ocr`'s own
+reuse-before-recompute path.
+
+Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
 shipped identification code paths with `ImageEvidence`-supplied
@@ -1366,6 +1741,272 @@ zero unexplained divergence; a full knowledge-inventory sweep (every
 empirically-derived constant/threshold/override/skip-reason mapped to
 its home in the new pipeline, or flagged missing) must be clean. Both
 gate task #148 (the owner HOLD deliverable) and any full-catalog fire.
+
+**Stage D — join-key calculator (framework + first slice, built 2026-07-20,
+public issue #152, "Stage D: calculators D1-D6")**: the owner directive
+dispatching this work named "calculators D1-D6", but no numbered D1-D6 spec
+exists anywhere — checked before building, not assumed (issue #152's own
+body/comments, this doc, the private orchestration orientation doc). What
+IS binding: the design frame (funnel-to-review, fast/slow path split,
+collector-line-OCR-plus-set-symbol as ONE near-unique join key, the
+pipeline-fidelity gate's "call the existing shipped code, don't re-derive"),
+`docs/theory.md`'s candidate-constrained-decoding model, and the Governing
+posture section above. Per that directive's own scope-management clause,
+this PR builds the calculator FRAMEWORK plus one coherent first slice — the
+join-key calculator — rather than inventing a six-item spec to fill.
+
+New module `cardpicker/local_calculate_verdicts.py` (+ management command
+`local_calculate_verdicts`, `--write`/`--run-id`/`--chunk-size`, dry-run
+default, mirroring `local_residual_classify`'s own CLI shape and its
+1:1 module/command filename convention). `calculate_join_key_verdict`
+reconstructs an `OcrParseResult` from Stage C's already-persisted
+`collector_line_set_code`/`collector_line_collector_number` fields (no
+re-OCR, no re-fetch) and calls the existing, unmodified
+`local_ocr.validate_against_candidates` — satisfying the pipeline-fidelity
+gate by direct reuse, not a parallel implementation. `local_ocr.py` (not
+PROTECTED CORE) gained a small behavior-preserving refactor,
+`find_matching_candidates`, extracting the candidate-narrowing filter
+`validate_against_candidates` already computed internally so a caller with
+independent tie-break evidence can inspect the ambiguous match set
+directly instead of only learning that ambiguity occurred.
+
+**Collector-line OCR + set-symbol phash are ONE join key, not two
+calculators**: a pre-M15 card's collector line never printed a set code, so
+matching on collector number alone can hit more than one of the card's own
+candidates (different expansions — `(expansion, collector_number)` is
+unique per `CanonicalCard`) even though a genuine printing identity exists.
+Stage C's `symbol_phash` (issue #160) resolves this inside the SAME
+calculator call: the card's own rendered set symbol is compared against
+each ambiguous candidate's expansion glyph
+(`local_fallback.render_set_symbol`, PROTECTED CORE, called not modified)
+via plain Hamming-distance arithmetic on the stored hash ints — the same
+"reimplement the arithmetic, don't touch the protected decision logic"
+pattern `local_identify_printing_tags._classify_no_clear_winner` already
+established for phash distance re-derivation. An initial draft split this
+across two calculators (D1 OCR, D2 symbol) before an advisor review flagged
+that as contradicting the design frame's own "one join key" framing —
+folded into one calculator before this PR was built out further.
+
+**The moderator-flag veto** (the design frame's explicit ask):
+`legal_line_proxy_marker_detected` (issue #151/#212's real motivating case
+— a "NOT FOR SALE"/proxy watermark misparsing as a plausible collector
+line) is checked only at the moment a join-key match would otherwise be
+trusted, never against a genuine no-match/ambiguous outcome. A vetoed match
+is a named skip (`"proxy-marker-veto"`), not an `is_no_match` vote — a
+vetoed reading is untrustworthy evidence FOR the matched printing, not
+evidence AGAINST every other candidate.
+
+Casts `CardPrintingTag` votes via the unmodified `VoteSource.OCR`/
+`resolve_and_persist_printing` machinery (own
+`anonymous_id='stage-d-join-key-v1'`, independently purgeable via the
+existing `purge_machine_votes --run-id`) — a single calculator vote at machine
+weight (0.5) can never resolve a card alone, reusing
+`local_identify_printing_tags.verify_zero_resolutions` directly as the
+command's own post-write gate (no new gate function needed — the printing-
+side equivalent of `verify_no_single_machine_vote_resolutions` already
+existed).
+
+**Known, accepted overlap with the live pilot (not a bug)**: this
+calculator's own eligibility query excludes only cards already carrying a
+`stage-d-join-key-v1` vote/skip — it does NOT exclude cards
+`local-ocr-v1`/`local-phash-v1`/`local-fallback-v1` (the live pilot's own
+engines) already voted or skipped on. Since Stage C's `ImageEvidence`
+cohort and the live pilot's own target pool substantially overlap during
+this transitional period, running this calculator for real will frequently
+re-vote on cards the old pilot already touched. Structurally safe
+regardless (the human-backed gate makes it impossible for any accumulation
+of machine-only votes across engines to resolve a card by itself — verified
+via `vote_consensus.resolve_weighted_consensus`'s own hard AND-gate), but a
+real characteristic of two mechanisms running concurrently mid-migration,
+named here rather than left to surface later as a surprise.
+
+**Agreement/corroboration layer (built 2026-07-20, issue #152 continuation,
+"Stage D calculators D2-D5")**: five cross-checks folded directly into
+`calculate_join_key_verdict`/`run_join_key_calculator`'s existing control
+flow — no new eligible-card population, no new `anonymous_id`, no new vote
+type — per the dispatching directive's own "raw cross-check feeding the
+verdict, not a second classifier" framing:
+
+- **Back-face-aware candidate selection** (issue #199/#213): new
+  `_resolve_candidates_for_card` tries the card's own name first (unchanged
+  fast path), and only when that finds nothing AND
+  `printing_metadata_import.is_back_face` confirms the name is a known DFC
+  back face, reconstructs Scryfall's own combined `"{front} // {back}"`
+  `CanonicalCard.name` form (via the already-shipped `DFCPair` table's
+  `back=name` lookup) and retries — fixes candidate _selection_ for a
+  cohort (back-face-named split-image DFC uploads) that would otherwise
+  never match at all, since `CanonicalCard.name` for these rows is never
+  the bare back-face name alone.
+- **Border/frame agreement**: `layout_class` vs. the matched printing's own
+  `CanonicalPrintingMetadata.border_color` (direct string comparison — both
+  use the same value space) and an OCR-re-derived frame class
+  (`local_fallback.classify_frame_style`/`frame_style_is_consistent`,
+  PROTECTED CORE, called not modified) vs. `.frame` — either disagreement
+  WITHHOLDS the match (`border-mismatch`/`frame-mismatch` named skips),
+  mirroring the live pilot's own frame-mismatch-withholding exactly.
+  `bleed_class` is deliberately NOT cross-checked (no Scryfall field it
+  could ever agree/disagree with — a proxy-sheet-formatting property, not a
+  printing property), despite this PR's own earlier deferred-item wording
+  naming it.
+- **Copyright-year era check** (issue #152/#220 follow-up, built alongside
+  the slow-path routing calculator below): the legal line's parsed
+  copyright year (`ImageEvidence.legal_line_copyright_year`, issue
+  #151/#159) cross-checked against the matched printing's own
+  `CanonicalPrintingMetadata.released_at` — reusing the SAME
+  `CanonicalCard`/`CanonicalPrintingMetadata` query the border/frame checks
+  just above already perform, no second lookup. Only a gap of more than
+  `COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS` (2) years — copyright
+  _predating_ release, the one direction the design frame actually names —
+  withholds the match as a new named, non-rescannable skip
+  (`"copyright-year-mismatch"`); a small/plausible gap (a print run landing
+  near a calendar-year boundary, an older copyright legend surviving into a
+  reprint) is deliberately not vetoed. Withheld, not confidence-adjusted —
+  confirmed by reading `vote_consensus.py` directly: it weights strictly by
+  `source`, never `confidence`, so a confidence-field tweak here would have
+  zero effect on resolution, the same point this module's own
+  `JOIN_KEY_CONFIDENCE_BOTH` comment already makes elsewhere.
+- **Artist-OCR corroboration**: `artist_ocr_name` vs. the matched
+  printing's `CanonicalCard.artist` via `local_fallback.match_artist`
+  (PROTECTED CORE, called not modified) — a disagreement WEAKENS confidence
+  (`JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT`, 0.65) rather than vetoing,
+  per the directive's own framing and `match_artist`'s own softer,
+  tie-tolerant design.
+- **Quality/integrity gating**: `image_is_truncated` is a hard veto
+  (`truncated-image` named skip). `blur_variance`/`image_entropy` are
+  deliberately NOT thresholded — both fields' own `local_image_quality.py`
+  docstrings defer "what counts as too blurry/too flat" to a calibrated
+  Stage D number, and #218's real golden-set gather run explicitly did NOT
+  hard-pin either value; inventing an arbitrary cutoff here would violate
+  this project's own "config values land only from measurement, not
+  automatically" rule, so only the binary integrity signal is acted on.
+
+All five checks above live in ONE function, `_apply_agreement_checks`,
+called from both of `calculate_join_key_verdict`'s match-producing branches
+(direct match, symbol-phash tie-break) rather than duplicated across them.
+
+**Deliberate deviation from the live pilot's own precedent**:
+`border-mismatch`/`frame-mismatch`/`truncated-image`/
+`copyright-year-mismatch` are NOT added to `JOIN_KEY_RESCANNABLE_SKIP_REASONS` (unlike `local_identify_printing_tags`'s own rescannable
+`"frame-mismatch"`) — that module's rescannability exists because a future
+run re-fetches the image and may read it differently; Stage D's join-key
+calculator instead reads an already-persisted, content-hash-keyed
+`ImageEvidence` row, so re-selecting the same card against the same stored
+evidence would deterministically recompute the identical mismatch forever.
+
+**Two further cheap additions (built 2026-07-20, owner decision on issue
+#220)**:
+
+1. **Slow-path routing** (`calculate_slow_path_verdict`/
+   `run_slow_path_calculator`, own `anonymous_id="stage-d-slow-path-v1"`):
+   issue #220's settled answer for the ~83% of cards the join-key
+   calculator alone can't confidently resolve — explicitly option (b) from
+   that issue (send no-hit cards to the human review queue carrying their
+   partial extracted signals), not (a) bulk server-side phash (the
+   165k-run analysis found that costs ~84h to resolve only 2.6% — exactly
+   why #203 already moved phash to user-submitted instead) and not (c)
+   user-submitted phash itself (issue #203, a distinct, separately-designed,
+   not-yet-built mechanism, deliberately not built here). A pure routing
+   step, not a matching engine — casts no `CardPrintingTag` at all (nothing
+   to vote for), only a `CardScanLog(skip_reason="to-review")` durable
+   marker once a card gets a real `is_no_match` vote or a non-rescannable
+   join-key/agreement-layer skip (`ambiguous`, `no-text`,
+   `proxy-marker-veto`, `border-mismatch`, `frame-mismatch`,
+   `truncated-image`, `copyright-year-mismatch`). No new storage: the
+   signals themselves already live in `ImageEvidence` (Stage C's job) —
+   `SlowPathVerdict.raw_signals` is an in-memory packaging of that same
+   data for whatever consumes it next, not a second copy.
+2. **Collector-number-only ambiguity guard** — a hardening/regression item,
+   not new logic: the ~472 pre-M15 cards where OCR parsed a collector
+   number but no set code (globally ambiguous alone — ~15.7% of
+   collector-number values appear in ≥2 sets, per the run analysis
+   motivating issue #220's slow-path decision) were already structurally
+   safe, since `calculate_join_key_verdict` only ever receives a
+   `candidates` list already narrowed to the card's own name (via
+   `_resolve_candidates_for_card`, which always starts from
+   `CandidateNameIndex.candidates_for(card.name)` and only ever widens to
+   the DFC-combined name for a confirmed back face, never a global query),
+   and `CandidatePrinting` carries no `name` field for a global re-match to
+   even be expressible. Made explicit via a docstring invariant plus a
+   dedicated regression test (`TestCollectorNumberOnlyStaysNameScoped`,
+   including a defense-in-depth case proving a misscoped candidate list
+   degrades to `"ambiguous"`, never a silent wrong-printing match) rather
+   than new matching logic.
+
+**Still deferred (not built or stubbed here)**: visual/phash slow-path
+_matching_ (distinct from the slow-path _routing_ calculator built above)
+— explicitly NOT bulk server-side phash (issue #150's own 2026-07-20
+re-spec dropped that in favor of user-submitted phash, task #203, a
+distinct, not-yet-designed mechanism); a calibrated
+`blur_variance`/`image_entropy` trust-modifier threshold (needs real
+measurement against production data first, per the same "measurement, not
+automatically" rule above — the slow-path routing calculator already
+carries both as raw signals for human review, which is not the same as a
+machine trust modifier).
+
+Golden-gated against synthetic `ImageEvidence`/`Card`/`CanonicalCard`/
+`CanonicalPrintingMetadata`/`DFCPair` DB fixtures, not a live fetch — Stage
+D consumes stored evidence + Scryfall-backed models, it never touches a
+live image, so Stage C's "real network fetch over 30 pinned cards"
+golden-set convention doesn't apply here (host venv, no network —
+`render_set_symbol` IS exercised for real, a pure local font-render, so the
+symbol-phash tie-break is tested against real keyrune glyph hashes;
+`is_back_face` IS exercised against a real, temporary on-disk bulk-data
+JSON file, never mocked). 20 new tests added on top of the agreement/
+corroboration layer's own 37 in `test_local_calculate_verdicts.py` (57
+total in that file now) — 10 for the copyright-year era check
+(`TestCopyrightYearEraCheck`), 2 for the collector-number-only name-scoping
+regression (`TestCollectorNumberOnlyStaysNameScoped`), 1 for
+`calculate_slow_path_verdict`'s raw-signal packaging
+(`TestCalculateSlowPathVerdict`), and 7 for `run_slow_path_calculator`
+(`TestRunSlowPathCalculator`); full suite 1184 passed / 4 skipped (the same
+CI-documented named skips — nothing newly broken); `makemigrations --check`
+clean (no model change — every field these checks read already existed on
+`ImageEvidence`/`CanonicalPrintingMetadata`); `pre-commit`
+(ruff/isort/black/mypy/prettier) clean.
+
+**Command flags, rollback, and testing posture (2026-07-20, issue
+#152)**:
+
+- **Command flags** (`manage.py local_calculate_verdicts`, both
+  `run_join_key_calculator` and `run_slow_path_calculator` share the one
+  invocation/run_id): `--write` (`action="store_true", default=False`) —
+  the command defaults to dry-run and requires this explicit flag to
+  persist any `CardPrintingTag`/`CardScanLog` row; dry-run computes every
+  verdict and reports `would_cast` counts (`total_votes=would_cast=N` in
+  the final summary line) while writing nothing. `--run-id` (`default=None`)
+  reuses/pins a specific `run_id`; the default is a freshly generated one
+  (`generate_run_id()`). `--chunk-size` (`type=int, default=500`) is the
+  `.iterator()` chunk size for both calculators' eligibility querysets.
+- **Rollback / poisoning containment**: writes are `run_id`-scoped (Part
+  1's mechanism, unchanged), so a bad batch is revertible by deleting that
+  `run_id`'s rows — `manage.py purge_machine_votes --run-id <id>` — with
+  no separate DB snapshot required. This `run_id`-batching is the same
+  poisoning-containment mechanism carried over from the first backfill
+  round (Part 1 §5 above), not a Stage-D-specific addition.
+- **Caveat, honest**: `purge_machine_votes --run-id` cleanly reverts the
+  vote ROWS (and, in the same invocation, re-resolves affected cards'
+  consensus status — `purge_run` calls `resolve_and_persist_printing`/
+  `resolve_and_persist_artist`/`resolve_and_persist_tag_votes` right after
+  the `.delete()`), but this is two sequential calls, not one atomic
+  transaction — a consensus resolution computed from a bad vote can
+  already have been live (served, reindexed to ES via
+  `reindex_card_safely`) for the entire interval between the bad write and
+  someone noticing and running the purge; deleting the row afterward does
+  not erase that it was live. Separately, `purge_run`'s own query touches
+  only `CardPrintingTag`/`CardArtistVote`/`CardTagVote` — it never touches
+  `CardScanLog`, so Stage D's own skip markers for that `run_id`
+  (`no-evidence`, `ambiguous`, `to-review`, etc.) survive a purge intact.
+  Since `_eligible_cards_queryset`/`_slow_path_eligible_cards_queryset`
+  both exclude any card already carrying a non-rescannable `CardScanLog`
+  row for the relevant `anonymous_id`, a purged card does not
+  automatically become re-eligible for a redo under the same
+  `anonymous_id` — fully unwinding a written run so it can be re-run
+  cleanly needs more than the batch-delete alone. Not transaction-perfect
+  downstream; named here rather than assumed.
+- **Testing posture**: the 20k-card test run uses dry-run only — no
+  writes, no interaction with the pre-existing 165k-run's own machine
+  votes, no backup needed, since nothing is persisted. Production cutover
+  is the only phase that uses `--write --run-id <fresh>`.
 
 **Stage E resume contract (owner directive, 2026-07-19 — full spec on
 task #147, acceptance test folded into task #156's soak gate)**:

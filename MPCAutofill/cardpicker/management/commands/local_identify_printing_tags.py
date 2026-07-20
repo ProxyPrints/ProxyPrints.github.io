@@ -248,6 +248,11 @@ class Command(BaseCommand):
         for name, result in results.items():
             print(f"--- {name} ---")
             print(f"  votes written: {result.votes_written}")
+            if result.no_match_votes_written:
+                # issue #207: is_no_match votes cast from a genuine whole-candidate-set no-match
+                # conclusion (OCR's "parsed-but-no-match", fallback's "eliminated") - reported
+                # separately from votes_written (which names a specific printing).
+                print(f"  no-match votes written: {result.no_match_votes_written}")
             for reason, count in sorted(result.skip_counts.items()):
                 print(f"  skipped ({reason}): {count}")
             if result.skipped_below_resolution_floor:
@@ -283,7 +288,10 @@ class Command(BaseCommand):
             print("Dry run - nothing written, gate check not run.")
             return
 
-        total_written = sum(r.votes_written for r in results.values())
+        # issue #207: no_match_votes_written counts real CardPrintingTag(is_no_match=True) rows
+        # too - total_written feeds the gate check's own denominator/the ledger's votes_written
+        # field, both of which should reflect every vote row this run actually created.
+        total_written = sum(r.votes_written + r.no_match_votes_written for r in results.values())
 
         if gate_violations:
             if ledger_entry is not None:

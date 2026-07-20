@@ -36,4 +36,17 @@ after it does.
 | [XML-Schema-Specification](https://github.com/chilli-axe/mpc-autofill/wiki/XML-Schema-Specification)                     | 2026-01-24            | `af06fe2` |
 | [\_Footer](https://github.com/chilli-axe/mpc-autofill/wiki/_Footer)                                                      | 2023-05-31            | `03a205a` |
 
-Last checked: 2026-07-18
+Last checked: 2026-07-20
+
+| Page                                                                                                                     | Last changed upstream | Commit    |
+| ------------------------------------------------------------------------------------------------------------------------ | --------------------- | --------- |
+| [Backend](https://github.com/chilli-axe/mpc-autofill/wiki/Backend)                                                       | 2025-05-29            | `27ea820` |
+| [Desktop-Tool](https://github.com/chilli-axe/mpc-autofill/wiki/Desktop-Tool)                                             | 2026-01-24            | `098da5f` |
+| [Frontend](https://github.com/chilli-axe/mpc-autofill/wiki/Frontend)                                                     | 2025-08-23            | `e6f2c03` |
+| [GitHub Repo Configuration](https://github.com/chilli-axe/mpc-autofill/wiki/GitHub%20Repo%20Configuration)               | 2026-04-06            | `62f7a36` |
+| [Google-Scripts](https://github.com/chilli-axe/mpc-autofill/wiki/Google-Scripts)                                         | 2026-06-16            | `43a8eed` |
+| [Home](https://github.com/chilli-axe/mpc-autofill/wiki/Home)                                                             | 2026-01-24            | `098da5f` |
+| [Image-CDN-Google-Drive-Credentials](https://github.com/chilli-axe/mpc-autofill/wiki/Image-CDN-Google-Drive-Credentials) | 2026-06-13            | `ad90993` |
+| [Overview](https://github.com/chilli-axe/mpc-autofill/wiki/Overview)                                                     | 2025-03-30            | `fd24c69` |
+| [XML-Schema-Specification](https://github.com/chilli-axe/mpc-autofill/wiki/XML-Schema-Specification)                     | 2026-01-24            | `af06fe2` |
+| [\_Footer](https://github.com/chilli-axe/mpc-autofill/wiki/_Footer)                                                      | 2023-05-31            | `03a205a` |

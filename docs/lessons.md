@@ -858,3 +858,31 @@ post-approval follow-up commits, or one with a PR stacked on it - verify the mer
 contains the follow-up work (`git show <merge-commit> --stat`, or just checking the expected file/
 line is present on the target branch) instead of assuming "merged" means everything on the branch
 landed.
+
+## Converting a thread pool to a process pool for CPU-bound work has to re-derive every piece of state threads were sharing for free
+
+`docs/reports/2026-07-20-pipeline-compute-profile.md` found Stage C's OCR-heavy extraction 3.25x
+SLOWER under `ThreadPoolExecutor(concurrency=6)` than sequential (CPU-bound tesseract work
+oversubscribing a fixed core count, not the I/O-bound case thread pools suit) - fixed by
+converting `run_image_evidence_cohort.py` to a `ProcessPoolExecutor`. That conversion is not a
+one-line `Thread`->`Process` swap: threads share a process's memory, so several things that "just
+worked" silently need an explicit fix once each worker is a separate process. Three found in this
+pass (generalize past this one command): (1) **Django DB connections aren't fork-safe to share** -
+a connection opened before the pool starts must not be inherited by forked workers; fix is
+`django.db.connections.close_all()` in the pool's `initializer=`, run once per worker before its
+first query, so it lazily opens its own fresh connection instead. (2) **A plain-dict/bool flag
+closed over by a nested function** (e.g. a "stop the run" signal) only works via shared memory
+under threads - under processes each worker gets an independent copy at submission time; fix is a
+`multiprocessing.Manager().Event()` passed as an explicit argument to a module-level (picklable)
+work function, not a closure. (3) **A module-level singleton rate limiter** (or any other
+process-global cache/registry) becomes N independent instances, one per worker process, silently
+multiplying whatever ceiling it enforced by the worker count - a limiter validated safe at
+`max_concurrency=6` for one process becomes `6 * workers` in aggregate once each process builds
+its own. If the limiter's registry keys instances by name/id and only constructs one if absent
+(true here), a workers-scaled-down config can be pre-seeded into each worker's own local registry
+from the pool's `initializer=` - no edit to the limiter module itself. **The general check**:
+before converting any thread-based concurrent driver to processes, list every piece of state the
+old code touches OUTSIDE the per-task function's own locals (closures, module-level singletons,
+already-open resources) and re-derive fork-safety for each one explicitly - don't assume "the
+tests still pass" proves this, since a small/mocked test run may never exercise the actual shared
+state that breaks at real concurrency.

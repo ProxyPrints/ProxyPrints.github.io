@@ -16,10 +16,10 @@ do not store images) - they go out of scope the moment this function returns.
 Extend this module (not ImageEvidence's callers) when adding a new extractor: fetch once at
 the top of `extract_card_evidence`, call each new pure extractor function against the same
 in-memory image, and add its fields/version/skip-reason to the result. `fetch_health`,
-`geometry_bleed` (task #147), and `layout_class`/`crop_coordinates` (issue #148, the
-geometry-group) exist today - every subsequent extractor (OCR/collector-line, artist OCR,
-phash, symbol-strip, legal-line, etc.) lands as its own follow-up PR per task #145's manifest
-and one-PR-per-extractor gate.
+`geometry_bleed` (task #147), `layout_class`/`crop_coordinates` (issue #148, the geometry-group),
+and `collector_line_ocr`/`artist_ocr`/`collector_line_tsv` (issue #149, the OCR-group) exist
+today - every subsequent extractor (visual-signal/phash, legal-line, symbol harness, etc.) lands
+as its own follow-up PR per task #145's manifest and one-PR-per-extractor gate.
 
 geometry_bleed calls `local_fallback.classify_bleed_edge` directly rather than re-deriving the
 aspect-ratio math - that function is the exact classifier the live pilot/harvest vote path
@@ -48,12 +48,131 @@ exactly as that function's own docstring specifies) then scaled by `width`/`heig
 COORDINATES only - crop PIXELS are never computed or stored here, matching the FINAL POSTURE
 directive (CLAUDE.md's "Governing premise").
 
-`back_face_flag`, also named in issue #148's title, is deliberately NOT built in this PR: no
-signal for it exists in `Card`/`CanonicalCard` metadata (no DFC-face field anywhere - the only
-`face` field in the whole schema is `ProjectMember.face`, an unrelated per-slot print-request
-concept) or in `local_fallback.py`'s exported helpers, and no other doc/issue in this repo
-defines what visual signal it should measure. Flagged as an OPEN ITEM on this PR rather than
-shipped as an invented heuristic with fabricated golden-set expectations.
+`back_face_flag`, also named in issue #148's title, was deliberately NOT built in that PR: no
+signal for it existed in `Card`/`CanonicalCard` metadata or `local_fallback.py`'s exported
+helpers at the time, and no doc/issue defined what visual signal it should measure. The owner
+later settled it (issue #199) as NAME-based, not image-based - determined from Scryfall's
+`card_faces` data, not this module's fetched image - so it was never added here as an
+`ImageEvidence` field/extractor. See `printing_metadata_import.get_back_face_names`/
+`is_back_face` for the actual implementation, and
+`docs/features/catalog-completion-plan.md`'s "back-face flag" paragraph for the full rationale
+(including why no `ImageEvidence`/`CanonicalCard` field was added).
+
+collector_line_ocr / artist_ocr / collector_line_tsv (issue #149, the OCR-group): consume
+`collector_line_crop_px`/`artist_crop_px` - the pixel boxes issue #148's crop_coordinates
+extractor already computed earlier in this same pass - directly (`image.crop(...)`), rather than
+recomputing them from `local_ocr.DEFAULT_CROP_BOX`/`local_fallback.ARTIST_CROP_BOX` +
+`normalize_crop_box` a second time. Deliberately do NOT call
+`local_ocr.validate_against_candidates` or `local_fallback.match_artist`: both require a card's
+real `CandidatePrinting` list, which this per-card function never receives (`extract_card_
+evidence` takes only a `Card`) - candidate matching is Stage D calculator territory (task #151's
+pipeline-fidelity gate), not Stage C extraction. What's stored here is raw OCR text + a tolerant
+parse (`local_ocr.parse_collector_line`, `local_fallback.extract_artist_name` - both already
+exist, called not reimplemented) plus TSV word-level bounding boxes - both the raw text and the
+word boxes for collector_line_ocr/collector_line_tsv come from a SINGLE tesseract call per
+variant tried (`local_ocr.run_tesseract_text_and_words`, added 2026-07-20 as an OCR call-cost
+reduction, docs/reports/2026-07-20-pipeline-compute-profile.md - supersedes an earlier version
+of this PR that called `run_tesseract` and `local_ocr.run_tesseract_tsv` separately for the same
+winning variant) - metadata per FINAL POSTURE item 2 ("full OCR text + TSV word boxes, parsed
+fields"), never a verdict about which printing this is.
+
+artist_ocr reuses collector_line_ocr's own raw texts first, before falling back to its own
+crop+OCR pass over `artist_crop_px` - the same reuse-before-recompute convention
+`local_fallback.detect_illus_anchor` already uses (an old-border card's "Illus. <artist>" credit
+frequently lands inside the SAME crop region a modern card's collector line occupies). Does not
+call `detect_illus_anchor` itself, since that function recomputes its own crop box from
+`ARTIST_CROP_BOX` rather than consuming the already-computed `artist_crop_px` pixels - this PR's
+own inline reuse-then-crop logic mirrors its structure without violating "consume the
+crop-coordinate fields, don't recompute them".
+
+symbol_region (issue #160, "Part 4b: symbol harness" - the SET half of the collector+set join
+key Stage D uses for its Scryfall lookup, per docs/features/catalog-completion-plan.md's
+Governing posture note that this re-plans as in-pass hash math, not a stored strip): turns
+`local_fallback.SYMBOL_STRIP_BOX` (the same right-side vertical strip that module's own
+`find_symbol_matches` sub-check scans) into a `symbol_crop_px` pixel box exactly the way
+crop_coordinates derives its own three boxes (`_crop_box_to_pixels`, remapped via
+`normalize_crop_box` for this row's `bleed_class` first), then computes a perceptual hash
+(`imagehash.phash`) of that cropped region ONLY - the cropped pixels are discarded the moment
+`_compute_region_phash` returns, never persisted (FINAL POSTURE item 2: "store the math, not the
+strip"). Deliberately NOT `find_symbol_matches` itself: that sub-check compares the strip against
+a rendered keyrune glyph for each of a card's real `CandidatePrinting`s, which this per-card
+function never receives - candidate matching is Stage D calculator territory, same reasoning
+issue #149's module docstring gives for OCR candidate matching. `symbol_phash` is therefore a raw
+content signal for Stage D to consume, not a verdict about which set this is. Stored as a signed
+64-bit int via `twos_complement` (`cardpicker.utils`, not protected core) - the exact
+representation `local_phash.py`'s own private `_hash_to_int` uses for `Card.content_phash`/
+`CanonicalCard.image_hash`, reproduced here rather than imported since that helper isn't exported
+(kept internal to that PROTECTED CORE module), so the two hash columns stay bit-for-bit
+comparable without reaching into local_phash.py's private internals. The only named skip is a
+degenerate crop box (zero/negative width or height) - the same "sub-floor" guard geometry_bleed's
+own `test_zero_height_image_guards_aspect_ratio_division` exercises for its own division, applied
+here before hashing rather than letting `PIL.Image.crop`/`imagehash.phash` raise on an empty
+region. Real fetched images essentially never hit this (mirrors crop_coordinates's own "no
+ambiguous outcome here, only fetch_failed" - see that section's comment) - it exists as a genuine
+mechanical guard against a real crash risk, not a tuned classification threshold, and is not
+expected to fire against the golden set.
+
+legal_line (public issue #151, "Legal-line extractor + moderator flag + volume report (task
+#159)" - this PR builds the extractor + moderator-flag signal only, per that issue's own SCOPE;
+the volume report half (task #159) is out of scope, tracked separately): a NEW, dedicated crop
+region (`local_ocr.LEGAL_LINE_CROP_BOX`, NOT a reuse of `collector_line_crop_px` - verified
+against real fetched production images before being locked in, see that constant's own comment),
+turned into pixel coordinates the same way `crop_coordinates`/`symbol_region` derive their own
+boxes. `local_ocr.parse_legal_line`'s tolerant parse (`legal_line_copyright_year`,
+`legal_line_proxy_marker_detected`) - no candidate matching here either, same Stage-D-territory
+reasoning every other OCR-adjacent extractor in this module gives. `legal_line_proxy_marker_
+detected` is the moderator-flag signal: a raw True/False fact this extractor emits, consumed by
+Stage D's calculator (task #151's pipeline-fidelity gate) - never acted on directly here, matching
+every prior extractor's "emit signals, don't act on them" discipline.
+
+color_profile / quality_signals (public issue #150's re-spec, "Stage C visual-signal extractors" -
+the LAST Stage C manifest extractor group; the phash half of the original issue is DROPPED per the
+owner's 2026-07-20 re-spec comment, superseded by user-submitted phash (task #203) - set-symbol
+phash already shipped separately as symbol_region above, not touched by this PR): both consume the
+SAME `local_image_quality.is_image_truncated(image)` call - `quality_signals` runs it first (right
+after legal_line above) and stores the local `truncated` boolean for `color_profile` to reuse a few
+lines later, rather than re-attempting (and re-catching) the same `OSError` a second time. This is
+an explicit cross-extractor dependency, same category as `artist_ocr` reusing `collector_line_ocr`'s
+own raw texts or `crop_coordinates` reusing `geometry_bleed`'s `bleed_class` - documented here for
+the same reason those are documented in their own sections above.
+
+`quality_signals`: `image_is_truncated` is a genuine integrity fact (Pillow only lazily decodes on
+`Image.open()`, so a download cut off partway through can still open successfully and only raise
+`OSError` once something forces a full pixel read - see `local_image_quality.is_image_truncated`'s
+own docstring). Only if the image loaded cleanly does this extractor go on to compute
+`blur_variance` (variance of a Laplacian-kernel edge response over the grayscale image - a standard
+sharpness/blur proxy) and `image_entropy` (Pillow's own `Image.entropy()`, a built-in method, not
+reimplemented) - a truncated image's partial pixel data would produce meaningless numbers for both,
+not a real reading. Both are raw signals only: this extractor never decides what variance/entropy
+counts as "too blurry"/"too flat" - that's Stage D calculator territory, same reasoning every other
+extractor in this module gives for staying signal-only. A truncated image is reported through the
+SAME `"fetch_failed"` skip reason `fetch_health` already uses (see that section below) rather than
+a new string - Stage D doesn't need a finer bucket than "no usable image data," and inventing one
+here would cross into the separately-invented-vocabulary problem `docs/features/catalog-completion-
+plan.md`'s own `CardScanLog` design explicitly warns against.
+
+`color_profile`: per-channel (R, G, B) mean and population standard deviation over the FULL fetched
+image (`local_image_quality.compute_color_profile`, a first-party `PIL.ImageStat.Stat` call, not a
+hand-rolled pixel loop) - "color statistics... store the math, not the strip" (FINAL POSTURE item
+2). Skips (sharing `quality_signals`' own `truncated` finding, not a fresh decode attempt) under the
+same `"fetch_failed"` skip reason for the same reason given above.
+
+`local_image_quality.py` is NOT protected core (`docs/upstreaming/license-provenance.md` §2's file
+list doesn't include it) - new helpers land there directly, matching `local_ocr.py`'s own precedent
+for OCR-adjacent (non-protected) additions. No changes to `local_fallback.py`/`local_phash.py`
+themselves (both PROTECTED CORE; not touched by this extractor group at all).
+
+fetch_health completion (same re-spec): `fetch_latency_ms` (wall-clock time for the
+`image_cdn_fetch.fetch_card_image` call, measured around the SAME call this extractor already
+made - no second fetch) and `fetch_image_format` (the fetched image's own `PIL.Image.format`,
+e.g. `"JPEG"`, blank-string-as-sentinel on fetch failure, matching `fetch_error_class`'s own
+convention) complete the trivial substrate-PR version of this extractor (`fetch_ok`/
+`fetch_error_class` only). `fetch_error_class`'s own value space is deliberately UNCHANGED -
+still only `""`/`"fetch_failed"` - for the same separately-invented-vocabulary reason given above;
+this PR adds new FIELDS, not a wider value space for an existing one. `FETCH_HEALTH_EXTRACTOR_
+VERSION` is bumped (`v1` -> `v2`) to signal that a row bearing the OLD version tag was written
+before these two fields existed - the "per-field completion/versioning map" ImageEvidence's own
+docstring describes exists exactly to make this distinction readable by a future consumer.
 
 RECONCILIATION LEDGER (owner directive 2026-07-19, task #155): `build_reconciliation_report`
 answers "attempted = voted + each named skip-reason + dropped" for one extractor over one set
@@ -62,27 +181,61 @@ ImageEvidence's own docstring for the exact voted/skipped/dropped definitions.
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+import imagehash
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
+    SYMBOL_STRIP_BOX,
     classify_bleed_edge,
     classify_border_color,
+    extract_artist_name,
     normalize_crop_box,
 )
-from cardpicker.local_ocr import DEFAULT_CROP_BOX
+from cardpicker.local_image_quality import (
+    compute_blur_variance,
+    compute_color_profile,
+    compute_entropy,
+    is_image_truncated,
+)
+from cardpicker.local_ocr import (
+    DEFAULT_CROP_BOX,
+    LEGAL_LINE_CROP_BOX,
+    parse_collector_line,
+    parse_legal_line,
+    preprocess_variants,
+    run_tesseract,
+    run_tesseract_text_and_words,
+)
 from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import Card, CardScanLog, ImageEvidence
+from cardpicker.utils import twos_complement
 
 logger = logging.getLogger(__name__)
 
-FETCH_HEALTH_EXTRACTOR_VERSION = "fetch-health-v1"
+# v1 -> v2 (issue #150's re-spec): completes this extractor with fetch_latency_ms/
+# fetch_image_format - a row bearing the old "fetch-health-v1" tag predates those two fields.
+FETCH_HEALTH_EXTRACTOR_VERSION = "fetch-health-v2"
 GEOMETRY_BLEED_EXTRACTOR_VERSION = "geometry-bleed-v1"
 LAYOUT_CLASS_EXTRACTOR_VERSION = "layout-class-v1"
 CROP_COORDINATES_EXTRACTOR_VERSION = "crop-coordinates-v1"
+COLLECTOR_LINE_OCR_EXTRACTOR_VERSION = "collector-line-ocr-v1"
+ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v1"
+COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v1"
+SYMBOL_REGION_EXTRACTOR_VERSION = "symbol-region-v1"
+LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v1"
+QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
+COLOR_PROFILE_EXTRACTOR_VERSION = "color-profile-v1"
+
+# Bit width for the perceptual-hash int representation - matches local_phash.py's own private
+# _hash_to_int/_HASH_BITS exactly (imagehash's default hash_size=8 -> a 64-bit hash), reproduced
+# here rather than imported since that helper isn't exported from that PROTECTED CORE module.
+_SYMBOL_HASH_BITS = 64
 
 
 @dataclass(frozen=True)
@@ -114,6 +267,16 @@ def _crop_box_to_pixels(
     return [round(left * width), round(top * height), round(right * width), round(bottom * height)]
 
 
+def _compute_region_phash(image: Any, box: list[int]) -> int:
+    """Crops `box` from `image`, converts to grayscale, and returns `imagehash.phash` as a signed
+    64-bit int via `twos_complement` - see module docstring's `symbol_region` section for why this
+    reproduces (rather than imports) local_phash.py's own private hash-to-int convention. The
+    cropped region never leaves this function's stack frame - only the int it returns persists
+    (FINAL POSTURE item 2: "store the math, not the strip")."""
+    region = image.crop(tuple(box)).convert("L")
+    return twos_complement(str(imagehash.phash(region)), _SYMBOL_HASH_BITS)
+
+
 def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) -> ExtractionResult:
     """
     The per-card callable work unit. `card.content_phash` (not recomputed here) is the content
@@ -127,6 +290,7 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
     extractor_versions: dict[str, str] = {}
     skip_reasons: dict[str, str] = {}
 
+    fetch_started_at = time.monotonic()
     try:
         image = fetch_card_image(card, dpi=dpi)
     except GoogleFetchLockoutError:
@@ -134,14 +298,17 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
         # observation - propagate exactly as image_cdn_fetch.fetch_card_image's own docstring
         # requires every caller to.
         raise
+    fields["fetch_latency_ms"] = (time.monotonic() - fetch_started_at) * 1000
 
     if image is None:
         fields["fetch_ok"] = False
         fields["fetch_error_class"] = "fetch_failed"
+        fields["fetch_image_format"] = ""
         skip_reasons["fetch_health"] = "fetch_failed"
     else:
         fields["fetch_ok"] = True
         fields["fetch_error_class"] = ""
+        fields["fetch_image_format"] = getattr(image, "format", None) or ""
     # Set even on skip - fetch_health RAN TO COMPLETION either way, it just didn't find a
     # positive result. Omitted only if this function raises before reaching here.
     extractor_versions["fetch_health"] = FETCH_HEALTH_EXTRACTOR_VERSION
@@ -191,6 +358,209 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
         fields["artist_crop_px"] = _crop_box_to_pixels(ARTIST_CROP_BOX, bleed_class, width, height)
         fields["art_crop_px"] = _crop_box_to_pixels(ART_CROP_BOX, bleed_class, width, height)
     extractor_versions["crop_coordinates"] = CROP_COORDINATES_EXTRACTOR_VERSION
+
+    # collector_line_ocr / artist_ocr / collector_line_tsv (issue #149, the OCR-group): consume
+    # the *_crop_px pixel boxes crop_coordinates just computed above rather than recomputing them
+    # - see module docstring. No candidate matching happens here (Stage D's job).
+    if image is None:
+        skip_reasons["collector_line_ocr"] = "fetch_failed"
+        skip_reasons["artist_ocr"] = "fetch_failed"
+        skip_reasons["collector_line_tsv"] = "fetch_failed"
+    else:
+        collector_crop = image.crop(tuple(fields["collector_line_crop_px"]))
+        collector_variants = preprocess_variants(collector_crop)
+
+        # OCR call-cost reduction (docs/reports/2026-07-20-pipeline-compute-profile.md):
+        # previously this ran run_tesseract (image_to_string) on EVERY variant unconditionally,
+        # then a SEPARATE run_tesseract_tsv (image_to_data) call on whichever variant won - up to
+        # 3 tesseract invocations per card for this one extractor. Now: one
+        # run_tesseract_text_and_words call per variant TRIED (a single image_to_data call
+        # yielding both the raw text and the word boxes at once - see that function's own
+        # docstring), and the loop stops at the FIRST variant whose text parses a collector
+        # number rather than always computing every variant - matches this same loop's own
+        # pre-existing "first variant that produces something" precedence, just applied to WHEN
+        # each variant gets OCR'd, not only to which one's result is kept.
+        collector_texts_and_words: list[tuple[str, list[dict[str, Any]]]] = []
+        selected_index = 0
+        parsed = parse_collector_line("")
+        for i, variant in enumerate(collector_variants):
+            raw_text, word_boxes = run_tesseract_text_and_words(variant)
+            collector_texts_and_words.append((raw_text, word_boxes))
+            candidate_parse = parse_collector_line(raw_text)
+            if candidate_parse.collector_number is not None:
+                parsed = candidate_parse
+                selected_index = i
+                break
+        else:
+            # every variant was tried and none parsed a collector number - keep the first
+            # variant's (empty-ish) parse as the deterministic stored artifact, matching the
+            # pre-existing fallback precedence.
+            if collector_texts_and_words:
+                parsed = parse_collector_line(collector_texts_and_words[0][0])
+
+        collector_raw_texts = [text for text, _words in collector_texts_and_words]
+        fields["collector_line_raw_text"] = (
+            collector_texts_and_words[selected_index][0] if collector_texts_and_words else ""
+        )
+        fields["collector_line_set_code"] = parsed.set_code or ""
+        fields["collector_line_collector_number"] = parsed.collector_number or ""
+        if parsed.collector_number is None:
+            skip_reasons["collector_line_ocr"] = "no-text"
+
+        # TSV word boxes: same winning variant the text parse above came from (computed by the
+        # SAME tesseract call as that variant's raw text, not a second call) - so the word boxes
+        # and the parsed text always describe the same underlying tesseract read.
+        fields["collector_line_word_boxes"] = (
+            collector_texts_and_words[selected_index][1] if collector_texts_and_words else []
+        )
+
+        # artist OCR: reuse collector_line_ocr's own raw texts first (see module docstring),
+        # only cropping+OCR-ing artist_crop_px if none of those already contain an "Illus." match.
+        # `collector_raw_texts` only contains as many entries as the loop above actually computed
+        # (short-circuited once a collector number was found) - a real card whose collector-line
+        # crop legitimately carries an "Illus." credit (old-border only, per this module's own
+        # artist_ocr section) never has a genuine collector number to short-circuit on in the
+        # first place, so the loop above runs to completion (computing every variant) for exactly
+        # the population where this reuse would otherwise matter; verified against
+        # TestExtractCardEvidenceArtistOcr's real-tesseract reuse test, not just argued.
+        artist_name: Optional[str] = None
+        artist_raw_text = ""
+        for raw_text in collector_raw_texts:
+            artist_name = extract_artist_name(raw_text)
+            if artist_name is not None:
+                artist_raw_text = raw_text
+                break
+        if artist_name is None:
+            artist_crop = image.crop(tuple(fields["artist_crop_px"]))
+            for variant in preprocess_variants(artist_crop):
+                raw_text = run_tesseract(variant)
+                if not artist_raw_text:
+                    artist_raw_text = raw_text  # keep at least one attempt as a stored artifact
+                artist_name = extract_artist_name(raw_text)
+                if artist_name is not None:
+                    artist_raw_text = raw_text
+                    break
+
+        fields["artist_ocr_raw_text"] = artist_raw_text
+        fields["artist_ocr_name"] = artist_name or ""
+        # whether the "Illus." anchor was found at all, independent of whether the extracted name
+        # would go on to fuzzy-match a real candidate (that's Stage D's job) - same convention as
+        # local_fallback.detect_illus_anchor's own (fired, name) return.
+        fields["illus_anchor_fired"] = artist_name is not None
+        if artist_name is None:
+            skip_reasons["artist_ocr"] = "no-text"
+
+    extractor_versions["collector_line_ocr"] = COLLECTOR_LINE_OCR_EXTRACTOR_VERSION
+    extractor_versions["artist_ocr"] = ARTIST_OCR_EXTRACTOR_VERSION
+    extractor_versions["collector_line_tsv"] = COLLECTOR_LINE_TSV_EXTRACTOR_VERSION
+
+    # symbol_region (issue #160, "Part 4b: symbol harness"): SYMBOL_STRIP_BOX turned into pixel
+    # coordinates the same way crop_coordinates derives its own three boxes, then a raw phash of
+    # that region only - see module docstring for why this is a raw signal (Stage D's job to
+    # compare against a candidate's rendered glyph), not a verdict, and why the only named skip is
+    # a degenerate crop box rather than a tuned classification threshold.
+    if image is None:
+        skip_reasons["symbol_region"] = "fetch_failed"
+    else:
+        symbol_crop_px = _crop_box_to_pixels(SYMBOL_STRIP_BOX, bleed_class, width, height)
+        left, top, right, bottom = symbol_crop_px
+        if right <= left or bottom <= top:
+            # A degenerate (zero/negative-area) crop box - the same "sub-floor" input category
+            # geometry_bleed's own zero-height guard handles for its aspect-ratio division (see
+            # module docstring) - guarded here before PIL.Image.crop/imagehash.phash would raise
+            # on an empty region. Real fetched images essentially never hit this; not expected to
+            # fire against the golden set (see module docstring).
+            skip_reasons["symbol_region"] = "ambiguous"
+        else:
+            fields["symbol_crop_px"] = symbol_crop_px
+            fields["symbol_phash"] = _compute_region_phash(image, symbol_crop_px)
+    extractor_versions["symbol_region"] = SYMBOL_REGION_EXTRACTOR_VERSION
+
+    # legal_line (issue #151, task #159's extractor half): a NEW, dedicated crop region (not a
+    # reuse of collector_line_crop_px - see module docstring), OCR'd fresh (no reuse-before-
+    # recompute here, unlike artist_ocr - the legal/copyright line's overlap with the collector
+    # line region is coincidental, not the primary design point the way "Illus." credit's overlap
+    # with the collector-line crop is), then a tolerant parse for copyright year + the proxy/
+    # not-for-sale moderator-flag signal. No candidate matching (Stage D's job, same as every
+    # other OCR-adjacent extractor above).
+    if image is None:
+        skip_reasons["legal_line"] = "fetch_failed"
+    else:
+        fields["legal_line_crop_px"] = _crop_box_to_pixels(LEGAL_LINE_CROP_BOX, bleed_class, width, height)
+        legal_crop = image.crop(tuple(fields["legal_line_crop_px"]))
+        legal_variants = preprocess_variants(legal_crop)
+
+        # OCR call-cost reduction (docs/reports/2026-07-20-pipeline-compute-profile.md): lazily
+        # OCR each variant (run_tesseract, unchanged - no word boxes are stored for legal_line,
+        # so there's no TSV call to batch here the way collector_line_ocr's does above), stopping
+        # at the FIRST variant whose parse finds something (a year OR a proxy marker) rather than
+        # always running tesseract against every variant - same "first variant that produces
+        # something" precedence this selection already used, just applied to WHEN each variant
+        # gets OCR'd too.
+        legal_raw_texts: list[str] = []
+        selected_index = 0
+        legal_parsed = parse_legal_line("")
+        for i, variant in enumerate(legal_variants):
+            raw_text = run_tesseract(variant)
+            legal_raw_texts.append(raw_text)
+            legal_candidate_parse = parse_legal_line(raw_text)
+            if legal_candidate_parse.copyright_year is not None or legal_candidate_parse.proxy_marker_detected:
+                legal_parsed = legal_candidate_parse
+                selected_index = i
+                break
+        else:
+            if legal_raw_texts:
+                legal_parsed = parse_legal_line(legal_raw_texts[0])
+
+        fields["legal_line_raw_text"] = legal_raw_texts[selected_index] if legal_raw_texts else ""
+        fields["legal_line_copyright_year"] = legal_parsed.copyright_year or ""
+        fields["legal_line_proxy_marker_detected"] = legal_parsed.proxy_marker_detected
+        if legal_parsed.copyright_year is None and not legal_parsed.proxy_marker_detected:
+            skip_reasons["legal_line"] = "no-text"
+    extractor_versions["legal_line"] = LEGAL_LINE_EXTRACTOR_VERSION
+
+    # quality_signals (issue #150's re-spec, the LAST Stage C manifest extractor): a degenerate
+    # (zero/negative) width or height is guarded before anything else - the same "sub-floor"
+    # input category geometry_bleed's own zero-height guard and symbol_region's degenerate-crop-
+    # box guard handle for their own divisions/crops (see those sections above) - real fetched
+    # images essentially never hit this. Truncation check next (is_image_truncated forces a full
+    # pixel decode) - `truncated` is reused by color_profile just below rather than
+    # re-attempting the same decode a second time (see module docstring for this explicit
+    # cross-extractor dependency). blur_variance/image_entropy are only computed when the image
+    # loaded cleanly - a truncated image's partial pixel data would produce meaningless numbers,
+    # not a real reading.
+    if image is None:
+        skip_reasons["quality_signals"] = "fetch_failed"
+    elif width <= 0 or height <= 0:
+        truncated = False  # not truncated - never attempted, a degenerate size instead
+        skip_reasons["quality_signals"] = "ambiguous"
+    else:
+        truncated = is_image_truncated(image)
+        fields["image_is_truncated"] = truncated
+        if truncated:
+            # Shares fetch_health's own "fetch_failed" skip reason - see module docstring for
+            # why this isn't a new, separately-invented skip-reason string.
+            skip_reasons["quality_signals"] = "fetch_failed"
+        else:
+            fields["blur_variance"] = compute_blur_variance(image)
+            fields["image_entropy"] = compute_entropy(image)
+    extractor_versions["quality_signals"] = QUALITY_SIGNALS_EXTRACTOR_VERSION
+
+    # color_profile (issue #150's re-spec): per-channel (R, G, B) mean/stddev over the FULL
+    # fetched image - "color statistics... store the math, not the strip" (FINAL POSTURE item
+    # 2). Reuses quality_signals' own degenerate-size guard and `truncated` finding above rather
+    # than a fresh decode attempt.
+    if image is None:
+        skip_reasons["color_profile"] = "fetch_failed"
+    elif width <= 0 or height <= 0:
+        skip_reasons["color_profile"] = "ambiguous"
+    elif truncated:
+        skip_reasons["color_profile"] = "fetch_failed"
+    else:
+        mean_rgb, stddev_rgb = compute_color_profile(image)
+        fields["color_mean_rgb"] = mean_rgb
+        fields["color_stddev_rgb"] = stddev_rgb
+    extractor_versions["color_profile"] = COLOR_PROFILE_EXTRACTOR_VERSION
 
     return ExtractionResult(
         card_id=card.pk,
@@ -300,4 +670,11 @@ __all__ = [
     "GEOMETRY_BLEED_EXTRACTOR_VERSION",
     "LAYOUT_CLASS_EXTRACTOR_VERSION",
     "CROP_COORDINATES_EXTRACTOR_VERSION",
+    "COLLECTOR_LINE_OCR_EXTRACTOR_VERSION",
+    "ARTIST_OCR_EXTRACTOR_VERSION",
+    "COLLECTOR_LINE_TSV_EXTRACTOR_VERSION",
+    "SYMBOL_REGION_EXTRACTOR_VERSION",
+    "LEGAL_LINE_EXTRACTOR_VERSION",
+    "QUALITY_SIGNALS_EXTRACTOR_VERSION",
+    "COLOR_PROFILE_EXTRACTOR_VERSION",
 ]

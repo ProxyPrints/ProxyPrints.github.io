@@ -11,7 +11,7 @@ best-effort reading, it never has to be trusted on its own.
 import logging
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import pytesseract
 from PIL import Image, ImageOps
@@ -60,12 +60,46 @@ TESSERACT_CONFIG = "--psm 6"
 _SET_CODE_RE = re.compile(r"\b([A-Za-z0-9]{3,5})\b")
 _COLLECTOR_NUMBER_RE = re.compile(r"★?(\d{1,4}[A-Za-z]?)\b")
 
+# legal/copyright line (Stage C issue #151/task #159): same y-band DEFAULT_CROP_BOX was tuned
+# against (bottom 90-96.5% height - see that constant's own comment for the tuning history),
+# widened to the FULL card width rather than DEFAULT_CROP_BOX's narrow left-hand 6-35% window -
+# a real MTG copyright legend ("™ & © 2023 Wizards of the Coast") sits on the same physical
+# print row as the collector line but commonly runs further right than DEFAULT_CROP_BOX's own
+# crop captures. Verified against real fetched production images (golden-set gathering, see
+# golden_set.py's own "legal_line" comment) before being locked in, per the same "don't invent a
+# box from memory" discipline every other *_crop_px field in this pipeline followed.
+LEGAL_LINE_CROP_BOX: tuple[float, float, float, float] = (0.0, 0.90, 1.0, 0.965)
+
+# copyright year: prefer a year anchored to an actual copyright glyph/word ("©", "(c)",
+# "copyright") over a bare 4-digit run elsewhere in the line - a 4-digit collector number (e.g. a
+# Secret Lair/promo product's numbering) could otherwise be misread as a year. \D{0,10} tolerates
+# the "&"/"™"/whitespace noise tesseract commonly inserts between the glyph and the digits.
+_COPYRIGHT_YEAR_RE = re.compile(r"(?:©|\(c\)|copyright)\D{0,10}((?:19|20)\d{2})", re.IGNORECASE)
+_BARE_YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
+
+# Proxy/non-authentic markers (the real motivating case, task #151/#159: a "MTG★EN ... NOT FOR
+# SALE ©2022" watermark misparsed as a genuine collector line). Deliberately a plain, easy-to-audit
+# literal match rather than a fuzzier OCR-noise-tolerant pattern (unlike _COLLECTOR_NUMBER_RE's
+# no-space tolerance, which fixed a real missed-match case) - a missed marker here silently drops
+# the moderator flag with no other downstream signal to catch it, so a pattern that could start
+# matching genuine legal text this taxonomy hasn't seen is a worse trade than an occasional miss
+# on garbled OCR. Case-insensitive, tolerant of "NOT-FOR-SALE"/"NOT   FOR SALE" spacing/hyphen
+# variants only - not of letter-substitution noise.
+_PROXY_MARKER_RE = re.compile(r"not[\s-]*for[\s-]*sale|\bproxy\b", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class OcrParseResult:
     raw_text: str
     set_code: Optional[str]  # lowercased, or None if nothing plausible was found
     collector_number: Optional[str]  # lowercased, or None
+
+
+@dataclass(frozen=True)
+class LegalLineParseResult:
+    raw_text: str
+    copyright_year: Optional[str]  # 4-digit string, or None if nothing plausible was found
+    proxy_marker_detected: bool  # "NOT FOR SALE" / "PROXY" - see _PROXY_MARKER_RE's own comment
 
 
 def _normalize_collector_number(number: str) -> str:
@@ -111,6 +145,84 @@ def run_tesseract(image: "Image.Image") -> str:
     return pytesseract.image_to_string(image, config=TESSERACT_CONFIG)
 
 
+def _words_from_tesseract_data(data: dict[str, list[Any]]) -> list[dict[str, Any]]:
+    """Shared row-filtering logic behind `run_tesseract_tsv`/`run_tesseract_text_and_words` -
+    tesseract's TSV emits a row for every detected layout box (block/paragraph/line/word), most
+    of which carry no text at all; only the word rows (non-blank text) are useful here."""
+    words: list[dict[str, Any]] = []
+    for i, text in enumerate(data["text"]):
+        if not text.strip():
+            continue
+        words.append(
+            {
+                "text": text,
+                "left": int(data["left"][i]),
+                "top": int(data["top"][i]),
+                "width": int(data["width"][i]),
+                "height": int(data["height"][i]),
+                "conf": float(data["conf"][i]),
+            }
+        )
+    return words
+
+
+def _text_from_tesseract_data(data: dict[str, list[Any]]) -> str:
+    """Reconstructs an `image_to_string`-shaped raw text from `image_to_data`'s own per-word rows
+    - words within the same (block, paragraph, line) triple are joined with a single space, and
+    each distinct line is joined with a newline, in the order tesseract emitted them (already
+    reading order, not re-sorted). Not byte-identical to `pytesseract.image_to_string`'s own
+    output (that runs a different internal recognition pass, not just a different report format
+    of the same one) but equivalent for this module's own regex-based tolerant parsing
+    (`parse_collector_line`/`parse_legal_line` both `.search()` for a pattern anywhere in the
+    string, not position- or whitespace-exact) - this is what lets `run_tesseract_text_and_words`
+    below derive both the raw text AND the word boxes from a SINGLE tesseract call instead of one
+    call per representation of the same underlying OCR pass."""
+    lines: list[list[str]] = []
+    current_key: Optional[tuple[int, int, int]] = None
+    for i, text in enumerate(data["text"]):
+        if not text.strip():
+            continue
+        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        if key != current_key:
+            lines.append([])
+            current_key = key
+        lines[-1].append(text)
+    return "\n".join(" ".join(words) for words in lines)
+
+
+def run_tesseract_tsv(image: "Image.Image") -> list[dict[str, Any]]:
+    """
+    Word-level bounding boxes via tesseract's TSV output (`pytesseract.image_to_data`), filtered
+    to rows with a non-blank recognized word (tesseract's TSV emits a row for every detected
+    layout box - block/paragraph/line/word - most of which carry no text at all; only the word
+    rows are useful here). Coordinates are in the INPUT image's own pixel space (i.e. whatever
+    crop/preprocessing variant was passed in, not the full card image) - a caller wanting
+    full-card coordinates must add its own crop box's left/top offset itself, same convention as
+    every fixed-fraction crop box elsewhere in this module. Metadata only (text + box
+    coordinates + confidence) - the image itself is never touched beyond this one read, matching
+    CLAUDE.md's "Governing premise: we index, we do not store images".
+    """
+    data = pytesseract.image_to_data(image, config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT)
+    return _words_from_tesseract_data(data)
+
+
+def run_tesseract_text_and_words(image: "Image.Image") -> tuple[str, list[dict[str, Any]]]:
+    """
+    OCR call-cost reduction (2026-07-20, docs/reports/2026-07-20-pipeline-compute-profile.md's
+    ocr_group/legal_line finding, 58% of Stage C's per-card compute cost): a single
+    `pytesseract.image_to_data` call, returning BOTH a raw text string (`_text_from_tesseract_data`)
+    and the word-level bounding boxes (`_words_from_tesseract_data`) `run_tesseract_tsv` already
+    returns - the exact same underlying tesseract invocation, read two ways, instead of the two
+    separate tesseract calls (`run_tesseract` + `run_tesseract_tsv`) `image_evidence.py`'s
+    collector-line pass used to make for the SAME winning variant. Deliberately a NEW function
+    rather than a change to `run_tesseract`/`run_tesseract_tsv`'s own signatures - both of those
+    are called directly by `local_fallback.py` (PROTECTED CORE) and `local_identify_printing_tags
+    .py`'s live pilot pass, neither of which this cost-reduction pass touches or needs to change.
+    """
+    data = pytesseract.image_to_data(image, config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT)
+    return _text_from_tesseract_data(data), _words_from_tesseract_data(data)
+
+
 def parse_collector_line(raw_text: str) -> OcrParseResult:
     """
     Tolerant extraction, not validation - a plausible-looking (set, collector) pair from noisy
@@ -148,6 +260,56 @@ def parse_collector_line(raw_text: str) -> OcrParseResult:
     return OcrParseResult(raw_text=raw_text, set_code=set_code, collector_number=collector_number)
 
 
+def parse_legal_line(raw_text: str) -> LegalLineParseResult:
+    """
+    Tolerant extraction, not validation - matches parse_collector_line's own "extract, don't
+    validate" contract. No candidate matching happens here (that's Stage D's job, same as every
+    other extractor's raw parse - see image_evidence.py's module docstring); `copyright_year`/
+    `proxy_marker_detected` are raw signals for Stage D's calculator to weigh, most notably the
+    moderator-flag case: a proxy/not-for-sale marker detected here is exactly what lets Stage D
+    reject a false-accept a tolerant collector-line parse would otherwise wave through (the real
+    motivating case, task #151/#159's own "MTG★EN ... NOT FOR SALE ©2022" watermark).
+    """
+    year_match = _COPYRIGHT_YEAR_RE.search(raw_text) or _BARE_YEAR_RE.search(raw_text)
+    copyright_year = year_match.group(1) if year_match else None
+    proxy_marker_detected = bool(_PROXY_MARKER_RE.search(raw_text))
+    return LegalLineParseResult(
+        raw_text=raw_text, copyright_year=copyright_year, proxy_marker_detected=proxy_marker_detected
+    )
+
+
+def find_matching_candidates(
+    parsed: OcrParseResult, candidates: list["CandidatePrinting"]
+) -> list["CandidatePrinting"]:
+    """
+    The candidate-narrowing filter `validate_against_candidates` itself uses internally,
+    exposed separately (Stage D, docs/features/catalog-completion-plan.md) so a caller holding
+    genuine ADDITIONAL evidence - Stage D's set-symbol phash tie-break, for the pre-M15
+    collector-number-only case - can inspect an ambiguous match set directly instead of only
+    learning that ambiguity occurred. Same (set_code, collector_number) matching rules
+    `validate_against_candidates` documents; an empty result means "no plausible match at all",
+    which that function reports as "parsed-but-no-match" whenever a collector_number was parsed.
+    Returns `[]` (not `candidates`) when `parsed.collector_number is None` - there is nothing to
+    match against, this is a pure filter, not a validation/skip-reason decision (that stays in
+    `validate_against_candidates`, this function's own caller).
+    """
+    if parsed.collector_number is None:
+        return []
+
+    normalized_parsed_number = _normalize_collector_number(parsed.collector_number)
+    if parsed.set_code is not None:
+        return [
+            c
+            for c in candidates
+            if c.expansion_code == parsed.set_code
+            and _normalize_collector_number(c.collector_number) == normalized_parsed_number
+        ]
+    # pre-M15 cards have no set code on the collector line at all - fall back to matching on
+    # collector number alone, which is enough when the name's candidates don't share a number
+    # across sets (usually true, but not guaranteed - hence "ambiguous" below).
+    return [c for c in candidates if _normalize_collector_number(c.collector_number) == normalized_parsed_number]
+
+
 def validate_against_candidates(
     parsed: OcrParseResult, candidates: list["CandidatePrinting"]
 ) -> tuple["Optional[CandidatePrinting]", str]:
@@ -158,25 +320,16 @@ def validate_against_candidates(
     misread, possibly a genuinely wrong crop), or "ambiguous" (matches more than one candidate -
     can't happen when a set code was parsed, since (expansion, collector_number) is unique per
     CanonicalCard, but a collector-number-only match against a name that spans multiple sets
-    with an overlapping number is a real case). Empty string means matched.
+    with an overlapping number is a real case). Empty string means matched. A thin wrapper
+    around `find_matching_candidates` (behavior-preserving extraction, 2026-07-20, Stage D) -
+    the actual filtering logic lives there now, so a caller with independent tie-break evidence
+    for the "ambiguous" case can reuse the exact same filter this function's own decision is
+    built from, rather than a second implementation that could drift from it.
     """
     if parsed.collector_number is None:
         return None, "no-text"
 
-    normalized_parsed_number = _normalize_collector_number(parsed.collector_number)
-    if parsed.set_code is not None:
-        matches = [
-            c
-            for c in candidates
-            if c.expansion_code == parsed.set_code
-            and _normalize_collector_number(c.collector_number) == normalized_parsed_number
-        ]
-    else:
-        # pre-M15 cards have no set code on the collector line at all - fall back to matching
-        # on collector number alone, which is enough when the name's candidates don't share a
-        # number across sets (usually true, but not guaranteed - hence "ambiguous" below).
-        matches = [c for c in candidates if _normalize_collector_number(c.collector_number) == normalized_parsed_number]
-
+    matches = find_matching_candidates(parsed, candidates)
     if not matches:
         return None, "parsed-but-no-match"
     if len(matches) > 1:
@@ -186,10 +339,16 @@ def validate_against_candidates(
 
 __all__ = [
     "DEFAULT_CROP_BOX",
+    "LEGAL_LINE_CROP_BOX",
     "OcrParseResult",
+    "LegalLineParseResult",
     "crop_collector_line",
     "preprocess_variants",
     "run_tesseract",
+    "run_tesseract_tsv",
+    "run_tesseract_text_and_words",
     "parse_collector_line",
+    "parse_legal_line",
+    "find_matching_candidates",
     "validate_against_candidates",
 ]

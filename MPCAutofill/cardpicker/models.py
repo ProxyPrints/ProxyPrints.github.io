@@ -1128,6 +1128,14 @@ class CardScanLog(models.Model):
     the same card for different or the same reason over time), not deduplicated away, since the
     resume query only cares whether ANY non-re-scannable row exists, and the scan_log table
     itself is a append-only audit trail like the vote tables are.
+
+    Note (issue #207): a skip_reason that turned out to carry genuine whole-candidate-set
+    no-match evidence (OCR's "parsed-but-no-match", fallback's "eliminated") no longer gets a
+    row here at all - it gets a real `CardPrintingTag(is_no_match=True)` vote instead, same "the
+    vote IS the record, no scan-log row needed" convention a positive vote already followed (see
+    `TestScanLog.test_a_voted_card_gets_no_scan_log_row`). Only genuine abstention reasons
+    (no evidence either way, or evidence against a single candidate/pair rather than the whole
+    set) still land here.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="scan_logs")
@@ -1139,6 +1147,22 @@ class CardScanLog(models.Model):
     run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
     skip_reason = models.CharField(max_length=64)
     scanned_at = models.DateTimeField(auto_now_add=True)
+    # Instrumentation for a future ranked-vote decision (issue #207, docs/theory.md's
+    # Dawid-Skene addendum) - code-only, no schema for that future decision built here. Always
+    # `[]` for a non-fallback row (OCR/phash have no sub-check concept of their own) and for
+    # fallback's own "no-evidence" row (by definition, nothing fired) - populated with whichever
+    # of "border"/"artist"/"symbol" produced a reading for fallback's "ambiguous" row.
+    evidence_types_used = models.JSONField(default=list, blank=True)
+    # The candidate pks fallback's evidence intersection left standing, where knowable WITHOUT
+    # re-deriving local_fallback's own protected-core decision logic a second time in the caller
+    # (docs/upstreaming/license-provenance.md §2): trivially the card's full (post
+    # expansion_hint-narrowing) candidate set for "no-evidence" (nothing filtered anything).
+    # Deliberately left `null` for "ambiguous" (more than one candidate survived, but which ones
+    # can't be recovered from what run_fallback_for_card returns today without either
+    # reimplementing its border/artist/symbol sub-checks a second time here, or having
+    # `FallbackOutcome` expose the survivor set itself - the latter touches protected core and is
+    # an open item, not built in this change). Never populated for an OCR/phash row.
+    survivor_pks = models.JSONField(null=True, blank=True)
 
     class Meta:
         indexes = [models.Index(fields=["card", "anonymous_id"])]
@@ -1330,9 +1354,79 @@ class ImageEvidence(models.Model):
     the three `*_crop_px` fields. See `image_evidence.py`'s module docstring for why
     `layout_class` reuses `local_fallback.classify_border_color` rather than
     `classify_frame_style` (the latter needs OCR outputs not available until issue #149's PR).
-    `back_face_flag`, also named in issue #148's title, is deliberately NOT built in this PR -
+    `back_face_flag`, also named in issue #148's title, was deliberately NOT built in that PR -
     no signal for it was found anywhere in `Card`/`CanonicalCard` metadata or in
-    `local_fallback.py`'s exported helpers; see this PR's own OPEN ITEMS.
+    `local_fallback.py`'s exported helpers. The owner later settled it (issue #199) as
+    NAME-based, not image-based, so it never landed as a field here: see
+    `cardpicker.printing_metadata_import.get_back_face_names`/`is_back_face` for the actual
+    implementation and `docs/features/catalog-completion-plan.md`'s "back-face flag" paragraph
+    for why no `ImageEvidence`/`CanonicalCard` field was added.
+
+    OCR-group (public issue #149, third manifest extractor group): `collector_line_ocr` (raw
+    text + `local_ocr.parse_collector_line`'s tolerant set-code/collector-number parse),
+    `artist_ocr` (raw text + `local_fallback.extract_artist_name`'s tolerant "Illus. <name>"
+    parse + `illus_anchor_fired`), and `collector_line_tsv` (word-level bounding boxes via
+    `local_ocr.run_tesseract_tsv`, new in this PR). All three consume the `*_crop_px` pixel boxes
+    the geometry-group extractor already computed rather than recomputing them, and none of them
+    perform candidate matching (`local_ocr.validate_against_candidates`/`local_fallback.
+    match_artist` both need a card's real `CandidatePrinting` list, which this per-card function
+    never receives) - that comparison is Stage D calculator territory (task #151's
+    pipeline-fidelity gate), not Stage C extraction. See `image_evidence.py`'s module docstring
+    for the full rationale.
+
+    symbol_region (public issue #160, "Part 4b: symbol harness"): `symbol_crop_px` turns
+    `local_fallback.SYMBOL_STRIP_BOX` into pixel coordinates the same way the geometry-group's
+    `*_crop_px` fields do; `symbol_phash` is a perceptual hash of that region ONLY - crop PIXELS
+    are hashed in memory and discarded, never persisted (FINAL POSTURE item 2: "store the math,
+    not the strip"). A raw content signal for Stage D's Scryfall lookup (the SET half of the
+    collector+set join key), not a verdict - no candidate matching happens here, same reasoning
+    the OCR-group paragraph above gives. See `image_evidence.py`'s module docstring for why this
+    is a raw hash rather than `local_fallback.find_symbol_matches`'s own per-candidate comparison.
+
+    legal_line (public issue #151, "Legal-line extractor + moderator flag + volume report (task
+    #159)" - this PR builds the extractor + moderator-flag signal only, NOT the volume report,
+    which stays out of scope per that issue's own held task #159 half): `legal_line_crop_px`
+    turns a new `local_ocr.LEGAL_LINE_CROP_BOX` into pixel coordinates the same way every other
+    `*_crop_px` field does - a NEW, dedicated crop region (not a reuse of `collector_line_crop_px`),
+    verified against real fetched production images before being locked in (see `local_ocr.py`'s
+    own comment on that constant). `legal_line_raw_text` + `local_ocr.parse_legal_line`'s tolerant
+    parse of it (`legal_line_copyright_year`, `legal_line_proxy_marker_detected`) - metadata only,
+    no candidate matching, same convention as every prior OCR-group field. The real motivating
+    case (task #151/#159): a "MTG★EN ... NOT FOR SALE ©2022" watermark reads as plausible
+    collector-line-shaped text to a tolerant parser - `legal_line_proxy_marker_detected` is the
+    signal that lets Stage D's calculator reject that false-accept instead of trusting it.
+
+    color_profile / quality_signals (public issue #150's re-spec, "Stage C visual-signal
+    extractors" - the phash half of the original issue is DROPPED per the owner's 2026-07-20
+    re-spec comment, superseded by user-submitted phash, task #203; set-symbol phash already
+    shipped separately as symbol_region above): the LAST Stage C manifest extractor group.
+    `color_mean_rgb`/`color_stddev_rgb` are per-channel (R, G, B) mean/stddev over the FULL
+    fetched image via `cardpicker.local_image_quality.compute_color_profile` (a first-party
+    `PIL.ImageStat.Stat` call, not a hand-rolled pixel loop) - "color statistics... store the
+    math, not the strip" (FINAL POSTURE item 2). `blur_variance`/`image_entropy` are raw
+    sharpness/histogram-entropy signals (`local_image_quality.compute_blur_variance`/
+    `compute_entropy`) - Stage D's job to decide what counts as "too blurry"/"too flat," never
+    this extractor's. `image_is_truncated` is a genuine integrity fact
+    (`local_image_quality.is_image_truncated` forces a full pixel decode and catches the
+    `OSError` Pillow raises for a genuinely truncated download) - checked BEFORE blur/entropy/
+    color stats are computed, since a truncated image's partial pixel data would produce
+    meaningless numbers rather than a real reading (see `image_evidence.py`'s module docstring
+    for the exact ordering). `local_image_quality.py` is NOT protected core - new helpers land
+    there directly, same convention `local_ocr.py` already established for OCR-adjacent
+    (non-protected) additions.
+
+    fetch_health completion (same re-spec): `fetch_latency_ms` (wall-clock time for the
+    `image_cdn_fetch.fetch_card_image` call) and `fetch_image_format` (the fetched image's own
+    `PIL.Image.format`, e.g. `"JPEG"`, blank-string-as-sentinel on fetch failure - same
+    convention as `fetch_error_class`) complete the trivial substrate-PR version of this
+    extractor, which only ever recorded `fetch_ok`/`fetch_error_class`. `fetch_error_class`'s
+    own value space is deliberately UNCHANGED (still only `""`/`"fetch_failed"`) - widening it
+    would cross into inventing a new skip-reason vocabulary entry, which
+    `docs/features/catalog-completion-plan.md`'s own `CardScanLog` design explicitly warns
+    against ("the pipeline's own existing strings verbatim... not a separately-invented
+    vocabulary"); a truncated download (see `image_is_truncated` above) is reported through the
+    SAME `"fetch_failed"` skip reason for the same reason - Stage D doesn't need a finer bucket
+    than "no usable image data" to treat it correctly.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -1371,6 +1465,80 @@ class ImageEvidence(models.Model):
     collector_line_crop_px = models.JSONField(null=True, blank=True)
     artist_crop_px = models.JSONField(null=True, blank=True)
     art_crop_px = models.JSONField(null=True, blank=True)
+
+    # OCR-group (issue #149) - collector_line_ocr/artist_ocr/collector_line_tsv. Raw text +
+    # local_ocr.parse_collector_line's tolerant parse of it (blank-string-as-sentinel for "no
+    # OCR run yet, or nothing plausible found", same convention as bleed_class/layout_class
+    # above) - no candidate matching happens here (that's Stage D's job, see image_evidence.py's
+    # module docstring); this is metadata only, per FINAL POSTURE item 2.
+    collector_line_raw_text = models.TextField(blank=True, default="")
+    collector_line_set_code = models.CharField(max_length=16, blank=True, default="")
+    collector_line_collector_number = models.CharField(max_length=16, blank=True, default="")
+    # Word-level bounding boxes from tesseract's own TSV output (local_ocr.run_tesseract_tsv) for
+    # whichever preprocessing variant produced collector_line_raw_text above - a list of
+    # {text, left, top, width, height, conf} dicts, coordinates in that crop's own pixel space.
+    # Crop COORDINATES only, never crop pixels (CLAUDE.md's "Governing premise"). Null when not
+    # yet computed (fetch failure); an empty list is a real "nothing recognized" outcome, not the
+    # same as null - same distinction geometry-group's *_crop_px fields draw.
+    collector_line_word_boxes = models.JSONField(null=True, blank=True)
+    # artist_ocr: local_fallback.extract_artist_name's tolerant "Illus. <name>" parse, run first
+    # against collector_line_ocr's own raw text (reuse-before-recompute, see image_evidence.py)
+    # then against a fresh crop+OCR pass over artist_crop_px. illus_anchor_fired mirrors
+    # local_fallback.detect_illus_anchor's own (fired, name) return convention - True/False once
+    # computed, null only if the fetch itself failed (same null-vs-blank convention as
+    # fetch_ok above).
+    artist_ocr_raw_text = models.TextField(blank=True, default="")
+    artist_ocr_name = models.CharField(max_length=64, blank=True, default="")
+    illus_anchor_fired = models.BooleanField(null=True, blank=True)
+
+    # symbol_region (issue #160, "Part 4b: symbol harness") - symbol_crop_px is
+    # local_fallback.SYMBOL_STRIP_BOX remapped/scaled the same way the geometry-group's *_crop_px
+    # fields above are (crop COORDINATES only, never crop pixels). symbol_phash is a perceptual
+    # hash (imagehash.phash) of that region, stored as a signed 64-bit int via twos_complement -
+    # the same representation local_phash.py's own private _hash_to_int uses for
+    # Card.content_phash/CanonicalCard.image_hash. Null when not yet computed (fetch failure or a
+    # degenerate crop box - see image_evidence.py's module docstring).
+    symbol_crop_px = models.JSONField(null=True, blank=True)
+    symbol_phash = models.BigIntegerField(null=True, blank=True)
+
+    # legal_line (issue #151, task #159's extractor half) - legal_line_crop_px is
+    # local_ocr.LEGAL_LINE_CROP_BOX remapped/scaled the same way every other *_crop_px field is
+    # (crop COORDINATES only, never crop pixels). legal_line_raw_text + local_ocr.
+    # parse_legal_line's tolerant parse of it - same blank-string-as-sentinel convention as
+    # collector_line_raw_text/collector_line_set_code above for "no OCR run yet, or nothing
+    # plausible found". legal_line_proxy_marker_detected mirrors illus_anchor_fired's own
+    # True/False-once-computed/null-only-on-fetch-failure convention - the moderator-flag signal
+    # (task #151/#159): True when a "NOT FOR SALE"/"PROXY" watermark was detected in this card's
+    # legal-line region, consumed by Stage D (not acted on here - this extractor emits the raw
+    # signal only, same "extractors emit signals, Stage D calculators/consumers act on them"
+    # discipline every prior extractor in this file follows).
+    legal_line_crop_px = models.JSONField(null=True, blank=True)
+    legal_line_raw_text = models.TextField(blank=True, default="")
+    legal_line_copyright_year = models.CharField(max_length=4, blank=True, default="")
+    legal_line_proxy_marker_detected = models.BooleanField(null=True, blank=True)
+
+    # fetch_health completion (issue #150's re-spec) - fetch_latency_ms/fetch_image_format
+    # complete the trivial substrate-PR version of this extractor (fetch_ok/fetch_error_class
+    # above). fetch_image_format uses the same blank-string-as-sentinel convention as
+    # fetch_error_class for the not-yet-computed/fetch-failed case.
+    fetch_latency_ms = models.FloatField(null=True, blank=True)
+    fetch_image_format = models.CharField(max_length=16, blank=True, default="")
+
+    # quality_signals (issue #150's re-spec) - image_is_truncated is a genuine integrity fact
+    # (null only if the fetch itself failed, same null-vs-blank convention as fetch_ok/
+    # illus_anchor_fired above); blur_variance/image_entropy are only computed when the image
+    # loaded cleanly (null on fetch failure OR a truncated image - see image_evidence.py's
+    # module docstring for the exact ordering).
+    image_is_truncated = models.BooleanField(null=True, blank=True)
+    blur_variance = models.FloatField(null=True, blank=True)
+    image_entropy = models.FloatField(null=True, blank=True)
+
+    # color_profile (issue #150's re-spec) - per-channel (R, G, B) mean/stddev over the full
+    # fetched image (local_image_quality.compute_color_profile), each a 3-element float list.
+    # Null when not yet computed (fetch failure or a truncated image, same convention as
+    # quality_signals' own fields above).
+    color_mean_rgb = models.JSONField(null=True, blank=True)
+    color_stddev_rgb = models.JSONField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
