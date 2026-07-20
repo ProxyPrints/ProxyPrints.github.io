@@ -63,6 +63,45 @@ class TestGoldenExpectations:
                 assert len(box) == 4
                 assert all(isinstance(coord, int) for coord in box)
 
+    def test_collector_line_ocr_expectation_covers_every_golden_card(self):
+        card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["collector_line_ocr"]}
+        assert card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_collector_line_ocr_values_have_set_code_and_collector_number_keys(self):
+        # Recorded 2026-07-19 against a real extract_card_evidence() run over all 30 golden
+        # cards (issue #149) - see TestGeometryBleed's own note above for why this isn't
+        # re-verified live in CI. "" is a genuine real outcome for most of this sample (only
+        # 10/30 produced a parseable collector number), not a placeholder - see golden_set.py's
+        # own comment.
+        for expectation in GOLDEN_EXPECTATIONS["collector_line_ocr"]:
+            assert set(expectation.value) == {"set_code", "collector_number"}
+            assert isinstance(expectation.value["set_code"], str)
+            assert isinstance(expectation.value["collector_number"], str)
+
+    def test_artist_ocr_expectation_covers_every_golden_card(self):
+        card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["artist_ocr"]}
+        assert card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_artist_ocr_values_have_name_and_illus_anchor_fired_keys(self):
+        # Recorded the same run as collector_line_ocr above - illus_anchor_fired is False for
+        # every card on this real sample (a genuine "Illus." old-border-only convention this
+        # source-stratified draw happened not to include - see golden_set.py's own comment), not
+        # a placeholder.
+        for expectation in GOLDEN_EXPECTATIONS["artist_ocr"]:
+            assert set(expectation.value) == {"name", "illus_anchor_fired"}
+            assert isinstance(expectation.value["name"], str)
+            assert isinstance(expectation.value["illus_anchor_fired"], bool)
+
+    def test_collector_line_tsv_expectation_covers_every_golden_card(self):
+        card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["collector_line_tsv"]}
+        assert card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_collector_line_tsv_values_are_bool(self):
+        # Recorded the same run as collector_line_ocr above - 25/30 found at least one non-blank
+        # tesseract word in the collector-line crop (see golden_set.py's own comment for why the
+        # exact word-box list itself isn't pinned here).
+        assert all(isinstance(e.value, bool) for e in GOLDEN_EXPECTATIONS["collector_line_tsv"])
+
 
 class TestGetGoldenCards:
     def test_raises_when_pinned_ids_are_missing_from_the_db(self, db):

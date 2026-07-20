@@ -1333,6 +1333,18 @@ class ImageEvidence(models.Model):
     `back_face_flag`, also named in issue #148's title, is deliberately NOT built in this PR -
     no signal for it was found anywhere in `Card`/`CanonicalCard` metadata or in
     `local_fallback.py`'s exported helpers; see this PR's own OPEN ITEMS.
+
+    OCR-group (public issue #149, third manifest extractor group): `collector_line_ocr` (raw
+    text + `local_ocr.parse_collector_line`'s tolerant set-code/collector-number parse),
+    `artist_ocr` (raw text + `local_fallback.extract_artist_name`'s tolerant "Illus. <name>"
+    parse + `illus_anchor_fired`), and `collector_line_tsv` (word-level bounding boxes via
+    `local_ocr.run_tesseract_tsv`, new in this PR). All three consume the `*_crop_px` pixel boxes
+    the geometry-group extractor already computed rather than recomputing them, and none of them
+    perform candidate matching (`local_ocr.validate_against_candidates`/`local_fallback.
+    match_artist` both need a card's real `CandidatePrinting` list, which this per-card function
+    never receives) - that comparison is Stage D calculator territory (task #151's
+    pipeline-fidelity gate), not Stage C extraction. See `image_evidence.py`'s module docstring
+    for the full rationale.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -1371,6 +1383,31 @@ class ImageEvidence(models.Model):
     collector_line_crop_px = models.JSONField(null=True, blank=True)
     artist_crop_px = models.JSONField(null=True, blank=True)
     art_crop_px = models.JSONField(null=True, blank=True)
+
+    # OCR-group (issue #149) - collector_line_ocr/artist_ocr/collector_line_tsv. Raw text +
+    # local_ocr.parse_collector_line's tolerant parse of it (blank-string-as-sentinel for "no
+    # OCR run yet, or nothing plausible found", same convention as bleed_class/layout_class
+    # above) - no candidate matching happens here (that's Stage D's job, see image_evidence.py's
+    # module docstring); this is metadata only, per FINAL POSTURE item 2.
+    collector_line_raw_text = models.TextField(blank=True, default="")
+    collector_line_set_code = models.CharField(max_length=16, blank=True, default="")
+    collector_line_collector_number = models.CharField(max_length=16, blank=True, default="")
+    # Word-level bounding boxes from tesseract's own TSV output (local_ocr.run_tesseract_tsv) for
+    # whichever preprocessing variant produced collector_line_raw_text above - a list of
+    # {text, left, top, width, height, conf} dicts, coordinates in that crop's own pixel space.
+    # Crop COORDINATES only, never crop pixels (CLAUDE.md's "Governing premise"). Null when not
+    # yet computed (fetch failure); an empty list is a real "nothing recognized" outcome, not the
+    # same as null - same distinction geometry-group's *_crop_px fields draw.
+    collector_line_word_boxes = models.JSONField(null=True, blank=True)
+    # artist_ocr: local_fallback.extract_artist_name's tolerant "Illus. <name>" parse, run first
+    # against collector_line_ocr's own raw text (reuse-before-recompute, see image_evidence.py)
+    # then against a fresh crop+OCR pass over artist_crop_px. illus_anchor_fired mirrors
+    # local_fallback.detect_illus_anchor's own (fired, name) return convention - True/False once
+    # computed, null only if the fetch itself failed (same null-vs-blank convention as
+    # fetch_ok above).
+    artist_ocr_raw_text = models.TextField(blank=True, default="")
+    artist_ocr_name = models.CharField(max_length=64, blank=True, default="")
+    illus_anchor_fired = models.BooleanField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

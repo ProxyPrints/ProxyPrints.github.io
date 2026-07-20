@@ -11,7 +11,7 @@ best-effort reading, it never has to be trusted on its own.
 import logging
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import pytesseract
 from PIL import Image, ImageOps
@@ -111,6 +111,36 @@ def run_tesseract(image: "Image.Image") -> str:
     return pytesseract.image_to_string(image, config=TESSERACT_CONFIG)
 
 
+def run_tesseract_tsv(image: "Image.Image") -> list[dict[str, Any]]:
+    """
+    Word-level bounding boxes via tesseract's TSV output (`pytesseract.image_to_data`), filtered
+    to rows with a non-blank recognized word (tesseract's TSV emits a row for every detected
+    layout box - block/paragraph/line/word - most of which carry no text at all; only the word
+    rows are useful here). Coordinates are in the INPUT image's own pixel space (i.e. whatever
+    crop/preprocessing variant was passed in, not the full card image) - a caller wanting
+    full-card coordinates must add its own crop box's left/top offset itself, same convention as
+    every fixed-fraction crop box elsewhere in this module. Metadata only (text + box
+    coordinates + confidence) - the image itself is never touched beyond this one read, matching
+    CLAUDE.md's "Governing premise: we index, we do not store images".
+    """
+    data = pytesseract.image_to_data(image, config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT)
+    words: list[dict[str, Any]] = []
+    for i, text in enumerate(data["text"]):
+        if not text.strip():
+            continue
+        words.append(
+            {
+                "text": text,
+                "left": int(data["left"][i]),
+                "top": int(data["top"][i]),
+                "width": int(data["width"][i]),
+                "height": int(data["height"][i]),
+                "conf": float(data["conf"][i]),
+            }
+        )
+    return words
+
+
 def parse_collector_line(raw_text: str) -> OcrParseResult:
     """
     Tolerant extraction, not validation - a plausible-looking (set, collector) pair from noisy
@@ -190,6 +220,7 @@ __all__ = [
     "crop_collector_line",
     "preprocess_variants",
     "run_tesseract",
+    "run_tesseract_tsv",
     "parse_collector_line",
     "validate_against_candidates",
 ]

@@ -21,6 +21,16 @@ output.
 crop_coordinates (issue #148) never touches the image object itself (only `width`/`height` +
 `bleed_class`, both already-computed numbers/strings), so it never needs the classify_border_color
 patch - it's exercised directly against `_StubImage`/`_TRIMMED_IMAGE` like geometry_bleed is.
+
+collector_line_ocr / artist_ocr / collector_line_tsv (issue #149, the OCR-group) call `image.crop`
+directly on the fetched image (consuming `collector_line_crop_px`/`artist_crop_px`, already
+computed by crop_coordinates above - see image_evidence.py's module docstring) - every existing
+test that feeds a `_StubImage` through `extract_card_evidence` now also stubs the OCR-group's own
+crop/tesseract entry points via `_stub_ocr` below (mirroring `_stub_border_color`'s identical
+rationale: `_StubImage` has no `.crop()`/`.convert()` a real PIL image needs).
+`TestExtractCardEvidenceCollectorLineOcr`/`ArtistOcr`/`CollectorLineTsv` below use real PIL images
++ the REAL tesseract binary throughout (no monkeypatching of run_tesseract itself) - per CLAUDE.md,
+tesseract is installed in CI and real OCR tests are expected to run, not be skipped.
 """
 
 from dataclasses import dataclass
@@ -31,6 +41,9 @@ from PIL import Image, ImageDraw
 import cardpicker.image_evidence as module
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import (
+    ARTIST_OCR_EXTRACTOR_VERSION,
+    COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
+    COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
     CROP_COORDINATES_EXTRACTOR_VERSION,
     FETCH_HEALTH_EXTRACTOR_VERSION,
     GEOMETRY_BLEED_EXTRACTOR_VERSION,
@@ -63,6 +76,11 @@ _SHARED_FACTORIES = [CardFactory, SourceFactory, CanonicalArtistFactory, Canonic
 class _StubImage:
     size: tuple[int, int]
 
+    def crop(self, box):
+        # a fake crop - real cropping is never exercised through _StubImage, only through the
+        # real-PIL-image test classes below (see _stub_ocr's own docstring for why this is safe).
+        return self
+
 
 # A real fetched image at DEFAULT_FETCH_DPI (250) is ~925px tall - these stub sizes just need to
 # land at the right aspect ratio, not the right absolute resolution, since classify_bleed_edge
@@ -82,6 +100,44 @@ def _stub_border_color(monkeypatch, value=None):
     monkeypatch.setattr(module, "classify_border_color", lambda image, bleed_class=None: value)
 
 
+def _stub_ocr(monkeypatch, collector_raw_text: str = "158/287 R MOM EN"):
+    """`_StubImage.crop()` returns a fake crop with no real pixel data - any test feeding one
+    through `extract_card_evidence` must stub the OCR-group's own crop/tesseract entry points
+    (same rationale as `_stub_border_color` above). `preprocess_variants`/`run_tesseract_tsv` are
+    stubbed unconditionally (they need a real image); `run_tesseract` returns a caller-supplied
+    raw string so the REAL `parse_collector_line`/`extract_artist_name` (never stubbed - both are
+    pure string parsing, no image/tesseract dependency) still exercise their own logic against it,
+    keeping these stand-in tests honest about what's actually parsed rather than faking the
+    parsed fields directly. Defaults to a realistic modern-frame collector line with no artist
+    credit in it (matching real cards, where "Illus." text is an old-border-only convention) -
+    `artist_ocr` genuinely skips ("no-text") under this default, which is the correct outcome for
+    a modern card, not an oversight."""
+    monkeypatch.setattr(module, "preprocess_variants", lambda cropped: [cropped])
+    monkeypatch.setattr(module, "run_tesseract", lambda variant: collector_raw_text)
+    monkeypatch.setattr(module, "run_tesseract_tsv", lambda variant: [])
+
+
+def _build_card_image(
+    regions: list[tuple[tuple[float, float, float, float], str]], bleed: bool = True
+) -> "Image.Image":
+    """A real white-background PIL image at BLEED_ASPECT_RATIO/TRIM_ASPECT_RATIO, with each
+    (fixed-fraction box, text) pair rendered as a black rectangle + white text - shared real-
+    tesseract fixture for the OCR-group extractor tests below (mirrors
+    TestExtractCardEvidenceLayoutClass's own real-PIL-image style, since these extractors
+    genuinely read pixels, not just width/height/bleed_class)."""
+    ratio = BLEED_ASPECT_RATIO if bleed else TRIM_ASPECT_RATIO
+    height = 1300
+    width = round(height * ratio)
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    for (left, top, right, bottom), text in regions:
+        box = [round(left * width), round(top * height), round(right * width), round(bottom * height)]
+        draw.rectangle(box, fill="black")
+        if text:
+            draw.text((box[0] + 5, box[1] + 10), text, fill="white")
+    return img
+
+
 @pytest.fixture(autouse=True)
 def _preserve_shared_factory_sequences():
     before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
@@ -97,6 +153,7 @@ class TestExtractCardEvidence:
         card = CardFactory(content_phash=12345)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -109,8 +166,14 @@ class TestExtractCardEvidence:
             "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
             "layout_class": LAYOUT_CLASS_EXTRACTOR_VERSION,
             "crop_coordinates": CROP_COORDINATES_EXTRACTOR_VERSION,
+            "collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
+            "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
+            "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
         }
-        assert result.skip_reasons == {}
+        # _stub_ocr's default raw text ("158/287 R MOM EN") is a realistic modern-frame collector
+        # line with no artist credit in it - artist_ocr genuinely skips here, which is the
+        # correct outcome for a modern card (see _stub_ocr's own docstring), not a gap.
+        assert result.skip_reasons == {"artist_ocr": "no-text"}
 
     def test_failed_fetch_marks_fetch_not_ok_and_records_a_named_skip(self, db, monkeypatch):
         card = CardFactory(content_phash=12345)
@@ -127,18 +190,25 @@ class TestExtractCardEvidence:
             "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
             "layout_class": LAYOUT_CLASS_EXTRACTOR_VERSION,
             "crop_coordinates": CROP_COORDINATES_EXTRACTOR_VERSION,
+            "collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
+            "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
+            "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
         }
         assert result.skip_reasons == {
             "fetch_health": "fetch_failed",
             "geometry_bleed": "fetch_failed",
             "layout_class": "fetch_failed",
             "crop_coordinates": "fetch_failed",
+            "collector_line_ocr": "fetch_failed",
+            "artist_ocr": "fetch_failed",
+            "collector_line_tsv": "fetch_failed",
         }
 
     def test_null_content_phash_surfaces_as_none(self, db, monkeypatch):
         card = CardFactory(content_phash=None)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch)
+        _stub_ocr(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -159,6 +229,7 @@ class TestExtractCardEvidence:
         card = CardFactory(content_phash=12345)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch)
+        _stub_ocr(monkeypatch)
 
         extract_card_evidence(card)
 
@@ -173,6 +244,7 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -187,6 +259,7 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -197,6 +270,7 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _AMBIGUOUS_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -214,6 +288,7 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
         _stub_border_color(monkeypatch)
+        _stub_ocr(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -236,6 +311,13 @@ class TestExtractCardEvidenceGeometryBleed:
         assert result.skip_reasons["layout_class"] == "fetch_failed"
         assert "collector_line_crop_px" not in result.fields
         assert result.skip_reasons["crop_coordinates"] == "fetch_failed"
+        # the OCR-group (issue #149) shares the same root cause too.
+        assert "collector_line_raw_text" not in result.fields
+        assert result.skip_reasons["collector_line_ocr"] == "fetch_failed"
+        assert "artist_ocr_name" not in result.fields
+        assert result.skip_reasons["artist_ocr"] == "fetch_failed"
+        assert "collector_line_word_boxes" not in result.fields
+        assert result.skip_reasons["collector_line_tsv"] == "fetch_failed"
 
     def test_persist_writes_geometry_fields(self, db):
         card = CardFactory(content_phash=999)
@@ -327,7 +409,9 @@ class TestExtractCardEvidenceCropCoordinates:
     """issue #148 (geometry-group) - crop_coordinates turns DEFAULT_CROP_BOX/ARTIST_CROP_BOX/
     ART_CROP_BOX into pixel coordinates for this specific fetched image. Never touches the image
     object itself (only width/height + bleed_class), so it's exercised against _StubImage like
-    geometry_bleed, with classify_border_color always stubbed out alongside it."""
+    geometry_bleed, with classify_border_color and the OCR-group's own entry points (_stub_ocr -
+    issue #149 now also reads collector_line_crop_px/artist_crop_px, which _StubImage's fake
+    .crop() satisfies) always stubbed out alongside it."""
 
     def test_ambiguous_bleed_class_applies_no_remap(self, db, monkeypatch):
         # 1000x2000 is not a real card aspect ratio - bleed_class comes out "" (ambiguous),
@@ -336,6 +420,7 @@ class TestExtractCardEvidenceCropCoordinates:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(1000, 2000)))
         _stub_border_color(monkeypatch)
+        _stub_ocr(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -351,6 +436,7 @@ class TestExtractCardEvidenceCropCoordinates:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
         _stub_border_color(monkeypatch)
+        _stub_ocr(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -367,6 +453,7 @@ class TestExtractCardEvidenceCropCoordinates:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -394,6 +481,10 @@ class TestExtractCardEvidenceCropCoordinates:
         assert "artist_crop_px" not in result.fields
         assert "art_crop_px" not in result.fields
         assert result.skip_reasons["crop_coordinates"] == "fetch_failed"
+        # the OCR-group (issue #149) shares the same root cause too.
+        assert result.skip_reasons["collector_line_ocr"] == "fetch_failed"
+        assert result.skip_reasons["artist_ocr"] == "fetch_failed"
+        assert result.skip_reasons["collector_line_tsv"] == "fetch_failed"
 
     def test_persist_writes_crop_fields(self, db):
         card = CardFactory(content_phash=999)
@@ -414,6 +505,210 @@ class TestExtractCardEvidenceCropCoordinates:
         assert evidence.collector_line_crop_px == [60, 1800, 350, 1930]
         assert evidence.artist_crop_px == [0, 1640, 1000, 2000]
         assert evidence.art_crop_px == [70, 200, 930, 1160]
+
+
+class TestExtractCardEvidenceCollectorLineOcr:
+    """issue #149 (OCR-group) - collector_line_ocr crops collector_line_crop_px (already
+    computed by crop_coordinates above) and runs the SAME local_ocr.parse_collector_line the live
+    pilot's pass-1 engine uses. Real PIL images + the REAL tesseract binary throughout (mirrors
+    TestExtractCardEvidenceLayoutClass's own real-image style, since this extractor genuinely
+    reads pixels) - per CLAUDE.md, tesseract is installed in CI and real OCR tests are expected
+    to run, not be skipped. No candidate matching happens here - see module docstring."""
+
+    def test_parses_set_code_and_collector_number(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "158/287 R MOM EN")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["collector_line_set_code"] == "mom"
+        assert result.fields["collector_line_collector_number"] == "158"
+        assert result.fields["collector_line_raw_text"].strip() != ""
+        assert "collector_line_ocr" not in result.skip_reasons
+
+    def test_no_legible_text_records_named_skip(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])  # a blank crop, no text at all
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["collector_line_set_code"] == ""
+        assert result.fields["collector_line_collector_number"] == ""
+        assert result.skip_reasons["collector_line_ocr"] == "no-text"
+
+    def test_fetch_failure_withholds_fields_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "collector_line_raw_text" not in result.fields
+        assert "collector_line_set_code" not in result.fields
+        assert "collector_line_collector_number" not in result.fields
+        assert result.skip_reasons["collector_line_ocr"] == "fetch_failed"
+
+    def test_persist_writes_collector_line_fields(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={
+                "collector_line_raw_text": "158/287 R MOM EN",
+                "collector_line_set_code": "mom",
+                "collector_line_collector_number": "158",
+            },
+            extractor_versions={"collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.collector_line_raw_text == "158/287 R MOM EN"
+        assert evidence.collector_line_set_code == "mom"
+        assert evidence.collector_line_collector_number == "158"
+
+
+class TestExtractCardEvidenceArtistOcr:
+    """issue #149 (OCR-group) - local_fallback.extract_artist_name's tolerant "Illus. <name>"
+    parse. Reuses collector_line_ocr's own raw texts first (see module docstring's rationale,
+    mirroring local_fallback.detect_illus_anchor's identical reuse-before-recompute convention)
+    before falling back to a fresh crop+OCR pass over artist_crop_px. Real tesseract throughout,
+    same rationale as TestExtractCardEvidenceCollectorLineOcr above."""
+
+    def test_finds_artist_within_collector_line_crop_without_a_second_ocr_pass(self, db, monkeypatch):
+        # an old-border card's "Illus. <artist>" credit frequently lands INSIDE the same crop
+        # region a modern card's collector line occupies - place the text there and assert the
+        # fallback crop/OCR pass over artist_crop_px never runs (preprocess_variants call count).
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "Illus. Jane Doe")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        calls: list["Image.Image"] = []
+        original_preprocess = module.preprocess_variants
+
+        def counting_preprocess(cropped):
+            calls.append(cropped)
+            return original_preprocess(cropped)
+
+        monkeypatch.setattr(module, "preprocess_variants", counting_preprocess)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["artist_ocr_name"] == "Jane Doe"
+        assert result.fields["illus_anchor_fired"] is True
+        assert "artist_ocr" not in result.skip_reasons
+        assert len(calls) == 1  # only the collector-line crop was ever preprocessed
+
+    def test_falls_back_to_artist_crop_when_not_in_collector_text(self, db, monkeypatch):
+        # placed just above the collector-line crop's own top boundary (0.90) but still within
+        # ARTIST_CROP_BOX's wider band (0.82-1.0) - collector_line_ocr's own crop never sees it.
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([((0.0, 0.83, 1.0, 0.88), "Illus. John Smith")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["artist_ocr_name"] == "John Smith"
+        assert result.fields["illus_anchor_fired"] is True
+        assert "artist_ocr" not in result.skip_reasons
+
+    def test_no_artist_credit_anywhere_records_named_skip(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "158/287 R MOM EN")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["artist_ocr_name"] == ""
+        assert result.fields["illus_anchor_fired"] is False
+        assert result.skip_reasons["artist_ocr"] == "no-text"
+
+    def test_fetch_failure_withholds_fields_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "artist_ocr_raw_text" not in result.fields
+        assert "artist_ocr_name" not in result.fields
+        assert "illus_anchor_fired" not in result.fields
+        assert result.skip_reasons["artist_ocr"] == "fetch_failed"
+
+    def test_persist_writes_artist_ocr_fields(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={
+                "artist_ocr_raw_text": "Illus. Jane Doe",
+                "artist_ocr_name": "Jane Doe",
+                "illus_anchor_fired": True,
+            },
+            extractor_versions={"artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.artist_ocr_name == "Jane Doe"
+        assert evidence.illus_anchor_fired is True
+
+
+class TestExtractCardEvidenceCollectorLineTsv:
+    """issue #149 (OCR-group) - word-level bounding boxes (local_ocr.run_tesseract_tsv, new in
+    this PR) for the SAME crop/variant collector_line_ocr's own raw text came from. Real
+    tesseract throughout, same rationale as the sibling classes above."""
+
+    def test_word_boxes_present_for_legible_text(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "158/287 R MOM EN")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        word_boxes = result.fields["collector_line_word_boxes"]
+        assert isinstance(word_boxes, list)
+        assert len(word_boxes) > 0
+        for word in word_boxes:
+            assert set(word) == {"text", "left", "top", "width", "height", "conf"}
+        assert "collector_line_tsv" not in result.skip_reasons
+
+    def test_empty_word_list_for_a_blank_crop(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["collector_line_word_boxes"] == []
+        # collector_line_tsv "ran to completion" regardless - no skip for an honestly-empty read.
+        assert "collector_line_tsv" not in result.skip_reasons
+
+    def test_fetch_failure_withholds_field_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "collector_line_word_boxes" not in result.fields
+        assert result.skip_reasons["collector_line_tsv"] == "fetch_failed"
+
+    def test_persist_writes_word_boxes(self, db):
+        card = CardFactory(content_phash=999)
+        word_boxes = [{"text": "158", "left": 1, "top": 2, "width": 3, "height": 4, "conf": 90.0}]
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={"collector_line_word_boxes": word_boxes},
+            extractor_versions={"collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.collector_line_word_boxes == word_boxes
 
 
 class TestPersistEvidence:

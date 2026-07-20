@@ -16,10 +16,10 @@ do not store images) - they go out of scope the moment this function returns.
 Extend this module (not ImageEvidence's callers) when adding a new extractor: fetch once at
 the top of `extract_card_evidence`, call each new pure extractor function against the same
 in-memory image, and add its fields/version/skip-reason to the result. `fetch_health`,
-`geometry_bleed` (task #147), and `layout_class`/`crop_coordinates` (issue #148, the
-geometry-group) exist today - every subsequent extractor (OCR/collector-line, artist OCR,
-phash, symbol-strip, legal-line, etc.) lands as its own follow-up PR per task #145's manifest
-and one-PR-per-extractor gate.
+`geometry_bleed` (task #147), `layout_class`/`crop_coordinates` (issue #148, the geometry-group),
+and `collector_line_ocr`/`artist_ocr`/`collector_line_tsv` (issue #149, the OCR-group) exist
+today - every subsequent extractor (visual-signal/phash, legal-line, symbol harness, etc.) lands
+as its own follow-up PR per task #145's manifest and one-PR-per-extractor gate.
 
 geometry_bleed calls `local_fallback.classify_bleed_edge` directly rather than re-deriving the
 aspect-ratio math - that function is the exact classifier the live pilot/harvest vote path
@@ -55,6 +55,29 @@ concept) or in `local_fallback.py`'s exported helpers, and no other doc/issue in
 defines what visual signal it should measure. Flagged as an OPEN ITEM on this PR rather than
 shipped as an invented heuristic with fabricated golden-set expectations.
 
+collector_line_ocr / artist_ocr / collector_line_tsv (issue #149, the OCR-group): consume
+`collector_line_crop_px`/`artist_crop_px` - the pixel boxes issue #148's crop_coordinates
+extractor already computed earlier in this same pass - directly (`image.crop(...)`), rather than
+recomputing them from `local_ocr.DEFAULT_CROP_BOX`/`local_fallback.ARTIST_CROP_BOX` +
+`normalize_crop_box` a second time. Deliberately do NOT call
+`local_ocr.validate_against_candidates` or `local_fallback.match_artist`: both require a card's
+real `CandidatePrinting` list, which this per-card function never receives (`extract_card_
+evidence` takes only a `Card`) - candidate matching is Stage D calculator territory (task #151's
+pipeline-fidelity gate), not Stage C extraction. What's stored here is raw OCR text + a tolerant
+parse (`local_ocr.parse_collector_line`, `local_fallback.extract_artist_name` - both already
+exist, called not reimplemented) plus TSV word-level bounding boxes
+(`local_ocr.run_tesseract_tsv`, new in this PR) - metadata per FINAL POSTURE item 2 ("full OCR
+text + TSV word boxes, parsed fields"), never a verdict about which printing this is.
+
+artist_ocr reuses collector_line_ocr's own raw texts first, before falling back to its own
+crop+OCR pass over `artist_crop_px` - the same reuse-before-recompute convention
+`local_fallback.detect_illus_anchor` already uses (an old-border card's "Illus. <artist>" credit
+frequently lands inside the SAME crop region a modern card's collector line occupies). Does not
+call `detect_illus_anchor` itself, since that function recomputes its own crop box from
+`ARTIST_CROP_BOX` rather than consuming the already-computed `artist_crop_px` pixels - this PR's
+own inline reuse-then-crop logic mirrors its structure without violating "consume the
+crop-coordinate fields, don't recompute them".
+
 RECONCILIATION LEDGER (owner directive 2026-07-19, task #155): `build_reconciliation_report`
 answers "attempted = voted + each named skip-reason + dropped" for one extractor over one set
 of cards, by querying ImageEvidence.extractor_versions + CardScanLog directly - see
@@ -71,9 +94,16 @@ from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
     classify_bleed_edge,
     classify_border_color,
+    extract_artist_name,
     normalize_crop_box,
 )
-from cardpicker.local_ocr import DEFAULT_CROP_BOX
+from cardpicker.local_ocr import (
+    DEFAULT_CROP_BOX,
+    parse_collector_line,
+    preprocess_variants,
+    run_tesseract,
+    run_tesseract_tsv,
+)
 from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import Card, CardScanLog, ImageEvidence
 
@@ -83,6 +113,9 @@ FETCH_HEALTH_EXTRACTOR_VERSION = "fetch-health-v1"
 GEOMETRY_BLEED_EXTRACTOR_VERSION = "geometry-bleed-v1"
 LAYOUT_CLASS_EXTRACTOR_VERSION = "layout-class-v1"
 CROP_COORDINATES_EXTRACTOR_VERSION = "crop-coordinates-v1"
+COLLECTOR_LINE_OCR_EXTRACTOR_VERSION = "collector-line-ocr-v1"
+ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v1"
+COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v1"
 
 
 @dataclass(frozen=True)
@@ -192,6 +225,76 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
         fields["art_crop_px"] = _crop_box_to_pixels(ART_CROP_BOX, bleed_class, width, height)
     extractor_versions["crop_coordinates"] = CROP_COORDINATES_EXTRACTOR_VERSION
 
+    # collector_line_ocr / artist_ocr / collector_line_tsv (issue #149, the OCR-group): consume
+    # the *_crop_px pixel boxes crop_coordinates just computed above rather than recomputing them
+    # - see module docstring. No candidate matching happens here (Stage D's job).
+    if image is None:
+        skip_reasons["collector_line_ocr"] = "fetch_failed"
+        skip_reasons["artist_ocr"] = "fetch_failed"
+        skip_reasons["collector_line_tsv"] = "fetch_failed"
+    else:
+        collector_crop = image.crop(tuple(fields["collector_line_crop_px"]))
+        collector_variants = preprocess_variants(collector_crop)
+        collector_raw_texts: list[str] = [run_tesseract(variant) for variant in collector_variants]
+
+        # prefer the first variant whose text actually parses a collector number - matches
+        # run_ocr_for_card's own "first variant that produces something" precedence - falling
+        # back to the first variant's (empty) parse if none did, so the stored artifact is
+        # deterministic either way.
+        selected_index = 0
+        parsed = parse_collector_line(collector_raw_texts[0]) if collector_raw_texts else parse_collector_line("")
+        for i, raw_text in enumerate(collector_raw_texts):
+            candidate_parse = parse_collector_line(raw_text)
+            if candidate_parse.collector_number is not None:
+                parsed = candidate_parse
+                selected_index = i
+                break
+
+        fields["collector_line_raw_text"] = collector_raw_texts[selected_index] if collector_raw_texts else ""
+        fields["collector_line_set_code"] = parsed.set_code or ""
+        fields["collector_line_collector_number"] = parsed.collector_number or ""
+        if parsed.collector_number is None:
+            skip_reasons["collector_line_ocr"] = "no-text"
+
+        # TSV word boxes: same winning variant the text parse above came from, so the word boxes
+        # and the parsed text always describe the same underlying tesseract read.
+        fields["collector_line_word_boxes"] = (
+            run_tesseract_tsv(collector_variants[selected_index]) if collector_variants else []
+        )
+
+        # artist OCR: reuse collector_line_ocr's own raw texts first (see module docstring),
+        # only cropping+OCR-ing artist_crop_px if none of those already contain an "Illus." match.
+        artist_name: Optional[str] = None
+        artist_raw_text = ""
+        for raw_text in collector_raw_texts:
+            artist_name = extract_artist_name(raw_text)
+            if artist_name is not None:
+                artist_raw_text = raw_text
+                break
+        if artist_name is None:
+            artist_crop = image.crop(tuple(fields["artist_crop_px"]))
+            for variant in preprocess_variants(artist_crop):
+                raw_text = run_tesseract(variant)
+                if not artist_raw_text:
+                    artist_raw_text = raw_text  # keep at least one attempt as a stored artifact
+                artist_name = extract_artist_name(raw_text)
+                if artist_name is not None:
+                    artist_raw_text = raw_text
+                    break
+
+        fields["artist_ocr_raw_text"] = artist_raw_text
+        fields["artist_ocr_name"] = artist_name or ""
+        # whether the "Illus." anchor was found at all, independent of whether the extracted name
+        # would go on to fuzzy-match a real candidate (that's Stage D's job) - same convention as
+        # local_fallback.detect_illus_anchor's own (fired, name) return.
+        fields["illus_anchor_fired"] = artist_name is not None
+        if artist_name is None:
+            skip_reasons["artist_ocr"] = "no-text"
+
+    extractor_versions["collector_line_ocr"] = COLLECTOR_LINE_OCR_EXTRACTOR_VERSION
+    extractor_versions["artist_ocr"] = ARTIST_OCR_EXTRACTOR_VERSION
+    extractor_versions["collector_line_tsv"] = COLLECTOR_LINE_TSV_EXTRACTOR_VERSION
+
     return ExtractionResult(
         card_id=card.pk,
         content_hash=card.content_phash,
@@ -300,4 +403,7 @@ __all__ = [
     "GEOMETRY_BLEED_EXTRACTOR_VERSION",
     "LAYOUT_CLASS_EXTRACTOR_VERSION",
     "CROP_COORDINATES_EXTRACTOR_VERSION",
+    "COLLECTOR_LINE_OCR_EXTRACTOR_VERSION",
+    "ARTIST_OCR_EXTRACTOR_VERSION",
+    "COLLECTOR_LINE_TSV_EXTRACTOR_VERSION",
 ]

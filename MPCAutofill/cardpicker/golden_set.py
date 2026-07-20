@@ -341,6 +341,107 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
             },
         }.items()
     ],
+    # collector_line_ocr (issue #149, OCR-group, recorded 2026-07-19 the same way as the
+    # geometry-group extractors above - a real, no-persistence extract_card_evidence() run over
+    # all 30 golden cards). `value` is {"set_code", "collector_number"} - local_ocr.
+    # parse_collector_line's own discrete, tolerant parse of the raw OCR text (the raw text
+    # itself is NOT pinned, same "brittle/continuous values excluded" rationale geometry_bleed's
+    # own comment gives for omitting width/height/aspect_ratio). No candidate matching happens
+    # here (Stage D's job, see image_evidence.py's module docstring) - most of these are blank
+    # (real tesseract found nothing plausible on this sample), which is an honest outcome, not a
+    # placeholder: only 10/30 produced a parseable collector number on this real run, several of
+    # those a 4-digit "year" collector number (mtg/proxy sets) rather than a classic 3-digit one.
+    "collector_line_ocr": [
+        GoldenExpectation(card_id=cid, value=value)
+        for cid, value in {
+            35: {"set_code": "", "collector_number": "0013"},
+            37: {"set_code": "j25", "collector_number": "0002"},
+            40: {"set_code": "", "collector_number": "3"},
+            37962: {"set_code": "sld", "collector_number": "142"},
+            39520: {"set_code": "", "collector_number": ""},
+            41039: {"set_code": "", "collector_number": ""},
+            102138: {"set_code": "", "collector_number": ""},
+            128981: {"set_code": "", "collector_number": ""},
+            144933: {"set_code": "", "collector_number": ""},
+            145081: {"set_code": "", "collector_number": ""},
+            145532: {"set_code": "", "collector_number": ""},
+            147855: {"set_code": "foe", "collector_number": "0"},
+            150472: {"set_code": "", "collector_number": ""},
+            159175: {"set_code": "", "collector_number": ""},
+            161020: {"set_code": "", "collector_number": ""},
+            175889: {"set_code": "", "collector_number": ""},
+            189166: {"set_code": "", "collector_number": ""},
+            189921: {"set_code": "", "collector_number": ""},
+            190895: {"set_code": "mtg", "collector_number": "2024"},
+            193523: {"set_code": "oey", "collector_number": "0055"},
+            194684: {"set_code": "", "collector_number": ""},
+            199986: {"set_code": "", "collector_number": "4"},
+            200330: {"set_code": "mtg", "collector_number": "2024"},
+            200668: {"set_code": "dmr", "collector_number": "421r"},
+            204427: {"set_code": "mtg", "collector_number": "2024"},
+            207913: {"set_code": "thato", "collector_number": "267"},
+            208337: {"set_code": "ahr", "collector_number": "7"},
+            208569: {"set_code": "proxy", "collector_number": "2025"},
+            214113: {"set_code": "cls", "collector_number": "0228"},
+            217783: {"set_code": "msh", "collector_number": "570"},
+        }.items()
+    ],
+    # artist_ocr (issue #149, OCR-group, recorded the same run as collector_line_ocr above).
+    # `illus_anchor_fired` is False for all 30 golden cards on this real run - genuine, not a
+    # placeholder: the "Illus. <artist>" credit is an OLD-BORDER-ONLY convention (pre-2003, see
+    # local_fallback.py's frame-style section), and this sample - stratified by SOURCE, not by
+    # frame era - happened to draw zero old-border cards (consistent with issue #148's own
+    # layout_class results: 14 black/13 borderless/1 white/1 ambiguous, no frame-era signal
+    # pointing old-border either). Kept as-is per the same "don't discard a real all-negative
+    # outcome" rationale layout_class's own comment gives for card 207913's ambiguous read - a
+    # golden set that only ever pins positive matches would never catch a regression in the
+    # "correctly found nothing" path.
+    "artist_ocr": [
+        GoldenExpectation(card_id=cid, value={"name": "", "illus_anchor_fired": False}) for cid in GOLDEN_CARD_IDS
+    ],
+    # collector_line_tsv (issue #149, OCR-group, recorded the same run as collector_line_ocr
+    # above). `value` is a bool - whether tesseract's TSV output found ANY non-blank word in the
+    # collector-line crop, not the exact word-box list itself (too brittle to pin exactly across
+    # a tesseract version bump - same "exclude the continuous/brittle, pin the discrete" call
+    # geometry_bleed's own comment makes for width/height/aspect_ratio). 25/30 found at least one
+    # word (including several cards where collector_line_ocr itself found no PARSEABLE collector
+    # number - tesseract read something, it just didn't fit the collector-number regex, a
+    # genuinely different, weaker outcome than a fully blank crop).
+    "collector_line_tsv": [
+        GoldenExpectation(card_id=cid, value=value)
+        for cid, value in {
+            35: True,
+            37: True,
+            40: True,
+            37962: True,
+            39520: False,
+            41039: True,
+            102138: False,
+            128981: True,
+            144933: True,
+            145081: True,
+            145532: False,
+            147855: True,
+            150472: False,
+            159175: True,
+            161020: True,
+            175889: True,
+            189166: False,
+            189921: True,
+            190895: True,
+            193523: True,
+            194684: True,
+            199986: True,
+            200330: True,
+            200668: True,
+            204427: True,
+            207913: True,
+            208337: True,
+            208569: True,
+            214113: True,
+            217783: True,
+        }.items()
+    ],
 }
 
 
