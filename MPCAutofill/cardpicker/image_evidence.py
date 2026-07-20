@@ -48,12 +48,15 @@ exactly as that function's own docstring specifies) then scaled by `width`/`heig
 COORDINATES only - crop PIXELS are never computed or stored here, matching the FINAL POSTURE
 directive (CLAUDE.md's "Governing premise").
 
-`back_face_flag`, also named in issue #148's title, is deliberately NOT built in this PR: no
-signal for it exists in `Card`/`CanonicalCard` metadata (no DFC-face field anywhere - the only
-`face` field in the whole schema is `ProjectMember.face`, an unrelated per-slot print-request
-concept) or in `local_fallback.py`'s exported helpers, and no other doc/issue in this repo
-defines what visual signal it should measure. Flagged as an OPEN ITEM on this PR rather than
-shipped as an invented heuristic with fabricated golden-set expectations.
+`back_face_flag`, also named in issue #148's title, was deliberately NOT built in that PR: no
+signal for it existed in `Card`/`CanonicalCard` metadata or `local_fallback.py`'s exported
+helpers at the time, and no doc/issue defined what visual signal it should measure. The owner
+later settled it (issue #199) as NAME-based, not image-based - determined from Scryfall's
+`card_faces` data, not this module's fetched image - so it was never added here as an
+`ImageEvidence` field/extractor. See `printing_metadata_import.get_back_face_names`/
+`is_back_face` for the actual implementation, and
+`docs/features/catalog-completion-plan.md`'s "back-face flag" paragraph for the full rationale
+(including why no `ImageEvidence`/`CanonicalCard` field was added).
 
 collector_line_ocr / artist_ocr / collector_line_tsv (issue #149, the OCR-group): consume
 `collector_line_crop_px`/`artist_crop_px` - the pixel boxes issue #148's crop_coordinates

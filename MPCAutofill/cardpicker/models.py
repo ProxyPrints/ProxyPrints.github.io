@@ -1354,9 +1354,13 @@ class ImageEvidence(models.Model):
     the three `*_crop_px` fields. See `image_evidence.py`'s module docstring for why
     `layout_class` reuses `local_fallback.classify_border_color` rather than
     `classify_frame_style` (the latter needs OCR outputs not available until issue #149's PR).
-    `back_face_flag`, also named in issue #148's title, is deliberately NOT built in this PR -
+    `back_face_flag`, also named in issue #148's title, was deliberately NOT built in that PR -
     no signal for it was found anywhere in `Card`/`CanonicalCard` metadata or in
-    `local_fallback.py`'s exported helpers; see this PR's own OPEN ITEMS.
+    `local_fallback.py`'s exported helpers. The owner later settled it (issue #199) as
+    NAME-based, not image-based, so it never landed as a field here: see
+    `cardpicker.printing_metadata_import.get_back_face_names`/`is_back_face` for the actual
+    implementation and `docs/features/catalog-completion-plan.md`'s "back-face flag" paragraph
+    for why no `ImageEvidence`/`CanonicalCard` field was added.
 
     OCR-group (public issue #149, third manifest extractor group): `collector_line_ocr` (raw
     text + `local_ocr.parse_collector_line`'s tolerant set-code/collector-number parse),

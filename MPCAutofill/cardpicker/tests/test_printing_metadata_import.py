@@ -6,7 +6,12 @@ from typing import Any
 import pytest
 
 from cardpicker.models import CanonicalPrintingMetadata
-from cardpicker.printing_metadata_import import import_scryfall_printing_metadata
+from cardpicker.printing_metadata_import import (
+    _load_back_face_names,
+    get_back_face_names,
+    import_scryfall_printing_metadata,
+    is_back_face,
+)
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
@@ -170,3 +175,110 @@ class TestImportScryfallPrintingMetadata:
 
         assert stats["deleted"] == 1
         assert CanonicalPrintingMetadata.objects.count() == 0
+
+
+class TestGetBackFaceNames:
+    """
+    Public issue #199: back-face determined from a card's NAME via the on-disk Scryfall bulk
+    data (no network fetch, no live DB) - see get_back_face_names' own docstring for the full
+    design. No `db` fixture needed anywhere here - this is a pure file-read/lookup, not a DB
+    write.
+    """
+
+    def test_dfc_back_face_is_flagged_true(self, tmp_path):
+        record = _record(
+            layout="transform",
+            card_faces=[{"name": "Delver of Secrets"}, {"name": "Insectile Aberration"}],
+        )
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        assert is_back_face("Insectile Aberration", default_cards_path=path) is True
+
+    def test_dfc_front_face_is_flagged_false(self, tmp_path):
+        record = _record(
+            layout="transform",
+            card_faces=[{"name": "Delver of Secrets"}, {"name": "Insectile Aberration"}],
+        )
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        assert is_back_face("Delver of Secrets", default_cards_path=path) is False
+
+    def test_normal_single_faced_card_is_flagged_false(self, tmp_path):
+        record = _record(layout="normal")
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        assert is_back_face("Lightning Bolt", default_cards_path=path) is False
+
+    def test_unknown_name_is_flagged_false(self, tmp_path):
+        record = _record(
+            layout="modal_dfc",
+            card_faces=[{"name": "Front Face"}, {"name": "Back Face"}],
+        )
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        assert is_back_face("Some Other Card", default_cards_path=path) is False
+
+    def test_adventure_second_mode_is_not_flagged_as_back_face(self, tmp_path):
+        # Adventure cards nest two named MODES under card_faces, both printed on the same
+        # (single) physical face - not a real front/back pair, so this must stay False even
+        # though the shape superficially looks like a DFC row.
+        record = _record(
+            layout="adventure",
+            card_faces=[{"name": "Bonecrusher Giant"}, {"name": "Stomp"}],
+        )
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        assert is_back_face("Stomp", default_cards_path=path) is False
+
+    def test_split_card_second_half_is_not_flagged_as_back_face(self, tmp_path):
+        record = _record(
+            layout="split",
+            card_faces=[{"name": "Fire"}, {"name": "Ice"}],
+        )
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        assert is_back_face("Ice", default_cards_path=path) is False
+
+    def test_art_series_is_not_flagged_as_back_face(self, tmp_path):
+        record = _record(
+            layout="art_series",
+            card_faces=[{"name": "Some Card"}, {"name": "Some Card Back"}],
+        )
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        assert is_back_face("Some Card Back", default_cards_path=path) is False
+
+    def test_dfc_row_missing_second_face_is_ignored_without_raising(self, tmp_path):
+        record = _record(layout="transform", card_faces=[{"name": "Only Face"}])
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        assert get_back_face_names(default_cards_path=path) == frozenset()
+
+    def test_missing_bulk_file_returns_empty_set_without_raising(self, tmp_path):
+        missing_path = tmp_path / "does_not_exist.json"
+
+        assert get_back_face_names(default_cards_path=missing_path) == frozenset()
+
+    def test_multiple_dfc_rows_all_captured(self, tmp_path):
+        records = [
+            _record(layout="transform", card_faces=[{"name": "Delver of Secrets"}, {"name": "Insectile Aberration"}]),
+            _record(layout="modal_dfc", card_faces=[{"name": "Front Two"}, {"name": "Back Two"}]),
+        ]
+        path = _write_bulk_data_file(tmp_path, records)
+
+        assert get_back_face_names(default_cards_path=path) == frozenset({"Insectile Aberration", "Back Two"})
+
+    def test_result_is_cached_per_path_not_reparsed_every_call(self, tmp_path, monkeypatch):
+        record = _record(
+            layout="transform",
+            card_faces=[{"name": "Delver of Secrets"}, {"name": "Insectile Aberration"}],
+        )
+        path = _write_bulk_data_file(tmp_path, [record])
+        _load_back_face_names.cache_clear()
+
+        get_back_face_names(default_cards_path=path)
+        get_back_face_names(default_cards_path=path)
+
+        info = _load_back_face_names.cache_info()
+        assert info.hits == 1
+        assert info.misses == 1

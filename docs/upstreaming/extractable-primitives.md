@@ -111,6 +111,7 @@ coupling to the vote system is.
 | Generic backend utilities                  | `MPCAutofill/cardpicker/utils.py` (`get_json_endpoint_rate_limited`, `twos_complement`, `section_timer`, `time_to_hours_minutes_seconds`, `log_hours_minutes_seconds_elapsed`) | Rate-limited JSON GET wrapper, signed-int bit-twiddling, timing decorator/formatter                                                  | upstream, proxies-at-home                                             | CLEAN                                         | —            |
 | Batch-flush checkpoint pattern             | `MPCAutofill/cardpicker/local_phash.py` (`run_content_phash_backfill`), `deductive_backfill.py` (`run_backfill`), `local_identify_printing_tags.py` (`run_pilot`)              | Sliding-window worker pool + periodic bulk-flush + NULL-filter-as-checkpoint for resumable backfill jobs                             | upstream, proxies-at-home (needs generalizing first — see note)       | entangled — no clean instance exists yet      | —            |
 | Elasticsearch connection helpers           | `MPCAutofill/cardpicker/search/search_functions.py` (`get_elasticsearch_connection`, `ping_elasticsearch`, `elastic_connection`, `SearchExceptions`)                           | Thread-local ES client + a decorator translating raw ES connection errors into app exceptions                                        | upstream, proxies-at-home                                             | entangled-with-consensus (colocation)         | —            |
+| Back-face name lookup (issue #199)         | `MPCAutofill/cardpicker/printing_metadata_import.py` (`get_back_face_names`, `is_back_face`, `DOUBLE_FACED_LAYOUTS`)                                                           | Deterministic name → "is this a known DFC back face" lookup from Scryfall's on-disk `card_faces` bulk data, no network fetch         | upstream, proxies-at-home                                             | entangled-with-CanonicalPrinting (colocation) | —            |
 
 ## Docs tooling & federation
 
@@ -192,6 +193,16 @@ federation _protocol_ (signing scheme, `VoteSource.FEDERATED` gate,
 publisher-only posture) in `docs/federation-v1.md`, which genuinely is
 fork-only by definition — the hash tool is the one piece of the federation
 program that cleanly separates from that layer.
+
+**Back-face name lookup** — `get_back_face_names`/`is_back_face`/
+`DOUBLE_FACED_LAYOUTS` touch only `Path`/pydantic parsing of the raw bulk
+JSON, no fork-only symbol at all in their own bodies — but they live in
+`printing_metadata_import.py`, already listed in `docs_lint.py`'s
+`FORK_ONLY_PY_MODULES` (the file's other top-level code imports
+`CanonicalCard`/`CanonicalPrintingMetadata`), same "clean logic,
+colocation-entangled file" shape as the bleed/border and rate-limiter rows
+above. Lifting means copying the three names out, not importing the
+module.
 
 ## Not audited this pass
 
