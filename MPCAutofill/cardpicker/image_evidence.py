@@ -78,6 +78,33 @@ call `detect_illus_anchor` itself, since that function recomputes its own crop b
 own inline reuse-then-crop logic mirrors its structure without violating "consume the
 crop-coordinate fields, don't recompute them".
 
+symbol_region (issue #160, "Part 4b: symbol harness" - the SET half of the collector+set join
+key Stage D uses for its Scryfall lookup, per docs/features/catalog-completion-plan.md's
+Governing posture note that this re-plans as in-pass hash math, not a stored strip): turns
+`local_fallback.SYMBOL_STRIP_BOX` (the same right-side vertical strip that module's own
+`find_symbol_matches` sub-check scans) into a `symbol_crop_px` pixel box exactly the way
+crop_coordinates derives its own three boxes (`_crop_box_to_pixels`, remapped via
+`normalize_crop_box` for this row's `bleed_class` first), then computes a perceptual hash
+(`imagehash.phash`) of that cropped region ONLY - the cropped pixels are discarded the moment
+`_compute_region_phash` returns, never persisted (FINAL POSTURE item 2: "store the math, not the
+strip"). Deliberately NOT `find_symbol_matches` itself: that sub-check compares the strip against
+a rendered keyrune glyph for each of a card's real `CandidatePrinting`s, which this per-card
+function never receives - candidate matching is Stage D calculator territory, same reasoning
+issue #149's module docstring gives for OCR candidate matching. `symbol_phash` is therefore a raw
+content signal for Stage D to consume, not a verdict about which set this is. Stored as a signed
+64-bit int via `twos_complement` (`cardpicker.utils`, not protected core) - the exact
+representation `local_phash.py`'s own private `_hash_to_int` uses for `Card.content_phash`/
+`CanonicalCard.image_hash`, reproduced here rather than imported since that helper isn't exported
+(kept internal to that PROTECTED CORE module), so the two hash columns stay bit-for-bit
+comparable without reaching into local_phash.py's private internals. The only named skip is a
+degenerate crop box (zero/negative width or height) - the same "sub-floor" guard geometry_bleed's
+own `test_zero_height_image_guards_aspect_ratio_division` exercises for its own division, applied
+here before hashing rather than letting `PIL.Image.crop`/`imagehash.phash` raise on an empty
+region. Real fetched images essentially never hit this (mirrors crop_coordinates's own "no
+ambiguous outcome here, only fetch_failed" - see that section's comment) - it exists as a genuine
+mechanical guard against a real crash risk, not a tuned classification threshold, and is not
+expected to fire against the golden set.
+
 RECONCILIATION LEDGER (owner directive 2026-07-19, task #155): `build_reconciliation_report`
 answers "attempted = voted + each named skip-reason + dropped" for one extractor over one set
 of cards, by querying ImageEvidence.extractor_versions + CardScanLog directly - see
@@ -88,10 +115,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import imagehash
+
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
+    SYMBOL_STRIP_BOX,
     classify_bleed_edge,
     classify_border_color,
     extract_artist_name,
@@ -106,6 +136,7 @@ from cardpicker.local_ocr import (
 )
 from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import Card, CardScanLog, ImageEvidence
+from cardpicker.utils import twos_complement
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +147,12 @@ CROP_COORDINATES_EXTRACTOR_VERSION = "crop-coordinates-v1"
 COLLECTOR_LINE_OCR_EXTRACTOR_VERSION = "collector-line-ocr-v1"
 ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v1"
 COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v1"
+SYMBOL_REGION_EXTRACTOR_VERSION = "symbol-region-v1"
+
+# Bit width for the perceptual-hash int representation - matches local_phash.py's own private
+# _hash_to_int/_HASH_BITS exactly (imagehash's default hash_size=8 -> a 64-bit hash), reproduced
+# here rather than imported since that helper isn't exported from that PROTECTED CORE module.
+_SYMBOL_HASH_BITS = 64
 
 
 @dataclass(frozen=True)
@@ -145,6 +182,16 @@ def _crop_box_to_pixels(
     scales it into this image's own pixel space - crop COORDINATES only, never crop pixels."""
     left, top, right, bottom = normalize_crop_box(box, bleed_class)
     return [round(left * width), round(top * height), round(right * width), round(bottom * height)]
+
+
+def _compute_region_phash(image: Any, box: list[int]) -> int:
+    """Crops `box` from `image`, converts to grayscale, and returns `imagehash.phash` as a signed
+    64-bit int via `twos_complement` - see module docstring's `symbol_region` section for why this
+    reproduces (rather than imports) local_phash.py's own private hash-to-int convention. The
+    cropped region never leaves this function's stack frame - only the int it returns persists
+    (FINAL POSTURE item 2: "store the math, not the strip")."""
+    region = image.crop(tuple(box)).convert("L")
+    return twos_complement(str(imagehash.phash(region)), _SYMBOL_HASH_BITS)
 
 
 def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) -> ExtractionResult:
@@ -295,6 +342,28 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
     extractor_versions["artist_ocr"] = ARTIST_OCR_EXTRACTOR_VERSION
     extractor_versions["collector_line_tsv"] = COLLECTOR_LINE_TSV_EXTRACTOR_VERSION
 
+    # symbol_region (issue #160, "Part 4b: symbol harness"): SYMBOL_STRIP_BOX turned into pixel
+    # coordinates the same way crop_coordinates derives its own three boxes, then a raw phash of
+    # that region only - see module docstring for why this is a raw signal (Stage D's job to
+    # compare against a candidate's rendered glyph), not a verdict, and why the only named skip is
+    # a degenerate crop box rather than a tuned classification threshold.
+    if image is None:
+        skip_reasons["symbol_region"] = "fetch_failed"
+    else:
+        symbol_crop_px = _crop_box_to_pixels(SYMBOL_STRIP_BOX, bleed_class, width, height)
+        left, top, right, bottom = symbol_crop_px
+        if right <= left or bottom <= top:
+            # A degenerate (zero/negative-area) crop box - the same "sub-floor" input category
+            # geometry_bleed's own zero-height guard handles for its aspect-ratio division (see
+            # module docstring) - guarded here before PIL.Image.crop/imagehash.phash would raise
+            # on an empty region. Real fetched images essentially never hit this; not expected to
+            # fire against the golden set (see module docstring).
+            skip_reasons["symbol_region"] = "ambiguous"
+        else:
+            fields["symbol_crop_px"] = symbol_crop_px
+            fields["symbol_phash"] = _compute_region_phash(image, symbol_crop_px)
+    extractor_versions["symbol_region"] = SYMBOL_REGION_EXTRACTOR_VERSION
+
     return ExtractionResult(
         card_id=card.pk,
         content_hash=card.content_phash,
@@ -406,4 +475,5 @@ __all__ = [
     "COLLECTOR_LINE_OCR_EXTRACTOR_VERSION",
     "ARTIST_OCR_EXTRACTOR_VERSION",
     "COLLECTOR_LINE_TSV_EXTRACTOR_VERSION",
+    "SYMBOL_REGION_EXTRACTOR_VERSION",
 ]
