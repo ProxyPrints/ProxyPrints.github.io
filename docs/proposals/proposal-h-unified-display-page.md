@@ -517,40 +517,37 @@ deliberate, none silent):**
 (`schemas/schemas/Card.json`) already carries, vs. what group 1/2's
 grouping and moment (c) actually need:**
 
-| Need                                                                                                                             | Already available?         | Detail                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Resolved attribute tags (Full Art, Borderless, Old/Modern Border, etc.) for group 2's sub-grouping and moment (b)'s filter chips | **Yes, no change needed.** | `Card.tags: string[]` already contains ONLY consensus-resolved tags — `tag_consensus.resolve_and_persist_tag_votes` explicitly merges a resolved APPLY into `card.tags` and explicitly does NOT write contested or pending-approval tags there. `attributeChips.ts`'s `ALL_ATTRIBUTE_CHIPS` tag names already match this taxonomy 1:1 (`cardpicker.attribute_tags.ATTRIBUTE_TAGS`) — the frontend can group/filter on `tags.includes(chip.tagName)` today, client-side, with zero backend change.                                                                                                        |
-| Machine-suggested (not yet community-resolved) printing, for group 1's "then machine-suggested" ordering                         | **No — real gap.**         | `Card.canonicalCard` is `null` until `printingTagStatus === "resolved"` (via `inferred_canonical_card`) or a confirmed indexing match exists (`canonical_card`). There is no field carrying "our best unresolved guess" — `get_ranked_printing_candidates()`'s top hit is only ever surfaced on-demand, per-slot, via the separate `2/printingCandidates/` endpoint (what `DeckbuilderConfirmAffordance` fetches when opened), never attached in bulk to search results. Grouping an entire result set by "suggested printing" needs this precomputed per-`Card`, not fetched N times over a result set. |
-| Suggested (unresolved/contested) attribute tags, for moment (c)'s "is the matching tag resolved or suggested" check              | **No — real gap.**         | The DB model already has `tag_vote_statuses: {tag.name: "resolved_apply" \| "resolved_reject" \| "contested" \| "unresolved" \| "pending_approval"}`, but `Card.serialise()` never puts it on `SerialisedCard`/`Card.json` — `tags` alone can't distinguish "no votes yet" from "actively suggested but unresolved," and moment (c) specifically needs that distinction to decide whether to show the inline confirm chip at all.                                                                                                                                                                        |
+| Need                                                                                                                             | Already available?                       | Detail                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Resolved attribute tags (Full Art, Borderless, Old/Modern Border, etc.) for group 2's sub-grouping and moment (b)'s filter chips | **Yes, no change needed.**               | `Card.tags: string[]` already contains ONLY consensus-resolved tags — `tag_consensus.resolve_and_persist_tag_votes` explicitly merges a resolved APPLY into `card.tags` and explicitly does NOT write contested or pending-approval tags there. `attributeChips.ts`'s `ALL_ATTRIBUTE_CHIPS` tag names already match this taxonomy 1:1 (`cardpicker.attribute_tags.ATTRIBUTE_TAGS`) — the frontend can group/filter on `tags.includes(chip.tagName)` today, client-side, with zero backend change.                                                                                                                                                                                                                                                                     |
+| Machine-suggested (not yet community-resolved) printing, for group 1's "then machine-suggested" ordering                         | **Yes — shipped, PR #195 (issue #184).** | `Card.serialise(include_suggested_printing=True)` now populates `SerialisedCard.suggestedCanonicalCard` from the printing named by a machine-cast (`VoteSource.DEDUCTION`/`OCR`) `CardPrintingTag` vote — mirroring `question_feed.py`'s `_confirm_suggestion_item` `ai_vote` lookup exactly, not `get_ranked_printing_candidates()` (that ranking search was judged too expensive to run per-card across a bulk result set; exposing an already-cast vote is free by comparison). Only populated while `printingTagStatus != RESOLVED`. Attached with zero extra queries per card via `suggested_printing_votes_prefetch()` on the two bulk endpoints (`2/cards/`, `2/explore/`). See [[../features/printing-tags.md]]'s "Card payload" entry for the full contract. |
+| Suggested (unresolved/contested) attribute tags, for moment (c)'s "is the matching tag resolved or suggested" check              | **Yes — shipped, PR #195 (issue #184).** | `SerialisedCard.tagVoteStatuses: Record<string, "resolved" \| "suggested">` is now always populated (zero extra query cost — it's the already-loaded `tag_vote_statuses` JSONField), collapsing the 5-way DB status: `resolved_apply`/`resolved_reject` → `"resolved"`, `contested`/`unresolved` → `"suggested"`. `pending_approval` tags are excluded from the object entirely, same reason they're excluded from `Card.tags` today. See [[../features/printing-tags.md]]'s "Card payload" entry.                                                                                                                                                                                                                                                                    |
 
-**Serializer-field ask, for the server session (spec only — not built
-here):**
+**Serializer-field ask — SHIPPED, PR #195 (issue #184), merged 2026-07-19,
+ahead of this section's own build (issue #167):**
 
-1. A lightweight suggested-printing summary on `Card`/`SerialisedCard`
-   — e.g. `suggestedCanonicalCard: CanonicalCard | null`, populated
-   from `get_ranked_printing_candidates()`'s top hit, **only** when
-   `printingTagStatus != RESOLVED` (so it's never redundant with the
-   already-resolved `canonicalCard`). Whether this needs its own
-   confidence/score field alongside it, and whether computing it inline
-   in `serialise()` is cheap enough to run per-card across a search
-   result set or needs precomputing/caching at ingest or vote-resolve
-   time, is a call for whoever picks this up server-side — flagging the
-   need, not prescribing the implementation.
-2. `tag_vote_statuses` (or a filtered subset of it) exposed on
-   `Card`/`SerialisedCard` — e.g. `tagVoteStatuses: Record<string, "resolved" | "suggested">` — collapsing the DB's five-way status
-   down to the two-way distinction the frontend actually needs, and
-   **excluding `pending_approval` tags entirely** (those are gated
-   behind the sensitive-tag co-sign queue —
-   `docs/features/moderation.md` — and must not leak to ordinary users
-   ahead of that review, the same reason that status is excluded from
-   `card.tags` today).
+1. `suggestedCanonicalCard: CanonicalCard | null` on `Card`/`SerialisedCard`,
+   opt-in via `Card.serialise(include_suggested_printing: bool = False)`.
+   The confidence/score question this section originally left open was
+   resolved by not adding one — the field exposes an already-cast machine
+   vote rather than a freshly computed ranking, so there's no separate
+   score to carry. The cost question was resolved toward precomputing:
+   inline `get_ranked_printing_candidates()` per card was judged too
+   expensive across a bulk result set, so the field reads an existing vote
+   instead (prefetched, one extra query per page, not per card).
+2. `tagVoteStatuses: Record<string, "resolved" | "suggested">` on
+   `Card`/`SerialisedCard`, always populated (no opt-in flag needed — it's
+   a zero-cost read of an already-loaded field). `pending_approval` tags
+   are excluded entirely, per the constraint above.
 
-Both changes are additive fields on an existing serializer, not a
-schema migration or new endpoint — low-risk, but real backend work,
-hence the explicit hand-off rather than a client-side workaround (e.g.
-fetching `printingCandidates` per-card across a whole result set, which
-would multiply request volume against an endpoint designed for a
-single focused slot, not bulk use).
+Both landed as additive fields on the existing serializer, no schema
+migration or new endpoint, exactly as scoped — not a client-side
+workaround (e.g. fetching `printingCandidates` per-card across a whole
+result set, which would multiply request volume against an endpoint
+designed for a single focused slot, not bulk use). Full contract:
+[[../features/printing-tags.md]]'s "Card payload" entry;
+`MPCAutofill/cardpicker/tests/test_card_serialise.py` for the test
+coverage.
 
 **Component breakdown (build, once un-HOLD'd):**
 
