@@ -6,6 +6,7 @@ from django.utils import timezone
 from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_ANONYMOUS_ID,
     run_join_key_calculator,
+    run_slow_path_calculator,
 )
 from cardpicker.local_identify_printing_tags import (
     generate_run_id,
@@ -19,10 +20,13 @@ class Command(BaseCommand):
     help = (
         "Stage D (docs/features/catalog-completion-plan.md, public issue #152): the join-key "
         "calculator - the fast-path deduction step over Stage C's ImageEvidence rows (collector-"
-        "line OCR + set-symbol phash tie-break) plus the on-disk Scryfall bulk data. Casts "
-        "CardPrintingTag votes via the existing, unmodified vote-consensus machinery; never "
-        "resolves a card by itself. Defaults to dry-run and requires an explicit --write to "
-        "actually cast votes, matching local_residual_classify's own convention."
+        "line OCR + set-symbol phash tie-break, plus a copyright-year era cross-check) - plus the "
+        "slow-path routing calculator (owner decision, issue #220) that sends every card the "
+        "join-key calculator couldn't confidently resolve to the human review queue, carrying its "
+        "raw extracted signals. Casts CardPrintingTag votes via the existing, unmodified "
+        "vote-consensus machinery; never resolves a card by itself - the slow-path half casts no "
+        "votes at all. Defaults to dry-run and requires an explicit --write to actually write, "
+        "matching local_residual_classify's own convention."
     )
 
     def add_arguments(self, parser: Any) -> None:
@@ -93,6 +97,20 @@ class Command(BaseCommand):
                         f"{violations[:50]}" + (" (truncated)" if len(violations) > 50 else "")
                     )
                 print(f"Gate check passed: 0/{len(touched_card_ids)} touched cards resolved machine-only.")
+
+            # Slow-path routing (owner decision, issue #220): runs AFTER the join-key pass above
+            # in the SAME invocation/run_id - it only ever consumes that pass's own no-hit output
+            # (see run_slow_path_calculator's own docstring), so sequencing here matters even
+            # though both ship in this one command/PR. Casts no CardPrintingTag at all (it has no
+            # printing to vote for), so there is no analogous gate check to run for it.
+            slow_path_result = run_slow_path_calculator(run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"])
+            print(
+                f"[slow-path] considered={slow_path_result.cards_considered} "
+                f"routed={'written=' + str(slow_path_result.routed_written) if not dry_run else 'would_cast=' + str(slow_path_result.routed_would_cast)} "
+                f"reason_counts={dict(slow_path_result.reason_counts)}"
+            )
+            for entry in slow_path_result.audit[:10]:
+                print(f"  sample: {entry}")
 
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()
