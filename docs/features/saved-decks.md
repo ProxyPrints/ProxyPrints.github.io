@@ -7,7 +7,9 @@ Spec: [`proposals/proposal-g-user-accounts-saved-decks.md`](../proposals/proposa
 5 sequenced PRs, all merged: schema+backend (#85), sign-in relocation (#86),
 the opaque-blob API (#94, a recreation after #88's stacked-PR base-deletion
 auto-close — see [`../lessons.md`](../lessons.md)), the client-side crypto
-module (#89), and the frontend UI wiring (#93).
+module (#89), and the frontend UI wiring (#93). "PR-6, post-v1: deck
+portability" (export/import + the standalone decrypt tool) shipped as a
+later, separate frontend-only change — see its own section below.
 
 ## Where it's wired in
 
@@ -102,6 +104,14 @@ cannot decrypt, by design, not by policy.
   slot's identifier is device-specific and meaningless elsewhere, so only a
   flag survives on save; the card grid's existing empty-slot/re-search UI
   is the honest "needs re-picking" placeholder on load, not a bespoke tile.
+  Currently at `version: 2` (PR-6 "Revision tracking" — see below); a v1
+  payload is upgraded forward on load (`parseDeckPayload`), never rejected.
+  `buildDeckPayload`'s own return (`DeckPayloadContent`) deliberately omits
+  `version`/`revision`/`modifiedAt` so it stays byte-identical across calls
+  with unchanged input — those bookkeeping fields are stamped on only at
+  the moment of encryption (`encryptDeckPayloadForSave`), otherwise the
+  dirty-check baseline (`selectors.ts`) would see a fresh `modifiedAt` on
+  every render and permanently misreport "dirty."
 - `PassphraseSetupModal.tsx` / `UnlockModal.tsx` / `RecoveryKeyDisplay.tsx`:
   first-save passphrase creation (with the verbatim-spirit unrecoverability
   warning), once-per-session unlock, and the show-once recovery-key
@@ -129,14 +139,67 @@ cannot decrypt, by design, not by policy.
   shared `Toasts` system has no action-button support, so this doesn't
   embed a "save now" action in the toast itself.
 
+## Deck portability (PR-6)
+
+Formalizes what the zero-knowledge, server-unbound design already implies:
+since no key material is ever held by the server, a user's saved decks are
+portable by construction. Frontend-only — no backend schema or endpoint
+changes, since export/import are fully served by the existing
+`getSavedDecks`/`getCryptoProfile`/`saveDeck`/`saveCryptoProfile` endpoints.
+
+- `deckExportImport.ts`: `buildExportBundle`/`downloadExportBundle` (export;
+  requires no unlock — it's the same opaque bytes the server already holds,
+  reshaped into one `.json` file) and `unlockBundleMasterKeyWithPassphrase`/
+  `unlockBundleMasterKeyWithRecoveryKey`/`decryptBundleDecks` (import;
+  decrypts using the **bundle's own** crypto profile, not necessarily the
+  live session's — a bundle may come from a different account or a
+  different, compatible instance entirely). `EXPORT_FORMAT_VERSION` (starts
+  at 1) is this bundle's own public wire-format version — distinct from
+  `deckPayload.ts`'s private, per-deck `version` field, which lives inside
+  the ciphertext and is never visible in the outer envelope.
+- `ImportDeckModal.tsx`: file picker + passphrase-or-recovery-key prompt for
+  the bundle, then re-encrypts every decrypted deck under the **current**
+  session's own master key and calls `saveDeck` with `key: null` for each —
+  always import-as-new (never overwrites an existing deck by matching key
+  or name; there's no server-visible name to match against anyway once
+  titles are encrypted). Uses `encryptFinalizedDeckPayload` (not
+  `encryptDeckPayloadForSave`) specifically so each imported deck's own
+  `revision`/`modifiedAt` survive verbatim — importing is a restore, not a
+  new save. Requires the current session to already be unlocked (an
+  honest, stated scope limit — importing into a brand-new account with no
+  crypto profile yet isn't handled by this modal).
+- `MyDecksPage.tsx`: "Export my decks" (enabled whenever any deck exists,
+  even while locked) and "Import decks" (enabled only once unlocked, since
+  importing needs somewhere to persist the decrypted decks to) sit above
+  the deck list.
+- **Revision tracking**: `deckPayload.ts`'s `DeckPayloadV2` adds `revision`
+  (an integer, incremented on every save of the SAME server-side row) and
+  `modifiedAt` (an ISO 8601 timestamp), both PRIVATE — inside the encrypted
+  payload, never server-visible. A brand-new row (a fresh deck, "Save as
+  new snapshot," or an imported deck) always starts its own chain at
+  `revision: 1`; only an update to an already-saved row continues it
+  (tracked client-side via `savedDeckSessionSlice`'s `lastSavedRevision`).
+  Bumping to `version: 2` for this addition establishes the "PR-6/PR-7
+  shared versioning rule" the spec describes — PR-7's art-provenance
+  addition (not built) is expected to become `version: 3` of this same
+  counter, via the same upgrade-dispatch pattern `parseDeckPayload` already
+  uses for v1 → v2.
+- **Standalone decrypt tool** (`decrypt-saved-deck-export/` at the repo
+  root, mirroring `federation-hash-tool/`'s precedent): a zero-npm-dependency
+  Node.js script (`decrypt.mjs`) using only `node:crypto`'s built-in
+  WebCrypto implementation — the exact same primitives the browser used to
+  encrypt. This is the trust anchor for "if this site vanishes tomorrow,
+  your decks are still yours": it runs without this site, this codebase, or
+  any server existing at all. Declared MIT-licensed (a deviation from this
+  repository's own GPL-3.0, following `federation-hash-tool/`'s existing
+  precedent for a standalone tool meant to be freely reusable by forks or
+  independent reimplementations) — see that directory's own readme.md for
+  the full public wire-format writeup and usage.
+
 ## Not yet built (design-only addenda in the spec doc)
 
 - **PR-5, per-deck share links**: key-in-URL-fragment sharing, so a share
   link's server-side request never carries key material. Nothing built.
-- **PR-6, deck portability**: export/import of the complete encrypted
-  bundle (no unlock required to export), a versioned public format, and a
-  standalone decrypt tool as the trust anchor for "if this site vanishes
-  tomorrow, your decks are still yours." Nothing built.
 - **PR-7, art provenance**: per-slot provenance (`driveId`, `sourceName`,
   `sourceType`, optional `contentPhash`, `indexedBy`) in a future
   `deckPayload` version, so an un-indexed slot renders a direct-from-drive

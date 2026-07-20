@@ -16,16 +16,23 @@ import { useAppDispatch, useAppSelector } from "@/common/types";
 import { RightPaddedIcon } from "@/components/icon";
 import { useCryptoSession } from "@/features/savedDecks/cryptoSession";
 import {
+  buildExportBundle,
+  downloadExportBundle,
+} from "@/features/savedDecks/deckExportImport";
+import {
+  deckContentForComparison,
   DecryptedSavedDeck,
   decryptSavedDeckSummary,
   projectFromDeckPayload,
   serializeDeckPayload,
 } from "@/features/savedDecks/deckPayload";
+import { ImportDeckModal } from "@/features/savedDecks/ImportDeckModal";
 import { LoadSafetyModal } from "@/features/savedDecks/LoadSafetyModal";
 import { selectIsCurrentProjectDirty } from "@/features/savedDecks/selectors";
 import { UnlockModal } from "@/features/savedDecks/UnlockModal";
 import {
   useDeleteDeckMutation,
+  useGetCryptoProfileQuery,
   useGetSavedDecksQuery,
   useGetWhoamiQuery,
   useResetSavedDecksMutation,
@@ -81,6 +88,11 @@ export function MyDecksPage() {
   const shouldFetchDecks =
     session.status === "locked" || session.status === "unlocked";
   const savedDecksQuery = useGetSavedDecksQuery({ skip: !shouldFetchDecks });
+  // Export requires no unlock (docs/proposals/.../PR-6's own explicit requirement) - fetched
+  // independently of the crypto session's unlocked state, same gate as savedDecksQuery above.
+  const cryptoProfileQuery = useGetCryptoProfileQuery({
+    skip: !shouldFetchDecks,
+  });
   const [deleteDeck] = useDeleteDeckMutation();
   const [resetSavedDecks] = useResetSavedDecksMutation();
 
@@ -94,6 +106,9 @@ export function MyDecksPage() {
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [pendingLoadDeck, setPendingLoadDeck] =
     useState<DecryptedSavedDeck | null>(null);
+  const [showImport, setShowImport] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (session.status === "locked") {
@@ -158,10 +173,32 @@ export function MyDecksPage() {
       setCurrentSavedDeck({
         key: deck.key,
         name,
-        serialized: serializeDeckPayload(deck.payload),
+        // Content-only (deckPayload.ts's `deckContentForComparison`) - matches the shape
+        // `buildDeckPayload` produces, since the dirty-check compares the two directly. The
+        // full payload's `revision`/`modifiedAt` (PR-6) live separately, in `lastSavedRevision`.
+        serialized: serializeDeckPayload(
+          deckContentForComparison(deck.payload)
+        ),
+        revision: deck.payload.revision,
       })
     );
     router.push("/editor");
+  };
+
+  const handleExport = () => {
+    if (savedDecksQuery.data == null || cryptoProfileQuery.data == null) {
+      return;
+    }
+    setExportError(null);
+    try {
+      const bundle = buildExportBundle(
+        cryptoProfileQuery.data,
+        savedDecksQuery.data.decks
+      );
+      downloadExportBundle(bundle);
+    } catch (thrown) {
+      setExportError(thrown instanceof Error ? thrown.message : String(thrown));
+    }
   };
 
   // Loss-proof by construction (frontend spec §4): an empty or clean editor loads immediately,
@@ -236,6 +273,20 @@ export function MyDecksPage() {
           }
         }}
       />
+      {session.masterKey != null && (
+        <ImportDeckModal
+          show={showImport}
+          onCancel={() => setShowImport(false)}
+          onImported={(count) => {
+            setShowImport(false);
+            setImportMessage(
+              `Imported ${count} deck${count === 1 ? "" : "s"} as new.`
+            );
+            savedDecksQuery.refetch();
+          }}
+          masterKey={session.masterKey}
+        />
+      )}
       {session.status === "locked" && !showUnlock && (
         <p>
           <Button onClick={() => setShowUnlock(true)}>
@@ -243,6 +294,35 @@ export function MyDecksPage() {
           </Button>
         </p>
       )}
+      {shouldFetchDecks && (
+        <p>
+          {/* Export requires no unlock (docs/proposals/.../PR-6) - it's the same opaque bytes
+          the server already holds, so it works whether or not this session has ever unlocked. */}
+          <Button
+            variant="outline-secondary"
+            size="sm"
+            className="me-2"
+            onClick={handleExport}
+            disabled={deckCount === 0}
+            data-testid="export-my-decks"
+          >
+            Export my decks
+          </Button>
+          {/* Import needs somewhere to PERSIST the decrypted decks to, so it needs THIS
+          session's own master key unlocked - unlike export. */}
+          <Button
+            variant="outline-secondary"
+            size="sm"
+            onClick={() => setShowImport(true)}
+            disabled={session.status !== "unlocked"}
+            data-testid="open-import-decks"
+          >
+            Import decks
+          </Button>
+        </p>
+      )}
+      {exportError != null && <p className="text-danger">{exportError}</p>}
+      {importMessage != null && <p className="text-success">{importMessage}</p>}
       {decrypting && <Spinner animation="border" />}
       {decryptError != null && <p className="text-danger">{decryptError}</p>}
       {session.status === "unlocked" && !decrypting && (

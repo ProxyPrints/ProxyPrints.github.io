@@ -79,14 +79,22 @@ export function LoadSafetyModal({
       finishSettings,
       cardDocuments
     );
-    encryptDeckPayloadForSave(payload, session.masterKey)
+    // "Save as new snapshot" always starts a brand-new row (PR-6 "Revision tracking" - a new
+    // row's revision chain never inherits from the dirty editor's prior saved row).
+    const previousRevision = asUpdate
+      ? currentSavedDeck.lastSavedRevision
+      : null;
+    encryptDeckPayloadForSave(payload, session.masterKey, previousRevision)
       .then((encrypted) =>
         saveDeck({
           key: asUpdate ? currentSavedDeck.currentDeckKey : null,
           kind: asUpdate
             ? LoadDeckResponseKind.Deck
             : LoadDeckResponseKind.Snapshot,
-          ...encrypted,
+          ciphertext: encrypted.ciphertext,
+          ciphertextNonce: encrypted.ciphertextNonce,
+          wrappedDek: encrypted.wrappedDek,
+          wrappedDekNonce: encrypted.wrappedDekNonce,
         }).unwrap()
       )
       .then(() => {

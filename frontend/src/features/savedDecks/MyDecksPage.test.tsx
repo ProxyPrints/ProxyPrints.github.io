@@ -148,6 +148,9 @@ test("opening a deck loads it into the project store and navigates to the editor
   expect(selectCurrentSavedDeck(store.getState())).toMatchObject({
     currentDeckKey: "deck-42",
     currentDeckName: "Control Deck",
+    // v1 legacy payload (emptyDeckPayload's `version: 1`) upgraded on load - PR-6 "Revision
+    // tracking" backfills revision 0 for a pre-existing row that never tracked one.
+    lastSavedRevision: 0,
   });
 });
 
@@ -209,4 +212,111 @@ test("resetting saved decks requires a second confirming click before calling th
 
   fireEvent.click(screen.getByTestId("reset-saved-decks"));
   await waitFor(() => expect(resetBody).toEqual({ confirm: true }));
+});
+
+test("PR-6 deck portability: Export my decks is disabled with zero decks, enabled once decks exist, and triggers a download", async () => {
+  const profile = await createCryptoProfile("the real one", TEST_ITERATIONS);
+  server.use(
+    whoamiSignedInNotModerator,
+    existingProfileHandler(profile),
+    getSavedDecksHandler([])
+  );
+  renderPage();
+
+  await screen.findByTestId("unlock-modal");
+  fireEvent.change(screen.getByLabelText("unlock-passphrase"), {
+    target: { value: "the real one" },
+  });
+  fireEvent.click(screen.getByText("Unlock"));
+
+  const exportButton = await screen.findByTestId("export-my-decks");
+  expect(exportButton).toBeDisabled();
+});
+
+test("PR-6 deck portability: Export my decks works while STILL LOCKED - the spec's own headline scenario (a user who's forgotten their passphrase can still export)", async () => {
+  const profile = await createCryptoProfile("the real one", TEST_ITERATIONS);
+  const namedDeck = await buildMockSavedDeckSummary(
+    "deck-1",
+    "deck",
+    emptyDeckPayload("Standard Aggro"),
+    profile.masterKey,
+    { createdAt: "2026-01-01", updatedAt: "2026-01-02" }
+  );
+  server.use(
+    whoamiSignedInNotModerator,
+    existingProfileHandler(profile),
+    getSavedDecksHandler([namedDeck])
+  );
+  renderPage();
+
+  // Deliberately never unlocks - the unlock modal auto-shows (locked state), but Export must
+  // still work without it, per the spec's own explicit requirement.
+  await screen.findByTestId("unlock-modal");
+
+  const exportButton = await screen.findByTestId("export-my-decks");
+  await waitFor(() => expect(exportButton).not.toBeDisabled());
+
+  const clickSpy = jest
+    .spyOn(HTMLAnchorElement.prototype, "click")
+    .mockImplementation(() => undefined);
+  fireEvent.click(exportButton);
+
+  await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
+  clickSpy.mockRestore();
+});
+
+test("PR-6 deck portability: Export my decks downloads a bundle once decks exist", async () => {
+  const profile = await createCryptoProfile("the real one", TEST_ITERATIONS);
+  const namedDeck = await buildMockSavedDeckSummary(
+    "deck-1",
+    "deck",
+    emptyDeckPayload("Standard Aggro"),
+    profile.masterKey,
+    { createdAt: "2026-01-01", updatedAt: "2026-01-02" }
+  );
+  server.use(
+    whoamiSignedInNotModerator,
+    existingProfileHandler(profile),
+    getSavedDecksHandler([namedDeck])
+  );
+  renderPage();
+
+  await screen.findByTestId("unlock-modal");
+  fireEvent.change(screen.getByLabelText("unlock-passphrase"), {
+    target: { value: "the real one" },
+  });
+  fireEvent.click(screen.getByText("Unlock"));
+
+  const exportButton = await screen.findByTestId("export-my-decks");
+  await waitFor(() => expect(exportButton).not.toBeDisabled());
+
+  const clickSpy = jest
+    .spyOn(HTMLAnchorElement.prototype, "click")
+    .mockImplementation(() => undefined);
+  fireEvent.click(exportButton);
+
+  await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
+  clickSpy.mockRestore();
+});
+
+test("PR-6 deck portability: Import decks is disabled while locked, enabled once unlocked", async () => {
+  const profile = await createCryptoProfile("the real one", TEST_ITERATIONS);
+  server.use(
+    whoamiSignedInNotModerator,
+    existingProfileHandler(profile),
+    getSavedDecksHandler([])
+  );
+  renderPage();
+
+  await screen.findByTestId("unlock-modal");
+  expect(screen.getByTestId("open-import-decks")).toBeDisabled();
+
+  fireEvent.change(screen.getByLabelText("unlock-passphrase"), {
+    target: { value: "the real one" },
+  });
+  fireEvent.click(screen.getByText("Unlock"));
+
+  await waitFor(() =>
+    expect(screen.getByTestId("open-import-decks")).not.toBeDisabled()
+  );
 });

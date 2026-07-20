@@ -4,18 +4,37 @@ import React from "react";
 import { Provider } from "react-redux";
 
 import { createCryptoProfile } from "@/common/savedDeckCrypto";
-import { SourceType } from "@/common/schema_types";
+import { LoadDeckResponseKind, SourceType } from "@/common/schema_types";
 import { localBackend, projectSelectedImage1 } from "@/common/test-constants";
 import {
   CryptoSessionProvider,
   useCryptoSession,
 } from "@/features/savedDecks/cryptoSession";
 import { existingProfileHandler } from "@/features/savedDecks/cryptoTestHandlers";
+import { decryptSavedDeckSummary } from "@/features/savedDecks/deckPayload";
 import { SaveDeckModal } from "@/features/savedDecks/SaveDeckModal";
 import { whoamiSignedInNotModerator } from "@/mocks/handlers";
 import { server } from "@/mocks/server";
 import { selectCurrentSavedDeck } from "@/store/slices/savedDeckSessionSlice";
 import { setupStore } from "@/store/store";
+
+/** Decrypts a captured saveDeck request body the same way the server-stored ciphertext would be
+ * decrypted on load, to assert on the PR-6 "Revision tracking" fields living inside it. */
+async function decryptSavedRequest(savedRequest: any, masterKey: CryptoKey) {
+  return decryptSavedDeckSummary(
+    {
+      key: savedRequest.key ?? "unused-in-test",
+      kind: savedRequest.kind ?? LoadDeckResponseKind.Deck,
+      ciphertext: savedRequest.ciphertext,
+      ciphertextNonce: savedRequest.ciphertextNonce,
+      wrappedDek: savedRequest.wrappedDek,
+      wrappedDekNonce: savedRequest.wrappedDekNonce,
+      createdAt: "2026-01-01",
+      updatedAt: "2026-01-01",
+    },
+    masterKey
+  );
+}
 
 const TEST_ITERATIONS = 100;
 const PASSPHRASE = "the real one";
@@ -96,7 +115,12 @@ test("saving a brand-new deck (no prior key) records the key the server returns"
   expect(selectCurrentSavedDeck(store.getState())).toMatchObject({
     currentDeckKey: "new-deck-key",
     currentDeckName: "My New Deck",
+    lastSavedRevision: 1,
   });
+  // PR-6 "Revision tracking" - a brand-new row always starts at revision 1.
+  const decrypted = await decryptSavedRequest(savedRequest, profile.masterKey);
+  expect(decrypted.payload.revision).toEqual(1);
+  expect(decrypted.payload.modifiedAt).toBeTruthy();
 });
 
 test("saving over an already-loaded deck sends its existing key (an update, not a new deck)", async () => {
@@ -117,6 +141,7 @@ test("saving over an already-loaded deck sends its existing key (an update, not 
       currentDeckKey: "existing-key",
       currentDeckName: "Existing Deck",
       lastSavedSerialized: null,
+      lastSavedRevision: 3,
     },
   });
   render(
@@ -135,6 +160,10 @@ test("saving over an already-loaded deck sends its existing key (an update, not 
 
   await waitFor(() => expect(savedRequest).not.toBeNull());
   expect(savedRequest.key).toEqual("existing-key");
+  // PR-6 "Revision tracking" - continuing the SAME row's chain increments from its last known
+  // revision (3, from the preloaded savedDeckSession state above), never restarting at 1.
+  const decrypted = await decryptSavedRequest(savedRequest, profile.masterKey);
+  expect(decrypted.payload.revision).toEqual(4);
 });
 
 test("warns about local-file-sourced cards that won't restore on another device", async () => {

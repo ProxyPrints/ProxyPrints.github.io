@@ -11,8 +11,8 @@ import { bytesToBase64 } from "@/common/savedDeckCrypto";
 import { LoadDeckResponseKind, SavedDeckSummary } from "@/common/schema_types";
 import { localBackendURL } from "@/common/test-constants";
 import {
-  DeckPayloadV1,
-  encryptDeckPayloadForSave,
+  DeckPayload,
+  encryptFinalizedDeckPayload,
 } from "@/features/savedDecks/deckPayload";
 
 function buildRoute(path: string): string {
@@ -104,11 +104,11 @@ export function resetSavedDecksHandler(onReset: (body: any) => void) {
 export async function buildMockSavedDeckSummary(
   key: string,
   kind: "deck" | "snapshot",
-  payload: DeckPayloadV1,
+  payload: DeckPayload,
   masterKey: CryptoKey,
   timestamps: { createdAt: string; updatedAt: string }
 ): Promise<SavedDeckSummary> {
-  const encrypted = await encryptDeckPayloadForSave(payload, masterKey);
+  const encrypted = await encryptFinalizedDeckPayload(payload, masterKey);
   return {
     key,
     kind:

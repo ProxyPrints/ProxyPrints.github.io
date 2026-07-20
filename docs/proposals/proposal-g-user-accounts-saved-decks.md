@@ -10,9 +10,12 @@ recreated after #88's stacked-PR base-deletion auto-close — see
 docs/lessons.md), the client-side ZK crypto module (#89), and the frontend
 UI wiring (#93). **Spec CLOSED: no open decisions remain** (see Decisions).
 §7 (authed vote tier) is fully specified but remains a deliberately separate,
-later build — not part of this HOLD's core scope. PR-5 (share links),
-PR-6 (deck portability), and PR-7 (art provenance) are design-only,
-post-v1 addenda — nothing built for any of them yet.
+later build — not part of this HOLD's core scope. PR-5 (share links) and
+PR-7 (art provenance) are still design-only, post-v1 addenda — nothing
+built for either yet. **PR-6 (deck portability) has since shipped**
+(frontend-only — export/import + the standalone decrypt tool; see
+docs/features/saved-decks.md's "Deck portability (PR-6)" section) —
+nothing else in this file's own scope changed as a result.
 
 ## Context — prior art outside this codebase
 
@@ -780,7 +783,7 @@ already built in PR-1's schema.
   ciphertext; a leaked `shareKey` cannot decrypt or unwrap anything for
   any _other_ deck, shared or not.
 
-### PR-6, post-v1: deck portability (design only — owner-directed addendum, 2026-07-18; nothing built here)
+### PR-6, post-v1: deck portability (SHIPPED — owner-directed addendum, spec written 2026-07-18; built as a frontend-only change, see docs/features/saved-decks.md's "Deck portability (PR-6)" section for what actually landed)
 
 Formalizes what the ZK envelope already implies rather than adding new
 capability: the crypto is deliberately **server-unbound** — no key
