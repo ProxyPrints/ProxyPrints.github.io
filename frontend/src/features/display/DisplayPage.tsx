@@ -3,17 +3,20 @@
  * shell: a top toolbar, a live print-sheet preview (reusing PagePreview/computeLayout from
  * Proposal A - see PagePreview.tsx), slot selection, and the rail's always-visible status header
  * + accordion (AutofillCollapse, per the owner's accordion amendment). Choose Image is wired to
- * the real candidate/version picker (Step 2 PR 2a - see ChooseImageSection below, and
- * useGridSelectorSearch.ts/GridSelectorResults.tsx, extracted from GridSelectorModal.tsx so both
- * surfaces share one real search implementation). The always-visible header now carries the real
- * requested-printing badge (Step 2 PR 2b - degraded-style variant keyed off
+ * the real candidate/version picker (originally Step 2 PR 2a's flat GridSelectorResults grid,
+ * replaced by the unified Select Version section - issue #167, SelectVersionResults.tsx - see
+ * ChooseImageSection below; still shares useGridSelectorSearch.ts's search/filter state machine
+ * with GridSelectorModal.tsx's own unchanged modal variant). The always-visible header now
+ * carries the real requested-printing badge (Step 2 PR 2b - degraded-style variant keyed off
  * EditorSearchResponse.degradedQueries, wired end to end through searchResultsSlice's
  * selectIsSearchQueryDegraded; later extracted into its own RequestedPrintingBadge.tsx component
  * - item (c) of the frontend-polish package - so CardSlot.tsx's editor slots could mount the
  * exact same badge, one component instead of two copies that could drift) and the real
  * DeckbuilderConfirmAffordance (same component CardSlot.tsx mounts, adapted only via its
  * onOpenGridSelector prop - the rail has no modal to open, so N expands the Choose Image section
- * instead). Left-panel unification (issue #164) filled in every remaining rail section: Attributes
+ * instead; SelectVersionResults.tsx also reuses this same component verbatim for its own
+ * suggested-printing confirm moment - see that file's own module comment). Left-panel
+ * unification (issue #164) filled in every remaining rail section: Attributes
  * (AttributesSection.tsx - the same tap/vote-submission logic AttributeChipPanel.tsx uses via the
  * shared useTagVoting hook, rendered as a plain vertical stack instead of a ring around a card),
  * Print Options (PrintOptionsSection.tsx - the same per-card bleed override
@@ -23,8 +26,8 @@
  * (SlotActionsSection.tsx - the same getCardSlotMenuActions list CardSlot.tsx's 3-dot dropdown/
  * context menu use, rendered as a plain action list rather than a dropdown overlay). Every rail
  * section is now real, not a stub - see docs/proposals/proposal-h-unified-display-page.md's own
- * status line for what's still not built (the Select Version rework, tablet/mobile interaction
- * patterns, and the switchover step).
+ * status line for what's still not built (tablet/mobile interaction patterns and the switchover
+ * step).
  *
  * Item 3 (owner's hands-on review, flat-scroll amendment) replaced the original one-page-at-a-
  * time pager with a continuous vertical stack of every sheet (`sheets`, derived from
@@ -76,7 +79,7 @@ import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
-import { GridSelectorResults } from "@/features/gridSelector/GridSelectorResults";
+import { SelectVersionResults } from "@/features/gridSelector/SelectVersionResults";
 import { useGridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
 import { computeLayout } from "@/features/pdf/layout";
 import {
@@ -230,26 +233,31 @@ const RailHeader = ({
 
 //# endregion
 
-//# region Choose Image section (PR 2a - the real candidate/version picker)
+//# region Choose Image section (issue #167 - the unified Select Version section, spec §4.4′)
 
 interface ChooseImageSectionProps {
   face: Faces;
   slot: number;
   query: SearchQuery | undefined;
   selectedImage: string | undefined;
+  backendURL: string;
 }
 
 // Reuses the same real search/filter machinery GridSelectorModal itself now delegates to
-// (useGridSelectorSearch + GridSelectorResults, extracted in this PR) rather than a modal - the
-// design doc's §4.4 calls for this to render inline in the rail's own scroll container, not a
-// second overlapping dialog. Selecting an image dispatches the same setSelectedImages action
+// (useGridSelectorSearch, still shared with the modal variant) rather than a modal - the design
+// doc's §4.4 calls for this to render inline in the rail's own scroll container, not a second
+// overlapping dialog. Selecting an image dispatches the same setSelectedImages action
 // CardSlot.tsx's own grid selector uses, so the sheet's thumbnail for this slot updates
-// immediately (same Redux state, same PagePreview render path).
+// immediately (same Redux state, same PagePreview render path). The results themselves are now
+// SelectVersionResults (issue #167) - grouped by printing/reason-tag/unknown per the spec's §4.4′
+// rather than GridSelectorResults' flat CardResultSet grid; GridSelectorModal.tsx's own modal
+// variant (CardSlot.tsx's editor grid) is untouched, out of this issue's scope.
 const ChooseImageSection = ({
   face,
   slot,
   query,
   selectedImage,
+  backendURL,
 }: ChooseImageSectionProps) => {
   const dispatch = useAppDispatch();
   const searchResultsForQuery =
@@ -307,13 +315,21 @@ const ChooseImageSection = ({
           Filters
         </Button>
       </div>
-      <GridSelectorResults
-        variant="embedded"
+      <SelectVersionResults
         imageIdentifiers={searchResultsForQuery}
         selectedImage={selectedImage}
         onSelectImage={onSelectImage}
         focusRef={focusRef}
         search={search}
+        requestedPrinting={
+          query?.expansionCode != null
+            ? {
+                expansionCode: query.expansionCode,
+                collectorNumber: query.collectorNumber,
+              }
+            : undefined
+        }
+        backendURL={backendURL}
       />
     </>
   );
@@ -423,6 +439,7 @@ const Rail = ({
           slot={selectedSlotRef.slot}
           query={query}
           selectedImage={selectedImage}
+          backendURL={backendURL}
         />
       </RailSection>
       <RailSection

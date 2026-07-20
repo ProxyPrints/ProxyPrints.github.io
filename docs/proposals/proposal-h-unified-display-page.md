@@ -7,14 +7,15 @@ it. **PARTIAL — this doc's own design/mockup pass is complete and most of
 §6's migration plan has since shipped as feature code** (route shell #87;
 inline PDF export #109; missing-image slot names #104; requested-printing
 badge #110/#102; the candidate/version picker #96; flat-scroll +
-virtualization #115; and, most recently, the pane migration's remaining
-rail instruments — Attributes, Print Options, Artist, Slot Actions —
-issue #164). Still not built: §4.4′'s Select Version section rework
-(separately HELD per its own PR #116, blocked on issue #140), the tablet
-off-canvas drawer / mobile bottom-sheet interaction patterns (§3), and
-§6 step 3/4 (switchover to make `/display` the default nav entry point,
-then retiring `/editor` + the classic PDF tab) — see
-`docs/features/grid-selector.md`, `docs/features/print-export-page.md`,
+virtualization #115; the pane migration's remaining rail instruments —
+Attributes, Print Options, Artist, Slot Actions — issue #164; and, most
+recently, §4.4′'s Select Version section rework itself — issue #167,
+`SelectVersionResults.tsx` — see `docs/features/grid-selector.md`'s own
+"Select Version section" entry for what actually shipped vs. what's still
+open). Still not built: the tablet off-canvas drawer / mobile bottom-sheet
+interaction patterns (§3), and §6 step 3/4 (switchover to make `/display`
+the default nav entry point, then retiring `/editor` + the classic PDF
+tab) — see `docs/features/grid-selector.md`, `docs/features/print-export-page.md`,
 and `docs/features/pdf-generator.md` for the surfaces this page is meant
 to eventually absorb.
 
@@ -432,14 +433,18 @@ section originally called for; §4.4′ is the actual current spec).
    action; the sheet's thumbnail for that slot updates immediately
    (same Redux state, same `PagePreview` render path — no new plumbing).
 
-### 4.4′ Select Version section — unified spec (owner directive; HOLD, spec only)
+### 4.4′ Select Version section — unified spec (owner directive)
 
-Status: **SPEC ONLY — HOLD for owner review before any build.** Slots
-into the standing work order after the pane migration (left-panel
-unification). Defines the left panel's Select Version section (2a's
+Status: **BUILT** (issue #167, `SelectVersionResults.tsx` — see
+`docs/features/grid-selector.md`'s own "Select Version section" entry for
+the concrete component/test breakdown and the deviations/open items that
+build surfaced). Defines the left panel's Select Version section (2a's
 `GridSelectorResults` "embedded" variant, which the left-panel-
 unification amendment already established as the ONE surface for this
-— no modal, ever, on `/display`; see that amendment's own text).
+— no modal, ever, on `/display`; see that amendment's own text) — the
+build replaced that flat variant's own results rendering with the
+grouped display this section describes; `GridSelectorModal.tsx`'s
+classic modal (used everywhere else in the app) is untouched.
 
 **Purpose.** The picker maximizes both usefulness (find the right art
 fast) and 1-click verification potential (every gap in the catalog's

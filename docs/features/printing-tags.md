@@ -411,7 +411,11 @@ printings, artists, tags, and moderation from one screen.
   `"question-feed"`, `AttributeVotingPanel` passes nothing (unchanged).
   Every other voting surface (`PrintingTagPicker.tsx`, `TagVotePicker.tsx`,
   `ReportsPanel.tsx`) is untouched — `voteSurface` stays `undefined`
-  there, not a guessed value.
+  there, not a guessed value. A fourth value, `"select-version"`, was
+  added (issue #167, the unified display page's Select Version section —
+  see `docs/features/grid-selector.md`) for the confirm chip a user can
+  tap while browsing/filtering that section's candidate grid — see that
+  doc's own entry for the exact gating logic.
 - **Branding integration** (frontend-polish package): the plain text
   `<h1>What's That Card?</h1>` heading is now the mark+wordmark lockup
   SVG (`frontend/public/whatsthat-composite.svg`) instead. Source assets
