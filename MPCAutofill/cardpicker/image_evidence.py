@@ -277,18 +277,36 @@ def _compute_region_phash(image: Any, box: list[int]) -> int:
     return twos_complement(str(imagehash.phash(region)), _SYMBOL_HASH_BITS)
 
 
-def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) -> ExtractionResult:
+def extract_card_evidence(
+    card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI, profile: Optional[dict[str, float]] = None
+) -> ExtractionResult:
     """
-    The per-card callable work unit. `card.content_phash` (not recomputed here) is the content
-    hash this evidence is keyed against - hash-at-ingest (Part 2) already populates it for
-    essentially every card by the time Stage C runs. If it's still null, the result's
-    `content_hash` is None and `persist_evidence` will refuse to write a row, since
+    The per-card callable work unit - fetch, then compute. `card.content_phash` (not recomputed
+    here) is the content hash this evidence is keyed against - hash-at-ingest (Part 2) already
+    populates it for essentially every card by the time Stage C runs. If it's still null, the
+    result's `content_hash` is None and `persist_evidence` will refuse to write a row, since
     ImageEvidence's "computed-once-forever" premise depends on a stable hash to key on.
-    """
 
-    fields: dict[str, Any] = {}
-    extractor_versions: dict[str, str] = {}
-    skip_reasons: dict[str, str] = {}
+    Split into a fetch step (here) + `compute_card_evidence` (2026-07-20, Stage C fetch/compute
+    decoupling design, docs/features/catalog-completion-plan.md's Stage C section, #228) so a
+    concurrent driver can run the fetch on an I/O-bound thread and the compute on a CPU-bound
+    process, without this function's own single-caller behavior changing at all - every existing
+    caller of `extract_card_evidence` (this pilot's tests, any future direct caller) still gets
+    the exact same fetch-then-compute behavior in one call.
+
+    `profile`, if given, is forwarded straight through to `compute_card_evidence` below and
+    populated (in place) there with a `time.monotonic()`-delta timing breakdown - `fetch_ms`,
+    `ocr_group_ms` (collector_line_ocr + artist_ocr + collector_line_tsv, the Tesseract-backed OCR
+    group), `legal_line_ms` (the second Tesseract-backed extractor), `extraction_ms` (everything
+    after fetch returns, i.e. every extractor combined), and `other_ms` (`extraction_ms` minus the
+    two OCR-group figures - geometry_bleed/layout_class/crop_coordinates/symbol_region/
+    quality_signals/color_profile combined). Diagnostic-only (2026-07-20,
+    docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md) - `None` by default, zero behavior
+    change and negligible overhead (a handful of extra `time.monotonic()` calls) when not passed;
+    never persisted onto `ImageEvidence` itself, per docs/features/catalog-completion-plan.md's
+    Stage C instrumentation spec ("aggregated into the run's own summary logging rather than a
+    new persisted ImageEvidence field").
+    """
 
     fetch_started_at = time.monotonic()
     try:
@@ -298,7 +316,49 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
         # observation - propagate exactly as image_cdn_fetch.fetch_card_image's own docstring
         # requires every caller to.
         raise
-    fields["fetch_latency_ms"] = (time.monotonic() - fetch_started_at) * 1000
+    fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
+
+    return compute_card_evidence(card.pk, card.content_phash, image, fetch_latency_ms, profile=profile)
+
+
+def compute_card_evidence(
+    card_id: int,
+    content_hash: Optional[int],
+    image: Optional[Any],
+    fetch_latency_ms: float,
+    profile: Optional[dict[str, float]] = None,
+) -> ExtractionResult:
+    """
+    Compute-only continuation of `extract_card_evidence` above - everything that function does
+    AFTER its own fetch step, against an already-fetched `image` (a `PIL.Image.Image`, or `None`
+    for a failed/skipped fetch) and a `fetch_latency_ms` the caller already measured. Takes a
+    plain `card_id`/`content_hash` pair rather than a `Card` instance deliberately: this is the
+    module-level, picklable entrypoint a `ProcessPoolExecutor` compute worker calls directly
+    (`run_image_evidence_cohort.py`'s decoupled compute stage) once the fetch stage (a separate
+    thread pool, I/O-bound, never itself CPU-heavy) has already produced `image` - a compute
+    worker never touches the network, never calls `fetch_card_image`/`GoogleFetchLockoutError`
+    can only ever originate in the fetch stage now. Never called with `image` freshly decoded
+    from bytes on the FETCH side - the fetch stage hands over raw bytes
+    (`image_cdn_fetch.fetch_card_image_bytes`) and the compute worker decodes them into an
+    `Image` itself right before calling this, so the real pixel decode cost lands on the compute
+    side, not the fetch side (see that function's own docstring for why this split matters for
+    the hardware's network-vs-compute core allocation).
+
+    `profile` (2026-07-20, docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md): see
+    `extract_card_evidence`'s own docstring for the full field breakdown. `fetch_ms` is set here
+    directly from the caller-supplied `fetch_latency_ms` (this function never measures its own
+    fetch) - so the resulting profile shape is identical regardless of whether the caller is
+    `extract_card_evidence` (bundled fetch+compute, one process/call) or the decoupled compute
+    stage calling this directly with a `fetch_latency_ms` its own separate fetch stage already
+    measured.
+    """
+
+    fields: dict[str, Any] = {"fetch_latency_ms": fetch_latency_ms}
+    extractor_versions: dict[str, str] = {}
+    skip_reasons: dict[str, str] = {}
+    if profile is not None:
+        profile["fetch_ms"] = fetch_latency_ms
+    extraction_started_at = time.monotonic()
 
     if image is None:
         fields["fetch_ok"] = False
@@ -362,6 +422,7 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
     # collector_line_ocr / artist_ocr / collector_line_tsv (issue #149, the OCR-group): consume
     # the *_crop_px pixel boxes crop_coordinates just computed above rather than recomputing them
     # - see module docstring. No candidate matching happens here (Stage D's job).
+    _ocr_group_started_at = time.monotonic()
     if image is None:
         skip_reasons["collector_line_ocr"] = "fetch_failed"
         skip_reasons["artist_ocr"] = "fetch_failed"
@@ -453,6 +514,8 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
     extractor_versions["collector_line_ocr"] = COLLECTOR_LINE_OCR_EXTRACTOR_VERSION
     extractor_versions["artist_ocr"] = ARTIST_OCR_EXTRACTOR_VERSION
     extractor_versions["collector_line_tsv"] = COLLECTOR_LINE_TSV_EXTRACTOR_VERSION
+    if profile is not None:
+        profile["ocr_group_ms"] = (time.monotonic() - _ocr_group_started_at) * 1000
 
     # symbol_region (issue #160, "Part 4b: symbol harness"): SYMBOL_STRIP_BOX turned into pixel
     # coordinates the same way crop_coordinates derives its own three boxes, then a raw phash of
@@ -483,6 +546,7 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
     # with the collector-line crop is), then a tolerant parse for copyright year + the proxy/
     # not-for-sale moderator-flag signal. No candidate matching (Stage D's job, same as every
     # other OCR-adjacent extractor above).
+    _legal_line_started_at = time.monotonic()
     if image is None:
         skip_reasons["legal_line"] = "fetch_failed"
     else:
@@ -518,6 +582,8 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
         if legal_parsed.copyright_year is None and not legal_parsed.proxy_marker_detected:
             skip_reasons["legal_line"] = "no-text"
     extractor_versions["legal_line"] = LEGAL_LINE_EXTRACTOR_VERSION
+    if profile is not None:
+        profile["legal_line_ms"] = (time.monotonic() - _legal_line_started_at) * 1000
 
     # quality_signals (issue #150's re-spec, the LAST Stage C manifest extractor): a degenerate
     # (zero/negative) width or height is guarded before anything else - the same "sub-floor"
@@ -562,9 +628,15 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
         fields["color_stddev_rgb"] = stddev_rgb
     extractor_versions["color_profile"] = COLOR_PROFILE_EXTRACTOR_VERSION
 
+    if profile is not None:
+        profile["extraction_ms"] = (time.monotonic() - extraction_started_at) * 1000
+        profile["other_ms"] = (
+            profile["extraction_ms"] - profile.get("ocr_group_ms", 0.0) - profile.get("legal_line_ms", 0.0)
+        )
+
     return ExtractionResult(
-        card_id=card.pk,
-        content_hash=card.content_phash,
+        card_id=card_id,
+        content_hash=content_hash,
         fields=fields,
         extractor_versions=extractor_versions,
         skip_reasons=skip_reasons,
@@ -663,6 +735,7 @@ def build_reconciliation_report(
 __all__ = [
     "ExtractionResult",
     "extract_card_evidence",
+    "compute_card_evidence",
     "persist_evidence",
     "ReconciliationReport",
     "build_reconciliation_report",

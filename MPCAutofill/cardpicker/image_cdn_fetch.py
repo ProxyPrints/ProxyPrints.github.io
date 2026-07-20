@@ -68,16 +68,26 @@ def get_worker_image_url(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -
     return f"{settings.IMAGE_WORKER_URL}/images/google_drive/full/{card.identifier}.jpg?jpgQuality=100{dpi_param}"
 
 
-def fetch_card_image(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Optional["Image.Image"]:
-    from PIL import Image
-
+def fetch_card_image_bytes(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Optional[bytes]:
+    """
+    Fetch-only half of `fetch_card_image` below - does the paced network call and returns the
+    raw (still-encoded, e.g. JPEG) response bytes, without ever decoding them into a `PIL.Image`.
+    Split out 2026-07-20 (Stage C fetch/compute decoupling design,
+    docs/features/catalog-completion-plan.md's Stage C section, #228) so a fetch-stage caller
+    (`run_image_evidence_cohort.py`'s fetch thread pool) can hand a buffer across a process
+    boundary as plain `bytes` - cheap to pickle, no forced pixel decode - and let the RECEIVING
+    compute worker do the actual `Image.open()` lazily, preserving the same "decode only happens
+    where the compute cost is meant to be spent" property this function's own caller below
+    already had before this split (`Image.open()` itself is lazy - the real pixel decode happens
+    on first access like `.crop()`/`.size`, which now happens inside the compute-only step).
+    """
     url = get_worker_image_url(card, dpi)
     if url is None:
         return None
     try:
         response = rate_limited_get(GOOGLE_IMAGE, url, timeout=15)
         response.raise_for_status()
-        return Image.open(BytesIO(response.content))
+        return response.content
     except GoogleFetchLockoutError:
         # Deliberately NOT caught by the broad except below - a 403 lockout is a hard stop
         # (see GoogleFetchLockoutError's own docstring), not an ordinary per-card fetch failure.
@@ -90,4 +100,18 @@ def fetch_card_image(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Op
         return None
 
 
-__all__ = ["DEFAULT_FETCH_DPI", "get_worker_image_url", "fetch_card_image"]
+def fetch_card_image(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Optional["Image.Image"]:
+    """Thin decode wrapper around `fetch_card_image_bytes` above - unchanged signature/behavior
+    for this function's existing callers (`extract_card_evidence`, the ingest hook in
+    `cardpicker.sources.update_database`). Not used by the decoupled fetch stage in
+    `run_image_evidence_cohort.py` - that caller wants the raw bytes above instead, precisely to
+    avoid decoding on the fetch side (see that function's own docstring)."""
+    from PIL import Image
+
+    data = fetch_card_image_bytes(card, dpi)
+    if data is None:
+        return None
+    return Image.open(BytesIO(data))
+
+
+__all__ = ["DEFAULT_FETCH_DPI", "get_worker_image_url", "fetch_card_image", "fetch_card_image_bytes"]
