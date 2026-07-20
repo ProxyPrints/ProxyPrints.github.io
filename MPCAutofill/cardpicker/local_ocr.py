@@ -145,19 +145,10 @@ def run_tesseract(image: "Image.Image") -> str:
     return pytesseract.image_to_string(image, config=TESSERACT_CONFIG)
 
 
-def run_tesseract_tsv(image: "Image.Image") -> list[dict[str, Any]]:
-    """
-    Word-level bounding boxes via tesseract's TSV output (`pytesseract.image_to_data`), filtered
-    to rows with a non-blank recognized word (tesseract's TSV emits a row for every detected
-    layout box - block/paragraph/line/word - most of which carry no text at all; only the word
-    rows are useful here). Coordinates are in the INPUT image's own pixel space (i.e. whatever
-    crop/preprocessing variant was passed in, not the full card image) - a caller wanting
-    full-card coordinates must add its own crop box's left/top offset itself, same convention as
-    every fixed-fraction crop box elsewhere in this module. Metadata only (text + box
-    coordinates + confidence) - the image itself is never touched beyond this one read, matching
-    CLAUDE.md's "Governing premise: we index, we do not store images".
-    """
-    data = pytesseract.image_to_data(image, config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT)
+def _words_from_tesseract_data(data: dict[str, list[Any]]) -> list[dict[str, Any]]:
+    """Shared row-filtering logic behind `run_tesseract_tsv`/`run_tesseract_text_and_words` -
+    tesseract's TSV emits a row for every detected layout box (block/paragraph/line/word), most
+    of which carry no text at all; only the word rows (non-blank text) are useful here."""
     words: list[dict[str, Any]] = []
     for i, text in enumerate(data["text"]):
         if not text.strip():
@@ -173,6 +164,63 @@ def run_tesseract_tsv(image: "Image.Image") -> list[dict[str, Any]]:
             }
         )
     return words
+
+
+def _text_from_tesseract_data(data: dict[str, list[Any]]) -> str:
+    """Reconstructs an `image_to_string`-shaped raw text from `image_to_data`'s own per-word rows
+    - words within the same (block, paragraph, line) triple are joined with a single space, and
+    each distinct line is joined with a newline, in the order tesseract emitted them (already
+    reading order, not re-sorted). Not byte-identical to `pytesseract.image_to_string`'s own
+    output (that runs a different internal recognition pass, not just a different report format
+    of the same one) but equivalent for this module's own regex-based tolerant parsing
+    (`parse_collector_line`/`parse_legal_line` both `.search()` for a pattern anywhere in the
+    string, not position- or whitespace-exact) - this is what lets `run_tesseract_text_and_words`
+    below derive both the raw text AND the word boxes from a SINGLE tesseract call instead of one
+    call per representation of the same underlying OCR pass."""
+    lines: list[list[str]] = []
+    current_key: Optional[tuple[int, int, int]] = None
+    for i, text in enumerate(data["text"]):
+        if not text.strip():
+            continue
+        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        if key != current_key:
+            lines.append([])
+            current_key = key
+        lines[-1].append(text)
+    return "\n".join(" ".join(words) for words in lines)
+
+
+def run_tesseract_tsv(image: "Image.Image") -> list[dict[str, Any]]:
+    """
+    Word-level bounding boxes via tesseract's TSV output (`pytesseract.image_to_data`), filtered
+    to rows with a non-blank recognized word (tesseract's TSV emits a row for every detected
+    layout box - block/paragraph/line/word - most of which carry no text at all; only the word
+    rows are useful here). Coordinates are in the INPUT image's own pixel space (i.e. whatever
+    crop/preprocessing variant was passed in, not the full card image) - a caller wanting
+    full-card coordinates must add its own crop box's left/top offset itself, same convention as
+    every fixed-fraction crop box elsewhere in this module. Metadata only (text + box
+    coordinates + confidence) - the image itself is never touched beyond this one read, matching
+    CLAUDE.md's "Governing premise: we index, we do not store images".
+    """
+    data = pytesseract.image_to_data(image, config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT)
+    return _words_from_tesseract_data(data)
+
+
+def run_tesseract_text_and_words(image: "Image.Image") -> tuple[str, list[dict[str, Any]]]:
+    """
+    OCR call-cost reduction (2026-07-20, docs/reports/2026-07-20-pipeline-compute-profile.md's
+    ocr_group/legal_line finding, 58% of Stage C's per-card compute cost): a single
+    `pytesseract.image_to_data` call, returning BOTH a raw text string (`_text_from_tesseract_data`)
+    and the word-level bounding boxes (`_words_from_tesseract_data`) `run_tesseract_tsv` already
+    returns - the exact same underlying tesseract invocation, read two ways, instead of the two
+    separate tesseract calls (`run_tesseract` + `run_tesseract_tsv`) `image_evidence.py`'s
+    collector-line pass used to make for the SAME winning variant. Deliberately a NEW function
+    rather than a change to `run_tesseract`/`run_tesseract_tsv`'s own signatures - both of those
+    are called directly by `local_fallback.py` (PROTECTED CORE) and `local_identify_printing_tags
+    .py`'s live pilot pass, neither of which this cost-reduction pass touches or needs to change.
+    """
+    data = pytesseract.image_to_data(image, config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT)
+    return _text_from_tesseract_data(data), _words_from_tesseract_data(data)
 
 
 def parse_collector_line(raw_text: str) -> OcrParseResult:
@@ -298,6 +346,7 @@ __all__ = [
     "preprocess_variants",
     "run_tesseract",
     "run_tesseract_tsv",
+    "run_tesseract_text_and_words",
     "parse_collector_line",
     "parse_legal_line",
     "find_matching_candidates",

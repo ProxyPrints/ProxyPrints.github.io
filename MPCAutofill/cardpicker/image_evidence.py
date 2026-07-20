@@ -68,9 +68,13 @@ real `CandidatePrinting` list, which this per-card function never receives (`ext
 evidence` takes only a `Card`) - candidate matching is Stage D calculator territory (task #151's
 pipeline-fidelity gate), not Stage C extraction. What's stored here is raw OCR text + a tolerant
 parse (`local_ocr.parse_collector_line`, `local_fallback.extract_artist_name` - both already
-exist, called not reimplemented) plus TSV word-level bounding boxes
-(`local_ocr.run_tesseract_tsv`, new in this PR) - metadata per FINAL POSTURE item 2 ("full OCR
-text + TSV word boxes, parsed fields"), never a verdict about which printing this is.
+exist, called not reimplemented) plus TSV word-level bounding boxes - both the raw text and the
+word boxes for collector_line_ocr/collector_line_tsv come from a SINGLE tesseract call per
+variant tried (`local_ocr.run_tesseract_text_and_words`, added 2026-07-20 as an OCR call-cost
+reduction, docs/reports/2026-07-20-pipeline-compute-profile.md - supersedes an earlier version
+of this PR that called `run_tesseract` and `local_ocr.run_tesseract_tsv` separately for the same
+winning variant) - metadata per FINAL POSTURE item 2 ("full OCR text + TSV word boxes, parsed
+fields"), never a verdict about which printing this is.
 
 artist_ocr reuses collector_line_ocr's own raw texts first, before falling back to its own
 crop+OCR pass over `artist_crop_px` - the same reuse-before-recompute convention
@@ -206,7 +210,7 @@ from cardpicker.local_ocr import (
     parse_legal_line,
     preprocess_variants,
     run_tesseract,
-    run_tesseract_tsv,
+    run_tesseract_text_and_words,
 )
 from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import Card, CardScanLog, ImageEvidence
@@ -365,35 +369,60 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
     else:
         collector_crop = image.crop(tuple(fields["collector_line_crop_px"]))
         collector_variants = preprocess_variants(collector_crop)
-        collector_raw_texts: list[str] = [run_tesseract(variant) for variant in collector_variants]
 
-        # prefer the first variant whose text actually parses a collector number - matches
-        # run_ocr_for_card's own "first variant that produces something" precedence - falling
-        # back to the first variant's (empty) parse if none did, so the stored artifact is
-        # deterministic either way.
+        # OCR call-cost reduction (docs/reports/2026-07-20-pipeline-compute-profile.md):
+        # previously this ran run_tesseract (image_to_string) on EVERY variant unconditionally,
+        # then a SEPARATE run_tesseract_tsv (image_to_data) call on whichever variant won - up to
+        # 3 tesseract invocations per card for this one extractor. Now: one
+        # run_tesseract_text_and_words call per variant TRIED (a single image_to_data call
+        # yielding both the raw text and the word boxes at once - see that function's own
+        # docstring), and the loop stops at the FIRST variant whose text parses a collector
+        # number rather than always computing every variant - matches this same loop's own
+        # pre-existing "first variant that produces something" precedence, just applied to WHEN
+        # each variant gets OCR'd, not only to which one's result is kept.
+        collector_texts_and_words: list[tuple[str, list[dict[str, Any]]]] = []
         selected_index = 0
-        parsed = parse_collector_line(collector_raw_texts[0]) if collector_raw_texts else parse_collector_line("")
-        for i, raw_text in enumerate(collector_raw_texts):
+        parsed = parse_collector_line("")
+        for i, variant in enumerate(collector_variants):
+            raw_text, word_boxes = run_tesseract_text_and_words(variant)
+            collector_texts_and_words.append((raw_text, word_boxes))
             candidate_parse = parse_collector_line(raw_text)
             if candidate_parse.collector_number is not None:
                 parsed = candidate_parse
                 selected_index = i
                 break
+        else:
+            # every variant was tried and none parsed a collector number - keep the first
+            # variant's (empty-ish) parse as the deterministic stored artifact, matching the
+            # pre-existing fallback precedence.
+            if collector_texts_and_words:
+                parsed = parse_collector_line(collector_texts_and_words[0][0])
 
-        fields["collector_line_raw_text"] = collector_raw_texts[selected_index] if collector_raw_texts else ""
+        collector_raw_texts = [text for text, _words in collector_texts_and_words]
+        fields["collector_line_raw_text"] = (
+            collector_texts_and_words[selected_index][0] if collector_texts_and_words else ""
+        )
         fields["collector_line_set_code"] = parsed.set_code or ""
         fields["collector_line_collector_number"] = parsed.collector_number or ""
         if parsed.collector_number is None:
             skip_reasons["collector_line_ocr"] = "no-text"
 
-        # TSV word boxes: same winning variant the text parse above came from, so the word boxes
+        # TSV word boxes: same winning variant the text parse above came from (computed by the
+        # SAME tesseract call as that variant's raw text, not a second call) - so the word boxes
         # and the parsed text always describe the same underlying tesseract read.
         fields["collector_line_word_boxes"] = (
-            run_tesseract_tsv(collector_variants[selected_index]) if collector_variants else []
+            collector_texts_and_words[selected_index][1] if collector_texts_and_words else []
         )
 
         # artist OCR: reuse collector_line_ocr's own raw texts first (see module docstring),
         # only cropping+OCR-ing artist_crop_px if none of those already contain an "Illus." match.
+        # `collector_raw_texts` only contains as many entries as the loop above actually computed
+        # (short-circuited once a collector number was found) - a real card whose collector-line
+        # crop legitimately carries an "Illus." credit (old-border only, per this module's own
+        # artist_ocr section) never has a genuine collector number to short-circuit on in the
+        # first place, so the loop above runs to completion (computing every variant) for exactly
+        # the population where this reuse would otherwise matter; verified against
+        # TestExtractCardEvidenceArtistOcr's real-tesseract reuse test, not just argued.
         artist_name: Optional[str] = None
         artist_raw_text = ""
         for raw_text in collector_raw_texts:
@@ -460,19 +489,28 @@ def extract_card_evidence(card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI) ->
         fields["legal_line_crop_px"] = _crop_box_to_pixels(LEGAL_LINE_CROP_BOX, bleed_class, width, height)
         legal_crop = image.crop(tuple(fields["legal_line_crop_px"]))
         legal_variants = preprocess_variants(legal_crop)
-        legal_raw_texts: list[str] = [run_tesseract(variant) for variant in legal_variants]
 
-        # prefer the first variant whose parse actually found something (a year OR a proxy
-        # marker) over the first variant's raw (possibly empty) parse - same "first variant that
-        # produces something" precedence collector_line_ocr's own selection above uses.
+        # OCR call-cost reduction (docs/reports/2026-07-20-pipeline-compute-profile.md): lazily
+        # OCR each variant (run_tesseract, unchanged - no word boxes are stored for legal_line,
+        # so there's no TSV call to batch here the way collector_line_ocr's does above), stopping
+        # at the FIRST variant whose parse finds something (a year OR a proxy marker) rather than
+        # always running tesseract against every variant - same "first variant that produces
+        # something" precedence this selection already used, just applied to WHEN each variant
+        # gets OCR'd too.
+        legal_raw_texts: list[str] = []
         selected_index = 0
-        legal_parsed = parse_legal_line(legal_raw_texts[0]) if legal_raw_texts else parse_legal_line("")
-        for i, raw_text in enumerate(legal_raw_texts):
+        legal_parsed = parse_legal_line("")
+        for i, variant in enumerate(legal_variants):
+            raw_text = run_tesseract(variant)
+            legal_raw_texts.append(raw_text)
             legal_candidate_parse = parse_legal_line(raw_text)
             if legal_candidate_parse.copyright_year is not None or legal_candidate_parse.proxy_marker_detected:
                 legal_parsed = legal_candidate_parse
                 selected_index = i
                 break
+        else:
+            if legal_raw_texts:
+                legal_parsed = parse_legal_line(legal_raw_texts[0])
 
         fields["legal_line_raw_text"] = legal_raw_texts[selected_index] if legal_raw_texts else ""
         fields["legal_line_copyright_year"] = legal_parsed.copyright_year or ""
