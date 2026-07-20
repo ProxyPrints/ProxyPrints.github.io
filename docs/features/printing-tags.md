@@ -567,9 +567,14 @@ reach at all:
 - **L1, OCR**: Tesseract on a cropped, preprocessed collector-line region
   (bottom-left corner, grayscale/upscaled/thresholded). Parses candidate
   (set code, collector number) pairs from the raw text and only casts a
-  vote when the parse matches **exactly one** of the card's own
-  name-candidates - weak OCR is made safe by this validation rail, not by
-  trusting the OCR output itself. Never writes `is_no_match`.
+  **positive** vote when the parse matches **exactly one** of the card's
+  own name-candidates - weak OCR is made safe by this validation rail, not
+  by trusting the OCR output itself. Also casts a real `is_no_match=True`
+  vote for its own distinct **"parsed-but-no-match"** outcome (a
+  syntactically valid parse that matches none of the card's candidates) -
+  see "Negative-vote wiring" below for why this one skip_reason (of
+  several) is treated as genuine whole-candidate-set evidence rather than
+  a mere abstention.
 - **L2, perceptual hash**: art-region phash comparison against each
   name-candidate's Scryfall art crop, voting only when there's a clear
   single best match (distance threshold + margin over the second-best,
@@ -581,7 +586,10 @@ reach at all:
   used for the real import) - so this pilot is the first thing to
   actually populate it, lazily, only for candidates it needs. Capped at
   12 candidates per name (basic lands/staples can have hundreds - see
-  "Real pilot run results" for how often this cap fires).
+  "Real pilot run results" for how often this cap fires). Never writes
+  `is_no_match` - a "no-clear-winner" outcome is evidence against ONE
+  candidate falling short of the bar, not against the whole set (see
+  "Negative-vote wiring" below).
 - **Pass 2, fallback** (`local_fallback.py`, `local-fallback-v1`): fires
   only when pass 1 (either engine) produced no accepted vote for a card -
   the old-border-frame case (no collector line printed on the card face
@@ -589,9 +597,11 @@ reach at all:
   across border-color sample, artist-name OCR fuzzy match, and set-symbol
   phash (found unreliable in practice, kept but effectively disabled via
   a strict threshold - see `local_fallback.py`'s module docstring for the
-  full negative finding): a vote is cast only when the intersection of
-  every sub-check that produced a reading narrows to exactly one
-  candidate.
+  full negative finding): a **positive** vote is cast only when the
+  intersection of every sub-check that produced a reading narrows to
+  exactly one candidate. Also casts a real `is_no_match=True` vote for its
+  own distinct **"eliminated"** outcome (the intersection narrowed to
+  ZERO candidates) - see "Negative-vote wiring" below.
 - Border-color sampling and frame-style classification (OCR-collector-
   line-present vs. Illus.-anchor-present) run for **every** processed
   card regardless of printing-vote success, casting standalone
@@ -619,6 +629,110 @@ Docker/container change) - `tesseract-ocr` installed via host apt,
 install. No Dockerfile change made. (A future full-catalog run, if one
 ever happens, should revisit baking `tesseract-ocr` into
 `docker/django/Dockerfile` instead, per the original tradeoff writeup.)
+
+### Negative-vote wiring (2026-07-20, issue #207)
+
+Owner-approved, diagnostic-backed follow-up closing the implementation
+gap `docs/theory.md` §4 always assumed existed: machine engines can cast
+a real `is_no_match=True` `CardPrintingTag` vote, not only a positive
+one, for the two skip_reasons that carry genuine evidence against the
+**whole** candidate set (not just one candidate) - OCR's
+`"parsed-but-no-match"` and fallback's `"eliminated"`. Every other
+skip_reason (a pure abstention, or evidence against a single
+candidate/pair rather than the set) is unaffected and still casts no
+vote at all. Same non-negotiable principle as every other engine in this
+doc: still just a vote (`VoteSource.OCR`, machine weight `0.5` by
+default) - the human-backed gate
+(`vote_consensus.resolve_weighted_consensus`) means a lone machine
+`is_no_match` vote can never resolve a card to `NO_MATCH` by itself
+(`PRINTING_TAG_MIN_VOTES=2` can't clear on weight `0.5` alone). Effect at
+current weights: advisory only - it surfaces the card as `CONTESTED` if
+a printing vote already exists or is cast later
+(`printing_consensus.get_contested_card_ids` already treats "a printing
+vote + a no-match vote on the same card" as contested, unchanged by this
+work), giving a reviewer a genuine negative signal instead of the prior
+silence.
+
+**PREREQUISITE - the ambiguous/no-match split**: `local_ocr. validate_against_candidates` already returned a distinct `"ambiguous"`
+outcome (a collector-number-only match against more than one candidate -
+possible when a name spans multiple sets sharing a number) separately
+from `"parsed-but-no-match"` (matches none), but `run_ocr_for_card` used
+to discard that distinction - it only ever inspected the matched
+candidate, never the skip reason, on a miss, silently folding both into
+`"parsed-but-no-match"`. Fixed first, since casting `is_no_match` on the
+now-corrected `"parsed-but-no-match"` would otherwise have miscast an
+ambiguous (evidence-FOR-more-than-one-candidate) read as
+whole-set-no-match evidence. Tracked across every preprocessing variant
+tried (not just the last), with `"ambiguous"` taking priority if any
+variant produced it.
+
+**What does NOT cast `is_no_match`**, deliberately: frame-mismatch (a
+vote WAS produced but withheld by the consistency check - evidence
+against the ONE candidate it landed on, not the set),
+engine-disagreement (OCR and phash each finding a DIFFERENT candidate -
+evidence FOR two candidates), and every pure-abstention reason (OCR's
+`"no-text"`/`"ambiguous"`; phash's `"too-many-candidates"`/
+`"no-hashable-candidates"`/`"no-clear-winner-distance"`/
+`"no-clear-winner-margin"`; fallback's `"no-evidence"`/`"ambiguous"`).
+Casting a whole-set no-match vote from any of these would misrepresent
+what the engine actually found.
+
+**Instrumentation for a future ranked-vote decision** (code-only, no new
+fetches, no ranked-vote schema built here - `docs/theory.md`'s
+Dawid-Skene addendum is the eventual consumer): `CardScanLog` gained two
+additive fields, `evidence_types_used` and `survivor_pks`, populated for
+fallback's own `"no-evidence"`/`"ambiguous"` rows (never for an OCR/phash
+row, which have no sub-check concept of their own).
+`evidence_types_used` is always available (already threaded through as
+`CardOutcome.fallback_evidence_types`, just never persisted before this
+change). `survivor_pks` is populated only where knowable WITHOUT
+re-deriving `local_fallback.py`'s own border/artist/symbol sub-checks a
+second time in the caller: trivially the card's full (post
+`expansion_hint`-narrowing) candidate set for `"no-evidence"` (nothing
+filtered anything) - left `null` for `"ambiguous"`, see the open item
+below. phash's own `"no-clear-winner"` skip_reason is similarly split
+into two distinct sub-cases, `"no-clear-winner-distance"` (best distance
+over threshold) and `"no-clear-winner-margin"` (runner-up too close
+behind it) - re-derived in the caller via a pure Hamming-distance
+recompute over the exact same inputs `local_phash.find_best_match`
+itself used (verified empirically to match `imagehash.ImageHash`'s own
+subtraction before use), never by editing that function's own decision
+logic.
+
+**PROTECTED CORE boundary honored, not routed around**
+(`docs/upstreaming/license-provenance.md` §2): `local_phash.py` and
+`local_fallback.py` were not edited. The phash no-clear-winner split is
+pure arithmetic re-derivation from inputs the caller already held (safe
+to duplicate - no tunable decision logic of its own). Fallback's
+survivor set for `"ambiguous"` is a different case: recovering it would
+mean either reimplementing `local_fallback.py`'s border/artist/symbol
+sub-checks (three algorithms with real tunable thresholds/margins/fuzzy
+ratios) a second time in the caller, or having `FallbackOutcome` expose
+the already-computed `survivors` set directly - the latter touches
+protected core. **Open item, not built**: exposing `survivors` on
+`FallbackOutcome` is the clean fix, needs owner sign-off per the
+absorption-adjacent protected-core review convention; `survivor_pks`
+stays `null` for `"ambiguous"` rows until that lands.
+
+**Known gap, not built**: `is_no_match` votes do not propagate to
+cluster (identical-image) members the way positive votes do via
+`propagate_cluster_vote` - unscoped by issue #207, and extending that
+function to accept an `Optional[printing_pk]` is real surface area
+nobody asked for. A representative card's no-match conclusion is
+currently NOT mirrored onto its absorbed duplicates.
+
+**Side effect on abstention-aware ordering, worth being explicit about**:
+`_compute_hard_names` demotes a name to the back of the queue once it
+has `>= HARD_NAME_MIN_ATTEMPTS` non-rescannable scan-log rows and zero
+votes, "one real vote disqualifies the name permanently" (see that
+function's own docstring). Since `"parsed-but-no-match"`/`"eliminated"`
+now cast a real vote instead of a scan-log row, cards that used to count
+toward hard-name demotion no longer do, the moment they get a genuine
+`is_no_match` conclusion. Judged correct, not a regression: a no-match
+vote is a real conclusion (the engine successfully determined "not this
+set"), not a failure-to-conclude - the demotion mechanism exists to
+deprioritize names an engine keeps failing to say anything about, and
+this is the opposite of that.
 
 ### Real pilot run results (2026-07-15, `--limit 300 --engine both --nice`)
 

@@ -1128,6 +1128,14 @@ class CardScanLog(models.Model):
     the same card for different or the same reason over time), not deduplicated away, since the
     resume query only cares whether ANY non-re-scannable row exists, and the scan_log table
     itself is a append-only audit trail like the vote tables are.
+
+    Note (issue #207): a skip_reason that turned out to carry genuine whole-candidate-set
+    no-match evidence (OCR's "parsed-but-no-match", fallback's "eliminated") no longer gets a
+    row here at all - it gets a real `CardPrintingTag(is_no_match=True)` vote instead, same "the
+    vote IS the record, no scan-log row needed" convention a positive vote already followed (see
+    `TestScanLog.test_a_voted_card_gets_no_scan_log_row`). Only genuine abstention reasons
+    (no evidence either way, or evidence against a single candidate/pair rather than the whole
+    set) still land here.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="scan_logs")
@@ -1139,6 +1147,22 @@ class CardScanLog(models.Model):
     run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
     skip_reason = models.CharField(max_length=64)
     scanned_at = models.DateTimeField(auto_now_add=True)
+    # Instrumentation for a future ranked-vote decision (issue #207, docs/theory.md's
+    # Dawid-Skene addendum) - code-only, no schema for that future decision built here. Always
+    # `[]` for a non-fallback row (OCR/phash have no sub-check concept of their own) and for
+    # fallback's own "no-evidence" row (by definition, nothing fired) - populated with whichever
+    # of "border"/"artist"/"symbol" produced a reading for fallback's "ambiguous" row.
+    evidence_types_used = models.JSONField(default=list, blank=True)
+    # The candidate pks fallback's evidence intersection left standing, where knowable WITHOUT
+    # re-deriving local_fallback's own protected-core decision logic a second time in the caller
+    # (docs/upstreaming/license-provenance.md §2): trivially the card's full (post
+    # expansion_hint-narrowing) candidate set for "no-evidence" (nothing filtered anything).
+    # Deliberately left `null` for "ambiguous" (more than one candidate survived, but which ones
+    # can't be recovered from what run_fallback_for_card returns today without either
+    # reimplementing its border/artist/symbol sub-checks a second time here, or having
+    # `FallbackOutcome` expose the survivor set itself - the latter touches protected core and is
+    # an open item, not built in this change). Never populated for an OCR/phash row.
+    survivor_pks = models.JSONField(null=True, blank=True)
 
     class Meta:
         indexes = [models.Index(fields=["card", "anonymous_id"])]
