@@ -208,6 +208,10 @@ external reader's orientation to the whole fork, see
 - [`docs/features/homepage-panel.md`](docs/features/homepage-panel.md) —
   the "what is this, really?" landing panel (`HomepagePanel.tsx`), its
   gating, and the reserved-not-built catalog-stats chart slot.
+- [`docs/features/consent-toast.md`](docs/features/consent-toast.md) — the
+  reusable, permission-triggered contextual consent toast (`useConsentToast`
+  - `ConsentToast.tsx`), issue #204. No dependency on any consumer feature
+    yet; issue #203 (client-side phash contribution) is the first planned one.
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
   Upstreaming workflow in `docs/infrastructure.md`); accurate through
