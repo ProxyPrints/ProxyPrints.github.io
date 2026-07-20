@@ -399,6 +399,31 @@ printings, artists, tags, and moderation from one screen.
   Level 0 (gated on a _selected image_ existing to compare against),
   this badge is independent of whether an image has been selected yet
   — it's about what was asked for, not what's currently shown.
+- **Post-export contribution prompt** (issue #166, Proposal H milestone) —
+  another entry point INTO this same `/whatsthat` funnel, not a parallel
+  one: a small, dismissible `Alert` shown once per session immediately
+  after a genuinely successful PDF export (either "Generate PDF" or "Save
+  PDF to Google Drive"), linking straight to `/whatsthat` via the exact
+  same route `Navbar.tsx`/`HomepagePanel.tsx` already use. Mounted from
+  both real export surfaces — `frontend/src/features/display/DisplayPage.tsx`'s
+  own inline export (Proposal H, item 2) and `PDFGenerator.tsx` itself
+  (so the classic "Print!" tab / `PDFGeneratorModal.tsx` / `ProjectEditor.tsx`
+  mounts get it too, since they all render the same component) — one
+  `usePostExportContributionPrompt`/`PostExportContributionPrompt.tsx`
+  pair (`frontend/src/features/export/`), not two copies. "Never repeats
+  within a session" (this is the "separate post-export contribution
+  toast, task #31" the unified-display-page proposal's own §4.4′ footnote
+  references) — a `sessionStorage` flag set the moment the prompt is
+  shown, mirroring `chunkErrorRecovery.ts`'s existing session-scoped-flag
+  precedent; deliberately not `localStorage`, since this must not survive
+  a "clear site data"/incognito test. Does not fire when an export is
+  cancelled (e.g. the image-fetch-failure confirm modal's Cancel path) —
+  see `postExportContributionPrompt.ts`'s `wasMostRecentCardsPdfDownloadSuccessful`
+  for the success-detection logic (the download path reads the
+  `fileDownloads` redux slice the download manager already populates,
+  since `useDownloadPDF`'s own return value is swallowed to `void`
+  elsewhere; the Save-to-Drive path reads `useSaveToDrivePDF`'s resolved
+  promise value directly). No backend change, no new API data.
 - **Vote provenance (`voteSurface`)**: `AbstractWeightedVote.vote_surface`
   (backend PR #48, nullable additive field, already on
   `SubmitPrintingTagRequest`/`SubmitArtistVoteRequest`/

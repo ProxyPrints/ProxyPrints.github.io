@@ -26,6 +26,9 @@ import { OverflowCol } from "@/components/OverflowCol";
 import { Spinner } from "@/components/Spinner";
 import { ClientSearchService } from "@/features/clientSearch/clientSearchService";
 import { downloadFile, useDoFileDownload } from "@/features/download/download";
+import { PostExportContributionPrompt } from "@/features/export/PostExportContributionPrompt";
+import { wasLatestCardsPdfDownloadSuccessful } from "@/features/export/postExportContributionPrompt";
+import { usePostExportContributionPrompt } from "@/features/export/usePostExportContributionPrompt";
 import { requestGoogleDriveWriteToken } from "@/features/googleDrive/googleDriveAuth";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { GoogleDriveService } from "@/features/googleDrive/GoogleDriveService";
@@ -1429,6 +1432,26 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
     confirmDespiteFailures
   );
 
+  // Issue #166 - post-export contribution prompt, mounted here rather than only on the /display
+  // page's own inline export so the classic "Print!" tab / PDFGeneratorModal / ProjectEditor
+  // mounts (every real caller of this component - see docs/features/pdf-generator.md) get it too.
+  // See postExportContributionPrompt.ts's own comment for why the download path needs the
+  // fileDownloads redux-slice check while the Save-to-Drive path can just read its own resolved
+  // promise value directly.
+  const contributionPrompt = usePostExportContributionPrompt();
+  const onDownloadPDFClick = async () => {
+    await downloadPDF();
+    if (wasLatestCardsPdfDownloadSuccessful()) {
+      contributionPrompt.notifyExportSucceeded();
+    }
+  };
+  const onSaveToDriveClick = async () => {
+    const succeeded = await saveToDrive();
+    if (succeeded === true) {
+      contributionPrompt.notifyExportSucceeded();
+    }
+  };
+
   return (
     <Container fluid>
       <Row>
@@ -1572,7 +1595,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
           )}
           <hr />
           <div className="d-grid gap-0">
-            <Button onClick={downloadPDF} disabled={isDownloading}>
+            <Button onClick={onDownloadPDFClick} disabled={isDownloading}>
               {isDownloading ? <Spinner size={1.5} /> : "Generate PDF"}
             </Button>
           </div>
@@ -1580,7 +1603,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
             <div className="d-grid gap-0 mt-2">
               <Button
                 variant="outline-primary"
-                onClick={saveToDrive}
+                onClick={onSaveToDriveClick}
                 disabled={isSavingToDrive}
               >
                 {isSavingToDrive ? (
@@ -1604,6 +1627,17 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
               Fetching images: {imageFetchProgress.completed} of ~
               {imageFetchProgress.total}
             </p>
+          )}
+          {/* Issue #166 - see this component's own hook-usage comment above for the
+              success-detection wiring; shown once per session, dismissible, never blocks the
+              buttons above it. */}
+          {contributionPrompt.visible && (
+            <div className="mt-2">
+              <PostExportContributionPrompt
+                show={contributionPrompt.visible}
+                onDismiss={contributionPrompt.dismiss}
+              />
+            </div>
           )}
         </OverflowCol>
         <Col lg={9} md={8} sm={7} xs={6} style={{ position: "relative" }}>

@@ -8,16 +8,19 @@ it. **PARTIAL — this doc's own design/mockup pass is complete and most of
 inline PDF export #109; missing-image slot names #104; requested-printing
 badge #110/#102; the candidate/version picker #96; flat-scroll +
 virtualization #115; the pane migration's remaining rail instruments —
-Attributes, Print Options, Artist, Slot Actions — issue #164; and, most
-recently, §4.4′'s Select Version section rework itself — issue #167,
-`SelectVersionResults.tsx` — see `docs/features/grid-selector.md`'s own
-"Select Version section" entry for what actually shipped vs. what's still
-open). Still not built: the tablet off-canvas drawer / mobile bottom-sheet
-interaction patterns (§3), and §6 step 3/4 (switchover to make `/display`
-the default nav entry point, then retiring `/editor` + the classic PDF
-tab) — see `docs/features/grid-selector.md`, `docs/features/print-export-page.md`,
-and `docs/features/pdf-generator.md` for the surfaces this page is meant
-to eventually absorb.
+Attributes, Print Options, Artist, Slot Actions — issue #164; §4.4′'s
+Select Version section rework — issue #167, `SelectVersionResults.tsx` —
+see `docs/features/grid-selector.md`'s own "Select Version section" entry
+for what actually shipped vs. what's still open; and, most recently, the
+milestone's post-export contribution prompt — issue #166,
+`frontend/src/features/export/usePostExportContributionPrompt.ts` +
+`PostExportContributionPrompt.tsx` — see `docs/features/printing-tags.md`'s
+own entry for the full detail). Still not built: the tablet off-canvas
+drawer / mobile bottom-sheet interaction patterns (§3), and §6 step 3/4
+(switchover to make `/display` the default nav entry point, then retiring
+`/editor` + the classic PDF tab) — see `docs/features/grid-selector.md`,
+`docs/features/print-export-page.md`, and `docs/features/pdf-generator.md`
+for the surfaces this page is meant to eventually absorb.
 
 ## 0. Vision, in our own words
 
@@ -499,8 +502,12 @@ deliberate, none silent):**
   prompt, ever. Once per card per session (dismissal/cast state kept in
   local component state, not persisted — matches the "never repeats
   within a session" framing the owner used for the separate post-export
-  contribution toast, task #31, though these are two independent
-  pieces of session-scoped UI state, not the same mechanism). NO vote
+  contribution toast, task #31 — **now built, issue #166**, a
+  `sessionStorage`-backed flag rather than local component state since it
+  needs to survive this tab's own reloads; see
+  `docs/features/printing-tags.md`'s own entry — though these remain two
+  independent pieces of session-scoped UI state, not the same mechanism).
+  NO vote
   is ever cast from selection alone — zero-telemetry and the
   deliberate-vote principle both hold, same as every other funnel this
   fork has built (`docs/features/printing-tags.md`).

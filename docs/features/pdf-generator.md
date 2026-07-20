@@ -140,6 +140,37 @@ Full spec + approval record: `docs/proposals/proposal-b-bleed-normalization.md`.
 
 **A real crash caught only by running `tests/PDFGenerator.spec.ts`, not by `tsc`/`jest`**: the first version skipped the old proportional rescale by setting `transform: "none"` when normalized. `@react-pdf/renderer`'s own stylesheet parser (`@react-pdf/stylesheet`) has a bug where any single-token transform value throws deep inside its internals (see `docs/lessons.md`'s entry for the exact mechanism) - and their custom reconciler doesn't propagate that as a rejection anywhere, so `pdf(...).toBlob()` just hangs forever with zero console/page error. All 3 download-path Playwright tests hung at their timeout; a stashed pre-Proposal-B baseline confirmed they pass cleanly with no other changes. Fixed by using `transform: undefined` (omitting the key) instead of `"none"` - all 4 tests pass afterward, matching baseline timing.
 
+## Post-export contribution prompt (issue #166)
+
+`useDownloadPDF`/`useSaveToDrivePDF` (this file) are the shared success
+signal both real export surfaces key off: `PDFGenerator.tsx` itself now
+awaits its own `downloadPDF`/`saveToDrive` button handlers and, on a
+genuine success, calls `usePostExportContributionPrompt`'s
+`notifyExportSucceeded()` to show a dismissible, once-per-session prompt
+linking to `/whatsthat` (`frontend/src/features/export/ postExportContributionPrompt.ts` + `usePostExportContributionPrompt.ts` +
+`PostExportContributionPrompt.tsx`). Two different success-detection paths,
+because the two hooks return differently:
+
+- **Download path**: `useDownloadPDF`'s returned promise resolves `void` —
+  its own `useDoFileDownload` wrapper (`download.ts`) swallows the inner
+  success boolean to drive the download-manager UI instead. Success is read
+  back out of the same `fileDownloads` redux slice that UI already
+  populates (`wasLatestCardsPdfDownloadSuccessful`, keyed off the most
+  recently COMPLETED `"cards.pdf"` entry by `completedTimestamp` — every
+  click enqueues a fresh entry, so this can't pick up a stale success from
+  an earlier export).
+- **Save-to-Drive path**: `useSaveToDrivePDF` has no such wrapper —
+  `.finally()` passes its `.then()`'s resolved boolean straight through, so
+  `await saveToDrive()` already gives the real success/cancelled value
+  directly.
+
+The same hook/component pair is also mounted from `frontend/src/features/ display/DisplayPage.tsx`'s own inline export (Proposal H, item 2) — one
+implementation shared by both real export surfaces, not two. See
+`docs/features/printing-tags.md`'s own entry for the full detail (why
+`/whatsthat` and not a new route, the `sessionStorage`-backed "never
+repeats within a session" rule) and `docs/features/print-export-page.md`
+for the classic "Print!" tab's side of this.
+
 ## Key files
 
 - `frontend/src/features/pdf/PDFGenerator.tsx`,
@@ -153,9 +184,17 @@ Full spec + approval record: `docs/proposals/proposal-b-bleed-normalization.md`.
 - `frontend/src/features/pdf/PDFGeneratorModal.tsx`,
   `frontend/src/features/export/FinishedMyProject.tsx`,
   `frontend/src/components/ProjectEditor.tsx`
+- `frontend/src/features/export/postExportContributionPrompt.ts` (+
+  `postExportContributionPrompt.test.ts`),
+  `frontend/src/features/export/usePostExportContributionPrompt.ts`,
+  `frontend/src/features/export/PostExportContributionPrompt.tsx` — issue
+  #166's post-export contribution prompt
 - `frontend/tests/PDFGenerator.spec.ts` — mocked-CDN Playwright coverage for
   bug 4 (preview warning, confirm-gated download/cancel, and a real-image
   success-path regression check)
+- `frontend/tests/PostExportContributionPrompt.spec.ts` — issue #166
+  coverage across both real export surfaces (`/display` and the classic
+  "Print!" tab)
 
 ## Status
 

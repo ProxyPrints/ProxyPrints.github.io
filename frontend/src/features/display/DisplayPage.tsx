@@ -45,6 +45,13 @@
  * dropped. Front-only pagination (see displayPagination.ts's own module comment) - a Fronts/
  * Backs toggle reuses the existing frontsVisible view setting rather than PDFGenerator's
  * export-time front-then-distinct-back interleaving.
+ *
+ * Issue #166 (post-export contribution prompt) - after a genuinely successful "Generate PDF" or
+ * "Save PDF to Google Drive", a dismissible prompt points the user at the existing "What's That
+ * Card?" vote-queue funnel (docs/features/printing-tags.md). See
+ * features/export/postExportContributionPrompt.ts + usePostExportContributionPrompt.ts for the
+ * success-detection and show-once-per-session logic - the same hook/component pair is also
+ * mounted from PDFGenerator.tsx itself, so the classic "Print!" tab gets it too.
  */
 import styled from "@emotion/styled";
 import Link from "next/link";
@@ -78,6 +85,9 @@ import { AttributesSection } from "@/features/display/AttributesSection";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
+import { PostExportContributionPrompt } from "@/features/export/PostExportContributionPrompt";
+import { wasLatestCardsPdfDownloadSuccessful } from "@/features/export/postExportContributionPrompt";
+import { usePostExportContributionPrompt } from "@/features/export/usePostExportContributionPrompt";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { SelectVersionResults } from "@/features/gridSelector/SelectVersionResults";
 import { useGridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
@@ -645,6 +655,27 @@ export function DisplayPage() {
     confirmDespiteFailures
   );
 
+  // Issue #166 - post-export contribution prompt. useDownloadPDF's returned promise resolves
+  // void (its own useDoFileDownload wrapper swallows the inner success boolean - see
+  // postExportContributionPrompt.ts's own comment), so success is read back out of the same
+  // fileDownloads redux slice the download manager UI already populates, once this exact click's
+  // download has finished. useSaveToDrivePDF has no such wrapper - .finally() passes its
+  // .then()'s resolved boolean straight through, so awaiting saveToDrive() directly already
+  // gives the real success/cancelled value.
+  const contributionPrompt = usePostExportContributionPrompt();
+  const onGeneratePdfClick = async () => {
+    await generatePdf();
+    if (wasLatestCardsPdfDownloadSuccessful()) {
+      contributionPrompt.notifyExportSucceeded();
+    }
+  };
+  const onSaveToDriveClick = async () => {
+    const succeeded = await saveToDrive();
+    if (succeeded === true) {
+      contributionPrompt.notifyExportSucceeded();
+    }
+  };
+
   //# endregion
 
   const layout = useMemo(
@@ -874,7 +905,7 @@ export function DisplayPage() {
             <Button
               size="sm"
               variant="outline-primary"
-              onClick={saveToDrive}
+              onClick={onSaveToDriveClick}
               disabled={isSavingToDrive || isDownloading}
               data-testid="display-save-to-drive"
             >
@@ -888,7 +919,7 @@ export function DisplayPage() {
           <Button
             size="sm"
             variant="primary"
-            onClick={generatePdf}
+            onClick={onGeneratePdfClick}
             disabled={isDownloading || isSavingToDrive}
             data-testid="display-generate-pdf"
           >
@@ -896,6 +927,22 @@ export function DisplayPage() {
           </Button>
         </div>
       </div>
+
+      {/* Issue #166 - shown once per session, immediately after this button's first genuine
+          export success (see usePostExportContributionPrompt.ts) - never blocks the export
+          result above it, dismissible, and never re-fires again this session per its own
+          show-once logic. */}
+      {contributionPrompt.visible && (
+        <div
+          className="px-3 pt-2"
+          data-testid="display-contribution-prompt-wrapper"
+        >
+          <PostExportContributionPrompt
+            show={contributionPrompt.visible}
+            onDismiss={contributionPrompt.dismiss}
+          />
+        </div>
+      )}
 
       {/* Item 2 (owner's hands-on review): a real determinate progress bar, not a spinner - a
           large export paced to the image CDN's shared rate limit (see pdfImage.ts) can take
