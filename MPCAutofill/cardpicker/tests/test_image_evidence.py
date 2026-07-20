@@ -134,18 +134,23 @@ def _stub_border_color(monkeypatch, value=None):
 def _stub_ocr(monkeypatch, collector_raw_text: str = "158/287 R MOM EN"):
     """`_StubImage.crop()` returns a fake crop with no real pixel data - any test feeding one
     through `extract_card_evidence` must stub the OCR-group's own crop/tesseract entry points
-    (same rationale as `_stub_border_color` above). `preprocess_variants`/`run_tesseract_tsv` are
-    stubbed unconditionally (they need a real image); `run_tesseract` returns a caller-supplied
-    raw string so the REAL `parse_collector_line`/`extract_artist_name` (never stubbed - both are
-    pure string parsing, no image/tesseract dependency) still exercise their own logic against it,
-    keeping these stand-in tests honest about what's actually parsed rather than faking the
-    parsed fields directly. Defaults to a realistic modern-frame collector line with no artist
-    credit in it (matching real cards, where "Illus." text is an old-border-only convention) -
-    `artist_ocr` genuinely skips ("no-text") under this default, which is the correct outcome for
-    a modern card, not an oversight."""
+    (same rationale as `_stub_border_color` above). `preprocess_variants`/
+    `run_tesseract_text_and_words` are stubbed unconditionally (they need a real image);
+    `run_tesseract`/`run_tesseract_text_and_words` return a caller-supplied raw string so the REAL
+    `parse_collector_line`/`extract_artist_name` (never stubbed - both are pure string parsing, no
+    image/tesseract dependency) still exercise their own logic against it, keeping these stand-in
+    tests honest about what's actually parsed rather than faking the parsed fields directly.
+    Defaults to a realistic modern-frame collector line with no artist credit in it (matching real
+    cards, where "Illus." text is an old-border-only convention) - `artist_ocr` genuinely skips
+    ("no-text") under this default, which is the correct outcome for a modern card, not an
+    oversight. `run_tesseract_text_and_words` (2026-07-20, OCR call-cost reduction - a single
+    tesseract call returning both text and word boxes, see local_ocr.py's own docstring) replaces
+    the old separate `run_tesseract`/`run_tesseract_tsv` calls collector_line_ocr's own winning
+    variant used to make - stubbed here to return `(collector_raw_text, [])`, matching the old
+    stub's "real text, empty word boxes" contract."""
     monkeypatch.setattr(module, "preprocess_variants", lambda cropped: [cropped])
     monkeypatch.setattr(module, "run_tesseract", lambda variant: collector_raw_text)
-    monkeypatch.setattr(module, "run_tesseract_tsv", lambda variant: [])
+    monkeypatch.setattr(module, "run_tesseract_text_and_words", lambda variant: (collector_raw_text, []))
 
 
 def _stub_symbol_region(monkeypatch, value: int = 123456789):

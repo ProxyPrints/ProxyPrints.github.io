@@ -1702,6 +1702,35 @@ tests updated for the two new extractors' presence (`_stub_quality_signals`/`_st
 helpers, mirroring `_stub_symbol_region`'s own identical rationale); full suite (host venv) 1106
 passed / 4 skipped (the same CI-documented named skips - nothing newly broken); `makemigrations --check` clean.
 
+**Stage C bulk driver: compute profile + concurrency/OCR-cost fix (2026-07-20)** —
+`docs/reports/2026-07-20-pipeline-compute-profile.md` measured the bulk cohort driver
+(`run_image_evidence_cohort.py`, previously landed on an unmerged worktree branch only, ported to
+master in this same pass) at 71–378h projected wall-clock for the full ~218k-card harvest against
+a 6.2h reference budget (11.5x–61x over), concentrated in the two Tesseract-backed extractors
+(`ocr_group` 41.7%, `legal_line` 16.2%, together 58%), with the driver's `ThreadPoolExecutor (concurrency=6)` measured 3.25x SLOWER than sequential (CPU-bound OCR oversubscribing a fixed core
+count, not the I/O-bound case that concurrency level was validated for on the fetch stage). Fixed
+two ways: (1) the driver now uses a `ProcessPoolExecutor` sized to the host's USABLE compute cores
+(owner-confirmed hardware: 8 OCPU total, 1 pinned to network traffic, 7 usable — `--workers`/
+`STAGE_C_WORKERS` env-tunable, default 7), each worker forcing `OMP_THREAD_LIMIT=1` so N processes
+don't ALSO nest-oversubscribe tesseract's own internal OpenMP threading; a local synthetic
+micro-benchmark (not the authoritative re-profile — that happens after deploy) reproduced the
+qualitative finding directly: `ThreadPoolExecutor` at 0.24–0.29x vs sequential, `ProcessPoolExecutor`
+at 4.0–4.9x. Converting to a process pool required re-deriving three pieces of state threads were
+sharing for free (DB connections, the stop-on-lockout flag, and `harvest_fetch_limiter`'s
+process-local rate limiter singleton) — see `docs/lessons.md`'s new entry on this for the general
+pattern, and `run_image_evidence_cohort.py`'s own module docstring for the specific fix to each.
+(2) `local_ocr.run_tesseract_text_and_words` (new) derives BOTH a variant's raw text and its
+TSV word boxes from a single `pytesseract.image_to_data` call, replacing collector_line_ocr's old
+separate `run_tesseract` + `run_tesseract_tsv` calls on the same winning variant (measured 2.01x
+speedup for that call site alone, local micro-benchmark); both collector_line_ocr's and
+legal_line's own multi-variant loops now short-circuit at the first variant that parses something
+usable, instead of always OCR-ing every variant. No `ImageEvidence` field or its semantics
+changed — same signal set, cheaper to compute; full backend suite green (1184 passed / 4 skipped,
+same CI-documented named skips) including the real-tesseract
+`TestExtractCardEvidenceArtistOcr::test_finds_artist_within_collector_line_crop_without_a_second_ocr_pass`
+reuse test, run explicitly to confirm the short-circuit doesn't starve `artist_ocr`'s own
+reuse-before-recompute path.
+
 Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
