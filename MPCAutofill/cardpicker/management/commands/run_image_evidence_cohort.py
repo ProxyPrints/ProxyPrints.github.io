@@ -351,11 +351,17 @@ class Command(BaseCommand):
                     )
                     self.stdout.flush()
 
+        # Read stop_event's state BEFORE manager.shutdown() tears down the manager process - the
+        # proxy's is_set() call needs a live manager to talk to, and calling it after shutdown()
+        # unconditionally raised (every invocation, regardless of cohort size or lockout state -
+        # see docs/reports/2026-07-20-canary-reprofile.md's "Bug found" section for the traceback
+        # this produced against a real 400-card prod canary).
+        lockout_hit = stop_event.is_set()
         manager.shutdown()
 
         elapsed = time.monotonic() - run_start
         rate = completed / elapsed if elapsed > 0 else 0.0
         self.stdout.write(
             f"DONE run_id={run_id} completed={completed}/{len(cohort_ids)} elapsed={elapsed:.0f}s "
-            f"rate={rate:.3f}/s fetch_failures={fetch_failures} lockout_hit={stop_event.is_set()}"
+            f"rate={rate:.3f}/s fetch_failures={fetch_failures} lockout_hit={lockout_hit}"
         )
