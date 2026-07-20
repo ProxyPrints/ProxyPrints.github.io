@@ -1624,6 +1624,81 @@ fit" conditional wording; full suite 1099 passed / 4 skipped (the same
 CI-documented named skips — nothing newly broken); `makemigrations --check`
 clean (no model change).
 
+**color_profile / quality_signals / fetch-health completion — LAST Stage C manifest
+extractor group, built** (public issue #150's re-spec, 2026-07-20 — the phash half of the
+original issue is DROPPED per the owner's same-day re-spec comment on #150, superseded by
+user-submitted phash on the art-similarity flag, task #203; set-symbol phash already shipped
+separately as `symbol_region`, issue #160): adds `fetch_latency_ms`, `fetch_image_format`,
+`image_is_truncated`, `blur_variance`, `image_entropy`, `color_mean_rgb`, `color_stddev_rgb` to
+`ImageEvidence` (migration `0075`, additive-only `AddField`s, no freeze conflict — checked
+`gh issue list --label deploy-freeze-active --state all` fresh immediately before writing the
+migration, empty). New, NOT-protected-core module `cardpicker/local_image_quality.py`
+(`docs/upstreaming/license-provenance.md` §2's file list doesn't include it — new helpers land
+there directly, same convention `local_ocr.py` already established for OCR-adjacent additions):
+`is_image_truncated` (forces a full pixel decode via `Image.load()`, catching the `OSError`
+Pillow raises for a genuinely truncated download — verified empirically against a real
+half-written JPEG before being wired in), `compute_blur_variance` (variance of a Laplacian-kernel
+edge response over the grayscale image, cropping out `PIL.ImageFilter.Kernel`'s own documented
+1-pixel unprocessed border first — verified empirically that a flat solid-color image reports an
+exact-zero interior response only after that crop, not before), `compute_entropy` (Pillow's own
+built-in `Image.entropy()`, not reimplemented), and `compute_color_profile` (per-channel R/G/B
+mean + population stddev via `PIL.ImageStat.Stat`, not a hand-rolled pixel loop) — all first-party
+Pillow APIs, no external code ported (matching this repo's own provenance-sweep precedent for
+`local_phash.py`/`local_fallback.py`, `docs/upstreaming/license-provenance.md` §1.7). No changes
+to `local_fallback.py`/`local_phash.py` themselves (both PROTECTED CORE; not touched by this PR).
+
+`quality_signals` runs `is_image_truncated` first and shares that finding with `color_profile`
+just below it (an explicit cross-extractor dependency, documented in `image_evidence.py`'s module
+docstring the same way `artist_ocr` reusing `collector_line_ocr`'s raw text already is) rather than
+re-attempting the same decode twice; `blur_variance`/`image_entropy` are only computed once the
+image has loaded cleanly, since a truncated image's partial pixel data would produce meaningless
+numbers, not a real reading. Both extractors share a degenerate-size (zero/negative width or
+height) guard with `skip_reason="ambiguous"`, the same "sub-floor input" category
+`geometry_bleed`'s own zero-height guard and `symbol_region`'s degenerate-crop-box guard handle for
+their own divisions/crops — real fetched images essentially never hit this. A truncated image is
+reported through the SAME `"fetch_failed"` skip reason `fetch_health` already uses, deliberately —
+see the vocabulary note below.
+
+**Vocabulary discipline, advisor-reviewed before building**: the initial design considered
+widening `fetch_error_class`'s value space (distinguishing an unsupported source type from a
+generic fetch failure) and inventing a new skip-reason string for a truncated download
+(`"unfetchable-image"`, an existing but different subsystem's term). Both were dropped after
+review: the task asked to complete fetch-health's _fields_ (plural — i.e. add columns), not widen
+what values an existing field can take, and `docs/features/catalog-completion-plan.md`'s own
+`CardScanLog` design explicitly warns against a separately-invented skip-reason vocabulary ("the
+pipeline's own existing strings verbatim... not a separately-invented vocabulary"). The simpler,
+fully-precedented path shipped instead: `fetch_error_class` stays `""`/`"fetch_failed"` only, new
+fields (`fetch_latency_ms`, measured around the SAME `fetch_card_image` call this extractor
+already made — no second fetch; `fetch_image_format`, the fetched image's own `PIL.Image.format`)
+complete the trivial substrate-PR version of this extractor, and a truncated image is bucketed
+under the same `"fetch_failed"` skip reason `quality_signals`/`color_profile` share above.
+`FETCH_HEALTH_EXTRACTOR_VERSION` is bumped `v1` → `v2` to signal that a row bearing the old tag
+predates these two fields, per `ImageEvidence`'s own "per-field completion/versioning map" design
+intent.
+
+**Golden-set gathering — NOT completed in this PR, open item**: every prior Stage C extractor's
+`GOLDEN_EXPECTATIONS` entry was populated against a real, no-persistence `extract_card_evidence()`
+run over all 30 golden cards, requiring both a live production `Card` read (the golden set's 30
+pinned ids) and a real network fetch through the shared `GOOGLE_IMAGE`-paced Worker path. This
+session's isolated worktree has neither production DB credentials nor a route to that fetch path
+(no `docker/.env`, and reaching into the live containers to work around that was declined — see
+this PR's own report). `GOLDEN_EXPECTATIONS` therefore has NO new entries for `quality_signals`/
+`color_profile`/`fetch_health`'s completed fields yet, unlike every extractor before it — flagged
+here plainly rather than shipped with fabricated numbers or silently skipped. A follow-up pass (a
+session with production access, or the owner directly) needs to run the same read-only
+`extract_card_evidence()` sweep this PR's own predecessors used and add the entries before this is
+truly done to the same bar as #147–#151/#160. 18 new tests (10 in a new
+`test_local_image_quality.py` - the pure math functions, tested in isolation with real PIL images;
+`is_image_truncated` specifically tested there rather than through the full pipeline, since a
+genuinely truncated real file would also trip up earlier real-pixel-reading extractors that run
+before `quality_signals` in `extract_card_evidence`'s own order, a pre-existing, out-of-scope gap
+in those extractors, not something to route around by picking a "safe" truncation point - 8 in
+`test_image_evidence.py`'s new `TestExtractCardEvidenceQualitySignals`/`ColorProfile` classes),
+plus 13 pre-existing `TestExtractCardEvidence`/`GeometryBleed`/`CropCoordinates` `_StubImage`-based
+tests updated for the two new extractors' presence (`_stub_quality_signals`/`_stub_color_profile`
+helpers, mirroring `_stub_symbol_region`'s own identical rationale); full suite (host venv) 1106
+passed / 4 skipped (the same CI-documented named skips - nothing newly broken); `makemigrations --check` clean.
+
 Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
