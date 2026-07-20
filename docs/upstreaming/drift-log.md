@@ -9,11 +9,11 @@ never rebases anything itself).
 
 Last run: 2026-07-20 10:54 UTC, upstream/master @ c3d10253e581a1e4fc52b7c4efd9d150b00de026
 
-| Branch | Applies clean onto upstream/master? | Upstream commits since fork point | Files upstream touched that this branch also touches | Last checked |
-| --- | --- | --- | --- | --- |
-| `upstream-feat-local-file-source` | yes | 0 | 0 file(s) | 2026-07-20 |
-| `upstream-fix-frontend-searchable-the` | yes | 1 | 0 file(s) | 2026-07-20 |
-| `upstream-fix-image-cdn-cors` | yes | 2 | 0 file(s) | 2026-07-20 |
-| `upstream-fix-pdf-canvas-preview` | yes | 2 | 0 file(s) | 2026-07-20 |
-| `upstream-fix-pdf-eager-wasm-load` | yes | 2 | 0 file(s) | 2026-07-20 |
-| `upstream-fix-pdf-thumbnail-worker-route` | yes | 2 | 0 file(s) | 2026-07-20 |
+| Branch                                    | Applies clean onto upstream/master? | Upstream commits since fork point | Files upstream touched that this branch also touches | Last checked |
+| ----------------------------------------- | ----------------------------------- | --------------------------------- | ---------------------------------------------------- | ------------ |
+| `upstream-feat-local-file-source`         | yes                                 | 0                                 | 0 file(s)                                            | 2026-07-20   |
+| `upstream-fix-frontend-searchable-the`    | yes                                 | 1                                 | 0 file(s)                                            | 2026-07-20   |
+| `upstream-fix-image-cdn-cors`             | yes                                 | 2                                 | 0 file(s)                                            | 2026-07-20   |
+| `upstream-fix-pdf-canvas-preview`         | yes                                 | 2                                 | 0 file(s)                                            | 2026-07-20   |
+| `upstream-fix-pdf-eager-wasm-load`        | yes                                 | 2                                 | 0 file(s)                                            | 2026-07-20   |
+| `upstream-fix-pdf-thumbnail-worker-route` | yes                                 | 2                                 | 0 file(s)                                            | 2026-07-20   |
