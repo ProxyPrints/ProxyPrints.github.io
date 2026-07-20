@@ -281,28 +281,32 @@ def extract_card_evidence(
     card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI, profile: Optional[dict[str, float]] = None
 ) -> ExtractionResult:
     """
-    The per-card callable work unit. `card.content_phash` (not recomputed here) is the content
-    hash this evidence is keyed against - hash-at-ingest (Part 2) already populates it for
-    essentially every card by the time Stage C runs. If it's still null, the result's
-    `content_hash` is None and `persist_evidence` will refuse to write a row, since
+    The per-card callable work unit - fetch, then compute. `card.content_phash` (not recomputed
+    here) is the content hash this evidence is keyed against - hash-at-ingest (Part 2) already
+    populates it for essentially every card by the time Stage C runs. If it's still null, the
+    result's `content_hash` is None and `persist_evidence` will refuse to write a row, since
     ImageEvidence's "computed-once-forever" premise depends on a stable hash to key on.
 
-    `profile`, if given, is populated (in place) with a `time.monotonic()`-delta timing
-    breakdown - `fetch_ms`, `ocr_group_ms` (collector_line_ocr + artist_ocr + collector_line_tsv,
-    the Tesseract-backed OCR group), `legal_line_ms` (the second Tesseract-backed extractor),
-    `extraction_ms` (everything after fetch returns, i.e. every extractor combined), and
-    `other_ms` (`extraction_ms` minus the two OCR-group figures - geometry_bleed/layout_class/
-    crop_coordinates/symbol_region/quality_signals/color_profile combined). Diagnostic-only
-    (2026-07-20, docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md) - `None` by default,
-    zero behavior change and negligible overhead (a handful of extra `time.monotonic()` calls)
-    when not passed; never persisted onto `ImageEvidence` itself, per
-    docs/features/catalog-completion-plan.md's Stage C instrumentation spec ("aggregated into the
-    run's own summary logging rather than a new persisted ImageEvidence field").
-    """
+    Split into a fetch step (here) + `compute_card_evidence` (2026-07-20, Stage C fetch/compute
+    decoupling design, docs/features/catalog-completion-plan.md's Stage C section, #228) so a
+    concurrent driver can run the fetch on an I/O-bound thread and the compute on a CPU-bound
+    process, without this function's own single-caller behavior changing at all - every existing
+    caller of `extract_card_evidence` (this pilot's tests, any future direct caller) still gets
+    the exact same fetch-then-compute behavior in one call.
 
-    fields: dict[str, Any] = {}
-    extractor_versions: dict[str, str] = {}
-    skip_reasons: dict[str, str] = {}
+    `profile`, if given, is forwarded straight through to `compute_card_evidence` below and
+    populated (in place) there with a `time.monotonic()`-delta timing breakdown - `fetch_ms`,
+    `ocr_group_ms` (collector_line_ocr + artist_ocr + collector_line_tsv, the Tesseract-backed OCR
+    group), `legal_line_ms` (the second Tesseract-backed extractor), `extraction_ms` (everything
+    after fetch returns, i.e. every extractor combined), and `other_ms` (`extraction_ms` minus the
+    two OCR-group figures - geometry_bleed/layout_class/crop_coordinates/symbol_region/
+    quality_signals/color_profile combined). Diagnostic-only (2026-07-20,
+    docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md) - `None` by default, zero behavior
+    change and negligible overhead (a handful of extra `time.monotonic()` calls) when not passed;
+    never persisted onto `ImageEvidence` itself, per docs/features/catalog-completion-plan.md's
+    Stage C instrumentation spec ("aggregated into the run's own summary logging rather than a
+    new persisted ImageEvidence field").
+    """
 
     fetch_started_at = time.monotonic()
     try:
@@ -312,11 +316,49 @@ def extract_card_evidence(
         # observation - propagate exactly as image_cdn_fetch.fetch_card_image's own docstring
         # requires every caller to.
         raise
-    fetch_ended_at = time.monotonic()
-    fields["fetch_latency_ms"] = (fetch_ended_at - fetch_started_at) * 1000
+    fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
+
+    return compute_card_evidence(card.pk, card.content_phash, image, fetch_latency_ms, profile=profile)
+
+
+def compute_card_evidence(
+    card_id: int,
+    content_hash: Optional[int],
+    image: Optional[Any],
+    fetch_latency_ms: float,
+    profile: Optional[dict[str, float]] = None,
+) -> ExtractionResult:
+    """
+    Compute-only continuation of `extract_card_evidence` above - everything that function does
+    AFTER its own fetch step, against an already-fetched `image` (a `PIL.Image.Image`, or `None`
+    for a failed/skipped fetch) and a `fetch_latency_ms` the caller already measured. Takes a
+    plain `card_id`/`content_hash` pair rather than a `Card` instance deliberately: this is the
+    module-level, picklable entrypoint a `ProcessPoolExecutor` compute worker calls directly
+    (`run_image_evidence_cohort.py`'s decoupled compute stage) once the fetch stage (a separate
+    thread pool, I/O-bound, never itself CPU-heavy) has already produced `image` - a compute
+    worker never touches the network, never calls `fetch_card_image`/`GoogleFetchLockoutError`
+    can only ever originate in the fetch stage now. Never called with `image` freshly decoded
+    from bytes on the FETCH side - the fetch stage hands over raw bytes
+    (`image_cdn_fetch.fetch_card_image_bytes`) and the compute worker decodes them into an
+    `Image` itself right before calling this, so the real pixel decode cost lands on the compute
+    side, not the fetch side (see that function's own docstring for why this split matters for
+    the hardware's network-vs-compute core allocation).
+
+    `profile` (2026-07-20, docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md): see
+    `extract_card_evidence`'s own docstring for the full field breakdown. `fetch_ms` is set here
+    directly from the caller-supplied `fetch_latency_ms` (this function never measures its own
+    fetch) - so the resulting profile shape is identical regardless of whether the caller is
+    `extract_card_evidence` (bundled fetch+compute, one process/call) or the decoupled compute
+    stage calling this directly with a `fetch_latency_ms` its own separate fetch stage already
+    measured.
+    """
+
+    fields: dict[str, Any] = {"fetch_latency_ms": fetch_latency_ms}
+    extractor_versions: dict[str, str] = {}
+    skip_reasons: dict[str, str] = {}
     if profile is not None:
-        profile["fetch_ms"] = fields["fetch_latency_ms"]
-    extraction_started_at = fetch_ended_at
+        profile["fetch_ms"] = fetch_latency_ms
+    extraction_started_at = time.monotonic()
 
     if image is None:
         fields["fetch_ok"] = False
@@ -593,8 +635,8 @@ def extract_card_evidence(
         )
 
     return ExtractionResult(
-        card_id=card.pk,
-        content_hash=card.content_phash,
+        card_id=card_id,
+        content_hash=content_hash,
         fields=fields,
         extractor_versions=extractor_versions,
         skip_reasons=skip_reasons,
@@ -693,6 +735,7 @@ def build_reconciliation_report(
 __all__ = [
     "ExtractionResult",
     "extract_card_evidence",
+    "compute_card_evidence",
     "persist_evidence",
     "ReconciliationReport",
     "build_reconciliation_report",
