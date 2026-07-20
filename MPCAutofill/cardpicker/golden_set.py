@@ -136,6 +136,211 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
             217783: "bleed",
         }.items()
     ],
+    # layout_class (issue #148, geometry-group, recorded 2026-07-19 the same way geometry_bleed
+    # was - a real no-persistence extract_card_evidence() run over all 30 golden cards). `value`
+    # is `classify_border_color`'s own output (see image_evidence.py's module docstring for why
+    # this classifier backs the `layout_class` field). Card 207913 genuinely came back "" with
+    # an "ambiguous" skip_reason in the real run (a border sample outside the v1 taxonomy) - kept
+    # as-is rather than discarded, since a golden set that only ever pins clean-positive outcomes
+    # would never catch a regression in the ambiguous path.
+    "layout_class": [
+        GoldenExpectation(card_id=cid, value=value)
+        for cid, value in {
+            35: "borderless",
+            37: "black",
+            40: "black",
+            37962: "black",
+            39520: "black",
+            41039: "borderless",
+            102138: "black",
+            128981: "black",
+            144933: "borderless",
+            145081: "borderless",
+            145532: "black",
+            147855: "borderless",
+            150472: "black",
+            159175: "black",
+            161020: "white",
+            175889: "borderless",
+            189166: "black",
+            189921: "black",
+            190895: "borderless",
+            193523: "borderless",
+            194684: "black",
+            199986: "black",
+            200330: "black",
+            200668: "borderless",
+            204427: "borderless",
+            207913: "",
+            208337: "borderless",
+            208569: "borderless",
+            214113: "borderless",
+            217783: "borderless",
+        }.items()
+    ],
+    # crop_coordinates (issue #148, geometry-group, recorded the same run as layout_class above).
+    # `value` is a dict of the three pixel-coordinate boxes this extractor writes
+    # (`collector_line_crop_px`/`artist_crop_px`/`art_crop_px`) - kept together per card rather
+    # than as three separate GOLDEN_EXPECTATIONS keys, since they're one extractor's one pass
+    # (see image_evidence.py's `crop_coordinates` extractor_versions key). The three
+    # 'trimmed'-classified cards (145532/150472/189166) show visibly different numbers than the
+    # 'bleed' majority - real evidence that normalize_crop_box's remap is actually engaged for
+    # those rows, not a no-op silently passing through everywhere.
+    "crop_coordinates": [
+        GoldenExpectation(card_id=cid, value=value)
+        for cid, value in {
+            35: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            37: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            40: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            37962: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 681, 925],
+                "art_crop_px": [48, 92, 633, 536],
+            },
+            39520: {
+                "collector_line_crop_px": [41, 832, 237, 893],
+                "artist_crop_px": [0, 758, 678, 925],
+                "art_crop_px": [47, 92, 631, 536],
+            },
+            41039: {
+                "collector_line_crop_px": [41, 832, 237, 893],
+                "artist_crop_px": [0, 758, 678, 925],
+                "art_crop_px": [47, 92, 631, 536],
+            },
+            102138: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            128981: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            144933: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            145081: {
+                "collector_line_crop_px": [41, 832, 237, 893],
+                "artist_crop_px": [0, 758, 678, 925],
+                "art_crop_px": [47, 92, 631, 536],
+            },
+            145532: {
+                "collector_line_crop_px": [10, 859, 222, 924],
+                "artist_crop_px": [0, 780, 662, 925],
+                "art_crop_px": [18, 66, 644, 542],
+            },
+            147855: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            150472: {
+                "collector_line_crop_px": [10, 859, 219, 924],
+                "artist_crop_px": [0, 780, 654, 925],
+                "art_crop_px": [17, 66, 637, 542],
+            },
+            159175: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            161020: {
+                "collector_line_crop_px": [41, 832, 237, 893],
+                "artist_crop_px": [0, 758, 678, 925],
+                "art_crop_px": [47, 92, 631, 536],
+            },
+            175889: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            189166: {
+                "collector_line_crop_px": [10, 859, 222, 924],
+                "artist_crop_px": [0, 780, 664, 925],
+                "art_crop_px": [18, 66, 646, 542],
+            },
+            189921: {
+                "collector_line_crop_px": [41, 832, 237, 893],
+                "artist_crop_px": [0, 758, 678, 925],
+                "art_crop_px": [47, 92, 631, 536],
+            },
+            190895: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            193523: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            194684: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            199986: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            200330: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            200668: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            204427: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            207913: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            208337: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            208569: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            214113: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            217783: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+        }.items()
+    ],
 }
 
 

@@ -39,6 +39,30 @@ class TestGoldenExpectations:
         # populated and whenever it's next revisited, not a per-CI-run network call).
         assert all(e.value in ("bleed", "trimmed") for e in GOLDEN_EXPECTATIONS["geometry_bleed"])
 
+    def test_layout_class_expectation_covers_every_golden_card(self):
+        layout_class_card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["layout_class"]}
+        assert layout_class_card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_layout_class_values_are_a_known_border_class_or_ambiguous(self):
+        # Recorded 2026-07-19 against a real extract_card_evidence() run over all 30 golden
+        # cards (issue #148) - see this file's own note on TestGeometryBleed above for why this
+        # isn't re-verified live in CI. "" (ambiguous) is a genuine real outcome for one golden
+        # card (207913), not a placeholder - see golden_set.py's own comment.
+        assert all(
+            e.value in ("black", "white", "silver", "borderless", "") for e in GOLDEN_EXPECTATIONS["layout_class"]
+        )
+
+    def test_crop_coordinates_expectation_covers_every_golden_card(self):
+        crop_coordinates_card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["crop_coordinates"]}
+        assert crop_coordinates_card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_crop_coordinates_values_have_all_three_boxes_as_four_int_lists(self):
+        for expectation in GOLDEN_EXPECTATIONS["crop_coordinates"]:
+            for key in ("collector_line_crop_px", "artist_crop_px", "art_crop_px"):
+                box = expectation.value[key]
+                assert len(box) == 4
+                assert all(isinstance(coord, int) for coord in box)
+
 
 class TestGetGoldenCards:
     def test_raises_when_pinned_ids_are_missing_from_the_db(self, db):

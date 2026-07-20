@@ -8,23 +8,46 @@ geometry_bleed (task #147) is exercised against a lightweight `_StubImage` rathe
 PIL Image - `local_fallback.classify_bleed_edge` (the function this extractor calls, unmodified)
 only ever reads `.size`, so a bare `(width, height)` stand-in is sufficient and keeps these tests
 fast/dependency-light; the real classifier function itself is never mocked, only its input.
+
+layout_class (issue #148) calls `local_fallback.classify_border_color`, which DOES need a real
+image (`.crop()`/`.convert()`/`.getdata()`) - every existing test that feeds a `_StubImage`
+through `extract_card_evidence` now also monkeypatches `classify_border_color` itself (not just
+its input) so those tests keep exercising only what they're actually about (fetch_health/
+geometry_bleed) without needing a real PIL image. `TestExtractCardEvidenceLayoutClass` below is
+the one test class that uses real `PIL.Image` objects, mirroring `test_local_fallback.py`'s own
+`TestClassifyBorderColor` fixture style, since it's actually testing that classifier's real
+output.
+
+crop_coordinates (issue #148) never touches the image object itself (only `width`/`height` +
+`bleed_class`, both already-computed numbers/strings), so it never needs the classify_border_color
+patch - it's exercised directly against `_StubImage`/`_TRIMMED_IMAGE` like geometry_bleed is.
 """
 
 from dataclasses import dataclass
 
 import pytest
+from PIL import Image, ImageDraw
 
 import cardpicker.image_evidence as module
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import (
+    CROP_COORDINATES_EXTRACTOR_VERSION,
     FETCH_HEALTH_EXTRACTOR_VERSION,
     GEOMETRY_BLEED_EXTRACTOR_VERSION,
+    LAYOUT_CLASS_EXTRACTOR_VERSION,
     ExtractionResult,
     build_reconciliation_report,
     extract_card_evidence,
     persist_evidence,
 )
-from cardpicker.local_fallback import BLEED_ASPECT_RATIO, TRIM_ASPECT_RATIO
+from cardpicker.local_fallback import (
+    ARTIST_CROP_BOX,
+    BLEED_ASPECT_RATIO,
+    TRIM_ASPECT_RATIO,
+    normalize_crop_box,
+)
+from cardpicker.local_ocr import DEFAULT_CROP_BOX
+from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import CardScanLog, ImageEvidence
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
@@ -49,6 +72,16 @@ _TRIMMED_IMAGE = _StubImage(size=(round(1000 * TRIM_ASPECT_RATIO), 1000))
 _AMBIGUOUS_IMAGE = _StubImage(size=(1000, 1000))  # square - far from both known ratios
 
 
+def _stub_border_color(monkeypatch, value=None):
+    """`_StubImage` has no `.crop()`/`.convert()`/`.getdata()`, so any test feeding one through
+    `extract_card_evidence` must stub out `classify_border_color` itself (not just its image
+    input) - it's a different function than `classify_bleed_edge`, which only ever reads
+    `.size`. `value` defaults to None (ambiguous) but tests that don't care about layout_class's
+    own outcome pass a fixed non-None value to keep skip_reasons/extractor_versions assertions
+    unaffected by an incidental "ambiguous" entry."""
+    monkeypatch.setattr(module, "classify_border_color", lambda image, bleed_class=None: value)
+
+
 @pytest.fixture(autouse=True)
 def _preserve_shared_factory_sequences():
     before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
@@ -63,6 +96,7 @@ class TestExtractCardEvidence:
     def test_successful_fetch_marks_fetch_ok_and_records_no_skip(self, db, monkeypatch):
         card = CardFactory(content_phash=12345)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
 
         result = extract_card_evidence(card)
 
@@ -73,6 +107,8 @@ class TestExtractCardEvidence:
         assert result.extractor_versions == {
             "fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION,
             "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
+            "layout_class": LAYOUT_CLASS_EXTRACTOR_VERSION,
+            "crop_coordinates": CROP_COORDINATES_EXTRACTOR_VERSION,
         }
         assert result.skip_reasons == {}
 
@@ -83,19 +119,26 @@ class TestExtractCardEvidence:
         result = extract_card_evidence(card)
 
         assert result.fields == {"fetch_ok": False, "fetch_error_class": "fetch_failed"}
-        # extractor_versions is still set for BOTH extractors - each ran to completion, it just
-        # found a negative result (a fetch failure is a shared root cause, not a crash in either
-        # extractor). Only a crash omits an extractor's own key (see ExtractionResult's
-        # docstring).
+        # extractor_versions is still set for every extractor - each ran to completion, it just
+        # found a negative result (a fetch failure is a shared root cause, not a crash in any of
+        # them). Only a crash omits an extractor's own key (see ExtractionResult's docstring).
         assert result.extractor_versions == {
             "fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION,
             "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
+            "layout_class": LAYOUT_CLASS_EXTRACTOR_VERSION,
+            "crop_coordinates": CROP_COORDINATES_EXTRACTOR_VERSION,
         }
-        assert result.skip_reasons == {"fetch_health": "fetch_failed", "geometry_bleed": "fetch_failed"}
+        assert result.skip_reasons == {
+            "fetch_health": "fetch_failed",
+            "geometry_bleed": "fetch_failed",
+            "layout_class": "fetch_failed",
+            "crop_coordinates": "fetch_failed",
+        }
 
     def test_null_content_phash_surfaces_as_none(self, db, monkeypatch):
         card = CardFactory(content_phash=None)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -115,6 +158,7 @@ class TestExtractCardEvidence:
     def test_no_db_writes_happen(self, db, monkeypatch):
         card = CardFactory(content_phash=12345)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch)
 
         extract_card_evidence(card)
 
@@ -128,6 +172,7 @@ class TestExtractCardEvidenceGeometryBleed:
     def test_bleed_image_records_dims_ratio_and_bleed_class(self, db, monkeypatch):
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
 
         result = extract_card_evidence(card)
 
@@ -141,6 +186,7 @@ class TestExtractCardEvidenceGeometryBleed:
     def test_trimmed_image_records_trimmed_bleed_class(self, db, monkeypatch):
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
 
         result = extract_card_evidence(card)
 
@@ -150,6 +196,7 @@ class TestExtractCardEvidenceGeometryBleed:
     def test_ambiguous_aspect_ratio_records_named_skip(self, db, monkeypatch):
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _AMBIGUOUS_IMAGE)
+        _stub_border_color(monkeypatch, "black")
 
         result = extract_card_evidence(card)
 
@@ -166,6 +213,7 @@ class TestExtractCardEvidenceGeometryBleed:
     def test_zero_height_image_guards_aspect_ratio_division(self, db, monkeypatch):
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
+        _stub_border_color(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -183,6 +231,11 @@ class TestExtractCardEvidenceGeometryBleed:
         assert "aspect_ratio" not in result.fields
         assert "bleed_class" not in result.fields
         assert result.skip_reasons["geometry_bleed"] == "fetch_failed"
+        # every geometry-group extractor shares the same root cause - see module docstring.
+        assert "layout_class" not in result.fields
+        assert result.skip_reasons["layout_class"] == "fetch_failed"
+        assert "collector_line_crop_px" not in result.fields
+        assert result.skip_reasons["crop_coordinates"] == "fetch_failed"
 
     def test_persist_writes_geometry_fields(self, db):
         card = CardFactory(content_phash=999)
@@ -200,6 +253,167 @@ class TestExtractCardEvidenceGeometryBleed:
         assert evidence.height == 1300
         assert evidence.aspect_ratio == pytest.approx(925 / 1300)
         assert evidence.bleed_class == "bleed"
+
+
+class TestExtractCardEvidenceLayoutClass:
+    """issue #148 (geometry-group) - layout_class calls local_fallback.classify_border_color
+    directly, unmodified. Real PIL images throughout (unlike geometry_bleed's _StubImage above)
+    since classify_border_color genuinely samples pixel data - mirrors
+    test_local_fallback.py::TestClassifyBorderColor's own fixture style."""
+
+    @staticmethod
+    def _bordered_image(border_rgb: tuple[int, int, int], bleed: bool = True) -> "Image.Image":
+        ratio = BLEED_ASPECT_RATIO if bleed else TRIM_ASPECT_RATIO
+        width = round(1000 * ratio)
+        img = Image.new("RGB", (width, 1000), border_rgb)
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([round(width * 0.08), 60, round(width * 0.92), 940], fill=(120, 80, 200))
+        return img
+
+    def test_black_border_records_layout_class(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: self._bordered_image((5, 5, 5)))
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["bleed_class"] == "bleed"
+        assert result.fields["layout_class"] == "black"
+        assert "layout_class" not in result.skip_reasons
+
+    def test_white_border_records_layout_class(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: self._bordered_image((250, 250, 250)))
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["layout_class"] == "white"
+
+    def test_ambiguous_color_records_named_skip(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        # gold/yellow - explicitly outside the v1 taxonomy, see classify_border_color's own
+        # docstring.
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: self._bordered_image((180, 140, 40)))
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["layout_class"] == ""
+        assert result.skip_reasons["layout_class"] == "ambiguous"
+
+    def test_fetch_failure_withholds_layout_class_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "layout_class" not in result.fields
+        assert result.skip_reasons["layout_class"] == "fetch_failed"
+
+    def test_persist_writes_layout_class(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={"layout_class": "white"},
+            extractor_versions={"layout_class": LAYOUT_CLASS_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.layout_class == "white"
+
+
+class TestExtractCardEvidenceCropCoordinates:
+    """issue #148 (geometry-group) - crop_coordinates turns DEFAULT_CROP_BOX/ARTIST_CROP_BOX/
+    ART_CROP_BOX into pixel coordinates for this specific fetched image. Never touches the image
+    object itself (only width/height + bleed_class), so it's exercised against _StubImage like
+    geometry_bleed, with classify_border_color always stubbed out alongside it."""
+
+    def test_ambiguous_bleed_class_applies_no_remap(self, db, monkeypatch):
+        # 1000x2000 is not a real card aspect ratio - bleed_class comes out "" (ambiguous),
+        # which is (like 'bleed') a no-op for normalize_crop_box, so the raw fixed-fraction
+        # boxes apply directly with no remapping - a clean, hand-verifiable case.
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(1000, 2000)))
+        _stub_border_color(monkeypatch)
+
+        result = extract_card_evidence(card)
+
+        left, top, right, bottom = DEFAULT_CROP_BOX
+        assert result.fields["collector_line_crop_px"] == [
+            round(left * 1000),
+            round(top * 2000),
+            round(right * 1000),
+            round(bottom * 2000),
+        ]
+
+    def test_trimmed_image_applies_normalize_crop_box_remap(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
+        _stub_border_color(monkeypatch)
+
+        result = extract_card_evidence(card)
+
+        width, height = _TRIMMED_IMAGE.size
+        left, top, right, bottom = normalize_crop_box(ARTIST_CROP_BOX, "trimmed")
+        assert result.fields["artist_crop_px"] == [
+            round(left * width),
+            round(top * height),
+            round(right * width),
+            round(bottom * height),
+        ]
+
+    def test_bleed_image_computes_all_three_boxes(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
+
+        result = extract_card_evidence(card)
+
+        width, height = _BLEED_IMAGE.size
+        for field_name, box in (
+            ("collector_line_crop_px", DEFAULT_CROP_BOX),
+            ("artist_crop_px", ARTIST_CROP_BOX),
+            ("art_crop_px", ART_CROP_BOX),
+        ):
+            left, top, right, bottom = box  # 'bleed' is a no-op for normalize_crop_box
+            assert result.fields[field_name] == [
+                round(left * width),
+                round(top * height),
+                round(right * width),
+                round(bottom * height),
+            ]
+
+    def test_fetch_failure_withholds_crop_fields_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "collector_line_crop_px" not in result.fields
+        assert "artist_crop_px" not in result.fields
+        assert "art_crop_px" not in result.fields
+        assert result.skip_reasons["crop_coordinates"] == "fetch_failed"
+
+    def test_persist_writes_crop_fields(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={
+                "collector_line_crop_px": [60, 1800, 350, 1930],
+                "artist_crop_px": [0, 1640, 1000, 2000],
+                "art_crop_px": [70, 200, 930, 1160],
+            },
+            extractor_versions={"crop_coordinates": CROP_COORDINATES_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.collector_line_crop_px == [60, 1800, 350, 1930]
+        assert evidence.artist_crop_px == [0, 1640, 1000, 2000]
+        assert evidence.art_crop_px == [70, 200, 930, 1160]
 
 
 class TestPersistEvidence:
