@@ -102,6 +102,22 @@ class TestGoldenExpectations:
         # exact word-box list itself isn't pinned here).
         assert all(isinstance(e.value, bool) for e in GOLDEN_EXPECTATIONS["collector_line_tsv"])
 
+    def test_symbol_region_expectation_covers_every_golden_card(self):
+        card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["symbol_region"]}
+        assert card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_symbol_region_values_have_crop_px_and_phash_present_keys(self):
+        # Recorded 2026-07-20 against a real extract_card_evidence() run over all 30 golden cards
+        # (issue #160) - see TestGeometryBleed's own note above for why this isn't re-verified
+        # live in CI. 30/30 produced a real (non-degenerate) hash on this run, zero "ambiguous"
+        # skips - a genuine outcome, not a placeholder (see golden_set.py's own comment).
+        for expectation in GOLDEN_EXPECTATIONS["symbol_region"]:
+            assert set(expectation.value) == {"symbol_crop_px", "phash_present"}
+            box = expectation.value["symbol_crop_px"]
+            assert len(box) == 4
+            assert all(isinstance(coord, int) for coord in box)
+            assert isinstance(expectation.value["phash_present"], bool)
+
 
 class TestGetGoldenCards:
     def test_raises_when_pinned_ids_are_missing_from_the_db(self, db):

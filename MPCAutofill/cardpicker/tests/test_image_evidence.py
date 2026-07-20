@@ -31,6 +31,13 @@ rationale: `_StubImage` has no `.crop()`/`.convert()` a real PIL image needs).
 `TestExtractCardEvidenceCollectorLineOcr`/`ArtistOcr`/`CollectorLineTsv` below use real PIL images
 + the REAL tesseract binary throughout (no monkeypatching of run_tesseract itself) - per CLAUDE.md,
 tesseract is installed in CI and real OCR tests are expected to run, not be skipped.
+
+symbol_region (issue #160, "Part 4b: symbol harness") also calls `image.crop(...).convert("L")`
+directly (via `_compute_region_phash`) - every existing test that feeds a `_StubImage` through
+`extract_card_evidence` now also stubs `_compute_region_phash` itself via `_stub_symbol_region`
+below (same rationale as `_stub_border_color`/`_stub_ocr`). `TestExtractCardEvidenceSymbolRegion`
+below uses real PIL images throughout (mirrors `TestExtractCardEvidenceLayoutClass`'s own style),
+since it's actually testing `_compute_region_phash`'s real output.
 """
 
 from dataclasses import dataclass
@@ -48,6 +55,7 @@ from cardpicker.image_evidence import (
     FETCH_HEALTH_EXTRACTOR_VERSION,
     GEOMETRY_BLEED_EXTRACTOR_VERSION,
     LAYOUT_CLASS_EXTRACTOR_VERSION,
+    SYMBOL_REGION_EXTRACTOR_VERSION,
     ExtractionResult,
     build_reconciliation_report,
     extract_card_evidence,
@@ -56,6 +64,7 @@ from cardpicker.image_evidence import (
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
     BLEED_ASPECT_RATIO,
+    SYMBOL_STRIP_BOX,
     TRIM_ASPECT_RATIO,
     normalize_crop_box,
 )
@@ -117,6 +126,15 @@ def _stub_ocr(monkeypatch, collector_raw_text: str = "158/287 R MOM EN"):
     monkeypatch.setattr(module, "run_tesseract_tsv", lambda variant: [])
 
 
+def _stub_symbol_region(monkeypatch, value: int = 123456789):
+    """`_StubImage` has no `.crop()`/`.convert()` a real PIL image needs, so any test feeding one
+    through `extract_card_evidence` must stub `_compute_region_phash` itself (same rationale as
+    `_stub_border_color`/`_stub_ocr` above) - `symbol_crop_px` itself is still computed for real
+    (it only needs width/height/bleed_class, same as crop_coordinates), only the phash of the
+    (fake) cropped region is stubbed out."""
+    monkeypatch.setattr(module, "_compute_region_phash", lambda image, box: value)
+
+
 def _build_card_image(
     regions: list[tuple[tuple[float, float, float, float], str]], bleed: bool = True
 ) -> "Image.Image":
@@ -154,6 +172,7 @@ class TestExtractCardEvidence:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
         _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -169,6 +188,7 @@ class TestExtractCardEvidence:
             "collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
             "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
+            "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
         }
         # _stub_ocr's default raw text ("158/287 R MOM EN") is a realistic modern-frame collector
         # line with no artist credit in it - artist_ocr genuinely skips here, which is the
@@ -193,6 +213,7 @@ class TestExtractCardEvidence:
             "collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
             "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
+            "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
         }
         assert result.skip_reasons == {
             "fetch_health": "fetch_failed",
@@ -202,6 +223,7 @@ class TestExtractCardEvidence:
             "collector_line_ocr": "fetch_failed",
             "artist_ocr": "fetch_failed",
             "collector_line_tsv": "fetch_failed",
+            "symbol_region": "fetch_failed",
         }
 
     def test_null_content_phash_surfaces_as_none(self, db, monkeypatch):
@@ -209,6 +231,7 @@ class TestExtractCardEvidence:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -230,6 +253,7 @@ class TestExtractCardEvidence:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
 
         extract_card_evidence(card)
 
@@ -245,6 +269,7 @@ class TestExtractCardEvidenceGeometryBleed:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
         _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -260,6 +285,7 @@ class TestExtractCardEvidenceGeometryBleed:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
         _stub_border_color(monkeypatch, "black")
         _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -271,6 +297,7 @@ class TestExtractCardEvidenceGeometryBleed:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _AMBIGUOUS_IMAGE)
         _stub_border_color(monkeypatch, "black")
         _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -294,6 +321,14 @@ class TestExtractCardEvidenceGeometryBleed:
 
         assert result.fields["aspect_ratio"] is None
         assert result.skip_reasons["geometry_bleed"] == "ambiguous"
+        # symbol_region (issue #160): height=0 makes SYMBOL_STRIP_BOX's own pixel box degenerate
+        # (top == bottom == 0) - the genuine, non-fabricated trigger of its degenerate-crop-box
+        # guard (see image_evidence.py's module docstring: not expected to fire against the real
+        # golden set, but a real mechanical guard, exercised for real here). No stub needed -
+        # _compute_region_phash is never called for a degenerate box.
+        assert "symbol_crop_px" not in result.fields
+        assert "symbol_phash" not in result.fields
+        assert result.skip_reasons["symbol_region"] == "ambiguous"
 
     def test_fetch_failure_withholds_geometry_fields_and_shares_skip_reason(self, db, monkeypatch):
         card = CardFactory(content_phash=1)
@@ -314,6 +349,9 @@ class TestExtractCardEvidenceGeometryBleed:
         # the OCR-group (issue #149) shares the same root cause too.
         assert "collector_line_raw_text" not in result.fields
         assert result.skip_reasons["collector_line_ocr"] == "fetch_failed"
+        # symbol_region (issue #160) shares the same root cause too.
+        assert "symbol_crop_px" not in result.fields
+        assert result.skip_reasons["symbol_region"] == "fetch_failed"
         assert "artist_ocr_name" not in result.fields
         assert result.skip_reasons["artist_ocr"] == "fetch_failed"
         assert "collector_line_word_boxes" not in result.fields
@@ -421,6 +459,7 @@ class TestExtractCardEvidenceCropCoordinates:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(1000, 2000)))
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -437,6 +476,7 @@ class TestExtractCardEvidenceCropCoordinates:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -454,6 +494,7 @@ class TestExtractCardEvidenceCropCoordinates:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
         _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -485,6 +526,9 @@ class TestExtractCardEvidenceCropCoordinates:
         assert result.skip_reasons["collector_line_ocr"] == "fetch_failed"
         assert result.skip_reasons["artist_ocr"] == "fetch_failed"
         assert result.skip_reasons["collector_line_tsv"] == "fetch_failed"
+        # symbol_region (issue #160) shares the same root cause too.
+        assert "symbol_crop_px" not in result.fields
+        assert result.skip_reasons["symbol_region"] == "fetch_failed"
 
     def test_persist_writes_crop_fields(self, db):
         card = CardFactory(content_phash=999)
@@ -505,6 +549,117 @@ class TestExtractCardEvidenceCropCoordinates:
         assert evidence.collector_line_crop_px == [60, 1800, 350, 1930]
         assert evidence.artist_crop_px == [0, 1640, 1000, 2000]
         assert evidence.art_crop_px == [70, 200, 930, 1160]
+
+
+class TestExtractCardEvidenceSymbolRegion:
+    """issue #160, "Part 4b: symbol harness" - symbol_crop_px turns SYMBOL_STRIP_BOX into pixel
+    coordinates the same way crop_coordinates derives its own three boxes; symbol_phash is a raw
+    perceptual hash of that region only (never compared against any candidate here - see
+    image_evidence.py's module docstring for why that's Stage D's job). Real PIL images
+    throughout (mirrors TestExtractCardEvidenceLayoutClass's own style), since this extractor
+    genuinely reads pixels via `_compute_region_phash`."""
+
+    @staticmethod
+    def _image_with_symbol_strip(width: int = 1000, height: int = 1000) -> "Image.Image":
+        img = Image.new("RGB", (width, height), "white")
+        draw = ImageDraw.Draw(img)
+        left, top, right, bottom = SYMBOL_STRIP_BOX
+        box = [round(left * width), round(top * height), round(right * width), round(bottom * height)]
+        # a checkerboard, not a flat fill - phash's DCT-based hash is degenerate (near-identical
+        # regardless of fill color) for a perfectly uniform region, the same reason
+        # local_fallback.py's own keyrune-glyph comparison needs real edges/contrast to
+        # discriminate at all (see that module's SYMBOL_DISTANCE_THRESHOLD comment) - a flat
+        # rectangle isn't a realistic stand-in for a printed set symbol's actual edges.
+        step = 6
+        for y in range(box[1], box[3], step):
+            for x in range(box[0], box[2], step):
+                if (x // step + y // step) % 2 == 0:
+                    draw.rectangle([x, y, x + step, y + step], fill=(10, 20, 30))
+        return img
+
+    def test_bleed_image_computes_symbol_crop_px(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = self._image_with_symbol_strip(1000, 1000)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        left, top, right, bottom = SYMBOL_STRIP_BOX  # 'ambiguous' bleed_class is a no-op remap
+        assert result.fields["symbol_crop_px"] == [
+            round(left * 1000),
+            round(top * 1000),
+            round(right * 1000),
+            round(bottom * 1000),
+        ]
+        assert "symbol_region" not in result.skip_reasons
+
+    def test_computes_a_real_phash_int(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = self._image_with_symbol_strip(1000, 1000)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert isinstance(result.fields["symbol_phash"], int)
+        # a signed 64-bit int (twos_complement's own output range) - not asserting an exact value,
+        # since the precise phash bits are a library-version-dependent implementation detail (same
+        # "don't pin the continuous/brittle" rationale geometry_bleed's own comment gives for
+        # width/height/aspect_ratio).
+        assert -(2**63) <= result.fields["symbol_phash"] < 2**63
+
+    def test_different_regions_hash_differently(self, db, monkeypatch):
+        # a blank (all-white) card vs. one with a distinct rendered strip - real evidence the
+        # hash actually reflects this region's own content, not a constant.
+        card = CardFactory(content_phash=1)
+        blank_image = Image.new("RGB", (1000, 1000), "white")
+        marked_image = self._image_with_symbol_strip(1000, 1000)
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: blank_image)
+        blank_result = extract_card_evidence(card)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: marked_image)
+        marked_result = extract_card_evidence(card)
+
+        assert blank_result.fields["symbol_phash"] != marked_result.fields["symbol_phash"]
+
+    def test_degenerate_crop_box_records_named_skip_and_withholds_fields(self, db, monkeypatch):
+        # height=0 collapses SYMBOL_STRIP_BOX's own pixel box to zero area (top == bottom == 0) -
+        # the same real, non-fabricated trigger TestExtractCardEvidenceGeometryBleed's own
+        # test_zero_height_image_guards_aspect_ratio_division exercises for geometry_bleed.
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
+        _stub_border_color(monkeypatch)
+        _stub_ocr(monkeypatch)
+
+        result = extract_card_evidence(card)
+
+        assert "symbol_crop_px" not in result.fields
+        assert "symbol_phash" not in result.fields
+        assert result.skip_reasons["symbol_region"] == "ambiguous"
+
+    def test_fetch_failure_withholds_fields_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "symbol_crop_px" not in result.fields
+        assert "symbol_phash" not in result.fields
+        assert result.skip_reasons["symbol_region"] == "fetch_failed"
+
+    def test_persist_writes_symbol_fields(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={"symbol_crop_px": [780, 550, 1000, 800], "symbol_phash": -12345},
+            extractor_versions={"symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.symbol_crop_px == [780, 550, 1000, 800]
+        assert evidence.symbol_phash == -12345
 
 
 class TestExtractCardEvidenceCollectorLineOcr:

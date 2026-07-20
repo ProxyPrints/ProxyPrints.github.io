@@ -1423,7 +1423,74 @@ nothing newly broken); `makemigrations --check` clean.
 `back_face_flag` remains an open question for the owner (see the
 geometry-group paragraph above) — nothing in this PR bears on it either.
 
-Queued behind Stage B per the paced task sequence (#145–149). Stage D
+**symbol_region — fourth manifest extractor, built** (public issue #160,
+"Part 4b: symbol harness", 2026-07-20): adds `symbol_crop_px` and
+`symbol_phash` to `ImageEvidence` (migration `0073`, additive-only
+`AddField`s, no freeze conflict — checked
+`gh issue list --label deploy-freeze-active --state all` fresh
+immediately before both the migration and the golden-set gathering run,
+empty both times, despite a concurrent live dataset-population run
+writing `ImageEvidence` rows in the background — this PR's own
+migration/tests/golden-set run all targeted the throwaway pytest
+testcontainers DB or read-only production `Card` reads, never a write to
+that live data). `symbol_crop_px` turns `local_fallback.SYMBOL_STRIP_BOX`
+— the same right-side vertical strip that module's own
+`find_symbol_matches` sub-check scans — into pixel coordinates exactly
+the way issue #148's `crop_coordinates` derives its own three boxes
+(`normalize_crop_box` remap, then scaled by width/height); `symbol_phash`
+is a perceptual hash (`imagehash.phash`) of that region ONLY — the
+cropped pixels are hashed in memory and discarded, never persisted (the
+Governing posture section's own "the symbol-strip diagnosis re-plans as
+in-pass hash/feature-vector math — store the math, not the strip"
+directive this task closes out). Deliberately NOT
+`find_symbol_matches` itself: that sub-check compares the strip against
+a rendered keyrune glyph for each of a card's real `CandidatePrinting`s,
+which this per-card function never receives — candidate matching (and
+the actual set identification/lookup) is Stage D calculator territory,
+same reasoning issue #149's own OCR-group paragraph gives for why no
+candidate matching happens in Stage C. `symbol_phash` is stored as a
+signed 64-bit int via `twos_complement` (`cardpicker.utils`, not
+protected core) — the same representation `local_phash.py`'s own private
+`_hash_to_int` uses for `Card.content_phash`/`CanonicalCard.image_hash`,
+reproduced rather than imported since that helper isn't exported from
+that PROTECTED CORE module. No changes to `local_fallback.py` itself
+(PROTECTED CORE; importing its existing `SYMBOL_STRIP_BOX` constant from
+new code is not "changing" it, per
+`docs/upstreaming/license-provenance.md` — note `SYMBOL_STRIP_BOX` isn't
+in that module's own `__all__`, which restricts `from ... import *` only,
+not a direct named import).
+
+The only named skip is a degenerate crop box (zero/negative width or
+height) — the same "sub-floor" input category `geometry_bleed`'s own
+`test_zero_height_image_guards_aspect_ratio_division` guards against for
+its aspect-ratio division, applied here before `PIL.Image.crop`/
+`imagehash.phash` would raise on an empty region. An earlier design
+considered gating on `imagehash.phash` returning the literal all-zero
+sentinel `local_phash.py`'s own docstring names for
+`CanonicalCard.image_hash` ("vanishingly unlikely for real card art") —
+rejected on advisor review as an ungrounded heuristic near-guaranteed
+never to fire (the same failure mode issue #148's own `back_face_flag`
+rejection names), in favor of the degenerate-box guard actually built:
+mechanically necessary regardless (a real crash risk on a sub-floor-
+resolution fetch), constructible in a real test (fed a zero-height stub
+image), and not a tuned classification threshold.
+`GOLDEN_EXPECTATIONS["symbol_region"]` populated against a real,
+no-persistence `extract_card_evidence()` run over all 30 golden cards
+(host venv, real network fetch through the shared `GOOGLE_IMAGE`-paced
+Worker path, zero DB writes): 30/30 produced a real (non-degenerate)
+hash, zero "ambiguous" skips — a genuine outcome for this
+source-stratified real-image sample, not a placeholder; the degenerate-
+box guard is not expected to fire against the golden set, stated plainly
+in both the golden-set comment and this extractor's own module docstring
+rather than left implicit. 8 new tests (`TestExtractCardEvidenceSymbolRegion`
+in `test_image_evidence.py`, plus 2 in `test_golden_set.py`), and existing
+`_StubImage`-based `TestExtractCardEvidence*` tests updated (a new
+`_stub_symbol_region` helper, mirroring `_stub_border_color`/`_stub_ocr`'s
+identical rationale) for the new extractor's presence; full suite 1069
+passed / 4 skipped (the same CI-documented named skips — nothing newly
+broken); `makemigrations --check` clean.
+
+Queued behind Stage B per the paced task sequence (#145–149, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
 shipped identification code paths with `ImageEvidence`-supplied

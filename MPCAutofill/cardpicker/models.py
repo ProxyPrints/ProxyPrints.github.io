@@ -1369,6 +1369,15 @@ class ImageEvidence(models.Model):
     never receives) - that comparison is Stage D calculator territory (task #151's
     pipeline-fidelity gate), not Stage C extraction. See `image_evidence.py`'s module docstring
     for the full rationale.
+
+    symbol_region (public issue #160, "Part 4b: symbol harness"): `symbol_crop_px` turns
+    `local_fallback.SYMBOL_STRIP_BOX` into pixel coordinates the same way the geometry-group's
+    `*_crop_px` fields do; `symbol_phash` is a perceptual hash of that region ONLY - crop PIXELS
+    are hashed in memory and discarded, never persisted (FINAL POSTURE item 2: "store the math,
+    not the strip"). A raw content signal for Stage D's Scryfall lookup (the SET half of the
+    collector+set join key), not a verdict - no candidate matching happens here, same reasoning
+    the OCR-group paragraph above gives. See `image_evidence.py`'s module docstring for why this
+    is a raw hash rather than `local_fallback.find_symbol_matches`'s own per-candidate comparison.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -1432,6 +1441,16 @@ class ImageEvidence(models.Model):
     artist_ocr_raw_text = models.TextField(blank=True, default="")
     artist_ocr_name = models.CharField(max_length=64, blank=True, default="")
     illus_anchor_fired = models.BooleanField(null=True, blank=True)
+
+    # symbol_region (issue #160, "Part 4b: symbol harness") - symbol_crop_px is
+    # local_fallback.SYMBOL_STRIP_BOX remapped/scaled the same way the geometry-group's *_crop_px
+    # fields above are (crop COORDINATES only, never crop pixels). symbol_phash is a perceptual
+    # hash (imagehash.phash) of that region, stored as a signed 64-bit int via twos_complement -
+    # the same representation local_phash.py's own private _hash_to_int uses for
+    # Card.content_phash/CanonicalCard.image_hash. Null when not yet computed (fetch failure or a
+    # degenerate crop box - see image_evidence.py's module docstring).
+    symbol_crop_px = models.JSONField(null=True, blank=True)
+    symbol_phash = models.BigIntegerField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -442,6 +442,56 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
             217783: True,
         }.items()
     ],
+    # symbol_region (issue #160, "Part 4b: symbol harness", recorded 2026-07-20 against a real,
+    # no-persistence extract_card_evidence() run over all 30 golden cards - same host-venv/real-
+    # network-fetch method as every extractor above). `value` is {"symbol_crop_px", "phash_present"}
+    # - `symbol_crop_px` is deterministic from width/height/bleed_class alone (same as
+    # crop_coordinates's own three boxes), pinned exactly; the raw phash int itself is NOT pinned
+    # (library-version-dependent, same "exclude the continuous/brittle" rationale geometry_bleed's
+    # own comment gives for width/height/aspect_ratio) - only whether a real (non-degenerate) hash
+    # was produced at all. 30/30 produced one on this real run, zero "ambiguous" (degenerate-crop)
+    # skips - genuinely unsurprising for a source-stratified sample of real fetched images (the
+    # degenerate-box guard is a mechanical crash-prevention measure for a sub-floor-resolution
+    # input, not a classification threshold expected to fire on a normal fetch - see
+    # image_evidence.py's own module docstring), not a placeholder result. The three
+    # 'trimmed'-classified cards (145532/150472/189166) show visibly different crop-coordinate
+    # numbers than the majority, same real evidence of normalize_crop_box's remap being engaged
+    # that issue #148's own crop_coordinates expectation notes.
+    "symbol_region": [
+        GoldenExpectation(card_id=cid, value=value)
+        for cid, value in {
+            35: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            37: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            40: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            37962: {"symbol_crop_px": [531, 509, 681, 740], "phash_present": True},
+            39520: {"symbol_crop_px": [529, 509, 678, 740], "phash_present": True},
+            41039: {"symbol_crop_px": [529, 509, 678, 740], "phash_present": True},
+            102138: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            128981: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            144933: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            145081: {"symbol_crop_px": [529, 509, 678, 740], "phash_present": True},
+            145532: {"symbol_crop_px": [535, 512, 662, 760], "phash_present": True},
+            147855: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            150472: {"symbol_crop_px": [529, 512, 654, 760], "phash_present": True},
+            159175: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            161020: {"symbol_crop_px": [529, 509, 678, 740], "phash_present": True},
+            175889: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            189166: {"symbol_crop_px": [537, 512, 664, 760], "phash_present": True},
+            189921: {"symbol_crop_px": [529, 509, 678, 740], "phash_present": True},
+            190895: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            193523: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            194684: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            199986: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            200330: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            200668: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            204427: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            207913: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            208337: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            208569: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            214113: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            217783: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+        }.items()
+    ],
 }
 
 
