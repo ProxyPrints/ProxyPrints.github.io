@@ -47,6 +47,16 @@ the scope split) crops its OWN dedicated region (`local_ocr.LEGAL_LINE_CROP_BOX`
 stubs legal_line's own crop+OCR pass for free, same as it does for collector_line_ocr/artist_ocr).
 `TestExtractCardEvidenceLegalLine` below uses real PIL images + the real tesseract binary
 throughout, same rationale as the other OCR-group test classes.
+
+quality_signals / color_profile (public issue #150's re-spec, the LAST Stage C manifest extractor
+group) call `local_image_quality.is_image_truncated`/`compute_blur_variance`/`compute_entropy`/
+`compute_color_profile` directly on the fetched image - every existing test that feeds a
+`_StubImage` with a non-degenerate width/height through `extract_card_evidence` now also stubs
+these via `_stub_quality_signals`/`_stub_color_profile` below (same rationale as
+`_stub_border_color`/`_stub_ocr`/`_stub_symbol_region`). `TestExtractCardEvidenceQualitySignals`/
+`ColorProfile` below use real PIL images throughout (mirrors `TestExtractCardEvidenceLayoutClass`/
+`SymbolRegion`'s own style), since they're actually testing these functions' real output,
+including a genuinely truncated real JPEG for the integrity-check path.
 """
 
 from dataclasses import dataclass
@@ -60,11 +70,13 @@ from cardpicker.image_evidence import (
     ARTIST_OCR_EXTRACTOR_VERSION,
     COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
     COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
+    COLOR_PROFILE_EXTRACTOR_VERSION,
     CROP_COORDINATES_EXTRACTOR_VERSION,
     FETCH_HEALTH_EXTRACTOR_VERSION,
     GEOMETRY_BLEED_EXTRACTOR_VERSION,
     LAYOUT_CLASS_EXTRACTOR_VERSION,
     LEGAL_LINE_EXTRACTOR_VERSION,
+    QUALITY_SIGNALS_EXTRACTOR_VERSION,
     SYMBOL_REGION_EXTRACTOR_VERSION,
     ExtractionResult,
     build_reconciliation_report,
@@ -145,6 +157,24 @@ def _stub_symbol_region(monkeypatch, value: int = 123456789):
     monkeypatch.setattr(module, "_compute_region_phash", lambda image, box: value)
 
 
+def _stub_quality_signals(monkeypatch, truncated: bool = False, blur: float = 42.0, entropy: float = 5.0):
+    """`_StubImage` has no `.load()`/`.convert()` a real PIL image needs, so any test feeding one
+    through `extract_card_evidence` (and whose image has a non-degenerate width/height, so the
+    `quality_signals`/`color_profile` extractors' own guard doesn't already skip them - see
+    `image_evidence.py`'s module docstring) must stub `is_image_truncated`/`compute_blur_variance`/
+    `compute_entropy` themselves (same rationale as `_stub_border_color`/`_stub_ocr`/
+    `_stub_symbol_region` above)."""
+    monkeypatch.setattr(module, "is_image_truncated", lambda image: truncated)
+    monkeypatch.setattr(module, "compute_blur_variance", lambda image: blur)
+    monkeypatch.setattr(module, "compute_entropy", lambda image: entropy)
+
+
+def _stub_color_profile(monkeypatch, mean_rgb=(10.0, 20.0, 30.0), stddev_rgb=(1.0, 2.0, 3.0)):
+    """Same rationale as `_stub_quality_signals` above - `_StubImage` has no `.convert()` a real
+    PIL image needs for `compute_color_profile`."""
+    monkeypatch.setattr(module, "compute_color_profile", lambda image: (list(mean_rgb), list(stddev_rgb)))
+
+
 def _build_card_image(
     regions: list[tuple[tuple[float, float, float, float], str]], bleed: bool = True
 ) -> "Image.Image":
@@ -183,6 +213,8 @@ class TestExtractCardEvidence:
         _stub_border_color(monkeypatch, "black")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -190,6 +222,8 @@ class TestExtractCardEvidence:
         assert result.content_hash == 12345
         assert result.fields["fetch_ok"] is True
         assert result.fields["fetch_error_class"] == ""
+        assert result.fields["fetch_image_format"] == ""  # _StubImage has no .format attribute
+        assert isinstance(result.fields["fetch_latency_ms"], float)
         assert result.extractor_versions == {
             "fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION,
             "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
@@ -200,6 +234,8 @@ class TestExtractCardEvidence:
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
             "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
             "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
+            "quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION,
+            "color_profile": COLOR_PROFILE_EXTRACTOR_VERSION,
         }
         # _stub_ocr's default raw text ("158/287 R MOM EN") is a realistic modern-frame collector
         # line with no artist credit in it - artist_ocr genuinely skips here, which is the
@@ -215,7 +251,16 @@ class TestExtractCardEvidence:
 
         result = extract_card_evidence(card)
 
-        assert result.fields == {"fetch_ok": False, "fetch_error_class": "fetch_failed"}
+        assert result.fields["fetch_ok"] is False
+        assert result.fields["fetch_error_class"] == "fetch_failed"
+        assert result.fields["fetch_image_format"] == ""
+        assert isinstance(result.fields["fetch_latency_ms"], float)
+        # no other field is written on a fetch failure - quality_signals/color_profile share the
+        # same root cause (see below) and withhold their own fields entirely, same as every other
+        # extractor group.
+        assert "image_is_truncated" not in result.fields
+        assert "blur_variance" not in result.fields
+        assert "color_mean_rgb" not in result.fields
         # extractor_versions is still set for every extractor - each ran to completion, it just
         # found a negative result (a fetch failure is a shared root cause, not a crash in any of
         # them). Only a crash omits an extractor's own key (see ExtractionResult's docstring).
@@ -229,6 +274,8 @@ class TestExtractCardEvidence:
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
             "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
             "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
+            "quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION,
+            "color_profile": COLOR_PROFILE_EXTRACTOR_VERSION,
         }
         assert result.skip_reasons == {
             "fetch_health": "fetch_failed",
@@ -240,6 +287,8 @@ class TestExtractCardEvidence:
             "collector_line_tsv": "fetch_failed",
             "symbol_region": "fetch_failed",
             "legal_line": "fetch_failed",
+            "quality_signals": "fetch_failed",
+            "color_profile": "fetch_failed",
         }
 
     def test_null_content_phash_surfaces_as_none(self, db, monkeypatch):
@@ -248,6 +297,8 @@ class TestExtractCardEvidence:
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -270,6 +321,8 @@ class TestExtractCardEvidence:
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
 
         extract_card_evidence(card)
 
@@ -286,6 +339,8 @@ class TestExtractCardEvidenceGeometryBleed:
         _stub_border_color(monkeypatch, "black")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -302,6 +357,8 @@ class TestExtractCardEvidenceGeometryBleed:
         _stub_border_color(monkeypatch, "black")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -314,6 +371,8 @@ class TestExtractCardEvidenceGeometryBleed:
         _stub_border_color(monkeypatch, "black")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -345,6 +404,15 @@ class TestExtractCardEvidenceGeometryBleed:
         assert "symbol_crop_px" not in result.fields
         assert "symbol_phash" not in result.fields
         assert result.skip_reasons["symbol_region"] == "ambiguous"
+        # quality_signals/color_profile (issue #150's re-spec) share this same degenerate-size
+        # guard - height=0 skips both as "ambiguous", no stub needed since is_image_truncated/
+        # compute_blur_variance/compute_entropy/compute_color_profile are never called for a
+        # degenerate size.
+        assert "image_is_truncated" not in result.fields
+        assert "blur_variance" not in result.fields
+        assert result.skip_reasons["quality_signals"] == "ambiguous"
+        assert "color_mean_rgb" not in result.fields
+        assert result.skip_reasons["color_profile"] == "ambiguous"
 
     def test_fetch_failure_withholds_geometry_fields_and_shares_skip_reason(self, db, monkeypatch):
         card = CardFactory(content_phash=1)
@@ -375,6 +443,11 @@ class TestExtractCardEvidenceGeometryBleed:
         # legal_line (issue #151) shares the same root cause too.
         assert "legal_line_crop_px" not in result.fields
         assert result.skip_reasons["legal_line"] == "fetch_failed"
+        # quality_signals/color_profile (issue #150's re-spec) share the same root cause too.
+        assert "image_is_truncated" not in result.fields
+        assert result.skip_reasons["quality_signals"] == "fetch_failed"
+        assert "color_mean_rgb" not in result.fields
+        assert result.skip_reasons["color_profile"] == "fetch_failed"
 
     def test_persist_writes_geometry_fields(self, db):
         card = CardFactory(content_phash=999)
@@ -479,6 +552,8 @@ class TestExtractCardEvidenceCropCoordinates:
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -496,6 +571,8 @@ class TestExtractCardEvidenceCropCoordinates:
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -514,6 +591,8 @@ class TestExtractCardEvidenceCropCoordinates:
         _stub_border_color(monkeypatch, "black")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
 
         result = extract_card_evidence(card)
 
@@ -551,6 +630,9 @@ class TestExtractCardEvidenceCropCoordinates:
         # legal_line (issue #151) shares the same root cause too.
         assert "legal_line_crop_px" not in result.fields
         assert result.skip_reasons["legal_line"] == "fetch_failed"
+        # quality_signals/color_profile (issue #150's re-spec) share the same root cause too.
+        assert result.skip_reasons["quality_signals"] == "fetch_failed"
+        assert result.skip_reasons["color_profile"] == "fetch_failed"
 
     def test_persist_writes_crop_fields(self, db):
         card = CardFactory(content_phash=999)
@@ -969,6 +1051,151 @@ class TestExtractCardEvidenceLegalLine:
         assert evidence.legal_line_crop_px == [0, 832, 680, 893]
         assert evidence.legal_line_copyright_year == "2022"
         assert evidence.legal_line_proxy_marker_detected is True
+
+
+class TestExtractCardEvidenceQualitySignals:
+    """public issue #150's re-spec, "Stage C visual-signal extractors" - the LAST Stage C
+    manifest extractor group (the phash half of the original issue is DROPPED, see
+    image_evidence.py's own module docstring). is_image_truncated/compute_blur_variance/
+    compute_entropy are called directly on the fetched image via
+    cardpicker.local_image_quality - real PIL images throughout (mirrors
+    TestExtractCardEvidenceLayoutClass/SymbolRegion's own style), including a genuinely
+    truncated real JPEG for the integrity-check path."""
+
+    @staticmethod
+    def _real_card_image(width: int = 800, height: int = 1120) -> "Image.Image":
+        img = Image.new("RGB", (width, height), (200, 200, 200))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([40, 40, width - 40, height // 2], fill=(30, 90, 160))
+        draw.ellipse([80, height // 2 + 20, width - 80, height - 80], fill=(220, 60, 40))
+        return img
+
+    def test_clean_image_records_blur_and_entropy_not_truncated(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = self._real_card_image()
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["image_is_truncated"] is False
+        assert isinstance(result.fields["blur_variance"], float)
+        assert isinstance(result.fields["image_entropy"], float)
+        assert result.fields["image_entropy"] > 0  # a real image with shapes has real entropy
+        assert "quality_signals" not in result.skip_reasons
+
+    def test_truncated_image_records_flag_and_withholds_blur_entropy(self, db, monkeypatch):
+        # is_image_truncated's own REAL behavior against a genuinely truncated JPEG is proven in
+        # test_local_image_quality.py, in isolation - going through the full extract_card_evidence
+        # pipeline with a real truncated file here would also trip up EARLIER real-pixel-reading
+        # extractors (layout_class/collector_line_ocr/legal_line, all upstream of quality_signals
+        # in extraction order), which is a pre-existing, out-of-scope gap in those extractors, not
+        # something this PR's own tests should paper over by picking a truncation point that
+        # happens to dodge it. This test instead proves extract_card_evidence's own WIRING - that a
+        # True `is_image_truncated` result is recorded and blur/entropy are correctly withheld -
+        # the same "stub the function being tested elsewhere, prove the wiring here" split
+        # TestExtractCardEvidenceSymbolRegion's own degenerate-box test already uses.
+        card = CardFactory(content_phash=1)
+        image = self._real_card_image()
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(module, "is_image_truncated", lambda image: True)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["image_is_truncated"] is True
+        assert "blur_variance" not in result.fields
+        assert "image_entropy" not in result.fields
+        # shares fetch_health's own "fetch_failed" skip reason - see image_evidence.py's module
+        # docstring for why this isn't a new, separately-invented skip-reason string.
+        assert result.skip_reasons["quality_signals"] == "fetch_failed"
+        # color_profile (below) shares this same finding, without a fresh decode attempt.
+        assert "color_mean_rgb" not in result.fields
+        assert result.skip_reasons["color_profile"] == "fetch_failed"
+
+    def test_fetch_failure_withholds_fields_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "image_is_truncated" not in result.fields
+        assert "blur_variance" not in result.fields
+        assert "image_entropy" not in result.fields
+        assert result.skip_reasons["quality_signals"] == "fetch_failed"
+
+    def test_persist_writes_quality_signal_fields(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={"image_is_truncated": False, "blur_variance": 123.45, "image_entropy": 6.7},
+            extractor_versions={"quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.image_is_truncated is False
+        assert evidence.blur_variance == pytest.approx(123.45)
+        assert evidence.image_entropy == pytest.approx(6.7)
+
+
+class TestExtractCardEvidenceColorProfile:
+    """public issue #150's re-spec, same extractor group as TestExtractCardEvidenceQualitySignals
+    above - color_profile computes per-channel (R, G, B) mean/stddev over the FULL fetched image
+    via cardpicker.local_image_quality.compute_color_profile. Real PIL images throughout, same
+    rationale as TestExtractCardEvidenceQualitySignals above."""
+
+    @staticmethod
+    def _solid_color_image(rgb: tuple[int, int, int], size: tuple[int, int] = (200, 280)) -> "Image.Image":
+        return Image.new("RGB", size, rgb)
+
+    def test_solid_color_image_records_exact_mean_zero_stddev(self, db, monkeypatch):
+        # a solid-color image has a trivially exact, hand-verifiable expected mean (the fill
+        # color itself) and zero stddev (every pixel is identical) - a clean, non-brittle
+        # positive assertion, unlike pinning stats against a real photographic image.
+        card = CardFactory(content_phash=1)
+        image = self._solid_color_image((100, 150, 200))
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["color_mean_rgb"] == pytest.approx([100.0, 150.0, 200.0])
+        assert result.fields["color_stddev_rgb"] == pytest.approx([0.0, 0.0, 0.0])
+        assert "color_profile" not in result.skip_reasons
+
+    def test_different_images_produce_different_profiles(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: self._solid_color_image((10, 10, 10)))
+        dark_result = extract_card_evidence(card)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: self._solid_color_image((240, 240, 240)))
+        light_result = extract_card_evidence(card)
+
+        assert dark_result.fields["color_mean_rgb"] != light_result.fields["color_mean_rgb"]
+
+    def test_fetch_failure_withholds_fields_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "color_mean_rgb" not in result.fields
+        assert "color_stddev_rgb" not in result.fields
+        assert result.skip_reasons["color_profile"] == "fetch_failed"
+
+    def test_persist_writes_color_profile_fields(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={"color_mean_rgb": [100.0, 150.0, 200.0], "color_stddev_rgb": [10.0, 20.0, 30.0]},
+            extractor_versions={"color_profile": COLOR_PROFILE_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.color_mean_rgb == [100.0, 150.0, 200.0]
+        assert evidence.color_stddev_rgb == [10.0, 20.0, 30.0]
 
 
 class TestPersistEvidence:

@@ -1395,6 +1395,38 @@ class ImageEvidence(models.Model):
     case (task #151/#159): a "MTG★EN ... NOT FOR SALE ©2022" watermark reads as plausible
     collector-line-shaped text to a tolerant parser - `legal_line_proxy_marker_detected` is the
     signal that lets Stage D's calculator reject that false-accept instead of trusting it.
+
+    color_profile / quality_signals (public issue #150's re-spec, "Stage C visual-signal
+    extractors" - the phash half of the original issue is DROPPED per the owner's 2026-07-20
+    re-spec comment, superseded by user-submitted phash, task #203; set-symbol phash already
+    shipped separately as symbol_region above): the LAST Stage C manifest extractor group.
+    `color_mean_rgb`/`color_stddev_rgb` are per-channel (R, G, B) mean/stddev over the FULL
+    fetched image via `cardpicker.local_image_quality.compute_color_profile` (a first-party
+    `PIL.ImageStat.Stat` call, not a hand-rolled pixel loop) - "color statistics... store the
+    math, not the strip" (FINAL POSTURE item 2). `blur_variance`/`image_entropy` are raw
+    sharpness/histogram-entropy signals (`local_image_quality.compute_blur_variance`/
+    `compute_entropy`) - Stage D's job to decide what counts as "too blurry"/"too flat," never
+    this extractor's. `image_is_truncated` is a genuine integrity fact
+    (`local_image_quality.is_image_truncated` forces a full pixel decode and catches the
+    `OSError` Pillow raises for a genuinely truncated download) - checked BEFORE blur/entropy/
+    color stats are computed, since a truncated image's partial pixel data would produce
+    meaningless numbers rather than a real reading (see `image_evidence.py`'s module docstring
+    for the exact ordering). `local_image_quality.py` is NOT protected core - new helpers land
+    there directly, same convention `local_ocr.py` already established for OCR-adjacent
+    (non-protected) additions.
+
+    fetch_health completion (same re-spec): `fetch_latency_ms` (wall-clock time for the
+    `image_cdn_fetch.fetch_card_image` call) and `fetch_image_format` (the fetched image's own
+    `PIL.Image.format`, e.g. `"JPEG"`, blank-string-as-sentinel on fetch failure - same
+    convention as `fetch_error_class`) complete the trivial substrate-PR version of this
+    extractor, which only ever recorded `fetch_ok`/`fetch_error_class`. `fetch_error_class`'s
+    own value space is deliberately UNCHANGED (still only `""`/`"fetch_failed"`) - widening it
+    would cross into inventing a new skip-reason vocabulary entry, which
+    `docs/features/catalog-completion-plan.md`'s own `CardScanLog` design explicitly warns
+    against ("the pipeline's own existing strings verbatim... not a separately-invented
+    vocabulary"); a truncated download (see `image_is_truncated` above) is reported through the
+    SAME `"fetch_failed"` skip reason for the same reason - Stage D doesn't need a finer bucket
+    than "no usable image data" to treat it correctly.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -1484,6 +1516,29 @@ class ImageEvidence(models.Model):
     legal_line_raw_text = models.TextField(blank=True, default="")
     legal_line_copyright_year = models.CharField(max_length=4, blank=True, default="")
     legal_line_proxy_marker_detected = models.BooleanField(null=True, blank=True)
+
+    # fetch_health completion (issue #150's re-spec) - fetch_latency_ms/fetch_image_format
+    # complete the trivial substrate-PR version of this extractor (fetch_ok/fetch_error_class
+    # above). fetch_image_format uses the same blank-string-as-sentinel convention as
+    # fetch_error_class for the not-yet-computed/fetch-failed case.
+    fetch_latency_ms = models.FloatField(null=True, blank=True)
+    fetch_image_format = models.CharField(max_length=16, blank=True, default="")
+
+    # quality_signals (issue #150's re-spec) - image_is_truncated is a genuine integrity fact
+    # (null only if the fetch itself failed, same null-vs-blank convention as fetch_ok/
+    # illus_anchor_fired above); blur_variance/image_entropy are only computed when the image
+    # loaded cleanly (null on fetch failure OR a truncated image - see image_evidence.py's
+    # module docstring for the exact ordering).
+    image_is_truncated = models.BooleanField(null=True, blank=True)
+    blur_variance = models.FloatField(null=True, blank=True)
+    image_entropy = models.FloatField(null=True, blank=True)
+
+    # color_profile (issue #150's re-spec) - per-channel (R, G, B) mean/stddev over the full
+    # fetched image (local_image_quality.compute_color_profile), each a 3-element float list.
+    # Null when not yet computed (fetch failure or a truncated image, same convention as
+    # quality_signals' own fields above).
+    color_mean_rgb = models.JSONField(null=True, blank=True)
+    color_stddev_rgb = models.JSONField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
