@@ -1742,6 +1742,202 @@ empirically-derived constant/threshold/override/skip-reason mapped to
 its home in the new pipeline, or flagged missing) must be clean. Both
 gate task #148 (the owner HOLD deliverable) and any full-catalog fire.
 
+**Stage C: fetch/compute decoupling design (2026-07-20, addresses the canary's
+63.1% parallel-efficiency gap)** — the process-pool fix above (PR #224) was a
+real, large improvement (377.8h projected at x6 thread-pool concurrency down
+to a process pool matching the 7 usable cores), but a 400-card canary against
+rebuilt prod (`docs/reports/2026-07-20-canary-reprofile.md`, run
+`stagec-canary-20260720T1659Z`, `--workers 7`) measured only **63.1% parallel
+efficiency** (458.79 CPU-s / 400 cards = 1.147 CPU-s/card, against a
+theoretical 7-way budget of 1.817 CPU-s/card) — equivalently, **4.41 of 7
+workers busy on average** (458.79 CPU-s ÷ 104s wall-clock), meaning ~37% of
+usable cores sit idle rather than pegged. Idle-not-pegged is the signature of
+workers stalling on I/O, not CPU contention, and the almost-certain cause is
+structural: `run_image_evidence_cohort.py`'s per-card work unit
+(`_process_one_card`, lines 194–220) calls `extract_card_evidence(card)` at
+line 213, and that function's own first step (`image_evidence.py` line 295,
+`image = fetch_card_image(card, dpi=dpi)`, inside `extract_card_evidence`
+defined at line 280) does a real network fetch — bundled into the same
+worker process that then goes on to run the OCR-heavy extractors. Every one
+of the 7 compute workers spends part of each card's wall-clock blocked on its
+own Google-image fetch before it can start the CPU-bound work it exists to
+do. This is a design gap, not a re-litigation of the canary's own STOPPED gate
+decision — that decision (condition (a), ~15.7–16h projected vs. a ~15h
+ceiling) stands; this section is the design to close the gap the canary
+surfaced, plus what would need to be measured to confirm it before spending
+more compute on a re-profile.
+
+Note on the **~6.2h reference budget's provenance**, since the
+compute-profile report's comparison invites reading it as a compute number:
+it is a _fetch-only_ figure. PR #131/#139's canary measured
+`harvest_fetch_limiter.py`'s `GOOGLE_IMAGE` concurrency (55,641 requests
+tested at concurrency 3/6/10, landing on the merged config — PR #179 —
+`max_concurrency=6, rate_per_sec=8.0`, ≈8.116/s achieved ≈ 6.2h for the
+181,483 deduped fetch targets) _before Stage C/OCR existed_, so it never
+included any compute cost. `docs/reports/2026-07-20-pipeline-compute-profile.md`
+already makes this same point in its own "Fetch vs. compute" section (the
+6.2h figure "was never meant to include Stage C/D compute cost"); restated
+here because the decoupling design below leans on it directly: once fetch
+and compute run as two independent concurrent stages instead of one bundled
+per-card unit, the ~6.2h figure becomes the real, standalone fetch-stage
+budget again (not a number to net against compute), and the two stages'
+wall-clocks compose as `max(fetch, compute)` rather than `fetch + compute`.
+
+**1. Decoupling architecture.** Two concurrent stages instead of one bundled
+per-card unit:
+
+- **Fetch stage**: a pool of fetch threads (I/O-bound — a Python thread
+  releases the GIL for the duration of the blocking `requests.get` inside
+  `rate_limited_get`, so threads are the right primitive here, unlike the
+  compute stage where threading measured 0.31x/3.25x-slower for CPU-bound
+  OCR) built directly around `harvest_fetch_limiter.GOOGLE_IMAGE` — the
+  reusable, already-integrated, already-owner-validated pacing (PR #179:
+  `max_concurrency=6`, `rate_per_sec=8.0`), used exactly as
+  `image_cdn_fetch.fetch_card_image` already calls it today, unmodified.
+  Fetch-thread count should be sized a little above `GOOGLE_IMAGE`'s own
+  `max_concurrency=6` (e.g. 8) — the limiter's own semaphore is the real
+  concurrency ceiling regardless of thread count, so extra threads beyond 6
+  only exist to keep a request queued and ready the instant a semaphore slot
+  frees, at negligible cost (idle thread stacks, no compute). This also
+  removes a piece of accepted complexity the process-pool conversion had to
+  add specifically because fetch was bundled into N compute processes: today,
+  `_init_worker` (lines 161–191) pre-seeds each of the 7 worker processes
+  with its own workers-scaled-down copy of `GOOGLE_IMAGE` (rate and
+  concurrency divided by 7, module docstring's numbered point 3) because each
+  process would otherwise construct its own independent limiter instance and
+  the aggregate ceiling across all 7 would silently become 7x too high. Once
+  fetching lives in one place (the fetch stage, not 7 separate compute
+  processes), `harvest_fetch_limiter.get_limiter`'s existing process-wide
+  singleton semantics apply directly — the descaling hack has nothing left
+  to compensate for.
+- **Compute stage**: unchanged in spirit — a `ProcessPoolExecutor` sized to
+  the 7 usable compute cores (1 of the host's 8 OCPU stays pinned to network
+  traffic, per the owner-confirmed hardware profile already recorded above),
+  each worker still forcing `OMP_THREAD_LIMIT=1` so N processes don't
+  nest-oversubscribe Tesseract's own OpenMP threading. The difference is
+  what a compute worker receives: not a bare `card_id` that it re-fetches
+  itself, but a card plus an already-fetched image buffer, so a compute
+  worker's own wall-clock is 100% CPU-bound extraction, never fetch-wait.
+- **The queue between them**: a bounded, RAM-only handoff — the fetch stage
+  produces (card, image buffer) pairs no faster than the compute stage can
+  accept them, via backpressure (a bounded number of outstanding
+  fetched-but-not-yet-computed buffers, enforced however the eventual
+  implementation chooses to gate submission — e.g. a counting semaphore
+  around handoff to the compute pool). A reasonable starting depth is on the
+  order of 2x the compute pool size (~14–16) — enough that a compute worker
+  finishing early never stalls waiting on the next buffer (this also directly
+  addresses one of the canary's own cited efficiency-loss factors, "uneven
+  per-card OCR cost" — a shallow queue would let that variance become worker
+  idle time even after decoupling), without letting fetch run so far ahead
+  that memory grows unbounded. The exact depth is a tuning knob for the
+  confirming re-profile below, not a value to fix in this spec.
+
+  _Memory-budget arithmetic_ (derived estimate, not a measured figure — used
+  here only to show the design has wide margin, not to pin an exact number):
+  at the fetch stage's `DEFAULT_FETCH_DPI=250`, the Worker's own
+  `height = dpi * 1110 / 300` conversion (`image-cdn/src/url.ts`) gives a
+  fetched image height of 925px; at a standard MTG card's 2.5:3.5in aspect
+  ratio, width ≈ 661px. A fully-decoded RGB buffer at that size is
+  `661 × 925 × 3 ≈ 1.8 MiB`. Worst-case buffers alive at once ≈ fetch
+  threads in flight (≈8) + queue depth (≈16) + one per compute worker (7) ≈
+  31, so ≈ 31 × 1.8 MiB ≈ **56 MiB** — even at a generous 10x that estimate
+  (in case the size derivation above is off, or a future DPI bump changes
+  it), total buffer memory is still under 1 GiB, a rounding error against
+  the host's 24GB ceiling. This is not RAM-bound at any plausible queue
+  depth; the ceiling that matters here is backpressure/throughput tuning,
+  not memory.
+
+**2. Change points.** What the decoupled structure replaces (description,
+not a diff):
+
+- `run_image_evidence_cohort.py`'s `_process_one_card` (lines 194–220) —
+  today's single per-card unit, run once per card inside a compute worker,
+  that both fetches (via `extract_card_evidence`'s own internal call to
+  `fetch_card_image`, `image_evidence.py` line 295) and computes. This
+  collapses into two cooperating units: a fetch-only step (calling
+  `fetch_card_image` from a fetch thread, not a compute worker) and a
+  compute-only step (running everything `extract_card_evidence` does
+  _after_ its current fetch step, against an already-fetched buffer).
+- `_init_worker`'s rate-limiter descaling (lines 179–191, module docstring's
+  numbered point 3) — goes away once only the fetch stage ever calls
+  `rate_limited_get(GOOGLE_IMAGE, ...)`; the unscaled `GOOGLE_IMAGE` config
+  applies directly, with no per-process division needed.
+- The cross-process stop-on-lockout `Event` (module docstring's numbered
+  point 2, `multiprocessing.Manager().Event()`, checked at the top of every
+  `_process_one_card` call) — a `GoogleFetchLockoutError` can now only ever
+  originate in the fetch stage (compute workers no longer fetch anything),
+  which simplifies where this needs to be checked, though the exact
+  mechanism for telling already-idle compute workers "no more work is
+  coming" (a sentinel, a different signal, or something else) is an
+  implementation choice left open here, not settled by this design.
+
+**3. Instrumentation spec for the confirming re-profile.** The canary above
+diagnosed the idle-core signature by inference (aggregate CPU-seconds ÷
+wall-clock), not direct measurement — it never captured where the idle time
+actually went. Before spending more compute on a full re-profile, add:
+
+- **cgroup `io.stat` / block I/O**, sampled before/after the run (same
+  cgroup-read approach the canary already used for `memory.current`/
+  `memory.peak`) — this pipeline's own image fetch is a network read, not
+  disk I/O, so `io.stat` here mainly serves as a negative control: it should
+  show ~zero incremental block-device writes throughout, confirming the
+  index-not-store posture holds (no image buffer or intermediate spilled to
+  disk) and ruling out unexpected disk contention (e.g. logging, Tesseract
+  temp files) as an alternative explanation for idle cores.
+- **Network bytes** (container network cgroup/interface counters, rx/tx
+  delta over the run) — cross-checked against the memory-budget section's
+  derived per-image size estimate; a large discrepancy would mean that
+  estimate needs correcting before the queue-depth tuning above is trusted.
+- **A per-card fetch-wait-vs-compute-time split.** `extract_card_evidence`
+  already records `fields["fetch_latency_ms"]` (`image_evidence.py`, right
+  after its `fetch_card_image` call) — the confirming re-profile should
+  capture the matching compute-side duration (time from end of fetch to end
+  of extraction) alongside it, aggregated into the run's own summary
+  logging rather than a new persisted `ImageEvidence` field (this is
+  re-profile instrumentation, not new catalog signal). With both numbers,
+  the 63.1%-efficiency gap can be attributed directly — how much is
+  fetch-wait (the hypothesis this design is built around) versus pool
+  dispatch, `_init_worker`'s per-task DB reconnect cost, or genuine
+  straggler variance — instead of inferred from one aggregate ratio.
+
+**4. Expected outcome + risks.** Once compute workers never block on
+download, the compute stage's own wall-clock should approach the
+compute-profile report's compute-only figure divided across the 7 usable
+cores: 71.2h single-threaded ÷ 7 ≈ **~10.2h**, run near-linear because the
+workers are now doing CPU-bound-only work matched 1:1 to available cores
+(no fetch-wait, same `OMP_THREAD_LIMIT=1` anti-nesting fix as today). Fetch
+overlaps in its own already-validated ~6.2h-scale budget (`GOOGLE_IMAGE`'s
+concurrency=6/rate=8.0 config) running concurrently rather than bundled in
+sequence, so total wall-clock composes as `max(fetch, compute)` plus
+fill/drain slack at the start and tail of a cohort, not `fetch + compute` —
+landing around **~10–11h** for the full 218,212-card remaining-work pool,
+materially better than the canary's measured ~15.7–16h. Risks:
+
+- **Memory ceiling** — shown above to have wide margin (tens of MiB to
+  under 1 GiB even at 10x the derived per-buffer estimate, against a 24GB
+  host); the real risk is a queue-depth misconfiguration that removes the
+  bound entirely (e.g. an accidentally-unbounded queue), not the depth
+  values under discussion here.
+- **Backpressure tuning** — too shallow a queue reintroduces compute-worker
+  idle time (just moved from "waiting on its own fetch" to "waiting on the
+  queue"); too deep lets fetch run far ahead of compute, which is still
+  memory-bounded per the arithmetic above but wastes the fetch stage's own
+  paced-rate budget on cards compute won't reach for a while. Needs
+  empirical tuning against the instrumentation above, not a value fixed in
+  this design.
+- **Straggler cards** — the canary's own cited "uneven per-card OCR cost"
+  factor means the last few cards in a cohort can leave some compute workers
+  idle waiting on a fetch stage that has nothing left to hand them (a
+  tail/drain concern, distinct from steady-state backpressure).
+- **The network-pinned core** — the hardware profile already reserves 1 of
+  8 OCPU for network traffic, separate from the 7 usable compute cores; the
+  fetch stage's own threads are I/O-bound and don't need a dedicated core of
+  their own, but this only holds if the fetch stage stays I/O-only (e.g. if
+  `fetch_card_image`'s `Image.open()` call were ever changed to force a full
+  JPEG decode eagerly, that would add real CPU work to the fetch side that
+  this hardware profile didn't budget compute for — worth keeping in mind
+  for whoever implements this, not a problem today since decoding is lazy).
+
 **Stage D — join-key calculator (framework + first slice, built 2026-07-20,
 public issue #152, "Stage D: calculators D1-D6")**: the owner directive
 dispatching this work named "calculators D1-D6", but no numbered D1-D6 spec
