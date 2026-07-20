@@ -1420,8 +1420,9 @@ presence; full suite 1037 passed / 4 skipped (the same CI-documented
 named skips —
 nothing newly broken); `makemigrations --check` clean.
 
-`back_face_flag` remains an open question for the owner (see the
-geometry-group paragraph above) — nothing in this PR bears on it either.
+`back_face_flag` remained an open question for the owner as of this PR
+(see the geometry-group paragraph above) — settled afterward, see the
+"back-face flag" paragraph following the legal-line extractor below.
 
 **symbol_region — fourth manifest extractor, built** (public issue #160,
 "Part 4b: symbol harness", 2026-07-20): adds `symbol_crop_px` and
@@ -1574,6 +1575,54 @@ from 1 to 2, since legal_line — unlike `artist_ocr` — always crops+OCRs
 its own dedicated region rather than reusing another extractor's already-
 computed raw text); full suite 1088 passed / 4 skipped (the same
 CI-documented named skips — nothing newly broken); `makemigrations --check` clean.
+
+**back-face flag — settled by owner decision, built as a name lookup, NOT an
+`ImageEvidence` extractor** (public issue #199, 2026-07-20): the owner settled
+the open question the geometry-group PR left hanging — back-face is
+determined from a card's NAME via Scryfall, not from image analysis, which
+makes it name/identity metadata rather than a Stage C image extractor.
+`printing_metadata_import.py` gains `get_back_face_names()`/`is_back_face()`:
+a deterministic name → back-face lookup built entirely from the Scryfall
+bulk data already on disk (`scryfall_cache/default_cards.json`, the same
+file that function's own `import_scryfall_printing_metadata` already
+parses) — no network fetch, no downloader, per the owner's own wording
+("reads the EXISTING on-disk bulk data... a small addition to the existing
+metadata-import path, not new plumbing"). For every row whose Scryfall
+`layout` is a genuine double-faced layout (`DOUBLE_FACED_LAYOUTS`:
+`transform`/`modal_dfc`/`double_faced_token`/`battle`/`reversible_card`),
+the second face's name (`card_faces[1]["name"]`) is a back face.
+Deliberately narrower than "any row with 2+ `card_faces`": split/flip/
+adventure/aftermath/mutate/prototype layouts also nest multiple named
+modes under `card_faces`, but those modes are printed on the SAME single
+face of the card, not front/back — an unfiltered check would misflag e.g.
+Adventure's spell side ("Stomp") as a back face of "Bonecrusher Giant".
+`art_series` is excluded for the same reason `MTGIntegration. DFC_SCRYFALL_QUERY` already excludes it for its own (live-API-sourced)
+`DFCPair` table. **Scope gap, by the owner's own card_faces-based
+definition, not an oversight**: meld back faces are NOT covered — meld
+pieces carry no `card_faces` on their own bulk-data row at all (Scryfall
+represents the merged result via `all_parts` on the _meld_result_ card
+instead, which is why `MTGIntegration.get_meld_pairs` reads a completely
+different shape) — this on-disk, name/card_faces-based definition
+structurally cannot see them. No `ImageEvidence`/`CanonicalCard`/
+`CanonicalPrintingMetadata` field was added: `CanonicalCard.name` for a
+double-faced print is Scryfall's own combined `"A // B"` name (one row per
+print, both faces embedded), so a per-print boolean doesn't correspond to
+"is this a back face" the way it does for a physical uploaded `Card.name`
+(which is single-face, e.g. "Insectile Aberration") — no real caller needs
+a persisted flag yet, so none was speculatively added; "additive migration
+if a field is added" resolved to no migration this round. 11 new tests in
+`test_printing_metadata_import.py`'s new `TestGetBackFaceNames` class
+(known DFC back face → True, its own front face → False, a normal card →
+False, an Adventure/split second mode → False, an art_series row → False,
+a missing bulk file → empty set without raising, caching); no real
+golden-set expectations gathered for this one — the real
+`default_cards.json` isn't present on any dev machine this PR was built on
+(no network fetch in scope to obtain it), so the three required cases
+(known back face/normal card/front face) are covered by synthetic
+bulk-data fixtures instead, per the task's own "if golden-set expectations
+fit" conditional wording; full suite 1099 passed / 4 skipped (the same
+CI-documented named skips — nothing newly broken); `makemigrations --check`
+clean (no model change).
 
 Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
