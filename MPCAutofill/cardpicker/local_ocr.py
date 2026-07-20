@@ -230,6 +230,38 @@ def parse_legal_line(raw_text: str) -> LegalLineParseResult:
     )
 
 
+def find_matching_candidates(
+    parsed: OcrParseResult, candidates: list["CandidatePrinting"]
+) -> list["CandidatePrinting"]:
+    """
+    The candidate-narrowing filter `validate_against_candidates` itself uses internally,
+    exposed separately (Stage D, docs/features/catalog-completion-plan.md) so a caller holding
+    genuine ADDITIONAL evidence - Stage D's set-symbol phash tie-break, for the pre-M15
+    collector-number-only case - can inspect an ambiguous match set directly instead of only
+    learning that ambiguity occurred. Same (set_code, collector_number) matching rules
+    `validate_against_candidates` documents; an empty result means "no plausible match at all",
+    which that function reports as "parsed-but-no-match" whenever a collector_number was parsed.
+    Returns `[]` (not `candidates`) when `parsed.collector_number is None` - there is nothing to
+    match against, this is a pure filter, not a validation/skip-reason decision (that stays in
+    `validate_against_candidates`, this function's own caller).
+    """
+    if parsed.collector_number is None:
+        return []
+
+    normalized_parsed_number = _normalize_collector_number(parsed.collector_number)
+    if parsed.set_code is not None:
+        return [
+            c
+            for c in candidates
+            if c.expansion_code == parsed.set_code
+            and _normalize_collector_number(c.collector_number) == normalized_parsed_number
+        ]
+    # pre-M15 cards have no set code on the collector line at all - fall back to matching on
+    # collector number alone, which is enough when the name's candidates don't share a number
+    # across sets (usually true, but not guaranteed - hence "ambiguous" below).
+    return [c for c in candidates if _normalize_collector_number(c.collector_number) == normalized_parsed_number]
+
+
 def validate_against_candidates(
     parsed: OcrParseResult, candidates: list["CandidatePrinting"]
 ) -> tuple["Optional[CandidatePrinting]", str]:
@@ -240,25 +272,16 @@ def validate_against_candidates(
     misread, possibly a genuinely wrong crop), or "ambiguous" (matches more than one candidate -
     can't happen when a set code was parsed, since (expansion, collector_number) is unique per
     CanonicalCard, but a collector-number-only match against a name that spans multiple sets
-    with an overlapping number is a real case). Empty string means matched.
+    with an overlapping number is a real case). Empty string means matched. A thin wrapper
+    around `find_matching_candidates` (behavior-preserving extraction, 2026-07-20, Stage D) -
+    the actual filtering logic lives there now, so a caller with independent tie-break evidence
+    for the "ambiguous" case can reuse the exact same filter this function's own decision is
+    built from, rather than a second implementation that could drift from it.
     """
     if parsed.collector_number is None:
         return None, "no-text"
 
-    normalized_parsed_number = _normalize_collector_number(parsed.collector_number)
-    if parsed.set_code is not None:
-        matches = [
-            c
-            for c in candidates
-            if c.expansion_code == parsed.set_code
-            and _normalize_collector_number(c.collector_number) == normalized_parsed_number
-        ]
-    else:
-        # pre-M15 cards have no set code on the collector line at all - fall back to matching
-        # on collector number alone, which is enough when the name's candidates don't share a
-        # number across sets (usually true, but not guaranteed - hence "ambiguous" below).
-        matches = [c for c in candidates if _normalize_collector_number(c.collector_number) == normalized_parsed_number]
-
+    matches = find_matching_candidates(parsed, candidates)
     if not matches:
         return None, "parsed-but-no-match"
     if len(matches) > 1:
@@ -277,5 +300,6 @@ __all__ = [
     "run_tesseract_tsv",
     "parse_collector_line",
     "parse_legal_line",
+    "find_matching_candidates",
     "validate_against_candidates",
 ]

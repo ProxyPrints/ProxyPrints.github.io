@@ -1710,6 +1710,112 @@ empirically-derived constant/threshold/override/skip-reason mapped to
 its home in the new pipeline, or flagged missing) must be clean. Both
 gate task #148 (the owner HOLD deliverable) and any full-catalog fire.
 
+**Stage D — join-key calculator (framework + first slice, built 2026-07-20,
+public issue #152, "Stage D: calculators D1-D6")**: the owner directive
+dispatching this work named "calculators D1-D6", but no numbered D1-D6 spec
+exists anywhere — checked before building, not assumed (issue #152's own
+body/comments, this doc, the private orchestration orientation doc). What
+IS binding: the design frame (funnel-to-review, fast/slow path split,
+collector-line-OCR-plus-set-symbol as ONE near-unique join key, the
+pipeline-fidelity gate's "call the existing shipped code, don't re-derive"),
+`docs/theory.md`'s candidate-constrained-decoding model, and the Governing
+posture section above. Per that directive's own scope-management clause,
+this PR builds the calculator FRAMEWORK plus one coherent first slice — the
+join-key calculator — rather than inventing a six-item spec to fill.
+
+New module `cardpicker/local_calculate_verdicts.py` (+ management command
+`local_calculate_verdicts`, `--write`/`--run-id`/`--chunk-size`, dry-run
+default, mirroring `local_residual_classify`'s own CLI shape and its
+1:1 module/command filename convention). `calculate_join_key_verdict`
+reconstructs an `OcrParseResult` from Stage C's already-persisted
+`collector_line_set_code`/`collector_line_collector_number` fields (no
+re-OCR, no re-fetch) and calls the existing, unmodified
+`local_ocr.validate_against_candidates` — satisfying the pipeline-fidelity
+gate by direct reuse, not a parallel implementation. `local_ocr.py` (not
+PROTECTED CORE) gained a small behavior-preserving refactor,
+`find_matching_candidates`, extracting the candidate-narrowing filter
+`validate_against_candidates` already computed internally so a caller with
+independent tie-break evidence can inspect the ambiguous match set
+directly instead of only learning that ambiguity occurred.
+
+**Collector-line OCR + set-symbol phash are ONE join key, not two
+calculators**: a pre-M15 card's collector line never printed a set code, so
+matching on collector number alone can hit more than one of the card's own
+candidates (different expansions — `(expansion, collector_number)` is
+unique per `CanonicalCard`) even though a genuine printing identity exists.
+Stage C's `symbol_phash` (issue #160) resolves this inside the SAME
+calculator call: the card's own rendered set symbol is compared against
+each ambiguous candidate's expansion glyph
+(`local_fallback.render_set_symbol`, PROTECTED CORE, called not modified)
+via plain Hamming-distance arithmetic on the stored hash ints — the same
+"reimplement the arithmetic, don't touch the protected decision logic"
+pattern `local_identify_printing_tags._classify_no_clear_winner` already
+established for phash distance re-derivation. An initial draft split this
+across two calculators (D1 OCR, D2 symbol) before an advisor review flagged
+that as contradicting the design frame's own "one join key" framing —
+folded into one calculator before this PR was built out further.
+
+**The moderator-flag veto** (the design frame's explicit ask):
+`legal_line_proxy_marker_detected` (issue #151/#212's real motivating case
+— a "NOT FOR SALE"/proxy watermark misparsing as a plausible collector
+line) is checked only at the moment a join-key match would otherwise be
+trusted, never against a genuine no-match/ambiguous outcome. A vetoed match
+is a named skip (`"proxy-marker-veto"`), not an `is_no_match` vote — a
+vetoed reading is untrustworthy evidence FOR the matched printing, not
+evidence AGAINST every other candidate.
+
+Casts `CardPrintingTag` votes via the unmodified `VoteSource.OCR`/
+`resolve_and_persist_printing` machinery (own
+`anonymous_id='stage-d-join-key-v1'`, independently purgeable via the
+existing `purge_machine_votes --run-id`) — a single calculator vote at machine
+weight (0.5) can never resolve a card alone, reusing
+`local_identify_printing_tags.verify_zero_resolutions` directly as the
+command's own post-write gate (no new gate function needed — the printing-
+side equivalent of `verify_no_single_machine_vote_resolutions` already
+existed).
+
+**Known, accepted overlap with the live pilot (not a bug)**: this
+calculator's own eligibility query excludes only cards already carrying a
+`stage-d-join-key-v1` vote/skip — it does NOT exclude cards
+`local-ocr-v1`/`local-phash-v1`/`local-fallback-v1` (the live pilot's own
+engines) already voted or skipped on. Since Stage C's `ImageEvidence`
+cohort and the live pilot's own target pool substantially overlap during
+this transitional period, running this calculator for real will frequently
+re-vote on cards the old pilot already touched. Structurally safe
+regardless (the human-backed gate makes it impossible for any accumulation
+of machine-only votes across engines to resolve a card by itself — verified
+via `vote_consensus.resolve_weighted_consensus`'s own hard AND-gate), but a
+real characteristic of two mechanisms running concurrently mid-migration,
+named here rather than left to surface later as a surprise.
+
+**Deferred to follow-up calculator PRs (not built or stubbed here)**:
+geometry/border agreement (cross-check `layout_class`/`bleed_class`
+against a match's own `CanonicalPrintingMetadata`, mirroring the live
+pilot's frame-mismatch withholding); artist-OCR corroboration
+(`artist_ocr_name` via `local_fallback.match_artist`); back-face-aware
+lookup (`printing_metadata_import.is_back_face`, issue #199/#213); quality/
+integrity gating (`image_is_truncated`/`blur_variance`/`image_entropy` as a
+trust modifier or Part 5 routing signal); visual/phash slow-path candidate
+matching — explicitly NOT bulk server-side phash (issue #150's own
+2026-07-20 re-spec dropped that in favor of user-submitted phash, task
+#203, a distinct, not-yet-designed mechanism a future slow-path calculator
+would need to be designed against, not the original bulk-phash idea).
+
+Golden-gated against synthetic `ImageEvidence`/`Card`/`CanonicalCard` DB
+fixtures, not a live fetch — Stage D consumes stored evidence + Scryfall-
+backed models, it never touches a live image, so Stage C's "real network
+fetch over 30 pinned cards" golden-set convention doesn't apply here (host
+venv, no network — `render_set_symbol` IS exercised for real, a pure local
+font-render, so the symbol-phash tie-break is tested against real keyrune
+glyph hashes). 25 new tests (`test_local_calculate_verdicts.py`, 20;
+`test_local_identify_printing_tags.py`'s new `TestFindMatchingCandidates`
+class, 5 — confirms the `local_ocr.py` refactor agrees with
+`validate_against_candidates` on every outcome); full suite 1142 passed / 4
+skipped (the same CI-documented named skips — nothing newly broken);
+`makemigrations --check` clean (no model change — this PR adds no new
+`ImageEvidence` fields); `pre-commit` (ruff/isort/black/mypy/prettier)
+clean.
+
 **Stage E resume contract (owner directive, 2026-07-19 — full spec on
 task #147, acceptance test folded into task #156's soak gate)**:
 resumability is a TESTED requirement, not an assumed property — this

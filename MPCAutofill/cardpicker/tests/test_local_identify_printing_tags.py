@@ -40,6 +40,7 @@ from cardpicker.local_identify_printing_tags import (
 )
 from cardpicker.local_ocr import (
     crop_collector_line,
+    find_matching_candidates,
     parse_collector_line,
     parse_legal_line,
     preprocess_variants,
@@ -685,6 +686,54 @@ class TestOcrValidationRail:
         assert matched is not None
         assert matched.pk == 1
         assert reason == ""
+
+
+class TestFindMatchingCandidates:
+    """Stage D (docs/features/catalog-completion-plan.md, public issue #152): the candidate-
+    narrowing filter extracted out of validate_against_candidates so a caller with independent
+    tie-break evidence (the join-key calculator's symbol-phash tie-break, for the pre-M15
+    ambiguous case) can inspect the full ambiguous match set directly. Mirrors
+    TestOcrValidationRail's own fixtures/cases exactly - a behavior-preserving extraction should
+    agree with validate_against_candidates on every one of them."""
+
+    CANDIDATES = [
+        CandidatePrinting(pk=1, expansion_code="mom", collector_number="158"),
+        CandidatePrinting(pk=2, expansion_code="vow", collector_number="158"),
+    ]
+
+    def test_no_collector_number_returns_empty(self):
+        parsed = parse_collector_line("")
+        assert find_matching_candidates(parsed, self.CANDIDATES) == []
+
+    def test_set_and_collector_match_returns_the_one_candidate(self):
+        parsed = parse_collector_line("158/287 R MOM EN")
+        matches = find_matching_candidates(parsed, self.CANDIDATES)
+        assert [c.pk for c in matches] == [1]
+
+    def test_parsed_but_no_matching_candidate_returns_empty(self):
+        parsed = parse_collector_line("999/287 R MOM EN")
+        assert find_matching_candidates(parsed, self.CANDIDATES) == []
+
+    def test_collector_only_returns_every_ambiguous_candidate(self):
+        parsed = parse_collector_line("158")
+        matches = find_matching_candidates(parsed, self.CANDIDATES)
+        assert {c.pk for c in matches} == {1, 2}
+
+    def test_agrees_with_validate_against_candidates_on_every_outcome(self):
+        """The refactor must be behavior-preserving: validate_against_candidates's own decision
+        (matched/no-match/ambiguous) is fully derivable from this function's own output alone."""
+        for raw_text in ["", "158/287 R MOM EN", "999/287 R MOM EN", "158"]:
+            parsed = parse_collector_line(raw_text)
+            matched, reason = validate_against_candidates(parsed, self.CANDIDATES)
+            matches = find_matching_candidates(parsed, self.CANDIDATES)
+            if parsed.collector_number is None:
+                assert matches == [] and reason == "no-text"
+            elif len(matches) == 0:
+                assert matched is None and reason == "parsed-but-no-match"
+            elif len(matches) == 1:
+                assert matched is matches[0] and reason == ""
+            else:
+                assert matched is None and reason == "ambiguous"
 
 
 class TestOcrAmbiguousSplit:
