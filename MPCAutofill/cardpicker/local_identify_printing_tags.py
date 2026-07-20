@@ -24,6 +24,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Iterable, Literal, Optional, cast
 
 from PIL import Image
@@ -137,29 +138,44 @@ class CandidatePrinting:
     # this specific printing (confirmed live: ~10.7% of CanonicalPrintingMetadata rows,
     # 2026-07-15) - see _demand_rank_for_candidates for how a name's candidates combine this.
     edhrec_rank: Optional[int] = None
+    # Stage D's copyright-year era check (public issue #152, docs/features/catalog-completion-
+    # plan.md's Stage D section - cardpicker.local_calculate_verdicts._withhold_reason_for_match):
+    # CanonicalPrintingMetadata.released_at, the same Scryfall release-date field
+    # printing_metadata_import.py already imports and CandidatePrinting.edhrec_rank already
+    # precedents pulling from that same sidecar model. None where a candidate has no
+    # CanonicalPrintingMetadata row yet (same "missing sidecar data" case edhrec_rank's own
+    # Optional already handles) - never defaulted to a fabricated date.
+    released_at: Optional[date] = None
 
 
 class CandidateNameIndex:
     """
     Like cardpicker.deductive_backfill.CanonicalNameIndex, but keyed on the same to_searchable
-    name normalisation and carrying (expansion_code, collector_number, edhrec_rank) per candidate
-    instead of just a printings_count - both engines here need to check a parsed/matched value
-    against a candidate's actual identity, not just count how many candidates exist. Built once,
-    reused across the whole scan (one query over CanonicalCard's 113k+ rows, not one per card).
+    name normalisation and carrying (expansion_code, collector_number, edhrec_rank, released_at)
+    per candidate instead of just a printings_count - both engines here need to check a
+    parsed/matched value against a candidate's actual identity, not just count how many
+    candidates exist. Built once, reused across the whole scan (one query over CanonicalCard's
+    113k+ rows, not one per card).
     """
 
     def __init__(self) -> None:
         by_name: dict[str, list[CandidatePrinting]] = collections.defaultdict(list)
         rows = CanonicalCard.objects.select_related("expansion", "printing_metadata").values_list(
-            "pk", "name", "expansion__code", "collector_number", "printing_metadata__edhrec_rank"
+            "pk",
+            "name",
+            "expansion__code",
+            "collector_number",
+            "printing_metadata__edhrec_rank",
+            "printing_metadata__released_at",
         )
-        for pk, name, expansion_code, collector_number, edhrec_rank in rows:
+        for pk, name, expansion_code, collector_number, edhrec_rank, released_at in rows:
             by_name[to_searchable(name)].append(
                 CandidatePrinting(
                     pk=pk,
                     expansion_code=expansion_code.lower(),
                     collector_number=collector_number,
                     edhrec_rank=edhrec_rank,
+                    released_at=released_at,
                 )
             )
         self._by_name = dict(by_name)

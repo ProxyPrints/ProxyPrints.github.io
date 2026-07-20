@@ -54,7 +54,62 @@ therefore a named SKIP (`"proxy-marker-veto"`, a genuine, non-rescannable, evide
 conclusion - not a `CardPrintingTag(is_no_match=True)` vote, since a vetoed reading is not
 evidence against every one of the card's other candidates either).
 
-DEFERRED (explicitly out of scope for this PR, tracked as follow-up - NOT invented/stubbed here):
+THREE CHEAP ADDITIONS ON TOP OF THE FRAMEWORK (this PR, public issue #152, following #219/#221 -
+per the owner's issue #220 decision, sequenced newest-last since the copyright-year check changes
+the outcome space the slow-path routing calculator needs to sweep over):
+
+1. **Slow-path routing (`calculate_slow_path_verdict`/`run_slow_path_calculator`)**: issue #220's
+   owner-settled answer for the ~83% of cards the join-key calculator alone can't confidently
+   resolve. Explicitly option (b) from that issue, not (a) or (c): no bulk server-side phash (the
+   165k-run analysis found that costs ~84h to resolve only 2.6% - exactly why issue #203 already
+   moved phash to user-submitted instead), and not user-submitted phash itself (issue #203, a
+   distinct, separately-designed mechanism, deliberately not built here). This is a ROUTING step,
+   not a matching engine: any card the join-key calculator concluded has no confident hit (a real
+   `is_no_match` vote, or a genuine non-rescannable skip - `"ambiguous"`, `"no-text"`,
+   `"proxy-marker-veto"`, or the new `"copyright-year-mismatch"` below) gets a `SlowPathVerdict`
+   carrying its already-persisted `ImageEvidence` signals (collector/legal-line OCR text, layout/
+   bleed class, symbol phash, quality signals) verbatim, and a `CardScanLog(anonymous_id=
+   "stage-d-slow-path-v1", skip_reason="to-review")` durable routing marker. No new storage: the
+   signals themselves already live in `ImageEvidence` (Stage C's job) - this calculator's own
+   `SlowPathVerdict.raw_signals` is an in-memory packaging of that same data for whatever consumes
+   it next (a review-queue view, an audit/report), not a second copy. Casts no `CardPrintingTag`
+   at all - it has no printing to vote for - so it can never touch `resolve_and_persist_printing`'s
+   own resolution logic.
+
+2. **Copyright-year era check (`_withhold_reason_for_match`)**: the legal-line's parsed copyright
+   year (`ImageEvidence.legal_line_copyright_year`, issue #151/#159) is cross-checked against the
+   matched candidate's own Scryfall release date (`CanonicalPrintingMetadata.released_at`, now
+   threaded onto `CandidatePrinting.released_at` alongside its existing `edhrec_rank` precedent) -
+   a cheap, independent agreement signal, same shape as the moderator-flag veto below but checking
+   a different disagreement. Only a LARGE gap withholds the vote - specifically the copyright year
+   sitting more than `COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS` years BEFORE the candidate's own
+   release year (the design frame's own "© year predating the set's release by years" framing) - a
+   small/plausible gap (a print run landing near a calendar-year boundary, an older copyright
+   legend surviving into a reprint) is deliberately NOT vetoed. Withheld, not confidence-adjusted:
+   confirmed by reading `vote_consensus.py` directly (no `confidence` reference anywhere in it) -
+   `resolve_weighted_consensus` weights strictly by `source`, so tweaking the `confidence` float
+   here would be pure decoration with zero effect on resolution, the same point
+   `JOIN_KEY_CONFIDENCE_BOTH`'s own comment already makes. A withheld match is a named, non-
+   rescannable skip (`"copyright-year-mismatch"`) - same "the vote IS the record" shape as
+   `"proxy-marker-veto"`, not added to `JOIN_KEY_RESCANNABLE_SKIP_REASONS` since both source facts
+   (the OCR read, the Scryfall release date) are static once extracted/imported, unlike
+   `"frame-mismatch"`'s own rescannable case in `local_identify_printing_tags` (that one is
+   re-scannable for a reason specific to Part 3's dual-yield artist-extraction design, which
+   doesn't apply here).
+
+3. **Collector-number-only ambiguity guard (hardening, not new logic)**: the ~472 pre-M15 cards
+   where OCR parsed a collector NUMBER but no set code (globally ambiguous on their own - ~15.7%
+   of collector-number values appear in >=2 sets, per the run analysis motivating issue #220) are
+   ALREADY structurally safe: `calculate_join_key_verdict` only ever receives `candidates` already
+   narrowed to the card's own name (`CandidateNameIndex.candidates_for(card.name)` -
+   `run_join_key_calculator`'s own call site), and `CandidatePrinting` carries no `name` field at
+   all for a global re-query to even be expressible here. This item makes that invariant EXPLICIT
+   (docstring + a dedicated regression test, `TestCollectorNumberOnlyStaysNameScoped`, pinning
+   that two different card names sharing a collector number across different sets never cross-
+   contaminate) rather than adding new matching logic - the guard already existed, per the
+   directive's own "RETAIN" wording.
+
+DEFERRED (still out of scope, tracked as follow-up - NOT invented/stubbed here):
   - Geometry/border agreement calculator: cross-check `layout_class`/`bleed_class` against a
     join-key match's own `CanonicalPrintingMetadata.border_color`/`frame` and withhold (mirroring
     the live pilot's existing frame-mismatch-withholding logic in `local_identify_printing_tags`)
@@ -66,11 +121,10 @@ DEFERRED (explicitly out of scope for this PR, tracked as follow-up - NOT invent
     (issue #199/#213, name-based, no `ImageEvidence` field) into join-key candidate selection for
     double-faced cards.
   - Quality/integrity gating: `image_is_truncated`/`blur_variance`/`image_entropy` as a
-    trust modifier, or a routing signal into Part 5's residual classification.
-  - Visual/phash slow-path candidate matching: explicitly NOT bulk server-side phash - issue
-    #150's own 2026-07-20 re-spec dropped that half in favor of user-submitted phash (task #203,
-    a distinct, not-yet-designed mechanism). A slow-path calculator here would need to be
-    redesigned against whatever #203 actually ships, not against the original bulk-phash idea.
+    trust modifier for the FAST path (the slow-path routing calculator above already carries them
+    as raw signals for human review - that's not the same as a machine trust modifier).
+  - User-submitted phash (issue #203) enhancing slow-path-routed cards post-hoc - the ongoing
+    enhancement half of issue #220's decision, a distinct, not-yet-designed mechanism.
 
 None of the above is built or stubbed in this PR - each is its own follow-up calculator PR,
 golden-gated (synthetic `ImageEvidence`/`Card`/`CanonicalCard` DB fixtures, not a live fetch -
@@ -86,7 +140,7 @@ from typing import Optional
 
 import imagehash
 
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 
 from cardpicker.local_fallback import (
     SYMBOL_DISTANCE_THRESHOLD,
@@ -149,6 +203,17 @@ JOIN_KEY_NO_MATCH_CONFIDENCE = 0.6
 # because ImageEvidence simply hadn't been extracted yet for this card at selection time is a
 # transient state (a future extraction run may still land it), not a permanent conclusion.
 JOIN_KEY_RESCANNABLE_SKIP_REASONS = frozenset({"no-evidence"})
+
+# The copyright-year era check (module docstring, item 2): a gap this large or larger between the
+# legal line's parsed copyright year and the matched candidate's own Scryfall release year
+# withholds the match. Deliberately small and one-directional (only "copyright predates release
+# by more than this many years" - the design frame's own stated failure mode; a copyright year
+# AFTER release isn't the case being guarded against here and isn't checked). Picked as a genuine,
+# but not exhaustively calibrated, judgment call - a small gap (a print run landing near a
+# calendar-year boundary, an older copyright legend surviving into a reprint) is real and
+# shouldn't veto an otherwise-good join-key hit; anything past this is implausible enough to
+# distrust the reading rather than the match.
+COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS = 2
 
 _SYMBOL_HASH_BITS = 64
 
@@ -229,16 +294,72 @@ def _symbol_phash_tiebreak(
     return next(c for c in ambiguous_candidates if c.expansion_code == best_candidate.expansion_code)
 
 
+def _withhold_reason_for_match(evidence: ImageEvidence, candidate: CandidatePrinting) -> Optional[str]:
+    """
+    Given a join-key match that would otherwise be trusted, returns a named skip_reason if THIS
+    specific reading should be withheld rather than cast, or `None` if it's clean - factored out
+    of `calculate_join_key_verdict` so both the direct-match and symbol-tiebreak branches share one
+    check rather than duplicating it (an initial draft had this inline in both places). Checked
+    ONLY at the moment a match would be trusted (same placement the module docstring's original
+    moderator-flag veto already used) - never against a genuine no-match/ambiguous outcome, since
+    neither condition here says "printing P is wrong": a proxy marker means "this reading isn't
+    trustworthy evidence FOR P", and a copyright-year mismatch means "this reading disagrees with
+    P's own known release era" - both are about the READING's trustworthiness, not P's identity.
+
+    Checks, in order:
+      1. THE MODERATOR-FLAG VETO (issue #151/#212's real motivating case - a "NOT FOR SALE"/proxy
+         watermark misparsing as a plausible collector line): `"proxy-marker-veto"`.
+      2. THE COPYRIGHT-YEAR ERA CHECK (module docstring, item 2): `"copyright-year-mismatch"` if
+         the legal line's parsed copyright year sits more than
+         `COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS` years BEFORE the candidate's own Scryfall
+         release year. Silently skipped (no check performed, not a "no mismatch" finding) whenever
+         either side of the comparison is missing - `evidence.legal_line_copyright_year` empty (no
+         legal-line OCR text was parseable) or `candidate.released_at` unset (no
+         `CanonicalPrintingMetadata` sidecar row yet) - an absent signal must never manufacture a
+         withhold, matching this codebase's existing "missing data is not evidence" convention
+         (see e.g. `_NO_DEMAND_RANK`'s own comment in local_identify_printing_tags.py). A
+         non-numeric parsed year (shouldn't happen - `_COPYRIGHT_YEAR_RE`/`_BARE_YEAR_RE` only
+         ever capture digit runs - but not assumed) is treated the same way: skipped, not vetoed.
+    """
+    if evidence.legal_line_proxy_marker_detected:
+        return "proxy-marker-veto"
+
+    if evidence.legal_line_copyright_year and candidate.released_at is not None:
+        try:
+            copyright_year = int(evidence.legal_line_copyright_year)
+        except ValueError:
+            copyright_year = None
+        if copyright_year is not None:
+            years_before_release = candidate.released_at.year - copyright_year
+            if years_before_release > COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS:
+                return "copyright-year-mismatch"
+
+    return None
+
+
 def calculate_join_key_verdict(
     card_id: int, evidence: ImageEvidence, candidates: list[CandidatePrinting]
 ) -> JoinKeyVerdict:
     """
-    The join-key calculator (this PR's only calculator - see module docstring). Pure function,
+    The join-key calculator (this Stage's first calculator - see module docstring). Pure function,
     no DB write - reconstructs an `OcrParseResult` from Stage C's already-persisted
     `collector_line_set_code`/`collector_line_collector_number` fields (no re-OCR, no re-fetch)
     and calls the EXISTING, unmodified `local_ocr.validate_against_candidates` - the pipeline-
     fidelity gate's own "call the existing shipped identification code paths, don't re-derive"
     requirement, satisfied by direct reuse rather than a parallel implementation.
+
+    INVARIANT (module docstring, item 3 - the collector-number-only ambiguity guard): `candidates`
+    MUST already be narrowed to this card's own name - the only correct way to produce it is
+    `CandidateNameIndex.candidates_for(card.name)` (see `run_join_key_calculator`'s own call site).
+    When `evidence.collector_line_set_code` is empty (the pre-M15 case - no set code was ever
+    printed on the collector line), `find_matching_candidates`/`validate_against_candidates` match
+    on collector number ALONE - safe here ONLY because that matching happens exclusively within
+    THIS already-name-scoped list, never a fresh, global `CanonicalCard` query. A collector number
+    alone is globally ambiguous across the full catalog (~15.7% of collector-number values appear
+    in >=2 sets, per the run analysis motivating issue #220's slow-path decision) - this function
+    has no way to enforce the invariant at runtime (`CandidatePrinting` carries no `name` field for
+    a defensive re-check), so it is a caller contract, not a runtime guard: never call this with a
+    `candidates` list that mixes more than one card's own name-narrowed set.
     """
     parsed = OcrParseResult(
         raw_text=evidence.collector_line_raw_text,
@@ -248,10 +369,9 @@ def calculate_join_key_verdict(
     matched, reason = validate_against_candidates(parsed, candidates)
 
     if matched is not None:
-        if evidence.legal_line_proxy_marker_detected:
-            # THE MODERATOR-FLAG VETO (module docstring) - a would-be match is rejected as
-            # untrustworthy, not accepted and not converted into is_no_match evidence either.
-            return JoinKeyVerdict(card_id=card_id, skip_reason="proxy-marker-veto", detail=parsed.raw_text)
+        withhold_reason = _withhold_reason_for_match(evidence, matched)
+        if withhold_reason is not None:
+            return JoinKeyVerdict(card_id=card_id, skip_reason=withhold_reason, detail=parsed.raw_text)
         confidence = JOIN_KEY_CONFIDENCE_BOTH if parsed.set_code is not None else JOIN_KEY_CONFIDENCE_COLLECTOR_ONLY
         return JoinKeyVerdict(card_id=card_id, printing_pk=matched.pk, confidence=confidence, detail=parsed.raw_text)
 
@@ -259,8 +379,9 @@ def calculate_join_key_verdict(
         ambiguous_candidates = find_matching_candidates(parsed, candidates)
         tie_broken = _symbol_phash_tiebreak(evidence.symbol_phash, ambiguous_candidates)
         if tie_broken is not None:
-            if evidence.legal_line_proxy_marker_detected:
-                return JoinKeyVerdict(card_id=card_id, skip_reason="proxy-marker-veto", detail=parsed.raw_text)
+            withhold_reason = _withhold_reason_for_match(evidence, tie_broken)
+            if withhold_reason is not None:
+                return JoinKeyVerdict(card_id=card_id, skip_reason=withhold_reason, detail=parsed.raw_text)
             return JoinKeyVerdict(
                 card_id=card_id,
                 printing_pk=tie_broken.pk,
@@ -417,6 +538,200 @@ def run_join_key_calculator(
     return result
 
 
+# Slow-path routing (module docstring, item 1; owner decision, public issue #220): own
+# anonymous_id, same rationale as JOIN_KEY_ANONYMOUS_ID's own comment - a distinct, independently
+# purgeable/re-runnable population from every other engine's. This calculator never casts a
+# CardPrintingTag (it has no printing to vote for), so its only DB footprint is a CardScanLog row.
+SLOW_PATH_ANONYMOUS_ID = "stage-d-slow-path-v1"
+
+# The routing marker itself - not a genuine abstention reason in the sense CardScanLog's other
+# skip_reason values are (this ISN'T "this engine looked and found nothing"), but reusing the
+# same field/model rather than inventing new storage: a durable, queryable "this card was routed
+# to human review, carrying partial evidence" fact, matching this pipeline's own "don't invent a
+# separate vocabulary/table for a concept an existing field can hold" convention (see
+# image_evidence.py's own remarks about reusing skip-reason strings rather than growing a new
+# taxonomy).
+SLOW_PATH_TO_REVIEW_REASON = "to-review"
+
+# The join-key calculator's own non-match outcomes that qualify a card for slow-path routing: a
+# real is_no_match vote (handled separately, via CardPrintingTag), or any of these named,
+# non-rescannable CardScanLog skip_reason values it can produce. Deliberately excludes
+# JOIN_KEY_RESCANNABLE_SKIP_REASONS ("no-evidence") - a card the join-key calculator never
+# actually got to look at yet has nothing to route on, and will naturally become eligible once
+# a future join-key pass runs.
+JOIN_KEY_NO_HIT_SKIP_REASONS = frozenset({"ambiguous", "no-text", "proxy-marker-veto", "copyright-year-mismatch"})
+
+# The ImageEvidence fields packaged into a SlowPathVerdict's raw_signals for human review - every
+# extracted signal a reviewer might use to disambiguate a card with no confident join-key hit,
+# EXCLUDING candidate-matching fields (collector_line_set_code/collector_line_collector_number are
+# included as the OCR's own raw parse, not a verdict) and excluding anything crop-pixel/geometry-
+# coordinate-only (not useful without the image itself, which this module never re-fetches -
+# "we index, we do not store images", CLAUDE.md's Governing premise). No new storage: every one
+# of these fields already lives in ImageEvidence (Stage C's job) - this is a read-time packaging,
+# not a second copy.
+SLOW_PATH_RAW_SIGNAL_FIELDS: tuple[str, ...] = (
+    "collector_line_raw_text",
+    "collector_line_set_code",
+    "collector_line_collector_number",
+    "artist_ocr_name",
+    "legal_line_raw_text",
+    "legal_line_copyright_year",
+    "legal_line_proxy_marker_detected",
+    "layout_class",
+    "bleed_class",
+    "symbol_phash",
+    "image_is_truncated",
+    "blur_variance",
+    "image_entropy",
+)
+
+
+@dataclass(frozen=True)
+class SlowPathVerdict:
+    """
+    Pure result of routing one card to the human review queue (module docstring, item 1) - NOT a
+    match, NOT a vote; `raw_signals` is an in-memory packaging of that card's own already-persisted
+    `ImageEvidence` fields (see `SLOW_PATH_RAW_SIGNAL_FIELDS`), for whatever consumes this next (a
+    review-queue view, a report) - it is not written anywhere new.
+    """
+
+    card_id: int
+    reason: str  # the join-key outcome that routed this card here - see JOIN_KEY_NO_HIT_SKIP_REASONS
+    raw_signals: dict[str, object] = field(default_factory=dict)
+
+
+def calculate_slow_path_verdict(card_id: int, reason: str, evidence: ImageEvidence) -> SlowPathVerdict:
+    """
+    The slow-path routing calculator (module docstring, item 1; owner decision, public issue
+    #220's option (b) - "send no-hit cards straight to the human review queue with their partial
+    extracted signals"). Pure function, no DB write - packages `SLOW_PATH_RAW_SIGNAL_FIELDS` off
+    the SAME `ImageEvidence` row the join-key calculator already looked at (no re-fetch, no
+    re-OCR) alongside `reason` (why the join-key calculator found no confident hit). NOT a
+    phash-matching engine and never will be one here - issue #220's own decision explicitly
+    rejected bulk server-side phash (option (a)) in favor of this routing step plus user-submitted
+    phash (issue #203, option (c), a distinct, not-yet-built enhancement) as the two real answers.
+    """
+    raw_signals = {field_name: getattr(evidence, field_name) for field_name in SLOW_PATH_RAW_SIGNAL_FIELDS}
+    return SlowPathVerdict(card_id=card_id, reason=reason, raw_signals=raw_signals)
+
+
+@dataclass
+class SlowPathCalculatorResult:
+    dry_run: bool = False
+    run_id: str = ""
+    cards_considered: int = 0
+    routed_would_cast: int = 0
+    routed_written: int = 0
+    reason_counts: dict[str, int] = field(default_factory=dict)
+    # capped audit sample, same convention as JoinKeyCalculatorResult.audit - includes raw_signals
+    # so a reader can confirm this calculator really is carrying evidence, not just a bare route.
+    audit: list[dict[str, object]] = field(default_factory=list)
+
+
+def _slow_path_eligible_cards_queryset() -> "QuerySet[Card]":
+    """
+    Cards the join-key calculator (JOIN_KEY_ANONYMOUS_ID) already concluded have no confident
+    hit - either a real `is_no_match` vote, or a non-rescannable skip in
+    JOIN_KEY_NO_HIT_SKIP_REASONS - and that this calculator's own SLOW_PATH_ANONYMOUS_ID hasn't
+    already routed (its own idempotence/resume mechanism, same shape as every other engine's).
+    A card the join-key calculator hasn't looked at yet at all (no vote, no scan-log row) is
+    simply not yet in scope - this calculator only ever consumes the join-key calculator's own
+    output, it never runs independently of it.
+    """
+    join_key_no_match_card_ids = CardPrintingTag.objects.filter(
+        anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
+    ).values_list("card_id", flat=True)
+    join_key_no_hit_scanned_card_ids = CardScanLog.objects.filter(
+        anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
+    ).values_list("card_id", flat=True)
+    already_routed_card_ids = CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID).values_list(
+        "card_id", flat=True
+    )
+    return (
+        Card.objects.filter(
+            printing_tag_status=PrintingTagStatus.UNRESOLVED,
+            canonical_card__isnull=True,
+            card_type=CardTypes.CARD,
+        )
+        .filter(Q(pk__in=join_key_no_match_card_ids) | Q(pk__in=join_key_no_hit_scanned_card_ids))
+        .exclude(pk__in=already_routed_card_ids)
+        .distinct()
+        .select_related("source")
+    )
+
+
+def run_slow_path_calculator(
+    run_id: Optional[str] = None, dry_run: bool = True, chunk_size: int = 500, audit_sample_size: int = 20
+) -> SlowPathCalculatorResult:
+    """
+    Batch runner over every card the join-key calculator already routed to no-hit (see
+    `_slow_path_eligible_cards_queryset`) - re-reads that same card's CURRENT `ImageEvidence` row
+    (same content-hash-freshness check `run_join_key_calculator` uses; a card whose evidence has
+    gone stale since the join-key pass is skipped here too, rather than routing stale signals to
+    a reviewer) and writes a `CardScanLog(anonymous_id=SLOW_PATH_ANONYMOUS_ID,
+    skip_reason=SLOW_PATH_TO_REVIEW_REASON)` durable routing marker. `dry_run=True` (the default,
+    matching `run_join_key_calculator`'s own convention) computes and counts everything without
+    writing.
+    """
+    run_id = run_id or generate_run_id()
+    result = SlowPathCalculatorResult(dry_run=dry_run, run_id=run_id)
+
+    scan_log_batch: list[CardScanLog] = []
+
+    for card in _slow_path_eligible_cards_queryset().iterator(chunk_size=chunk_size):
+        if card.content_phash is None:
+            continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
+
+        evidence = (
+            ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)
+            .filter(extractor_versions__has_key="collector_line_ocr")
+            .order_by("-updated_at")
+            .first()
+        )
+        if evidence is None:
+            continue  # the join-key evidence has since gone stale - nothing current to route
+
+        no_match_vote = CardPrintingTag.objects.filter(
+            card_id=card.pk, anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
+        ).exists()
+        if no_match_vote:
+            reason = "parsed-but-no-match"
+        else:
+            scan_log = (
+                CardScanLog.objects.filter(
+                    card_id=card.pk, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
+                )
+                .order_by("-scanned_at")
+                .first()
+            )
+            # unreachable given _slow_path_eligible_cards_queryset's own filter, guarded rather
+            # than assumed - see that function's own docstring for the exact eligibility contract.
+            reason = scan_log.skip_reason if scan_log is not None else "unknown"
+
+        result.cards_considered += 1
+        verdict = calculate_slow_path_verdict(card.pk, reason, evidence)
+        result.reason_counts[reason] = result.reason_counts.get(reason, 0) + 1
+        result.routed_would_cast += 1
+        if len(result.audit) < audit_sample_size:
+            result.audit.append({"card_id": card.pk, "reason": verdict.reason, "raw_signals": verdict.raw_signals})
+
+        if not dry_run:
+            scan_log_batch.append(
+                CardScanLog(
+                    card_id=card.pk,
+                    anonymous_id=SLOW_PATH_ANONYMOUS_ID,
+                    run_id=run_id,
+                    skip_reason=SLOW_PATH_TO_REVIEW_REASON,
+                )
+            )
+
+    if not dry_run:
+        CardScanLog.objects.bulk_create(scan_log_batch)
+        result.routed_written = len(scan_log_batch)
+
+    return result
+
+
 __all__ = [
     "JOIN_KEY_ANONYMOUS_ID",
     "JOIN_KEY_CONFIDENCE_BOTH",
@@ -424,8 +739,17 @@ __all__ = [
     "JOIN_KEY_CONFIDENCE_SYMBOL_TIEBREAK",
     "JOIN_KEY_NO_MATCH_CONFIDENCE",
     "JOIN_KEY_RESCANNABLE_SKIP_REASONS",
+    "JOIN_KEY_NO_HIT_SKIP_REASONS",
+    "COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS",
+    "SLOW_PATH_ANONYMOUS_ID",
+    "SLOW_PATH_TO_REVIEW_REASON",
+    "SLOW_PATH_RAW_SIGNAL_FIELDS",
     "JoinKeyVerdict",
     "calculate_join_key_verdict",
     "JoinKeyCalculatorResult",
     "run_join_key_calculator",
+    "SlowPathVerdict",
+    "calculate_slow_path_verdict",
+    "SlowPathCalculatorResult",
+    "run_slow_path_calculator",
 ]
