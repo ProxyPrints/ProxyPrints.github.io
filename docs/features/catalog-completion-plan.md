@@ -1701,3 +1701,27 @@ permits your users to be the compute."
     feature and the "degradation badge" work: card ids 35226, 6074,
     1631, 6342, 4614, 36867, 36927, 57997, 62298, 74102, 58652, 64896,
     57583, 114225, 117403.
+- **Stage C: first real `ImageEvidence` dataset run** (bounded, owner-
+  authorized, 2026-07-20 — explicitly NOT the full-catalog harvest, which
+  still needs Stage D's pipeline-fidelity gate + Stage E's soak test and
+  a separate owner GO): migrations `0068`-`0072` applied to production
+  (confirmed via `django_migrations` directly, not just the app's own
+  `showmigrations`) - `ImageEvidence` had zero rows beforehand. New
+  one-off `run_image_evidence_cohort` management command (prioritizes by
+  a name-level `edhrec_rank` proxy - a cheap two-query approximation of
+  this doc's own harvest-priority chain, not the full
+  lands/dying-source/queue-backing ordering; a naive per-card correlated
+  subquery version of the same idea was measured live and cancelled
+  after >2 minutes with zero rows returned, confirming the simplification
+  was necessary, not just convenient). Calibration run: 3.36/s stable
+  across 200 real cards (6 workers, matching the settled
+  `GOOGLE_IMAGE` concurrency-raise config), zero fetch failures - faster
+  than Part 2's ~3/s backfill despite doing substantially more per-card
+  work (full geometry + OCR-group pass, not just a hash), plausibly
+  because this box now has more real cores available than the "2 real
+  cores" figure `local_identify_printing_tags.py`'s own `OMP_THREAD_LIMIT`
+  comment assumed. Full cohort (15,000 cards, resume-filtered to skip the
+  200 calibration cards) launched in background
+  (`run_id=stagec-cohort-20260720-full`) - dataset scale, achieved rate,
+  and field-distribution summary:
+  [`docs/reports/2026-07-20-image-evidence-first-run.md`](../reports/2026-07-20-image-evidence-first-run.md).
