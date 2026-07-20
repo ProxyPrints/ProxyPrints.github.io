@@ -1356,7 +1356,74 @@ presence, 4 in `test_golden_set.py`); full suite 1024 passed / 4
 skipped (the same CI-documented named skips — nothing newly broken);
 `makemigrations --check` clean.
 
-Queued behind Stage B per the paced task sequence (#145–148). Stage D
+**OCR-group — third manifest extractor group, built** (public issue
+#149, 2026-07-20): adds `collector_line_raw_text`,
+`collector_line_set_code`, `collector_line_collector_number`,
+`artist_ocr_raw_text`, `artist_ocr_name`, `illus_anchor_fired`, and
+`collector_line_word_boxes`
+to `ImageEvidence` (migration `0071`, additive-only `AddField`s, no
+freeze conflict — checked `gh issue list --label deploy-freeze-active`
+fresh immediately before both the migration and the golden-set
+gathering run, empty both times). All three extractors consume
+`collector_line_crop_px`/`artist_crop_px` — the pixel boxes issue #148's
+crop_coordinates already computed earlier in the same pass — directly
+(`image.crop(...)`), rather than recomputing them from the fixed-fraction
+constants a second time. None of the three perform candidate matching:
+`local_ocr.validate_against_candidates`/`local_fallback.match_artist`
+both require a card's real `CandidatePrinting` list, which the per-card
+`extract_card_evidence(card)` function never receives — that comparison
+is Stage D calculator territory (task #151's pipeline-fidelity gate),
+not Stage C extraction. What's stored is raw OCR text plus
+`local_ocr.parse_collector_line`/`local_fallback.extract_artist_name`'s
+existing tolerant parses (both called, not reimplemented) plus word-level
+bounding boxes from a new `local_ocr.run_tesseract_tsv` wrapper around
+`pytesseract.image_to_data` — metadata per FINAL POSTURE item 2 ("full
+OCR text + TSV word boxes, parsed fields"), never a verdict about which
+printing this is. `artist_ocr` reuses `collector_line_ocr`'s own raw
+texts first (an old-border card's "Illus. <artist>" credit frequently
+lands inside the same crop region a modern card's collector line
+occupies), the same reuse-before-recompute convention
+`local_fallback.detect_illus_anchor` already uses — only cropping+OCR-
+ing `artist_crop_px` if that reuse finds nothing. No changes to
+`local_fallback.py` itself (PROTECTED CORE; calling its existing
+exported `extract_artist_name` from new code is not "changing" it, per
+`docs/upstreaming/license-provenance.md`); `local_ocr.py` is not
+PROTECTED CORE, so `run_tesseract_tsv` was added there directly.
+
+`GOLDEN_EXPECTATIONS["collector_line_ocr"]`/`["artist_ocr"]`/
+`["collector_line_tsv"]` populated against a real, no-persistence
+`extract_card_evidence()` run over all 30 golden cards (host venv, real
+network fetch through the shared `GOOGLE_IMAGE`-paced Worker path, zero
+DB writes): only 10/30 produced a parseable collector number (several a
+4-digit "year" number on `mtg`/`proxy`-coded promos rather than a
+classic 3-digit one); `illus_anchor_fired` came back `False` for all 30
+— genuine, not a placeholder, since "Illus. <artist>" is an
+old-border-only convention (pre-2003) and this source-stratified sample
+happened to draw zero old-border cards, consistent with issue #148's
+own layout_class results (14 black/13 borderless/1 white/1 ambiguous,
+no old-border signal either); 25/30 found at least one non-blank
+tesseract word in the collector-line crop, including several cards
+where the word(s) found didn't fit the collector-number regex — a
+genuinely different (weaker) outcome than a fully blank crop, and worth
+keeping distinct in the golden set for exactly that reason. Raw OCR
+text itself is NOT pinned (too verbose/brittle across a tesseract
+version bump), nor is the exact word-box list (same reasoning) — only
+the discrete parsed fields and a `word_boxes_present` bool are, matching
+`geometry_bleed`'s own precedent of excluding continuous/brittle values
+from the hard gate. 19 new tests (13 in `test_image_evidence.py`'s new
+`TestExtractCardEvidenceCollectorLineOcr`/`ArtistOcr`/`CollectorLineTsv`
+classes — all three run against real PIL images + the real tesseract
+binary, no monkeypatching of tesseract itself, per CLAUDE.md's "no new
+skips" rule — plus 6 in `test_golden_set.py`), and 13 pre-existing
+`TestExtractCardEvidence*` tests updated for the three new extractors'
+presence; full suite 1037 passed / 4 skipped (the same CI-documented
+named skips —
+nothing newly broken); `makemigrations --check` clean.
+
+`back_face_flag` remains an open question for the owner (see the
+geometry-group paragraph above) — nothing in this PR bears on it either.
+
+Queued behind Stage B per the paced task sequence (#145–149). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
 shipped identification code paths with `ImageEvidence`-supplied
