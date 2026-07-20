@@ -32,8 +32,9 @@ printings, artists, tags, and moderation from one screen.
   `import_scryfall_printing_metadata`. `CardPrintingTag.printing` FKs
   directly to `CanonicalCard`.
 - **Card payload — machine-suggested printing + tag vote status** (Proposal H
-  §4.4′, issue #184, backend-only; frontend consumer is the not-yet-built
-  Select Version section): `Card.serialise()` (`cardpicker/models.py`) takes
+  §4.4′, issue #184, PR #195; consumed by the Select Version section, issue
+  #167 — see [[grid-selector.md]]'s own "Select Version section" entry):
+  `Card.serialise()` (`cardpicker/models.py`) takes
   a keyword-only `include_suggested_printing: bool = False` argument.
   When `True`, `SerialisedCard.suggestedCanonicalCard` is populated with the
   printing named by a machine-cast (`VoteSource.DEDUCTION`/`OCR`)
