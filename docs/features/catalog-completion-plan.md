@@ -1791,84 +1791,149 @@ via `vote_consensus.resolve_weighted_consensus`'s own hard AND-gate), but a
 real characteristic of two mechanisms running concurrently mid-migration,
 named here rather than left to surface later as a surprise.
 
-**Three cheap additions on top of the framework (built 2026-07-20, following
-#219/#221, owner decision on issue #220)**:
+**Agreement/corroboration layer (built 2026-07-20, issue #152 continuation,
+"Stage D calculators D2-D5")**: five cross-checks folded directly into
+`calculate_join_key_verdict`/`run_join_key_calculator`'s existing control
+flow — no new eligible-card population, no new `anonymous_id`, no new vote
+type — per the dispatching directive's own "raw cross-check feeding the
+verdict, not a second classifier" framing:
+
+- **Back-face-aware candidate selection** (issue #199/#213): new
+  `_resolve_candidates_for_card` tries the card's own name first (unchanged
+  fast path), and only when that finds nothing AND
+  `printing_metadata_import.is_back_face` confirms the name is a known DFC
+  back face, reconstructs Scryfall's own combined `"{front} // {back}"`
+  `CanonicalCard.name` form (via the already-shipped `DFCPair` table's
+  `back=name` lookup) and retries — fixes candidate _selection_ for a
+  cohort (back-face-named split-image DFC uploads) that would otherwise
+  never match at all, since `CanonicalCard.name` for these rows is never
+  the bare back-face name alone.
+- **Border/frame agreement**: `layout_class` vs. the matched printing's own
+  `CanonicalPrintingMetadata.border_color` (direct string comparison — both
+  use the same value space) and an OCR-re-derived frame class
+  (`local_fallback.classify_frame_style`/`frame_style_is_consistent`,
+  PROTECTED CORE, called not modified) vs. `.frame` — either disagreement
+  WITHHOLDS the match (`border-mismatch`/`frame-mismatch` named skips),
+  mirroring the live pilot's own frame-mismatch-withholding exactly.
+  `bleed_class` is deliberately NOT cross-checked (no Scryfall field it
+  could ever agree/disagree with — a proxy-sheet-formatting property, not a
+  printing property), despite this PR's own earlier deferred-item wording
+  naming it.
+- **Copyright-year era check** (issue #152/#220 follow-up, built alongside
+  the slow-path routing calculator below): the legal line's parsed
+  copyright year (`ImageEvidence.legal_line_copyright_year`, issue
+  #151/#159) cross-checked against the matched printing's own
+  `CanonicalPrintingMetadata.released_at` — reusing the SAME
+  `CanonicalCard`/`CanonicalPrintingMetadata` query the border/frame checks
+  just above already perform, no second lookup. Only a gap of more than
+  `COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS` (2) years — copyright
+  _predating_ release, the one direction the design frame actually names —
+  withholds the match as a new named, non-rescannable skip
+  (`"copyright-year-mismatch"`); a small/plausible gap (a print run landing
+  near a calendar-year boundary, an older copyright legend surviving into a
+  reprint) is deliberately not vetoed. Withheld, not confidence-adjusted —
+  confirmed by reading `vote_consensus.py` directly: it weights strictly by
+  `source`, never `confidence`, so a confidence-field tweak here would have
+  zero effect on resolution, the same point this module's own
+  `JOIN_KEY_CONFIDENCE_BOTH` comment already makes elsewhere.
+- **Artist-OCR corroboration**: `artist_ocr_name` vs. the matched
+  printing's `CanonicalCard.artist` via `local_fallback.match_artist`
+  (PROTECTED CORE, called not modified) — a disagreement WEAKENS confidence
+  (`JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT`, 0.65) rather than vetoing,
+  per the directive's own framing and `match_artist`'s own softer,
+  tie-tolerant design.
+- **Quality/integrity gating**: `image_is_truncated` is a hard veto
+  (`truncated-image` named skip). `blur_variance`/`image_entropy` are
+  deliberately NOT thresholded — both fields' own `local_image_quality.py`
+  docstrings defer "what counts as too blurry/too flat" to a calibrated
+  Stage D number, and #218's real golden-set gather run explicitly did NOT
+  hard-pin either value; inventing an arbitrary cutoff here would violate
+  this project's own "config values land only from measurement, not
+  automatically" rule, so only the binary integrity signal is acted on.
+
+All five checks above live in ONE function, `_apply_agreement_checks`,
+called from both of `calculate_join_key_verdict`'s match-producing branches
+(direct match, symbol-phash tie-break) rather than duplicated across them.
+
+**Deliberate deviation from the live pilot's own precedent**:
+`border-mismatch`/`frame-mismatch`/`truncated-image`/
+`copyright-year-mismatch` are NOT added to `JOIN_KEY_RESCANNABLE_SKIP_REASONS` (unlike `local_identify_printing_tags`'s own rescannable
+`"frame-mismatch"`) — that module's rescannability exists because a future
+run re-fetches the image and may read it differently; Stage D's join-key
+calculator instead reads an already-persisted, content-hash-keyed
+`ImageEvidence` row, so re-selecting the same card against the same stored
+evidence would deterministically recompute the identical mismatch forever.
+
+**Two further cheap additions (built 2026-07-20, owner decision on issue
+#220)**:
 
 1. **Slow-path routing** (`calculate_slow_path_verdict`/
    `run_slow_path_calculator`, own `anonymous_id="stage-d-slow-path-v1"`):
-   issue #220's settled answer for the ~83% of cards the join-key calculator
-   alone can't confidently resolve — explicitly option (b) from that issue
-   (send no-hit cards to the human review queue carrying their partial
-   extracted signals), not (a) bulk server-side phash (the 165k-run analysis
-   found that costs ~84h to resolve only 2.6%) and not (c) user-submitted
-   phash (issue #203, a distinct, not-yet-built enhancement layered on top
-   later). A pure routing step, not a matching engine — casts no
-   `CardPrintingTag` at all (nothing to vote for), only a
-   `CardScanLog(skip_reason="to-review")` durable marker once a card gets a
-   real `is_no_match` vote or a non-rescannable join-key skip (`ambiguous`,
-   `no-text`, `proxy-marker-veto`, `copyright-year-mismatch`). No new
-   storage: the signals themselves already live in `ImageEvidence` (Stage
-   C's job) — `SlowPathVerdict.raw_signals` is an in-memory packaging of
-   that same data for whatever consumes it next, not a second copy.
-2. **Copyright-year era check** (`_withhold_reason_for_match`): the
-   legal-line's parsed copyright year cross-checked against the matched
-   candidate's own Scryfall release date (`CanonicalPrintingMetadata.released_at`, now threaded onto `CandidatePrinting.released_at`
-   alongside its existing `edhrec_rank`). Only a gap of more than
-   `COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS` (2) years — copyright
-   _predating_ release, the one direction the design frame actually names —
-   withholds the match as a new named, non-rescannable skip
-   (`"copyright-year-mismatch"`); a small/plausible gap is deliberately not
-   vetoed. Withheld, not confidence-adjusted — confirmed by reading
-   `vote_consensus.py` directly: it weights strictly by `source`, never
-   `confidence`, so a confidence-field tweak here would have zero effect on
-   resolution. The proxy-marker-veto and this check now share one helper
-   (`_withhold_reason_for_match`), checked in that order, so both of the
-   join-key calculator's match branches (direct match, symbol tie-break) get
-   both checks without duplicating either.
-3. **Collector-number-only ambiguity guard** — a hardening/regression item,
-   not new logic: the ~472 pre-M15 cards where OCR parsed a collector number
-   but no set code (globally ambiguous alone — ~15.7% of collector-number
-   values appear in ≥2 sets) were already structurally safe, since
-   `calculate_join_key_verdict` only ever receives a `candidates` list
-   already narrowed to the card's own name
-   (`CandidateNameIndex.candidates_for(card.name)`), and `CandidatePrinting`
-   carries no `name` field for a global re-match to even be expressible.
-   Made explicit via a docstring invariant plus a dedicated regression test
-   (`TestCollectorNumberOnlyStaysNameScoped`, including a defense-in-depth
-   case proving a misscoped candidate list degrades to `"ambiguous"`, never
-   a silent wrong-printing match) rather than new matching logic.
+   issue #220's settled answer for the ~83% of cards the join-key
+   calculator alone can't confidently resolve — explicitly option (b) from
+   that issue (send no-hit cards to the human review queue carrying their
+   partial extracted signals), not (a) bulk server-side phash (the
+   165k-run analysis found that costs ~84h to resolve only 2.6% — exactly
+   why #203 already moved phash to user-submitted instead) and not (c)
+   user-submitted phash itself (issue #203, a distinct, separately-designed,
+   not-yet-built mechanism, deliberately not built here). A pure routing
+   step, not a matching engine — casts no `CardPrintingTag` at all (nothing
+   to vote for), only a `CardScanLog(skip_reason="to-review")` durable
+   marker once a card gets a real `is_no_match` vote or a non-rescannable
+   join-key/agreement-layer skip (`ambiguous`, `no-text`,
+   `proxy-marker-veto`, `border-mismatch`, `frame-mismatch`,
+   `truncated-image`, `copyright-year-mismatch`). No new storage: the
+   signals themselves already live in `ImageEvidence` (Stage C's job) —
+   `SlowPathVerdict.raw_signals` is an in-memory packaging of that same
+   data for whatever consumes it next, not a second copy.
+2. **Collector-number-only ambiguity guard** — a hardening/regression item,
+   not new logic: the ~472 pre-M15 cards where OCR parsed a collector
+   number but no set code (globally ambiguous alone — ~15.7% of
+   collector-number values appear in ≥2 sets, per the run analysis
+   motivating issue #220's slow-path decision) were already structurally
+   safe, since `calculate_join_key_verdict` only ever receives a
+   `candidates` list already narrowed to the card's own name (via
+   `_resolve_candidates_for_card`, which always starts from
+   `CandidateNameIndex.candidates_for(card.name)` and only ever widens to
+   the DFC-combined name for a confirmed back face, never a global query),
+   and `CandidatePrinting` carries no `name` field for a global re-match to
+   even be expressible. Made explicit via a docstring invariant plus a
+   dedicated regression test (`TestCollectorNumberOnlyStaysNameScoped`,
+   including a defense-in-depth case proving a misscoped candidate list
+   degrades to `"ambiguous"`, never a silent wrong-printing match) rather
+   than new matching logic.
 
-**Deferred to follow-up calculator PRs (not built or stubbed here)**:
-geometry/border agreement (cross-check `layout_class`/`bleed_class`
-against a match's own `CanonicalPrintingMetadata`, mirroring the live
-pilot's frame-mismatch withholding); artist-OCR corroboration
-(`artist_ocr_name` via `local_fallback.match_artist`); back-face-aware
-lookup (`printing_metadata_import.is_back_face`, issue #199/#213);
-quality/integrity gating as a FAST-path trust modifier
-(`image_is_truncated`/`blur_variance`/`image_entropy` — the slow-path
-routing calculator above already carries these as raw signals for human
-review, which is not the same as a machine trust modifier); user-submitted
-phash (issue #203) enhancing slow-path-routed cards post-hoc — the ongoing
-enhancement half of issue #220's decision, a distinct, not-yet-designed
-mechanism.
+**Still deferred (not built or stubbed here)**: visual/phash slow-path
+_matching_ (distinct from the slow-path _routing_ calculator built above)
+— explicitly NOT bulk server-side phash (issue #150's own 2026-07-20
+re-spec dropped that in favor of user-submitted phash, task #203, a
+distinct, not-yet-designed mechanism); a calibrated
+`blur_variance`/`image_entropy` trust-modifier threshold (needs real
+measurement against production data first, per the same "measurement, not
+automatically" rule above — the slow-path routing calculator already
+carries both as raw signals for human review, which is not the same as a
+machine trust modifier).
 
-Golden-gated against synthetic `ImageEvidence`/`Card`/`CanonicalCard` DB
-fixtures, not a live fetch — Stage D consumes stored evidence + Scryfall-
-backed models, it never touches a live image, so Stage C's "real network
-fetch over 30 pinned cards" golden-set convention doesn't apply here (host
-venv, no network — `render_set_symbol` IS exercised for real, a pure local
-font-render, so the symbol-phash tie-break is tested against real keyrune
-glyph hashes). 25 new tests for the framework/join-key PR
-(`test_local_calculate_verdicts.py`, 20; `test_local_identify_printing_tags.py`'s `TestFindMatchingCandidates` class, 5), plus 20 more for the
-three cheap additions (`test_local_calculate_verdicts.py`'s new
-`TestCopyrightYearEraCheck`/`TestWithholdReasonForMatch`/
-`TestCollectorNumberOnlyStaysNameScoped`/`TestCalculateSlowPathVerdict`/
-`TestRunSlowPathCalculator` classes, 18;
-`test_local_identify_printing_tags.py`'s new `released_at` propagation
-tests on `TestCandidateNameIndex`, 2); full suite 1167 passed / 4 skipped
-(the same CI-documented named skips — nothing newly broken);
-`makemigrations --check` clean (no Django model change — `CandidatePrinting.released_at` is a plain-Python-dataclass field, not a model field, so this
-adds no migration); `pre-commit` (ruff/isort/black/mypy/prettier) clean.
+Golden-gated against synthetic `ImageEvidence`/`Card`/`CanonicalCard`/
+`CanonicalPrintingMetadata`/`DFCPair` DB fixtures, not a live fetch — Stage
+D consumes stored evidence + Scryfall-backed models, it never touches a
+live image, so Stage C's "real network fetch over 30 pinned cards"
+golden-set convention doesn't apply here (host venv, no network —
+`render_set_symbol` IS exercised for real, a pure local font-render, so the
+symbol-phash tie-break is tested against real keyrune glyph hashes;
+`is_back_face` IS exercised against a real, temporary on-disk bulk-data
+JSON file, never mocked). 20 new tests added on top of the agreement/
+corroboration layer's own 37 in `test_local_calculate_verdicts.py` (57
+total in that file now) — 10 for the copyright-year era check
+(`TestCopyrightYearEraCheck`), 2 for the collector-number-only name-scoping
+regression (`TestCollectorNumberOnlyStaysNameScoped`), 1 for
+`calculate_slow_path_verdict`'s raw-signal packaging
+(`TestCalculateSlowPathVerdict`), and 7 for `run_slow_path_calculator`
+(`TestRunSlowPathCalculator`); full suite 1184 passed / 4 skipped (the same
+CI-documented named skips — nothing newly broken); `makemigrations --check`
+clean (no model change — every field these checks read already existed on
+`ImageEvidence`/`CanonicalPrintingMetadata`); `pre-commit`
+(ruff/isort/black/mypy/prettier) clean.
 
 **Stage E resume contract (owner directive, 2026-07-19 — full spec on
 task #147, acceptance test folded into task #156's soak gate)**:

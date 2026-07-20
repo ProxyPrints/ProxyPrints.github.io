@@ -9,7 +9,6 @@ it, only the host venv used for the real pilot run does).
 """
 
 import collections
-import datetime
 import os
 import shutil
 
@@ -509,26 +508,6 @@ class TestCandidateNameIndex:
         CanonicalCardFactory(name="Kusari-Gama")
         index = CandidateNameIndex()
         assert len(index.candidates_for("Kusari-Gama (Modern Tomas Giorello)")) == 1
-
-    def test_released_at_is_populated_from_the_printing_metadata_sidecar(self, db):
-        """Stage D's copyright-year era check (cardpicker.local_calculate_verdicts) reads
-        CandidatePrinting.released_at - confirms it's actually wired up to
-        CanonicalPrintingMetadata.released_at, alongside the pre-existing edhrec_rank precedent."""
-        printing = CanonicalCardFactory(name="Some Old Card")
-        CanonicalPrintingMetadataFactory(canonical_card=printing, released_at=datetime.date(1993, 8, 5))
-
-        index = CandidateNameIndex()
-        candidates = index.candidates_for("Some Old Card")
-
-        assert len(candidates) == 1
-        assert candidates[0].released_at == datetime.date(1993, 8, 5)
-
-    def test_released_at_is_none_without_a_metadata_sidecar_row(self, db):
-        CanonicalCardFactory(name="No Sidecar Yet")
-        index = CandidateNameIndex()
-        candidates = index.candidates_for("No Sidecar Yet")
-        assert len(candidates) == 1
-        assert candidates[0].released_at is None
 
 
 class TestOcrParsing:
