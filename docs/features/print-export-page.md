@@ -27,6 +27,22 @@ later simplified to the vendored static SVGs above once the original
 Windows-emoji reasoning was already satisfied by "not emoji" rather than
 requiring hand-rolled SVG specifically.
 
+## Post-export contribution prompt (issue #166)
+
+The `PDFGenerator.tsx` mounted inside this tab's own "PDF" sub-tab carries the
+same post-export contribution prompt the unified `/display` page's inline
+export does — a dismissible `Alert` shown once per session after a genuine
+"Generate PDF"/"Save PDF to Google Drive" success, linking to `/whatsthat`.
+One shared implementation (`frontend/src/features/export/ usePostExportContributionPrompt.ts` + `PostExportContributionPrompt.tsx`),
+mounted from `PDFGenerator.tsx` itself so every real caller of that
+component — this tab, `PDFGeneratorModal.tsx`, `ProjectEditor.tsx` — gets it
+for free, rather than wiring it into `FinishedMyProject.tsx` separately. See
+`docs/features/printing-tags.md`'s own entry for the full detail (session-
+scoped `sessionStorage` flag, success-detection mechanism, why it's a
+funnel entry point rather than a parallel one) and
+`docs/features/pdf-generator.md`'s "Key files" for the export-pipeline side
+of the wiring.
+
 ## Key files
 
 - `frontend/src/features/export/FinishedMyProject.tsx`
