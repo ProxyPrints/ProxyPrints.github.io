@@ -38,6 +38,15 @@ directly (via `_compute_region_phash`) - every existing test that feeds a `_Stub
 below (same rationale as `_stub_border_color`/`_stub_ocr`). `TestExtractCardEvidenceSymbolRegion`
 below uses real PIL images throughout (mirrors `TestExtractCardEvidenceLayoutClass`'s own style),
 since it's actually testing `_compute_region_phash`'s real output.
+
+legal_line (public issue #151, "Legal-line extractor + moderator flag + volume report (task
+#159)" - extractor + moderator-flag signal only, see image_evidence.py's own module docstring for
+the scope split) crops its OWN dedicated region (`local_ocr.LEGAL_LINE_CROP_BOX`, not a reuse of
+`collector_line_crop_px`) and OCRs it fresh - `_stub_ocr` below already covers this (it patches
+`preprocess_variants`/`run_tesseract` at the module level, so any `_StubImage`-based test already
+stubs legal_line's own crop+OCR pass for free, same as it does for collector_line_ocr/artist_ocr).
+`TestExtractCardEvidenceLegalLine` below uses real PIL images + the real tesseract binary
+throughout, same rationale as the other OCR-group test classes.
 """
 
 from dataclasses import dataclass
@@ -55,6 +64,7 @@ from cardpicker.image_evidence import (
     FETCH_HEALTH_EXTRACTOR_VERSION,
     GEOMETRY_BLEED_EXTRACTOR_VERSION,
     LAYOUT_CLASS_EXTRACTOR_VERSION,
+    LEGAL_LINE_EXTRACTOR_VERSION,
     SYMBOL_REGION_EXTRACTOR_VERSION,
     ExtractionResult,
     build_reconciliation_report,
@@ -68,7 +78,7 @@ from cardpicker.local_fallback import (
     TRIM_ASPECT_RATIO,
     normalize_crop_box,
 )
-from cardpicker.local_ocr import DEFAULT_CROP_BOX
+from cardpicker.local_ocr import DEFAULT_CROP_BOX, LEGAL_LINE_CROP_BOX
 from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import CardScanLog, ImageEvidence
 from cardpicker.tests.factories import (
@@ -189,11 +199,15 @@ class TestExtractCardEvidence:
             "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
             "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
+            "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
         }
         # _stub_ocr's default raw text ("158/287 R MOM EN") is a realistic modern-frame collector
         # line with no artist credit in it - artist_ocr genuinely skips here, which is the
-        # correct outcome for a modern card (see _stub_ocr's own docstring), not a gap.
-        assert result.skip_reasons == {"artist_ocr": "no-text"}
+        # correct outcome for a modern card (see _stub_ocr's own docstring), not a gap. The same
+        # text also carries no copyright year or proxy/not-for-sale marker, so legal_line
+        # genuinely skips here too (it's fed the identical stubbed text - see _stub_ocr's own
+        # module-level patch of run_tesseract).
+        assert result.skip_reasons == {"artist_ocr": "no-text", "legal_line": "no-text"}
 
     def test_failed_fetch_marks_fetch_not_ok_and_records_a_named_skip(self, db, monkeypatch):
         card = CardFactory(content_phash=12345)
@@ -214,6 +228,7 @@ class TestExtractCardEvidence:
             "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
             "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
+            "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
         }
         assert result.skip_reasons == {
             "fetch_health": "fetch_failed",
@@ -224,6 +239,7 @@ class TestExtractCardEvidence:
             "artist_ocr": "fetch_failed",
             "collector_line_tsv": "fetch_failed",
             "symbol_region": "fetch_failed",
+            "legal_line": "fetch_failed",
         }
 
     def test_null_content_phash_surfaces_as_none(self, db, monkeypatch):
@@ -356,6 +372,9 @@ class TestExtractCardEvidenceGeometryBleed:
         assert result.skip_reasons["artist_ocr"] == "fetch_failed"
         assert "collector_line_word_boxes" not in result.fields
         assert result.skip_reasons["collector_line_tsv"] == "fetch_failed"
+        # legal_line (issue #151) shares the same root cause too.
+        assert "legal_line_crop_px" not in result.fields
+        assert result.skip_reasons["legal_line"] == "fetch_failed"
 
     def test_persist_writes_geometry_fields(self, db):
         card = CardFactory(content_phash=999)
@@ -529,6 +548,9 @@ class TestExtractCardEvidenceCropCoordinates:
         # symbol_region (issue #160) shares the same root cause too.
         assert "symbol_crop_px" not in result.fields
         assert result.skip_reasons["symbol_region"] == "fetch_failed"
+        # legal_line (issue #151) shares the same root cause too.
+        assert "legal_line_crop_px" not in result.fields
+        assert result.skip_reasons["legal_line"] == "fetch_failed"
 
     def test_persist_writes_crop_fields(self, db):
         card = CardFactory(content_phash=999)
@@ -754,7 +776,10 @@ class TestExtractCardEvidenceArtistOcr:
         assert result.fields["artist_ocr_name"] == "Jane Doe"
         assert result.fields["illus_anchor_fired"] is True
         assert "artist_ocr" not in result.skip_reasons
-        assert len(calls) == 1  # only the collector-line crop was ever preprocessed
+        # 2, not 1: the collector-line crop (reused by artist_ocr, no second call) plus
+        # legal_line's own independent crop+OCR pass (issue #151 - deliberately NOT a
+        # reuse-before-recompute like artist_ocr's, see image_evidence.py's module docstring).
+        assert len(calls) == 2
 
     def test_falls_back_to_artist_crop_when_not_in_collector_text(self, db, monkeypatch):
         # placed just above the collector-line crop's own top boundary (0.90) but still within
@@ -864,6 +889,86 @@ class TestExtractCardEvidenceCollectorLineTsv:
 
         assert evidence is not None
         assert evidence.collector_line_word_boxes == word_boxes
+
+
+class TestExtractCardEvidenceLegalLine:
+    """public issue #151, "Legal-line extractor + moderator flag + volume report (task #159)" -
+    this PR builds the extractor + moderator-flag signal only (task #159's volume report stays
+    out of scope). legal_line crops its OWN dedicated region (LEGAL_LINE_CROP_BOX - NOT a reuse
+    of collector_line_crop_px, see image_evidence.py's module docstring) and runs
+    local_ocr.parse_legal_line against it. Real PIL images + the REAL tesseract binary throughout,
+    same rationale as the other OCR-group test classes above. No candidate matching happens here -
+    see module docstring."""
+
+    def test_parses_copyright_year(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(LEGAL_LINE_CROP_BOX, "TM and (c) 2019 Wizards of the Coast")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["legal_line_copyright_year"] == "2019"
+        assert result.fields["legal_line_proxy_marker_detected"] is False
+        assert result.fields["legal_line_raw_text"].strip() != ""
+        assert "legal_line" not in result.skip_reasons
+
+    def test_detects_not_for_sale_marker(self, db, monkeypatch):
+        # the real motivating case (task #151/#159): a proxy watermark reading as
+        # plausible-looking legal-line text to a tolerant parser.
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(LEGAL_LINE_CROP_BOX, "MTG EN NOT FOR SALE (c) 2022")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["legal_line_proxy_marker_detected"] is True
+        assert result.fields["legal_line_copyright_year"] == "2022"
+        assert "legal_line" not in result.skip_reasons
+
+    def test_no_legible_text_records_named_skip(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(LEGAL_LINE_CROP_BOX, "")])  # a blank crop, no text at all
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["legal_line_copyright_year"] == ""
+        assert result.fields["legal_line_proxy_marker_detected"] is False
+        assert result.skip_reasons["legal_line"] == "no-text"
+
+    def test_fetch_failure_withholds_fields_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "legal_line_crop_px" not in result.fields
+        assert "legal_line_raw_text" not in result.fields
+        assert "legal_line_copyright_year" not in result.fields
+        # null (not False) only on fetch failure - matches illus_anchor_fired's own convention.
+        assert "legal_line_proxy_marker_detected" not in result.fields
+        assert result.skip_reasons["legal_line"] == "fetch_failed"
+
+    def test_persist_writes_legal_line_fields(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={
+                "legal_line_crop_px": [0, 832, 680, 893],
+                "legal_line_raw_text": "NOT FOR SALE (c) 2022",
+                "legal_line_copyright_year": "2022",
+                "legal_line_proxy_marker_detected": True,
+            },
+            extractor_versions={"legal_line": LEGAL_LINE_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.legal_line_crop_px == [0, 832, 680, 893]
+        assert evidence.legal_line_copyright_year == "2022"
+        assert evidence.legal_line_proxy_marker_detected is True
 
 
 class TestPersistEvidence:

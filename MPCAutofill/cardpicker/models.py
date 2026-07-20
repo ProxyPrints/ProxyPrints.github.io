@@ -1378,6 +1378,19 @@ class ImageEvidence(models.Model):
     collector+set join key), not a verdict - no candidate matching happens here, same reasoning
     the OCR-group paragraph above gives. See `image_evidence.py`'s module docstring for why this
     is a raw hash rather than `local_fallback.find_symbol_matches`'s own per-candidate comparison.
+
+    legal_line (public issue #151, "Legal-line extractor + moderator flag + volume report (task
+    #159)" - this PR builds the extractor + moderator-flag signal only, NOT the volume report,
+    which stays out of scope per that issue's own held task #159 half): `legal_line_crop_px`
+    turns a new `local_ocr.LEGAL_LINE_CROP_BOX` into pixel coordinates the same way every other
+    `*_crop_px` field does - a NEW, dedicated crop region (not a reuse of `collector_line_crop_px`),
+    verified against real fetched production images before being locked in (see `local_ocr.py`'s
+    own comment on that constant). `legal_line_raw_text` + `local_ocr.parse_legal_line`'s tolerant
+    parse of it (`legal_line_copyright_year`, `legal_line_proxy_marker_detected`) - metadata only,
+    no candidate matching, same convention as every prior OCR-group field. The real motivating
+    case (task #151/#159): a "MTG★EN ... NOT FOR SALE ©2022" watermark reads as plausible
+    collector-line-shaped text to a tolerant parser - `legal_line_proxy_marker_detected` is the
+    signal that lets Stage D's calculator reject that false-accept instead of trusting it.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -1451,6 +1464,22 @@ class ImageEvidence(models.Model):
     # degenerate crop box - see image_evidence.py's module docstring).
     symbol_crop_px = models.JSONField(null=True, blank=True)
     symbol_phash = models.BigIntegerField(null=True, blank=True)
+
+    # legal_line (issue #151, task #159's extractor half) - legal_line_crop_px is
+    # local_ocr.LEGAL_LINE_CROP_BOX remapped/scaled the same way every other *_crop_px field is
+    # (crop COORDINATES only, never crop pixels). legal_line_raw_text + local_ocr.
+    # parse_legal_line's tolerant parse of it - same blank-string-as-sentinel convention as
+    # collector_line_raw_text/collector_line_set_code above for "no OCR run yet, or nothing
+    # plausible found". legal_line_proxy_marker_detected mirrors illus_anchor_fired's own
+    # True/False-once-computed/null-only-on-fetch-failure convention - the moderator-flag signal
+    # (task #151/#159): True when a "NOT FOR SALE"/"PROXY" watermark was detected in this card's
+    # legal-line region, consumed by Stage D (not acted on here - this extractor emits the raw
+    # signal only, same "extractors emit signals, Stage D calculators/consumers act on them"
+    # discipline every prior extractor in this file follows).
+    legal_line_crop_px = models.JSONField(null=True, blank=True)
+    legal_line_raw_text = models.TextField(blank=True, default="")
+    legal_line_copyright_year = models.CharField(max_length=4, blank=True, default="")
+    legal_line_proxy_marker_detected = models.BooleanField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

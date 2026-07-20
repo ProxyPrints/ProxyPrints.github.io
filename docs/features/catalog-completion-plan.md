@@ -1511,7 +1511,71 @@ writing, but its own production-deploy status is a separate, unconfirmed
 question — not covered by the `0068`–`0072` range above, flagged as an
 open item rather than assumed either way.
 
-Queued behind Stage B per the paced task sequence (#145–149, #160). Stage D
+**legal-line extractor + moderator flag — next manifest extractor, built**
+(public issue #151, "Legal-line extractor + moderator flag + volume report
+(task #159)", 2026-07-20 — this PR builds the extractor + moderator-flag
+signal only; task #159's volume-report half is out of scope, tracked
+separately, not folded into this PR): adds `legal_line_crop_px`,
+`legal_line_raw_text`, `legal_line_copyright_year`,
+`legal_line_proxy_marker_detected` to `ImageEvidence` (migration `0074`,
+additive-only `AddField`s, no freeze conflict — checked
+`gh issue list --label deploy-freeze-active` fresh immediately before both
+the migration and the golden-set gathering run, empty both times; depends
+on `0073`, per the note above also not yet confirmed live on
+production — this PR's own dev/test work targeted the throwaway pytest
+testcontainers DB or read-only production `Card` reads only, never a
+write, so this dependency doesn't block merging ahead of that deploy).
+A NEW,
+dedicated crop region (`local_ocr.LEGAL_LINE_CROP_BOX` — same y-band
+`DEFAULT_CROP_BOX` was tuned against, widened to the full card width since
+a real copyright legend commonly runs further right than the collector
+line's own narrow window), verified against real fetched production images
+before being locked in — a quick probe against 18 real golden cards
+confirmed the box genuinely captures legal/proxy-marker text (including
+several real "NOT FOR SALE"/"PROXY" hits) rather than being invented from
+memory, per the same discipline every other `*_crop_px` field followed.
+`local_ocr.parse_legal_line` (new, `local_ocr.py` is not PROTECTED CORE)
+extracts a copyright year (anchored to a `©`/`(c)`/"copyright" glyph in
+preference to a bare 4-digit run elsewhere in the line, avoiding a
+collector-number-shaped false read) and detects a proxy/not-for-sale
+marker via a deliberately plain, literal (not fuzzy) regex — no candidate
+matching happens here (Stage D's job, same as every other OCR-adjacent
+extractor). `legal_line_proxy_marker_detected` is the moderator-flag
+signal (task #151's real motivating case: a "MTG★EN … NOT FOR SALE
+©2022" watermark reads as plausible collector-line-shaped text to a
+tolerant parser — this signal is what lets Stage D's calculator reject
+that false-accept instead of trusting it); this extractor only emits the
+raw True/False fact, it never acts on it directly, matching every other
+extractor's "emit signals, don't act on them" discipline. No changes to
+`local_fallback.py`/`local_phash.py` (both PROTECTED CORE; not touched by
+this extractor at all).
+`GOLDEN_EXPECTATIONS["legal_line"]` populated against a real,
+no-persistence `extract_card_evidence()` run over all 30 golden cards
+(host venv, real network fetch through the shared `GOOGLE_IMAGE`-paced
+Worker path, zero DB writes): 10/30 produced a plausible copyright year,
+10/30 detected a proxy/not-for-sale marker — genuinely common on this
+real sample, not a rare edge case, since this catalog is specifically an
+MTG-proxy print catalog rather than a scan archive (real hits include
+"NOT FOR SALE", `Custom Proxy *NOTFORSALE*`, "MTG PROXY", and a
+community-credit "Proxy - `<username>`" watermark baked into the source
+image) — kept as-is per the same "don't discard a real outcome" rationale
+every prior extractor's own golden-set comment gives. 21 new tests (7 in
+`test_image_evidence.py`'s new `TestExtractCardEvidenceLegalLine` class —
+real PIL images + the real tesseract binary, no monkeypatching of
+tesseract itself; 12 in `test_local_identify_printing_tags.py`'s new
+`TestLegalLineParsing` class — pure string-parsing unit tests of the
+marker-detection regex against synthetic strings, including the exact
+motivating watermark text, separate from the golden set which only
+reflects whatever real production images happen to contain; 2 in
+`test_golden_set.py`), plus 4 pre-existing `TestExtractCardEvidence*`
+tests updated for the new extractor's presence (including one call-count
+assertion in `TestExtractCardEvidenceArtistOcr` that legitimately changes
+from 1 to 2, since legal_line — unlike `artist_ocr` — always crops+OCRs
+its own dedicated region rather than reusing another extractor's already-
+computed raw text); full suite 1088 passed / 4 skipped (the same
+CI-documented named skips — nothing newly broken); `makemigrations --check` clean.
+
+Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
 shipped identification code paths with `ImageEvidence`-supplied
