@@ -1,29 +1,44 @@
 """
 Tests for cardpicker.local_calculate_verdicts (Stage D, docs/features/catalog-completion-plan.md,
-public issue #152) - the join-key calculator (this Stage's first, and so far only, calculator -
-see that module's own docstring for why D2-D6 are deferred). No network calls, no live image
-fetch - Stage D consumes stored `ImageEvidence` + `Card`/`CanonicalCard` rows only, so every
-fixture here is synthetic DB state (factories), matching `test_local_residual_classify.py`'s own
-"host venv, no network" precedent for this pipeline's later stages. `render_set_symbol` IS
-exercised for real (it's a pure local font-render, no network) so the symbol-phash tie-break is
-tested against REAL keyrune glyph hashes, not a mocked distance.
+public issue #152) - the join-key calculator plus its agreement/corroboration layer (back-face-
+aware candidate selection, border/frame agreement, artist-OCR corroboration, quality/integrity
+gating - see that module's own docstring for the full design and why the phash slow-path/a
+calibrated blur-or-entropy threshold stay deferred). No network calls, no live image fetch -
+Stage D consumes stored `ImageEvidence` + `Card`/`CanonicalCard`/`CanonicalPrintingMetadata`/
+`DFCPair` rows only, so every fixture here is synthetic DB state (factories), matching
+`test_local_residual_classify.py`'s own "host venv, no network" precedent for this pipeline's
+later stages. `render_set_symbol` IS exercised for real (it's a pure local font-render, no
+network) so the symbol-phash tie-break is tested against REAL keyrune glyph hashes, not a mocked
+distance. `is_back_face` is exercised against a real, temporary on-disk bulk-data JSON file (same
+`_write_bulk_data_file`/`_record` convention `test_printing_metadata_import.py` already
+establishes for that primitive), never mocked.
 """
+
+import json
+import uuid
+from pathlib import Path
+from typing import Any
 
 import imagehash
 import pytest
 
 from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_ANONYMOUS_ID,
+    JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT,
     JOIN_KEY_CONFIDENCE_BOTH,
     JOIN_KEY_CONFIDENCE_COLLECTOR_ONLY,
     JOIN_KEY_CONFIDENCE_SYMBOL_TIEBREAK,
     JOIN_KEY_NO_MATCH_CONFIDENCE,
+    _resolve_candidates_for_card,
     _symbol_phash_tiebreak,
     calculate_join_key_verdict,
     run_join_key_calculator,
 )
 from cardpicker.local_fallback import render_set_symbol
-from cardpicker.local_identify_printing_tags import CandidatePrinting
+from cardpicker.local_identify_printing_tags import (
+    CandidateNameIndex,
+    CandidatePrinting,
+)
 from cardpicker.models import (
     CardPrintingTag,
     CardScanLog,
@@ -34,11 +49,29 @@ from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
+    CanonicalPrintingMetadataFactory,
     CardFactory,
+    DFCPairFactory,
     ImageEvidenceFactory,
     SourceFactory,
 )
 from cardpicker.utils import twos_complement
+
+
+def _write_bulk_data_file(tmp_path: Path, records: list[dict[str, Any]]) -> Path:
+    """Same shape as test_printing_metadata_import.py's own helper - deliberately duplicated
+    (not imported cross-module) matching this test suite's own per-module small-helper
+    convention."""
+    path = tmp_path / "default_cards.json"
+    path.write_text("[\n" + "\n".join(json.dumps(record) + "," for record in records) + "\n]")
+    return path
+
+
+def _dfc_record(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {"id": str(uuid.uuid4()), "layout": "transform"}
+    base.update(overrides)
+    return base
+
 
 # see test_local_identify_printing_tags.py's identical fixture for the full rationale -
 # factory.Sequence counters are process-global across the whole pytest run.
@@ -48,6 +81,7 @@ _SHARED_FACTORIES = [
     CanonicalArtistFactory,
     CanonicalExpansionFactory,
     CanonicalCardFactory,
+    DFCPairFactory,
 ]
 
 
@@ -326,3 +360,264 @@ class TestRunJoinKeyCalculator:
 
         assert result.cards_considered == 0
         assert result.skip_counts.get("no-evidence") == 1
+
+    def test_back_face_card_resolves_via_the_combined_scryfall_name(self, db, tmp_path):
+        """End-to-end: a card uploaded under just its BACK face's name (a split-image DFC
+        source) still gets a real join-key vote, via `_resolve_candidates_for_card`'s DFCPair
+        fallback - the structural gap `_resolve_candidates_for_card`'s own docstring describes."""
+        card = CardFactory(name="Insectile Aberration", content_phash=42)
+        printing = CanonicalCardFactory(
+            name="Delver of Secrets // Insectile Aberration", expansion__code="isd", collector_number="51"
+        )
+        DFCPairFactory(front="Delver of Secrets", back="Insectile Aberration")
+        path = _write_bulk_data_file(
+            tmp_path,
+            [_dfc_record(card_faces=[{"name": "Delver of Secrets"}, {"name": "Insectile Aberration"}])],
+        )
+        _evidence(card, collector_line_set_code="isd", collector_line_collector_number="51")
+
+        result = run_join_key_calculator(dry_run=False, default_cards_path=path)
+
+        assert result.votes_written == 1
+        vote = CardPrintingTag.objects.get(card=card)
+        assert vote.printing_id == printing.pk
+
+
+class TestResolveCandidatesForCard:
+    """`_resolve_candidates_for_card` - back-face-aware candidate selection (module docstring,
+    issue #199/#213)."""
+
+    def test_direct_match_short_circuits_before_any_back_face_check(self, db):
+        CanonicalCardFactory(name="Lightning Bolt", expansion__code="lea", collector_number="1")
+        index = CandidateNameIndex()
+
+        candidates = _resolve_candidates_for_card("Lightning Bolt", index)
+
+        assert len(candidates) == 1
+        assert candidates[0].expansion_code == "lea"
+
+    def test_back_face_name_resolves_via_the_combined_scryfall_name(self, db, tmp_path):
+        CanonicalCardFactory(
+            name="Delver of Secrets // Insectile Aberration", expansion__code="isd", collector_number="51"
+        )
+        DFCPairFactory(front="Delver of Secrets", back="Insectile Aberration")
+        path = _write_bulk_data_file(
+            tmp_path,
+            [_dfc_record(card_faces=[{"name": "Delver of Secrets"}, {"name": "Insectile Aberration"}])],
+        )
+        index = CandidateNameIndex()
+
+        candidates = _resolve_candidates_for_card("Insectile Aberration", index, default_cards_path=path)
+
+        assert len(candidates) == 1
+        assert candidates[0].expansion_code == "isd"
+
+    def test_non_back_face_name_with_no_direct_match_stays_empty(self, db, tmp_path):
+        path = _write_bulk_data_file(tmp_path, [])
+        index = CandidateNameIndex()
+
+        candidates = _resolve_candidates_for_card("Some Totally Unknown Card", index, default_cards_path=path)
+
+        assert candidates == []
+
+    def test_back_face_without_a_synced_dfc_pair_row_stays_empty(self, db, tmp_path):
+        """A real, honestly-reported gap (module docstring) - not every back face is guaranteed
+        to have a synced DFCPair row at any given moment; this must degrade to empty, not raise."""
+        path = _write_bulk_data_file(
+            tmp_path,
+            [_dfc_record(card_faces=[{"name": "Some Front"}, {"name": "Some Back"}])],
+        )
+        index = CandidateNameIndex()  # deliberately no DFCPairFactory row for this pair
+
+        candidates = _resolve_candidates_for_card("Some Back", index, default_cards_path=path)
+
+        assert candidates == []
+
+
+class TestAgreementChecks:
+    """The agreement/corroboration layer (module docstring) - border/frame agreement,
+    artist-OCR corroboration, quality/integrity gating. Exercised through
+    `calculate_join_key_verdict` directly, same style `TestCalculateJoinKeyVerdict` already
+    uses, with a REAL backing `CanonicalCard`/`CanonicalPrintingMetadata` row where a check needs
+    one to compare against."""
+
+    def test_border_mismatch_withholds_the_match(self, db):
+        printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="white")
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            layout_class="black",  # disagrees with the printing's real "white" border_color
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.skip_reason == "border-mismatch"
+        assert verdict.printing_pk is None
+
+    def test_border_agreement_does_not_veto_the_match(self, db):
+        printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black", frame="2015")
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card, collector_line_set_code="mom", collector_line_collector_number="158", layout_class="black"
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_BOTH
+
+    def test_frame_mismatch_withholds_the_match(self, db):
+        printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        # a parsed collector NUMBER implies a "modern" frame reading - "1993" is an "old" printing.
+        CanonicalPrintingMetadataFactory(canonical_card=printing, frame="1993")
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.skip_reason == "frame-mismatch"
+        assert verdict.printing_pk is None
+
+    def test_frame_agreement_does_not_veto_the_match(self, db):
+        printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, frame="2015")
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_BOTH
+
+    def test_no_printing_metadata_sidecar_skips_border_and_frame_checks(self, db):
+        """A real CanonicalCard row with NO CanonicalPrintingMetadata sidecar - "nothing to
+        compare" degrades to agreement, same as frame_style_is_consistent's own documented
+        printing_frame_value=None semantics."""
+        printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card, collector_line_set_code="mom", collector_line_collector_number="158", layout_class="white"
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing.pk
+
+    def test_artist_disagreement_downgrades_confidence(self, db):
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            artist_ocr_name="Someone Totally Different",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT
+
+    def test_artist_agreement_keeps_the_base_confidence(self, db):
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card, collector_line_set_code="mom", collector_line_collector_number="158", artist_ocr_name="Rebecca Guay"
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_BOTH
+
+    def test_no_artist_ocr_reading_keeps_the_base_confidence(self, db):
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_BOTH
+
+    def test_truncated_image_vetoes_a_direct_match(self, db):
+        card = CardFactory(name="Some Card")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card, collector_line_set_code="mom", collector_line_collector_number="158", image_is_truncated=True
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.skip_reason == "truncated-image"
+        assert verdict.printing_pk is None
+        assert verdict.is_no_match is False
+
+    def test_truncated_image_vetoes_a_symbol_tiebroken_match(self, db):
+        card = CardFactory(name="Forest")
+        candidates = [
+            CandidatePrinting(pk=1, expansion_code="mom", collector_number="158"),
+            CandidatePrinting(pk=2, expansion_code="vow", collector_number="158"),
+        ]
+        evidence = _evidence(
+            card,
+            collector_line_collector_number="158",
+            symbol_phash=_hash_of("mom"),
+            image_is_truncated=True,
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.skip_reason == "truncated-image"
+        assert verdict.printing_pk is None
+
+    def test_truncated_image_does_not_affect_a_genuine_no_match(self, db):
+        """Mirrors the existing proxy-marker-veto precedent: the veto only rejects a would-be
+        MATCH, it's not a blanket 'ignore this card's evidence' switch."""
+        card = CardFactory(name="Some Card")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card, collector_line_collector_number="999", image_is_truncated=True  # parsed-but-no-match
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.is_no_match is True
+        assert verdict.skip_reason == ""
+
+    def test_border_mismatch_writes_a_scan_log_row_via_the_full_runner(self, db):
+        """Integration check (module docstring's rescannability deviation): a border/frame
+        mismatch is a permanent skip, not added to JOIN_KEY_RESCANNABLE_SKIP_REASONS - confirmed
+        here via the real batch runner rather than only the pure-function unit tests above."""
+        card = CardFactory(name="Test Card", content_phash=42)
+        printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="white")
+        _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158", layout_class="black")
+
+        result = run_join_key_calculator(dry_run=False)
+
+        assert result.votes_written == 0
+        log = CardScanLog.objects.get(card=card)
+        assert log.skip_reason == "border-mismatch"
+
+        # non-rescannable: re-running does NOT re-select this card.
+        second = run_join_key_calculator(dry_run=False)
+        assert second.cards_considered == 0

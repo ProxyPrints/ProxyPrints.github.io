@@ -1791,32 +1791,82 @@ via `vote_consensus.resolve_weighted_consensus`'s own hard AND-gate), but a
 real characteristic of two mechanisms running concurrently mid-migration,
 named here rather than left to surface later as a surprise.
 
-**Deferred to follow-up calculator PRs (not built or stubbed here)**:
-geometry/border agreement (cross-check `layout_class`/`bleed_class`
-against a match's own `CanonicalPrintingMetadata`, mirroring the live
-pilot's frame-mismatch withholding); artist-OCR corroboration
-(`artist_ocr_name` via `local_fallback.match_artist`); back-face-aware
-lookup (`printing_metadata_import.is_back_face`, issue #199/#213); quality/
-integrity gating (`image_is_truncated`/`blur_variance`/`image_entropy` as a
-trust modifier or Part 5 routing signal); visual/phash slow-path candidate
-matching — explicitly NOT bulk server-side phash (issue #150's own
-2026-07-20 re-spec dropped that in favor of user-submitted phash, task
-#203, a distinct, not-yet-designed mechanism a future slow-path calculator
-would need to be designed against, not the original bulk-phash idea).
+**Agreement/corroboration layer (built 2026-07-20, issue #152 continuation,
+"Stage D calculators D2-D5")**: four cross-checks folded directly into
+`calculate_join_key_verdict`/`run_join_key_calculator`'s existing control
+flow — no new eligible-card population, no new `anonymous_id`, no new vote
+type — per the dispatching directive's own "raw cross-check feeding the
+verdict, not a second classifier" framing:
 
-Golden-gated against synthetic `ImageEvidence`/`Card`/`CanonicalCard` DB
-fixtures, not a live fetch — Stage D consumes stored evidence + Scryfall-
-backed models, it never touches a live image, so Stage C's "real network
-fetch over 30 pinned cards" golden-set convention doesn't apply here (host
-venv, no network — `render_set_symbol` IS exercised for real, a pure local
-font-render, so the symbol-phash tie-break is tested against real keyrune
-glyph hashes). 25 new tests (`test_local_calculate_verdicts.py`, 20;
-`test_local_identify_printing_tags.py`'s new `TestFindMatchingCandidates`
-class, 5 — confirms the `local_ocr.py` refactor agrees with
-`validate_against_candidates` on every outcome); full suite 1142 passed / 4
-skipped (the same CI-documented named skips — nothing newly broken);
-`makemigrations --check` clean (no model change — this PR adds no new
-`ImageEvidence` fields); `pre-commit` (ruff/isort/black/mypy/prettier)
+- **Back-face-aware candidate selection** (issue #199/#213): new
+  `_resolve_candidates_for_card` tries the card's own name first (unchanged
+  fast path), and only when that finds nothing AND
+  `printing_metadata_import.is_back_face` confirms the name is a known DFC
+  back face, reconstructs Scryfall's own combined `"{front} // {back}"`
+  `CanonicalCard.name` form (via the already-shipped `DFCPair` table's
+  `back=name` lookup) and retries — fixes candidate _selection_ for a
+  cohort (back-face-named split-image DFC uploads) that would otherwise
+  never match at all, since `CanonicalCard.name` for these rows is never
+  the bare back-face name alone.
+- **Border/frame agreement**: `layout_class` vs. the matched printing's own
+  `CanonicalPrintingMetadata.border_color` (direct string comparison — both
+  use the same value space) and an OCR-re-derived frame class
+  (`local_fallback.classify_frame_style`/`frame_style_is_consistent`,
+  PROTECTED CORE, called not modified) vs. `.frame` — either disagreement
+  WITHHOLDS the match (`border-mismatch`/`frame-mismatch` named skips),
+  mirroring the live pilot's own frame-mismatch-withholding exactly.
+  `bleed_class` is deliberately NOT cross-checked (no Scryfall field it
+  could ever agree/disagree with — a proxy-sheet-formatting property, not a
+  printing property), despite this PR's own earlier deferred-item wording
+  naming it.
+- **Artist-OCR corroboration**: `artist_ocr_name` vs. the matched
+  printing's `CanonicalCard.artist` via `local_fallback.match_artist`
+  (PROTECTED CORE, called not modified) — a disagreement WEAKENS confidence
+  (`JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT`, 0.65) rather than vetoing,
+  per the directive's own framing and `match_artist`'s own softer,
+  tie-tolerant design.
+- **Quality/integrity gating**: `image_is_truncated` is a hard veto
+  (`truncated-image` named skip). `blur_variance`/`image_entropy` are
+  deliberately NOT thresholded — both fields' own `local_image_quality.py`
+  docstrings defer "what counts as too blurry/too flat" to a calibrated
+  Stage D number, and #218's real golden-set gather run explicitly did NOT
+  hard-pin either value; inventing an arbitrary cutoff here would violate
+  this project's own "config values land only from measurement, not
+  automatically" rule, so only the binary integrity signal is acted on.
+
+**Deliberate deviation from the live pilot's own precedent**:
+`border-mismatch`/`frame-mismatch`/`truncated-image` are NOT added to
+`JOIN_KEY_RESCANNABLE_SKIP_REASONS` (unlike `local_identify_printing_tags`'s
+own rescannable `"frame-mismatch"`) — that module's rescannability exists
+because a future run re-fetches the image and may read it differently;
+Stage D's join-key calculator instead reads an already-persisted, content-
+hash-keyed `ImageEvidence` row, so re-selecting the same card against the
+same stored evidence would deterministically recompute the identical
+mismatch forever.
+
+**Still deferred (not built or stubbed here)**: visual/phash slow-path
+candidate matching — explicitly NOT bulk server-side phash (issue #150's
+own 2026-07-20 re-spec dropped that in favor of user-submitted phash, task
+#203, a distinct, not-yet-designed mechanism); a calibrated
+`blur_variance`/`image_entropy` trust-modifier threshold (needs real
+measurement against production data first, per the same "measurement, not
+automatically" rule above).
+
+Golden-gated against synthetic `ImageEvidence`/`Card`/`CanonicalCard`/
+`CanonicalPrintingMetadata`/`DFCPair` DB fixtures, not a live fetch — Stage
+D consumes stored evidence + Scryfall-backed models, it never touches a
+live image, so Stage C's "real network fetch over 30 pinned cards"
+golden-set convention doesn't apply here (host venv, no network —
+`render_set_symbol` IS exercised for real, a pure local font-render, so the
+symbol-phash tie-break is tested against real keyrune glyph hashes;
+`is_back_face` IS exercised against a real, temporary on-disk bulk-data
+JSON file, never mocked). 17 new tests added to
+`test_local_calculate_verdicts.py` (37 total in that file now) covering the
+four checks above plus the back-face candidate-selection helper; full suite
+1164 passed / 4 skipped (the same CI-documented named skips — nothing newly
+broken); `makemigrations --check` clean (no model change — every field
+these checks read already existed on `ImageEvidence`/
+`CanonicalPrintingMetadata`); `pre-commit` (ruff/isort/black/mypy/prettier)
 clean.
 
 **Stage E resume contract (owner directive, 2026-07-19 — full spec on
