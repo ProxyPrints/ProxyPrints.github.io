@@ -45,6 +45,16 @@ export default function Footer() {
           <Spacer />•<Spacer />
           <Link href="/about#privacy-policy">Privacy Policy</Link>
         </div>
+        <div
+          className="footer-copyright text-center pb-3"
+          data-testid="footer-source-disclosure"
+        >
+          <small className="text-muted">
+            Card data comes from Scryfall. Card images are hosted by their
+            original uploaders &mdash; ProxyPrints indexes them, it doesn&apos;t
+            store them.
+          </small>
+        </div>
       </footer>
     </>
   );

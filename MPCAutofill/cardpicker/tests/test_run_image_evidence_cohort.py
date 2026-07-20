@@ -83,10 +83,13 @@ def _stub_compute_ok(
     fetch_latency_ms: float,
     dry_run: bool,
     run_id: str,
-) -> tuple[int, str]:
+    profile: bool = False,
+) -> tuple[int, str, Optional[dict[str, float]]]:
     """Replaces the real compute-stage step - no PIL decode, no extractors, no persist_evidence
-    call, just the (card_id, outcome) tuple `_run_cohort` consumes."""
-    return card_id, "ok"
+    call, just the (card_id, outcome, profile) tuple `_run_cohort` consumes. `profile` (2026-07-20
+    diagnostic addition, #235) is accepted but unused here - the stub never produces a real timing
+    breakdown, matching the real function's own `None` when `--profile` is not passed."""
+    return card_id, "ok", None
 
 
 @pytest.fixture(autouse=True)
@@ -202,7 +205,11 @@ class TestComputeOneCard:
         captured: dict[str, Any] = {}
 
         def _stub_compute_card_evidence(
-            card_id: int, content_hash: Optional[int], image: Any, fetch_latency_ms: float
+            card_id: int,
+            content_hash: Optional[int],
+            image: Any,
+            fetch_latency_ms: float,
+            profile: Optional[dict[str, float]] = None,
         ) -> Any:
             captured["card_id"] = card_id
             captured["content_hash"] = content_hash
@@ -219,12 +226,13 @@ class TestComputeOneCard:
         monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _stub_compute_card_evidence)
         monkeypatch.setattr(image_evidence_module, "persist_evidence", lambda result, run_id=None: None)
 
-        card_id, outcome = cohort_command._compute_one_card(
+        card_id, outcome, profile_dict = cohort_command._compute_one_card(
             card_id=7, content_hash=99, image_bytes=raw_bytes, fetch_latency_ms=12.3, dry_run=False, run_id="r"
         )
 
         assert card_id == 7
         assert outcome == "ok"
+        assert profile_dict is None
         assert captured["card_id"] == 7
         assert captured["content_hash"] == 99
         assert captured["image_size"] == (10, 10)
@@ -235,7 +243,11 @@ class TestComputeOneCard:
         captured: dict[str, Any] = {}
 
         def _stub_compute_card_evidence(
-            card_id: int, content_hash: Optional[int], image: Any, fetch_latency_ms: float
+            card_id: int,
+            content_hash: Optional[int],
+            image: Any,
+            fetch_latency_ms: float,
+            profile: Optional[dict[str, float]] = None,
         ) -> Any:
             captured["image"] = image
 
@@ -249,12 +261,13 @@ class TestComputeOneCard:
         monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _stub_compute_card_evidence)
         monkeypatch.setattr(image_evidence_module, "persist_evidence", lambda result, run_id=None: None)
 
-        card_id, outcome = cohort_command._compute_one_card(
+        card_id, outcome, profile_dict = cohort_command._compute_one_card(
             card_id=7, content_hash=None, image_bytes=None, fetch_latency_ms=0.0, dry_run=False, run_id="r"
         )
 
         assert captured["image"] is None
         assert outcome == "fetch_failed"
+        assert profile_dict is None
 
     @pytest.mark.django_db
     def test_dry_run_never_calls_persist_evidence(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,6 +288,68 @@ class TestComputeOneCard:
         )
 
         assert persist_calls == []
+
+    @pytest.mark.django_db
+    def test_profile_true_forwards_a_dict_and_adds_wall_ms(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """#235's diagnostic instrumentation, re-anchored to the decoupled compute stage: when
+        `profile=True`, `_compute_one_card` passes a mutable dict through to
+        `compute_card_evidence` (which populates fetch_ms/ocr_group_ms/etc. in place - not
+        exercised here, that's `image_evidence.py`'s own test suite) and adds its own `wall_ms`
+        covering this function's whole call."""
+        import cardpicker.image_evidence as image_evidence_module
+
+        captured_profile: dict[str, Any] = {}
+
+        def _stub_compute_card_evidence(
+            card_id: int,
+            content_hash: Optional[int],
+            image: Any,
+            fetch_latency_ms: float,
+            profile: Optional[dict[str, float]] = None,
+        ) -> Any:
+            if profile is not None:
+                profile["fetch_ms"] = fetch_latency_ms
+                captured_profile["seen"] = profile
+
+            class _Result:
+                fields = {"fetch_ok": True}
+
+            return _Result()
+
+        monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _stub_compute_card_evidence)
+        monkeypatch.setattr(image_evidence_module, "persist_evidence", lambda result, run_id=None: None)
+
+        card_id, outcome, profile_dict = cohort_command._compute_one_card(
+            card_id=7,
+            content_hash=None,
+            image_bytes=None,
+            fetch_latency_ms=5.0,
+            dry_run=True,
+            run_id="r",
+            profile=True,
+        )
+
+        assert profile_dict is not None
+        assert profile_dict is captured_profile["seen"]  # same dict object, populated in place
+        assert profile_dict["fetch_ms"] == 5.0
+        assert "wall_ms" in profile_dict
+        assert profile_dict["wall_ms"] >= 0.0
+
+    @pytest.mark.django_db
+    def test_profile_false_returns_none_profile(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import cardpicker.image_evidence as image_evidence_module
+
+        class _Result:
+            fields = {"fetch_ok": True}
+
+        monkeypatch.setattr(image_evidence_module, "compute_card_evidence", lambda *a, **k: _Result())
+        monkeypatch.setattr(image_evidence_module, "persist_evidence", lambda result, run_id=None: None)
+
+        _card_id, _outcome, profile_dict = cohort_command._compute_one_card(
+            card_id=7, content_hash=None, image_bytes=None, fetch_latency_ms=0.0, dry_run=True, run_id="r"
+        )
+
+        assert profile_dict is None
 
 
 class TestCohortStats:
@@ -316,6 +391,73 @@ class TestCohortStats:
 
         assert stats.completed == 1
         assert stats.fetch_failures == 0
+
+
+class TestRunCohortProfileOutput:
+    """`_run_cohort` is the single writer for `--profile` JSONL output (#235's diagnostic
+    instrumentation, re-anchored to the decoupled driver - see `_run_cohort`'s own docstring)."""
+
+    def test_writes_one_json_line_per_card_when_profile_is_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import io
+        import json
+
+        def _stub_compute_with_profile(
+            card_id: int,
+            content_hash: Optional[int],
+            image_bytes: Optional[bytes],
+            fetch_latency_ms: float,
+            dry_run: bool,
+            run_id: str,
+            profile: bool = False,
+        ) -> tuple[int, str, Optional[dict[str, float]]]:
+            profile_dict = {"fetch_ms": fetch_latency_ms, "wall_ms": 1.0} if profile else None
+            return card_id, "ok", profile_dict
+
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_with_profile)
+
+        profile_file = io.StringIO()
+        completed, fetch_failures, lockout_hit = cohort_command._run_cohort(
+            cohort_ids=[1, 2, 3],
+            fetch_threads=2,
+            workers=1,
+            queue_depth=2,
+            dry_run=True,
+            run_id="test",
+            stdout_write=lambda _msg: None,
+            profile=True,
+            profile_file=profile_file,
+        )
+
+        assert completed == 3
+        assert fetch_failures == 0
+        assert lockout_hit is False
+
+        lines = [json.loads(line) for line in profile_file.getvalue().splitlines()]
+        assert len(lines) == 3
+        assert {entry["card_id"] for entry in lines} == {1, 2, 3}
+        assert all(entry["wall_ms"] == 1.0 for entry in lines)
+
+    def test_writes_nothing_when_profile_is_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import io
+
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+        profile_file = io.StringIO()
+        cohort_command._run_cohort(
+            cohort_ids=[1, 2],
+            fetch_threads=2,
+            workers=1,
+            queue_depth=2,
+            dry_run=True,
+            run_id="test",
+            stdout_write=lambda _msg: None,
+            profile=False,
+            profile_file=profile_file,
+        )
+
+        assert profile_file.getvalue() == ""
 
 
 class TestRunCohortBackpressure:

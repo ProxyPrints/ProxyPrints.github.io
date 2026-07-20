@@ -1948,13 +1948,35 @@ materially better than the canary's measured ~15.7–16h. Risks:
   this hardware profile didn't budget compute for — worth keeping in mind
   for whoever implements this, not a problem today since decoding is lazy).
 
+**Confirming re-profile: fetch-wait confirmed as the dominant cause (2026-07-20,
+`docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md`)** — the
+instrumentation spec above was implemented (`extract_card_evidence` gained an
+optional `profile` param; `run_image_evidence_cohort` gained `--profile`/
+`--profile-output`, diagnostic-only, off by default) and run against a
+130-card `--dry-run` prod cohort. Result: **fetch is 36.5% of mean per-card
+wall-clock, extraction 63.4%** (ocr_group + legal_line alone = 58.5%,
+matching the compute-profile report's independently-derived 58% figure);
+pool-dispatch overhead measured at only ~3.8% and per-task DB-reconnect-
+adjacent cost at ~0.18% — both ruled out as the primary driver. Cross-
+validated against cgroup `cpu.stat`: this run's CPU-seconds/card (1.233) and
+the canary's own (1.147) both closely match the direct `extraction_ms`
+measurement, confirming that "CPU-s/card" was implicitly measuring
+extraction-only cost all along — the canary's 63.1%-efficiency /
+1.817-CPU-s-budget comparison assumed the whole bundled per-card wall-clock
+would need to be CPU-bound for 100% efficiency, and the ~37% shortfall and
+the measured 36.5% fetch fraction are the same number within noise, not two
+separate findings. `io.stat` showed ~zero incremental block I/O (negative
+control, confirms no disk-side explanation). Expected-speedup cross-check
+(`1/(1-0.365) ≈ 1.574x`) applied to the canary's ~15.7–16.0h full-pool
+projection lands at ~10.0–10.2h, matching this design's own expected-outcome
+figure (71.2h ÷ 7 ≈ 10.2h) from an independent direction. **Verdict: build
+the decoupling design above as specified — no different fix is indicated.**
+
 **Stage C: fetch/compute decoupling — implemented (2026-07-20)**, on top of
-the confirming re-profile (PR #235's fetch/compute timing diagnostic — not
-yet merged to master as of this writing, so its own report file isn't
-referenced by path here; fetch measured at 36.5% of mean per-card
-wall-clock, cross-validated against cgroup CPU-seconds — the same number as
-the canary's "missing" ~37% efficiency within noise, not two separate
-findings). `run_image_evidence_cohort.py`
+the confirming re-profile just above (`docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md`,
+#235: fetch measured at 36.5% of mean per-card wall-clock, cross-validated
+against cgroup CPU-seconds — the same number as the canary's "missing" ~37%
+efficiency within noise, not two separate findings). `run_image_evidence_cohort.py`
 now runs a `ThreadPoolExecutor` fetch stage (`--fetch-threads`/
 `STAGE_C_FETCH_THREADS`, default 8) concurrently with the `ProcessPoolExecutor`
 compute stage (`--workers`/`STAGE_C_WORKERS`, unchanged, default 7), joined by

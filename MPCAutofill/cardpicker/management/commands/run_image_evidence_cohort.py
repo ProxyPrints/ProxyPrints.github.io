@@ -122,6 +122,7 @@ drain, rather than continuing to submit new fetch work into a destination that h
 us out.
 """
 
+import json
 import logging
 import math
 import os
@@ -262,14 +263,27 @@ def _compute_one_card(
     fetch_latency_ms: float,
     dry_run: bool,
     run_id: str,
-) -> tuple[int, str]:
+    profile: bool = False,
+) -> tuple[int, str, Optional[dict[str, float]]]:
     """Module-level (picklable) compute-only work unit for the process pool - takes plain,
     already-fetched data (never a `Card`/`Image` instance re-fetched or re-decoded elsewhere), and
     does the actual pixel decode (`Image.open`, lazy - real decode happens on first access inside
     `compute_card_evidence`'s extractors) plus every CPU-bound extractor. Never touches the
     network and can never raise `GoogleFetchLockoutError` - that can only originate in the fetch
-    stage now (see module docstring point 2)."""
+    stage now (see module docstring point 2).
+
+    `profile` (2026-07-20, docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md): when
+    True, a per-card timing dict (`compute_card_evidence`'s own `fetch_ms`/`ocr_group_ms`/
+    `legal_line_ms`/`extraction_ms`/`other_ms` breakdown, plus this function's own `wall_ms`
+    covering decode + every extractor + `persist_evidence` - i.e. this compute worker's entire
+    slice of the work, no fetch/DB-refetch included any more since neither happens here under the
+    decoupled design) is built and returned as the third tuple element, exactly as
+    `_run_cohort`'s single-writer discipline (see its own docstring) expects - the compute pool's
+    OWN worker processes never write the JSONL file directly, only the caller collecting results
+    back in the parent process does."""
     from cardpicker.image_evidence import compute_card_evidence, persist_evidence
+
+    wall_started_at = time.monotonic() if profile else None
 
     image = None
     if image_bytes is not None:
@@ -279,10 +293,14 @@ def _compute_one_card(
 
         image = Image.open(BytesIO(image_bytes))
 
-    result = compute_card_evidence(card_id, content_hash, image, fetch_latency_ms)
+    profile_dict: Optional[dict[str, float]] = {} if profile else None
+    result = compute_card_evidence(card_id, content_hash, image, fetch_latency_ms, profile=profile_dict)
     if not dry_run:
         persist_evidence(result, run_id=run_id)
-    return card_id, ("fetch_failed" if result.fields.get("fetch_ok") is False else "ok")
+    if profile_dict is not None and wall_started_at is not None:
+        profile_dict["wall_ms"] = (time.monotonic() - wall_started_at) * 1000
+    outcome = "fetch_failed" if result.fields.get("fetch_ok") is False else "ok"
+    return card_id, outcome, profile_dict
 
 
 class _CohortStats:
@@ -327,6 +345,8 @@ def _run_cohort(
     dry_run: bool,
     run_id: str,
     stdout_write: Any,
+    profile: bool = False,
+    profile_file: Any = None,
 ) -> tuple[int, int, bool]:
     """
     The decoupled fetch/compute driver itself. Two concurrent executors:
@@ -351,6 +371,14 @@ def _run_cohort(
       only run as far ahead of compute as `queue_depth` allows, which is exactly the backpressure
       property the design calls for.
 
+    `profile`/`profile_file` (2026-07-20, docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md):
+    when `profile` is True, each completed compute future's own per-card timing dict (see
+    `_compute_one_card`'s docstring) is written as one JSON line to `profile_file` - this function
+    is the single writer (every result flows back through `_drain_one_pending` in THIS thread, the
+    same single-parent-process discipline the original bundled design's instrumentation used, just
+    re-anchored to the decoupled driver instead of the old `as_completed` loop directly in
+    `handle()`).
+
     Returns `(completed, fetch_failures, lockout_hit)` - the same three figures the old single-
     loop design printed in its final summary line.
     """
@@ -366,13 +394,17 @@ def _run_cohort(
         def _drain_one_pending() -> None:
             done, _ = wait(set(pending.keys()), return_when=FIRST_COMPLETED)
             for done_future in done:
-                pending.pop(done_future)
+                card_id = pending.pop(done_future)
+                card_profile: Optional[dict[str, float]] = None
                 try:
-                    _, outcome = done_future.result()
+                    _, outcome, card_profile = done_future.result()
                 except Exception:
                     logger.exception("Dropped card (uncaught exception in compute stage)")
                     outcome = "dropped"
                 stats.record(outcome)
+                if profile_file is not None and card_profile is not None:
+                    profile_file.write(json.dumps({"card_id": card_id, **card_profile}) + "\n")
+                    profile_file.flush()
 
         for fetch_future in as_completed(fetch_futures):
             fetch_result = fetch_future.result()
@@ -391,6 +423,7 @@ def _run_cohort(
                 fetch_result.fetch_latency_ms,
                 dry_run,
                 run_id,
+                profile,
             )
             pending[compute_future] = fetch_result.card_id
 
@@ -453,6 +486,23 @@ class Command(BaseCommand):
             default=False,
             help="Extract but do not persist anything - for timing/sampling only.",
         )
+        parser.add_argument(
+            "--profile",
+            action="store_true",
+            default=False,
+            help="Diagnostic-only (2026-07-20, docs/reports/2026-07-20-fetch-compute-timing-"
+            "diagnostic.md): capture a per-card fetch-vs-extraction timing breakdown "
+            "(fetch_ms/ocr_group_ms/legal_line_ms/other_ms/extraction_ms/wall_ms) and write one "
+            "JSON line per card to --profile-output. Adds a handful of time.monotonic() calls "
+            "per card - negligible overhead. Does not persist anything new onto ImageEvidence.",
+        )
+        parser.add_argument(
+            "--profile-output",
+            type=str,
+            default=None,
+            help="Path (inside the container) to write the --profile JSONL to. Default: "
+            "/tmp/stagec-profile-<run_id>.jsonl.",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         limit: int = options["limit"]
@@ -466,11 +516,16 @@ class Command(BaseCommand):
         )
         dry_run: bool = options["dry_run"]
         run_id: str = options["run_id"] or f"stagec-cohort-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        profile: bool = options["profile"]
+        profile_output: str = options["profile_output"] or f"/tmp/stagec-profile-{run_id}.jsonl"
+        profile_file = open(profile_output, "w") if profile else None
 
         self.stdout.write(
             f"run_id={run_id} limit={limit} workers={workers} fetch_threads={fetch_threads} "
-            f"queue_depth={queue_depth} dry_run={dry_run} (decoupled fetch/compute pipeline)"
+            f"queue_depth={queue_depth} dry_run={dry_run} profile={profile} (decoupled fetch/compute pipeline)"
         )
+        if profile:
+            self.stdout.write(f"Profile JSONL: {profile_output}")
 
         # Step 1: cheap name -> min(edhrec_rank) map - see module docstring for why this replaces
         # a per-row correlated subquery.
@@ -526,15 +581,21 @@ class Command(BaseCommand):
         _parent_connections.close_all()
 
         run_start = time.monotonic()
-        completed, fetch_failures, lockout_hit = _run_cohort(
-            cohort_ids=cohort_ids,
-            fetch_threads=fetch_threads,
-            workers=workers,
-            queue_depth=queue_depth,
-            dry_run=dry_run,
-            run_id=run_id,
-            stdout_write=self.stdout.write,
-        )
+        try:
+            completed, fetch_failures, lockout_hit = _run_cohort(
+                cohort_ids=cohort_ids,
+                fetch_threads=fetch_threads,
+                workers=workers,
+                queue_depth=queue_depth,
+                dry_run=dry_run,
+                run_id=run_id,
+                stdout_write=self.stdout.write,
+                profile=profile,
+                profile_file=profile_file,
+            )
+        finally:
+            if profile_file is not None:
+                profile_file.close()
 
         elapsed = time.monotonic() - run_start
         rate = completed / elapsed if elapsed > 0 else 0.0
