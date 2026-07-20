@@ -1,0 +1,13 @@
+{
+  "title": "Deck Share Summary",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "shareId": { "type": "string" },
+    "deckKey": { "type": "string" },
+    "createdAt": { "type": "string" },
+    "expiresAt": { "type": ["string", "null"] }
+  },
+  "required": ["shareId", "deckKey", "createdAt", "expiresAt"],
+  "additionalProperties": false
+}

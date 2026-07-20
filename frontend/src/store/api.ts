@@ -22,7 +22,10 @@ import {
   CardsRequest,
   CardsResponse,
   ContributionsResponse,
+  CreateDeckShareRequest,
+  CreateDeckShareResponse,
   CryptoProfileResponse,
+  DeckSharesResponse,
   DeleteDeckRequest,
   DeleteDeckResponse,
   DFCPairsResponse,
@@ -30,6 +33,8 @@ import {
   EditorSearchResponse,
   ExploreSearchRequest,
   ExploreSearchResponse,
+  GetSharedDeckRequest,
+  GetSharedDeckResponse,
   ImportSite,
   ImportSiteDecklistRequest,
   ImportSiteDecklistResponse,
@@ -60,6 +65,8 @@ import {
   ReportCardResponse,
   ResetSavedDecksRequest,
   ResetSavedDecksResponse,
+  RevokeDeckShareRequest,
+  RevokeDeckShareResponse,
   SampleCardsResponse,
   SaveCryptoProfileRequest,
   SaveCryptoProfileResponse,
@@ -107,6 +114,7 @@ export const api = createApi({
     QueryTags.SampleCards,
     QueryTags.SavedDecks,
     QueryTags.CryptoProfile,
+    QueryTags.DeckShares,
   ],
   endpoints: (builder) => ({
     getImportSites: builder.query<Array<ImportSite>, void>({
@@ -305,6 +313,45 @@ export const api = createApi({
       }),
       invalidatesTags: [QueryTags.SavedDecks, QueryTags.CryptoProfile],
     }),
+    // Per-deck share links ("PR-5, post-v1" in the proposal doc) - owner-side surface only.
+    // The recipient-side fetch (2/getSharedDeck/) is deliberately NOT an RTK Query endpoint
+    // here - it's unauthenticated, one-shot, and used from a page with no other cached state to
+    // share with it, so a plain APIGetSharedDeck function (below, alongside APIGetCards etc.)
+    // is a better fit than adding no-op caching semantics to something that's never refetched.
+    createDeckShare: builder.mutation<
+      CreateDeckShareResponse,
+      CreateDeckShareRequest
+    >({
+      query: (body) => ({
+        url: `2/createDeckShare/`,
+        method: "POST",
+        body: JSON.stringify(body),
+        credentials: "include",
+        headers: getCSRFHeader(),
+      }),
+      invalidatesTags: [QueryTags.DeckShares],
+    }),
+    getDeckShares: builder.query<DeckSharesResponse, void>({
+      query: () => ({
+        url: `2/deckShares/`,
+        method: "GET",
+        credentials: "include",
+      }),
+      providesTags: [QueryTags.DeckShares],
+    }),
+    revokeDeckShare: builder.mutation<
+      RevokeDeckShareResponse,
+      RevokeDeckShareRequest
+    >({
+      query: (body) => ({
+        url: `2/revokeDeckShare/`,
+        method: "POST",
+        body: JSON.stringify(body),
+        credentials: "include",
+        headers: getCSRFHeader(),
+      }),
+      invalidatesTags: [QueryTags.DeckShares],
+    }),
   }),
 });
 
@@ -334,6 +381,9 @@ const {
   useGetCryptoProfileQuery: useRawGetCryptoProfileQuery,
   useSaveCryptoProfileMutation: useRawSaveCryptoProfileMutation,
   useResetSavedDecksMutation: useRawResetSavedDecksMutation,
+  useCreateDeckShareMutation: useRawCreateDeckShareMutation,
+  useGetDeckSharesQuery: useRawGetDeckSharesQuery,
+  useRevokeDeckShareMutation: useRawRevokeDeckShareMutation,
 } = api;
 
 export function useGetWhoamiQuery() {
@@ -440,6 +490,15 @@ export function useGetCryptoProfileQuery(options?: { skip?: boolean }) {
   });
 }
 
+// Same skip-until-authenticated reasoning as useGetSavedDecksQuery above - 2/deckShares/ 403s
+// without a session too.
+export function useGetDeckSharesQuery(options?: { skip?: boolean }) {
+  const remoteBackendConfigured = useRemoteBackendConfigured();
+  return useRawGetDeckSharesQuery(undefined, {
+    skip: !remoteBackendConfigured || (options?.skip ?? false),
+  });
+}
+
 // Mutations are triggered explicitly, not auto-fetched, so there's no `skip` gate to add here -
 // callers already only render the buttons that trigger these when a backend is configured.
 export const useSaveDeckMutation = useRawSaveDeckMutation;
@@ -447,6 +506,8 @@ export const useLoadDeckMutation = useRawLoadDeckMutation;
 export const useDeleteDeckMutation = useRawDeleteDeckMutation;
 export const useSaveCryptoProfileMutation = useRawSaveCryptoProfileMutation;
 export const useResetSavedDecksMutation = useRawResetSavedDecksMutation;
+export const useCreateDeckShareMutation = useRawCreateDeckShareMutation;
+export const useRevokeDeckShareMutation = useRawRevokeDeckShareMutation;
 
 //# endregion
 
@@ -465,6 +526,27 @@ export async function APIGetCards(
   return rawResponse.json().then((content) => {
     if (rawResponse.status === 200 && content.results != null) {
       return (content as CardsResponse).results;
+    }
+    throw { name: content.name, message: content.message };
+  });
+}
+
+// The recipient-side share fetch ("PR-5, post-v1: per-deck share links") - deliberately no
+// `credentials: "include"` here, unlike every other saved-decks call in this file: this is an
+// unauthenticated, public lookup by shareId alone, and never needs (or should carry) the
+// requester's own session cookie.
+export async function APIGetSharedDeck(
+  backendURL: string,
+  shareId: string
+): Promise<GetSharedDeckResponse> {
+  const rawResponse = await fetch(formatURL(backendURL, "/2/getSharedDeck/"), {
+    method: "POST",
+    body: JSON.stringify({ shareId } as GetSharedDeckRequest),
+    headers: getCSRFHeader(),
+  });
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.ciphertext != null) {
+      return content as GetSharedDeckResponse;
     }
     throw { name: content.name, message: content.message };
   });

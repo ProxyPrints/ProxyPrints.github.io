@@ -858,6 +858,48 @@ class ContributionsResponse(BaseModel):
         return result
 
 
+class CreateDeckShareRequest(BaseModel):
+    deckKey: str
+    wrappedDek: str
+    wrappedDekNonce: str
+    expiresInDays: Optional[int] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CreateDeckShareRequest":
+        assert isinstance(obj, dict)
+        deckKey = from_str(obj.get("deckKey"))
+        wrappedDek = from_str(obj.get("wrappedDek"))
+        wrappedDekNonce = from_str(obj.get("wrappedDekNonce"))
+        expiresInDays = from_union([from_none, from_int], obj.get("expiresInDays"))
+        return CreateDeckShareRequest(deckKey, wrappedDek, wrappedDekNonce, expiresInDays)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["deckKey"] = from_str(self.deckKey)
+        result["wrappedDek"] = from_str(self.wrappedDek)
+        result["wrappedDekNonce"] = from_str(self.wrappedDekNonce)
+        result["expiresInDays"] = from_union([from_none, from_int], self.expiresInDays)
+        return result
+
+
+class CreateDeckShareResponse(BaseModel):
+    createdAt: str
+    shareId: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CreateDeckShareResponse":
+        assert isinstance(obj, dict)
+        createdAt = from_str(obj.get("createdAt"))
+        shareId = from_str(obj.get("shareId"))
+        return CreateDeckShareResponse(createdAt, shareId)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["createdAt"] = from_str(self.createdAt)
+        result["shareId"] = from_str(self.shareId)
+        return result
+
+
 class CryptoProfileResponse(BaseModel):
     exists: bool
     kdfIterations: Optional[int] = None
@@ -913,6 +955,45 @@ class DFCPairsResponse(BaseModel):
     def to_dict(self) -> dict:
         result: dict = {}
         result["dfcPairs"] = from_dict(from_str, self.dfcPairs)
+        return result
+
+
+class DeckShareSummary(BaseModel):
+    createdAt: str
+    deckKey: str
+    shareId: str
+    expiresAt: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "DeckShareSummary":
+        assert isinstance(obj, dict)
+        createdAt = from_str(obj.get("createdAt"))
+        deckKey = from_str(obj.get("deckKey"))
+        shareId = from_str(obj.get("shareId"))
+        expiresAt = from_union([from_none, from_str], obj.get("expiresAt"))
+        return DeckShareSummary(createdAt, deckKey, shareId, expiresAt)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["createdAt"] = from_str(self.createdAt)
+        result["deckKey"] = from_str(self.deckKey)
+        result["shareId"] = from_str(self.shareId)
+        result["expiresAt"] = from_union([from_none, from_str], self.expiresAt)
+        return result
+
+
+class DeckSharesResponse(BaseModel):
+    shares: List[DeckShareSummary]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "DeckSharesResponse":
+        assert isinstance(obj, dict)
+        shares = from_list(DeckShareSummary.from_dict, obj.get("shares"))
+        return DeckSharesResponse(shares)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["shares"] = from_list(lambda x: to_class(DeckShareSummary, x), self.shares)
         return result
 
 
@@ -1093,6 +1174,48 @@ class ExploreSearchResponse(BaseModel):
         result: dict = {}
         result["cards"] = from_list(lambda x: to_class(Card, x), self.cards)
         result["count"] = from_int(self.count)
+        return result
+
+
+class GetSharedDeckRequest(BaseModel):
+    shareId: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "GetSharedDeckRequest":
+        assert isinstance(obj, dict)
+        shareId = from_str(obj.get("shareId"))
+        return GetSharedDeckRequest(shareId)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["shareId"] = from_str(self.shareId)
+        return result
+
+
+class GetSharedDeckResponse(BaseModel):
+    ciphertext: str
+    ciphertextNonce: str
+    createdAt: str
+    wrappedDek: str
+    wrappedDekNonce: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "GetSharedDeckResponse":
+        assert isinstance(obj, dict)
+        ciphertext = from_str(obj.get("ciphertext"))
+        ciphertextNonce = from_str(obj.get("ciphertextNonce"))
+        createdAt = from_str(obj.get("createdAt"))
+        wrappedDek = from_str(obj.get("wrappedDek"))
+        wrappedDekNonce = from_str(obj.get("wrappedDekNonce"))
+        return GetSharedDeckResponse(ciphertext, ciphertextNonce, createdAt, wrappedDek, wrappedDekNonce)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["ciphertext"] = from_str(self.ciphertext)
+        result["ciphertextNonce"] = from_str(self.ciphertextNonce)
+        result["createdAt"] = from_str(self.createdAt)
+        result["wrappedDek"] = from_str(self.wrappedDek)
+        result["wrappedDekNonce"] = from_str(self.wrappedDekNonce)
         return result
 
 
@@ -1930,6 +2053,36 @@ class ResetSavedDecksResponse(BaseModel):
     def to_dict(self) -> dict:
         result: dict = {}
         result["deletedDeckCount"] = from_int(self.deletedDeckCount)
+        return result
+
+
+class RevokeDeckShareRequest(BaseModel):
+    shareId: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "RevokeDeckShareRequest":
+        assert isinstance(obj, dict)
+        shareId = from_str(obj.get("shareId"))
+        return RevokeDeckShareRequest(shareId)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["shareId"] = from_str(self.shareId)
+        return result
+
+
+class RevokeDeckShareResponse(BaseModel):
+    deleted: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> "RevokeDeckShareResponse":
+        assert isinstance(obj, dict)
+        deleted = from_bool(obj.get("deleted"))
+        return RevokeDeckShareResponse(deleted)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["deleted"] = from_bool(self.deleted)
         return result
 
 
@@ -2836,6 +2989,22 @@ def ContributionsResponsetodict(x: ContributionsResponse) -> Any:
     return to_class(ContributionsResponse, x)
 
 
+def CreateDeckShareRequestfromdict(s: Any) -> CreateDeckShareRequest:
+    return CreateDeckShareRequest.from_dict(s)
+
+
+def CreateDeckShareRequesttodict(x: CreateDeckShareRequest) -> Any:
+    return to_class(CreateDeckShareRequest, x)
+
+
+def CreateDeckShareResponsefromdict(s: Any) -> CreateDeckShareResponse:
+    return CreateDeckShareResponse.from_dict(s)
+
+
+def CreateDeckShareResponsetodict(x: CreateDeckShareResponse) -> Any:
+    return to_class(CreateDeckShareResponse, x)
+
+
 def CryptoProfileResponsefromdict(s: Any) -> CryptoProfileResponse:
     return CryptoProfileResponse.from_dict(s)
 
@@ -2850,6 +3019,22 @@ def DFCPairsResponsefromdict(s: Any) -> DFCPairsResponse:
 
 def DFCPairsResponsetodict(x: DFCPairsResponse) -> Any:
     return to_class(DFCPairsResponse, x)
+
+
+def DeckShareSummaryfromdict(s: Any) -> DeckShareSummary:
+    return DeckShareSummary.from_dict(s)
+
+
+def DeckShareSummarytodict(x: DeckShareSummary) -> Any:
+    return to_class(DeckShareSummary, x)
+
+
+def DeckSharesResponsefromdict(s: Any) -> DeckSharesResponse:
+    return DeckSharesResponse.from_dict(s)
+
+
+def DeckSharesResponsetodict(x: DeckSharesResponse) -> Any:
+    return to_class(DeckSharesResponse, x)
 
 
 def DeleteDeckRequestfromdict(s: Any) -> DeleteDeckRequest:
@@ -2906,6 +3091,22 @@ def ExploreSearchResponsefromdict(s: Any) -> ExploreSearchResponse:
 
 def ExploreSearchResponsetodict(x: ExploreSearchResponse) -> Any:
     return to_class(ExploreSearchResponse, x)
+
+
+def GetSharedDeckRequestfromdict(s: Any) -> GetSharedDeckRequest:
+    return GetSharedDeckRequest.from_dict(s)
+
+
+def GetSharedDeckRequesttodict(x: GetSharedDeckRequest) -> Any:
+    return to_class(GetSharedDeckRequest, x)
+
+
+def GetSharedDeckResponsefromdict(s: Any) -> GetSharedDeckResponse:
+    return GetSharedDeckResponse.from_dict(s)
+
+
+def GetSharedDeckResponsetodict(x: GetSharedDeckResponse) -> Any:
+    return to_class(GetSharedDeckResponse, x)
 
 
 def ImportSiteDecklistRequestfromdict(s: Any) -> ImportSiteDecklistRequest:
@@ -3154,6 +3355,22 @@ def ResetSavedDecksResponsefromdict(s: Any) -> ResetSavedDecksResponse:
 
 def ResetSavedDecksResponsetodict(x: ResetSavedDecksResponse) -> Any:
     return to_class(ResetSavedDecksResponse, x)
+
+
+def RevokeDeckShareRequestfromdict(s: Any) -> RevokeDeckShareRequest:
+    return RevokeDeckShareRequest.from_dict(s)
+
+
+def RevokeDeckShareRequesttodict(x: RevokeDeckShareRequest) -> Any:
+    return to_class(RevokeDeckShareRequest, x)
+
+
+def RevokeDeckShareResponsefromdict(s: Any) -> RevokeDeckShareResponse:
+    return RevokeDeckShareResponse.from_dict(s)
+
+
+def RevokeDeckShareResponsetodict(x: RevokeDeckShareResponse) -> Any:
+    return to_class(RevokeDeckShareResponse, x)
 
 
 def SampleCardsResponsefromdict(s: Any) -> SampleCardsResponse:

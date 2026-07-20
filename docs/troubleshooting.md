@@ -771,3 +771,33 @@ says built it (`get_baked_git_sha`/`GIT_SHA` file, `cardpicker.utils`) file
 list, not just a spot-check of the files you happen to be touching — this
 gap was found by accident (checking whether a stub needed updating), not by
 a systematic audit, so other quietly-missing files may exist unnoticed.
+
+## A later "share/export this deck" design assumes a saved deck's DEK is stable, but it isn't
+
+**Symptom**: implementing a feature that shares or otherwise re-uses a saved
+deck's existing DEK across time (e.g. a share link that's supposed to keep
+tracking a deck's _live_ ciphertext) breaks the instant the deck is edited
+again — or, when designing such a feature, a spec's prose implies the
+deck's DEK only changes on an explicit action ("rotate"), never as a side
+effect of ordinary use.
+
+**Cause**: `encryptDeckPayloadForSave` (`frontend/src/features/savedDecks/deckPayload.ts`)
+mints a FRESH DEK on every single call to `saveDeck` — including an
+ordinary content-editing "Update {name}" save of an already-saved deck, not
+just first-save (see `SaveDeckModal.tsx`'s `handleSubmit`, which always
+calls `encryptDeckPayloadForSave` regardless of whether `key` is null).
+There is no code path that reuses an existing deck's DEK across saves. A
+design (this repo's own "PR-5, per-deck share links" spec included) can be
+written assuming the DEK is a stable, rarely-changing secret that only a
+deliberate "rotate" action touches — that assumption doesn't hold in this
+codebase and was never going to, once PR-4 shipped fresh-DEK-per-save.
+
+**Fix**: don't build anything that expects a saved deck's DEK, or its
+wrapped form, to survive an ordinary edit-save unchanged. Instead, snapshot
+whatever needs to be independent of future edits (ciphertext, wrapped-DEK
+material, etc.) at the moment it's captured — exactly what
+`SavedDeckKind.SNAPSHOT` already does for the load-safety flow, and what
+`SavedDeckShare` (PR-5) does for share links: a frozen copy taken at
+creation time, not a live reference. See
+[`features/saved-decks.md`](features/saved-decks.md)'s "Per-deck share
+links" section for the full writeup of this exact case.

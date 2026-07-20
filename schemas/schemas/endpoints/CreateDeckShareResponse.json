@@ -1,0 +1,11 @@
+{
+  "title": "Create Deck Share Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "shareId": { "type": "string" },
+    "createdAt": { "type": "string" }
+  },
+  "required": ["shareId", "createdAt"],
+  "additionalProperties": false
+}

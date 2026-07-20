@@ -5,6 +5,7 @@ import json
 import logging
 import mimetypes
 from collections import defaultdict
+from datetime import timedelta
 from pathlib import Path
 from random import sample
 from typing import Any, Callable, Literal, Optional, TypeVar, Union, cast
@@ -28,7 +29,7 @@ from django.http import (
     HttpResponseBase,
     JsonResponse,
 )
-from django.utils import dateformat
+from django.utils import dateformat, timezone
 from django.views.decorators.csrf import csrf_exempt
 
 from cardpicker.artist_consensus import UNKNOWN as ARTIST_UNKNOWN
@@ -65,6 +66,7 @@ from cardpicker.models import (
     PrintingTagStatus,
     SavedDeck,
     SavedDeckKind,
+    SavedDeckShare,
     Source,
     Tag,
     UserCryptoProfile,
@@ -101,7 +103,11 @@ from cardpicker.schema_types import (
     CardsRequest,
     CardsResponse,
     ContributionsResponse,
+    CreateDeckShareRequest,
+    CreateDeckShareResponse,
     CryptoProfileResponse,
+    DeckSharesResponse,
+    DeckShareSummary,
     DeleteDeckRequest,
     DeleteDeckResponse,
     DFCPairsResponse,
@@ -110,6 +116,8 @@ from cardpicker.schema_types import (
     ErrorResponse,
     ExploreSearchRequest,
     ExploreSearchResponse,
+    GetSharedDeckRequest,
+    GetSharedDeckResponse,
     ImportSite,
     ImportSiteDecklistRequest,
     ImportSiteDecklistResponse,
@@ -150,6 +158,8 @@ from cardpicker.schema_types import (
     ReportCardResponse,
     ResetSavedDecksRequest,
     ResetSavedDecksResponse,
+    RevokeDeckShareRequest,
+    RevokeDeckShareResponse,
     SampleCardsResponse,
     SaveCryptoProfileRequest,
     SaveCryptoProfileResponse,
@@ -1840,6 +1850,161 @@ def post_reset_saved_decks(request: HttpRequest) -> HttpResponse:
         deleted_deck_count, _ = SavedDeck.objects.filter(owner=user).delete()
         UserCryptoProfile.objects.filter(owner=user).delete()
     return JsonResponse(ResetSavedDecksResponse(deletedDeckCount=deleted_deck_count).model_dump())
+
+
+# endregion
+
+
+# region Per-deck share links (docs/proposals/proposal-g-user-accounts-saved-decks.md's
+# "PR-5, post-v1: per-deck share links")
+#
+# See cardpicker.models.SavedDeckShare's docstring for the frozen-snapshot deviation from the
+# spec's literal prose, forced by the fact that post_save_deck (above) already mints a fresh DEK
+# on every ordinary save, not just the first one. Every ciphertext/nonce/wrapped-key field below
+# is exactly as opaque to this backend as the rest of the saved-decks surface - never decrypted,
+# inspected, or searched server-side.
+
+
+def _get_saved_deck_share_or_400(share_id: str) -> SavedDeckShare:
+    try:
+        return SavedDeckShare.objects.select_related("deck").get(id=share_id)
+    except (SavedDeckShare.DoesNotExist, DjangoValidationError, ValueError):
+        raise BadRequestException(f"No share found with id {share_id!r}.")
+
+
+def _serialise_deck_share(share: SavedDeckShare) -> DeckShareSummary:
+    return DeckShareSummary(
+        shareId=str(share.id),
+        deckKey=str(share.deck.key),
+        createdAt=dateformat.format(share.created_at, DATE_FORMAT),
+        expiresAt=dateformat.format(share.expires_at, DATE_FORMAT) if share.expires_at is not None else None,
+    )
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_authenticated
+@ErrorWrappers.to_json
+def post_create_deck_share(request: HttpRequest) -> HttpResponse:
+    """
+    Create a share link for one of the requesting user's own decks (never a snapshot - sharing
+    is a `kind=deck` concept only). The client has already unwrapped the deck's current DEK
+    (via its own already-unlocked master key) and re-wrapped that same DEK under a fresh,
+    client-generated `shareKey` that never reaches this server - `wrappedDek`/`wrappedDekNonce`
+    below are that re-wrapping's result, opaque to us either way.
+
+    This server copies the referenced deck's CURRENT ciphertext/nonce into the new
+    SavedDeckShare row at this moment - a frozen snapshot, not a live reference (see
+    SavedDeckShare's docstring for why this is required, not optional, given post_save_deck's
+    existing fresh-DEK-per-save behaviour).
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    user = _authenticated_user(request)
+    req = CreateDeckShareRequest.model_validate(json.loads(request.body))
+    deck = _get_saved_deck_or_400(req.deckKey)
+    if deck.owner_id != user.id:
+        return _forbidden("You do not own this saved deck.")
+    if deck.kind != SavedDeckKind.DECK:
+        raise BadRequestException("Only named decks can be shared, not snapshots.")
+
+    existing_share_count = SavedDeckShare.objects.filter(deck=deck).count()
+    if existing_share_count >= settings.SAVED_DECK_SHARE_MAX_PER_DECK:
+        raise BadRequestException(
+            f"This deck already has the maximum of {settings.SAVED_DECK_SHARE_MAX_PER_DECK} active "
+            f"shares - revoke an old one to create a new one."
+        )
+
+    expires_at = timezone.now() + timedelta(days=req.expiresInDays) if req.expiresInDays is not None else None
+    share = SavedDeckShare.objects.create(
+        deck=deck,
+        ciphertext=deck.ciphertext,
+        ciphertext_nonce=deck.ciphertext_nonce,
+        wrapped_dek=_b64_to_bytes_or_400(req.wrappedDek, "wrappedDek"),
+        wrapped_dek_nonce=_b64_to_bytes_or_400(req.wrappedDekNonce, "wrappedDekNonce"),
+        expires_at=expires_at,
+    )
+    return JsonResponse(
+        CreateDeckShareResponse(
+            shareId=str(share.id),
+            createdAt=dateformat.format(share.created_at, DATE_FORMAT),
+        ).model_dump()
+    )
+
+
+@csrf_exempt
+@require_authenticated
+@ErrorWrappers.to_json
+def get_deck_shares(request: HttpRequest) -> HttpResponse:
+    """
+    List every share the requesting user owns (across all of their decks) - shareId, which deck
+    it belongs to, and its creation/expiry dates only, never ciphertext/wrapped-key material
+    (that's only ever served to a recipient holding the actual shareId, via get_shared_deck).
+    Read-only (GET), so - like get_saved_decks - this needs no Origin check. Includes shares
+    already past their own expires_at (still visible/revocable, just no longer fetchable by a
+    recipient - see get_shared_deck).
+    """
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+    user = _authenticated_user(request)
+    shares = SavedDeckShare.objects.filter(deck__owner=user).select_related("deck").order_by("-created_at")
+    return JsonResponse(DeckSharesResponse(shares=[_serialise_deck_share(share) for share in shares]).model_dump())
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_authenticated
+@ErrorWrappers.to_json
+def post_revoke_deck_share(request: HttpRequest) -> HttpResponse:
+    """
+    Hard delete one share by shareId - 403 if it belongs to a deck the requesting user doesn't
+    own. The link is dead for all future get_shared_deck fetches immediately. No undo, same
+    precedent as post_delete_deck. The spec's "paranoid" rotate-on-revoke option is deliberately
+    NOT a parameter here - rotating the live deck's own DEK only requires re-encrypting that
+    deck's content under a fresh key, which is exactly what an ordinary post_save_deck call
+    already does on every save (see cardpicker.models.SavedDeckShare's docstring) - the frontend
+    orchestrates "revoke, then optionally re-save the deck" as two calls to already-existing
+    endpoints rather than this one growing bespoke re-encryption logic it can't actually perform
+    server-side anyway (the server never holds a deck's plaintext).
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    user = _authenticated_user(request)
+    req = RevokeDeckShareRequest.model_validate(json.loads(request.body))
+    share = _get_saved_deck_share_or_400(req.shareId)
+    if share.deck.owner_id != user.id:
+        return _forbidden("You do not own this share.")
+    share.delete()
+    return JsonResponse(RevokeDeckShareResponse(deleted=True).model_dump())
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def post_get_shared_deck(request: HttpRequest) -> HttpResponse:
+    """
+    The recipient-side fetch - deliberately UNAUTHENTICATED (no session/cookie involved at all,
+    so no `credentials: "include"`, no CSRF token, and no Origin check: this is a public,
+    read-only lookup by shareId alone, nothing here can be forged into a state change on
+    anyone's behalf). Returns this share's own frozen ciphertext + its wrapped DEK; the
+    recipient unwraps that DEK using the shareKey from their URL's fragment, which this request
+    body never contains. A revoked (deleted) or expired share both look identical to the
+    recipient: "No share found" (400) - see SavedDeckShare.is_expired.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    req = GetSharedDeckRequest.model_validate(json.loads(request.body))
+    share = _get_saved_deck_share_or_400(req.shareId)
+    if share.is_expired():
+        raise BadRequestException(f"No share found with id {req.shareId!r}.")
+    return JsonResponse(
+        GetSharedDeckResponse(
+            ciphertext=_bytes_to_b64(share.ciphertext),
+            ciphertextNonce=_bytes_to_b64(share.ciphertext_nonce),
+            wrappedDek=_bytes_to_b64(share.wrapped_dek),
+            wrappedDekNonce=_bytes_to_b64(share.wrapped_dek_nonce),
+            createdAt=dateformat.format(share.created_at, DATE_FORMAT),
+        ).model_dump()
+    )
 
 
 # endregion
