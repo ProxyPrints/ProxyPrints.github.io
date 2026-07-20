@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import re
 import time
 import uuid
 from collections import Counter
@@ -22,6 +23,7 @@ from django.conf import settings as conf_settings
 from cardpicker.integrations.game.mtg import (
     Moxfield,
     MTGIntegration,
+    TappedOut,
     format_decklist_line,
 )
 from cardpicker.integrations.integrations import get_configured_game_integration
@@ -160,7 +162,20 @@ class TestMTGIntegration:
         ],
     )
     def test_valid_url(self, client, django_settings, snapshot, url: str):
-        decklist = MTGIntegration.query_import_site(url)
+        # CI baseline cleanup, 2026-07-20: TAPPEDOUT/TAPPEDOUT_WITH_WWW previously hit the
+        # real tappedout.net and produced a false-red (InvalidURLException) whenever that
+        # site 503s or is otherwise unreachable - unrelated to any code under test. Mocked
+        # (rather than named-skip like MOXFIELD above) because tappedout.net's flakiness is
+        # a live-network property with no config flag to gate on, and mocking keeps real
+        # coverage of TappedOut.retrieve_card_list's parsing instead of losing it. Every
+        # other site in this parametrize is untouched: real_http=True lets any non-tappedout
+        # request fall through to the real network exactly as before.
+        with requests_mock.Mocker(real_http=True) as mock:
+            mock.get(
+                re.compile(r"^https://(?:{})/".format("|".join(re.escape(h) for h in TappedOut.get_host_names()))),
+                text="Sideboard:\r\n4 Brainstorm\r\n3 Past in Flames\r\n1 Delver of Secrets\r\n",
+            )
+            decklist = MTGIntegration.query_import_site(url)
         assert decklist
         assert Counter(decklist.splitlines()) == snapshot
 
