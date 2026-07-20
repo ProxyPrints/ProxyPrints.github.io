@@ -182,7 +182,13 @@ tether excludes `TYPE_CHECKING` blocks from its import scan for exactly this
 reason. `validate_against_candidates`, the one function in this file that's
 _semantically_ tied to printing identification (even though it has no
 fork-only import), is not included in this row's primitive — an extractor
-drops that one function and keeps the rest.
+drops that one function and keeps the rest. `find_matching_candidates`
+(added 2026-07-20, Stage D's join-key calculator — the candidate-narrowing
+filter `validate_against_candidates` already computed internally, extracted
+so a caller with independent tie-break evidence can inspect the ambiguous
+match set directly) is excluded for the identical reason — it's the same
+printing-identification matching logic, just under a new name, not a
+separate primitive.
 
 **Federation hash tool** — the _code artifact_ has zero fork dependencies
 (confirmed: its only two mentions of `cardpicker` are provenance comments,

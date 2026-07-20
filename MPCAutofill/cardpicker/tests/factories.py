@@ -183,3 +183,13 @@ class UserCryptoProfileFactory(factory.django.DjangoModelFactory):
     passphrase_wrapped_master_key_nonce = factory.LazyFunction(lambda: os.urandom(12))
     recovery_wrapped_master_key = factory.LazyFunction(lambda: os.urandom(48))
     recovery_wrapped_master_key_nonce = factory.LazyFunction(lambda: os.urandom(12))
+
+
+class ImageEvidenceFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.ImageEvidence
+
+    card = factory.SubFactory(CardFactory)
+    content_hash = factory.LazyAttribute(lambda o: o.card.content_phash or 0)
+    extractor_versions = factory.LazyFunction(dict)
+    run_id = None
