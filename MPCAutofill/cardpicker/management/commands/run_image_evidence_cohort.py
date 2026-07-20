@@ -107,6 +107,7 @@ the moment one is observed and lets already in-flight work drain, rather than co
 submit new work into a destination that has already locked us out.
 """
 
+import json
 import logging
 import math
 import os
@@ -114,7 +115,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import Manager
 from multiprocessing.managers import SyncManager
-from typing import Any
+from typing import Any, Optional
 
 from django.core.management.base import BaseCommand, CommandParser
 from django.db.models import Min
@@ -191,33 +192,49 @@ def _init_worker() -> None:
     get_limiter(scaled_config)
 
 
-def _process_one_card(card_id: int, dry_run: bool, run_id: str, stop_event: Any) -> tuple[int, str]:
+def _process_one_card(
+    card_id: int, dry_run: bool, run_id: str, stop_event: Any, profile: bool = False
+) -> tuple[int, str, Optional[dict[str, float]]]:
     """Module-level (picklable) per-card work unit for the process pool - takes a plain card_id,
     not a `Card` instance, and re-fetches it inside the worker (see module docstring point 1).
     `stop_event` is a `multiprocessing.Manager().Event()` proxy, checked FIRST so a task
     dispatched to this worker after another worker already observed a lockout never calls
-    `extract_card_evidence` (and so never fetches) at all."""
+    `extract_card_evidence` (and so never fetches) at all.
+
+    `profile` (2026-07-20, docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md): when
+    True, a per-card timing dict (`extract_card_evidence`'s own `fetch_ms`/`ocr_group_ms`/
+    `legal_line_ms`/`extraction_ms`/`other_ms` breakdown, plus this function's own `wall_ms`
+    covering the whole call including the `Card.objects.get` re-fetch) is built and returned as
+    the third tuple element rather than written from inside the worker process - each worker
+    writing independently to a shared JSONL file would interleave/corrupt lines; the single
+    parent process (the `as_completed` loop below) is the only writer instead."""
     if stop_event.is_set():
-        return card_id, "skipped-lockout"
+        return card_id, "skipped-lockout", None
 
     # Imported here (not just at module level) so this stays trivially callable/picklable
     # regardless of worker start method - cheap, already-imported-by-Django-app-registry modules.
     from cardpicker.image_evidence import extract_card_evidence, persist_evidence
 
+    wall_started_at = time.monotonic() if profile else None
+
     try:
         card = Card.objects.select_related("source").get(pk=card_id)
     except Card.DoesNotExist:
-        return card_id, "dropped"
+        return card_id, "dropped", None
 
+    profile_dict: Optional[dict[str, float]] = {} if profile else None
     try:
-        result = extract_card_evidence(card)
+        result = extract_card_evidence(card, profile=profile_dict)
     except GoogleFetchLockoutError:
         stop_event.set()
         logger.error("GoogleFetchLockoutError observed - stopping the run, no further work submitted")
         raise
     if not dry_run:
         persist_evidence(result, run_id=run_id)
-    return card_id, ("fetch_failed" if result.fields.get("fetch_ok") is False else "ok")
+    if profile_dict is not None and wall_started_at is not None:
+        profile_dict["wall_ms"] = (time.monotonic() - wall_started_at) * 1000
+    outcome = "fetch_failed" if result.fields.get("fetch_ok") is False else "ok"
+    return card_id, outcome, profile_dict
 
 
 class Command(BaseCommand):
@@ -254,19 +271,43 @@ class Command(BaseCommand):
             default=False,
             help="Extract but do not persist anything - for timing/sampling only.",
         )
+        parser.add_argument(
+            "--profile",
+            action="store_true",
+            default=False,
+            help="Diagnostic-only (2026-07-20, docs/reports/2026-07-20-fetch-compute-timing-"
+            "diagnostic.md): capture a per-card fetch-vs-extraction timing breakdown "
+            "(fetch_ms/ocr_group_ms/legal_line_ms/other_ms/extraction_ms/wall_ms) and write one "
+            "JSON line per card to --profile-output. Adds a handful of time.monotonic() calls "
+            "per card - negligible overhead. Does not persist anything new onto ImageEvidence.",
+        )
+        parser.add_argument(
+            "--profile-output",
+            type=str,
+            default=None,
+            help="Path (inside the container) to write the --profile JSONL to. Default: "
+            "/tmp/stagec-profile-<run_id>.jsonl.",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         limit: int = options["limit"]
         workers: int = max(1, options["workers"])
         dry_run: bool = options["dry_run"]
         run_id: str = options["run_id"] or f"stagec-cohort-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        profile: bool = options["profile"]
+        profile_output: str = options["profile_output"] or f"/tmp/stagec-profile-{run_id}.jsonl"
+        profile_file = open(profile_output, "w") if profile else None
 
         # Read by _init_worker in each forked child (env is inherited at fork time) to scale the
         # rate limiter to the ACTUAL worker count this invocation used, not just the module
         # default - see _init_worker's own point 3.
         os.environ["STAGE_C_ACTIVE_WORKERS"] = str(workers)
 
-        self.stdout.write(f"run_id={run_id} limit={limit} workers={workers} dry_run={dry_run} (process pool)")
+        self.stdout.write(
+            f"run_id={run_id} limit={limit} workers={workers} dry_run={dry_run} profile={profile} " "(process pool)"
+        )
+        if profile:
+            self.stdout.write(f"Profile JSONL: {profile_output}")
 
         # Step 1: cheap name -> min(edhrec_rank) map - see module docstring for why this replaces
         # a per-row correlated subquery.
@@ -326,30 +367,39 @@ class Command(BaseCommand):
         manager: SyncManager = Manager()
         stop_event = manager.Event()
 
-        with ProcessPoolExecutor(max_workers=workers, initializer=_init_worker) as pool:
-            futures = {
-                pool.submit(_process_one_card, card_id, dry_run, run_id, stop_event): card_id for card_id in cohort_ids
-            }
-            for future in as_completed(futures):
-                card_id = futures[future]
-                try:
-                    _, outcome = future.result()
-                except GoogleFetchLockoutError:
-                    continue
-                except Exception:
-                    logger.exception("Dropped card %s (uncaught exception)", card_id)
-                    outcome = "dropped"
-                completed += 1
-                if outcome in ("fetch_failed", "dropped"):
-                    fetch_failures += 1
-                if completed % PROGRESS_EVERY == 0 or completed == len(cohort_ids):
-                    elapsed = time.monotonic() - run_start
-                    rate = completed / elapsed if elapsed > 0 else 0.0
-                    self.stdout.write(
-                        f"[{completed}/{len(cohort_ids)}] elapsed={elapsed:.0f}s rate={rate:.3f}/s "
-                        f"fetch_failures={fetch_failures}"
-                    )
-                    self.stdout.flush()
+        try:
+            with ProcessPoolExecutor(max_workers=workers, initializer=_init_worker) as pool:
+                futures = {
+                    pool.submit(_process_one_card, card_id, dry_run, run_id, stop_event, profile): card_id
+                    for card_id in cohort_ids
+                }
+                for future in as_completed(futures):
+                    card_id = futures[future]
+                    card_profile: Optional[dict[str, float]] = None
+                    try:
+                        _, outcome, card_profile = future.result()
+                    except GoogleFetchLockoutError:
+                        continue
+                    except Exception:
+                        logger.exception("Dropped card %s (uncaught exception)", card_id)
+                        outcome = "dropped"
+                    completed += 1
+                    if outcome in ("fetch_failed", "dropped"):
+                        fetch_failures += 1
+                    if profile_file is not None and card_profile is not None:
+                        profile_file.write(json.dumps({"card_id": card_id, **card_profile}) + "\n")
+                        profile_file.flush()
+                    if completed % PROGRESS_EVERY == 0 or completed == len(cohort_ids):
+                        elapsed = time.monotonic() - run_start
+                        rate = completed / elapsed if elapsed > 0 else 0.0
+                        self.stdout.write(
+                            f"[{completed}/{len(cohort_ids)}] elapsed={elapsed:.0f}s rate={rate:.3f}/s "
+                            f"fetch_failures={fetch_failures}"
+                        )
+                        self.stdout.flush()
+        finally:
+            if profile_file is not None:
+                profile_file.close()
 
         # Read stop_event's state BEFORE manager.shutdown() tears down the manager process - the
         # proxy's is_set() call needs a live manager to talk to, and calling it after shutdown()
