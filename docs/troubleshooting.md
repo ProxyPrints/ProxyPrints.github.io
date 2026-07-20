@@ -640,3 +640,58 @@ prints nothing per-test regardless of pass/fail; download the merged
 
 **Refs**: `frontend/tests/HomepagePanel.spec.ts`,
 `frontend/playwright.config.ts`'s `retries`/`webServer`.
+
+## `test_valid_url[tappedout*]` fails with `InvalidURLException`, unrelated to your change
+
+**Symptom**: `cardpicker/tests/test_integrations.py::TestMTGIntegration::test_valid_url[tappedout]`
+or `[tappedout_with_www]` fails with `TappedOut.InvalidURLException` in
+CI on a PR that never touched the import-sites code (hit #209, #213,
+#215).
+
+**Cause**: that parametrize case made a real HTTP request to the live
+`tappedout.net` — a genuine external-network dependency the test never
+declared. Whenever tappedout.net 503s, redirects, or is otherwise
+unreachable, `ImportSite.request`'s `default_is_response_valid` check
+fails and raises, and the test goes red for a reason with nothing to do
+with the PR's diff.
+
+**Fix**: `test_valid_url` now wraps the call in
+`requests_mock.Mocker(real_http=True)` and registers a mock response for
+any `tappedout.net`/`www.tappedout.net` request (matched via
+`TappedOut.get_host_names()`), so those two cases are fully offline and
+deterministic while every other site in the same parametrize
+(archidekt, cubecobra, magic-ville, manastack, scryfall — still real
+network calls) is untouched via the `real_http=True` fallback. Chosen
+over a named `skipif` (the `MOXFIELD_SECRET`-gated pattern just above it
+in the same file) because there's no config flag to gate tappedout on —
+only live reachability — and mocking keeps real parsing coverage instead
+of dropping it.
+
+**Refs**: `MPCAutofill/cardpicker/tests/test_integrations.py`'s
+`test_valid_url`, `MPCAutofill/cardpicker/integrations/game/mtg.py`'s
+`TappedOut`, `MPCAutofill/cardpicker/integrations/game/base.py`'s
+`ImportSite.request`.
+
+## Every PR's prettier pre-commit check fails on a docs file the PR never touched
+
+**Symptom**: the "Formatting and static type checking" CI job fails the
+`prettier` hook on `docs/upstreaming/upstream-wiki-drift.md` or
+`docs/upstreaming/drift-log.md` — files your branch's diff doesn't
+include (issue #214, surfaced by PR #213).
+
+**Cause**: PR CI checks out the merge commit (branch + `master`), so any
+non-prettier-conformant content the weekly bot workflows
+(`docs-upstream-wiki-drift.yml`, `upstream-drift-monitor.yml`) committed
+straight to `master` rides along into every open PR's CI run and fails a
+file the PR never changed.
+
+**Fix**: both auto-generated files are excluded from the `prettier`
+pre-commit hook via an `exclude:` pattern in `.pre-commit-config.yaml` —
+machine-generated weekly reports aren't hand-edited, so a hook gate on
+them protects nothing and only produces false reds. `drift-log.md` was
+also reformatted once so `master` itself started clean; the exclude is
+what keeps it that way regardless of what the bots commit next.
+
+**Refs**: `.pre-commit-config.yaml`'s `prettier` hook,
+`.github/workflows/docs-upstream-wiki-drift.yml`,
+`.github/workflows/upstream-drift-monitor.yml`.
