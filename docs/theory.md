@@ -5,7 +5,9 @@ the catalog-completion plan's Part 6, gated on the full-catalog run's
 final report existing. Written for an external reader — this also
 doubles as the technical annex for a future federation pitch (see
 `docs/federation-v1.md`), so it avoids repo-internal jargon where a
-general term exists.
+general term exists. For a plain-language walkthrough of the same
+pipeline without the formal decoding model, see
+[`identification-pipeline.md`](identification-pipeline.md).
 
 ## 1. The model: decoding over a closed codebook
 

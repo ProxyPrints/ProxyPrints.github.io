@@ -22,6 +22,11 @@ The methodology and the systems it governs.
   soundness mechanisms. Written for an external reader; doubles as the
   federation pitch's technical annex. **Reviewed and approved by the owner,
   2026-07-17.**
+- [`identification-pipeline.md`](identification-pipeline.md) — the same
+  pipeline, as a plain-language stage-by-stage walkthrough (Stage C
+  evidence extraction, Stage D join-key calculator, the human-backed vote
+  gate) rather than `theory.md`'s formal decoding model. **Reviewed and
+  approved by the owner, 2026-07-21.**
 - [`federation-v1.md`](federation-v1.md) — federation verdict exchange
   format v1 (spec; no implementation yet — instances would share resolved
   consensus verdicts as signed JSON, never raw votes). Companion HOLD

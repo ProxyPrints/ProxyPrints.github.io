@@ -251,6 +251,11 @@ external reader's orientation to the whole fork, see
   pipeline as candidate-constrained decoding: false-accept bound,
   prior-art comparison, soundness mechanisms, Sybil/Dawid-Skene
   addendum. Doubles as the federation pitch's technical annex.
+- [`docs/identification-pipeline.md`](docs/identification-pipeline.md) —
+  plain-language walkthrough of the same pipeline, stage by stage
+  (Stage C evidence extraction, Stage D join-key calculator, the
+  human-backed vote gate), for a reader who wants the mechanics without
+  `theory.md`'s formal decoding model.
 - [`docs/documentation-process.md`](docs/documentation-process.md) — docs/
   as source of truth, the wiki as a generated view of it, mechanical lint
   vs. the quarterly judgment pass, upstream wiki tracking.
