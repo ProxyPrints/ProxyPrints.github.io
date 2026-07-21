@@ -841,3 +841,49 @@ a healthy state (rather than just logging once and continuing), that
 would indicate a real regression and is worth revisiting; gating one of
 the two containers' `migrate` calls behind a lock, or having only one
 container run it, is a fix not yet implemented.
+
+## Adding one more always-visible `Navbar.tsx` link fails unrelated Playwright specs with "`<a>` from `<nav>` subtree intercepts pointer events"
+
+**Symptom**: `SavedDecks.spec.ts`'s Export/Import tests (and potentially
+other specs whose target element sits just below the fixed navbar) start
+failing in CI/Playwright with a `page.waitForEvent("download")` or
+`locator.click` timeout, and the retry log shows an unrelated navbar
+link (e.g. `<a href="/editor" class="nav-link">`) "intercepts pointer
+events" over the real target. The PR's own diff looks unrelated — it
+only added one new item to `Navbar.tsx`'s left-hand `Nav`.
+
+**Cause**: `frontend/src/features/ui/Layout.tsx`'s `ContentContainer` and
+several other components (`Explore.tsx`, `ProjectEditor.tsx`,
+`FinishedMyProject.tsx`) hardcode a fixed pixel offset from
+`NavbarHeight` (`frontend/src/common/constants.ts`, `= 50`) assuming the
+navbar is always exactly one row tall. In the fully-authenticated,
+every-backend-feature-enabled state, the left-hand `Nav`'s flex row is
+already near its horizontal wrapping budget — Bootstrap shrinks the flex
+items instead of moving them to a new line, so a long label ("What's
+That Card?") wraps internally and the _whole_ fixed navbar renders
+taller than `NavbarHeight` (confirmed via `page.locator("nav.navbar").boundingBox()`:
+64px tall on `origin/master` already, vs. the hardcoded 50px offset —
+a pre-existing, marginal, still-clickable overlap). Adding one more
+always-visible link to that same row pushes the real height further
+(88px), and now the _entire_ target button sits under the taller bar
+rather than just its top few pixels, making it fully unclickable instead
+of merely graze-overlapped.
+
+**How to confirm it's this and not a real click-target bug in your own
+change**: screenshot the affected page (`page.screenshot()`) and compare
+`page.locator("nav.navbar").boundingBox()` before/after your diff at the
+same viewport/auth state — if `origin/master` already shows the navbar's
+real height exceeding `NavbarHeight`'s 50px (even by a little), your
+change didn't invent the bug, it just widened an existing crack.
+
+**Fix**: don't add width to the already-crowded left-hand `Nav` when a
+new always-visible link is needed — put it in the right-hand
+`ms-auto` cluster instead (today just `AuthWidget` + the download-manager
+icon button + the Sources button, with real spare width). This keeps the
+navbar's real rendered height identical to `origin/master`'s (confirmed
+via the same `boundingBox()` check) rather than papering over the
+symptom with a longer Playwright timeout or a spec edit. The deeper fix
+— replacing the hardcoded `NavbarHeight` constant with a real
+`ResizeObserver`-driven measurement — is a legitimate follow-up (this
+whole class of bug recurs the next time a link is added to that row) but
+is out of scope for a single-link addition.
