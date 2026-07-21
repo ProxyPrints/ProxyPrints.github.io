@@ -1777,21 +1777,15 @@ ceiling) stands; this section is the design to close the gap the canary
 surfaced, plus what would need to be measured to confirm it before spending
 more compute on a re-profile.
 
-Note on the **~6.2h reference budget's provenance**, since the
-compute-profile report's comparison invites reading it as a compute number:
-it is a _fetch-only_ figure. PR #131/#139's canary measured
-`harvest_fetch_limiter.py`'s `GOOGLE_IMAGE` concurrency (55,641 requests
-tested at concurrency 3/6/10, landing on the merged config — PR #179 —
-`max_concurrency=6, rate_per_sec=8.0`, ≈8.116/s achieved ≈ 6.2h for the
-181,483 deduped fetch targets) _before Stage C/OCR existed_, so it never
-included any compute cost. `docs/reports/2026-07-20-pipeline-compute-profile.md`
-already makes this same point in its own "Fetch vs. compute" section (the
-6.2h figure "was never meant to include Stage C/D compute cost"); restated
-here because the decoupling design below leans on it directly: once fetch
-and compute run as two independent concurrent stages instead of one bundled
-per-card unit, the ~6.2h figure becomes the real, standalone fetch-stage
-budget again (not a number to net against compute), and the two stages'
-wall-clocks compose as `max(fetch, compute)` rather than `fetch + compute`.
+The **~6.2h reference budget**'s provenance (fetch-only, predates Stage
+C/OCR) is fully derived in the Fetch Acceleration Study above (see "Two
+ceilings, confirmed distinct" and its deliverable table) and confirmed
+not to include compute cost by
+`docs/reports/2026-07-20-pipeline-compute-profile.md`'s own "Fetch vs.
+compute" section; not re-derived here. The decoupling design below leans
+on it directly: once fetch and compute run as two independent concurrent
+stages instead of one bundled per-card unit, the two stages' wall-clocks
+compose as `max(fetch, compute)` rather than `fetch + compute`.
 
 **1. Decoupling architecture.** Two concurrent stages instead of one bundled
 per-card unit:
@@ -1948,29 +1942,11 @@ materially better than the canary's measured ~15.7–16h. Risks:
   this hardware profile didn't budget compute for — worth keeping in mind
   for whoever implements this, not a problem today since decoding is lazy).
 
-**Confirming re-profile: fetch-wait confirmed as the dominant cause (2026-07-20,
-`docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md`)** — the
-instrumentation spec above was implemented (`extract_card_evidence` gained an
-optional `profile` param; `run_image_evidence_cohort` gained `--profile`/
-`--profile-output`, diagnostic-only, off by default) and run against a
-130-card `--dry-run` prod cohort. Result: **fetch is 36.5% of mean per-card
-wall-clock, extraction 63.4%** (ocr_group + legal_line alone = 58.5%,
-matching the compute-profile report's independently-derived 58% figure);
-pool-dispatch overhead measured at only ~3.8% and per-task DB-reconnect-
-adjacent cost at ~0.18% — both ruled out as the primary driver. Cross-
-validated against cgroup `cpu.stat`: this run's CPU-seconds/card (1.233) and
-the canary's own (1.147) both closely match the direct `extraction_ms`
-measurement, confirming that "CPU-s/card" was implicitly measuring
-extraction-only cost all along — the canary's 63.1%-efficiency /
-1.817-CPU-s-budget comparison assumed the whole bundled per-card wall-clock
-would need to be CPU-bound for 100% efficiency, and the ~37% shortfall and
-the measured 36.5% fetch fraction are the same number within noise, not two
-separate findings. `io.stat` showed ~zero incremental block I/O (negative
-control, confirms no disk-side explanation). Expected-speedup cross-check
-(`1/(1-0.365) ≈ 1.574x`) applied to the canary's ~15.7–16.0h full-pool
-projection lands at ~10.0–10.2h, matching this design's own expected-outcome
-figure (71.2h ÷ 7 ≈ 10.2h) from an independent direction. **Verdict: build
-the decoupling design above as specified — no different fix is indicated.**
+**Confirming re-profile (2026-07-20,
+`docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md`)**: fetch-wait
+confirmed as the dominant cause of the canary's efficiency gap (measured
+fetch fraction matches the gap within noise). Verdict: build the decoupling
+design above as specified — no different fix is indicated.
 
 **Stage C: fetch/compute decoupling — implemented (2026-07-20)**, on top of
 the confirming re-profile just above (`docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md`,
