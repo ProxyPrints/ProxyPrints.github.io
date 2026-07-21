@@ -790,21 +790,32 @@ export function DisplayPage() {
   const [sheetRenderWidthPx, setSheetRenderWidthPx] =
     useState<number>(SHEET_MAX_WIDTH_PX);
 
-  // One ResizeObserver instance for this component's whole lifetime (the lazy-ref-initialization
-  // pattern React's own docs describe for an expensive object that shouldn't be recreated every
-  // render), rather than one created inside a `useEffect(..., [])`. A plain effect-plus-`useRef`
-  // pair would only ever attach while `isProjectEmpty` is true at the very FIRST mount (this
-  // page's own early-return below swaps the whole tree to `DeckInputLanding`, so the sheet-region
-  // div doesn't exist in the DOM yet) - since that effect only runs once, it would silently never
-  // observe anything once a project actually starts and the real div mounts. The callback ref
-  // below re-attaches the SAME observer to whatever DOM node it's handed, every time that node
-  // changes (including this empty→populated transition), which a mount-once effect can't do.
-  const sheetResizeObserverRef = useRef<ResizeObserver | null>(null);
-  if (
-    sheetResizeObserverRef.current == null &&
-    typeof ResizeObserver !== "undefined"
-  ) {
-    sheetResizeObserverRef.current = new ResizeObserver((entries) => {
+  // The sheet-region div doesn't exist at the very first (empty-project) mount - this page's own
+  // early-return below swaps the whole tree to `DeckInputLanding` until a project actually
+  // starts - so the ResizeObserver has to attach lazily, once the real div mounts, not just once
+  // at component-mount time. A callback ref writing into state (React's own documented pattern
+  // for "an effect that needs to react to a DOM node changing", since a plain ref object's
+  // mutation is invisible to React and won't re-run a dependent effect) is what makes the effect
+  // below re-run whenever that div mounts/unmounts/remounts - covering the empty→populated
+  // transition and any StrictMode-driven remount identically, with no risk of a stale observer
+  // instance surviving past its own node (an earlier lazy-ref-initialized single ResizeObserver
+  // wired up via ad hoc disconnect()/observe() calls in the ref callback itself was NOT
+  // StrictMode-safe: dev-mode's double invoke of mount/cleanup could leave more than one live
+  // observer instance racing to set this state, with a stale one's oversized last-fired
+  // measurement winning and never getting corrected - see docs/troubleshooting.md's entry on
+  // this, filed after CI caught the resulting overlap in `SelectVersionSection.spec.ts`).
+  const [sheetRegionNode, setSheetRegionNode] = useState<HTMLDivElement | null>(
+    null
+  );
+  const sheetRegionRef = useCallback((element: HTMLDivElement | null) => {
+    setSheetRegionNode(element);
+  }, []);
+
+  useEffect(() => {
+    if (sheetRegionNode == null || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver((entries) => {
       const measuredWidthPx = entries[0]?.contentRect.width;
       if (measuredWidthPx == null || measuredWidthPx <= 0) {
         return;
@@ -812,18 +823,9 @@ export function DisplayPage() {
       const clampedWidthPx = Math.min(SHEET_MAX_WIDTH_PX, measuredWidthPx);
       setSheetRenderWidthPx(Math.max(160, Math.round(clampedWidthPx / 8) * 8));
     });
-  }
-  useEffect(() => () => sheetResizeObserverRef.current?.disconnect(), []);
-  const sheetRegionRef = useCallback((element: HTMLDivElement | null) => {
-    const observer = sheetResizeObserverRef.current;
-    if (observer == null) {
-      return;
-    }
-    observer.disconnect();
-    if (element != null) {
-      observer.observe(element);
-    }
-  }, []);
+    observer.observe(sheetRegionNode);
+    return () => observer.disconnect();
+  }, [sheetRegionNode]);
 
   // Matches PagePreview's own internal scale-to-fit math exactly (scale = maxWidthPx /
   // pageWidthMM-in-px, height = pageHeightMM-in-px * scale - the px-per-mm factor cancels out),
