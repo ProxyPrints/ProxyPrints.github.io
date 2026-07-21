@@ -23,6 +23,14 @@ results.
 How to arrange your chosen cards into pages, set bleed/DPI/paper size,
 and export a PDF ready to print and cut.
 
+The **Display** page's Page Setup section defaults to Letter landscape,
+3.175mm bleed, and a **Margin profile** picker (Borderless / Bordered /
+Rear-feed) calibrated against an Epson ET-8500/8550 printer — Borderless
+is the default and the only profile that fits full bleed on a 4-across
+sheet; the other two trade some bleed for a printer-supported margin,
+and the page warns (rather than silently shrinking your bleed value) if
+your current bleed exceeds what the selected profile can fit.
+
 ## Saving and re-using a project
 
 Local-folder and Google Drive options for coming back to a project
