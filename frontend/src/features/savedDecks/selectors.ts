@@ -4,6 +4,7 @@ import {
   buildDeckPayload,
   serializeDeckPayload,
 } from "@/features/savedDecks/deckPayload";
+import { selectCardSpacing } from "@/store/slices/cardSpacingSlice";
 import { selectFinishSettings } from "@/store/slices/finishSettingsSlice";
 import {
   selectIsProjectEmpty,
@@ -32,6 +33,7 @@ export const selectIsCurrentProjectDirty = createSelector(
   (state: RootState) => selectProjectCardback(state),
   (state: RootState) => selectManualOverrides(state),
   (state: RootState) => selectFinishSettings(state),
+  (state: RootState) => selectCardSpacing(state),
   (state: RootState) => state.cardDocuments.cardDocuments,
   (
     isProjectEmpty,
@@ -40,6 +42,7 @@ export const selectIsCurrentProjectDirty = createSelector(
     cardback,
     manualOverrides,
     finishSettings,
+    cardSpacing,
     cardDocuments
   ): boolean => {
     if (isProjectEmpty) {
@@ -59,7 +62,8 @@ export const selectIsCurrentProjectDirty = createSelector(
           manualOverrides,
         },
         finishSettings,
-        cardDocuments
+        cardDocuments,
+        cardSpacing
       )
     );
     return currentSerialized !== savedDeckSession.lastSavedSerialized;

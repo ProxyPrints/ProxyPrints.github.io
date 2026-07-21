@@ -3,11 +3,11 @@
 Design target for the unified display page (`frontend/src/features/display/DisplayPage.tsx`,
 route `frontend/src/pages/display.tsx`). Companion mockup: `display-mockup.html` (same
 directory; open standalone via file://, use its top demo strip to force any breakpoint's
-view at any window width) — the committed mockup under
-`docs/proposals/mockups/proposal-h/` predates this file's ADDENDUM (polish round) and
-D17/D18 additions; syncing it is tracked separately, not part of this doc's own text sync.
-All primitives are react-bootstrap 2.10.10 / Bootstrap 5.3.8 (confirmed installed,
-including responsive-Offcanvas). No new dependencies.
+view at any window width) — synced (this PR) with the committed mockup under
+`docs/proposals/mockups/proposal-h/responsive-layout-2026-07-21.html`, which previously
+predated this file's ADDENDUM (polish round) and D17/D18/D19 additions. All primitives are
+react-bootstrap 2.10.10 / Bootstrap 5.3.8 (confirmed installed, including
+responsive-Offcanvas). No new dependencies.
 
 **Implementation status (2026-07-21):** #266 shipped (PR #274 — sheet fit-to-width,
 both rails as `Offcanvas` nodes). #267 shipped (PR #283): **D12 v1** (dual-mode
@@ -16,16 +16,23 @@ the typed operator grammar is explicitly out of scope, tracked as #276), **D15**
 existing `Import.tsx` Text/XML/CSV/URL dropdown, mounted verbatim), and **D13's
 landing/search-bar feedback half** (`InvalidIdentifiersStatus`, mounted in both the
 populated-state action bar and the empty-project landing — the right-rail Status row is
-D13's OTHER half, issue #272's own remaining scope, not that PR's). This PR ships
-**#268's own mapped rows (§5, §6 rows S1–S3)**: `DeckRow` (exported, gained an
+D13's OTHER half, issue #272's own remaining scope, not that PR's). #268 shipped
+(PR #293): **#268's own mapped rows (§5, §6 rows S1–S3)**: `DeckRow` (exported, gained an
 `openLabel` prop) and a new `useLoadSavedDeck` hook extracted from `MyDecksPage.tsx`
 (S1); `SavedDecksLandingPanel.tsx` (S2); `DeckInputLanding`'s `Col lg={4}`/`Col lg={8}`
 grid, decks first when stacked, rendering neither column when there's nothing to show
-(S3). Deliberately NOT built here: D9–D11/D14/D16 (own future issues, per §A2's own
-issue mapping), and D17/D18 (sheet-presentation refinement + default card-spacing
-change — #266-adjacent, appeared in this spec after #267's implementation task was
-scoped, mapped to neither #267 nor any other filed issue yet; flagged for the owner to
-file as its own follow-up rather than folded into this PR sight-unseen).
+(S3). **R7/D17/D18/D19 shipped (this PR — issue #284):** screen-only sheet presentation
+(hairline pinline, no white fill, tightened inter-sheet gap, per-page label lines retired
+in favor of one floating "n/M" pill — R7/D17); the asymmetric default inter-card gutter
+(`spacing.col=0`/`spacing.row=14.5`, D18); and the right rail's Card Spacing (X/Y +
+link/unlink) control that makes that gutter user-editable and persists it per deck (D19).
+Deliberately NOT built here (this PR, and not by #266/#267/#268 above either): D9–D11/D14/D16
+(own future issues, per §A2's own issue mapping) and D5/D6/M1 (margin-profile control +
+borderless/3.175mm bleed defaults) — D18's own fit-check assumed those D5/D6 defaults were
+already live; they are not, so this PR's D18 default lands against /display's actual current
+page config (A4 landscape, 5mm margins, 3.048mm bleed), which fits only 4×1 cards/page (not
+the 4×2 the fit-check modeled) until D5/D6/M1 land separately — see this PR's own report for
+the quantified trade-off.
 
 Issue mapping (explicit):
 
@@ -311,7 +318,8 @@ All existing components, relocated (sources named):
   controls (the page-local subset of `PDFGenerator.tsx`'s
   `PageSizeSettings`/`EdgeSettings`/`CutLinesSettings`) — plus the NEW D5
   margin-profile `Form.Select` (Borderless / Bordered 3mm / Rear-feed +20mm
-  trail), the only genuinely new control in this section.
+  trail) and the D19 Card Spacing (X/Y + link/unlink) group — the two genuinely
+  new controls in this section.
 - **Color Calibration** section (collapsed, D8): C/M/Y shift +
   brightness/saturation/contrast sliders + Reset — new UI over a new
   `colorCalibrationSlice`; preview via CSS filter approximation, exact canvas
@@ -389,8 +397,14 @@ Print defaults + calibration (D4–D6, D8):
   0mm horizontal, 14.5mm vertical). One-line change; the memo already feeds
   `computeLayout`, `PagePreview`'s `spacing` prop, and `exportPdfProps`'
   `cardSpacingRowMM`/`cardSpacingColMM`, so preview and PDF move together.
-  `layout.ts` untouched (it takes spacing as an argument). No new control surface
-  — this is a default only; a user spacing editor is out of scope here.
+  `layout.ts` untouched (it takes spacing as an argument). **D19 supersedes the
+  "default only" scope of this row:** the memo is no longer a hardcoded constant
+  — it becomes state written by the new right-rail Card Spacing (X/Y) control
+  (D19 below), seeded from these same D18 defaults (`col`/X = 0, `row`/Y = 14.5)
+  and persisted per deck alongside the other print defaults (the
+  `finishSettingsSlice`→`deckPayload.ts` precedent D8/D11 already ride). All three
+  downstream consumers stay wired to the memo, so the control moves preview + PDF
+  in lockstep with no extra plumbing.
 
 Action bar / search (#267):
 
@@ -799,6 +813,53 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   still holds, and the D6 max-bleed-for-4×2 table (governed by the width axis) is
   untouched.
 
+- **D19 — Card Spacing (mm) control group in the right rail's Page Setup section.**
+  Owner-directed; makes the D18 default gutter user-editable. **PROVENANCE NOTE
+  (verbatim discipline):** the control's BEHAVIOR is emulated from an owner-provided
+  screenshot description of an AGPL-licensed proxy-PDF tool — no source code was
+  consulted or is consultable (AGPL); this is the patterns-only posture
+  `docs/upstreaming/license-provenance.md` mandates (referencing behavior from a
+  public tool is always fine; code reuse is not, and none occurred here). The group:
+
+  - **Two numeric inputs**, unit **mm**: **Horizontal (X)** and **Vertical (Y)**,
+    defaults **0 / 14.5** (D18). Axis mapping is D18's, unchanged: **X → `spacing.col`**
+    (the gutter between columns, `fitCardsInDimension`'s width axis), **Y →
+    `spacing.row`** (the gutter between rows, the height axis).
+  - **A LINK/UNLINK toggle between the two inputs.** Linked ⇒ one value drives both
+    axes (editing either writes both); unlinked ⇒ independent X and Y. Because the
+    D18 defaults are asymmetric (0 ≠ 14.5), the group **opens UNLINKED** — linking
+    would collapse to a single value and discard the asymmetric default, so linked
+    is an opt-in convenience, not the initial state.
+  - **Helper text** conveying the rationale: separate axes ease cutting — a 0
+    horizontal gutter butts columns together for strip cutting, while a vertical
+    gutter suits die cutters. (Mockup copy: "Separate axes ease cutting — 0
+    horizontal butts columns for strip cutting; a vertical gap suits die cutters.")
+  - **Wiring (conceptual, per the M2 row):** the two inputs write the
+    `DisplayPage.tsx:646` spacing memo — which stops being a hardcoded constant and
+    becomes state seeded from the D18 defaults. The memo already feeds `computeLayout`,
+    `PagePreview`'s `spacing` prop, and `exportPdfProps`'
+    `cardSpacingRowMM`/`cardSpacingColMM` (verified in code at `DisplayPage.tsx`
+    lines 720-721, 798, 1145), so the control moves the on-screen sheet and the
+    exported PDF in lockstep with no extra plumbing. **Persisted per deck**
+    alongside the other print defaults, following the
+    `finishSettingsSlice`→`deckPayload.ts`/`MyDecksPage.performLoad` precedent D8's
+    `colorCalibrationSlice` and D11's `finishSettings` already ride.
+  - **Placement:** inside the existing **Page Setup** `AutofillCollapse` group
+    (§4.2), after the Margins control, grouped with the other page-geometry
+    controls; respects the collapsed-group pattern (Page Setup is open by default,
+    so the control is visible at rest). Reachable on phone/tablet via the same
+    gear-opened right-rail drawer as every other Page Setup control — no new
+    surface, no new drawer.
+
+  **Implemented as-shipped (this PR, R7+D17+D18+D19):** the right rail doesn't yet
+  have `AutofillCollapse` sectioning (that's still the flat, relocated-verbatim
+  layout the base spec's own R4 row describes as not-yet-built) — the control is
+  placed in the existing flat "Page Setup" block, directly after the Guides toggle,
+  as `CardSpacingControl.tsx` (a standalone component so the link/unlink behavior
+  has a plain unit-test target). The link/unlink toggle itself is local, session-
+  only UI state (always opens unlinked, never persisted); only the numeric X/Y
+  values persist per deck.
+
 - **D8-note (not a new decision): color calibration is CMYK, not just CMY.**
   #270 extends D8's per-channel controls from cyan/magenta/yellow to full
   **CMYK (adds black/K)** plus brightness/saturation/contrast. This is an
@@ -857,6 +918,23 @@ Browse + status + confidence (D12, D13, D14, D15):
   `useTagVoting` vote.
 - **F13** search-bar `Import ▾` dropdown — confirm URL/XML/CSV via `Import.tsx`
   variants (D15; = §6 T4, restated). No new UI.
+
+Card spacing control (D19) — **SHIPPED** (this PR, alongside R7/D17/D18):
+
+- **F14** `DisplayPage.tsx` right-rail Page Setup section — a **Card Spacing (mm)**
+  control group: two `Form.Control type="number"` inputs (Horizontal X / Vertical Y,
+  defaults 0 / 14.5) with a LINK/UNLINK toggle (`Button`/`ToggleButton`) between
+  them. Converts the `DisplayPage.tsx:646` spacing memo (M2) from a constant to
+  state; X writes `spacing.col`, Y writes `spacing.row` (D18 mapping). Linked ⇒ one
+  value drives both; opens unlinked (asymmetric defaults). Persist per deck via the
+  `finishSettingsSlice`→`deckPayload.ts` precedent (as D8/D11). All three existing
+  memo consumers (`computeLayout`, `PagePreview.spacing`, `exportPdfProps`) stay
+  wired, so no new plumbing. Placed after the Guides toggle in the flat (not yet
+  `AutofillCollapse`-sectioned) Page Setup block; reachable below xl through the
+  gear-opened right-rail drawer. Behavior emulated from an owner-supplied
+  AGPL-tool screenshot — patterns only, no source consulted (D19 provenance note).
+  The only genuinely new control in Page Setup besides D5's margin-profile select
+  (D5 itself is not part of this PR).
 
 ## A2. Issue mapping (extending the base §"Issue mapping")
 
@@ -924,3 +1002,12 @@ default gutter — the `.sheet` grid splits its single `gap` into `column-gap: 2
 separated); `1cqw = 2.794mm` since the sheet's inline-size represents 279.4mm.
 Applies at every breakpoint (the sheet is `container-type: inline-size`, so the
 gutter scales with the fit-to-width sheet on phone/tablet/desktop alike).
+**D19**: the right rail's Page Setup group gains a **Card Spacing (mm)** control —
+two numeric inputs (Horizontal X / Vertical Y, defaults 0 / 14.5) with a
+LINK/UNLINK toggle between them (opens unlinked, since the defaults are
+asymmetric; linking makes one value drive both) and helper text on the
+strip-cutter/die-cutter rationale. Placed after the Margins control, it is a
+vanilla-JS toggle consistent with the existing mockup; still file://-openable, no
+CDN. In the real page these inputs write the `DisplayPage.tsx:646` spacing memo
+(X→`spacing.col`, Y→`spacing.row`), persisted per deck. Behavior emulated from an
+owner-supplied AGPL-tool screenshot — patterns only, no source consulted.

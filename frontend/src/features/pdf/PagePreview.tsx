@@ -76,6 +76,17 @@ export interface PagePreviewProps {
   /** Row-major index of the slot to render with a selected outline. Ignored when onSlotClick
    * isn't provided. */
   selectedSlotIndex?: number;
+  /** Proposal H R7/D17 (docs/proposals/proposal-h-display-layout-spec.md) - the /display sheet
+   * stack's screen-only presentation: a fully clear page (no white fill, no drop shadow) with a
+   * hairline, low-alpha pinline boundary and rounded corners instead of a drawn box. Border/
+   * radius widths are computed against this component's OWN scale factor (see `scale` below) so
+   * they render as a constant ~1px/~7px of real screen space regardless of how far the mm-sized
+   * page has been scaled down to fit `maxWidthPx` - a raw 1px pre-scale border would nearly
+   * vanish on a heavily letterboxed phone sheet (issue #266's own fit-to-width rule). The exported
+   * PDF (PDF.tsx) never reads this prop - it's a screen-presentation-only flag. Omitted (false)
+   * by every existing caller (PDFGenerator.tsx's own fast preview), which keeps today's white-
+   * page/box-shadow look with zero behavior change. */
+  screenPresentation?: boolean;
 }
 
 export function PagePreview({
@@ -89,6 +100,7 @@ export function PagePreview({
   maxWidthPx,
   onSlotClick,
   selectedSlotIndex,
+  screenPresentation = false,
 }: PagePreviewProps) {
   const layout = useMemo(
     () =>
@@ -132,14 +144,23 @@ export function PagePreview({
       }}
     >
       <div
+        data-testid="page-preview-page"
         style={{
           width: pageWidthMM + "mm",
           height: pageHeightMM + "mm",
           position: "relative",
           transform: `scale(${scale})`,
           transformOrigin: "top left",
-          background: "white",
-          boxShadow: "0 2px 10px rgba(0, 0, 0, 0.25)",
+          ...(screenPresentation
+            ? {
+                background: "transparent",
+                border: `${1 / scale}px solid rgba(235, 235, 235, 0.18)`,
+                borderRadius: `${7 / scale}px`,
+              }
+            : {
+                background: "white",
+                boxShadow: "0 2px 10px rgba(0, 0, 0, 0.25)",
+              }),
         }}
       >
         {layout.slots.map((slot, index) => {

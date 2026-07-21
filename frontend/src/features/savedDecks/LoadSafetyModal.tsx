@@ -23,6 +23,7 @@ import {
   encryptDeckPayloadForSave,
 } from "@/features/savedDecks/deckPayload";
 import { useSaveDeckMutation } from "@/store/api";
+import { selectCardSpacing } from "@/store/slices/cardSpacingSlice";
 import { selectFinishSettings } from "@/store/slices/finishSettingsSlice";
 import { selectCurrentSavedDeck } from "@/store/slices/savedDeckSessionSlice";
 import { RootState } from "@/store/store";
@@ -46,6 +47,7 @@ export function LoadSafetyModal({
   const currentSavedDeck = useAppSelector(selectCurrentSavedDeck);
   const project = useAppSelector((state: RootState) => state.project);
   const finishSettings = useAppSelector(selectFinishSettings);
+  const cardSpacing = useAppSelector(selectCardSpacing);
   const cardDocuments = useAppSelector(
     (state: RootState) => state.cardDocuments.cardDocuments
   );
@@ -77,7 +79,8 @@ export function LoadSafetyModal({
       name,
       project,
       finishSettings,
-      cardDocuments
+      cardDocuments,
+      cardSpacing
     );
     // "Save as new snapshot" always starts a brand-new row (PR-6 "Revision tracking" - a new
     // row's revision chain never inherits from the dirty editor's prior saved row).

@@ -12,6 +12,7 @@
  * `parseDeckPayload` already uses below for v1 -> v2.
  */
 
+import { DefaultCardSpacing } from "@/common/constants";
 import {
   base64ToBytes,
   bytesToBase64,
@@ -28,6 +29,7 @@ import {
 } from "@/common/schema_types";
 import {
   CardDocuments,
+  CardSpacingState,
   FinishSettingsState,
   Project,
   ProjectMember,
@@ -67,6 +69,17 @@ export interface DeckPayloadContent {
   cardback: Project["cardback"];
   manualOverrides: Project["manualOverrides"];
   finishSettings: FinishSettingsState;
+  /**
+   * Proposal H D18/D19 (docs/proposals/proposal-h-display-layout-spec.md) - the /display sheet's
+   * inter-card gutter (mm), persisted per deck alongside `finishSettings`. Optional (rather than
+   * required like `finishSettings`) purely so every EXISTING call site/fixture built before this
+   * field existed keeps compiling unchanged - `buildDeckPayload` below always fills it with
+   * `DefaultCardSpacing` when the caller omits it, and `projectFromDeckPayload`/
+   * `deckContentForComparison` backfill the same default when reading an already-saved payload
+   * that predates this field, so a legacy deck's dirty-check baseline and a freshly-rebuilt
+   * payload agree on the same value rather than differing by the key's mere presence.
+   */
+  cardSpacing?: CardSpacingState;
 }
 
 export interface DeckPayloadV1 extends DeckPayloadContent {
@@ -111,7 +124,11 @@ export function buildDeckPayload(
   name: string,
   project: Project,
   finishSettings: FinishSettingsState,
-  cardDocuments: CardDocuments
+  cardDocuments: CardDocuments,
+  // Optional (defaulted, not required) so every existing call site built before D19 - mostly
+  // test fixtures - keeps compiling with no changes; every REAL call site (selectors.ts's dirty
+  // check, SaveDeckModal, LoadSafetyModal) passes the live `selectCardSpacing` value explicitly.
+  cardSpacing: CardSpacingState = DefaultCardSpacing
 ): DeckPayloadContent {
   const isDeviceLocal = (identifier: string | undefined): boolean =>
     identifier != null &&
@@ -126,6 +143,7 @@ export function buildDeckPayload(
     cardback: project.cardback,
     manualOverrides: project.manualOverrides,
     finishSettings,
+    cardSpacing,
   };
 }
 
@@ -152,7 +170,18 @@ export function deckContentForComparison(
   payload: DeckPayload
 ): DeckPayloadContent {
   const { name, members, cardback, manualOverrides, finishSettings } = payload;
-  return { name, members, cardback, manualOverrides, finishSettings };
+  return {
+    name,
+    members,
+    cardback,
+    manualOverrides,
+    finishSettings,
+    // Backfills the same default `buildDeckPayload` fills in for an omitted argument - a deck
+    // saved before D19 has no `cardSpacing` key at all, but the dirty-check's "freshly rebuilt"
+    // side always carries one (selectors.ts always passes the live redux value), so this baseline
+    // must carry the SAME default or a legacy deck reads as dirty the instant it's loaded.
+    cardSpacing: payload.cardSpacing ?? DefaultCardSpacing,
+  };
 }
 
 /**
@@ -208,6 +237,7 @@ export function countDeviceLocalSlots(payload: {
 export function projectFromDeckPayload(payload: DeckPayload): {
   project: Omit<Project, "mostRecentlySelectedSlot">;
   finishSettings: FinishSettingsState;
+  cardSpacing: CardSpacingState;
   name: string;
 } {
   return {
@@ -236,6 +266,10 @@ export function projectFromDeckPayload(payload: DeckPayload): {
       manualOverrides: payload.manualOverrides,
     },
     finishSettings: payload.finishSettings,
+    // Same backfill as deckContentForComparison above - a deck saved before D19 has no
+    // cardSpacing key, and both must agree on the same default or the freshly-loaded project
+    // reads as dirty against its own baseline before any edit happens.
+    cardSpacing: payload.cardSpacing ?? DefaultCardSpacing,
     name: payload.name,
   };
 }

@@ -1,11 +1,27 @@
 import { CardType as CardTypeSchema } from "@/common/schema_types";
-import { Cardstock, CardType, Faces, SortBy } from "@/common/types";
+import {
+  CardSpacingState,
+  Cardstock,
+  CardType,
+  Faces,
+  SortBy,
+} from "@/common/types";
 
 export const CardWidthMM = 63;
 export const CardHeightMM = 88;
 // 36 pixels (each side) at 300 dpi -> 0.12 inches, convert to MM. ref: https://www.makeplayingcards.com/pops/faq-photo.html
 export const BleedEdgeMM = Math.round(0.12 * 25.4 * 1000) / 1000;
 export const CornerRadiusMM = 2.5;
+
+/**
+ * Proposal H D18 (docs/proposals/proposal-h-display-layout-spec.md) - the /display sheet's
+ * default inter-card gutter: horizontal (col) touches (0mm, eases strip cutting), vertical (row)
+ * separates (14.5mm, suits die cutters). D19 makes this user-editable (the right rail's Card
+ * Spacing control); this is just the seed value a fresh project or a pre-D19 saved deck starts
+ * at - `cardSpacingSlice.ts`'s initial state and `deckPayload.ts`'s legacy-payload backfill both
+ * import this single constant so the two never drift apart from each other.
+ */
+export const DefaultCardSpacing: CardSpacingState = { row: 14.5, col: 0 };
 
 export const ProjectName = "ProxyPrints";
 export const MakePlayingCards = "MakePlayingCards.com";

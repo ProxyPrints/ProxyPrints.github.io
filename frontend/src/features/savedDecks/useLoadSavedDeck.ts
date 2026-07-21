@@ -30,6 +30,7 @@ import {
 import { LoadSafetyModal } from "@/features/savedDecks/LoadSafetyModal";
 import { selectIsCurrentProjectDirty } from "@/features/savedDecks/selectors";
 import { UnlockModal } from "@/features/savedDecks/UnlockModal";
+import { loadCardSpacing } from "@/store/slices/cardSpacingSlice";
 import { loadFinishSettings } from "@/store/slices/finishSettingsSlice";
 import { loadProject, selectIsProjectEmpty } from "@/store/slices/projectSlice";
 import { setCurrentSavedDeck } from "@/store/slices/savedDeckSessionSlice";
@@ -83,11 +84,11 @@ export function useLoadSavedDeck({
 
   const performLoad = useCallback(
     (deck: DecryptedSavedDeck) => {
-      const { project, finishSettings, name } = projectFromDeckPayload(
-        deck.payload
-      );
+      const { project, finishSettings, cardSpacing, name } =
+        projectFromDeckPayload(deck.payload);
       dispatch(loadProject(project));
       dispatch(loadFinishSettings(finishSettings));
+      dispatch(loadCardSpacing(cardSpacing));
       dispatch(
         setCurrentSavedDeck({
           key: deck.key,

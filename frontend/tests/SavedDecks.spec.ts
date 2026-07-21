@@ -189,7 +189,10 @@ test.describe("saved decks", () => {
 
     await expect(page.getByTestId("display-empty-state")).toHaveCount(0);
     await expect(page.getByTestId("display-page")).toBeVisible();
-    await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
+    // D18 (proposal-h-display-layout-spec.md) - the default 14.5mm row gutter drops A4 landscape
+    // from 4x2 (8) to 4x1 (4) at today's still-live 5mm margins/3.048mm bleed (D5/D6 margin/bleed
+    // defaults haven't landed).
+    await expect(page.getByTestId("page-preview-slot")).toHaveCount(4);
   });
 
   // PR-6, post-v1 "deck portability" (docs/proposals/proposal-g-user-accounts-saved-decks.md) -

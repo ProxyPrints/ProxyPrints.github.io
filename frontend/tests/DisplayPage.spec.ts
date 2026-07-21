@@ -123,10 +123,14 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     await expect(page.getByTestId("display-empty-state")).toHaveCount(0);
     await expect(page.getByTestId("display-page")).toBeVisible();
-    await expect(page.getByTestId("display-sheet-indicator")).toContainText(
-      "Sheet 1 of 1"
-    );
-    await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
+    await expect(
+      page.getByTestId("display-sheet-position-indicator")
+    ).toContainText("1/1");
+    // D18 (proposal-h-display-layout-spec.md) - the default 14.5mm row gutter drops A4 landscape
+    // from 4x2 (8) to 4x1 (4) at today's still-live 5mm margins/3.048mm bleed (D5/D6 margin/bleed
+    // defaults haven't landed - the spec's own fit-check assumed Letter+borderless+3.175mm bleed,
+    // a different page config than this app's actual current default).
+    await expect(page.getByTestId("page-preview-slot")).toHaveCount(4);
 
     // The rail starts idle - selecting the newly-imported slot swaps it in, exactly as it would
     // for a deck that arrived via /editor instead (§4.1 step 3: onImportComplete has nothing to
@@ -138,7 +142,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
   });
 
-  test("renders a live 4x2 sheet of the imported deck and starts with the rail idle", async ({
+  test("renders a live 4x1 sheet of the imported deck and starts with the rail idle", async ({
     page,
     network,
   }) => {
@@ -148,13 +152,15 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.getByRole("link", { name: "Display (beta)" }).click();
 
     await expect(page.getByTestId("display-page")).toBeVisible();
-    await expect(page.getByTestId("display-sheet-indicator")).toContainText(
-      "Sheet 1 of 1"
-    );
+    await expect(
+      page.getByTestId("display-sheet-position-indicator")
+    ).toContainText("1/1");
     await expect(page.getByTestId("display-sheet-wrapper")).toHaveCount(1);
-    // A4 landscape at the default bleed edge greedy-fits to 4 columns x 2 rows - see the
-    // design doc's §1 for the computeLayout() math this matches.
-    await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
+    // A4 landscape at the default bleed edge greedy-fits 4 columns; D18's default 14.5mm row
+    // gutter (proposal-h-display-layout-spec.md) only leaves room for 1 row at today's still-live
+    // 5mm margins/3.048mm bleed (D5/D6 margin/bleed defaults haven't landed) - see the design
+    // doc's §1 for the computeLayout() math this matches.
+    await expect(page.getByTestId("page-preview-slot")).toHaveCount(4);
     await expect(page.getByTestId("display-rail-idle")).toBeVisible();
   });
 
@@ -614,17 +620,19 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    // 20 slots at 8-per-sheet (the same 4x2 A4-landscape default the other tests rely on)
-    // chunks into 3 sheets: 8, 8, 4.
-    await importText(page, "20x my search query");
+    // D18 (proposal-h-display-layout-spec.md) - the default 14.5mm row gutter drops A4 landscape
+    // from 4x2 (8/sheet) to 4x1 (4/sheet) at today's still-live 5mm margins/3.048mm bleed (D5/D6
+    // margin/bleed defaults haven't landed). 18 slots at 4-per-sheet chunks into 5 sheets:
+    // 4, 4, 4, 4, 2.
+    await importText(page, "18x my search query");
     await page.getByRole("link", { name: "Display (beta)" }).click();
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     const sheetWrappers = page.getByTestId("display-sheet-wrapper");
-    await expect(sheetWrappers).toHaveCount(3);
-    await expect(page.getByTestId("display-sheet-indicator")).toContainText(
-      "Sheet 1 of 3"
-    );
+    await expect(sheetWrappers).toHaveCount(5);
+    await expect(
+      page.getByTestId("display-sheet-position-indicator")
+    ).toContainText("1/5");
 
     // The last sheet starts well outside RenderIfVisible's visibleOffset band at this scroll
     // position - it hasn't been asked to mount any real card images yet, which is the whole
@@ -643,15 +651,15 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // element that turns out to be.
     await lastSheet.scrollIntoViewIfNeeded();
 
-    // Now mounted: the full 4x2 grid's worth of slot divs (8, same as every other sheet), but
-    // only 4 of them are real project slots (20 cards - 8 - 8 already placed on the first two
-    // sheets) - the remaining 4 grid cells on this last sheet render empty, same as the
+    // Now mounted: the full 4x1 grid's worth of slot divs (4, same as every other sheet), but
+    // only 2 of them are real project slots (18 cards - 4*4 already placed on the first four
+    // sheets) - the remaining 2 grid cells on this last sheet render empty, same as the
     // baseline single-sheet "leaves a slot empty" case.
-    await expect(lastSheet.getByTestId("page-preview-slot")).toHaveCount(8);
-    await expect(lastSheet.locator("img")).toHaveCount(4);
-    await expect(page.getByTestId("display-sheet-indicator")).toContainText(
-      "Sheet 3 of 3"
-    );
+    await expect(lastSheet.getByTestId("page-preview-slot")).toHaveCount(4);
+    await expect(lastSheet.locator("img")).toHaveCount(2);
+    await expect(
+      page.getByTestId("display-sheet-position-indicator")
+    ).toContainText("5/5");
   });
 
   // Proposal H pane migration, left-panel unification (issue #164) - the four rail sections that
@@ -947,7 +955,10 @@ test.describe("DisplayPage - phone viewport (issue #266)", () => {
     const regionBox = await sheetRegion.boundingBox();
     expect(regionBox).not.toBeNull();
     expect(regionBox?.width ?? Infinity).toBeLessThanOrEqual(390);
-    await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
+    // D18 (proposal-h-display-layout-spec.md) - the default 14.5mm row gutter drops A4 landscape
+    // from 4x2 (8) to 4x1 (4) at today's still-live 5mm margins/3.048mm bleed (D5/D6 margin/bleed
+    // defaults haven't landed).
+    await expect(page.getByTestId("page-preview-slot")).toHaveCount(4);
 
     // Closed by default at this viewport - only opens once a slot is tapped.
     const rail = page.getByTestId("display-rail");
@@ -994,5 +1005,45 @@ test.describe("DisplayPage - phone viewport (issue #266)", () => {
     await expect(
       page.getByRole("dialog", { name: "Card details and art selection" })
     ).toHaveCount(0);
+  });
+
+  // D17 (docs/proposals/proposal-h-display-layout-spec.md ADDENDUM) - the floating "n/M" sheet-
+  // position pill is the SINGLE sheet-position readout at every breakpoint, replacing both the
+  // removed per-sheet "Sheet N of M" label lines and the action bar's own retired static one (see
+  // that comment in DisplayPage.tsx). The genuinely new journey this scopes: at phone width, does
+  // it actually update live as the user scrolls, structurally confined to the center column (never
+  // colliding with a rail/drawer, since it's a plain sibling of the sheet stack, not portaled).
+  test("the floating sheet-position pill updates live while scrolling at phone width (D17)", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page, "display");
+    await expect(page.getByTestId("display-empty-state")).toBeVisible();
+    // D18 (proposal-h-display-layout-spec.md) - the default 14.5mm row gutter drops A4 landscape
+    // from 4x2 (8/sheet) to 4x1 (4/sheet) at today's still-live 5mm margins/3.048mm bleed. 18
+    // slots at 4-per-sheet chunks into 5 sheets: 4, 4, 4, 4, 2 - matching the desktop-viewport
+    // scroll test above.
+    await page
+      .getByRole("textbox", { name: "import-text" })
+      .fill("18x my search query");
+    await page.getByRole("button", { name: "import-text-submit" }).click();
+    await expect(page.getByTestId("display-page")).toBeVisible();
+
+    const indicator = page.getByTestId("display-sheet-position-indicator");
+    await expect(indicator).toContainText("1/5");
+
+    const sheetWrappers = page.getByTestId("display-sheet-wrapper");
+    await expect(sheetWrappers).toHaveCount(5);
+    // scrollIntoViewIfNeeded() only scrolls the MINIMUM amount needed - at this letterboxed
+    // phone width each sheet is short enough (~260px) that its default bottom-aligned scroll
+    // still leaves the PREVIOUS sheet occupying the IntersectionObserver's thin (-45%/-45%
+    // rootMargin) center band, not this last one. `block: "center"` instead lines the target
+    // sheet's own vertical centre up with the viewport's, landing it squarely in that band -
+    // matching what a real user scrolling all the way down would see.
+    await sheetWrappers
+      .last()
+      .evaluate((element) => element.scrollIntoView({ block: "center" }));
+    await expect(indicator).toContainText("5/5");
   });
 });
