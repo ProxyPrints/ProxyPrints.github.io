@@ -252,3 +252,77 @@ describe("buildDeckPayload/projectFromDeckPayload - cardSpacing (D18/D19)", () =
     expect(freshlyRebuilt).toEqual(baseline);
   });
 });
+
+// Proposal H D5 (docs/proposals/proposal-h-display-layout-spec.md) - marginProfile persistence,
+// mirroring the cardSpacing (D18/D19) coverage above almost exactly.
+describe("buildDeckPayload/projectFromDeckPayload - marginProfile (D5)", () => {
+  test("buildDeckPayload defaults marginProfile to Borderless when the caller omits it - every pre-D5 call site keeps compiling with no changes", () => {
+    const content = buildDeckPayload(
+      "My Deck",
+      emptyProject,
+      emptyFinishSettings,
+      {}
+    );
+    expect(content.marginProfile).toEqual({ profile: "borderless" });
+  });
+
+  test("buildDeckPayload carries an explicitly-passed marginProfile value through verbatim", () => {
+    const content = buildDeckPayload(
+      "My Deck",
+      emptyProject,
+      emptyFinishSettings,
+      {},
+      { row: 14.5, col: 0 },
+      { profile: "rearFeed" }
+    );
+    expect(content.marginProfile).toEqual({ profile: "rearFeed" });
+  });
+
+  test("projectFromDeckPayload round-trips a saved marginProfile value verbatim", () => {
+    const payload = {
+      ...v1Payload("Modern"),
+      version: 2 as const,
+      revision: 1,
+      modifiedAt: "2026-01-01T00:00:00.000Z",
+      marginProfile: { profile: "bordered" as const },
+    };
+    const { marginProfile } = projectFromDeckPayload(payload);
+    expect(marginProfile).toEqual({ profile: "bordered" });
+  });
+
+  test("projectFromDeckPayload backfills the Borderless default marginProfile for a legacy (pre-D5) payload with no marginProfile field", () => {
+    const legacyPayload = {
+      ...v1Payload("Legacy"),
+      version: 2 as const,
+      revision: 1,
+      modifiedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const { marginProfile } = projectFromDeckPayload(legacyPayload);
+    expect(marginProfile).toEqual({ profile: "borderless" });
+  });
+
+  test("a legacy payload's dirty-check baseline (deckContentForComparison) agrees with a freshly-rebuilt payload's default marginProfile - no false-dirty on load", () => {
+    const legacyPayload = {
+      ...v1Payload("Legacy"),
+      version: 2 as const,
+      revision: 1,
+      modifiedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const baseline = serializeDeckPayload(
+      deckContentForComparison(legacyPayload)
+    );
+    const { cardSpacing, marginProfile } =
+      projectFromDeckPayload(legacyPayload);
+    const freshlyRebuilt = serializeDeckPayload(
+      buildDeckPayload(
+        legacyPayload.name,
+        emptyProject,
+        emptyFinishSettings,
+        {},
+        cardSpacing,
+        marginProfile
+      )
+    );
+    expect(freshlyRebuilt).toEqual(baseline);
+  });
+});

@@ -26,13 +26,21 @@ grid, decks first when stacked, rendering neither column when there's nothing to
 in favor of one floating "n/M" pill — R7/D17); the asymmetric default inter-card gutter
 (`spacing.col=0`/`spacing.row=14.5`, D18); and the right rail's Card Spacing (X/Y +
 link/unlink) control that makes that gutter user-editable and persists it per deck (D19).
-Deliberately NOT built here (this PR, and not by #266/#267/#268 above either): D9–D11/D14/D16
-(own future issues, per §A2's own issue mapping) and D5/D6/M1 (margin-profile control +
-borderless/3.175mm bleed defaults) — D18's own fit-check assumed those D5/D6 defaults were
-already live; they are not, so this PR's D18 default lands against /display's actual current
-page config (A4 landscape, 5mm margins, 3.048mm bleed), which fits only 4×1 cards/page (not
-the 4×2 the fit-check modeled) until D5/D6/M1 land separately — see this PR's own report for
-the quantified trade-off.
+**D1/D4/D5/D6/M1 shipped (PR #286):** LETTER (not A4) is now the default paper size, matching
+the D4–D6 fit math (an audit-driven amendment to issue #286 named this explicitly, since the
+original fit tables were computed against Letter throughout); the default bleed edge is now
+`STANDARD_BLEED_MARGIN_MM` (3.175mm) rather than the old `BleedEdgeMM` (3.048mm); and the right
+rail's Page Setup section gains a new margin-profile `Form.Select` (Borderless 0mm — the
+default — / Bordered 3mm / Rear-feed 3mm+20mm trailing edge, `marginProfiles.ts`), persisted
+per deck via a new `marginProfileSlice` riding the same `deckPayload.ts` precedent
+`cardSpacingSlice` (D19) established. The old hardcoded Bleed-edge input `max` clamp is
+removed — a soft warning (never a hard clamp) now surfaces when the current bleed exceeds the
+selected profile's D6-table cap for a 4-column sheet, computed dynamically
+(`maxBleedForFourColumns`) rather than copying the table's numbers verbatim. At these shipped
+defaults, /display's sheet now renders the spec's own 4×2 grid (D4) exactly, not the 4×1 this
+doc previously reported as the interim state before D5/D6 landed. Deliberately NOT built here
+(this PR, and not by #266/#267/#268/#284 above either): D9–D11/D14/D16 (own future issues, per
+§A2's own issue mapping).
 
 Issue mapping (explicit):
 

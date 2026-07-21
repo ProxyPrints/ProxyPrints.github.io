@@ -196,6 +196,21 @@ export interface CardSpacingState {
   col: number;
 }
 
+/**
+ * Proposal H D5 (docs/proposals/proposal-h-display-layout-spec.md) - the /display Page Setup's
+ * margin-profile control, calibrated against the Epson ET-8500/8550's own printable-area spec.
+ * See `features/display/marginProfiles.ts` for what each key means in real `LayoutMargins` and
+ * its bleed-cap trade-off.
+ */
+export type MarginProfileKey = "borderless" | "bordered" | "rearFeed";
+
+/** Wrapped in its own state object (rather than a bare `MarginProfileKey`) to mirror
+ * `CardSpacingState`/`FinishSettingsState`'s own shape - this state persists per deck via the
+ * same `deckPayload.ts` precedent those two ride. */
+export interface MarginProfileState {
+  profile: MarginProfileKey;
+}
+
 export type FileDownloadStatus = "success" | "failed" | "terminated";
 export type FileDownloadType =
   | "image"

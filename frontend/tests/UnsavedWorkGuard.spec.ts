@@ -51,11 +51,10 @@ test.describe("Unsaved-work guard (priority bug fix)", () => {
     await page.waitForURL("**/display");
     await expect(page.getByTestId("display-page")).toBeVisible();
     // Same deck, not an empty /display that merely happened not to show a dialog - the store
-    // genuinely survived the transition, matching the client-side-nav diagnosis. D18
-    // (proposal-h-display-layout-spec.md) - the default 14.5mm row gutter drops A4 landscape from
-    // 4x2 (8) to 4x1 (4) at today's still-live 5mm margins/3.048mm bleed (D5/D6 margin/bleed
-    // defaults haven't landed).
-    await expect(page.getByTestId("page-preview-slot")).toHaveCount(4);
+    // genuinely survived the transition, matching the client-side-nav diagnosis. D1/D4/D5/D6
+    // (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + Borderless margins +
+    // 3.175mm bleed + D18's spacing lands the spec's own 4x2 (8) grid.
+    await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
 
     expect(dialogAppeared).toBe(false);
   });
