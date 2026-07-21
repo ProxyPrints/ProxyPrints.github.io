@@ -68,7 +68,9 @@ The methodology and the systems it governs.
   — the six-part catalog-completion package (Stage 8+): run-cohort safety,
   `content_phash` backfill, evidence recovery, LANDS, residual
   classification, and the formal note that became `theory.md`. The live
-  source of truth for anything past Stage 7.
+  source of truth for anything past Stage 7 — its "Harvest-calculate
+  pipeline" section (Stages A-F) is now ~65% of the file and where
+  current work lives.
 - [`features/moderation.md`](features/moderation.md) — Discord OAuth login,
   the `Moderators` group gate, the sensitive-tag approval queue, card
   reports.

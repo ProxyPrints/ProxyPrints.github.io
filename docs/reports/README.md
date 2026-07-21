@@ -42,6 +42,20 @@ a `detail` object read only when the summary signals it's needed.
 - `2026-07-19-extractable-primitives-ledger.md` — repo-wide
   extractable-primitives audit (27 rows), the mechanical tether added
   to `docs_lint.py`, and the CLAUDE.md convention line.
+- `2026-07-20-pipeline-compute-profile.md` — Stage C/D compute profile:
+  Stage D negligible, Stage C (OCR-heavy) projects 71–378h against a
+  6.2h reference budget, BLOCKING verdict, x6 thread-pool concurrency
+  found to actively hurt CPU-bound work.
+- `2026-07-20-canary-reprofile.md` — 400-card process-pool canary on
+  rebuilt prod: 63.1% parallel efficiency, ~15.7–16.0h projected,
+  STOPPED at the gate's ~15h ceiling.
+- `2026-07-20-fetch-compute-timing-diagnostic.md` — 130-card
+  `--profile` dry-run confirming fetch-wait (36.5% of wall-clock) as
+  the dominant cause of the canary's efficiency gap; verdict to build
+  the fetch/compute decoupling design.
+- `2026-07-20-decoupled-canary-confirm.md` — 400-card canary on the
+  deployed decoupled architecture: 63.1% → 95.2–99.1% parallel
+  efficiency, ~10.5–10.9h projected, gate CLEAR.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
