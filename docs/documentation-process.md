@@ -88,10 +88,14 @@ separate from the transform concern above). Run locally via
 gracefully with a console warning, not a crash, if that hasn't been run
 yet — `/guide` simply has no pages until it has.
 
-Currently live for exactly one doc (`docs/overview.md`); widening the
-list is normal, low-risk work (add `"site"` + `sitePath` to a
-`wiki-publish-map.json` entry) explicitly deferred past PR-I-1's
-"prove the plumbing first" scope, not a technical blocker.
+Live for two docs so far — `docs/overview.md` (`/guide`) and
+`docs/user-guide.md` (`/guide/using-it`, added as a widening pass after
+PR-I-1); `docs/self-hosting.md` and `docs/theory.md` remain per this
+proposal's proposed initial mapping. Widening the list is normal,
+low-risk work (add `"site"` + `sitePath` to a `wiki-publish-map.json`
+entry). A `Nav.Link` to `/guide` in `frontend/src/features/ui/Navbar.tsx`
+ships alongside this widening (ungated, same as `Download` — `/guide` has
+no backend dependency), closing proposal-i's "not yet built" item 3.
 
 **Link-rewrite parity fixtures**: since one function now serves two output
 shapes (wiki mode vs. site mode) rather than two separate implementations,

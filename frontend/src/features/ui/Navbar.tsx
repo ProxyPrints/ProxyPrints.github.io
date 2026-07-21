@@ -160,6 +160,22 @@ export default function ProjectNavbar() {
               >
                 Download
               </Nav.Link>
+              {/* Not gated on anyBackendConfigured/remoteBackendConfigured (unlike Editor/
+                  Explore/etc. above) - /guide is build-time-static content sourced from docs/
+                  (see docs/proposals/proposal-i-docs-as-site-source.md), with no backend
+                  dependency, same as Download's own ungated placement. router.route can't be
+                  matched exactly here since /guide/[[...slug]].tsx is one catch-all page file
+                  serving every /guide/* route - router.pathname is the literal page-file path
+                  ("/guide/[[...slug]]") for all of them, so a startsWith("/guide") check on it
+                  is what actually highlights this link on both /guide and /guide/using-it. */}
+              <Nav.Link
+                as={Link}
+                href="/guide"
+                active={router.pathname.startsWith("/guide")}
+                eventKey="/guide"
+              >
+                Guide
+              </Nav.Link>
             </Nav>
             <Nav className="ms-auto d-flex align-items-center">
               {/* Deliberately NOT a Nav.Link (unlike its siblings below) - react-bootstrap's
