@@ -13,7 +13,7 @@ import { getWorkerImageURL } from "@/common/image";
 import { CardDocument, CardDocuments } from "@/common/types";
 import {
   DeckPayloadMemberFace,
-  DeckPayloadV1,
+  DeckPayloadV2,
 } from "@/features/savedDecks/deckPayload";
 import { APIGetCards } from "@/store/api";
 
@@ -21,7 +21,9 @@ interface SharedDeckViewerProps {
   backendURL: string;
   name: string;
   sharedAt: string;
-  payload: DeckPayloadV1;
+  // decryptSharedDeck (deckShare.ts) always upgrades to the latest payload shape (v2) before
+  // handing it back - a recipient never sees a raw, un-upgraded v1 payload.
+  payload: DeckPayloadV2;
 }
 
 function SlotFace({
