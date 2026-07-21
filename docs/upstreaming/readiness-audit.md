@@ -182,6 +182,15 @@ in `frontend/`.
 | **`entrypoint.sh`: always migrate, drop blocking first-boot catalog bootstrap**                                                                   | Real behavior change — a fresh instance no longer auto-populates on first boot                                                                                                                                                                     | **(b)**                                      | Medium-high, must be opt-in not a silent default flip | upstream-GPL3 (edits upstream's existing `entrypoint.sh`) |
 | GA/Sentry removal from CI, GH Pages deploy pipeline, `docker-compose.prod.yml` env branding, `test-backend` dropped from `build-frontend`'s needs | Fork hosting/telemetry choices                                                                                                                                                                                                                     | **(c)**                                      | N/A                                                   | upstream-GPL3 (edits existing upstream CI/deploy files)   |
 
+**`web-ci.yml`'s `build-frontend` job is currently dead weight, kept for rebase compatibility.** It (and the
+`publish-frontend-to-github`/`publish-frontend-to-cloudflare` composite actions it could feed) are upstream-native
+and have no live consumer in this fork today: `deploy-frontend.yml` does its own independent `next build` and
+`actions/upload-pages-artifact`/`actions/deploy-pages` for real GitHub Pages hosting, never touching
+`build-frontend`'s cached `frontend/out` artifact or either publish action. Two options exist — port our real
+deploy (`deploy-frontend.yml`) onto the upstream-native `build-frontend`/`publish-frontend-to-*` job shape, or
+leave the divergence as-is — neither has been decided; this row just records the fact so a future rebase doesn't
+mistake the dead job for something safe to delete.
+
 ## 2. Dependency graph
 
 ```mermaid

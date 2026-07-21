@@ -16,16 +16,34 @@ runs:
       uses: actions/setup-node@v6
       with:
         node-version: 22.15
-    - name: Compile frontend
+        cache: "npm"
+        cache-dependency-path: frontend/package-lock.json
+    - name: Install packages
       working-directory: frontend
-      run: |
-        npm ci
-        npm run build
+      run: npm ci
       shell: bash
+    - name: Compile frontend
+      # Playwright's webServer (playwright.config.ts) runs `npm run dev`, not a static-export
+      # serve of this build's output - no shard's Playwright run consumes frontend/out. This
+      # build only exists as a build-succeeds check, so - same as Jest below - it only needs
+      # to run once, on shard 1, not once per shard.
+      if: ${{ inputs.shard_index == '1' }}
+      working-directory: frontend
+      run: npm run build
+      shell: bash
+    - name: Cache Playwright browsers
+      id: playwright-cache
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ hashFiles('frontend/package-lock.json') }}
     - name: Install Playwright Browsers
       run: |
-        npm install
-        npx playwright install --with-deps
+        if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+          npx playwright install-deps
+        else
+          npx playwright install --with-deps
+        fi
       working-directory: frontend
       shell: bash
     - name: Run Jest tests
