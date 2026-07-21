@@ -778,3 +778,72 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     ).toHaveCount(1);
   });
 });
+
+// Issue #266 (docs' /display responsive layout spec, §4/§6 R2/R6) - the phone-tier journey that
+// gates the whole #231 switchover decision: "tapping a card highlights it but surfaces nothing"
+// (the owner's own repro) is fixed by the left rail becoming a real bottom-sheet drawer below
+// `lg`, opened on slot tap. Scoped to its own describe block with `test.use({ viewport })` rather
+// than a new Playwright `projects[]` entry - the existing `chromium` project's own configured
+// 800x600 viewport (playwright.config.ts's `contextOptions.viewport`) is never actually applied
+// (`contextOptions` isn't a real Playwright TestOptions field - the effective viewport for every
+// other test in this repo is `devices["Desktop Chrome"]`'s own 1280x720, i.e. Desktop tier, both
+// rails always inline - confirmed by inspecting the real rendered Offcanvas classes/computed
+// style at that viewport). `test.use({ viewport })` at describe level is unaffected by that dead
+// config and reliably narrows just this one test - not a whole new CI-matrix dimension re-running
+// every spec at a phone size. Filed as its own troubleshooting.md entry, not fixed here - fixing
+// the stale 800x600 intent would change the effective viewport (and therefore breakpoint tier) of
+// every existing DisplayPage test in this file, well beyond this PR's #266 scope.
+test.describe("DisplayPage - phone viewport (issue #266)", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("tapping a card on a phone-width viewport opens the left rail as a bottom-sheet drawer showing that slot's details", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    // Straight to /display's own inline importer (design doc §4.1's `DeckInputLanding`), not via
+    // the navbar's "Display (beta)" link - at this viewport, Navbar.tsx's own responsive collapse
+    // hides nav links behind a hamburger toggle, which is that component's own concern, not
+    // anything this test is about.
+    await loadPageWithDefaultBackend(page, "display");
+    await expect(page.getByTestId("display-empty-state")).toBeVisible();
+    await page
+      .getByRole("textbox", { name: "import-text" })
+      .fill("my search query");
+    await page.getByRole("button", { name: "import-text-submit" }).click();
+    await expect(page.getByTestId("display-page")).toBeVisible();
+
+    // Fit-to-width (§2): the whole landscape sheet is visible, not clipped to a fixed-width
+    // render wider than the viewport - the owner's own "only the middle cards visible" repro.
+    const sheetRegion = page.getByTestId("display-sheet-region");
+    const regionBox = await sheetRegion.boundingBox();
+    expect(regionBox).not.toBeNull();
+    expect(regionBox?.width ?? Infinity).toBeLessThanOrEqual(390);
+    await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
+
+    // Closed by default at this viewport - only opens once a slot is tapped.
+    const rail = page.getByTestId("display-rail");
+    await expect(rail).not.toBeInViewport();
+
+    await page.getByTestId("page-preview-slot").first().click();
+
+    // Now visible as a real drawer (react-bootstrap's portaled Offcanvas), showing the tapped
+    // slot's own header - not just "highlights it but surfaces nothing" (issue #266's repro).
+    await expect(rail).toBeInViewport();
+    await expect(page.getByTestId("display-rail-header")).toContainText(
+      "Slot 1"
+    );
+
+    // Dismissible (design doc §4.1's bottom-sheet - react-bootstrap's own Offcanvas keyboard
+    // handling, unmodified here). Checked via the dialog role rather than `rail` (the shared
+    // data-testid) - below its inline breakpoint, Offcanvas keeps BOTH a static, CSS-hidden node
+    // (needed so `responsive` has something to swap to) and, only while genuinely open, a second,
+    // portal-rendered dialog node sharing the same data-testid - a plain testid locator would hit
+    // Playwright's strict-mode "resolved to 2 elements" once both exist, which briefly happens
+    // again mid-close (the portal node lingers for its own exit transition).
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("dialog", { name: "Card details and art selection" })
+    ).toHaveCount(0);
+  });
+});

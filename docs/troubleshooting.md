@@ -887,3 +887,95 @@ symptom with a longer Playwright timeout or a spec edit. The deeper fix
 `ResizeObserver`-driven measurement — is a legitimate follow-up (this
 whole class of bug recurs the next time a link is added to that row) but
 is out of scope for a single-link addition.
+
+## Playwright tests behave like a 1280×720 desktop viewport even though `playwright.config.ts` sets 800×600
+
+**Symptom**: a change that's supposed to be invisible/behave differently
+below some breakpoint (a responsive drawer, a collapsed toolbar, a
+media-query-gated style) shows up as always-inline/always-expanded in
+every existing test in the suite, even though the `chromium` project's
+`use` block clearly declares `contextOptions: { viewport: { width: 800, height: 600 } }`.
+
+**Cause**: `contextOptions` is not a real Playwright `TestOptions`
+field — Playwright's actual browser-context config lives at the
+top level of `use` (`viewport`, `reducedMotion`, etc. directly), not
+nested under a `contextOptions` key. `playwright.config.ts`'s `chromium`
+project spreads `...devices["Desktop Chrome"]` first (which sets a
+top-level `viewport: {1280, 720}` and `reducedMotion` is absent
+entirely), then adds a sibling `contextOptions: {...}` object that
+Playwright silently ignores — so every test in the repo has actually
+been running at Desktop Chrome's stock 1280×720, full-motion, the whole
+time. Confirmed by evaluating the real rendered viewport/computed style
+inside a test (`page.evaluate(() => window.innerWidth)` and inspecting
+an Offcanvas's actual class list) rather than trusting the config file's
+stated intent.
+
+**Fix**: for a test that genuinely needs a narrower/specific viewport
+(or `reducedMotion`), use `test.use({ viewport: {...}, reducedMotion: "reduce" })` at the top level of a `test.describe` block (or per-test) —
+that field name IS real and reliably overrides the project default for
+just that scope, unaffected by the dead `contextOptions` wrapper. Don't
+"fix" the stale 800×600 intent in the project config itself as a
+drive-by — every existing spec in the repo was authored and passing
+against the _actual_ 1280×720 desktop viewport, so correcting the config
+to match its stated intent would silently change the effective
+breakpoint tier (and therefore behavior) of the entire existing suite in
+one line, far outside whatever single feature change prompted noticing
+this. Filed during issue #266 (mobile `/display` responsive shell,
+`frontend/tests/DisplayPage.spec.ts`'s phone-viewport describe block).
+
+## A `ResizeObserver`-driven layout value is "stuck" at its initial default in one CI shard/spec but correct everywhere you check it manually
+
+**Symptom**: a value derived from a `ResizeObserver` (e.g. a measured
+container width feeding a child's render size) intermittently renders as
+its unclamped, un-narrowed default rather than the real, smaller,
+currently-available size — causing that child to overflow its own flex
+column and visually spill under/over a sibling. Manual verification
+(screenshots, a scratch Playwright script hitting the same page) shows
+the correct, narrow value every time; only a specific CI shard, or a
+specific _other_ spec file exercising the same page more deeply
+(clicking further into nested UI before checking), reproduces it.
+Playwright reports the interaction failure as an unrelated element
+"intercepts pointer events" — the real target is exactly where expected,
+but something else (the wrongly-sized sibling) paints on top of it at
+that screen position.
+
+**Cause**: an observer wired up via the "lazy-ref-initialization" pattern
+(`if (ref.current == null) ref.current = new ResizeObserver(...)`,
+directly in a component's render body — a legitimate React pattern for
+an _expensive object that should exist exactly once_, but not
+StrictMode-safe for one that also needs `observe()`/`disconnect()`
+called on it from a callback ref) can end up with more than one live
+instance simultaneously in `next dev`'s `reactStrictMode: true` (double-
+invoke mount/cleanup/mount in development only). Each instance calls the
+same state setter independently; whichever instance's callback fires
+_last_ wins, and if a stale/duplicate instance is still attached to (or
+re-observing) a node whose size hasn't yet settled to its final,
+flex-constrained value, its late-firing callback silently overwrites the
+correct measurement with a stale, too-large one. This is a genuinely
+timing-dependent race — it doesn't reproduce every run, and a single
+manual check right after the interaction you expect to trigger it can
+easily land on the "correct" side of the race, which is why it slipped
+through this change's own pre-push manual/screenshot verification and
+only showed up as a real CI shard failure in a different spec file that
+happened to interact more deeply (and therefore add more time/render
+passes) before checking the result.
+
+**Fix**: don't hand-roll `observe()`/`disconnect()` calls against a
+lazily-constructed single observer instance from a plain callback ref.
+Use the standard React pattern instead: a callback ref that writes the
+DOM node into `useState`, plus a `useEffect` keyed on that state value
+that creates a _fresh_ `ResizeObserver` scoped to the current node and
+returns its own `disconnect()` as the cleanup function. This makes
+setup/cleanup pairing explicit and StrictMode's double-invoke
+mount→cleanup→mount cycle exercise it correctly every time — there is
+never more than one live observer racing to set state, regardless of how
+many times the effect re-runs. Confirmed via `page.addInitScript()`
+wrapping `window.ResizeObserver` to log every `constructed`/`observe`/
+`disconnect`/`fired: <width>` call — the lazy-ref version showed multiple
+constructed instances and a final stale `fired: 960` (the unclamped
+default) even though the container was genuinely ~488px wide by then;
+the state+effect version settled on one instance and the correct value.
+Filed during issue #266 (`frontend/src/features/display/DisplayPage.tsx`'s
+sheet-region fit-to-width `ResizeObserver`, caught by
+`tests/SelectVersionSection.spec.ts` failing in CI shard 4/4 only, not in
+the 39 tests run locally pre-push).

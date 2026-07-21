@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>/display responsive layout mockup — issues #266/#267/#268</title>
+<style>
+/* ============================================================
+   Base styles (breakpoint-independent). Breakpoint-variant CSS
+   lives in ONE set of JS chunks (bottom of file), injected either
+   wrapped in media queries ("Auto") or bare (forced demo views).
+   Palette: Superhero (#2B3E50 / #4E5D6C / #EBEBEB / #DF691A).
+
+   TWO-RAIL ARCHITECTURE (owner direction, 2026-07-21):
+   LEFT rail  = card surface: old card-details view + art selector,
+                merged; identical content inline (desktop) and as the
+                card-tap drawer/bottom-sheet (tablet/phone).
+   RIGHT rail = project surface: editing settings + preparing print;
+                inline at xl, gear-opened end drawer below.
+   ============================================================ */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: #2B3E50; color: #EBEBEB; padding-top: 36px;
+}
+button, input, select { font: inherit; color: inherit; border-radius: 0; }
+button { cursor: pointer; }
+.btn {
+  padding: 4px 10px; border: 1px solid #4E5D6C; background: #4E5D6C;
+  color: #EBEBEB; white-space: nowrap;
+}
+.btn:hover { filter: brightness(1.12); }
+.btn-primary { background: #DF691A; border-color: #DF691A; }
+.btn-outline { background: transparent; border-color: #7f8fa0; }
+.muted { color: #aab7c4; }
+.small { font-size: 12px; }
+
+/* ---------- mockup-only demo control strip (always visible) ----------
+   Wraps to multiple rows on narrow screens instead of clipping — the
+   whole review may happen on a ~390px phone. JS keeps --stripH and the
+   body padding in sync with its real height. */
+.demo-strip {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 2000;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 5px 10px; background: #DF691A; color: #fff; font-size: 12px;
+}
+.demo-strip .btn {
+  padding: 2px 8px; font-size: 12px; background: rgba(0,0,0,.25);
+  border-color: rgba(0,0,0,.35); color: #fff; flex: 0 0 auto;
+}
+.demo-strip .btn.active { background: #2B3E50; border-color: #2B3E50; }
+.demo-strip .hint { opacity: .9; }
+
+/* ---------- navbar (app chrome, context only) ---------- */
+.navbar {
+  height: 48px; background: #22303f; display: flex; align-items: center;
+  gap: 12px; padding: 0 12px; border-bottom: 1px solid #16202b;
+}
+.navbar .brand { font-weight: 700; color: #DF691A; }
+
+/* ---------- action bar: identity + add-cards search (#267) ---------- */
+.actionbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 12px; background: #2B3E50; border-bottom: 1px solid #16202b;
+  z-index: 1020; /* Bootstrap $zindex-sticky */
+}
+.deckname { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.deckname .name {
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.addbar { display: flex; gap: 0; flex: 1 1 auto; min-width: 0; }
+.addbar input {
+  flex: 1 1 auto; min-width: 0; padding: 4px 8px;
+  background: #22303f; border: 1px solid #4E5D6C; color: #EBEBEB;
+}
+.addbar input::placeholder { color: #8fa0b0; }
+.gear { margin-left: auto; }
+
+/* ---------- body: left rail + sheets + right rail ---------- */
+/* three regions (owner framing): left card rail · center sheet · right rail */
+.page-body { display: flex; align-items: flex-start; }
+.sheet-region {
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
+  align-items: center; padding: 8px; gap: 10px; /* minimal inter-page waste (D6) */
+}
+
+/* Sheet: US LETTER **LANDSCAPE** (279.4 x 215.9 mm), 4x2 (owner D4).
+   Default shown = D5 near-zero margins + D6 MPC-standard 3.175mm bleed:
+   4 x (63 + 2x3.175) = 277.5mm — fits 279.4 only BORDERLESS (<=0.95mm/
+   side), which the ET-8500 supports for Letter. Bordered profiles cap
+   bleed instead (3mm margins -> 2.66mm; rear slot's 20mm trailing edge
+   -> 0.54mm) — see spec D4/D5/D6. Screen presentation (owner ask):
+   OUTLINE ONLY — no white page fill, subtle frame, slightly rounded
+   corners, minimal space between pages.
+   FIT-TO-WIDTH RULE (issue #266): width = min(960px, 100%). */
+.sheet-wrap { width: min(960px, 100%); }
+.sheet-label { text-align: center; margin-bottom: 2px; }
+.sheet {
+  width: 100%; aspect-ratio: 279.4 / 215.9;
+  background: transparent; border: 1px solid rgba(235,235,235,.35);
+  border-radius: 8px;
+  container-type: inline-size;
+  display: grid; grid-template-columns: repeat(4, auto);
+  grid-template-rows: repeat(2, auto);
+  justify-content: center; align-content: center;
+  gap: 2.27cqw; /* = 2 x 3.175mm bleed between adjacent trim boxes */
+}
+.card63 {
+  width: 22.55cqw; /* 63mm / 279.4mm */ aspect-ratio: 63 / 88;
+  position: relative; border: 1px dashed rgba(255,255,255,.2);
+  cursor: pointer; overflow: hidden;
+}
+.card63 span {
+  position: absolute; left: 4px; bottom: 4px; right: 4px;
+  font-size: clamp(6px, 1.6cqw, 12px); color: #fff; text-shadow: 0 1px 2px #000;
+}
+.card63.selected { outline: 3px solid #DF691A; outline-offset: -3px; }
+.g1 { background: linear-gradient(160deg, #7a2f2f, #2d0f0f); }
+.g2 { background: linear-gradient(160deg, #2f5a7a, #0f1f2d); }
+.g3 { background: linear-gradient(160deg, #3f7a2f, #122d0f); }
+.g4 { background: linear-gradient(160deg, #7a6a2f, #2d250f); }
+.g5 { background: linear-gradient(160deg, #5a2f7a, #1d0f2d); }
+
+/* ---------- shared rail chrome (both rails) ---------- */
+.rail { background: #22303f; border: 0 solid #16202b; display: flex; flex-direction: column; }
+.rail-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  border-bottom: 1px solid #16202b;
+}
+.drag-handle {
+  width: 44px; height: 5px; background: #4E5D6C; margin: 8px auto 0;
+  border-radius: 3px; flex: 0 0 auto; cursor: pointer;
+}
+.rail-body { overflow-y: auto; flex: 1 1 auto; }
+.rail-foot { border-top: 1px solid #16202b; padding: 10px 12px; display: grid; gap: 8px; }
+.badge {
+  display: inline-block; padding: 1px 6px; font-size: 11px;
+  background: #4E5D6C; border: 1px solid #7f8fa0;
+}
+.badge.degraded { border-color: #DF691A; color: #ffb27d; }
+.acc-h {
+  width: 100%; text-align: left; padding: 8px 12px; background: #2B3E50;
+  border: 0; border-bottom: 1px solid #16202b; font-weight: 600;
+}
+.acc-h::before { content: "▸ "; color: #DF691A; }
+.acc.open > .acc-h::before { content: "▾ "; }
+.acc-b { display: none; padding: 10px 12px; border-bottom: 1px solid #16202b; }
+.acc.open > .acc-b { display: block; }
+.version-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.version-grid .card63 { width: 72px; }
+.version-grid .card63 span { font-size: 8px; }
+.meta-table { width: 100%; border-collapse: collapse; }
+.meta-table td { padding: 3px 4px; border-bottom: 1px solid #2B3E50; vertical-align: top; }
+.meta-table td:first-child { color: #aab7c4; white-space: nowrap; }
+/* scoped to .open so the grid display can't override .acc-b's collapsed state */
+.rail-right .acc.open > .banner-controls { display: grid; gap: 8px; }
+.rail-right label { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.rail-right select, .rail-right input[type="number"] {
+  background: #2B3E50; border: 1px solid #16202b; color: #EBEBEB; padding: 3px 6px;
+}
+.rail-right input[type="number"] { width: 70px; }
+
+.details-handle {
+  display: none; position: fixed; left: 0; top: 45%; z-index: 1030;
+  writing-mode: vertical-rl; padding: 10px 4px;
+  background: #DF691A; color: #fff; border: 0;
+}
+.backdrop {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1040;
+}
+.backdrop.show { display: block; }
+
+/* ---------- landing state (#267/#268) ---------- */
+.landing { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+.landing h2 { margin-bottom: 16px; }
+.landing-grid { display: grid; gap: 20px; grid-template-columns: 1fr; }
+.panel { background: #22303f; border: 1px solid #16202b; padding: 14px; }
+.panel h3 { margin-bottom: 10px; font-size: 15px; }
+.deck-list { list-style: none; }
+.deck-list li {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 8px 6px; border-bottom: 1px solid #2B3E50;
+}
+.import-cols { display: grid; gap: 20px; grid-template-columns: 1fr; }
+.paste-ta {
+  width: 100%; height: 180px; background: #2B3E50; color: #EBEBEB;
+  border: 1px solid #4E5D6C; padding: 8px; resize: vertical; font: inherit;
+}
+body.empty .app-populated { display: none; }
+body:not(.empty) .landing { display: none; }
+</style>
+<style id="bp"></style><!-- breakpoint-variant CSS injected here by JS -->
+</head>
+<body>
+
+<!-- mockup-only demo controls: force any breakpoint at any window width -->
+<div class="demo-strip">
+  <span class="hint">Demo view:</span>
+  <button class="btn active" data-mode="auto">Auto (resize window)</button>
+  <button class="btn" data-mode="desktop">Desktop</button>
+  <button class="btn" data-mode="tablet">Tablet</button>
+  <button class="btn" data-mode="phone">Phone</button>
+  <button class="btn" id="stateToggle">State: populated</button>
+  <span class="hint">· tap a card → left rail (card) · ⚙ → right rail (print/settings)</span>
+</div>
+
+<div id="app">
+<nav class="navbar">
+  <span class="brand">ProxyPrints</span>
+  <span class="muted small">/display — layout mockup (&lt;768 phone · 768–991 tablet · 992–1199 laptop · ≥1200 desktop)</span>
+</nav>
+
+<!-- ======== ACTION BAR (#267): identity + add-cards search bar ======== -->
+<header class="actionbar app-populated">
+  <span class="small muted">Sheet 1 of 2</span>
+  <span class="deckname">
+    <span class="name muted small">Editing: Boros Burn</span>
+    <button class="btn btn-outline small">Save</button>
+  </span>
+  <!-- populated-state search bar: single-line ImportText variant + Import dropdown -->
+  <span class="addbar" title="Add cards — same addMembers pipeline as ImportText">
+    <input type="text" placeholder="Add cards… e.g. 3x Lightning Bolt (2X2 117)">
+    <button class="btn" title="Import URL / XML / CSV (existing Import dropdown)">Import ▾</button>
+  </span>
+  <button class="btn gear" id="gearBtn" aria-expanded="false" title="Print &amp; settings">⚙ Print &amp; Settings</button>
+</header>
+
+<!-- ======== BODY: LEFT rail (card) + sheets + RIGHT rail (project) ======== -->
+<div class="page-body app-populated">
+
+  <!-- LEFT RAIL — merged card-details view + art selector (one node, all widths) -->
+  <aside class="rail rail-left" id="railLeft" aria-label="Card details and art selection">
+    <div class="drag-handle" data-close title="Dismiss"></div>
+    <div class="rail-head">
+      <div style="min-width:0">
+        <strong>Slot 5</strong> <span class="muted small">FRONT</span><br>
+        <span id="railCardName">Lightning Bolt</span><br>
+        <span class="badge degraded" title="Requested printing (degraded query)">2X2 117</span>
+        <!-- D3 PROMOTED: artist support is always visible, top of the rail -->
+        <div class="small" style="margin-top:4px">Art by Christopher Moeller ·
+          <span style="color:#DF691A">Support this artist ↗</span></div>
+      </div>
+      <button class="btn btn-outline small rail-close" data-close style="margin-left:auto" aria-label="Close">✕</button>
+    </div>
+    <div class="rail-body">
+      <div class="acc open"><!-- art selector: SelectVersionResults / GridSelector family -->
+        <button class="acc-h">Select Version</button>
+        <div class="acc-b">
+          <div class="muted small" style="margin-bottom:8px">14 results · <u>Filters</u></div>
+          <div class="version-grid">
+            <div class="card63 g1 selected"><span>2X2 117</span></div>
+            <div class="card63 g2"><span>STA 42</span></div>
+            <div class="card63 g3"><span>CLB 401</span></div>
+            <div class="card63 g4"><span>M11 146</span></div>
+            <div class="card63 g5"><span>PRM 63</span></div>
+          </div>
+        </div>
+      </div>
+<!-- D3 DEMOTED: everything below is collapsed by default, near the bottom -->
+      <div class="acc"><!-- card details: CardDetailedViewModal body, repurposed -->
+        <button class="acc-h">Card Details</button>
+        <div class="acc-b">
+          <table class="meta-table small">
+            <tr><td>Source</td><td>Chilli's Drive <u class="muted">(copy ID)</u></td></tr>
+            <tr><td>DPI</td><td>1200 · 4.2 MB</td></tr>
+            <tr><td>Uploaded</td><td>2025-11-03</td></tr>
+            <tr><td>Language</td><td>English</td></tr>
+          </table>
+          <p style="margin-top:8px"><button class="btn btn-outline small">⤓ Download image</button>
+          <button class="btn btn-outline small">☆ Favorite</button></p>
+        </div>
+      </div>
+      <div class="acc"><button class="acc-h">Attributes</button>
+        <div class="acc-b muted small">Attribute chips (vertical stack) — foil · extended art · borderless…</div></div>
+      <div class="acc"><button class="acc-h">Printing Tags</button>
+        <div class="acc-b muted small">"What's That Card?" printing tag picker · consensus status</div></div>
+      <div class="acc"><button class="acc-h">Print Options</button>
+        <div class="acc-b muted small">Per-card bleed override</div></div>
+      <div class="acc"><button class="acc-h">Slot Actions</button>
+        <div class="acc-b muted small">Change query · Duplicate · Delete slot</div></div>
+      <div class="acc"><button class="acc-h">Report</button>
+        <div class="acc-b muted small">Report this card image…</div></div>
+    </div>
+  </aside>
+
+  <!-- SHEETS (center region) — fit-to-width landscape Letter, 4x2, outline-only -->
+  <section class="sheet-region">
+    <div class="sheet-wrap">
+      <div class="sheet-label muted small">Sheet 1 of 2 — Letter (landscape), 4×2 borderless</div>
+      <div class="sheet" id="sheet1"></div>
+    </div>
+    <div class="sheet-wrap">
+      <div class="sheet-label muted small">Sheet 2 of 2 — Letter (landscape), 4×2 borderless</div>
+      <div class="sheet" id="sheet2"></div>
+    </div>
+  </section>
+
+  <!-- RIGHT RAIL — editing settings + preparing print (one node, all widths) -->
+  <aside class="rail rail-right" id="railRight" aria-label="Print and project settings">
+    <div class="rail-head">
+      <strong>Print &amp; Settings</strong>
+      <button class="btn btn-outline small rail-close" data-close style="margin-left:auto" aria-label="Close">✕</button>
+    </div>
+    <div class="rail-body">
+      <div class="acc open"><button class="acc-h">Page Setup</button>
+        <div class="acc-b banner-controls">
+          <label>Paper <select><option>Letter (landscape)</option><option>A4 (landscape)</option></select></label>
+          <label title="MPC standard 1/8 inch (D6); 4x2 at this bleed needs borderless — bordered profiles cap it (see spec D4/D5)">
+            Bleed (mm) <input type="number" value="3.175" step="0.025" min="0" max="3.412"></label>
+          <label>Margins <select><option>Borderless (0mm)</option><option>Bordered (3mm min)</option><option>Rear feed (+20mm trail)</option></select></label>
+          <label>Cut-line guides <input type="checkbox" checked></label>
+        </div>
+      </div>
+      <div class="acc open"><button class="acc-h">View</button>
+        <div class="acc-b banner-controls">
+          <label>Showing fronts <input type="checkbox" checked></label>
+        </div>
+      </div>
+      <div class="acc"><!-- D8: PDF-side color calibration (ET-8500 Linux driver
+           only exposes B/S/C, so color-cast correction lives in our PDF output;
+           on-screen preview = CSS-filter approximation, exact math at render) -->
+        <button class="acc-h">Color Calibration</button>
+        <div class="acc-b banner-controls">
+          <label>Cyan <input type="range" min="-50" max="50" value="0"></label>
+          <label>Magenta <input type="range" min="-50" max="50" value="0"></label>
+          <label>Yellow <input type="range" min="-50" max="50" value="0"></label>
+          <label>Brightness <input type="range" min="-50" max="50" value="0"></label>
+          <label>Saturation <input type="range" min="-50" max="50" value="0"></label>
+          <label>Contrast <input type="range" min="-50" max="50" value="0"></label>
+          <div class="muted small">Applied to every card at PDF render; sheet preview is approximate.</div>
+          <button class="btn btn-outline small">Reset</button>
+        </div>
+      </div>
+      <div class="acc"><button class="acc-h">Cardback</button>
+        <div class="acc-b"><button class="btn btn-outline small">Choose cardback…</button></div></div>
+      <div class="acc"><button class="acc-h">Search Settings</button>
+        <div class="acc-b"><button class="btn btn-outline small">Open search settings…</button></div></div>
+    </div>
+    <div class="rail-foot"><!-- preparing print: always visible -->
+      <button class="btn">Export ▾ <span class="muted small">(XML · images · decklist)</span></button>
+      <button class="btn btn-outline">🗀 Save PDF to Google Drive</button>
+      <button class="btn btn-primary">⤓ Generate PDF</button>
+    </div>
+  </aside>
+</div>
+
+<button class="details-handle app-populated" id="detailsHandle">Card details</button>
+
+<!-- ======== LANDING (empty project): saved decks + import (#268) ======== -->
+<main class="landing">
+  <h2>Start a project</h2>
+  <div class="landing-grid">
+    <div class="panel">
+      <h3>Your saved decks</h3>
+      <ul class="deck-list">
+        <li><span>Boros Burn</span><button class="btn btn-primary small">Load</button></li>
+        <li><span>Esper Control</span><button class="btn btn-primary small">Load</button></li>
+        <li><span>Goblin Tribal</span><button class="btn btn-primary small">Load</button></li>
+      </ul>
+      <p class="small" style="margin-top:8px"><a href="#" style="color:#DF691A">My decks →</a></p>
+    </div>
+    <div class="import-cols">
+      <div class="panel">
+        <h3>Enter a card list</h3>
+        <textarea class="paste-ta" placeholder="4x Lightning Bolt&#10;2x Monastery Swiftspear&#10;…"></textarea>
+        <p style="margin-top:8px"><button class="btn btn-primary">Add cards</button></p>
+      </div>
+      <div class="panel">
+        <h3>Import a file or URL</h3>
+        <div class="acc open"><button class="acc-h">URL</button>
+          <div class="acc-b"><input type="text" style="width:100%;background:#2B3E50;border:1px solid #4E5D6C;color:#EBEBEB;padding:6px" placeholder="https://moxfield.com/decks/…"></div></div>
+        <div class="acc"><button class="acc-h">XML</button><div class="acc-b muted small">Upload an MPC Autofill XML…</div></div>
+        <div class="acc"><button class="acc-h">CSV</button><div class="acc-b muted small">Upload a CSV…</div></div>
+      </div>
+    </div>
+  </div>
+</main>
+</div><!-- /#app -->
+<div class="backdrop" id="backdrop"></div>
+
+<script>
+// ==== breakpoint-variant CSS: single source of truth for the natural media
+// queries (Auto) AND the demo strip's forced views ==========================
+var LEFT_BOTTOM =
+  ".rail-left{position:fixed;left:0;right:0;bottom:0;height:72vh;transform:translateY(100%);" +
+  "transition:transform .25s ease;z-index:1045;border-top-width:1px;border-radius:10px 10px 0 0;}" +
+  ".rail-left.open{transform:translateY(0);}";
+var LEFT_START =
+  ".rail-left{position:fixed;top:var(--stripH,36px);bottom:0;left:0;width:380px;max-width:90vw;" +
+  "transform:translateX(-100%);transition:transform .25s ease;z-index:1045;border-right-width:1px;}" +
+  ".rail-left.open{transform:translateX(0);}.drag-handle{display:none;}";
+var LEFT_INLINE =
+  ".rail-left{position:sticky;top:calc(var(--stripH,36px) + 49px);width:380px;flex:0 0 380px;" +
+  "max-height:calc(100vh - var(--stripH,36px) - 49px);overflow-y:auto;border-right-width:1px;}" +
+  ".rail-left .rail-close{display:none;}.drag-handle{display:none;}";
+var RIGHT_END =
+  ".rail-right{position:fixed;top:var(--stripH,36px);bottom:0;right:0;width:320px;max-width:90vw;" +
+  "transform:translateX(100%);transition:transform .25s ease;z-index:1045;border-left-width:1px;}" +
+  ".rail-right.open{transform:translateX(0);}";
+var RIGHT_INLINE =
+  ".rail-right{position:sticky;top:calc(var(--stripH,36px) + 49px);width:300px;flex:0 0 300px;" +
+  "max-height:calc(100vh - var(--stripH,36px) - 49px);overflow-y:auto;border-left-width:1px;}" +
+  ".rail-right .rail-close{display:none;}";
+var STICKYBAR = ".actionbar{position:sticky;top:var(--stripH,36px);}";
+
+var CHUNKS = {
+  phone: LEFT_BOTTOM + RIGHT_END + ".addbar{flex-basis:100%;order:9;}",
+  tablet: LEFT_START + RIGHT_END + STICKYBAR +
+    ".details-handle{display:block;}.import-cols{grid-template-columns:1fr 1fr;}",
+  // laptop tier exists in Auto mode only (no forced button): left rail inline,
+  // right rail still a gear drawer — there's no width for two inline rails.
+  laptop: LEFT_INLINE + RIGHT_END + STICKYBAR +
+    ".landing-grid{grid-template-columns:1fr 2fr;}.import-cols{grid-template-columns:1fr 1fr;}",
+  // z-0 containment ONLY where no fixed drawer exists (docs/lessons.md trap:
+  // a z-index:0 parent traps a drawer's z-1045 under the sticky action bar;
+  // the real app avoids this because react-bootstrap portals Offcanvas dialogs).
+  desktop: LEFT_INLINE + RIGHT_INLINE + STICKYBAR +
+    ".page-body{position:relative;z-index:0;}.gear{display:none;}" +
+    ".landing-grid{grid-template-columns:1fr 2fr;}.import-cols{grid-template-columns:1fr 1fr;}"
+};
+var MQ = {
+  phone: "(max-width: 767.98px)",
+  tablet: "(min-width: 768px) and (max-width: 991.98px)",
+  laptop: "(min-width: 992px) and (max-width: 1199.98px)",
+  desktop: "(min-width: 1200px)"
+};
+// forced-view extras. Desktop/tablet frames are wider than a phone screen, so
+// they render as a transform-scaled zoomed-out preview: scale(var(--fs)) fits
+// the frame to the viewport width, and — because ANY transform makes #app the
+// containing block for fixed descendants — the drawers/backdrop-adjacent
+// chrome anchor to the frame's own edges (top:0/right:0), scaled with it. The
+// full desktop composition INCLUDING the right rail is therefore visible even
+// on a ~390px phone. Phone frame (390px) fits every viewport: no transform,
+// drawers stay viewport-fixed with .open-state clamps (clamping the closed
+// state would defeat translateX(100%) and leave a drawer peeking).
+var FRAME = {
+  phone: "#app{max-width:390px;margin:0 auto;outline:1px solid #16202b;min-height:100vh;}" +
+    ".rail-left{left:max(0px,calc(50vw - 195px));right:max(0px,calc(50vw - 195px));}" +
+    ".rail-right.open{right:max(0px,calc(50vw - 195px));}",
+  tablet: "html,body{overflow-x:hidden;}" +
+    "#app{width:820px;margin:0 auto;outline:1px solid #16202b;min-height:100vh;" +
+    "transform:scale(var(--fs,1));transform-origin:top left;}" +
+    ".rail-left,.rail-right{top:0;}" +
+    ".details-handle{left:0;}",
+  desktop: "html,body{overflow-x:hidden;}" +
+    "#app{width:1300px;margin:0 auto;transform:scale(var(--fs,1));transform-origin:top left;}"
+};
+var FRAME_W = { desktop: 1300, tablet: 820, phone: 390 };
+
+var bp = document.getElementById("bp");
+var mode = "auto";
+var app = document.getElementById("app");
+var strip = document.querySelector(".demo-strip");
+
+// keep --stripH and the body offset in sync with the strip's real (wrapped) height
+function updateStrip() {
+  var h = strip.offsetHeight;
+  document.documentElement.style.setProperty("--stripH", h + "px");
+  document.body.style.paddingTop = h + "px";
+}
+// zoomed-out preview scale for forced desktop/tablet frames on narrow screens;
+// negative margin-bottom removes the blank space the unscaled layout reserves
+function updateScale() {
+  var scalable = mode === "desktop" || mode === "tablet";
+  var s = scalable ? Math.min(1, innerWidth / FRAME_W[mode]) : 1;
+  document.documentElement.style.setProperty("--fs", s);
+  app.style.marginBottom = s < 1 ? -(app.offsetHeight * (1 - s)) + "px" : "";
+}
+function applyMode(m) {
+  mode = m;
+  bp.textContent = m === "auto"
+    ? Object.keys(CHUNKS).map(function (k) { return "@media " + MQ[k] + "{" + CHUNKS[k] + "}"; }).join("\n")
+    : CHUNKS[m] + FRAME[m];
+  closeRails();
+  document.querySelectorAll(".demo-strip [data-mode]").forEach(function (b) {
+    b.classList.toggle("active", b.dataset.mode === m);
+  });
+  updateStrip();
+  updateScale();
+}
+new ResizeObserver(function () { updateStrip(); updateScale(); }).observe(app);
+function effectiveTier() {
+  if (mode !== "auto") return mode;
+  for (var k of ["phone", "tablet", "laptop"]) if (matchMedia(MQ[k]).matches) return k;
+  return "desktop";
+}
+document.querySelectorAll(".demo-strip [data-mode]").forEach(function (b) {
+  b.addEventListener("click", function () { applyMode(b.dataset.mode); });
+});
+
+// ---- rail open/close (React state in the real page) ----
+var railLeft = document.getElementById("railLeft");
+var railRight = document.getElementById("railRight");
+var backdrop = document.getElementById("backdrop");
+function openLeft() {   // card tap — left rail inline at laptop/desktop
+  var t = effectiveTier();
+  if (t === "laptop" || t === "desktop") return;
+  railRight.classList.remove("open");
+  railLeft.classList.add("open");
+  backdrop.classList.add("show");
+}
+function openRight() {  // gear — right rail inline at desktop only
+  if (effectiveTier() === "desktop") return;
+  railLeft.classList.remove("open");
+  railRight.classList.add("open");
+  backdrop.classList.add("show");
+}
+function closeRails() {
+  railLeft.classList.remove("open");
+  railRight.classList.remove("open");
+  backdrop.classList.remove("show");
+}
+backdrop.addEventListener("click", closeRails);
+document.querySelectorAll("[data-close]").forEach(function (el) {
+  el.addEventListener("click", closeRails);
+});
+document.getElementById("detailsHandle").addEventListener("click", openLeft);
+document.getElementById("gearBtn").addEventListener("click", openRight);
+addEventListener("keydown", function (e) { if (e.key === "Escape") closeRails(); });
+addEventListener("resize", function () {
+  var t = effectiveTier();
+  if (t === "desktop") closeRails();
+  else if (t === "laptop") railLeft.classList.remove("open");
+  updateStrip();
+  updateScale();
+});
+
+// ---- accordion headers ----
+document.querySelectorAll(".acc-h").forEach(function (h) {
+  h.addEventListener("click", function () { h.parentElement.classList.toggle("open"); });
+});
+
+// ---- build 4x2 landscape sheets (D4); tap selects + opens the card rail ----
+var names = ["Lightning Bolt", "Monastery Swiftspear", "Boros Charm",
+             "Skewer the Critics", "Lava Spike", "Rift Bolt",
+             "Searing Blaze", "Eidolon of the Great Revel", "Sacred Foundry"];
+["sheet1", "sheet2"].forEach(function (id, s) {
+  var sheet = document.getElementById(id);
+  for (var i = 0; i < 8; i++) {
+    var c = document.createElement("div");
+    c.className = "card63 g" + ((i + s) % 5 + 1);
+    c.innerHTML = "<span>" + names[(i + s * 8) % 9] + "</span>";
+    c.addEventListener("click", function () {
+      document.querySelectorAll(".sheet .card63.selected").forEach(function (el) {
+        el.classList.remove("selected");
+      });
+      this.classList.add("selected");
+      document.getElementById("railCardName").textContent =
+        this.querySelector("span").textContent;
+      openLeft();
+    });
+    sheet.appendChild(c);
+  }
+});
+
+// ---- empty vs. populated (search-bar states, #267/#268) ----
+document.getElementById("stateToggle").addEventListener("click", function () {
+  var empty = document.body.classList.toggle("empty");
+  closeRails();
+  this.textContent = "State: " + (empty ? "empty (landing)" : "populated");
+});
+
+applyMode("auto");
+</script>
+</body>
+</html>
