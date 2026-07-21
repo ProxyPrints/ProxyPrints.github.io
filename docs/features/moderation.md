@@ -116,7 +116,7 @@ and need nothing.
 ## Sensitive taxonomy
 
 `Tag.moderation_class` (`standard` | `sensitive`, default standard).
-`manage.py seed_sensitive_tags` seeds four (command, not data migration —
+`manage.py seed_sensitive_tags` seeds five (command, not data migration —
 same rationale as the other taxonomies, see [[printing-tags.md]]):
 
 | name                | display name        | report reason |
@@ -125,6 +125,7 @@ same rationale as the other taxonomies, see [[printing-tags.md]]):
 | `low-res`           | Low quality         | `low_quality` |
 | `incorrect-info`    | Incorrect card info | `wrong_card`  |
 | `appropriate-bleed` | Appropriate Bleed   | — (no chip)   |
+| `AI-Generated`      | AI-Generated        | — (no chip)   |
 
 `appropriate-bleed` is deliberately the **positive** framing ("verified to
 include the full bleed margin required for printing") rather than a negative
@@ -147,6 +148,28 @@ replaces the synthetic pseudo-tag in the tag matcher (real rows win the
 lowercased key). Seeding upgrades a pre-existing standard row to sensitive but
 never clobbers a manually edited `display_name`. Names are immutable
 federation contracts.
+
+`AI-Generated` (public issue #261, 2026-07-21) was upgraded to sensitive from
+its pre-existing `standard` row (seeded by `cardpicker.default_tags. DEFAULT_TAGS` for a different, orthogonal reason — filename-bracket tagging,
+e.g. `[Midjourney]`, applies it directly at import time, exactly like
+`[NSFW]` above, untouched by this change). The upgrade exists because
+`cardpicker.local_detect_ai_art` now casts real machine votes for it — a
+calculator that scans already-stored OCR evidence (artist credit line, legal
+line, collector line) for known AI-generator marker strings (Midjourney,
+DALL-E, Stable Diffusion, SDXL, Gemini, Imagen, Adobe Firefly, Leonardo AI,
+NightCafe, Bing Image Creator, "AI art"/"AI generated" — deliberately
+excluding generator-SITE/tool names like CardConjurer, which indicate a
+rendering tool usable with ordinary human art, not AI provenance) under its
+own machine identity (`ai-art-detector-v1`, `VoteSource.OCR`). Same
+`appropriate-bleed` logic applies here, doubled: a lone machine vote can
+never resolve any tag at all (the shared human-backed gate), and even a
+confident crowd consensus on this one specifically still needs a moderator
+co-sign before it goes live — publicly labelling a real human artist's work
+as AI-generated is a reputational harm serious enough to warrant the same
+"machine can flag it, human must confirm it" treatment as the mature-content
+and quality tags above, not just the ordinary crowd threshold. Positive-
+detection only: a missing marker proves nothing, so this calculator never
+casts a negative vote, only `APPLY`.
 
 Two knock-ons worth knowing: the seeded tags become visible/votable in the
 card modal's tag grid for everyone (intended — votes accumulate as pending),
