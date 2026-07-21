@@ -1,8 +1,14 @@
 import { expect } from "@playwright/test";
 import { http, HttpResponse } from "msw";
 
-import { cardDocument8, localBackendURL } from "@/common/test-constants";
 import {
+  cardDocument1,
+  cardDocument2,
+  cardDocument8,
+  localBackendURL,
+} from "@/common/test-constants";
+import {
+  cardbacksTwoResults,
   cardDocumentsNoResults,
   cardDocumentsThreeResults,
   cardDocumentsWithCanonicalCards,
@@ -358,6 +364,55 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
         name: "Fuzzy (Forgiving) Search Precise Search",
       })
     ).toHaveClass(/btn-success/);
+  });
+
+  // Issue #240 (design doc §5's CommonCardback row) - the toolbar previously had no way to reach
+  // the project-wide cardback picker at all on this page (only the classic editor's own right
+  // panel could). CardbackToolbarButton (CommonCardback.tsx) reuses
+  // MemoizedCommonCardbackGridSelector's existing GridSelectorModal verbatim - this test only
+  // needs to confirm it opens from the toolbar and that a selection made through it actually
+  // updates the shared project cardback (visible via a back-face slot on the sheet), not that the
+  // grid selector's own internals work (already covered by CardSlot.spec.ts's cardback tests).
+  test("the Cardback toolbar button opens the same project-wide cardback picker the classic editor uses, and a selection made through it updates back-face slots on the sheet", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsThreeResults,
+      cardbacksTwoResults,
+      sourceDocumentsOneResult,
+      searchResultsThreeResults,
+      tagConsensusTwoUnresolvedTags,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    // A plain text query with no explicit back face falls back to the project cardback - the
+    // fetchCardbacks.fulfilled listener (listenerMiddleware.ts) auto-selects the first cardback
+    // in the list once cardbacksTwoResults resolves, so this starts on cardDocument1.
+    await importText(page, "my search query");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+
+    await expect(page.getByTestId("display-toolbar")).toBeVisible();
+    await page.getByText("Showing: Fronts").click();
+    const backSheetSlot = page.getByTestId("page-preview-slot").first();
+    await expect(backSheetSlot.locator("img")).toHaveAttribute(
+      "alt",
+      cardDocument1.name
+    );
+
+    await page.getByRole("button", { name: "Cardback" }).click();
+    const cardbackModal = page.getByTestId("cardback-grid-selector");
+    await expect(cardbackModal).toBeVisible();
+    await cardbackModal.getByAltText(cardDocument2.name).click();
+    await expect(cardbackModal).not.toBeVisible();
+
+    // The back-face slot on the sheet now reflects the newly selected cardback, confirming the
+    // selection round-tripped through the shared projectSlice.cardback state, not just the modal's
+    // own local component state.
+    await expect(backSheetSlot.locator("img")).toHaveAttribute(
+      "alt",
+      cardDocument2.name
+    );
   });
 
   test("the requested-printing badge shows the plain style for a resolved, non-degraded printing-specific import", async ({
