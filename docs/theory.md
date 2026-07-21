@@ -24,6 +24,13 @@ visual/text recognition problem into something closer to classical
 channel (the scan/photo and its filename), and a decoding rule that
 either outputs one codeword or abstains.
 
+A note on scope, before the channels: this section formalizes the
+**original pilot architecture** — three independent channels (OCR,
+phash, fallback), each modeled separately below. The **production**
+deduction chain, formalized in §7, is a narrower composition of the
+same primitives into a single join-key calculator; the closed-codebook
+model and the decode-or-abstain rule are common to both.
+
 Three independent noisy channels feed the decoder, each modeled
 separately rather than fused into one score:
 
@@ -228,7 +235,11 @@ contribution: three independent noisy channels over a **closed,
 per-record candidate set** (not an open-world search), each with an
 explicit abstention path rather than a forced decision, feeding into a
 consensus layer with a **structural** (not just statistical) guarantee
-that machine evidence alone can never resolve anything.
+that machine evidence alone can never resolve anything. (In production
+these same primitives are composed into the single join-key calculator
+of §7 rather than run as three parallel channels; the contribution is
+the composition and its structural guarantee, not the particular
+channel arrangement.)
 
 The transferable pattern is: **user-submitted media identified against a
 canonical registry, using multiple independent weak-evidence channels,
@@ -329,6 +340,298 @@ another noisy source whose reliability can be estimated the same way a
 human or machine voter's can, rather than needing a bespoke trust
 protocol.
 
+## 7. The deduction chain as an explicit composition
+
+§§1–2 give the model and its measured false-accept bound at the level
+of "the decoder as a whole." This section writes the decoder out as an
+explicit composition of stages, each a function with its own error
+term, so a federation peer (or a reviewer) can see exactly where the
+bound comes from and, crucially, which factors are **measured** versus
+which are only **a-priori-bounded** or frankly **unmeasured**. The
+chain formalized here is the one the code actually runs today: Stage
+D's join-key calculator (`cardpicker/local_calculate_verdicts.py`),
+not the older three-independent-channel live pilot §1 describes.
+
+**A note on which pipeline this is, stated plainly rather than
+smoothed over.** §1's "three independent noisy channels (OCR, phash,
+fallback), each modeled separately" describes the live-pilot engines
+(`local_identify_printing_tags.py`) that produced §2c's
+`run_id=20260716T193408-6613a1a6` numbers. The current deduction chain
+is architecturally narrower and is a **single composed calculator**,
+not three parallel decoders: collector-line OCR **and** set-symbol
+phash are treated as **one near-unique join key** into Scryfall data
+(`calculate_join_key_verdict`), followed by an agreement/veto layer,
+followed by human-review routing for everything that doesn't uniquely
+decode. Full-image phash as an independent matching channel is **not**
+part of this chain — Stage D's symbol phash is used **only** as a
+tie-break inside the ambiguous branch (below), and general
+image-phash matching was deferred to user-submitted phash (issue #203,
+not built). So §1's phash-channel description is the live pilot's, not
+this composition's; the two share the closed-codebook framing and the
+decode-or-abstain rule, but not the channel structure. The soundness
+property (§2c/§4) is identical across both, and is re-verified on this
+chain below.
+
+### 7a. The stages, as functions with error terms
+
+For a card uploaded under name `n` with (unknown) true printing
+`p* ∈ C(n)`, the chain is a composition `g = g₅ ∘ g₄ ∘ g₃ ∘ g₂ ∘ g₁`
+whose output is one of: a printing `p̂`, a genuine `no_match`, or an
+abstention (a named skip). A **false accept** is the event
+`p̂ ∉ {p*, no_match, abstain}` — the decoder commits to a _wrong_
+printing.
+
+- **`g₁` — join-key parse.** Reconstructs an `OcrParseResult` from the
+  already-persisted `collector_line_set_code`/`collector_line_collector_number`
+  fields (produced in Stage C by `local_ocr.parse_collector_line`; Stage
+  D builds the `OcrParseResult` from the persisted values — no re-OCR
+  and no re-parse). Output: a token `t = (ŝ, ĉ)` or `∅`. Error term
+  `ε₁ = P(t is a confusable misread — syntactically valid, but not the true (s*, c*))`. **Unmeasured** as a rate; structurally bounded
+  because `t` must clear the parser's own shape constraints (`_SET_CODE_RE`
+  = 3–5 alnum, `_COLLECTOR_NUMBER_RE` = 1–4 digits + optional letter)
+  and the number is normalized (`_normalize_collector_number`) before
+  any comparison.
+- **`g₂` — candidate constraint.** `validate_against_candidates(t, C(n))`
+  accepts iff `t` matches **exactly one** candidate in the card's own
+  name-scoped set `C(n)`; otherwise it returns `parsed-but-no-match`,
+  `ambiguous`, or `no-text`. This is the load-bearing stage: a false
+  accept here requires `t` to coincide **not merely with a wrong token
+  but with another _valid_ candidate `p' ∈ C(n), p' ≠ p*`** — the
+  misread must land inside the same name's own small candidate set.
+  Error term `ε₂ = P(a misread token equals some p' ∈ C(n)\{p*})`,
+  bounded above by `|C(n)|` (usually small) and by the per-`CanonicalCard`
+  uniqueness of `(expansion, collector_number)`. **Partially
+  measured**: the rate at which the constraint even _admits_ more than
+  one candidate (the `ambiguous` escape — collector-number-only match
+  across sets) is **2 / 20,677 ≈ 9.7×10⁻⁵** of considered cards on the
+  2026-07-21 run (`staged-write-20260721T0434Z`,
+  `docs/reports/2026-07-21-staged-write.md`). That is a direct
+  measurement of how rarely the closed-set constraint fails to isolate
+  a single candidate on its own.
+- **`g₃` — symbol-phash tie-break (conditional).** Runs **only** on
+  the `ambiguous` branch (`_symbol_phash_tiebreak`): the card's stored
+  `symbol_phash` is compared by Hamming distance against each ambiguous
+  candidate's rendered keyrune set-symbol glyph
+  (`local_fallback.render_set_symbol`), accepting the nearest **iff**
+  it clears `SYMBOL_DISTANCE_THRESHOLD` **and** beats its runner-up by
+  `SYMBOL_MARGIN`; a tie abstains (`None`). Error term
+  `ε₃ = P(the true card's symbol phash lands within threshold-and-margin of a *wrong* expansion's glyph)`. **Unmeasured** directly. The
+  nearest empirical evidence is §2a's orthogonal result — 269
+  different-printing pairs, minimum observed **full-image**-phash
+  distance 6 — but note that is full-image phash, not the set-symbol
+  phash `g₃` uses, so it is suggestive of clean hash-space separation,
+  not a measurement of this stage.
+- **`g₄` — agreement/veto layer.** Applied to **every** would-be match
+  (`_apply_agreement_checks`), whether from `g₂` directly or via `g₃`.
+  A sequence of orthogonal cross-checks, each of which can only
+  **withhold** a match (convert accept → skip), never manufacture one:
+  proxy-marker veto (`legal_line_proxy_marker_detected`),
+  truncated-image veto, border agreement (`layout_class` vs.
+  `CanonicalPrintingMetadata.border_color`), frame agreement
+  (`classify_frame_style` vs. `.frame`), copyright-year era check
+  (parsed `©` year predating the printing's `released_at` by more than
+  `COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS = 2` withholds), and
+  artist-OCR corroboration (a disagreement _weakens confidence_ rather
+  than vetoing). Error term `ε₄ = ∏ᵢ P(veto i passes | the match is actually wrong)` — a wrong match survives only if **all** vetoes
+  clear it. **Firing rates are measured, catch-precision is not**: on
+  the same 2026-07-21 run the vetoes fired at `proxy-marker-veto`
+  1,533, `border-mismatch` 507, `frame-mismatch` 35 (and copyright-year
+  / truncation folded into the same skip vocabulary). What is **not**
+  measured is what fraction of each firing was a _true_ wrong-match
+  caught versus a correctly-matched card whose observed frame/border
+  was merely noisy — that split needs labeled ground truth (§9). So
+  these counts bound how _often_ `g₄` intervenes, not how _accurately_.
+- **`g₅` — human-backed consensus gate.** The match becomes a
+  `CardPrintingTag` at `VoteSource.OCR` weight
+  (`PRINTING_TAG_MACHINE_WEIGHT`, 0.5) and is reconciled by
+  `vote_consensus.resolve_weighted_consensus`, which resolves a card
+  **iff** the winning group clears `min_weight`, clears `min_share`,
+  **and** contains at least one human-backed vote. A machine vote at
+  0.5 cannot satisfy the third condition alone. `P(card resolved to catalog | machine wrong-match) = 0` **structurally**, independent of
+  `ε₁…ε₄`.
+
+### 7b. The composed false-accept expression, honestly separated
+
+Two different quantities matter, and conflating them is the usual way
+a bound like this gets oversold:
+
+**Suggestion-level false accept** (a wrong printing _surfaced_ to a
+reviewer, before any human confirmation):
+
+    P(false-accept suggestion per card) ≤ ε₁ · ε₂ · ε₃* · ε₄
+
+where `ε₃*` = `ε₃` on the ambiguous branch and `1` otherwise (a
+non-ambiguous match never invokes `g₃`). This is an **upper bound of a
+product of mostly-unmeasured conditional terms**. What is anchored
+empirically about it: `ε₂`'s admits-more-than-one rate (2/20,677) and
+`g₄`'s firing counts above. What is **not** anchored: `ε₁`, `ε₃`, and
+each veto's conditional catch-precision inside `ε₄`. We therefore do
+**not** claim a numeric value for this product — only that it
+factors by the chain rule into a sequence of conditional terms, each
+≤ 1 (each stage can only narrow or withhold, never manufacture a
+match), over a closed candidate set, and that the two factors we _can_
+see are small.
+
+**Resolution-level false accept** (a wrong printing actually committed
+to the catalog by machine evidence alone):
+
+    P(false-accept resolved by machine alone)
+        = P(false-accept suggestion) · P(g₅ fails to gate it)
+        = (anything ≤ 1) · 0
+        = 0,  structurally.
+
+This is not an estimate. It is the same soundness property §2c and §4
+state, re-derived in the composition's own terms, and **it is measured
+on this exact chain**: the 2026-07-21 write run verified **0 / 8,925**
+touched cards resolved on machine evidence alone (independently
+re-derived via `resolve_printing`, and cross-checked against the
+`printing_tag_status` cache — `docs/reports/2026-07-21-staged-write.md`),
+matching the older live pilot's **0 / 43,426** (§2c). The two runs
+measure the same structural guarantee on two different pipelines; both
+read 0, by construction, at the scales observed.
+
+**The one-line honest summary:** the _resolution_ false-accept rate is
+**0 by construction and measured 0** (twice, on two pipelines); the
+_suggestion_ false-accept rate is a product of independent reductions
+over a closed set, **bounded but not calibrated** — the individual
+`εᵢ` are not yet measured, and §9 says what measuring them would take.
+
+## 8. Confidence semantics for downstream consumers
+
+The federation program (`docs/federation-v1.md`,
+`docs/federation/public-export-v1.md`) needs a **portable, auditable**
+notion of confidence: a number a peer can check against stated math,
+not a black-box score it has to trust. This section pins down exactly
+what our confidence signals may and may not claim. There are two
+distinct signals, and they carry very different epistemic weight.
+
+### 8a. What the numeric machine confidence _is_ — an ordinal pipeline-state label, not a posterior
+
+The `confidence` field on a machine-cast `CardPrintingTag` takes one
+of a small set of hand-set literals
+(`JOIN_KEY_CONFIDENCE_BOTH = 0.85`, `…COLLECTOR_ONLY = 0.75`,
+`…SYMBOL_TIEBREAK = 0.75`, `…ARTIST_DISAGREEMENT = 0.65`,
+`JOIN_KEY_NO_MATCH_CONFIDENCE = 0.6`). Read against §7's stages, these
+are **a strict encoding of which stages passed, and with what
+strength** — nothing more:
+
+| value | pipeline state it records                                                                                      |
+| ----- | -------------------------------------------------------------------------------------------------------------- |
+| 0.85  | `g₂` matched on **both** set code and collector number (strongest join key)                                    |
+| 0.75  | `g₂` matched on collector number **only** (pre-M15), **or** `g₃` symbol-phash tie-break resolved the ambiguity |
+| 0.65  | a match, but `g₄`'s artist-OCR cross-check **disagreed** (weakened, not vetoed)                                |
+| 0.6   | a validated `no_match` (`g₂` = `parsed-but-no-match`)                                                          |
+
+**Two hard facts about this number, both verified against the code, not
+assumed:**
+
+1. **It does not affect resolution at all.**
+   `resolve_weighted_consensus` reconciles votes **strictly by
+   source-derived weight** (`VoteTuple.weight`), and there is **no
+   reference to `confidence` anywhere in `vote_consensus.py`**. The
+   field is descriptive metadata on the vote row; changing it changes
+   no outcome. (`local_calculate_verdicts.py`'s own
+   `JOIN_KEY_CONFIDENCE_BOTH` comment makes the same point.)
+2. **It is ordinal, not calibrated.** `0.85` means "stronger join key
+   than 0.75," full stop. It does **not** mean "85% probability the
+   printing is correct." No data ties any tier to an observed accuracy
+   — see §9. Treat it as a rank, not a probability.
+
+### 8b. What the human-confirmed signal _is_ — a structurally checkable gate outcome
+
+The UI's confidence display (the checkmark-vs-numeric decision:
+**checkmark once a printing has cleared the human-backed consensus
+gate, a numeric score otherwise**) draws the line in exactly the right
+place. The checkmark is **not** a high value of the §8a number — it is
+a **categorically different, stronger claim**: "this printing cleared
+`g₅` — a consensus of `min_weight`/`min_share` **including at least one
+human-backed vote**." That claim is **structurally re-derivable** by
+anyone holding the vote tally: given `vote_weight` and `human_votes`
+(both already exported per record, `public-export-v1.md` §1), a peer
+recomputes the gate predicate from the published constants and confirms
+it, rather than trusting our assertion.
+
+### 8c. The defensible mapping, and the federation posture that follows from it
+
+Putting 8a and 8b together yields a clean, defensible mapping from
+pipeline state to an exportable confidence claim:
+
+- **Human-confirmed tier (checkmark / `basis.human_confirmed = true`).**
+  A **binary, auditable** claim: "cleared a human-backed consensus gate
+  of total weight `W` with `H ≥ 1` human votes." A peer verifies it
+  against §7's `g₅` predicate. This is the **only** tier v1 federation
+  publishes — `public-export-v1.md` §1's "the gate **is** the export":
+  machine suggestions that have not cleared `g₅` **stay home**.
+- **Machine-suggestion tier (numeric, no checkmark).** An **ordinal**
+  claim: "the strongest evidence stage that passed is `T`" (the §8a
+  table). A peer can recompute the same tier from the same evidence
+  fields (was a set code present? did the collector number match? did
+  the symbol tie-break clear threshold-and-margin? did artist OCR
+  agree?) — it is portable and checkable, but it is a **rank over
+  pipeline states, never a probability**. v1 federation deliberately
+  does **not** export this tier.
+
+**What our confidence therefore MAY claim, to a peer or a UI:** (i) a
+binary, re-derivable "cleared the human-backed gate, here is the tally
+to check it against," and (ii) an ordinal "here is which decode stages
+succeeded, on a fixed ladder you can reproduce." **What it MUST NOT
+claim:** that any number is a calibrated posterior `P(printing correct)`. It is not — not until the data in §9 exists. This is the
+"auditable against stated math rather than trust" property the
+federation program is aiming for: every claim above is something the
+consumer can independently recompute from fields we already publish,
+none of it is a score they must take on faith.
+
+## 9. From bound to calibrated probability — what upgrading would require (future work, nothing built)
+
+§7 gives a **structural** zero (resolution-level) and an **uncalibrated**
+bound (suggestion-level); §8 gives **ordinal** confidence. Upgrading
+any of the §8a tiers — or the individual `εᵢ` of §7 — into an honest
+**calibrated probability** `P(printing correct | tier)` requires data
+that **does not exist yet**, and inventing a number in its absence
+would violate this project's own "config values land only from
+measurement" rule. Concretely, three things would be needed, in
+increasing order of cost:
+
+1. **A labeled human-verified sample, per tier, adjudicated
+   independently of the machine suggestion.** For each confidence tier
+   (0.85 / 0.75 / 0.65) and for `no_match` (0.6), draw a random sample
+   of cards the machine assigned that tier and have humans establish
+   the true printing **without seeing the machine's guess** (else the
+   estimate is circular). The empirical accuracy per tier, with a
+   Wilson interval, is the calibration curve. This is the minimum bar,
+   and it is the one currently blocked: real human participation is
+   still tiny (§6 — 4 distinct voters), so the confirmed-label volume
+   to estimate even one tier's accuracy tightly is not there.
+2. **Per-veto precision/recall calibration for `g₄`.** Measure, over a
+   labeled sample, what fraction of each veto's firings
+   (`border-mismatch`, `frame-mismatch`, `proxy-marker-veto`,
+   `copyright-year-mismatch`, `truncated-image`) were _true_ wrong-match
+   catches versus correctly-matched cards vetoed on noisy observed
+   attributes, and — harder — what fraction of _passed_ matches were
+   nonetheless wrong (the miss rate). Only then does `ε₄` become a
+   number rather than a firing count. Same labeled-data dependency as
+   (1).
+3. **Dawid-Skene integration** (the model §6's final section already
+   names). Replace the **fixed** per-source weights (0.5 / 1.0 / 5.0)
+   and the **fixed** ordinal confidence tiers with **reliabilities
+   estimated jointly from the data** — per source, and potentially per
+   confidence tier — so that a vote's contribution reflects its
+   _measured_ correctness rate, not a hand-set prior. This is what
+   turns the §8a ordinal into an estimated likelihood that composes,
+   over the closed set `C(n)`, into a genuine posterior. It is gated on
+   exactly the volume condition §6 already states for the Sybil work:
+   a data-estimated reliability is only more stable than the current
+   hand-set prior once per-source volume is high enough, which it is
+   not yet. The same estimation, applied to a federation peer as "just
+   another noisy source" (§6, `federation-v1.md`), is what would let a
+   peer's verdicts earn a _measured_ weight rather than a default one.
+
+Until (1)–(3) exist, the honest ceiling is what §§7–8 already state:
+resolution false-accept is structurally and measuredly **0**;
+suggestion confidence is an **ordinal, auditable pipeline-state label**;
+neither is a calibrated probability, and this document does not pretend
+otherwise.
+
 ---
 
 ## Status
@@ -346,3 +649,17 @@ harvest count and analyzed count, checked against source data and not
 resolvable from what's recorded) is an **accepted documented
 limitation** — calibration on the accounted-for cases (241/269) is
 correct as-is, no harvest re-run planned.
+
+**§§7–9 added 2026-07-21** (owner-commissioned formalization): the
+deduction chain written as an explicit stage composition (§7), the
+confidence semantics federation needs (§8), and the calibration work
+that would upgrade the ordinal confidence to a real posterior (§9).
+These sections formalize the **current** Stage D chain
+(`local_calculate_verdicts.py`), which is architecturally narrower
+than §1's live-pilot three-channel model (§7 opens by stating that
+divergence plainly rather than retrofitting §1). Anchored on the
+2026-07-21 `staged-write-20260721T0434Z` run (8,925 join-key votes,
+0/8,925 gate verification, 2/20,677 ambiguous rate;
+`docs/reports/2026-07-21-staged-write.md`) alongside §2's existing
+0/43,426 and 269-pair numbers. The commission is owner-approved; the
+§§7–9 **text** is pending the same owner review §§1–6 received.
