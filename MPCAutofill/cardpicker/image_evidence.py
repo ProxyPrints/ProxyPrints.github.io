@@ -183,7 +183,7 @@ ImageEvidence's own docstring for the exact voted/skipped/dropped definitions.
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import imagehash
 
@@ -204,10 +204,13 @@ from cardpicker.local_image_quality import (
     is_image_truncated,
 )
 from cardpicker.local_ocr import (
+    ALTERNATE_TESSERACT_CONFIG,
     DEFAULT_CROP_BOX,
     LEGAL_LINE_CROP_BOX,
+    TESSERACT_CONFIG,
     parse_collector_line,
     parse_legal_line,
+    preprocess_fallback_variants,
     preprocess_variants,
     run_tesseract,
     run_tesseract_text_and_words,
@@ -275,6 +278,44 @@ def _compute_region_phash(image: Any, box: list[int]) -> int:
     (FINAL POSTURE item 2: "store the math, not the strip")."""
     region = image.crop(tuple(box)).convert("L")
     return twos_complement(str(imagehash.phash(region)), _SYMBOL_HASH_BITS)
+
+
+def _collector_line_ocr_attempts(cropped: Any) -> Iterator[tuple[Any, str]]:
+    """
+    Ordered, LAZY (image, tesseract_config) attempts for the `collector_line_ocr` extractor
+    (issue #259, "Stage D no-text bucket: OCR preprocessing/crop recovery") - cheapest/fastest
+    first, each later tier strictly more expensive than the one before it. A generator (not a
+    plain list) specifically so the caller's own "stop at the first attempt that parses a
+    collector number" loop never actually pays for a later tier's preprocessing/OCR cost unless
+    every earlier tier has already failed - `preprocess_fallback_variants(cropped)` below is not
+    even CALLED, let alone OCR'd, for the common case where an early attempt already succeeds.
+
+    - Tier 1 (attempts 1-2, PSM 6): `preprocess_variants`' original two polarity variants -
+      UNCHANGED from before this issue, still the fast/happy path for the large majority of
+      cards that already parse cleanly.
+    - Tier 2 (attempts 3-6, PSM 6): `preprocess_fallback_variants`' four heavier-preprocessed
+      variants (sharpen+heavier-upscale, percentile threshold) - targets the #259 diagnostic's
+      two concrete B-bucket failure modes (blurry uploads, uneven-brightness "garbled but
+      present" text) with better PIXELS, same page-segmentation assumption.
+    - Tier 3 (attempts 7-8, PSM 11): tier 1's original variants again, but under
+      `ALTERNATE_TESSERACT_CONFIG` - targets a genuinely different failure mode (tesseract's own
+      block/line SEGMENTATION going wrong on a noisy crop), not a pixel-quality problem tier 2's
+      preprocessing can fix. Retried against the original (not fallback-preprocessed) variants
+      since PSM 11 already drops the block-structure assumption tier 2's heavier processing was
+      never targeting in the first place.
+
+    Worst case (a card that never parses anything, e.g. a genuine coverage-ceiling case) pays for
+    all 8 attempts - up to 4x the pre-#259 cost (2 attempts). This only hits cards whose collector
+    line genuinely never resolves to a collector number under ANY of these attempts; the happy
+    path (an early tier-1 parse) is unaffected in cost or behavior.
+    """
+    variants = preprocess_variants(cropped)
+    for variant in variants:
+        yield variant, TESSERACT_CONFIG
+    for variant in preprocess_fallback_variants(cropped):
+        yield variant, TESSERACT_CONFIG
+    for variant in variants:
+        yield variant, ALTERNATE_TESSERACT_CONFIG
 
 
 def extract_card_evidence(
@@ -429,7 +470,6 @@ def compute_card_evidence(
         skip_reasons["collector_line_tsv"] = "fetch_failed"
     else:
         collector_crop = image.crop(tuple(fields["collector_line_crop_px"]))
-        collector_variants = preprocess_variants(collector_crop)
 
         # OCR call-cost reduction (docs/reports/2026-07-20-pipeline-compute-profile.md):
         # previously this ran run_tesseract (image_to_string) on EVERY variant unconditionally,
@@ -441,11 +481,18 @@ def compute_card_evidence(
         # number rather than always computing every variant - matches this same loop's own
         # pre-existing "first variant that produces something" precedence, just applied to WHEN
         # each variant gets OCR'd, not only to which one's result is kept.
+        #
+        # `_collector_line_ocr_attempts` (issue #259) supplies the FULL, lazily-evaluated
+        # attempt order - the original two `preprocess_variants` polarities first (unchanged, the
+        # happy path), then two fallback tiers (heavier-preprocessed variants, then an alternate
+        # PSM re-try) that are only ever reached - and only ever cost a tesseract call - once
+        # every earlier attempt has already failed to parse a collector number. See that
+        # function's own docstring for the full tier breakdown and worst-case cost.
         collector_texts_and_words: list[tuple[str, list[dict[str, Any]]]] = []
         selected_index = 0
         parsed = parse_collector_line("")
-        for i, variant in enumerate(collector_variants):
-            raw_text, word_boxes = run_tesseract_text_and_words(variant)
+        for i, (variant, config) in enumerate(_collector_line_ocr_attempts(collector_crop)):
+            raw_text, word_boxes = run_tesseract_text_and_words(variant, config=config)
             collector_texts_and_words.append((raw_text, word_boxes))
             candidate_parse = parse_collector_line(raw_text)
             if candidate_parse.collector_number is not None:
@@ -453,9 +500,9 @@ def compute_card_evidence(
                 selected_index = i
                 break
         else:
-            # every variant was tried and none parsed a collector number - keep the first
-            # variant's (empty-ish) parse as the deterministic stored artifact, matching the
-            # pre-existing fallback precedence.
+            # every attempt (every tier) was tried and none parsed a collector number - keep the
+            # first attempt's (empty-ish) parse as the deterministic stored artifact, matching
+            # the pre-existing fallback precedence.
             if collector_texts_and_words:
                 parsed = parse_collector_line(collector_texts_and_words[0][0])
 

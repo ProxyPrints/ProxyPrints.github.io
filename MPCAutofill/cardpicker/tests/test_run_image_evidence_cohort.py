@@ -133,6 +133,67 @@ def test_empty_cohort_still_exits_cleanly(capsys: pytest.CaptureFixture) -> None
     assert "Nothing to do." in out
 
 
+@pytest.mark.django_db
+def test_card_ids_file_bypasses_the_resume_filter(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, tmp_path: Any
+) -> None:
+    """issue #259's targeted re-extraction path: a card already carrying a FULL
+    `ImageEvidence.extractor_versions` (normally excluded by the resume filter, see the module
+    docstring's step 2) must still be picked up when it's named explicitly via
+    `--card-ids-file` - that's the whole point of the flag (a forced re-run against cards whose
+    evidence already exists, e.g. to re-OCR with issue #259's improved preprocessing)."""
+    from cardpicker.management.commands.run_image_evidence_cohort import (
+        MANIFEST_EXTRACTOR_KEYS,
+    )
+    from cardpicker.tests.factories import ImageEvidenceFactory
+
+    card = CardFactory(content_phash=123456789)
+    ImageEvidenceFactory(
+        card=card, content_hash=123456789, extractor_versions={key: "v1" for key in MANIFEST_EXTRACTOR_KEYS}
+    )
+
+    ids_file = tmp_path / "ids.txt"
+    ids_file.write_text(f"{card.pk}\n")
+
+    monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+    monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+    call_command(
+        "run_image_evidence_cohort", "--card-ids-file", str(ids_file), "--workers", "1", "--run-id", "test-run-ids"
+    )
+
+    out = capsys.readouterr().out
+    assert "explicit card ids" in out
+    assert "completed=1/1" in out
+
+
+@pytest.mark.django_db
+def test_card_ids_file_with_a_nonexistent_card_id_drops_cleanly(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, tmp_path: Any
+) -> None:
+    """A stale/typo'd id in the file must not crash the run - `_fetch_one_card`'s own
+    `Card.DoesNotExist` handling (unchanged by this flag) already covers this. Stubs
+    `_fetch_one_card` to return the same "dropped" outcome that handling produces (matching
+    every other test in this file's own convention of never exercising a real DB query through
+    the synchronous pool stub, which shares this test's own connection rather than a real
+    forked/threaded one)."""
+
+    def _stub_fetch_dropped(card_id: int, stop_event: threading.Event) -> "cohort_command._FetchOutcome":
+        return cohort_command._FetchOutcome(card_id=card_id, outcome="dropped")
+
+    monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_dropped)
+    monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+    ids_file = tmp_path / "ids.txt"
+    ids_file.write_text("999999999\n")
+
+    call_command("run_image_evidence_cohort", "--card-ids-file", str(ids_file), "--workers", "1", "--run-id", "t")
+
+    out = capsys.readouterr().out
+    assert "DONE" in out
+    assert "fetch_failures=1" in out
+
+
 class TestFetchOneCard:
     """`_fetch_one_card` is the new fetch-stage work unit - runs on a thread, never touches an
     extractor, and is the only place a `GoogleFetchLockoutError` can now originate (see the

@@ -147,10 +147,13 @@ def _stub_ocr(monkeypatch, collector_raw_text: str = "158/287 R MOM EN"):
     tesseract call returning both text and word boxes, see local_ocr.py's own docstring) replaces
     the old separate `run_tesseract`/`run_tesseract_tsv` calls collector_line_ocr's own winning
     variant used to make - stubbed here to return `(collector_raw_text, [])`, matching the old
-    stub's "real text, empty word boxes" contract."""
+    stub's "real text, empty word boxes" contract. Accepts (and ignores) a `config` kwarg (issue
+    #259's `_collector_line_ocr_attempts` always passes one) - the default `collector_raw_text`
+    always parses a collector number on this stub's very first attempt, so no test using the
+    default ever reaches a tier where `config` would differ from PSM 6 anyway."""
     monkeypatch.setattr(module, "preprocess_variants", lambda cropped: [cropped])
-    monkeypatch.setattr(module, "run_tesseract", lambda variant: collector_raw_text)
-    monkeypatch.setattr(module, "run_tesseract_text_and_words", lambda variant: (collector_raw_text, []))
+    monkeypatch.setattr(module, "run_tesseract", lambda variant, config=None: collector_raw_text)
+    monkeypatch.setattr(module, "run_tesseract_text_and_words", lambda variant, config=None: (collector_raw_text, []))
 
 
 def _stub_symbol_region(monkeypatch, value: int = 123456789):
@@ -802,6 +805,52 @@ class TestExtractCardEvidenceCollectorLineOcr:
         assert result.fields["collector_line_collector_number"] == ""
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
 
+    def test_no_legible_text_exhausts_every_fallback_tier_before_giving_up(self, db, monkeypatch):
+        """issue #259: a blank crop must genuinely try every tier (2 base + 4 fallback + 2
+        alternate-PSM = 8 attempts) before recording "no-text" - counted via a wrapper around
+        `run_tesseract_text_and_words` rather than asserting a specific OCR result (a blank crop
+        reliably reads as empty text under every config in this environment; the ATTEMPT COUNT,
+        not the text, is what this test is about)."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        configs_used: list[str] = []
+        original = module.run_tesseract_text_and_words
+
+        def counting(image_arg, config):
+            configs_used.append(config)
+            return original(image_arg, config=config)
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", counting)
+
+        result = extract_card_evidence(card)
+
+        assert result.skip_reasons["collector_line_ocr"] == "no-text"
+        assert len(configs_used) == 8
+        assert configs_used.count(module.TESSERACT_CONFIG) == 6  # 2 base + 4 fallback, PSM 6
+        assert configs_used.count(module.ALTERNATE_TESSERACT_CONFIG) == 2  # base variants, PSM 11
+
+    def test_happy_path_never_computes_fallback_preprocessing(self, db, monkeypatch):
+        """issue #259: a card whose collector line parses cleanly on the very first (base, PSM
+        6) attempt must never even CALL `preprocess_fallback_variants`, let alone OCR any of its
+        output - the lazy attempt generator must not advance past tier 1 once the consuming
+        loop's own early-break fires. Keeps the happy path's cost unchanged, per this issue's own
+        "keep the happy path unchanged and fast" directive."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "158/287 R MOM EN")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        def _boom(cropped):
+            raise AssertionError("preprocess_fallback_variants must never be called on the happy path")
+
+        monkeypatch.setattr(module, "preprocess_fallback_variants", _boom)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["collector_line_collector_number"] == "158"
+        assert "collector_line_ocr" not in result.skip_reasons
+
     def test_fetch_failure_withholds_fields_and_shares_skip_reason(self, db, monkeypatch):
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
@@ -832,6 +881,37 @@ class TestExtractCardEvidenceCollectorLineOcr:
         assert evidence.collector_line_raw_text == "158/287 R MOM EN"
         assert evidence.collector_line_set_code == "mom"
         assert evidence.collector_line_collector_number == "158"
+
+
+class TestCollectorLineOcrAttempts:
+    """Direct tests of `_collector_line_ocr_attempts` (issue #259) - the lazy, ordered
+    (image, tesseract_config) generator `collector_line_ocr`'s own loop consumes. No tesseract
+    call happens in these tests (only `preprocess_variants`' PIL-only grayscale/threshold work,
+    plus - when the fallback tier is actually reached - `preprocess_fallback_variants`' own
+    PIL-only work) - these tests are about the ORDERING/laziness contract, not OCR output, so
+    they're fast and don't need a real card image."""
+
+    def test_yields_eight_attempts_in_the_documented_tier_order(self):
+        crop = Image.new("RGB", (60, 24), "black")
+
+        attempts = list(module._collector_line_ocr_attempts(crop))
+
+        assert len(attempts) == 8
+        configs = [config for _variant, config in attempts]
+        assert configs == [module.TESSERACT_CONFIG] * 6 + [module.ALTERNATE_TESSERACT_CONFIG] * 2
+
+    def test_never_calls_fallback_variants_if_consumer_stops_after_tier_one(self, monkeypatch):
+        crop = Image.new("RGB", (60, 24), "black")
+
+        def _boom(cropped):
+            raise AssertionError("preprocess_fallback_variants must not be called")
+
+        monkeypatch.setattr(module, "preprocess_fallback_variants", _boom)
+
+        attempts = module._collector_line_ocr_attempts(crop)
+        first_two = [next(attempts) for _ in range(2)]  # tier 1 only - the generator's own laziness
+
+        assert len(first_two) == 2
 
 
 class TestExtractCardEvidenceArtistOcr:

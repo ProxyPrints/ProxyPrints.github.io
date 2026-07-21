@@ -108,3 +108,21 @@ def find_stale_applied_migrations() -> list[tuple[str, str]]:
     disk = set(MigrationLoader(connection, ignore_no_migrations=True).disk_migrations.keys())
     applied = set(MigrationRecorder(connection).applied_migrations().keys())
     return sorted(applied - disk)
+
+
+def read_card_ids_file(path: str) -> list[int]:
+    """
+    Shared `--card-ids-file` parsing (issue #259's reparse_collector_evidence +
+    run_image_evidence_cohort's own targeted-cohort flag) - one card pk per line, blank lines
+    and `#`-prefixed comment lines ignored, order preserved (not deduplicated or sorted - a
+    caller that cares about either does so itself; this is a plain, honest file read). Raises
+    `ValueError` (via `int()`) on a genuinely malformed line rather than silently skipping it -
+    a typo'd card id in an owner-authored targeting file should fail loudly, not vanish.
+    """
+    ids: list[int] = []
+    for line in Path(path).read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        ids.append(int(stripped))
+    return ids

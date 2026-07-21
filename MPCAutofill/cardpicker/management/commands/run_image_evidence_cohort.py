@@ -144,6 +144,7 @@ from django.db.models import Min
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.models import CanonicalCard, Card, ImageEvidence
+from cardpicker.utils import read_card_ids_file
 
 logger = logging.getLogger(__name__)
 
@@ -503,6 +504,17 @@ class Command(BaseCommand):
             help="Path (inside the container) to write the --profile JSONL to. Default: "
             "/tmp/stagec-profile-<run_id>.jsonl.",
         )
+        parser.add_argument(
+            "--card-ids-file",
+            type=str,
+            default=None,
+            help="Path to a newline-separated file of explicit card pks to (re-)extract - "
+            "issue #259's targeted re-extraction path (reparse_collector_evidence's own "
+            "--selector no-text runbook calls for this to refresh a specific no-text cohort's "
+            "OCR read with improved preprocessing). When given, BOTH the edhrec_rank priority "
+            "ordering AND the resume/'already fully processed' filter are bypassed for exactly "
+            "these ids - a forced re-run, not a normal cohort slice - and --limit is ignored.",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         limit: int = options["limit"]
@@ -527,45 +539,58 @@ class Command(BaseCommand):
         if profile:
             self.stdout.write(f"Profile JSONL: {profile_output}")
 
-        # Step 1: cheap name -> min(edhrec_rank) map - see module docstring for why this replaces
-        # a per-row correlated subquery.
-        t0 = time.monotonic()
-        name_rank: dict[str, int] = {}
-        rank_rows = (
-            CanonicalCard.objects.filter(printing_metadata__edhrec_rank__isnull=False)
-            .values("name")
-            .annotate(min_rank=Min("printing_metadata__edhrec_rank"))
-        )
-        for row in rank_rows.iterator():
-            key = row["name"].lower()
-            existing = name_rank.get(key)
-            if existing is None or row["min_rank"] < existing:
-                name_rank[key] = row["min_rank"]
-        self.stdout.write(f"Built name->edhrec_rank map ({len(name_rank)} names) in {time.monotonic() - t0:.2f}s")
+        card_ids_file: Optional[str] = options["card_ids_file"]
+        if card_ids_file:
+            # Targeted re-extraction path (issue #259) - explicit ids, priority ordering AND the
+            # resume filter both bypassed (see this flag's own --help): the whole point of using
+            # it is to force a re-run against cards whose ImageEvidence already exists.
+            cohort_ids = read_card_ids_file(card_ids_file)
+            self.stdout.write(
+                f"--card-ids-file given: {len(cohort_ids)} explicit card ids "
+                "(priority ordering and the resume filter are bypassed for these)"
+            )
+        else:
+            # Step 1: cheap name -> min(edhrec_rank) map - see module docstring for why this
+            # replaces a per-row correlated subquery.
+            t0 = time.monotonic()
+            name_rank: dict[str, int] = {}
+            rank_rows = (
+                CanonicalCard.objects.filter(printing_metadata__edhrec_rank__isnull=False)
+                .values("name")
+                .annotate(min_rank=Min("printing_metadata__edhrec_rank"))
+            )
+            for row in rank_rows.iterator():
+                key = row["name"].lower()
+                existing = name_rank.get(key)
+                if existing is None or row["min_rank"] < existing:
+                    name_rank[key] = row["min_rank"]
+            self.stdout.write(f"Built name->edhrec_rank map ({len(name_rank)} names) in {time.monotonic() - t0:.2f}s")
 
-        # Step 2: resume filter - cards whose ImageEvidence row already has every manifest key.
-        already_done_ids: set[int] = set()
-        for card_id, extractor_versions in ImageEvidence.objects.values_list("card_id", "extractor_versions"):
-            if MANIFEST_EXTRACTOR_KEYS.issubset(extractor_versions.keys()):
-                already_done_ids.add(card_id)
-        if already_done_ids:
-            self.stdout.write(f"Resume filter: skipping {len(already_done_ids)} already-fully-processed cards")
+            # Step 2: resume filter - cards whose ImageEvidence row already has every manifest key.
+            already_done_ids: set[int] = set()
+            for card_id, extractor_versions in ImageEvidence.objects.values_list("card_id", "extractor_versions"):
+                if MANIFEST_EXTRACTOR_KEYS.issubset(extractor_versions.keys()):
+                    already_done_ids.add(card_id)
+            if already_done_ids:
+                self.stdout.write(f"Resume filter: skipping {len(already_done_ids)} already-fully-processed cards")
 
-        # Step 3: candidate (id, name) pairs, cheapest possible shape for the Python-side sort.
-        candidates = (
-            Card.objects.filter(content_phash__isnull=False).exclude(id__in=already_done_ids).values_list("id", "name")
-        )
-        id_name_pairs = list(candidates)
-        self.stdout.write(f"{len(id_name_pairs)} eligible cards before cohort slicing")
+            # Step 3: candidate (id, name) pairs, cheapest possible shape for the Python-side sort.
+            candidates = (
+                Card.objects.filter(content_phash__isnull=False)
+                .exclude(id__in=already_done_ids)
+                .values_list("id", "name")
+            )
+            id_name_pairs = list(candidates)
+            self.stdout.write(f"{len(id_name_pairs)} eligible cards before cohort slicing")
 
-        def priority_key(pair: tuple[int, str]) -> tuple[float, int]:
-            card_id, name = pair
-            rank = name_rank.get(name.lower())
-            return (rank if rank is not None else math.inf, card_id)
+            def priority_key(pair: tuple[int, str]) -> tuple[float, int]:
+                card_id, name = pair
+                rank = name_rank.get(name.lower())
+                return (rank if rank is not None else math.inf, card_id)
 
-        id_name_pairs.sort(key=priority_key)
-        cohort_ids = [card_id for card_id, _name in id_name_pairs[:limit]]
-        self.stdout.write(f"Cohort: {len(cohort_ids)} cards (prioritized by edhrec_rank, cold tail last)")
+            id_name_pairs.sort(key=priority_key)
+            cohort_ids = [card_id for card_id, _name in id_name_pairs[:limit]]
+            self.stdout.write(f"Cohort: {len(cohort_ids)} cards (prioritized by edhrec_rank, cold tail last)")
 
         if not cohort_ids:
             self.stdout.write("Nothing to do.")
