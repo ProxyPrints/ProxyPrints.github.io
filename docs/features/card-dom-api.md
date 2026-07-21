@@ -51,7 +51,7 @@ The "No match" button intentionally carries none of these attributes.
 ## Status
 
 Documented in `frontend/docs/dom-api.md`. Test coverage in
-`CardSlot.spec.ts`, `PrintingTagPicker.spec.ts`, and the
+`CardSlot.spec.ts`, `VotePickers.spec.ts` (formerly `PrintingTagPicker.spec.ts`), and the
 `QuestionFeed*.spec.ts` suite (unified vote queue, successor to the old
 standalone `PrintingTagQueue.tsx` this API originally shipped against)
 — real Playwright runs against the mocked backend, not just typecheck.

@@ -3,6 +3,7 @@ import { expect } from "@playwright/test";
 import { cardDocument1, printingCandidate1 } from "@/common/test-constants";
 import {
   defaultHandlers,
+  questionFeedConfirmSuggestion,
   questionFeedIdentifyPrinting,
 } from "@/mocks/handlers";
 
@@ -128,5 +129,128 @@ test.describe("question feed - Level 2 layout reconciliation (real-device regres
     expect(cardAreaBox!.width).toBeGreaterThan(panelBox!.width * 0.9);
     // No chip overlaps the card's own grid area - the ring never re-forms below sm.
     expect(boxesIntersect(cardAreaBox!, chipBox!)).toBe(false);
+  });
+});
+
+// identify_printing lands straight on Level 2 (the candidate grid) - confirm_suggestion's
+// Level 1 has no grid to reorder at all, so it's not a fit for this ordering check anymore
+// (see QuestionFeed.spec.ts for Level 1's own coverage).
+test.describe("question feed - mobile layout", () => {
+  test("at a mobile viewport, the mystery card renders above the answer candidates, not below them", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const cardImage = page.getByAltText(cardDocument1.name);
+    const suggestedCandidate = page.locator(
+      `[data-card-identifier="${printingCandidate1.identifier}"]`
+    );
+    await expect(cardImage).toBeVisible();
+    await expect(suggestedCandidate).toBeVisible();
+
+    const cardBox = await cardImage.boundingBox();
+    const candidateBox = await suggestedCandidate.boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(candidateBox).not.toBeNull();
+    // The card must be reachable without scrolling past every answer option first - its top
+    // edge should render above (a smaller y than) the candidate grid's.
+    expect(cardBox!.y).toBeLessThan(candidateBox!.y);
+  });
+
+  test("at desktop width, candidates still render to the left of the card (unaffected by the mobile reorder)", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    // default chromium project viewport (800x600) is already >= the md breakpoint
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const cardImage = page.getByAltText(cardDocument1.name);
+    const suggestedCandidate = page.locator(
+      `[data-card-identifier="${printingCandidate1.identifier}"]`
+    );
+    await expect(cardImage).toBeVisible();
+    await expect(suggestedCandidate).toBeVisible();
+
+    const cardBox = await cardImage.boundingBox();
+    const candidateBox = await suggestedCandidate.boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(candidateBox).not.toBeNull();
+    expect(candidateBox!.x).toBeLessThan(cardBox!.x);
+  });
+});
+
+// Mobile funnel pass - thumb-native tap targets. WCAG 2.5.5 (Target Size, AA) and Apple's HIG
+// both call for a 44px minimum touch target; Bootstrap's own default .btn height (~38px) and
+// the attribute chips' original padding (~30px) both fell short. These assert the real,
+// measured height of each control class the funnel uses for answering a question, not just
+// that a CSS rule exists - a min-height declaration overridden elsewhere (e.g. a conflicting
+// Bootstrap utility class) wouldn't be caught by a stylesheet-only check.
+test.describe("question feed - tap target sizes (mobile funnel pass)", () => {
+  test("Level 1's stacked answer buttons meet the 44px floor", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    for (const testId of [
+      "question-feed-level1-yes",
+      "question-feed-level1-not-sure",
+      "question-feed-level1-no",
+      "question-feed-level1-skip",
+    ]) {
+      const box = await page.getByTestId(testId).boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  test("Level 2's filter toggle and exit buttons meet the 44px floor", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const toggleBox = await page
+      .getByTestId("question-feed-filter-toggle")
+      .boundingBox();
+    expect(toggleBox).not.toBeNull();
+    expect(toggleBox!.height).toBeGreaterThanOrEqual(44);
+
+    for (const testId of [
+      "question-feed-no-match",
+      "question-feed-custom-art",
+      "question-feed-skip",
+    ]) {
+      const box = await page.getByTestId(testId).boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  test("attribute chips meet the 44px floor once the filter panel is expanded", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await page.getByTestId("question-feed-filter-toggle").click();
+    const firstChip = page
+      .locator('[data-testid^="attribute-chip-"][data-chip-state]')
+      .first();
+    await expect(firstChip).toBeVisible();
+    const box = await firstChip.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.width).toBeGreaterThanOrEqual(44);
   });
 });

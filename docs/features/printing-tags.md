@@ -493,7 +493,8 @@ printings, artists, tags, and moderation from one screen.
   Confirm/Skip pair also gained `flex-column flex-sm-row` (previously
   always side-by-side, squeezed to half-width each on a phone) to match
   the stacking-to-full-width pattern every other level already used.
-  Regression coverage: `tests/QuestionFeedTapTargets.spec.ts` asserts
+  Regression coverage: `tests/QuestionFeedResponsive.spec.ts` (formerly
+  `QuestionFeedTapTargets.spec.ts`) asserts
   real measured heights (not just that a CSS rule exists) at 390px.
   Chip-ring reflow itself (the single-column stack below `sm` - see
   `AttributeChipPanel.tsx`'s own "MOBILE OVERRIDE" comment) was audited

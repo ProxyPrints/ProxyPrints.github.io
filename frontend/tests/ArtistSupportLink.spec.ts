@@ -23,7 +23,7 @@ const openDetailedView = async (page: any, cardName: string) => {
 
 // Artist Support Links v1, surface 1: the Card Detail Modal's "Canonical Aritst" row (see
 // docs/features/artist-support-links.md). Surface 2 (the /whatsthat post-answer moment) is
-// covered in QuestionFeedArtistAndTag.spec.ts.
+// covered in QuestionFeed.spec.ts.
 test.describe("Artist Support Link - Card Detail Modal", () => {
   test("a known canonical artist renders as an Artist Support Link, built deterministically from their name", async ({
     page,

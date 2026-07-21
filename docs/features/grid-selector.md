@@ -168,12 +168,12 @@ still back that modal.
   `/display`-only Select Version section (issue #167)
 - `frontend/src/features/card/Card.tsx` (+ new `Card.test.tsx`),
   `CardSlot.tsx`
-- Tests: `frontend/tests/GridSelectorModalAccessibility.spec.ts`
-  (keyboard nav + a large-grid focus-perf check),
-  `frontend/tests/GridSelectorModalMobile.spec.ts` (autofocus fallback +
-  mobile filters default), `frontend/tests/CardImageStates.spec.ts`
-  (error placeholder + slow-load hint), `frontend/tests/SelectVersionSection.spec.ts`
-  (grouping/ordering, moment (a)/(b)/(c) behavior — issue #167)
+- Tests: `frontend/tests/GridSelectorModalVariants.spec.ts` (keyboard nav
+  - a large-grid focus-perf check, autofocus fallback, mobile filters
+    default — merged from the former `GridSelectorModalAccessibility.spec.ts`
+    and `GridSelectorModalMobile.spec.ts`), `frontend/tests/CardImageStates.spec.ts`
+    (error placeholder + slow-load hint), `frontend/tests/SelectVersionSection.spec.ts`
+    (grouping/ordering, moment (a)/(b)/(c) behavior — issue #167)
 
 ## Known gaps
 

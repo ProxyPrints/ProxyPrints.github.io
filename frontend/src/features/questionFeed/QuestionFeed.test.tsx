@@ -218,7 +218,7 @@ describe("QuestionFeed", () => {
     // printing-2's borderColor is "borderless" - outside the Black/White/Silver taxonomy, so
     // no Border Color chip auto-fires for it (see attributeChips.test.ts's
     // getOpenExclusionGroups coverage - this is exactly what routes the feed to Level 3
-    // instead of advancing, covered separately in QuestionFeedLevels.spec.ts).
+    // instead of advancing, covered separately in QuestionFeed.spec.ts).
     expect(autoTagCalls.map((call) => call.tagName)).not.toContain(
       "Black Border"
     );

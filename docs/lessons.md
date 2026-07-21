@@ -326,7 +326,7 @@ consumers).
 `expect(getByText("Card Details")).toBeVisible()`) can fail with a hard 5s
 timeout in a Claude Code cloud sandbox specifically — reproduced
 identically and deterministically (not flaky/intermittent) across
-`PrintingTagPicker.spec.ts`, `TagVotePicker.spec.ts`, and
+`VotePickers.spec.ts` (formerly `PrintingTagPicker.spec.ts`/`TagVotePicker.spec.ts`) and
 `visual/CardDetailedViewModal.visual.spec.ts`, including on unmodified
 `master` and in isolated `--workers=1` runs, while every other Playwright
 spec in the same run (including specs that also drive
