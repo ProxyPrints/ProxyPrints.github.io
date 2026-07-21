@@ -19,6 +19,7 @@ from cardpicker.management.commands.reparse_collector_evidence import (
     reparse_and_retract,
     select_card_ids_no_text,
     select_card_ids_parser_bug,
+    select_card_ids_proxy_marker_veto,
 )
 from cardpicker.models import (
     CardPrintingTag,
@@ -124,6 +125,29 @@ class TestSelectCardIdsNoText:
         )
 
         assert select_card_ids_no_text("run-1") == []
+
+
+class TestSelectCardIdsProxyMarkerVeto:
+    """2026-07-21, moderator-flag-signal correction - mirrors TestSelectCardIdsNoText exactly,
+    structurally, just against the "proxy-marker-veto" skip_reason instead."""
+
+    def test_finds_cards_from_exactly_the_given_run_id(self, db):
+        card_a = CardFactory(name="Card F", content_phash=6)
+        card_b = CardFactory(name="Card G", content_phash=7)
+        CardScanLog.objects.create(
+            card=card_a, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto", run_id="run-1"
+        )
+        CardScanLog.objects.create(
+            card=card_b, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto", run_id="run-2"
+        )
+
+        assert select_card_ids_proxy_marker_veto("run-1") == [card_a.pk]
+
+    def test_ignores_a_different_skip_reason(self, db):
+        card = CardFactory(name="Card H", content_phash=8)
+        CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text", run_id="run-1")
+
+        assert select_card_ids_proxy_marker_veto("run-1") == []
 
 
 class TestReparseAndRetract:
@@ -238,6 +262,103 @@ class TestReparseAndRetract:
         assert result.retracted == 1
         assert not CardScanLog.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
         assert printing.pk
+
+    def test_proxy_marker_veto_selector_dry_run_counts_without_writing_anything(self, db):
+        """Mirrors test_dry_run_counts_without_writing_anything above (which only exercises the
+        parser-bug fixture) - dry_run's own generic gate in reparse_and_retract applies uniformly
+        across every selector, but this selector's own cohort deserves its own explicit dry-run
+        assertion rather than relying on that genericness alone."""
+        card = CardFactory(name="Marked Card Dry Run", content_phash=11)
+        printing = CanonicalCardFactory(name="Marked Card Dry Run", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_raw_text="158/287 R MOM EN",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            legal_line_proxy_marker_detected=True,
+        )
+        CardScanLog.objects.create(
+            card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto", run_id="stage-d-run-dry"
+        )
+
+        card_ids = select_card_ids_proxy_marker_veto("stage-d-run-dry")
+        assert card_ids == [card.pk]
+
+        result = reparse_and_retract(card_ids, run_id="reparse-dry", dry_run=True)
+
+        assert result.considered == 1
+        assert result.changed == 1
+        assert result.retracted == 0
+        # nothing actually written - the stale skip row and its evidence both survive untouched
+        assert CardScanLog.objects.filter(
+            card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto"
+        ).exists()
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
+        assert printing.pk
+
+    def test_proxy_marker_veto_selector_recovers_immediately_no_reextraction_needed(self, db):
+        """2026-07-21, moderator-flag-signal correction: unlike the no-text case above, this
+        selector needs NO simulated re-extraction step - the stored ImageEvidence never changes
+        at all (`legal_line_proxy_marker_detected=True` throughout); it's the CODE fix in
+        `local_calculate_verdicts._apply_agreement_checks` alone that makes the fresh verdict
+        differ from the stale recorded skip, immediately, on this command's very first pass
+        against a stale proxy-marker-veto row."""
+        card = CardFactory(name="Marked Card", content_phash=9)
+        printing = CanonicalCardFactory(name="Marked Card", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_raw_text="158/287 R MOM EN",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            legal_line_proxy_marker_detected=True,
+        )
+        CardScanLog.objects.create(
+            card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto", run_id="stage-d-run-x"
+        )
+
+        card_ids = select_card_ids_proxy_marker_veto("stage-d-run-x")
+        assert card_ids == [card.pk]
+
+        result = reparse_and_retract(card_ids, run_id="reparse-3", dry_run=False)
+
+        assert result.changed == 1
+        assert result.retracted == 1
+        assert not CardScanLog.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
+        # unchanged by this command (it never re-votes, only retracts) - still True, confirming
+        # the stored evidence itself never had to change for the retraction to be correct.
+        assert card.image_evidence.get().legal_line_proxy_marker_detected is True
+        assert printing.pk
+
+    def test_proxy_marker_veto_selector_end_to_end_recasts_the_real_vote(self, db):
+        """Full two-step runbook proof (mirrors test_card_becomes_eligible_again_for_local_
+        calculate_verdicts_after_retraction above): once this selector retracts the stale
+        proxy-marker-veto skip, the standard, UNCHANGED local_calculate_verdicts run casts the
+        real match the corrected code now allows, with the marker still present throughout."""
+        from cardpicker.local_calculate_verdicts import run_join_key_calculator
+
+        card = CardFactory(name="Marked Card Two", content_phash=10)
+        printing = CanonicalCardFactory(name="Marked Card Two", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_raw_text="158/287 R MOM EN",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            legal_line_proxy_marker_detected=True,
+        )
+        CardScanLog.objects.create(
+            card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto", run_id="stage-d-run-y"
+        )
+
+        before = run_join_key_calculator(dry_run=False)
+        assert before.cards_considered == 0  # excluded: a non-rescannable scan-log row exists
+
+        reparse_and_retract(select_card_ids_proxy_marker_veto("stage-d-run-y"), run_id="reparse-4", dry_run=False)
+
+        after = run_join_key_calculator(dry_run=False)
+        assert after.cards_considered == 1
+        assert after.votes_written == 1
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
 
     def test_unchanged_when_fresh_verdict_matches_the_recorded_vote(self, db):
         card = CardFactory(name="Some Card", content_phash=42)
@@ -380,6 +501,12 @@ class TestReparseCollectorEvidenceCommand:
 
         with pytest.raises(CommandError):
             call_command("reparse_collector_evidence", selector="no-text")
+
+    def test_proxy_marker_veto_selector_requires_stage_d_run_id(self, db):
+        from django.core.management import CommandError, call_command
+
+        with pytest.raises(CommandError):
+            call_command("reparse_collector_evidence", selector="proxy-marker-veto")
 
     def test_card_ids_file_selector_end_to_end(self, db, tmp_path):
         from django.core.management import call_command

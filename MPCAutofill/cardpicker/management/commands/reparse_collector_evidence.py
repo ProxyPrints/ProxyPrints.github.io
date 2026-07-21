@@ -49,6 +49,15 @@ TWO-STEP RUNBOOK (this command's own --help repeats this - read it before runnin
        command never calls) - THEN run this command again against the same `--stage-d-run-id`:
        it will now detect the join-key calculator's own now-different conclusion and retract the
        stale no-text scan-log row.
+     - `--selector proxy-marker-veto --stage-d-run-id RUN_ID` (2026-07-21, moderator-flag-signal
+       correction - `local_calculate_verdicts._apply_agreement_checks` no longer withholds a match
+       on `legal_line_proxy_marker_detected` at all): immediately actionable like `parser-bug`
+       above, NOT like `no-text` - the code fix alone changes `calculate_join_key_verdict`'s
+       conclusion for the SAME stored `ImageEvidence` row, no re-extraction needed. Targets every
+       card carrying a `CardScanLog(anonymous_id=stage-d-join-key-v1, skip_reason=
+       "proxy-marker-veto")` row from exactly `--stage-d-run-id` and retracts it so the card is
+       eligible again for `local_calculate_verdicts`'s own next `--write` pass to cast the real
+       match this fix now allows.
   2. `local_calculate_verdicts` (UNCHANGED by this PR) - once step 1 retracts a card's stale
      vote/scan-log, it is eligible again for that command's own `_eligible_cards_queryset` and
      gets a fresh join-key verdict the next time it runs.
@@ -150,6 +159,25 @@ def select_card_ids_no_text(stage_d_run_id: str) -> list[int]:
         set(
             CardScanLog.objects.filter(
                 anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text", run_id=stage_d_run_id
+            ).values_list("card_id", flat=True)
+        )
+    )
+
+
+def select_card_ids_proxy_marker_veto(stage_d_run_id: str) -> list[int]:
+    """Every card carrying a `CardScanLog(anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+    skip_reason="proxy-marker-veto")` row from exactly `stage_d_run_id` - one specific past
+    `local_calculate_verdicts` invocation's own proxy-marker-veto cohort (2026-07-21,
+    docs/features/catalog-completion-plan.md's "Recovery-arc lessons" item 1's moderator-flag-
+    signal correction: `calculate_join_key_verdict` no longer produces this skip_reason at all
+    going forward, so every row this selects necessarily predates that fix). Mirrors
+    `select_card_ids_no_text` exactly, structurally - the two differ only in WHEN the retraction
+    becomes actionable (this selector immediately, on a first pass; `no-text` only after a prior
+    re-extraction pass - see this module's own docstring)."""
+    return sorted(
+        set(
+            CardScanLog.objects.filter(
+                anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto", run_id=stage_d_run_id
             ).values_list("card_id", flat=True)
         )
     )
@@ -272,13 +300,14 @@ def reparse_and_retract(
 
 class Command(BaseCommand):
     help = (
-        "Supersede/re-vote tooling (issue #259 follow-up): re-parses ImageEvidence.collector_"
-        "line_raw_text with the CURRENT local_ocr parser and retracts the stale stage-d-join-"
-        "key-v1 vote/scan-log for any card whose join-key CONCLUSION changed as a result - zero "
-        "image fetches. See this command's own module docstring for the full two-step runbook "
-        "(re-extraction via run_image_evidence_cohort --card-ids-file is a SEPARATE, "
-        "prerequisite step for the --selector no-text case). Dry-run by default; --write "
-        "required to persist anything."
+        "Supersede/re-vote tooling (issue #259 follow-up, extended 2026-07-21 for the "
+        "moderator-flag-signal correction): re-parses ImageEvidence.collector_line_raw_text with "
+        "the CURRENT local_ocr parser and retracts the stale stage-d-join-key-v1 vote/scan-log "
+        "for any card whose join-key CONCLUSION changed as a result - zero image fetches. See "
+        "this command's own module docstring for the full two-step runbook (re-extraction via "
+        "run_image_evidence_cohort --card-ids-file is a SEPARATE, prerequisite step for "
+        "--selector no-text ONLY - --selector proxy-marker-veto is immediately actionable, like "
+        "parser-bug). Dry-run by default; --write required to persist anything."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -291,19 +320,24 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--selector",
-            choices=["parser-bug", "no-text"],
+            choices=["parser-bug", "no-text", "proxy-marker-veto"],
             default=None,
             help="parser-bug: cards whose CURRENT ImageEvidence.collector_line_set_code matches "
             "the old #260 bug's misparse shape. no-text: cards carrying a CardScanLog"
-            "(anonymous_id=stage-d-join-key-v1, skip_reason='no-text') from --stage-d-run-id. "
-            "Mutually exclusive with --card-ids-file.",
+            "(anonymous_id=stage-d-join-key-v1, skip_reason='no-text') from --stage-d-run-id "
+            "(requires a PRIOR run_image_evidence_cohort --card-ids-file re-extraction pass to "
+            "find anything to retract - see module docstring). proxy-marker-veto (2026-07-21): "
+            "cards carrying a CardScanLog(anonymous_id=stage-d-join-key-v1, "
+            "skip_reason='proxy-marker-veto') from --stage-d-run-id - immediately actionable, no "
+            "re-extraction needed (the code fix alone changes the conclusion for the same stored "
+            "evidence). Mutually exclusive with --card-ids-file.",
         )
         parser.add_argument(
             "--stage-d-run-id",
             type=str,
             default=None,
-            help="Required with --selector no-text - the run_id of the local_calculate_verdicts "
-            "invocation whose no-text scan-log rows to target.",
+            help="Required with --selector no-text or --selector proxy-marker-veto - the run_id "
+            "of the local_calculate_verdicts invocation whose scan-log rows to target.",
         )
         parser.add_argument(
             "--write",
@@ -333,11 +367,17 @@ class Command(BaseCommand):
             card_ids = read_card_ids_file(card_ids_file)
         elif selector == "parser-bug":
             card_ids = select_card_ids_parser_bug()
-        else:
+        elif selector == "no-text":
             stage_d_run_id = kwargs["stage_d_run_id"]
             if not stage_d_run_id:
                 raise CommandError("--selector no-text requires --stage-d-run-id.")
             card_ids = select_card_ids_no_text(stage_d_run_id)
+        else:
+            assert selector == "proxy-marker-veto"
+            stage_d_run_id = kwargs["stage_d_run_id"]
+            if not stage_d_run_id:
+                raise CommandError("--selector proxy-marker-veto requires --stage-d-run-id.")
+            card_ids = select_card_ids_proxy_marker_veto(stage_d_run_id)
 
         if not card_ids:
             self.stdout.write("No candidate cards found for this selector - nothing to do.")

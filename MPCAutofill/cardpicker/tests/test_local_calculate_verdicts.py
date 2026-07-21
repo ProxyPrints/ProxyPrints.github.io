@@ -199,7 +199,13 @@ class TestCalculateJoinKeyVerdict:
         assert verdict.skip_reason == "ambiguous"
         assert verdict.printing_pk is None
 
-    def test_proxy_marker_vetoes_a_direct_match(self, db):
+    def test_proxy_marker_no_longer_vetoes_a_direct_match(self, db):
+        """2026-07-21 correction (docs/features/catalog-completion-plan.md's "Recovery-arc
+        lessons" item 1, verified defect): the marker is catalog-required on every genuine
+        upload, real printings' proxies included, so its presence must never block an otherwise-
+        good join-key match. Confidence is unaffected too (deliberately NOT downgraded to a
+        weaker tier - see `_apply_agreement_checks`'s own inline comment for the reasoning) -
+        this is the exact same JOIN_KEY_CONFIDENCE_BOTH tier a marker-free identical match gets."""
         card = CardFactory(name="Some Card")
         candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
         evidence = _evidence(
@@ -211,11 +217,12 @@ class TestCalculateJoinKeyVerdict:
 
         verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
 
-        assert verdict.skip_reason == "proxy-marker-veto"
-        assert verdict.printing_pk is None
+        assert verdict.skip_reason == ""
+        assert verdict.printing_pk == 1
         assert verdict.is_no_match is False
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_BOTH
 
-    def test_proxy_marker_vetoes_a_symbol_tiebroken_match(self, db):
+    def test_proxy_marker_no_longer_vetoes_a_symbol_tiebroken_match(self, db):
         card = CardFactory(name="Forest")
         candidates = [
             CandidatePrinting(pk=1, expansion_code="mom", collector_number="158"),
@@ -230,13 +237,47 @@ class TestCalculateJoinKeyVerdict:
 
         verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
 
-        assert verdict.skip_reason == "proxy-marker-veto"
-        assert verdict.printing_pk is None
+        assert verdict.skip_reason == ""
+        assert verdict.printing_pk == 1
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_SYMBOL_TIEBREAK
+
+    def test_proxy_marker_present_or_absent_reaches_the_same_verdict(self, db):
+        """The marker is genuinely a no-op now (module docstring's moderator-flag signal section)
+        - not just "no longer a veto" but "no effect on the outcome at all", confirmed by
+        comparing against the identical marker-free evidence rather than only asserting the
+        marker-present case in isolation."""
+        # ImageEvidence carries a real unique_image_evidence_per_card_hash constraint on
+        # (card, content_hash) - two distinct cards (each with their own content_phash, via
+        # `_evidence`'s own `content_hash=card.content_phash or 0` default) avoids a collision
+        # rather than trying to attach two evidence rows to one card.
+        card_absent = CardFactory(name="Some Card", content_phash=1)
+        card_present = CardFactory(name="Some Card", content_phash=2)
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        marker_absent = _evidence(
+            card_absent,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            legal_line_proxy_marker_detected=False,
+        )
+        marker_present = _evidence(
+            card_present,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            legal_line_proxy_marker_detected=True,
+        )
+
+        verdict_absent = calculate_join_key_verdict(card_absent.pk, marker_absent, candidates)
+        verdict_present = calculate_join_key_verdict(card_present.pk, marker_present, candidates)
+
+        assert verdict_absent.printing_pk == verdict_present.printing_pk
+        assert verdict_absent.confidence == verdict_present.confidence
+        assert verdict_absent.skip_reason == verdict_present.skip_reason == ""
 
     def test_proxy_marker_does_not_affect_a_genuine_no_match(self, db):
-        """The veto only rejects a would-be MATCH - it's not a blanket 'ignore this card's
-        evidence' switch (module docstring: a marker doesn't mean printing P is wrong, it means
-        THIS reading isn't trustworthy evidence FOR P)."""
+        """Confirms the marker has no effect on a genuine parsed-but-no-match outcome either -
+        it was never checked on this path even back when it was a veto (module docstring: a
+        marker doesn't mean printing P is wrong, it means THIS reading isn't trustworthy evidence
+        FOR P), and remains a complete no-op post-correction too."""
         card = CardFactory(name="Some Card")
         candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
         evidence = _evidence(card, collector_line_collector_number="999", legal_line_proxy_marker_detected=True)
@@ -597,8 +638,9 @@ class TestAgreementChecks:
         assert verdict.printing_pk is None
 
     def test_truncated_image_does_not_affect_a_genuine_no_match(self, db):
-        """Mirrors the existing proxy-marker-veto precedent: the veto only rejects a would-be
-        MATCH, it's not a blanket 'ignore this card's evidence' switch."""
+        """Mirrors this module's own established "a withhold only rejects a would-be MATCH, it's
+        not a blanket 'ignore this card's evidence' switch" precedent (originally established by
+        the proxy-marker check back when it was a veto, before its 2026-07-21 correction)."""
         card = CardFactory(name="Some Card")
         candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
         evidence = _evidence(
@@ -770,9 +812,11 @@ class TestCopyrightYearEraCheck:
         assert verdict.skip_reason == "copyright-year-mismatch"
         assert verdict.printing_pk is None
 
-    def test_proxy_marker_veto_takes_precedence_over_copyright_mismatch(self, db):
-        """Both conditions can hold on the same card - the existing, already-tested
-        proxy-marker-veto outcome wins unchanged (checked first in `_apply_agreement_checks`)."""
+    def test_proxy_marker_no_longer_masks_a_real_copyright_mismatch(self, db):
+        """2026-07-21 correction: the marker used to win outright when both conditions held on
+        the same card (checked first, before the copyright-year query even ran). Now that it's a
+        pure no-op, the copyright-year-mismatch withhold - a genuine, informative check - fires
+        exactly as it would with the marker absent."""
         printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
         CanonicalPrintingMetadataFactory(canonical_card=printing, released_at=date(2023, 4, 21))
         card = CardFactory(name="Test Card")
@@ -787,7 +831,7 @@ class TestCopyrightYearEraCheck:
 
         verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
 
-        assert verdict.skip_reason == "proxy-marker-veto"
+        assert verdict.skip_reason == "copyright-year-mismatch"
 
     def test_a_non_numeric_parsed_year_is_treated_as_no_signal_not_a_veto(self, db):
         """Shouldn't happen in practice (the OCR parser's own year regexes only ever capture

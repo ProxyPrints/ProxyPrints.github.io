@@ -51,16 +51,21 @@ feeding the existing verdict, not a second classifier casting its own independen
 are folded directly into `calculate_join_key_verdict`'s/`run_join_key_calculator`'s existing
 control flow (no new eligible-card population, no new `anonymous_id`, no new vote type):
 
-  - THE MODERATOR-FLAG VETO (the design frame's own explicit ask): `legal_line_proxy_marker_
-    detected` (issue #151/#212's real motivating case - a "NOT FOR SALE"/proxy watermark that
-    misparses as a plausible-looking collector line) is checked ONLY at the moment a join-key
-    match would otherwise be trusted - not before, and not against a genuine no-match/ambiguous
-    outcome. A proxy marker doesn't mean "this card definitely isn't printing P" (P might still be
-    right); it means "this specific OCR reading is untrustworthy as evidence for P", which is
-    exactly the false-accept risk `docs/theory.md`'s candidate-constrained-decoding model is built
-    to bound. A vetoed match is therefore a named SKIP (`"proxy-marker-veto"`, a genuine,
-    non-rescannable, evidence-gathered conclusion - not a `CardPrintingTag(is_no_match=True)` vote,
-    since a vetoed reading is not evidence against every one of the card's other candidates either).
+  - THE MODERATOR-FLAG SIGNAL (2026-07-21 correction - was "THE MODERATOR-FLAG VETO" through
+    2026-07-21, the design frame's own original explicit ask): `legal_line_proxy_marker_detected`
+    (issue #151/#212's real motivating case - a "NOT FOR SALE"/proxy watermark that misparses as a
+    plausible-looking collector line) used to withhold a would-be-trusted join-key match entirely
+    (named SKIP `"proxy-marker-veto"`). Corrected per owner ruling
+    (docs/features/catalog-completion-plan.md's "Recovery-arc lessons" item 1's own verbatim
+    encoding: the catalog REQUIRES proxy/NOT-FOR-SALE marking on every genuine upload, real
+    printings' proxies included) after a live read-only trace (2026-07-21) found the veto
+    discarding 1,552 already-validated candidate matches, 99.4% with a real, DB-matching
+    set/number parse. A catalog-required field that's true across nearly the whole eligible
+    population carries no discriminating power over whether ANY SPECIFIC match is right or wrong,
+    so it no longer withholds OR weakens a match - see `_apply_agreement_checks`'s own inline
+    comment at this check's exact former location for the full reasoning (including why NOT
+    downgrading to a softer confidence tier, unlike artist-OCR disagreement below, is the correct
+    read of the same owner ruling).
   - Back-face-aware candidate selection (issue #199/#213): `_resolve_candidates_for_card` tries
     the card's own name first (unchanged fast path for the ~all-front-face-or-single-faced common
     case), and only when that finds nothing AND `printing_metadata_import.is_back_face` confirms
@@ -93,7 +98,7 @@ control flow (no new eligible-card population, no new `anonymous_id`, no new vot
     A small/plausible gap (a print run landing near a calendar-year boundary, an older copyright
     legend surviving into a reprint) is deliberately NOT vetoed. Withheld as a new named,
     non-rescannable skip (`"copyright-year-mismatch"`) - same "the vote IS the record" shape as
-    `"proxy-marker-veto"`/`"border-mismatch"`/`"frame-mismatch"` above, not a confidence-field
+    `"border-mismatch"`/`"frame-mismatch"` above, not a confidence-field
     tweak: confirmed by reading `vote_consensus.py` directly (no `confidence` reference anywhere in
     it) - `resolve_weighted_consensus` weights strictly by `source`, so adjusting `confidence` here
     would be pure decoration with zero effect on resolution, the same point this module's own
@@ -119,7 +124,7 @@ control flow (no new eligible-card population, no new `anonymous_id`, no new vot
     only the binary integrity signal is acted on, and the deferred list below carries the rest
     forward explicitly rather than guessing.
 
-All five checks above (moderator-flag veto, border/frame agreement, copyright-year era check,
+All checks above (the moderator-flag signal, border/frame agreement, copyright-year era check,
 artist-OCR corroboration, quality/integrity gating) live in ONE function, `_apply_agreement_
 checks`, called from both of `calculate_join_key_verdict`'s match-producing branches (direct
 match, symbol-phash tie-break) rather than duplicated across them.
@@ -148,8 +153,11 @@ TWO FURTHER CHEAP ADDITIONS (this PR, built 2026-07-20, owner decision on issue 
    user-submitted phash itself (issue #203, a distinct, separately-designed, not-yet-built
    mechanism, deliberately not built here). This is a ROUTING step, not a matching engine: any
    card the join-key calculator concluded has no confident hit (a real `is_no_match` vote, or a
-   non-rescannable skip - `"ambiguous"`, `"no-text"`, `"proxy-marker-veto"`, `"border-mismatch"`,
-   `"frame-mismatch"`, `"truncated-image"`, `"copyright-year-mismatch"`) gets a `SlowPathVerdict`
+   non-rescannable skip - `"ambiguous"`, `"no-text"`, `"border-mismatch"`, `"frame-mismatch"`,
+   `"truncated-image"`, `"copyright-year-mismatch"` - NOT `"proxy-marker-veto"`, retired 2026-07-21
+   per the moderator-flag signal correction above; a stale pre-2026-07-21 row carrying that value
+   may still exist until `reparse_collector_evidence --selector proxy-marker-veto` retracts it)
+   gets a `SlowPathVerdict`
    carrying its already-persisted `ImageEvidence` signals verbatim, and a
    `CardScanLog(anonymous_id="stage-d-slow-path-v1", skip_reason="to-review")` durable routing
    marker. No new storage: the signals themselves already live in `ImageEvidence` (Stage C's job)
@@ -376,14 +384,16 @@ def _apply_agreement_checks(
     The agreement/corroboration layer (module docstring) - runs once a join-key match candidate
     has been found (direct match OR symbol-phash tie-break, both call sites in
     `calculate_join_key_verdict` route through here rather than duplicating these checks), never
-    on an `ambiguous`/`parsed-but-no-match`/`no-text` outcome, matching the existing moderator-flag
-    veto's own "only checked at the moment a match would otherwise be trusted" scoping.
+    on an `ambiguous`/`parsed-but-no-match`/`no-text` outcome, matching the moderator-flag signal's
+    own "only checked at the moment a match would otherwise be trusted" scoping (still true even
+    though, as of 2026-07-21, that check no longer withholds or weakens anything - see its own
+    inline comment below).
 
     Ordering is cost-first (cheapest, no-DB-query checks before the one query this function
     needs), mirroring `local_fallback.py`'s own 2c "border-color sample - nearly free, applied
     before 2a/2b" cost-ordering precedent:
-      1. moderator-flag veto (existing, no query)
-      2. truncated-image veto (new, no query)
+      1. moderator-flag signal (no query, no-op as of 2026-07-21 - see its own inline comment)
+      2. truncated-image veto (no query)
       3. border agreement (one `CanonicalCard` query, shared with 4/5/6)
       4. frame agreement (same query)
       5. copyright-year era check (same query's `released_at` field)
@@ -398,10 +408,32 @@ def _apply_agreement_checks(
     absent `legal_line_copyright_year` OR an absent `released_at` skips the check entirely, never
     manufacturing a withhold from silence.
     """
-    if evidence.legal_line_proxy_marker_detected:
-        # THE MODERATOR-FLAG VETO (module docstring) - a would-be match is rejected as
-        # untrustworthy, not accepted and not converted into is_no_match evidence either.
-        return JoinKeyVerdict(card_id=card_id, skip_reason="proxy-marker-veto", detail=detail)
+    # THE MODERATOR-FLAG SIGNAL (module docstring - was "THE MODERATOR-FLAG VETO" through
+    # 2026-07-21; owner-ruled correction, verified against docs/features/catalog-completion-
+    # plan.md's "Recovery-arc lessons" item 4, encoded verbatim there: "all cards in the catalog
+    # should show proxy/not for sale somewhere even if they are an actual printing. that is a
+    # catalog requirement"). `legal_line_proxy_marker_detected` used to withhold an otherwise-good
+    # join-key match outright (named skip `"proxy-marker-veto"`) - a live read-only trace
+    # (2026-07-21) found this discarded 1,552 already-validated candidate matches, 99.4% of which
+    # had a real, DB-matching set/number parse. The premise the veto was built on ("a detected
+    # marker makes THIS match untrustworthy") doesn't hold once the marker is catalog-REQUIRED on
+    # every genuine upload here, proxies of real printings included: its presence is closer to a
+    # near-constant across the whole eligible population than a signal that covaries with whether
+    # a SPECIFIC join-key match is right or wrong, which is exactly what a confidence-weakening
+    # signal (see JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT immediately below, a genuine covarying
+    # cross-check) requires to mean anything.
+    #
+    # Deliberately NOT downgraded to a weaker confidence tier either (unlike the artist-OCR
+    # disagreement case) - a signal this non-discriminating gives no principled basis for picking
+    # a specific weaker number; inventing one anyway would repeat exactly the "a threshold invented
+    # without measurement" mistake this module's own quality/integrity gating note above already
+    # declines to make for blur_variance/image_entropy. The match therefore proceeds at its
+    # already-computed base_confidence, completely unaffected by this field - detection is neither
+    # a withhold NOR a weakening signal here, matching the corrected owner framing exactly. (The
+    # OPPOSITE case - a genuinely ABSENT marker, `legal_line_proxy_marker_detected=False` - is a
+    # separate, real, and still-unbuilt catalog-compliance gap, tracked as its own owner-gated item
+    # in that same doc section, not something this function is the right place to act on: matching
+    # is this function's only job, and marker ABSENCE says nothing about whether a match is right.)
 
     if evidence.image_is_truncated:
         # THE QUALITY/INTEGRITY VETO (module docstring) - a genuinely truncated download's
@@ -735,14 +767,21 @@ SLOW_PATH_TO_REVIEW_REASON = "to-review"
 
 # The join-key calculator's own non-match outcomes that qualify a card for slow-path routing: a
 # real is_no_match vote (handled separately, via CardPrintingTag), or any of these named,
-# non-rescannable CardScanLog skip_reason values it can produce (both the original join-key checks
-# - "ambiguous"/"no-text"/"proxy-marker-veto" - and the agreement/corroboration layer's own
-# withhold outcomes - "border-mismatch"/"frame-mismatch"/"truncated-image"/
-# "copyright-year-mismatch"; artist-OCR disagreement is deliberately excluded, since it weakens
-# confidence on a STILL-successful match rather than producing a skip). Deliberately excludes
-# JOIN_KEY_RESCANNABLE_SKIP_REASONS ("no-evidence") - a card the join-key calculator never
-# actually got to look at yet has nothing to route on, and will naturally become eligible once
-# a future join-key pass runs.
+# non-rescannable CardScanLog skip_reason values it can produce (both the original join-key check -
+# "ambiguous"/"no-text" - and the agreement/corroboration layer's own withhold outcomes -
+# "border-mismatch"/"frame-mismatch"/"truncated-image"/"copyright-year-mismatch"; artist-OCR
+# disagreement is deliberately excluded, since it weakens confidence on a STILL-successful match
+# rather than producing a skip). Deliberately excludes JOIN_KEY_RESCANNABLE_SKIP_REASONS
+# ("no-evidence") - a card the join-key calculator never actually got to look at yet has nothing
+# to route on, and will naturally become eligible once a future join-key pass runs.
+#
+# "proxy-marker-veto" (2026-07-21 correction, module docstring's moderator-flag signal section):
+# the join-key calculator no longer PRODUCES this value going forward - kept HERE, deliberately,
+# so a pre-2026-07-21 stale row still carrying it (until `reparse_collector_evidence --selector
+# proxy-marker-veto` retracts it) still routes its card to human review rather than silently
+# becoming routing-invisible; removing it from this set would be strictly worse than leaving it -
+# a dead value in a frozenset costs nothing, an orphaned unrouted card costs a real review-queue
+# gap.
 JOIN_KEY_NO_HIT_SKIP_REASONS = frozenset(
     {
         "ambiguous",

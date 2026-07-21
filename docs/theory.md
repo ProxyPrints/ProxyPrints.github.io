@@ -425,22 +425,28 @@ printing.
   (`_apply_agreement_checks`), whether from `g₂` directly or via `g₃`.
   A sequence of orthogonal cross-checks, each of which can only
   **withhold** a match (convert accept → skip), never manufacture one:
-  proxy-marker veto (`legal_line_proxy_marker_detected`),
   truncated-image veto, border agreement (`layout_class` vs.
   `CanonicalPrintingMetadata.border_color`), frame agreement
   (`classify_frame_style` vs. `.frame`), copyright-year era check
   (parsed `©` year predating the printing's `released_at` by more than
   `COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS = 2` withholds), and
   artist-OCR corroboration (a disagreement _weakens confidence_ rather
-  than vetoing). Error term `ε₄ = ∏ᵢ P(veto i passes | the match is actually wrong)` — a wrong match survives only if **all** vetoes
+  than vetoing). `legal_line_proxy_marker_detected` is READ here but no
+  longer withholds or weakens anything as of a 2026-07-21 owner-ruled
+  correction (the marker is catalog-required on every genuine upload,
+  proxies of real printings included, so its presence carries no
+  discriminating power over any specific match) — through that date it
+  was a sixth veto in this list. Error term `ε₄ = ∏ᵢ P(veto i passes | the match is actually wrong)` — a wrong match survives only if **all** vetoes
   clear it. **Firing rates are measured, catch-precision is not**: on
-  the same 2026-07-21 run the vetoes fired at `proxy-marker-veto`
-  1,533, `border-mismatch` 507, `frame-mismatch` 35 (and copyright-year
-  / truncation folded into the same skip vocabulary). What is **not**
-  measured is what fraction of each firing was a _true_ wrong-match
-  caught versus a correctly-matched card whose observed frame/border
-  was merely noisy — that split needs labeled ground truth (§9). So
-  these counts bound how _often_ `g₄` intervenes, not how _accurately_.
+  the 2026-07-21 run PREDATING that correction, the vetoes fired at
+  `proxy-marker-veto` 1,533, `border-mismatch` 507, `frame-mismatch` 35
+  (and copyright-year / truncation folded into the same skip
+  vocabulary) — `proxy-marker-veto` firings are no longer part of `ε₄`
+  going forward. What is **not** measured is what fraction of each
+  firing was a _true_ wrong-match caught versus a correctly-matched
+  card whose observed frame/border was merely noisy — that split needs
+  labeled ground truth (§9). So these counts bound how _often_ `g₄`
+  intervenes, not how _accurately_.
 - **`g₅` — human-backed consensus gate.** The match becomes a
   `CardPrintingTag` at `VoteSource.OCR` weight
   (`PRINTING_TAG_MACHINE_WEIGHT`, 0.5) and is reconciled by

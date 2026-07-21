@@ -265,7 +265,8 @@ def _compute_one_card(
     dry_run: bool,
     run_id: str,
     profile: bool = False,
-) -> tuple[int, str, Optional[dict[str, float]]]:
+    short_circuit: Optional[bool] = None,
+) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Module-level (picklable) compute-only work unit for the process pool - takes plain,
     already-fetched data (never a `Card`/`Image` instance re-fetched or re-decoded elsewhere), and
     does the actual pixel decode (`Image.open`, lazy - real decode happens on first access inside
@@ -281,7 +282,15 @@ def _compute_one_card(
     decoupled design) is built and returned as the third tuple element, exactly as
     `_run_cohort`'s single-writer discipline (see its own docstring) expects - the compute pool's
     OWN worker processes never write the JSONL file directly, only the caller collecting results
-    back in the parent process does."""
+    back in the parent process does.
+
+    `short_circuit` (2026-07-21, docs/features/catalog-completion-plan.md's "Recovery-arc lessons"
+    item 1): forwarded straight through to `compute_card_evidence` - `None` (the default) resolves
+    to that function's own `STAGE_C_NO_SHORTCIRCUIT` env-var default, an explicit `False` is this
+    command's own `--no-shortcircuit` escape hatch. The fourth return value, `short_circuited`, is
+    `result.short_circuited` verbatim - a per-card diagnostic count `_CohortStats` aggregates into
+    the run's own final summary line (never persisted onto `ImageEvidence`), which is how the
+    197k-card remainder run itself produces the plan's own "open verification gap" measurement."""
     from cardpicker.image_evidence import compute_card_evidence, persist_evidence
 
     wall_started_at = time.monotonic() if profile else None
@@ -295,13 +304,15 @@ def _compute_one_card(
         image = Image.open(BytesIO(image_bytes))
 
     profile_dict: Optional[dict[str, float]] = {} if profile else None
-    result = compute_card_evidence(card_id, content_hash, image, fetch_latency_ms, profile=profile_dict)
+    result = compute_card_evidence(
+        card_id, content_hash, image, fetch_latency_ms, profile=profile_dict, short_circuit=short_circuit
+    )
     if not dry_run:
         persist_evidence(result, run_id=run_id)
     if profile_dict is not None and wall_started_at is not None:
         profile_dict["wall_ms"] = (time.monotonic() - wall_started_at) * 1000
     outcome = "fetch_failed" if result.fields.get("fetch_ok") is False else "ok"
-    return card_id, outcome, profile_dict
+    return card_id, outcome, profile_dict, result.short_circuited
 
 
 class _CohortStats:
@@ -316,9 +327,14 @@ class _CohortStats:
         self._stdout_write = stdout_write
         self.completed = 0
         self.fetch_failures = 0
+        # Recovery-arc lessons item 1 (2026-07-21) - count, don't just enable, the
+        # pre-classification short-circuit's own real-world hit rate, so a real run (the 197k
+        # remainder in particular) produces the plan's own "open verification gap" measurement
+        # data rather than only the 20k-cohort's retrospective estimate.
+        self.short_circuited = 0
         self._run_start = time.monotonic()
 
-    def record(self, outcome: str) -> None:
+    def record(self, outcome: str, short_circuited: bool = False) -> None:
         # "lockout" mirrors the old design's `except GoogleFetchLockoutError: continue` - the one
         # card whose OWN fetch triggered the lockout is not counted at all, matching the exact
         # observable behaviour of the prior raise-and-catch mechanism (see module docstring
@@ -329,12 +345,15 @@ class _CohortStats:
             self.completed += 1
             if outcome in ("fetch_failed", "dropped"):
                 self.fetch_failures += 1
+            if short_circuited:
+                self.short_circuited += 1
             completed = self.completed
             elapsed = time.monotonic() - self._run_start
         if completed % PROGRESS_EVERY == 0 or completed == self._total:
             rate = completed / elapsed if elapsed > 0 else 0.0
             self._stdout_write(
-                f"[{completed}/{self._total}] elapsed={elapsed:.0f}s rate={rate:.3f}/s fetch_failures={self.fetch_failures}"
+                f"[{completed}/{self._total}] elapsed={elapsed:.0f}s rate={rate:.3f}/s "
+                f"fetch_failures={self.fetch_failures} short_circuited={self.short_circuited}"
             )
 
 
@@ -348,7 +367,8 @@ def _run_cohort(
     stdout_write: Any,
     profile: bool = False,
     profile_file: Any = None,
-) -> tuple[int, int, bool]:
+    short_circuit: Optional[bool] = None,
+) -> tuple[int, int, bool, int]:
     """
     The decoupled fetch/compute driver itself. Two concurrent executors:
 
@@ -380,8 +400,12 @@ def _run_cohort(
     re-anchored to the decoupled driver instead of the old `as_completed` loop directly in
     `handle()`).
 
-    Returns `(completed, fetch_failures, lockout_hit)` - the same three figures the old single-
-    loop design printed in its final summary line.
+    `short_circuit` (2026-07-21, docs/features/catalog-completion-plan.md's "Recovery-arc lessons"
+    item 1): forwarded to every `_compute_one_card` submission - see that function's own docstring.
+
+    Returns `(completed, fetch_failures, lockout_hit, short_circuited)` - the same three figures
+    the old single-loop design printed in its final summary line, plus the new short-circuit
+    counter (item 1's own "count it during the real run" ask).
     """
     stop_event = threading.Event()
     stats = _CohortStats(total=len(cohort_ids), stdout_write=stdout_write)
@@ -397,12 +421,13 @@ def _run_cohort(
             for done_future in done:
                 card_id = pending.pop(done_future)
                 card_profile: Optional[dict[str, float]] = None
+                short_circuited = False
                 try:
-                    _, outcome, card_profile = done_future.result()
+                    _, outcome, card_profile, short_circuited = done_future.result()
                 except Exception:
                     logger.exception("Dropped card (uncaught exception in compute stage)")
                     outcome = "dropped"
-                stats.record(outcome)
+                stats.record(outcome, short_circuited=short_circuited)
                 if profile_file is not None and card_profile is not None:
                     profile_file.write(json.dumps({"card_id": card_id, **card_profile}) + "\n")
                     profile_file.flush()
@@ -425,13 +450,14 @@ def _run_cohort(
                 dry_run,
                 run_id,
                 profile,
+                short_circuit,
             )
             pending[compute_future] = fetch_result.card_id
 
         while pending:
             _drain_one_pending()
 
-    return stats.completed, stats.fetch_failures, stop_event.is_set()
+    return stats.completed, stats.fetch_failures, stop_event.is_set(), stats.short_circuited
 
 
 class Command(BaseCommand):
@@ -515,6 +541,20 @@ class Command(BaseCommand):
             "ordering AND the resume/'already fully processed' filter are bypassed for exactly "
             "these ids - a forced re-run, not a normal cohort slice - and --limit is ignored.",
         )
+        parser.add_argument(
+            "--no-shortcircuit",
+            action="store_true",
+            default=False,
+            help="Disable the collector_line_ocr pre-classification short-circuit (2026-07-21, "
+            "docs/features/catalog-completion-plan.md's 'Recovery-arc lessons' item 1) - forces "
+            "every card to pay for the full multi-tier escalation even when tier 1 found no "
+            "digit character, matching this build's pre-item-1 behavior. For a measurement run "
+            "only (e.g. gathering the plan's own 'would a zero-digit tier-1 card ever have "
+            "recovered at a later tier' validation data) - the default (short-circuit ON) is the "
+            "one the 197k-card remainder run should use. Overrides the STAGE_C_NO_SHORTCIRCUIT "
+            "env var when passed; when NOT passed, that env var still applies (checked inside "
+            "image_evidence.compute_card_evidence itself).",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         limit: int = options["limit"]
@@ -531,10 +571,15 @@ class Command(BaseCommand):
         profile: bool = options["profile"]
         profile_output: str = options["profile_output"] or f"/tmp/stagec-profile-{run_id}.jsonl"
         profile_file = open(profile_output, "w") if profile else None
+        # --no-shortcircuit explicitly disables (False); otherwise None defers to
+        # image_evidence.compute_card_evidence's own STAGE_C_NO_SHORTCIRCUIT env-var default
+        # (short-circuit ON unless that env var is set) - see this flag's own --help.
+        short_circuit: Optional[bool] = False if options["no_shortcircuit"] else None
 
         self.stdout.write(
             f"run_id={run_id} limit={limit} workers={workers} fetch_threads={fetch_threads} "
-            f"queue_depth={queue_depth} dry_run={dry_run} profile={profile} (decoupled fetch/compute pipeline)"
+            f"queue_depth={queue_depth} dry_run={dry_run} profile={profile} "
+            f"no_shortcircuit={options['no_shortcircuit']} (decoupled fetch/compute pipeline)"
         )
         if profile:
             self.stdout.write(f"Profile JSONL: {profile_output}")
@@ -607,7 +652,7 @@ class Command(BaseCommand):
 
         run_start = time.monotonic()
         try:
-            completed, fetch_failures, lockout_hit = _run_cohort(
+            completed, fetch_failures, lockout_hit, short_circuited = _run_cohort(
                 cohort_ids=cohort_ids,
                 fetch_threads=fetch_threads,
                 workers=workers,
@@ -617,6 +662,7 @@ class Command(BaseCommand):
                 stdout_write=self.stdout.write,
                 profile=profile,
                 profile_file=profile_file,
+                short_circuit=short_circuit,
             )
         finally:
             if profile_file is not None:
@@ -626,5 +672,6 @@ class Command(BaseCommand):
         rate = completed / elapsed if elapsed > 0 else 0.0
         self.stdout.write(
             f"DONE run_id={run_id} completed={completed}/{len(cohort_ids)} elapsed={elapsed:.0f}s "
-            f"rate={rate:.3f}/s fetch_failures={fetch_failures} lockout_hit={lockout_hit}"
+            f"rate={rate:.3f}/s fetch_failures={fetch_failures} lockout_hit={lockout_hit} "
+            f"short_circuited={short_circuited}"
         )

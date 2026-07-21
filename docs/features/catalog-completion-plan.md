@@ -1848,7 +1848,14 @@ targeted validation pass (re-running tier 1 alone, in isolation, against a sampl
 cards' already-cached fetched images, comparing against their known-successful escalated outcome)
 is recommended before trusting the short-circuit at full-remainder scale — not run here (out of
 scope for this docs-first PR, and the 99.7%/0.27% split above is strong enough evidence to spec
-the short-circuit, not strong enough to certify zero regression on its own).
+the short-circuit, not strong enough to certify zero regression on its own). **Partially closed
+by the implementation (2026-07-21)**: `run_image_evidence_cohort`'s own `short_circuited` counter
+(`ExtractionResult.short_circuited` → `_CohortStats.short_circuited`, printed in both the
+progress line and the final `DONE` summary) means the 197k-card remainder run itself now produces
+a real short-circuit-rate measurement as a side effect of running — this still doesn't answer
+"how many would have recovered at tiers 2-3" directly, but a large gap between the remainder's
+own rate and the 99.7% figure above would be an early warning worth investigating before trusting
+the projection in item 5 below at full scale.
 
 **2. Atomic cast-and-route — corrected finding, not the premise as originally stated.** Read
 `local_calculate_verdicts.py`'s `Command.handle()` directly: `run_join_key_calculator` and
@@ -2024,6 +2031,16 @@ runbook/process rule with no code change proposed (a future code-enforced guard 
 candidate, not decided). Item 4 needs an owner call on which moderation sink to use before any
 code is written at all — nothing to build yet. A separate implementation PR per item, once each
 is owner-approved, is the right shape — not attempted here.
+
+**Follow-up status (2026-07-21, owner-approved)**: item 1's short-circuit is now BUILT
+(`image_evidence._collector_line_ocr_attempts`/`compute_card_evidence`'s `short_circuit` param,
+default ON, `--no-shortcircuit`/`STAGE_C_NO_SHORTCIRCUIT` escape hatch) — see this section's own
+"moderator-flag signal" write-up above for the companion correction (the marker withhold this
+item's own CRITICAL correction flagged is retired too, in the same PR) and
+`reparse_collector_evidence --selector proxy-marker-veto` for the matching re-scan tooling.
+Item 2 (the retraction-tooling slow-path-delete gap), item 3 (a code-enforced dry-run guard), and
+item 4 (the marker-absence compliance scan) remain unbuilt, owner-gated as this section originally
+scoped them.
 
 Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
@@ -2319,14 +2336,22 @@ across two calculators (D1 OCR, D2 symbol) before an advisor review flagged
 that as contradicting the design frame's own "one join key" framing —
 folded into one calculator before this PR was built out further.
 
-**The moderator-flag veto** (the design frame's explicit ask):
-`legal_line_proxy_marker_detected` (issue #151/#212's real motivating case
-— a "NOT FOR SALE"/proxy watermark misparsing as a plausible collector
-line) is checked only at the moment a join-key match would otherwise be
-trusted, never against a genuine no-match/ambiguous outcome. A vetoed match
-is a named skip (`"proxy-marker-veto"`), not an `is_no_match` vote — a
-vetoed reading is untrustworthy evidence FOR the matched printing, not
-evidence AGAINST every other candidate.
+**The moderator-flag signal** (the design frame's original explicit ask,
+corrected 2026-07-21 — see this section's own "Recovery-arc lessons" item
+1's "CRITICAL correction" note above for the full owner-ruling writeup):
+`legal_line_proxy_marker_detected`
+(issue #151/#212's real motivating case — a "NOT FOR SALE"/proxy watermark
+misparsing as a plausible collector line) was originally checked only at
+the moment a join-key match would otherwise be trusted, withholding it as a
+named skip (`"proxy-marker-veto"`) rather than casting an `is_no_match`
+vote. **Retired as a veto 2026-07-21**: the catalog requires proxy/NOT-FOR-
+SALE marking on every genuine upload, real printings' proxies included, so
+the field's presence carries no discriminating power over whether any
+specific match is right or wrong — a live trace found it discarding 1,552
+already-validated matches, 99.4% with a real, DB-matching set/number parse.
+The match now proceeds unaffected (no withhold, no confidence change) —
+`legal_line_proxy_marker_detected` is read but has zero effect on the
+outcome.
 
 Casts `CardPrintingTag` votes via the unmodified `VoteSource.OCR`/
 `resolve_and_persist_printing` machinery (own
@@ -2442,8 +2467,11 @@ evidence would deterministically recompute the identical mismatch forever.
    to vote for), only a `CardScanLog(skip_reason="to-review")` durable
    marker once a card gets a real `is_no_match` vote or a non-rescannable
    join-key/agreement-layer skip (`ambiguous`, `no-text`,
-   `proxy-marker-veto`, `border-mismatch`, `frame-mismatch`,
-   `truncated-image`, `copyright-year-mismatch`). No new storage: the
+   `border-mismatch`, `frame-mismatch`, `truncated-image`,
+   `copyright-year-mismatch` — `proxy-marker-veto` is no longer PRODUCED as
+   of the 2026-07-21 moderator-flag-signal correction above, but stays in
+   `JOIN_KEY_NO_HIT_SKIP_REASONS` deliberately so a pre-correction stale row
+   still routes correctly until `reparse_collector_evidence --selector proxy-marker-veto` retracts it). No new storage: the
    signals themselves already live in `ImageEvidence` (Stage C's job) —
    `SlowPathVerdict.raw_signals` is an in-memory packaging of that same
    data for whatever consumes it next, not a second copy.
