@@ -43,6 +43,15 @@ const BoldCollapse = styled(Navbar.Collapse)`
   font-weight: bold;
 `;
 
+// Sitewide theme (issue #302, mockup C-B): color the brand wordmark in the theme accent
+// (var(--bs-primary), Superhero-native orange #df6919) so it reads as the mockup's orange
+// wordmark on the dark navbar chrome, instead of inheriting the navbar's plain light text
+// color. References the CSS custom property (not a literal hex) so it stays in sync with
+// styles.scss's token layer automatically if the accent is ever retuned again.
+const BrandWordmark = styled.b`
+  color: var(--bs-primary);
+`;
+
 export default function ProjectNavbar() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   const anyBackendConfigured = useAnyBackendConfigured();
@@ -65,7 +74,7 @@ export default function ProjectNavbar() {
         expand="lg"
         fixed="top"
         variant="dark"
-        bg="primary"
+        bg="dark"
         collapseOnSelect
       >
         <MaxWidthContainer className="justify-content-center align-middle">
@@ -77,7 +86,7 @@ export default function ProjectNavbar() {
               height={NavbarLogoHeight}
             />{" "}
             <span className="align-middle">
-              <b>{projectName}</b>
+              <BrandWordmark>{projectName}</BrandWordmark>
             </span>
           </Navbar.Brand>
           <Navbar.Toggle aria-controls="basic-navbar-nav" />

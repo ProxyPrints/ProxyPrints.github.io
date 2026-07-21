@@ -20,9 +20,13 @@ import {
 type WhatsThatTab = "feed" | "moderation";
 
 // Page-scoped accent override (owner-directed, 2026-07-18, closing the /whatsthat visual
-// diagnosis's orange-background question): the loud #ff4719 background stays - it's the
-// page's deliberate identity - but the site-wide theme accent (--bs-primary/link color,
-// #4c9be8) measures a WCAG contrast ratio of just 1.16:1 against it, nowhere close to AA's
+// diagnosis's orange-background question; reconfirmed 2026-07-21 when issue #302's sitewide
+// retheme flipped the theme accent from blue to orange - this override keeps doing its job
+// unchanged, see docs/features/printing-tags.md): the loud #ff4719 background stays - it's the
+// page's deliberate identity - but the site-wide theme accent (--bs-primary/link color, now
+// #df6919 orange, previously #4c9be8 blue) measures a WCAG contrast ratio of just ~1.00:1
+// against it (worse than the old blue's 1.16:1 - two similar oranges are even less
+// distinguishable than blue-on-orange was), nowhere close to AA's
 // 4.5:1 for text. Even pure white only reaches 3.41:1 against this specific orange (a
 // mid-luminance, highly saturated color - no light tint of ANY hue clears 4.5:1 against it;
 // only a sufficiently dark one does, same reason StarburstBackground below already settled on
