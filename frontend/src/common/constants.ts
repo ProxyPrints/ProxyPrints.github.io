@@ -4,6 +4,7 @@ import {
   Cardstock,
   CardType,
   Faces,
+  MarginProfileState,
   SortBy,
 } from "@/common/types";
 
@@ -22,6 +23,18 @@ export const CornerRadiusMM = 2.5;
  * import this single constant so the two never drift apart from each other.
  */
 export const DefaultCardSpacing: CardSpacingState = { row: 14.5, col: 0 };
+
+/**
+ * Proposal H D5 (docs/proposals/proposal-h-display-layout-spec.md) - the /display Page Setup's
+ * default margin profile: Borderless (0mm), which the Epson ET-8500/8550 supports up to Letter/
+ * Legal (spec sheet CPD-59931R2) and is the only profile that fits the D6 default bleed
+ * (3.175mm) alongside the D4 4x2 grid. `marginProfileSlice.ts`'s initial state and
+ * `deckPayload.ts`'s legacy-payload backfill both import this single constant, mirroring
+ * `DefaultCardSpacing`'s own precedent immediately above.
+ */
+export const DefaultMarginProfile: MarginProfileState = {
+  profile: "borderless",
+};
 
 export const ProjectName = "ProxyPrints";
 export const MakePlayingCards = "MakePlayingCards.com";

@@ -19,6 +19,7 @@ import favoritesReducer from "@/store/slices/favoritesSlice";
 import fileDownloadsReducer from "@/store/slices/fileDownloadsSlice";
 import finishSettingsReducer from "@/store/slices/finishSettingsSlice";
 import invalidIdentifiersReducer from "@/store/slices/invalidIdentifiersSlice";
+import marginProfileReducer from "@/store/slices/marginProfileSlice";
 import modalsReducer from "@/store/slices/modalsSlice";
 import projectReducer from "@/store/slices/projectSlice";
 import savedDeckSessionReducer from "@/store/slices/savedDeckSessionSlice";
@@ -36,6 +37,7 @@ const rootReducer = combineReducers({
   searchResults: searchResultsReducer,
   cardDocuments: cardDocumentsReducer,
   cardSpacing: cardSpacingReducer,
+  marginProfile: marginProfileReducer,
   cardbacks: cardbacksReducer,
   sourceDocuments: sourceDocumentsReducer,
   project: projectReducer,

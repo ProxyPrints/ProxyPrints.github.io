@@ -141,8 +141,10 @@ export const ASYMMETRY_FLAG_THRESHOLD_MM = 2;
 
 /** Not the same value as a caller's chosen output bleedEdgeMM target (which can be anything,
  * including 0) - this is the fixed standard bleed convention baked into BLEED_ASPECT_RATIO
- * itself, matching the backend's _BLEED_MARGIN_MM exactly. */
-const STANDARD_BLEED_MARGIN_MM = 3.175;
+ * itself, matching the backend's _BLEED_MARGIN_MM exactly. Exported (proposal-h-display-layout-
+ * spec.md D6) so /display's own default bleed edge can import this same constant rather than
+ * duplicating the 3.175 literal - see DisplayPage.tsx's DEFAULT_SHEET_SETTINGS. */
+export const STANDARD_BLEED_MARGIN_MM = 3.175;
 
 export const TRIM_ASPECT_RATIO = CardWidthMM / CardHeightMM;
 export const BLEED_ASPECT_RATIO =

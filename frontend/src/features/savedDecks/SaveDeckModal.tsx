@@ -23,6 +23,7 @@ import {
 import { useSaveDeckMutation } from "@/store/api";
 import { selectCardSpacing } from "@/store/slices/cardSpacingSlice";
 import { selectFinishSettings } from "@/store/slices/finishSettingsSlice";
+import { selectMarginProfile } from "@/store/slices/marginProfileSlice";
 import {
   selectCurrentSavedDeck,
   setCurrentSavedDeck,
@@ -42,6 +43,7 @@ export function SaveDeckModal({ show, onCancel, onSaved }: SaveDeckModalProps) {
   const project = useAppSelector((state: RootState) => state.project);
   const finishSettings = useAppSelector(selectFinishSettings);
   const cardSpacing = useAppSelector(selectCardSpacing);
+  const marginProfile = useAppSelector(selectMarginProfile);
   const cardDocuments = useAppSelector(
     (state: RootState) => state.cardDocuments.cardDocuments
   );
@@ -63,7 +65,8 @@ export function SaveDeckModal({ show, onCancel, onSaved }: SaveDeckModalProps) {
     project,
     finishSettings,
     cardDocuments,
-    cardSpacing
+    cardSpacing,
+    marginProfile
   );
   const deviceLocalCount = countDeviceLocalSlots(previewPayload);
 
@@ -80,7 +83,8 @@ export function SaveDeckModal({ show, onCancel, onSaved }: SaveDeckModalProps) {
       project,
       finishSettings,
       cardDocuments,
-      cardSpacing
+      cardSpacing,
+      marginProfile
     );
     // Only an update to the SAME already-saved row continues its revision chain (PR-6
     // "Revision tracking") - a brand-new row (no currentDeckKey yet) always starts at 1.

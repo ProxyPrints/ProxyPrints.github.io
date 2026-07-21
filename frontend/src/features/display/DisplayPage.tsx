@@ -177,16 +177,11 @@ import Row from "react-bootstrap/Row";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 
-import {
-  Back,
-  BleedEdgeMM,
-  CardHeightMM,
-  CardWidthMM,
-  Front,
-} from "@/common/constants";
+import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
 import {
   CardDocument,
   Faces,
+  MarginProfileKey,
   SearchQuery,
   useAppDispatch,
   useAppSelector,
@@ -204,6 +199,8 @@ import { AttributesSection } from "@/features/display/AttributesSection";
 import { CardSpacingControl } from "@/features/display/CardSpacingControl";
 import { CatalogBrowseResults } from "@/features/display/CatalogBrowseResults";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
+import { MarginProfileControl } from "@/features/display/MarginProfileControl";
+import { MARGIN_PROFILES } from "@/features/display/marginProfiles";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
 import {
   SavedDecksLandingPanel,
@@ -224,6 +221,7 @@ import { ImportText } from "@/features/import/ImportText";
 import { ImportURL } from "@/features/import/ImportURL";
 import { ImportXML } from "@/features/import/ImportXML";
 import { InvalidIdentifiersStatus } from "@/features/invalidIdentifiers/InvalidIdentifiersStatus";
+import { STANDARD_BLEED_MARGIN_MM } from "@/features/pdf/bleedNormalize";
 import { computeLayout } from "@/features/pdf/layout";
 import {
   PagePreview,
@@ -245,6 +243,10 @@ import {
   setCardSpacingCol,
   setCardSpacingRow,
 } from "@/store/slices/cardSpacingSlice";
+import {
+  selectMarginProfile,
+  setMarginProfile,
+} from "@/store/slices/marginProfileSlice";
 import {
   selectIsProjectEmpty,
   selectManualOverrides,
@@ -273,9 +275,16 @@ interface DisplaySheetSettings {
   showCutLines: boolean;
 }
 
+// Proposal H D1/D4/D6 (docs/proposals/proposal-h-display-layout-spec.md, amended by issue #286's
+// comment) - LETTER (not A4) is the default paper size: the D4-D6 4x2 fit math is computed
+// against US Letter throughout (279.4x215.9mm landscape), and A4's own 297x210mm landscape ratio
+// (1.414, vs Letter's 1.294) doesn't land on the same grid. STANDARD_BLEED_MARGIN_MM (3.175, the
+// MPC 1/8in convention) replaces the old BleedEdgeMM (3.048, an Epson-margin-shaped constant
+// inherited from upstream) as the default bleed edge - see D6's own fit table for why 3.175 only
+// fits a 4x2 sheet under the Borderless margin profile (marginProfileSlice.ts's own default).
 const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
-  pageSize: "A4",
-  bleedEdgeMM: BleedEdgeMM,
+  pageSize: "LETTER",
+  bleedEdgeMM: STANDARD_BLEED_MARGIN_MM,
   showCutLines: true,
 };
 
@@ -970,7 +979,18 @@ export function DisplayPage() {
   const sheetPixelHeightPx =
     sheetRenderWidthPx * (sheetHeightMM / sheetWidthMM);
 
-  const margins = useMemo(() => ({ top: 5, bottom: 5, left: 5, right: 5 }), []);
+  // Proposal H D5 (docs/proposals/proposal-h-display-layout-spec.md) - no longer a hardcoded
+  // `useMemo` constant (was `{ top: 5, bottom: 5, left: 5, right: 5 }`): this is now live state
+  // (marginProfileSlice), seeded from D5's Borderless default and made user-editable by the
+  // right rail's Margin profile control below (MARGIN_PROFILES, marginProfiles.ts). Every
+  // existing consumer (computeLayout, PagePreview's margins prop, exportPdfProps' pageMargin*MM)
+  // stays wired to this same value, so the control moves the on-screen sheet and the exported
+  // PDF in lockstep with no extra plumbing - mirrors D18/D19's own cardSpacing precedent exactly.
+  const marginProfile = useAppSelector(selectMarginProfile).profile;
+  const margins = useMemo(
+    () => MARGIN_PROFILES[marginProfile].margins,
+    [marginProfile]
+  );
   // Proposal H D18/D19 (docs/proposals/proposal-h-display-layout-spec.md) - no longer a hardcoded
   // constant: this is now live state (cardSpacingSlice), seeded from D18's asymmetric default
   // (0mm horizontal / 14.5mm vertical) and made user-editable by the right rail's Card Spacing
@@ -1638,7 +1658,6 @@ export function DisplayPage() {
                     size="sm"
                     type="number"
                     min={0}
-                    max={BleedEdgeMM}
                     step={0.1}
                     value={settings.bleedEdgeMM}
                     onChange={(event) => {
@@ -1653,6 +1672,22 @@ export function DisplayPage() {
                     aria-label="Bleed edge (mm)"
                   />
                 </Form.Group>
+
+                {/* D5 (proposal-h-display-layout-spec.md) - the margin-profile control: no
+                    `max` clamp on the Bleed edge input above (removed the old `max={BleedEdgeMM}`
+                    cap - 3.048mm, below the new 3.175mm default) since the task's own instruction
+                    is to WARN, never hard-clamp, when a bleed edge exceeds a profile's cap; this
+                    control surfaces that warning instead. */}
+                <MarginProfileControl
+                  profile={marginProfile}
+                  onChange={(profile: MarginProfileKey) =>
+                    dispatch(setMarginProfile(profile))
+                  }
+                  bleedEdgeMM={settings.bleedEdgeMM}
+                  pageWidthMM={sheetWidthMM}
+                  cardWidthMM={CardWidthMM}
+                  spacingColMM={spacing.col}
+                />
 
                 <Form.Check
                   type="switch"

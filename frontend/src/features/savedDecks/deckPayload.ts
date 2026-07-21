@@ -12,7 +12,7 @@
  * `parseDeckPayload` already uses below for v1 -> v2.
  */
 
-import { DefaultCardSpacing } from "@/common/constants";
+import { DefaultCardSpacing, DefaultMarginProfile } from "@/common/constants";
 import {
   base64ToBytes,
   bytesToBase64,
@@ -31,6 +31,7 @@ import {
   CardDocuments,
   CardSpacingState,
   FinishSettingsState,
+  MarginProfileState,
   Project,
   ProjectMember,
   SlotProjectMembers,
@@ -80,6 +81,15 @@ export interface DeckPayloadContent {
    * payload agree on the same value rather than differing by the key's mere presence.
    */
   cardSpacing?: CardSpacingState;
+  /**
+   * Proposal H D5 (docs/proposals/proposal-h-display-layout-spec.md) - the /display Page Setup's
+   * margin-profile selection, persisted per deck via the exact same optional-field/default-
+   * backfill precedent `cardSpacing` above uses (see its own comment) - a legacy deck predating
+   * this field backfills `DefaultMarginProfile` in `projectFromDeckPayload`/
+   * `deckContentForComparison` below, so its dirty-check baseline never differs from a freshly-
+   * rebuilt payload by this key's mere presence.
+   */
+  marginProfile?: MarginProfileState;
 }
 
 export interface DeckPayloadV1 extends DeckPayloadContent {
@@ -128,7 +138,10 @@ export function buildDeckPayload(
   // Optional (defaulted, not required) so every existing call site built before D19 - mostly
   // test fixtures - keeps compiling with no changes; every REAL call site (selectors.ts's dirty
   // check, SaveDeckModal, LoadSafetyModal) passes the live `selectCardSpacing` value explicitly.
-  cardSpacing: CardSpacingState = DefaultCardSpacing
+  cardSpacing: CardSpacingState = DefaultCardSpacing,
+  // Same optional/defaulted precedent as cardSpacing immediately above, added for D5's margin
+  // profile - every REAL call site passes the live `selectMarginProfile` value explicitly.
+  marginProfile: MarginProfileState = DefaultMarginProfile
 ): DeckPayloadContent {
   const isDeviceLocal = (identifier: string | undefined): boolean =>
     identifier != null &&
@@ -144,6 +157,7 @@ export function buildDeckPayload(
     manualOverrides: project.manualOverrides,
     finishSettings,
     cardSpacing,
+    marginProfile,
   };
 }
 
@@ -181,6 +195,9 @@ export function deckContentForComparison(
     // side always carries one (selectors.ts always passes the live redux value), so this baseline
     // must carry the SAME default or a legacy deck reads as dirty the instant it's loaded.
     cardSpacing: payload.cardSpacing ?? DefaultCardSpacing,
+    // Same backfill precedent for D5's margin profile - a deck saved before this field existed
+    // has no `marginProfile` key at all.
+    marginProfile: payload.marginProfile ?? DefaultMarginProfile,
   };
 }
 
@@ -238,6 +255,7 @@ export function projectFromDeckPayload(payload: DeckPayload): {
   project: Omit<Project, "mostRecentlySelectedSlot">;
   finishSettings: FinishSettingsState;
   cardSpacing: CardSpacingState;
+  marginProfile: MarginProfileState;
   name: string;
 } {
   return {
@@ -270,6 +288,8 @@ export function projectFromDeckPayload(payload: DeckPayload): {
     // cardSpacing key, and both must agree on the same default or the freshly-loaded project
     // reads as dirty against its own baseline before any edit happens.
     cardSpacing: payload.cardSpacing ?? DefaultCardSpacing,
+    // Same backfill precedent for D5's margin profile.
+    marginProfile: payload.marginProfile ?? DefaultMarginProfile,
     name: payload.name,
   };
 }
