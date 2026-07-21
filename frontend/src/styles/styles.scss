@@ -1,6 +1,14 @@
-// Bootswatch variables
-$blue: #4c9be8;
-$primary: $blue;
+// Sitewide theme (2026-07-21, issue #302): dark chrome + Superhero-native
+// orange accent. No $primary override -> Superhero's native
+// $primary:$orange (#df6919) returns. $body-bg intentionally NOT overridden
+// (owner decision, T2 AMENDED): Superhero's native #0f2537 is kept because
+// it holds orange link text at 4.61:1 contrast (AA), vs. 3.24:1 (fails AA)
+// on the lighter #2b3e50 the theme mockup used.
+$dark: #22303f; // T3  (was #20374c)
+$input-bg: #22303f; // T4  (was $white)
+$input-color: #ebebeb; // T5  (was $gray-900)
+$input-border-color: #4e5d6c; // T6  (was transparent)
+$input-placeholder-color: #8fa0b0; // T7  (was $gray-500)
 @import "~bootswatch/dist/superhero/variables";
 
 // Configuration
