@@ -41,6 +41,20 @@ SENSITIVE_TAGS: list[tuple[str, str, str]] = [
     # cast_bleed_edge_vote for the full rationale) than voting APPLY on the routine majority
     # ever was. Sensitive because a moderator co-sign is still required either direction.
     ("appropriate-bleed", "Verified to include the full bleed margin required for printing", "Appropriate Bleed"),
+    # Public issue #261 (2026-07-21): "AI-Generated" already exists as a STANDARD row via
+    # cardpicker.default_tags.DEFAULT_TAGS (seeded there for a DIFFERENT, orthogonal reason -
+    # cardpicker.tags.Tags' filename-bracket matcher applies it directly to Card.tags at import
+    # time from an uploader-supplied "[Midjourney]"-style bracket, bypassing the vote system
+    # entirely - untouched by this change). Listing it here upgrades that SAME row to SENSITIVE
+    # (see seed_sensitive_tags' own "upgrades moderation_class to SENSITIVE if it isn't already"
+    # contract - it runs regardless of which seeding path created the row first) once
+    # cardpicker.local_detect_ai_art starts casting real machine votes for it: mistagging a real
+    # human artist's work as AI-generated is a serious reputational harm to that artist, the same
+    # "machine can usefully flag it, but a moderator must still co-sign before it's public" logic
+    # already applied to appropriate-bleed above - a lone machine vote can never resolve this tag
+    # regardless (resolve_weighted_consensus's own human-backed gate), but a confident CROWD
+    # consensus alone isn't enough either; a privileged co-sign is required either direction.
+    ("AI-Generated", "Card art likely produced by an AI image generator", "AI-Generated"),
 ]
 
 
