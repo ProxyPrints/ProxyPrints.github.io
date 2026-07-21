@@ -56,6 +56,23 @@ a `detail` object read only when the summary signals it's needed.
 - `2026-07-20-decoupled-canary-confirm.md` — 400-card canary on the
   deployed decoupled architecture: 63.1% → 95.2–99.1% parallel
   efficiency, ~10.5–10.9h projected, gate CLEAR.
+- `2026-07-21-stagec-20k-extraction.md` — 20,000-card Stage C cohort on
+  the decoupled architecture: row accounting exact, 0.525% fetch-failure
+  rate (down from the 400-card canary's 1.5%), no-pixels invariant
+  confirmed by schema inspection.
+- `2026-07-21-staged-write.md` — Stage D join-key + slow-path staged
+  write (`run_id=staged-write-20260721T0434Z`): 8,925 votes verified,
+  the dry-run's slow-path blind spot traced to its root cause, gate
+  independently re-derived at 0/8,925, three review-queue numbers
+  disambiguated (#258).
+- `2026-07-21-recovery-arc.md` — five-run recovery arc: a parser-bug
+  reparse/retraction (100 votes), the AI-art tag detector's first write
+  (1,183 votes), a no-text cohort re-extraction (`run_id=ntx-0721`,
+  31.3% collector-number recovery), and two further Stage D join-key
+  passes (one exposing a real skipped-state-clear sequencing gap);
+  `stage-d-join-key-v1` totals reconciled to 11,905, gate re-derived at
+  0/12,684 across both the printing- and tag-consensus engines this arc
+  touched.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
