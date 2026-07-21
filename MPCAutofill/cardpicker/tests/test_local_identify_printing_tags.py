@@ -554,6 +554,37 @@ class TestOcrParsing:
         assert parsed.collector_number == "158"
         assert parsed.set_code == "mom"
 
+    def test_slash_format_denominator_glued_to_rarity_is_not_mistaken_for_set_code(self):
+        # real production bug, run staged-write-20260721T0434Z, card_id 59 - a genuine Commander
+        # Legends card ("354/361R\nCMR ¢ EN..." - #354 of 361, rarity R, set CMR) was mis-parsed
+        # to set_code="361r" (the print-run denominator + rarity letter, glued with no space)
+        # instead of set_code="cmr", producing a false no-match vote on an identifiable real
+        # card. "361R" is alnum and 3-5 chars, so it looks like a plausible set-code token to
+        # _SET_CODE_RE unless the parser also checks POSITION (immediately after the "/") to
+        # tell a denominator+rarity fragment apart from a genuine code.
+        parsed = parse_collector_line("354/361R\nCMR ¢ EN '@ ALAYNA D")
+        assert parsed.collector_number == "354"
+        assert parsed.set_code == "cmr"
+
+    def test_slash_format_without_rarity_letter_still_parses_correctly(self):
+        # the same slash-format layout, but the denominator has no trailing rarity letter glued
+        # to it at all (e.g. tesseract simply didn't read the rarity glyph) - already worked
+        # before this fix (a bare digit-run denominator was always skipped via isdigit()), kept
+        # here as an explicit regression pin alongside the glued-rarity case above.
+        parsed = parse_collector_line("354/361\nCMR ¢ EN ALAYNA DANNER")
+        assert parsed.collector_number == "354"
+        assert parsed.set_code == "cmr"
+
+    def test_slash_format_with_space_before_rarity_is_unaffected(self):
+        # the pre-existing passing case (test_standard_modern_collector_line above) restated
+        # here for direct comparison with the glued-rarity regression above: when there IS a
+        # space between the denominator and the rarity letter ("287 R"), the single-char "R"
+        # token never satisfies _SET_CODE_RE's own {3,5}-char bound in the first place, so this
+        # case never needed the position-based skip at all.
+        parsed = parse_collector_line("354/361 R\nCMR ¢ EN ALAYNA DANNER")
+        assert parsed.collector_number == "354"
+        assert parsed.set_code == "cmr"
+
 
 class TestLegalLineParsing:
     """public issue #151, "Legal-line extractor + moderator flag + volume report (task #159)" -
