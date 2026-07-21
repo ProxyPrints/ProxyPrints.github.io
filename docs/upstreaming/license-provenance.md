@@ -161,6 +161,15 @@ nobody can point at doesn't function as one:
 - `federation-hash-tool/hash_my_cards.py` (+ its test)
 - `MPCAutofill/cardpicker/tests/test_federation_hash_tool_parity.py` (the
   parity tether between the previous two)
+- `decrypt-saved-deck-export/decrypt.mjs` (+ its test) — the standalone,
+  zero-import, zero-dependency decrypt tool for a saved-decks export
+  bundle (PR #242); same standalone-trust-anchor risk shape as the
+  federation hash tool above, not itself part of the vote/federation
+  system. **Not yet in `check_protected_core_license.py`'s
+  `PROTECTED_CORE_FILES`** — that file only exists on PR #242's branch,
+  not yet on `master`; add both paths to the CI script's list in the PR
+  that merges #242 (or immediately after), per this section's own "keep
+  these in sync in the same PR" convention.
 - **Prospectively**: any future verdict schema/signing/export/import/
   keygen module (`federation-v1.md`/`federation/public-export-v1.md`
   describe the format; per those docs, "format committed ahead of
@@ -191,8 +200,13 @@ that tool is **deliberately MIT-licensed**, a distinct, already-decided
 choice (`docs/federation/public-export-v1.md` §5: "Distinct from the
 reference tooling's MIT license... those are separate decisions about
 separate artifacts," decided by the owner 2026-07-18), precisely so
-third-party consumers can use it without GPL's copyleft attaching. The
-actual invariant isn't "everything here must be GPL-3" — it's **"nothing
+third-party consumers can use it without GPL's copyleft attaching —
+and, as of PR #242, `decrypt-saved-deck-export/decrypt.mjs` and its
+test as well — that tool is likewise **deliberately MIT-licensed**, a
+distinct, already-decided choice (PR #242, mirroring the federation
+hash tool's own precedent, decided by the owner 2026-07-20), precisely
+so third-party consumers can use it without GPL's copyleft attaching.
+The actual invariant isn't "everything here must be GPL-3" — it's **"nothing
 here may import from or derive from AGPL-marked code,"** which would
 poison either license (AGPL is incompatible with distributing under
 GPL-3.0-only, and definitely incompatible with keeping something
