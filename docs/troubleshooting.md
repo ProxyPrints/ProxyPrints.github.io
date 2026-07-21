@@ -1039,3 +1039,39 @@ Filed during issue #266 (`frontend/src/features/display/DisplayPage.tsx`'s
 sheet-region fit-to-width `ResizeObserver`, caught by
 `tests/SelectVersionSection.spec.ts` failing in CI shard 4/4 only, not in
 the 39 tests run locally pre-push).
+
+## Running backend `pytest` on the production box without touching the live `docker-compose.prod.yml` stack
+
+**Symptom**: you're on the production Oracle-box machine (not a cloud/web
+session), need to run backend tests for a small fix, and the only running
+Django/Postgres/Elasticsearch containers are the live, traffic-serving
+`mpcautofill_*` ones from `docker-compose.prod.yml` — rebuilding or
+`exec`-ing into them to run a test suite risks disrupting production, and
+there's no obvious per-worktree isolated stack (container names are fixed
+machine-wide, not per-worktree).
+
+**Cause**: `MPCAutofill/manage.py`/`pytest` need real Postgres +
+Elasticsearch to run against, but this box's only running instances are
+production's own. It's easy to assume you have to spin up (or touch) the
+prod compose stack to get there.
+
+**Fix**: you don't need to touch the prod containers at all. A
+pre-provisioned host venv already exists at
+`/home/ubuntu/.venvs/mpcautofill-pilot` with Django/pytest/pytest-django/
+tesseract/elasticsearch-dsl already installed — check for it before
+creating a fresh one. `MPCAutofill/MPCAutofill/settings.py`'s own
+`DATABASE_HOST`/`ELASTICSEARCH_HOST` env-var defaults are already
+`localhost`, and `docker-compose.prod.yml` already exposes Postgres on
+`127.0.0.1:5432` and Elasticsearch on `127.0.0.1:9200` — so
+`/home/ubuntu/.venvs/mpcautofill-pilot/bin/python -m pytest` run directly
+from `MPCAutofill/` on the host connects to the live containers' exposed
+ports with zero env overrides needed. This is safe: pytest-django creates
+its own ephemeral `test_*` database via `CREATE DATABASE` for the run and
+tears it down after (the standard pytest-django lifecycle) — it never
+reads or writes the actual production `mpcautofill` database/index. No
+docker rebuild, no `docker compose exec`, no risk to the live stack.
+Verified 2026-07-21 running `cardpicker/tests/test_local_ocr.py`,
+`test_local_identify_printing_tags.py`, `test_image_evidence.py`,
+`test_golden_set.py`, `test_local_calculate_verdicts.py`, and
+`test_reparse_collector_evidence.py` together (370 passed) this way
+against the live prod containers with no observed impact.
