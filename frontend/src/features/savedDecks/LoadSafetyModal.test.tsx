@@ -10,6 +10,7 @@ import {
   useCryptoSession,
 } from "@/features/savedDecks/cryptoSession";
 import { existingProfileHandler } from "@/features/savedDecks/cryptoTestHandlers";
+import { decryptSavedDeckSummary } from "@/features/savedDecks/deckPayload";
 import { LoadSafetyModal } from "@/features/savedDecks/LoadSafetyModal";
 import { whoamiSignedInNotModerator } from "@/mocks/handlers";
 import { server } from "@/mocks/server";
@@ -17,6 +18,24 @@ import { setupStore } from "@/store/store";
 
 const TEST_ITERATIONS = 100;
 const PASSPHRASE = "the real one";
+
+/** Decrypts a captured saveDeck request body to assert on the PR-6 "Revision tracking" fields
+ * living inside its ciphertext. */
+async function decryptSavedRequest(savedRequest: any, masterKey: CryptoKey) {
+  return decryptSavedDeckSummary(
+    {
+      key: savedRequest.key ?? "unused-in-test",
+      kind: savedRequest.kind,
+      ciphertext: savedRequest.ciphertext,
+      ciphertextNonce: savedRequest.ciphertextNonce,
+      wrappedDek: savedRequest.wrappedDek,
+      wrappedDekNonce: savedRequest.wrappedDekNonce,
+      createdAt: "2026-01-01",
+      updatedAt: "2026-01-01",
+    },
+    masterKey
+  );
+}
 
 function TestUnlockButton() {
   const session = useCryptoSession();
@@ -55,6 +74,7 @@ function renderModal(
     currentDeckKey: string | null;
     currentDeckName: string | null;
     lastSavedSerialized: string | null;
+    lastSavedRevision: number | null;
   }
 ) {
   const store = setupStore({
@@ -92,6 +112,7 @@ test("never-saved project: only a single 'save backup and continue' action, no '
     currentDeckKey: null,
     currentDeckName: null,
     lastSavedSerialized: null,
+    lastSavedRevision: null,
   });
   await unlockSession();
 
@@ -123,6 +144,7 @@ test("already-saved deck: offers Update-in-place vs Save-as-new-snapshot", async
     currentDeckKey: "existing-deck-key",
     currentDeckName: "My Existing Deck",
     lastSavedSerialized: "stale",
+    lastSavedRevision: 2,
   });
   await unlockSession();
 
@@ -135,6 +157,10 @@ test("already-saved deck: offers Update-in-place vs Save-as-new-snapshot", async
   expect(requests).toHaveLength(1);
   expect(requests[0].key).toBeNull();
   expect(requests[0].kind).toEqual("snapshot");
+  // PR-6 "Revision tracking" - a brand-new snapshot row starts at 1, never inheriting the
+  // dirty editor's prior saved row's revision (2, from the preloaded state above).
+  const decrypted = await decryptSavedRequest(requests[0], profile.masterKey);
+  expect(decrypted.payload.revision).toEqual(1);
 });
 
 test("already-saved deck: choosing Update sends the existing deck's key, kind deck", async () => {
@@ -153,6 +179,7 @@ test("already-saved deck: choosing Update sends the existing deck's key, kind de
     currentDeckKey: "existing-deck-key",
     currentDeckName: "My Existing Deck",
     lastSavedSerialized: "stale",
+    lastSavedRevision: 2,
   });
   await unlockSession();
 
@@ -161,4 +188,7 @@ test("already-saved deck: choosing Update sends the existing deck's key, kind de
   await waitFor(() => expect(onSafetyCompleted).toHaveBeenCalledTimes(1));
   expect(requests[0].key).toEqual("existing-deck-key");
   expect(requests[0].kind).toEqual("deck");
+  // PR-6 "Revision tracking" - updating the SAME row continues its chain (2 -> 3).
+  const decrypted = await decryptSavedRequest(requests[0], profile.masterKey);
+  expect(decrypted.payload.revision).toEqual(3);
 });

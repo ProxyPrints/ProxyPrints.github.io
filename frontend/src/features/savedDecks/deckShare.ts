@@ -28,7 +28,7 @@ import {
 } from "@/common/savedDeckCrypto";
 import { GetSharedDeckResponse } from "@/common/schema_types";
 import {
-  DeckPayloadV1,
+  DeckPayloadV2,
   parseDeckPayload,
 } from "@/features/savedDecks/deckPayload";
 
@@ -74,7 +74,9 @@ export function buildShareUrl(
 
 export interface DecryptedSharedDeck {
   name: string;
-  payload: DeckPayloadV1;
+  // parseDeckPayload always upgrades to the latest shape (currently v2) - a recipient never
+  // sees a raw, un-upgraded v1 payload.
+  payload: DeckPayloadV2;
   sharedAt: string;
 }
 

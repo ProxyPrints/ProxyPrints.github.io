@@ -51,6 +51,7 @@ test("authenticated, a saved deck is loaded: shows the reverse breadcrumb", asyn
       currentDeckKey: "some-key",
       currentDeckName: "My Deck",
       lastSavedSerialized: null,
+      lastSavedRevision: null,
     },
   });
 

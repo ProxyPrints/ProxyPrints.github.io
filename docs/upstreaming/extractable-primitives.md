@@ -117,11 +117,12 @@ coupling to the vote system is.
 
 ## Docs tooling & federation
 
-| Primitive                      | File(s)                                              | Problem solved                                                                                                                                                                                                               | Candidate consumers                                                                  | Entanglement                                 | License note                                                                     |
-| ------------------------------ | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------- | -------------------------------------------------------------------------------- |
-| Docs single-transform pipeline | `.github/scripts/publish_wiki.py`, `publish_site.py` | One shared link-rewrite transform (`transform_links()`) publishing the same `docs/` markdown to both a GitHub wiki and a static site, with a marker-based "only delete pages I generated" safety property                    | upstream, proxies-at-home, federation peers (any project with `docs/` + wiki + site) | CLEAN                                        | —                                                                                |
-| Upstream wiki drift tracker    | `.github/scripts/upstream_wiki_drift.py`             | Diffs an external GitHub wiki's git history against a last-seen-SHA table, updates it in place — detection only, never copies wiki prose                                                                                     | proxies-at-home, any fork tracking an upstream project's wiki                        | CLEAN                                        | —                                                                                |
-| Federation hash tool           | `federation-hash-tool/hash_my_cards.py`              | Computes a stable perceptual hash of a card image using this fork's crop/classify recipe, so a peer can independently reproduce the same hash and join against a published federation export without transmitting raw images | federation peers                                                                     | CLEAN (narrowly scoped by design — see note) | MIT, deliberately distinct from the ODbL-licensed export _data_ it joins against |
+| Primitive                      | File(s)                                              | Problem solved                                                                                                                                                                                                                                          | Candidate consumers                                                                                 | Entanglement                                                      | License note                                                                     |
+| ------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Docs single-transform pipeline | `.github/scripts/publish_wiki.py`, `publish_site.py` | One shared link-rewrite transform (`transform_links()`) publishing the same `docs/` markdown to both a GitHub wiki and a static site, with a marker-based "only delete pages I generated" safety property                                               | upstream, proxies-at-home, federation peers (any project with `docs/` + wiki + site)                | CLEAN                                                             | —                                                                                |
+| Upstream wiki drift tracker    | `.github/scripts/upstream_wiki_drift.py`             | Diffs an external GitHub wiki's git history against a last-seen-SHA table, updates it in place — detection only, never copies wiki prose                                                                                                                | proxies-at-home, any fork tracking an upstream project's wiki                                       | CLEAN                                                             | —                                                                                |
+| Federation hash tool           | `federation-hash-tool/hash_my_cards.py`              | Computes a stable perceptual hash of a card image using this fork's crop/classify recipe, so a peer can independently reproduce the same hash and join against a published federation export without transmitting raw images                            | federation peers                                                                                    | CLEAN (narrowly scoped by design — see note)                      | MIT, deliberately distinct from the ODbL-licensed export _data_ it joins against |
+| Saved-deck export decrypt tool | `decrypt-saved-deck-export/decrypt.mjs`              | Decrypts a ProxyPrints saved-decks export bundle (PBKDF2-SHA256 + AES-256-GCM, via Node's own `node:crypto` WebCrypto) without this codebase, this site, or any server existing at all — zero imports from anywhere in this repo, zero npm dependencies | upstream, proxies-at-home (any zero-knowledge saved-deck implementation using the same wire format) | CLEAN (zero imports at all, narrowly scoped by design — see note) | MIT, same precedent as the federation hash tool row above                        |
 
 ## Detail notes
 
@@ -201,6 +202,23 @@ federation _protocol_ (signing scheme, `VoteSource.FEDERATED` gate,
 publisher-only posture) in `docs/federation-v1.md`, which genuinely is
 fork-only by definition — the hash tool is the one piece of the federation
 program that cleanly separates from that layer.
+
+**Saved-deck export decrypt tool** — zero imports of any kind, not just zero
+fork-specific ones: `decrypt.mjs` re-implements the (tiny) AES-256-GCM/
+PBKDF2-SHA256 wrap/unwrap logic itself using only Node's built-in
+`node:crypto`, rather than importing `frontend/src/common/savedDeckCrypto.ts`
+
+- deliberately, since the whole point is running with none of this
+  repository's own code present. What's narrow by design is the wire format
+  (docs/proposals/proposal-g-user-accounts-saved-decks.md's "PR-6, post-v1:
+  deck portability" section, also reproduced in the tool's own readme.md) -
+  an arbitrary-but-fixed convention this fork chose for its saved-decks
+  export, not a universal format. `frontend/src/common/savedDeckCrypto.ts`
+  and `frontend/src/features/savedDecks/deckPayload.ts` (the in-app
+  counterparts this tool's logic mirrors) are themselves NOT rowed here -
+  they predate this ledger's 2026-07-19 sweep and haven't been audited for
+  it yet; not rowing this tool's own dependencies-that-aren't-actually-
+  dependencies (see above) doesn't change that gap.
 
 **Back-face name lookup** — `get_back_face_names`/`is_back_face`/
 `DOUBLE_FACED_LAYOUTS` touch only `Path`/pydantic parsing of the raw bulk

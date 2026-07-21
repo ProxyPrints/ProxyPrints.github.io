@@ -78,20 +78,32 @@ export function SaveDeckModal({ show, onCancel, onSaved }: SaveDeckModalProps) {
       finishSettings,
       cardDocuments
     );
-    encryptDeckPayloadForSave(payload, session.masterKey)
+    // Only an update to the SAME already-saved row continues its revision chain (PR-6
+    // "Revision tracking") - a brand-new row (no currentDeckKey yet) always starts at 1.
+    const previousRevision =
+      currentSavedDeck.currentDeckKey != null
+        ? currentSavedDeck.lastSavedRevision
+        : null;
+    encryptDeckPayloadForSave(payload, session.masterKey, previousRevision)
       .then((encrypted) =>
         saveDeck({
           key: currentSavedDeck.currentDeckKey,
           kind: LoadDeckResponseKind.Deck,
-          ...encrypted,
-        }).unwrap()
+          ciphertext: encrypted.ciphertext,
+          ciphertextNonce: encrypted.ciphertextNonce,
+          wrappedDek: encrypted.wrappedDek,
+          wrappedDekNonce: encrypted.wrappedDekNonce,
+        })
+          .unwrap()
+          .then((response) => ({ response, revision: encrypted.revision }))
       )
-      .then((response) => {
+      .then(({ response, revision }) => {
         dispatch(
           setCurrentSavedDeck({
             key: response.key,
             name: finalName,
             serialized: serializeDeckPayload(payload),
+            revision,
           })
         );
         onSaved();
