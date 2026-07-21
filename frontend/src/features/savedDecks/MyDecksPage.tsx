@@ -6,13 +6,11 @@
  * group, separate from ordinarily-saved decks.
  */
 
-import { useRouter } from "next/router";
 import React, { useEffect, useMemo, useState } from "react";
 import Button from "react-bootstrap/Button";
 import ListGroup from "react-bootstrap/ListGroup";
 import Spinner from "react-bootstrap/Spinner";
 
-import { useAppDispatch, useAppSelector } from "@/common/types";
 import { RightPaddedIcon } from "@/components/icon";
 import { useCryptoSession } from "@/features/savedDecks/cryptoSession";
 import {
@@ -20,17 +18,12 @@ import {
   downloadExportBundle,
 } from "@/features/savedDecks/deckExportImport";
 import {
-  deckContentForComparison,
   DecryptedSavedDeck,
   decryptSavedDeckSummary,
-  projectFromDeckPayload,
-  serializeDeckPayload,
 } from "@/features/savedDecks/deckPayload";
 import { ImportDeckModal } from "@/features/savedDecks/ImportDeckModal";
-import { LoadSafetyModal } from "@/features/savedDecks/LoadSafetyModal";
-import { selectIsCurrentProjectDirty } from "@/features/savedDecks/selectors";
 import { ShareDeckModal } from "@/features/savedDecks/ShareDeckModal";
-import { UnlockModal } from "@/features/savedDecks/UnlockModal";
+import { useLoadSavedDeck } from "@/features/savedDecks/useLoadSavedDeck";
 import {
   useDeleteDeckMutation,
   useGetCryptoProfileQuery,
@@ -38,26 +31,29 @@ import {
   useGetWhoamiQuery,
   useResetSavedDecksMutation,
 } from "@/store/api";
-import { loadFinishSettings } from "@/store/slices/finishSettingsSlice";
-import { loadProject, selectIsProjectEmpty } from "@/store/slices/projectSlice";
-import { setCurrentSavedDeck } from "@/store/slices/savedDeckSessionSlice";
 
 function sortByUpdatedAtDescending(decks: Array<DecryptedSavedDeck>) {
   return [...decks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-function DeckRow({
+// Exported (design doc §5/§6 row S1, issue #268) so the /display empty-project landing's
+// SavedDecksLandingPanel.tsx can reuse this exact row - same markup, same buttons - rather than
+// forking it. `openLabel` defaults to this page's own original copy, so MyDecksPage itself is
+// byte-for-byte unchanged.
+export function DeckRow({
   deck,
   onOpen,
   onDelete,
   onShare,
+  openLabel = "Open in editor",
 }: {
   deck: DecryptedSavedDeck;
   onOpen: (deck: DecryptedSavedDeck) => void;
-  onDelete: (deck: DecryptedSavedDeck) => void;
+  onDelete?: (deck: DecryptedSavedDeck) => void;
   // Sharing is a `kind=deck` concept only (see post_create_deck_share) - omitted for snapshot
   // rows, which never get a Share button.
   onShare?: (deck: DecryptedSavedDeck) => void;
+  openLabel?: string;
 }) {
   return (
     <ListGroup.Item className="d-flex justify-content-between align-items-center">
@@ -79,23 +75,23 @@ function DeckRow({
           className="me-2"
           onClick={() => onOpen(deck)}
         >
-          Open in editor
+          {openLabel}
         </Button>
-        <Button
-          size="sm"
-          variant="outline-danger"
-          onClick={() => onDelete(deck)}
-        >
-          Delete
-        </Button>
+        {onDelete != null && (
+          <Button
+            size="sm"
+            variant="outline-danger"
+            onClick={() => onDelete(deck)}
+          >
+            Delete
+          </Button>
+        )}
       </div>
     </ListGroup.Item>
   );
 }
 
 export function MyDecksPage() {
-  const router = useRouter();
-  const dispatch = useAppDispatch();
   const whoami = useGetWhoamiQuery();
   const isAuthenticated = whoami.data?.authenticated === true;
   const session = useCryptoSession();
@@ -111,28 +107,26 @@ export function MyDecksPage() {
   const [deleteDeck] = useDeleteDeckMutation();
   const [resetSavedDecks] = useResetSavedDecksMutation();
 
-  const isProjectEmpty = useAppSelector(selectIsProjectEmpty);
-  const isProjectDirty = useAppSelector(selectIsCurrentProjectDirty);
+  // Extracted (design doc §5/§6 row S1, issue #268) into useLoadSavedDeck.ts so the /display
+  // landing's SavedDecksLandingPanel can share the exact same open/load path - this page passes
+  // navigateTo: "/editor" (its own long-standing behaviour), the landing omits it.
+  const {
+    element: loadSavedDeckModals,
+    openDeck,
+    showUnlock,
+    openUnlock,
+  } = useLoadSavedDeck({ navigateTo: "/editor" });
 
   const [decrypted, setDecrypted] = useState<Array<DecryptedSavedDeck>>([]);
   const [decrypting, setDecrypting] = useState(false);
   const [decryptError, setDecryptError] = useState<string | null>(null);
-  const [showUnlock, setShowUnlock] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
-  const [pendingLoadDeck, setPendingLoadDeck] =
-    useState<DecryptedSavedDeck | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [sharingDeck, setSharingDeck] = useState<DecryptedSavedDeck | null>(
     null
   );
-
-  useEffect(() => {
-    if (session.status === "locked") {
-      setShowUnlock(true);
-    }
-  }, [session.status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -181,28 +175,6 @@ export function MyDecksPage() {
     [decrypted]
   );
 
-  const performLoad = (deck: DecryptedSavedDeck) => {
-    const { project, finishSettings, name } = projectFromDeckPayload(
-      deck.payload
-    );
-    dispatch(loadProject(project));
-    dispatch(loadFinishSettings(finishSettings));
-    dispatch(
-      setCurrentSavedDeck({
-        key: deck.key,
-        name,
-        // Content-only (deckPayload.ts's `deckContentForComparison`) - matches the shape
-        // `buildDeckPayload` produces, since the dirty-check compares the two directly. The
-        // full payload's `revision`/`modifiedAt` (PR-6) live separately, in `lastSavedRevision`.
-        serialized: serializeDeckPayload(
-          deckContentForComparison(deck.payload)
-        ),
-        revision: deck.payload.revision,
-      })
-    );
-    router.push("/editor");
-  };
-
   const handleExport = () => {
     if (savedDecksQuery.data == null || cryptoProfileQuery.data == null) {
       return;
@@ -216,17 +188,6 @@ export function MyDecksPage() {
       downloadExportBundle(bundle);
     } catch (thrown) {
       setExportError(thrown instanceof Error ? thrown.message : String(thrown));
-    }
-  };
-
-  // Loss-proof by construction (frontend spec §4): an empty or clean editor loads immediately,
-  // but a dirty one always gets a safety copy saved first - never silently discarded, and never
-  // skippable for a logged-in user (this page requires being logged in to reach at all).
-  const openInEditor = (deck: DecryptedSavedDeck) => {
-    if (isProjectEmpty || !isProjectDirty) {
-      performLoad(deck);
-    } else {
-      setPendingLoadDeck(deck);
     }
   };
 
@@ -286,22 +247,7 @@ export function MyDecksPage() {
 
   return (
     <>
-      <UnlockModal
-        show={showUnlock}
-        onCancel={() => setShowUnlock(false)}
-        onUnlocked={() => setShowUnlock(false)}
-      />
-      <LoadSafetyModal
-        show={pendingLoadDeck != null}
-        onCancel={() => setPendingLoadDeck(null)}
-        onSafetyCompleted={() => {
-          const deck = pendingLoadDeck;
-          setPendingLoadDeck(null);
-          if (deck != null) {
-            performLoad(deck);
-          }
-        }}
-      />
+      {loadSavedDeckModals}
       {session.masterKey != null && (
         <ImportDeckModal
           show={showImport}
@@ -328,9 +274,7 @@ export function MyDecksPage() {
       )}
       {session.status === "locked" && !showUnlock && (
         <p>
-          <Button onClick={() => setShowUnlock(true)}>
-            Unlock my saved decks
-          </Button>
+          <Button onClick={openUnlock}>Unlock my saved decks</Button>
         </p>
       )}
       {shouldFetchDecks && (
@@ -384,7 +328,7 @@ export function MyDecksPage() {
                 <DeckRow
                   key={deck.key}
                   deck={deck}
-                  onOpen={openInEditor}
+                  onOpen={openDeck}
                   onDelete={handleDelete}
                   onShare={setSharingDeck}
                 />
@@ -403,7 +347,7 @@ export function MyDecksPage() {
                   <DeckRow
                     key={deck.key}
                     deck={deck}
-                    onOpen={openInEditor}
+                    onOpen={openDeck}
                     onDelete={handleDelete}
                   />
                 ))}

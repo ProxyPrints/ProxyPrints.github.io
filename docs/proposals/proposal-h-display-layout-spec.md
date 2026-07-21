@@ -10,18 +10,22 @@ All primitives are react-bootstrap 2.10.10 / Bootstrap 5.3.8 (confirmed installe
 including responsive-Offcanvas). No new dependencies.
 
 **Implementation status (2026-07-21):** #266 shipped (PR #274 — sheet fit-to-width,
-both rails as `Offcanvas` nodes). This PR ships #267's own mapped rows only: **D12 v1**
-(dual-mode Add/Browse `ToggleButtonGroup` + `CatalogBrowseResults.tsx`, filters-first
-plain text — the typed operator grammar is explicitly out of scope, tracked as #276),
-**D15** (the existing `Import.tsx` Text/XML/CSV/URL dropdown, mounted verbatim), and
-**D13's landing/search-bar feedback half** (`InvalidIdentifiersStatus`, mounted in both
-the populated-state action bar and the empty-project landing — the right-rail Status
-row is D13's OTHER half, issue #272's own remaining scope, not this PR's). Deliberately
-NOT built here: D9–D11/D14/D16 (own future issues, per §A2's own issue mapping), and
-D17/D18 (sheet-presentation refinement + default card-spacing change — #266-adjacent,
-appeared in this spec after #267's implementation task was scoped, mapped to neither
-#267 nor any other filed issue yet; flagged for the owner to file as its own follow-up
-rather than folded into this PR sight-unseen).
+both rails as `Offcanvas` nodes). #267 shipped (PR #283): **D12 v1** (dual-mode
+Add/Browse `ToggleButtonGroup` + `CatalogBrowseResults.tsx`, filters-first plain text —
+the typed operator grammar is explicitly out of scope, tracked as #276), **D15** (the
+existing `Import.tsx` Text/XML/CSV/URL dropdown, mounted verbatim), and **D13's
+landing/search-bar feedback half** (`InvalidIdentifiersStatus`, mounted in both the
+populated-state action bar and the empty-project landing — the right-rail Status row is
+D13's OTHER half, issue #272's own remaining scope, not that PR's). This PR ships
+**#268's own mapped rows (§5, §6 rows S1–S3)**: `DeckRow` (exported, gained an
+`openLabel` prop) and a new `useLoadSavedDeck` hook extracted from `MyDecksPage.tsx`
+(S1); `SavedDecksLandingPanel.tsx` (S2); `DeckInputLanding`'s `Col lg={4}`/`Col lg={8}`
+grid, decks first when stacked, rendering neither column when there's nothing to show
+(S3). Deliberately NOT built here: D9–D11/D14/D16 (own future issues, per §A2's own
+issue mapping), and D17/D18 (sheet-presentation refinement + default card-spacing
+change — #266-adjacent, appeared in this spec after #267's implementation task was
+scoped, mapped to neither #267 nor any other filed issue yet; flagged for the owner to
+file as its own follow-up rather than folded into this PR sight-unseen).
 
 Issue mapping (explicit):
 
