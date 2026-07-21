@@ -887,3 +887,38 @@ symptom with a longer Playwright timeout or a spec edit. The deeper fix
 `ResizeObserver`-driven measurement — is a legitimate follow-up (this
 whole class of bug recurs the next time a link is added to that row) but
 is out of scope for a single-link addition.
+
+## Playwright tests behave like a 1280×720 desktop viewport even though `playwright.config.ts` sets 800×600
+
+**Symptom**: a change that's supposed to be invisible/behave differently
+below some breakpoint (a responsive drawer, a collapsed toolbar, a
+media-query-gated style) shows up as always-inline/always-expanded in
+every existing test in the suite, even though the `chromium` project's
+`use` block clearly declares `contextOptions: { viewport: { width: 800, height: 600 } }`.
+
+**Cause**: `contextOptions` is not a real Playwright `TestOptions`
+field — Playwright's actual browser-context config lives at the
+top level of `use` (`viewport`, `reducedMotion`, etc. directly), not
+nested under a `contextOptions` key. `playwright.config.ts`'s `chromium`
+project spreads `...devices["Desktop Chrome"]` first (which sets a
+top-level `viewport: {1280, 720}` and `reducedMotion` is absent
+entirely), then adds a sibling `contextOptions: {...}` object that
+Playwright silently ignores — so every test in the repo has actually
+been running at Desktop Chrome's stock 1280×720, full-motion, the whole
+time. Confirmed by evaluating the real rendered viewport/computed style
+inside a test (`page.evaluate(() => window.innerWidth)` and inspecting
+an Offcanvas's actual class list) rather than trusting the config file's
+stated intent.
+
+**Fix**: for a test that genuinely needs a narrower/specific viewport
+(or `reducedMotion`), use `test.use({ viewport: {...}, reducedMotion: "reduce" })` at the top level of a `test.describe` block (or per-test) —
+that field name IS real and reliably overrides the project default for
+just that scope, unaffected by the dead `contextOptions` wrapper. Don't
+"fix" the stale 800×600 intent in the project config itself as a
+drive-by — every existing spec in the repo was authored and passing
+against the _actual_ 1280×720 desktop viewport, so correcting the config
+to match its stated intent would silently change the effective
+breakpoint tier (and therefore behavior) of the entire existing suite in
+one line, far outside whatever single feature change prompted noticing
+this. Filed during issue #266 (mobile `/display` responsive shell,
+`frontend/tests/DisplayPage.spec.ts`'s phone-viewport describe block).

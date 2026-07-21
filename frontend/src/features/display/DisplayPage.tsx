@@ -80,13 +80,55 @@
  * own item is deliberately excluded, since this page's Generate PDF button already reuses
  * useDownloadPDF directly rather than opening the classic PDFGenerator modal that item dispatches
  * to (see the inline-export region comment below).
+ *
+ * Issue #266 (mobile responsive shell - docs/proposals' /display layout spec, owner-approved
+ * 2026-07-21, §2/§4/§6 rows R1/R2/R4/R5/R6) replaced the single always-rendered `RailWrapper`
+ * (static below md, sticky-in-place from md up) with the spec's real four-tier shell:
+ *   - The sheet region now measures its own width via `ResizeObserver` (`sheetRenderWidthPx`)
+ *     instead of a fixed constant, so `PagePreview`'s existing `maxWidthPx` prop fits the sheet to
+ *     whatever width is actually available - phones get the WHOLE landscape page, scaled down,
+ *     rather than a fixed-width sheet clipped by the viewport (the design doc's "only the middle
+ *     cards visible" symptom, issue #266's own repro). No `PagePreview` changes - it already scales
+ *     to any width.
+ *   - Both rails are now ONE `Offcanvas` node each (`responsive="lg"` left, `responsive="xl"`
+ *     right) - inline/sticky at their own breakpoint, a real dismissible drawer below it
+ *     (`useViewportTier.ts` drives the left rail's phone-bottom-sheet vs. tablet-start-drawer
+ *     placement switch, since Offcanvas's own `responsive` prop only knows one breakpoint at a
+ *     time). Selecting a slot opens the left rail even where it's a drawer (harmless at inline
+ *     tiers, where `show` is ignored - see Offcanvas's own source). Opening either rail closes the
+ *     other, so the two overlays never stack.
+ *   - The right rail is new: the settings/export controls this page used to keep in the toolbar
+ *     unconditionally (paper size, bleed, guides, Fronts/Backs, Search Settings, Cardback, the
+ *     export cluster, and the fetch-progress bar) are relocated there, reachable via the action
+ *     bar's gear button below `xl` (hidden entirely at `xl`+, where the rail is already inline).
+ *     This is, necessarily, also half of the design doc's §6 row T1 (the OTHER half - the
+ *     populated-state add-cards search bar replacing the rest of the toolbar, T2-T5/I1 - is
+ *     issue #267's own scope, not touched here): R4 (#266) can't have real content in its new
+ *     placement without the controls actually moving out of the toolbar, so that move happens
+ *     here using the existing components completely unforked, not the full #267 action-bar
+ *     redesign. The right rail's sections are plain, always-expanded groups (not yet the spec's
+ *     `AutofillCollapse` per-section chrome/collapsed-by-default hierarchy) - deferred to keep
+ *     this PR's test surface to "open the drawer first", not "expand a section first" too.
+ *   - Deliberately NOT built here (see the design doc's own issue-mapping + this file's own
+ *     module comment history): the `CardDetailedViewBody` extraction and D3's promoted/demoted
+ *     content reorder (design doc §7.5/R3 - its own follow-up, the rail's existing accordion
+ *     content is reused as-is in the new placements), the D4-D6 4x2/margins/bleed defaults and D8
+ *     color calibration (new scope beyond #266-268, own future issues), the #267 search-bar
+ *     migration/action-bar sticky wrapper, and the #268 saved-decks landing.
  */
 import styled from "@emotion/styled";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Accordion } from "react-bootstrap";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Form from "react-bootstrap/Form";
+import Offcanvas, { OffcanvasPlacement } from "react-bootstrap/Offcanvas";
 import ProgressBar from "react-bootstrap/ProgressBar";
 import Row from "react-bootstrap/Row";
 
@@ -117,6 +159,7 @@ import { AttributesSection } from "@/features/display/AttributesSection";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
+import { useViewportTier } from "@/features/display/useViewportTier";
 import { DisplayExportMenu } from "@/features/export/DisplayExportMenu";
 import { PostExportContributionPrompt } from "@/features/export/PostExportContributionPrompt";
 import { wasLatestCardsPdfDownloadSuccessful } from "@/features/export/postExportContributionPrompt";
@@ -178,9 +221,12 @@ const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   showCutLines: true,
 };
 
-// Width, in real CSS px, every sheet in the flat-scroll stack renders at - was PagePreview's own
-// inline maxWidthPx={960} prop before Item 3; hoisted to a shared constant since sheetPixelHeightPx
-// below needs the exact same value to estimate each sheet's rendered height for virtualization.
+// Upper bound, in real CSS px, on every sheet's rendered width - was PagePreview's own fixed
+// maxWidthPx={960} prop before Item 3, and stayed a fixed value until issue #266's fit-to-width
+// rule: the sheet-region ResizeObserver below now clamps to whichever is SMALLER, this cap or the
+// region's actual measured width, so a narrow viewport (phone/tablet, or a laptop/desktop rail
+// eating into the region) shrinks the sheet instead of clipping it. Still the same shared constant
+// sheetPixelHeightPx needs for its own height estimate, just no longer the only input.
 const SHEET_MAX_WIDTH_PX = 960;
 
 //# endregion
@@ -456,21 +502,97 @@ interface SelectedSlotRef {
   slot: number;
 }
 
-// Static (plain document flow) below `md`, sticky with its own scroll container from `md` up -
-// mirrors cardPanel.tsx's own static-below-md/sticky-at-md-up precedent (docs/lessons.md's
-// sticky/z-index entry) via ONE styled element with a media query, not a duplicate render
-// toggled by Bootstrap's d-none/d-md-none utilities (which would duplicate every testid/
-// heading/interactive control in the DOM at every viewport).
-const RailWrapper = styled.div`
-  width: 380px;
-  max-width: 100%;
-  position: static;
+// Issue #266 (design doc §4/§6 R2/R4) - the three-region body: left rail · sheet · right rail,
+// laid out as a single flex row only once EITHER rail actually goes inline (`lg`, 992px - the
+// left rail's own inline threshold, the first of the two). Below that, both rails render as
+// fixed-position Offcanvas drawers (out of normal flow entirely - see LeftRailOffcanvas/
+// RightRailOffcanvas below), so this wrapper only ever needs to arrange the sheet region itself.
+// `position: relative; z-index: 0` is scoped to the SAME `lg`-up media query - the specific fix
+// docs/lessons.md's sticky/z-index entry documents (part 3) - deliberately NOT applied below `lg`:
+// react-bootstrap's Offcanvas dialog renders through a portal while open (its own z-index escapes
+// any ancestor stacking context), so an unconditional zIndex: 0 parent here would only reintroduce
+// the exact stacking trap this fix exists to avoid, for no benefit, on tiers where the rail is a
+// drawer instead of an inline sibling (see the design doc's own portal note, §context/R2).
+const DisplayBodyRegion = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex-grow: 1;
 
-  @media (min-width: 768px) {
-    position: sticky;
-    top: 0;
-    max-height: 100vh;
-    overflow-y: auto;
+  @media (min-width: 992px) {
+    flex-direction: row;
+    align-items: flex-start;
+    position: relative;
+    z-index: 0;
+  }
+`;
+
+// Both rails are ONE `Offcanvas` node each (design doc §4's "hard precedent... no d-none
+// duplicate renders"): `responsive` picks the CSS class Bootstrap keys its own breakpoint media
+// queries off (`.offcanvas-lg`/`.offcanvas-xl`), which - above that breakpoint - already resets
+// `position`/`display` to plain in-flow values and hides `.offcanvas-header` entirely (Bootstrap's
+// own stock CSS, not custom here). Everything below fills in what Bootstrap's inline reset
+// deliberately leaves unstyled: a fixed width, sticky positioning, and its own scroll container -
+// see the design doc's §4 "Inline styling... attaches via a wrapper class scoped to the inline
+// tiers" instruction. The bottom-sheet's 72vh height + rounded top corners (design doc §4.1) are
+// scoped to `.offcanvas-bottom` specifically, since this same node also renders as `.offcanvas-
+// start` on tablet (leftPlacement below) - the two placements should not share sizing.
+const LeftRailOffcanvas = styled(Offcanvas)`
+  &.offcanvas-bottom {
+    border-top-left-radius: 0.75rem;
+    border-top-right-radius: 0.75rem;
+  }
+
+  @media (min-width: 992px) {
+    &.offcanvas-lg {
+      width: 380px;
+      max-width: 380px;
+      flex: 0 0 380px;
+      position: sticky;
+      top: 0;
+      max-height: 100vh;
+      overflow-y: auto;
+      border-right: var(--bs-border-width) solid
+        var(--bs-border-color-translucent);
+    }
+  }
+`;
+
+const RightRailOffcanvas = styled(Offcanvas)`
+  @media (min-width: 1200px) {
+    &.offcanvas-xl {
+      width: 300px;
+      max-width: 300px;
+      flex: 0 0 300px;
+      position: sticky;
+      top: 0;
+      max-height: 100vh;
+      overflow-y: auto;
+      border-left: var(--bs-border-width) solid
+        var(--bs-border-color-translucent);
+    }
+  }
+`;
+
+// Design doc §4.1's tablet-only discoverability affordance: "a 'Card details' edge handle keeps
+// it discoverable with nothing selected" - without this, a tablet user with no slot selected has
+// no visible way to reach the left rail at all (there's nothing on the sheet to tap yet, and the
+// gear only opens the RIGHT rail). Phone doesn't need this (D2's mockup omits it there too) -
+// nothing-selected still shows the rail's own idle message, which is reachable by tapping any
+// slot the moment one exists. Laptop/desktop don't need it either - the rail's already inline.
+const TabletRailHandle = styled(Button)`
+  display: none;
+
+  @media (min-width: 768px) and (max-width: 991.98px) {
+    display: block;
+    position: fixed;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 1030;
+    writing-mode: vertical-rl;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
   }
 `;
 
@@ -626,6 +748,27 @@ export function DisplayPage() {
   const [selectedSlotRef, setSelectedSlotRef] =
     useState<SelectedSlotRef | null>(null);
 
+  // Issue #266 (design doc §4) - which tier drives the left rail's drawer placement (phone:
+  // bottom sheet, tablet: start drawer; laptop/desktop: inline, where placement is moot - see
+  // LeftRailOffcanvas's own comment) and the gear button's visibility.
+  const viewportTier = useViewportTier();
+  const leftPlacement: OffcanvasPlacement =
+    viewportTier === "phone" ? "bottom" : "start";
+  const [leftRailOpen, setLeftRailOpen] = useState(false);
+  const [rightRailOpen, setRightRailOpen] = useState(false);
+  // Design doc §4's "two overlays, one screen" invariant - opening either rail closes the other,
+  // so they never stack below their own inline tier. Harmless to call at inline tiers too:
+  // Offcanvas ignores `show` there entirely (see its own source - `hideResponsiveOffcanvas`
+  // forces the portal closed once the viewport reaches the `responsive` breakpoint).
+  const openLeftRail = () => {
+    setRightRailOpen(false);
+    setLeftRailOpen(true);
+  };
+  const openRightRail = () => {
+    setLeftRailOpen(false);
+    setRightRailOpen(true);
+  };
+
   const activeFace: Faces = frontsVisible ? Front : Back;
 
   // Landscape: PDF.tsx's own PageSize table is portrait-oriented (matches the classic PDF
@@ -635,12 +778,61 @@ export function DisplayPage() {
   const portraitSize = getPageSizeMM(settings.pageSize, undefined, undefined);
   const sheetWidthMM = portraitSize.height;
   const sheetHeightMM = portraitSize.width;
+
+  // Issue #266 (design doc §2, D1) - fit-to-width: the sheet region measures its own real
+  // available width, and the rendered sheet is the SMALLER of that and SHEET_MAX_WIDTH_PX - no
+  // PagePreview change, this only changes what's passed into its existing maxWidthPx prop. The
+  // landscape page's own aspect ratio (already handled by PagePreview's scale-to-fit math) is
+  // what naturally "letterboxes" it on a narrow viewport - the whole page shrinks proportionally,
+  // it isn't a separately-drawn letterbox frame. Quantized to the nearest 8px so a sub-pixel
+  // ResizeObserver jitter (common when a scrollbar appears/disappears) doesn't cause a visible
+  // reflow loop.
+  const [sheetRenderWidthPx, setSheetRenderWidthPx] =
+    useState<number>(SHEET_MAX_WIDTH_PX);
+
+  // One ResizeObserver instance for this component's whole lifetime (the lazy-ref-initialization
+  // pattern React's own docs describe for an expensive object that shouldn't be recreated every
+  // render), rather than one created inside a `useEffect(..., [])`. A plain effect-plus-`useRef`
+  // pair would only ever attach while `isProjectEmpty` is true at the very FIRST mount (this
+  // page's own early-return below swaps the whole tree to `DeckInputLanding`, so the sheet-region
+  // div doesn't exist in the DOM yet) - since that effect only runs once, it would silently never
+  // observe anything once a project actually starts and the real div mounts. The callback ref
+  // below re-attaches the SAME observer to whatever DOM node it's handed, every time that node
+  // changes (including this empty→populated transition), which a mount-once effect can't do.
+  const sheetResizeObserverRef = useRef<ResizeObserver | null>(null);
+  if (
+    sheetResizeObserverRef.current == null &&
+    typeof ResizeObserver !== "undefined"
+  ) {
+    sheetResizeObserverRef.current = new ResizeObserver((entries) => {
+      const measuredWidthPx = entries[0]?.contentRect.width;
+      if (measuredWidthPx == null || measuredWidthPx <= 0) {
+        return;
+      }
+      const clampedWidthPx = Math.min(SHEET_MAX_WIDTH_PX, measuredWidthPx);
+      setSheetRenderWidthPx(Math.max(160, Math.round(clampedWidthPx / 8) * 8));
+    });
+  }
+  useEffect(() => () => sheetResizeObserverRef.current?.disconnect(), []);
+  const sheetRegionRef = useCallback((element: HTMLDivElement | null) => {
+    const observer = sheetResizeObserverRef.current;
+    if (observer == null) {
+      return;
+    }
+    observer.disconnect();
+    if (element != null) {
+      observer.observe(element);
+    }
+  }, []);
+
   // Matches PagePreview's own internal scale-to-fit math exactly (scale = maxWidthPx /
   // pageWidthMM-in-px, height = pageHeightMM-in-px * scale - the px-per-mm factor cancels out),
   // so this estimate is exact, not approximate - RenderIfVisible's defaultHeight/visibleOffset
-  // never has to correct a wrong guess via its own ResizeObserver fallback.
+  // never has to correct a wrong guess via its own ResizeObserver fallback. Derives from the same
+  // measured sheetRenderWidthPx (not the fixed cap) so virtualization placeholders stay exact at
+  // every viewport, not just the desktop one.
   const sheetPixelHeightPx =
-    SHEET_MAX_WIDTH_PX * (sheetHeightMM / sheetWidthMM);
+    sheetRenderWidthPx * (sheetHeightMM / sheetWidthMM);
 
   const margins = useMemo(() => ({ top: 5, bottom: 5, left: 5, right: 5 }), []);
   const spacing = useMemo(() => ({ row: 0, col: 0 }), []);
@@ -857,6 +1049,10 @@ export function DisplayPage() {
       return;
     }
     setSelectedSlotRef({ face: activeFace, slot: entry.slot });
+    // Issue #266 (design doc §4.1) - "fixes 'tapping a card shows nothing'": below `lg`, the left
+    // rail is a closed-by-default drawer, so selecting a slot must also open it. No-op at `lg`+,
+    // where the rail is already inline and ignores `show` entirely.
+    openLeftRail();
   };
 
   // Which sheet (not just which slot-on-a-page) currently holds the selected slot - needed now
@@ -913,8 +1109,40 @@ export function DisplayPage() {
     return <DeckInputLanding />;
   }
 
+  // Issue #266 (design doc §2/§4/§6 R4) - the export fetch-progress bar, extracted so both its
+  // old top-of-page placement's markup and its new right-rail-footer placement below render the
+  // exact same element rather than two hand-copied blocks that could drift.
+  const exportProgressBar = exportPhase != null && (
+    <div className="py-2" data-testid="display-export-progress">
+      {exportPhase === "fetching" && imageFetchProgress != null ? (
+        <ProgressBar
+          now={
+            imageFetchProgress.total > 0
+              ? (imageFetchProgress.completed / imageFetchProgress.total) * 100
+              : 0
+          }
+          label={`Fetching images: ${imageFetchProgress.completed} of ~${imageFetchProgress.total}`}
+          data-testid="display-export-progress-bar"
+        />
+      ) : (
+        <ProgressBar
+          now={100}
+          animated
+          striped
+          label="Assembling PDF…"
+          data-testid="display-export-progress-bar"
+        />
+      )}
+    </div>
+  );
+
   return (
     <div className="d-flex flex-column" data-testid="display-page">
+      {/* Issue #266 (design doc §3/§6 R4) - reduced to identity + the gear that opens the right
+          rail; the settings/export controls this toolbar used to hold unconditionally now live in
+          RightRailOffcanvas below (necessarily also half of design doc row T1 - see this file's
+          own module comment for why). The populated-state add-cards search bar row (§3, issue
+          #267) is NOT added here - that's issue #267's own scope, untouched by this change. */}
       <div
         className="d-flex align-items-center flex-wrap gap-2 px-3 py-2 border-bottom"
         data-testid="display-toolbar"
@@ -937,114 +1165,21 @@ export function DisplayPage() {
             saved-decks.md's "Where it's wired in" section for the full cross-reference). */}
         <SavedDeckPanel className="" />
 
+        {/* Design doc §1's region table: hidden entirely at desktop (≥1200, xl) where the right
+            rail is already inline - visible at every narrower tier, where it's the only way to
+            open it. */}
         <Button
           size="sm"
           variant="outline-secondary"
-          onClick={() => dispatch(toggleFaces())}
+          className="ms-auto d-xl-none"
+          onClick={openRightRail}
+          aria-expanded={rightRailOpen}
+          data-testid="display-gear-button"
+          aria-label="Print & Settings"
         >
-          {frontsVisible ? "Showing: Fronts" : "Showing: Backs"}
+          <RightPaddedIcon bootstrapIconName="gear" />
+          Print &amp; Settings
         </Button>
-
-        <Form.Select
-          size="sm"
-          style={{ width: "auto" }}
-          value={settings.pageSize}
-          onChange={(event) =>
-            setSettings((previous) => ({
-              ...previous,
-              pageSize: event.target.value as keyof typeof PageSize,
-            }))
-          }
-          aria-label="Paper size"
-        >
-          {Object.keys(PageSize)
-            .filter((key) => key !== "CUSTOM")
-            .map((key) => (
-              <option key={key} value={key}>
-                {key} (landscape)
-              </option>
-            ))}
-        </Form.Select>
-
-        <Form.Control
-          size="sm"
-          type="number"
-          style={{ width: "6rem" }}
-          min={0}
-          max={BleedEdgeMM}
-          step={0.1}
-          value={settings.bleedEdgeMM}
-          onChange={(event) => {
-            const value = parseFloat(event.target.value);
-            if (!Number.isNaN(value)) {
-              setSettings((previous) => ({ ...previous, bleedEdgeMM: value }));
-            }
-          }}
-          aria-label="Bleed edge (mm)"
-        />
-
-        <Form.Check
-          type="switch"
-          id="display-cut-lines-toggle"
-          label="Guides"
-          checked={settings.showCutLines}
-          onChange={(event) =>
-            setSettings((previous) => ({
-              ...previous,
-              showCutLines: event.target.checked,
-            }))
-          }
-        />
-
-        {/* Issue #239 (design doc §5's SearchSettings row) - the same self-contained
-            trigger-button-plus-modal ProjectEditor.tsx already mounts, relocated here
-            unmodified: same Modal, same searchSettingsSlice read/write, same
-            setLocalStorageSearchSettings persistence path. This is a deck-level setting
-            (search type, DPI/file-size filters, source ordering) per §2's own toolbar-vs-rail
-            dividing line, so it belongs beside the other deck-level controls above, not in the
-            per-slot rail. */}
-        <SearchSettings />
-
-        {/* Issue #240 (design doc §5's CommonCardback row) - a project-wide setting (§2's own
-            dividing line: true of the whole deck, not one selected slot), so it belongs here
-            beside the other deck-level controls rather than in the per-slot rail. Opens the same
-            GridSelectorModal instance CommonCardback.tsx's editor mount already owns - see that
-            component's own CardbackToolbarButton comment for why this is a new button rather
-            than mounting CommonCardback itself. */}
-        <CardbackToolbarButton />
-
-        <div className="ms-auto d-flex align-items-center gap-2">
-          {/* Issue #241 (design doc §5's export-beyond-PDF row) - XML/Card Images/Decklist,
-              relocated unmodified from the classic editor's own "Download" dropdown. Sits
-              beside Save to Drive/Generate PDF per the design doc's own instruction, not inside
-              them - those two buttons are this page's own PDF export entry points, this menu is
-              everything else. */}
-          <DisplayExportMenu />
-          {isGoogleDriveAppConfigured() && (
-            <Button
-              size="sm"
-              variant="outline-primary"
-              onClick={onSaveToDriveClick}
-              disabled={isSavingToDrive || isDownloading}
-              data-testid="display-save-to-drive"
-            >
-              {isSavingToDrive ? (
-                <Spinner size={1.2} />
-              ) : (
-                "Save PDF to Google Drive"
-              )}
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={onGeneratePdfClick}
-            disabled={isDownloading || isSavingToDrive}
-            data-testid="display-generate-pdf"
-          >
-            {isDownloading ? <Spinner size={1.2} /> : "Generate PDF"}
-          </Button>
-        </div>
       </div>
 
       {/* Issue #166 - shown once per session, immediately after this button's first genuine
@@ -1063,51 +1198,67 @@ export function DisplayPage() {
         </div>
       )}
 
-      {/* Item 2 (owner's hands-on review): a real determinate progress bar, not a spinner - a
-          large export paced to the image CDN's shared rate limit (see pdfImage.ts) can take
-          several minutes, and this is what turns that wait into "fetching images: N of ~M"
-          instead of something that looks hung. Switches to an indeterminate "Assembling PDF…"
-          bar once every image has resolved but the file itself is still being built - see
-          setExportProgress's own comment for how that phase is inferred. */}
-      {exportPhase != null && (
-        <div
-          className="px-3 py-2 border-bottom"
-          data-testid="display-export-progress"
+      <DisplayBodyRegion>
+        {/* Issue #266 (design doc §4.1) - ONE node, all widths: inline sticky 380px column at
+            `lg`+, `placement="start"` drawer on tablet, `placement="bottom"` 72vh sheet on phone
+            (leftPlacement, driven by useViewportTier.ts). Opens on slot tap below `lg`
+            (handleSlotClick's own openLeftRail call) - closing does NOT clear selectedSlotRef, so
+            re-opening (gear/handle/another slot tap) comes back to the same card. */}
+        <LeftRailOffcanvas
+          show={leftRailOpen}
+          onHide={() => setLeftRailOpen(false)}
+          responsive="lg"
+          placement={leftPlacement}
+          data-testid="display-rail"
+          aria-label="Card details and art selection"
         >
-          {exportPhase === "fetching" && imageFetchProgress != null ? (
-            <ProgressBar
-              now={
-                imageFetchProgress.total > 0
-                  ? (imageFetchProgress.completed / imageFetchProgress.total) *
-                    100
-                  : 0
-              }
-              label={`Fetching images: ${imageFetchProgress.completed} of ~${imageFetchProgress.total}`}
-              data-testid="display-export-progress-bar"
-            />
-          ) : (
-            <ProgressBar
-              now={100}
-              animated
-              striped
-              label="Assembling PDF…"
-              data-testid="display-export-progress-bar"
-            />
+          {leftPlacement === "bottom" && (
+            <div
+              className="d-flex justify-content-center pt-2 pb-1 d-lg-none"
+              role="button"
+              aria-label="Dismiss"
+              onClick={() => setLeftRailOpen(false)}
+            >
+              <span
+                style={{
+                  width: 44,
+                  height: 5,
+                  borderRadius: 3,
+                  backgroundColor: "var(--bs-border-color-translucent)",
+                  display: "block",
+                }}
+              />
+            </div>
           )}
-        </div>
-      )}
+          <Offcanvas.Header closeButton>
+            <Offcanvas.Title>Card details</Offcanvas.Title>
+          </Offcanvas.Header>
+          <Offcanvas.Body>
+            {/* `key` here (not inside Rail itself) is what actually forces a remount on slot
+                change - a key set on an element INSIDE a component's own render output has no
+                effect on that same component's hooks; only the key the PARENT assigns to the
+                component element does. Caught by this page's own Playwright suite: without this,
+                expandedSections silently persisted across slot selections instead of resetting to
+                the documented per-slot default (see the design doc's §4.2). */}
+            <Rail
+              key={
+                selectedSlotRef != null
+                  ? `${selectedSlotRef.face}-${selectedSlotRef.slot}`
+                  : "idle"
+              }
+              selectedSlotRef={selectedSlotRef}
+              cardDocumentsByIdentifier={cardDocumentsByIdentifier}
+              backendURL={backendURL ?? ""}
+              onSlotDeleted={() => setSelectedSlotRef(null)}
+            />
+          </Offcanvas.Body>
+        </LeftRailOffcanvas>
 
-      {/* position: relative + an explicit non-auto z-index together, on the sticky rail's own
-          PARENT - the specific fix docs/lessons.md's sticky/z-index entry documents (part 3):
-          without both together, the rail's necessary stacking context can escape to an
-          ancestor and make its own subtree un-hit-testable, even though it still paints fine. */}
-      <div
-        className="d-flex flex-column flex-md-row flex-grow-1"
-        style={{ position: "relative", zIndex: 0 }}
-      >
         <div
+          ref={sheetRegionRef}
           className="flex-grow-1 d-flex flex-column align-items-center p-3"
           data-testid="display-sheet-region"
+          style={{ minWidth: 0, width: "100%" }}
         >
           {sheets.map((sheet) => (
             <div
@@ -1145,7 +1296,7 @@ export function DisplayPage() {
                   spacing={spacing}
                   slots={sheet.slots}
                   showCutLines={settings.showCutLines}
-                  maxWidthPx={SHEET_MAX_WIDTH_PX}
+                  maxWidthPx={sheetRenderWidthPx}
                   onSlotClick={(indexOnPage) =>
                     handleSlotClick(sheet.pageIndex, indexOnPage)
                   }
@@ -1162,35 +1313,176 @@ export function DisplayPage() {
           ))}
         </div>
 
-        {/* Sticky + its own scroll container only from md up; plain document flow below md -
-            ONE rendered instance either way (a second copy toggled by Bootstrap's d-none/
-            d-md-none utility classes would duplicate every testid/heading/interactive control
-            in the DOM at every viewport, which is exactly what a real screen reader - and this
-            page's own Playwright suite - would trip over). Mirrors cardPanel.tsx's own
-            static-below-md/sticky-at-md-up precedent (see docs/lessons.md's sticky/z-index
-            entry) via a single styled wrapper with a media query, not a duplicate render. The
-            tablet drawer and mobile bottom-sheet overlay this eventually becomes are follow-up
-            work - see this component's own module comment. */}
-        <RailWrapper className="border-start" data-testid="display-rail">
-          {/* `key` here (not inside Rail itself) is what actually forces a remount on slot
-              change - a key set on an element INSIDE a component's own render output has no
-              effect on that same component's hooks; only the key the PARENT assigns to the
-              component element does. Caught by this page's own Playwright suite: without this,
-              expandedSections silently persisted across slot selections instead of resetting to
-              the documented per-slot default (see the design doc's §4.2). */}
-          <Rail
-            key={
-              selectedSlotRef != null
-                ? `${selectedSlotRef.face}-${selectedSlotRef.slot}`
-                : "idle"
-            }
-            selectedSlotRef={selectedSlotRef}
-            cardDocumentsByIdentifier={cardDocumentsByIdentifier}
-            backendURL={backendURL ?? ""}
-            onSlotDeleted={() => setSelectedSlotRef(null)}
-          />
-        </RailWrapper>
-      </div>
+        {/* Issue #266 (design doc §4.2) - editing settings + preparing print, ONE node, all
+            widths: inline sticky 300px column at `xl`+ (≥1200 - the region table's own "Laptop
+            deliberately keeps the right rail as a drawer" call, 380+300 doesn't fit under the
+            1200px ContentMaxWidth cap), `placement="end"` drawer everywhere narrower, opened by
+            the action bar's gear button. Content here is the same components the toolbar used to
+            mount unconditionally, relocated verbatim - not yet the design doc's own
+            `AutofillCollapse` per-section chrome (deferred, see this file's own module comment). */}
+        <RightRailOffcanvas
+          show={rightRailOpen}
+          onHide={() => setRightRailOpen(false)}
+          responsive="xl"
+          placement="end"
+          style={
+            {
+              "--bs-offcanvas-width": "min(92vw, 320px)",
+            } as React.CSSProperties
+          }
+          data-testid="display-print-settings-rail"
+          aria-label="Print and project settings"
+        >
+          <Offcanvas.Header closeButton>
+            <Offcanvas.Title>Print &amp; Settings</Offcanvas.Title>
+          </Offcanvas.Header>
+          <Offcanvas.Body className="d-flex flex-column p-0">
+            <div className="flex-grow-1 overflow-auto p-3">
+              <div className="mb-3">
+                <h6>Page Setup</h6>
+                <Form.Select
+                  size="sm"
+                  className="mb-2"
+                  value={settings.pageSize}
+                  onChange={(event) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      pageSize: event.target.value as keyof typeof PageSize,
+                    }))
+                  }
+                  aria-label="Paper size"
+                >
+                  {Object.keys(PageSize)
+                    .filter((key) => key !== "CUSTOM")
+                    .map((key) => (
+                      <option key={key} value={key}>
+                        {key} (landscape)
+                      </option>
+                    ))}
+                </Form.Select>
+
+                <Form.Group className="mb-2">
+                  <Form.Label className="small mb-1">
+                    Bleed edge (mm)
+                  </Form.Label>
+                  <Form.Control
+                    size="sm"
+                    type="number"
+                    min={0}
+                    max={BleedEdgeMM}
+                    step={0.1}
+                    value={settings.bleedEdgeMM}
+                    onChange={(event) => {
+                      const value = parseFloat(event.target.value);
+                      if (!Number.isNaN(value)) {
+                        setSettings((previous) => ({
+                          ...previous,
+                          bleedEdgeMM: value,
+                        }));
+                      }
+                    }}
+                    aria-label="Bleed edge (mm)"
+                  />
+                </Form.Group>
+
+                <Form.Check
+                  type="switch"
+                  id="display-cut-lines-toggle"
+                  label="Guides"
+                  checked={settings.showCutLines}
+                  onChange={(event) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      showCutLines: event.target.checked,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="mb-3">
+                <h6>View</h6>
+                <Button
+                  size="sm"
+                  variant="outline-secondary"
+                  onClick={() => dispatch(toggleFaces())}
+                >
+                  {frontsVisible ? "Showing: Fronts" : "Showing: Backs"}
+                </Button>
+              </div>
+
+              <div className="mb-3">
+                {/* No section heading here (unlike Page Setup/View above) - the button's own
+                    label already reads "Cardback", and a separate identical-text heading would
+                    make any future generic getByText("Cardback") locator ambiguous, exactly the
+                    ambiguity the Search Settings section right below used to hit (see this file's
+                    own history/PR notes). Issue #240 (design doc §5's CommonCardback row) - a
+                    project-wide setting (true of the whole deck, not one selected slot),
+                    relocated here unmodified - opens the same GridSelectorModal instance
+                    CommonCardback.tsx's editor mount already owns (see that component's own
+                    CardbackToolbarButton comment). */}
+                <CardbackToolbarButton />
+              </div>
+
+              <div>
+                {/* Issue #239 (design doc §5's SearchSettings row) - the same self-contained
+                    trigger-button-plus-modal ProjectEditor.tsx already mounts, relocated here
+                    unmodified: same Modal, same searchSettingsSlice read/write, same
+                    setLocalStorageSearchSettings persistence path. No section heading (see the
+                    Cardback div above) - the button's own label already reads "Search Settings",
+                    and test-utils.ts's shared openSearchSettingsModal helper uses a plain
+                    getByText(/Search Settings/) that a duplicate heading would make ambiguous. */}
+                <SearchSettings />
+              </div>
+            </div>
+
+            {/* Design doc §4.2's "Prepare Print footer - pinned, always visible at the rail's
+                bottom (flex column: body scrolls, footer doesn't)". */}
+            <div className="border-top p-3 d-grid gap-2">
+              {exportProgressBar}
+              {/* Issue #241 (design doc §5's export-beyond-PDF row) - XML/Card Images/Decklist,
+                  relocated unmodified from the classic editor's own "Download" dropdown. */}
+              <DisplayExportMenu />
+              {isGoogleDriveAppConfigured() && (
+                <Button
+                  size="sm"
+                  variant="outline-primary"
+                  onClick={onSaveToDriveClick}
+                  disabled={isSavingToDrive || isDownloading}
+                  data-testid="display-save-to-drive"
+                >
+                  {isSavingToDrive ? (
+                    <Spinner size={1.2} />
+                  ) : (
+                    "Save PDF to Google Drive"
+                  )}
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={onGeneratePdfClick}
+                disabled={isDownloading || isSavingToDrive}
+                data-testid="display-generate-pdf"
+              >
+                {isDownloading ? <Spinner size={1.2} /> : "Generate PDF"}
+              </Button>
+            </div>
+          </Offcanvas.Body>
+        </RightRailOffcanvas>
+      </DisplayBodyRegion>
+
+      {/* Design doc §4.1's tablet-only discoverability affordance - see TabletRailHandle's own
+          comment for why this doesn't exist on phone/laptop/desktop. */}
+      <TabletRailHandle
+        variant="primary"
+        size="sm"
+        onClick={openLeftRail}
+        data-testid="display-rail-handle"
+        aria-label="Card details"
+      >
+        Card details
+      </TabletRailHandle>
+
       <ImageFailureConfirmModal
         failures={pendingFailureConfirm?.failures ?? null}
         onCancel={() => {

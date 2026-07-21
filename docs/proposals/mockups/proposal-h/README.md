@@ -8,8 +8,21 @@ design artifacts, not application code: plain HTML with hand-written CSS
 placeholder rectangle throughout; real measurements and behavior notes
 are inline in each page as small annotated captions.
 
-**HOLD — nothing here is a build target yet.** See the design doc for
-scope, sequencing, and open decisions.
+**Superseded for responsive behaviour specifically**:
+[`responsive-layout-2026-07-21.html`](responsive-layout-2026-07-21.html)
+is the owner-approved 2026-07-21 review round's single self-contained
+mockup (its own demo strip forces Desktop/Tablet/Phone at any window
+width — see the file's own comments) for
+[`../../proposal-h-display-layout-spec.md`](../../proposal-h-display-layout-spec.md),
+which is now the authority for the tablet-drawer/mobile-bottom-sheet
+behaviour the five files below only sketch (their per-breakpoint rail
+side/width and instrument set predate the spec's D2 "two rails, split
+roles" decision). Kept for historical context on the earlier round, not
+deleted — issue #266 (mobile responsive shell) shipped against the
+newer spec, not this directory's original five-file set.
+
+**HOLD — nothing here is a build target yet** beyond what #266 already
+shipped. See the design doc for scope, sequencing, and open decisions.
 
 ## How to view
 

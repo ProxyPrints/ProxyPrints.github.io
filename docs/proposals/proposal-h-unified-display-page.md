@@ -1,4 +1,4 @@
-As of: 2026-07-20
+As of: 2026-07-21
 What this is: Proposal H — survey + design + static HTML mockups for a
 single unified display page that replaces both the "Choose Art" grid
 editor and the separate PDF-preview/export step with one page that IS
@@ -36,9 +36,25 @@ Generate PDF already reuses `useDownloadPDF` directly rather than
 opening the classic `PDFGenerator` modal that item dispatches to; see
 §5's row and §6 step 4). **§6 step 4's toolbar instrument parity queue
 (issues #239, #240, #241) is now complete** — every finding from the
-2026-07-20 feature-parity audit against `/editor` has shipped.
-Still not built: the tablet off-canvas drawer / mobile bottom-sheet
-interaction patterns (§3); §6 step 5/6 (switchover to make `/display` the
+2026-07-20 feature-parity audit against `/editor` has shipped; and, most
+recently, **the mobile/tablet responsive shell** (§3, issue #266 — the
+owner-approved 2026-07-21 review round produced a full three-region
+layout spec superseding this doc's own §3/mockups for the responsive
+behaviour specifically, see
+[`proposal-h-display-layout-spec.md`](proposal-h-display-layout-spec.md)
+and its companion mockup in `mockups/proposal-h/`. #266 shipped the
+sheet region's fit-to-width `ResizeObserver` scaling, and both rails as
+single `Offcanvas responsive={bp}` nodes — inline sticky columns at
+laptop (left)/desktop (both), a `start` drawer (tablet) or `bottom`
+72vh sheet (phone) for the left rail, an `end` drawer everywhere but
+desktop for the new right rail. Deliberately NOT part of #266 (see the
+spec's own issue-mapping and this repo's implementing PR): the
+`CardDetailedViewBody` extraction + D3 content reorder (spec §7.5, its
+own follow-up), D4–D6's 4×2/margins/bleed default changes and D8's
+color calibration (new scope beyond #266–268, filed as their own
+issues), and issues #267 (search-bar migration)/#268 (saved-decks
+landing) themselves).
+Still not built: §6 step 5/6 (switchover to make `/display` the
 default nav entry point, then retiring `/editor` + the classic PDF tab).
 A related but deliberately
 unscoped finding from the same audit pass: `FinishSettings.tsx` (cardstock +
