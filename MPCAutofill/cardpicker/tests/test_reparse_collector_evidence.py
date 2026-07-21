@@ -263,6 +263,39 @@ class TestReparseAndRetract:
         assert not CardScanLog.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
         assert printing.pk
 
+    def test_proxy_marker_veto_selector_dry_run_counts_without_writing_anything(self, db):
+        """Mirrors test_dry_run_counts_without_writing_anything above (which only exercises the
+        parser-bug fixture) - dry_run's own generic gate in reparse_and_retract applies uniformly
+        across every selector, but this selector's own cohort deserves its own explicit dry-run
+        assertion rather than relying on that genericness alone."""
+        card = CardFactory(name="Marked Card Dry Run", content_phash=11)
+        printing = CanonicalCardFactory(name="Marked Card Dry Run", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_raw_text="158/287 R MOM EN",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            legal_line_proxy_marker_detected=True,
+        )
+        CardScanLog.objects.create(
+            card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto", run_id="stage-d-run-dry"
+        )
+
+        card_ids = select_card_ids_proxy_marker_veto("stage-d-run-dry")
+        assert card_ids == [card.pk]
+
+        result = reparse_and_retract(card_ids, run_id="reparse-dry", dry_run=True)
+
+        assert result.considered == 1
+        assert result.changed == 1
+        assert result.retracted == 0
+        # nothing actually written - the stale skip row and its evidence both survive untouched
+        assert CardScanLog.objects.filter(
+            card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto"
+        ).exists()
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
+        assert printing.pk
+
     def test_proxy_marker_veto_selector_recovers_immediately_no_reextraction_needed(self, db):
         """2026-07-21, moderator-flag-signal correction: unlike the no-text case above, this
         selector needs NO simulated re-extraction step - the stored ImageEvidence never changes
