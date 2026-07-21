@@ -1760,9 +1760,22 @@ where tesseract 4.1.1 misreads "158" as "168" under the base tier and the fallba
 correctly) — an end-to-end `extract_card_evidence`-level demonstration was attempted but not
 achieved: the same blur parameters produce a hard pass/fail cliff through the real
 `crop_coordinates`-derived box geometry, with no stable band where the base tier cleanly fails
-and the fallback tier cleanly recovers in reasonable search effort; aggregate recovery rate is
-therefore an open question for the real gated re-extraction, not something this PR's fixtures
-can quantify. Companion tooling: `reparse_collector_evidence` (new management command, dry-run
+and the fallback tier cleanly recovers in reasonable search effort; aggregate recovery rate was
+an open question for the real gated re-extraction at the time this section was first written, not
+something this PR's fixtures could quantify on their own.
+
+**Aggregate recovery rate, now measured (2026-07-21, run `ntx-0721`, see
+`docs/reports/2026-07-21-recovery-arc.md` for the full verification)**: 9,675 `no-text`-skipped
+cards re-extracted under the fallback tier above, **3,032/9,675 (31.3%) gained a parsed collector
+number**, and 7,897/9,675 (81.6%) gained at least some non-empty raw text. The follow-on Stage D
+pass over exactly the 3,032-card recovered cohort (`run_id=staged3-0721`) resolved only 20 of them
+to an actual printing match, with 2,990 resolving to a confirmed no-match vote instead — consistent
+with this section's own characterization of the bucket (garbled-not-blank text, bottom-quartile
+`blur_variance`) plus `#151`'s "NOT FOR SALE"/proxy-watermark motivating case: recovering readable
+text from a blurry/garbled crop overwhelmingly means recovering a real proxy/custom-card marker,
+not a previously-illegible official collector line. Read as a real OCR-preprocessing win
+(readable text recovered from cards that previously contributed none) with a classification, not
+identification, character. Companion tooling: `reparse_collector_evidence` (new management command, dry-run
 by default) re-parses `ImageEvidence.collector_line_raw_text` with the CURRENT parser and
 retracts the stale `stage-d-join-key-v1` vote/scan-log for exactly the cards whose join-key
 CONCLUSION changed (compared against the RECORDED `CardPrintingTag`/`CardScanLog` state, not
