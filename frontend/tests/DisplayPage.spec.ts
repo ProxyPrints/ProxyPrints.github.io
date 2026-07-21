@@ -415,6 +415,32 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
   });
 
+  // Issue #241 (design doc §5's export-beyond-PDF row) - the toolbar previously had no way to
+  // reach XML/Card Images/Decklist export at all on this page (only the classic editor's own
+  // "Download" dropdown could). DisplayExportMenu.tsx composes the same unchanged Dropdown.Items;
+  // this test only needs to confirm the menu opens and lists them - the items' own download
+  // behaviour is already covered by ExportXML.spec.ts/ExportDecklist.spec.ts/
+  // ExportImages.test.tsx against the classic editor's identical, unforked components.
+  test("the Export ▾ toolbar menu lists XML, Card Images, and Decklist", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "my search query");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+
+    await expect(page.getByTestId("display-toolbar")).toBeVisible();
+    await page.getByTestId("display-export-menu-toggle").click();
+    const exportMenu = page.getByTestId("display-export-menu");
+    await expect(exportMenu).toBeVisible();
+    await expect(exportMenu.getByTestId("export-xml-button")).toBeVisible();
+    await expect(exportMenu.getByText("Card Images")).toBeVisible();
+    await expect(
+      exportMenu.getByTestId("export-decklist-button")
+    ).toBeVisible();
+  });
+
   test("the requested-printing badge shows the plain style for a resolved, non-degraded printing-specific import", async ({
     page,
     network,
