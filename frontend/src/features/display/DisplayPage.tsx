@@ -59,6 +59,12 @@
  * components ProjectEditor.tsx's own AddCardsPanel mounts, reused (not forked) inline in place of
  * that link - once addMembers fires, isProjectEmpty flips false and this component re-renders
  * straight into the sheet+rail layout below on its own.
+ *
+ * Issue #239 (Search Settings toolbar parity, design doc §5's SearchSettings row) - the toolbar
+ * previously had no way to reach precise/fuzzy search type, DPI/file-size filter ranges, or
+ * source reordering/toggling at all on this page. SearchSettings.tsx (the same self-contained
+ * trigger-button-plus-modal ProjectEditor.tsx already mounts) is relocated in, unmodified - same
+ * Modal, same searchSettingsSlice read/write, same setLocalStorageSearchSettings persistence path.
  */
 import styled from "@emotion/styled";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -118,6 +124,7 @@ import {
 } from "@/features/pdf/PDFGenerator";
 import { ImageFetchFailure } from "@/features/pdf/pdfImage";
 import { SavedDeckPanel } from "@/features/savedDecks/SavedDeckPanel";
+import { SearchSettings } from "@/features/searchSettings/SearchSettings";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
@@ -971,6 +978,15 @@ export function DisplayPage() {
             }))
           }
         />
+
+        {/* Issue #239 (design doc §5's SearchSettings row) - the same self-contained
+            trigger-button-plus-modal ProjectEditor.tsx already mounts, relocated here
+            unmodified: same Modal, same searchSettingsSlice read/write, same
+            setLocalStorageSearchSettings persistence path. This is a deck-level setting
+            (search type, DPI/file-size filters, source ordering) per §2's own toolbar-vs-rail
+            dividing line, so it belongs beside the other deck-level controls above, not in the
+            per-slot rail. */}
+        <SearchSettings />
 
         <div className="ms-auto d-flex align-items-center gap-2">
           {isGoogleDriveAppConfigured() && (

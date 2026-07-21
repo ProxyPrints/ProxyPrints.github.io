@@ -19,18 +19,21 @@ own entry for the full detail; and, most recently, **deck-input landing**
 (§4.1, issue #238 — `/display`'s `isProjectEmpty` early return now mounts
 `ImportText`/`ImportURL`/`ImportXML`/`ImportCSV` inline, the same
 components `ProjectEditor.tsx`'s `AddCardsPanel` uses, in place of the
-old plain "go to `/editor`" link — see §4.1's own updated status line).
+old plain "go to `/editor`" link — see §4.1's own updated status line);
+and, most recently, **Search Settings toolbar parity** (§5, issue #239 —
+the toolbar now mounts `SearchSettings.tsx` unmodified, alongside the
+paper/bleed/guides controls; see §5's row and §6 step 4).
 Still not built: the tablet off-canvas drawer / mobile bottom-sheet
 interaction patterns (§3); §6 step 5/6 (switchover to make `/display` the
 default nav entry point, then retiring `/editor` + the classic PDF tab);
 and, per a 2026-07-20 feature-parity audit against `/editor` that folded
-four further confirmed gaps into this doc's body, three still open —
-**Search Settings** (§5, `SearchSettings.tsx`; issue #239), **project-wide
-cardback selection** (§5, `CommonCardback.tsx`; issue #240), and **export
-surfaces beyond PDF** (§5, `ExportXML.tsx`/`ExportImages.tsx`/
-`ExportDecklist.tsx` — `ExportPDF.tsx` itself is already covered via the
-toolbar's Generate PDF/Save-to-Drive mapping; issue #241) — see §6 step 4
-for these three's sequencing. A related but deliberately
+four further confirmed gaps into this doc's body, two still open —
+**project-wide cardback selection** (§5, `CommonCardback.tsx`; issue
+#240), and **export surfaces beyond PDF** (§5, `ExportXML.tsx`/
+`ExportImages.tsx`/`ExportDecklist.tsx` — `ExportPDF.tsx` itself is
+already covered via the toolbar's Generate PDF/Save-to-Drive mapping;
+issue #241) — see §6 step 4 for these two's sequencing. A related but
+deliberately
 unscoped finding from the same pass: `FinishSettings.tsx` (cardstock +
 foil) is a genuinely distinct component from `CardQualitySettings`
 (§5's existing PDFGenerator-settings row) — not a naming collision — yet
@@ -665,7 +668,7 @@ coverage.
 | `downloadPDF`/`saveToDrivePDF`/`useDownloadPDF`/`useSaveToDrivePDF`                                                                                                                                                                                                 | Top toolbar's Generate PDF / Save to Drive buttons                                                                                                    | None                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Page pagination (today implicit in `PDFGenerator`'s `fastPreviewFirstPage`-only fast preview)                                                                                                                                                                       | Top toolbar's "Page N of M ◀▶"                                                                                                                        | **New** — today's fast preview only ever renders the _first_ page; this proposal's sheet needs real pagination across every page `CardSelectionModeToPaginator` produces, not just page 1                                                                                                                                                                                                                                                    |
 | `SavedDeckPanel.tsx` (Proposal G, `docs/features/saved-decks.md`) — reverse breadcrumb + Save button                                                                                                                                                                | Top toolbar (doubles as this row's own "deck name" slot, per §2's IA — that slot went unbuilt here since Proposal G landed after this doc's own pass) | Props-level only (issue #165, "Proposal G save integration"): the component gained an optional `className` prop so it can drop its original vertical-stack `pt-2` and sit as one more item in the toolbar's horizontal flex-wrap row; renders nothing for an anonymous session, same as its `ProjectEditor.tsx` mount                                                                                                                        |
-| `SearchSettings.tsx` + its sub-panels (`SearchTypeSettings.tsx`, `FilterSettings.tsx`, `SourceSettings.tsx`) — audit finding, 2026-07-20, issue #239                                                                                                                | Top toolbar (new button, alongside the paper/bleed/guides controls)                                                                                   | Relocate only — same `Modal`, same `searchSettingsSlice` read/write, same `setLocalStorageSearchSettings` persistence path; the toolbar gains one more trigger button, no new state                                                                                                                                                                                                                                                          |
+| `SearchSettings.tsx` + its sub-panels (`SearchTypeSettings.tsx`, `FilterSettings.tsx`, `SourceSettings.tsx`) — audit finding, 2026-07-20, issue #239 — **BUILT**                                                                                                    | Top toolbar (new button, alongside the paper/bleed/guides controls)                                                                                   | Relocate only — same `Modal`, same `searchSettingsSlice` read/write, same `setLocalStorageSearchSettings` persistence path; the toolbar gains one more trigger button, no new state                                                                                                                                                                                                                                                          |
 | `CommonCardback.tsx` + its own `GridSelectorModal` instance + `projectSlice`'s `setSelectedCardback` — audit finding, 2026-07-20, issue #240                                                                                                                        | Top toolbar (new "Cardback" button opening the same self-contained modal `CommonCardback.tsx` already owns)                                           | Relocate only — reuses `MemoizedCommonCardbackGridSelector`'s existing `GridSelectorModal` verbatim. NOT the same "no modal, ever" exception §4.4′ carves out for the per-slot Choose Image picker — that ban is specifically about a second modal stacking over an already-open rail/drawer; a standalone project-wide cardback picker triggered directly from the toolbar has no such stacking hazard, so its existing modal is left as-is |
 | `ExportXML.tsx` (`useDownloadXML`), `ExportImages.tsx` (`useDoImageDownload`), `ExportDecklist.tsx` (`useDownloadDecklist`) — audit finding, 2026-07-20, issue #241 (`ExportPDF.tsx` itself excluded — already covered by the Generate PDF/Save-to-Drive row above) | Top toolbar, composed into an "Export ▾" dropdown alongside the existing Generate PDF / Save to Drive buttons                                         | Relocate only — same `Dropdown.Item`s, same download hooks, same `selectIsProjectEmpty`/`selectAnyImagesDownloadable` gating; `ExportPDF.tsx`'s own `Dropdown.Item` is deliberately NOT included, since this page's Generate PDF already reuses `useDownloadPDF` directly rather than opening the classic `PDFGenerator` modal `ExportPDF.tsx` dispatches to                                                                                 |
 
@@ -698,12 +701,14 @@ Small PRs, existing editor left fully intact until the last step:
    three findings from the same audit, each its own small PR since each
    is a self-contained existing component being relocated, not rebuilt:
    a Search Settings toolbar button (`SearchSettings.tsx`, unchanged
-   modal, issue #239); a Cardback toolbar button (`CommonCardback.tsx`,
-   unchanged modal — see §5's note on why this one keeps its own modal
-   rather than following the Choose Image "no modal" exception, issue
-   #240); and an Export ▾ dropdown composing `ExportXML`/`ExportImages`/
-   `ExportDecklist` alongside the existing Generate PDF / Save to Drive
-   buttons (issue #241). See §5 for the full component mapping.
+   modal, issue #239 — **DONE**, mounted in `DisplayPage.tsx`'s toolbar
+   alongside the paper/bleed/guides controls); a Cardback toolbar button
+   (`CommonCardback.tsx`, unchanged modal — see §5's note on why this one
+   keeps its own modal rather than following the Choose Image "no modal"
+   exception, issue #240); and an Export ▾ dropdown composing
+   `ExportXML`/`ExportImages`/`ExportDecklist` alongside the existing
+   Generate PDF / Save to Drive buttons (issue #241). See §5 for the full
+   component mapping.
 5. **Switchover** — once the flag-gated page has full instrument
    parity with the editor + PDF tab combined (steps 2–4 above), flip the
    default nav entry point to the new page; keep `/editor` and the PDF tab

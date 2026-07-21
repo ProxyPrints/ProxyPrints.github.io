@@ -18,7 +18,11 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "./test-utils";
+import {
+  importText,
+  loadPageWithDefaultBackend,
+  openSearchSettingsModal,
+} from "./test-utils";
 
 const threeCardHandlers = [
   cardDocumentsThreeResults,
@@ -312,6 +316,48 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     await guidesToggle.uncheck();
     await expect(page.getByTestId("page-preview-cut-line")).toHaveCount(0);
+  });
+
+  // Issue #239 (design doc §5's SearchSettings row) - the toolbar previously had no way to reach
+  // precise/fuzzy search type, DPI/file-size filters, or source reordering at all on this page.
+  // The same self-contained modal ProjectEditor.tsx already mounts is relocated here unmodified -
+  // this test only needs to confirm it opens from the toolbar and that a change made through it
+  // actually persists via the shared searchSettingsSlice, not that the modal's own internals work
+  // (SearchSettings.visual.spec.ts and the settings-specific unit tests already cover that).
+  test("the Search Settings toolbar button opens the same modal the classic editor uses, and a change made through it persists via the shared searchSettingsSlice", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "my search query");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+
+    await expect(page.getByTestId("display-toolbar")).toBeVisible();
+    const settingsModal = await openSearchSettingsModal(page);
+    await expect(
+      settingsModal.getByRole("heading", { name: "Search Type" })
+    ).toBeVisible();
+
+    // getDefaultSearchSettings defaults fuzzySearch to false (Precise), so the toggle's whole
+    // clickable surface (both labels render inside one button - see SearchTypeSettings.tsx) is
+    // currently sitting in its "off"/Precise position; clicking anywhere on it flips to Fuzzy.
+    const searchTypeToggle = settingsModal.getByRole("button", {
+      name: "Fuzzy (Forgiving) Search Precise Search",
+    });
+    await expect(searchTypeToggle).not.toHaveClass(/btn-success/);
+    await searchTypeToggle.click();
+    await settingsModal.getByRole("button", { name: "Save Changes" }).click();
+    await expect(page.getByTestId("search-settings")).not.toBeVisible();
+
+    // Re-opening confirms the change actually round-tripped through searchSettingsSlice/
+    // localStorage rather than only ever living in the modal's own local component state.
+    const reopened = await openSearchSettingsModal(page);
+    await expect(
+      reopened.getByRole("button", {
+        name: "Fuzzy (Forgiving) Search Precise Search",
+      })
+    ).toHaveClass(/btn-success/);
   });
 
   test("the requested-printing badge shows the plain style for a resolved, non-degraded printing-specific import", async ({
