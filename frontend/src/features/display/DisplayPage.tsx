@@ -52,13 +52,22 @@
  * features/export/postExportContributionPrompt.ts + usePostExportContributionPrompt.ts for the
  * success-detection and show-once-per-session logic - the same hook/component pair is also
  * mounted from PDFGenerator.tsx itself, so the classic "Print!" tab gets it too.
+ *
+ * Issue #238 (deck-input landing, design doc §4.1) - the `isProjectEmpty` early return used to
+ * render only a plain "head to /editor" link, meaning this page could never start a project
+ * standalone. See DeckInputLanding below: the same plain ImportText/ImportURL/ImportXML/ImportCSV
+ * components ProjectEditor.tsx's own AddCardsPanel mounts, reused (not forked) inline in place of
+ * that link - once addMembers fires, isProjectEmpty flips false and this component re-renders
+ * straight into the sheet+rail layout below on its own.
  */
 import styled from "@emotion/styled";
-import Link from "next/link";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Accordion } from "react-bootstrap";
 import Button from "react-bootstrap/Button";
+import Col from "react-bootstrap/Col";
 import Form from "react-bootstrap/Form";
 import ProgressBar from "react-bootstrap/ProgressBar";
+import Row from "react-bootstrap/Row";
 
 import {
   Back,
@@ -75,6 +84,7 @@ import {
   useAppSelector,
 } from "@/common/types";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
+import { RightPaddedIcon } from "@/components/icon";
 import { RenderIfVisible } from "@/components/RenderIfVisible";
 import { Spinner } from "@/components/Spinner";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
@@ -91,6 +101,10 @@ import { usePostExportContributionPrompt } from "@/features/export/usePostExport
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { SelectVersionResults } from "@/features/gridSelector/SelectVersionResults";
 import { useGridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
+import { ImportCSV } from "@/features/import/ImportCSV";
+import { ImportText } from "@/features/import/ImportText";
+import { ImportURL } from "@/features/import/ImportURL";
+import { ImportXML } from "@/features/import/ImportXML";
 import { computeLayout } from "@/features/pdf/layout";
 import {
   PagePreview,
@@ -344,6 +358,72 @@ const ChooseImageSection = ({
     </>
   );
 };
+
+//# endregion
+
+//# region deck-input landing (issue #238, design doc §4.1)
+
+// Renders the same plain import components ProjectEditor.tsx's own AddCardsPanel mounts on the
+// classic editor's "Add Cards" tab - ImportText/ImportURL/ImportXML/ImportCSV - inline, in place
+// of the old "go to /editor" link, so an empty project can be started without ever leaving this
+// page. Deliberately NOT AddCardsPanel itself: that component wraps its two columns in an
+// OverflowCol sized via a heightDelta of NavPillButtonHeight + NavbarHeight, both editor-tab-
+// specific concepts this page has neither of (this page also has no bottom nav-pill tab strip to
+// account for) - and NavbarHeight is a currently-wrong hardcoded constant (issue #250, navbar
+// renders at 64px not the constant's 50px), so a second surface deriving a forced 100vh-minus-
+// NavbarHeight scroll region from it would just compound that same bug here. This page's own
+// root already sits inside Layout.tsx's fixed-position, overflow-y:scroll ContentContainer (see
+// this file's own flat-scroll comment above), so the landing just flows in that existing scroll
+// container - no forced height calc of its own needed.
+//
+// onImportComplete is intentionally omitted (design doc §4.1 step 3): once addMembers fires,
+// selectIsProjectEmpty flips false and DisplayPage re-renders straight into the sheet+rail layout
+// on its own - there's no separate tab to switch away from here, unlike ProjectEditor.tsx's own
+// use of this same callback to flip its Tab.Panes. Confirmed safe to omit by reading all four
+// components' own onImportComplete call sites: each dispatches addMembers synchronously, then
+// (if the prop is provided at all) calls onImportComplete as its very last statement with no
+// state updates afterwards - nothing here depends on this page's own subtree remaining mounted
+// once that callback fires.
+const DeckInputLanding = () => (
+  <div className="p-3" data-testid="display-empty-state">
+    <Row className="g-0">
+      <Col lg={6} md={6} sm={12} xs={12} className="px-2">
+        <h5>Enter a Card List</h5>
+        <ImportText />
+      </Col>
+      <Col lg={6} md={6} sm={12} xs={12} className="px-2">
+        <h5>Import a File or URL</h5>
+        <Accordion defaultActiveKey="url">
+          <Accordion.Item eventKey="url">
+            <Accordion.Header>
+              <RightPaddedIcon bootstrapIconName="link-45deg" /> URL
+            </Accordion.Header>
+            <Accordion.Body>
+              <ImportURL />
+            </Accordion.Body>
+          </Accordion.Item>
+          <Accordion.Item eventKey="xml">
+            <Accordion.Header>
+              <RightPaddedIcon bootstrapIconName="file-code" /> XML
+            </Accordion.Header>
+            <Accordion.Body>
+              <ImportXML />
+            </Accordion.Body>
+          </Accordion.Item>
+          <Accordion.Item eventKey="csv">
+            <Accordion.Header>
+              <RightPaddedIcon bootstrapIconName="file-earmark-spreadsheet" />{" "}
+              CSV
+            </Accordion.Header>
+            <Accordion.Body>
+              <ImportCSV />
+            </Accordion.Body>
+          </Accordion.Item>
+        </Accordion>
+      </Col>
+    </Row>
+  </div>
+);
 
 //# endregion
 
@@ -806,15 +886,7 @@ export function DisplayPage() {
   );
 
   if (isProjectEmpty) {
-    return (
-      <div className="text-center p-5" data-testid="display-empty-state">
-        <p>Your project is empty at the moment.</p>
-        <p>
-          <Link href="/editor">Head to the editor</Link> to add cards, then come
-          back here.
-        </p>
-      </div>
-    );
+    return <DeckInputLanding />;
   }
 
   return (
