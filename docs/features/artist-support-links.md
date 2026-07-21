@@ -115,7 +115,8 @@ richer, blessed integration later.
 - `tests/ArtistSupportLink.spec.ts` (Playwright) - surface 1: a known
   canonical artist renders the link with the correct href/attributes; no
   canonical artist renders plain `"Unknown"` text with no link at all.
-- `tests/QuestionFeedArtistAndTag.spec.ts` (Playwright) - surface 2: the
+- `tests/QuestionFeed.spec.ts` (formerly `QuestionFeedArtistAndTag.spec.ts`,
+  Playwright) - surface 2: the
   post-answer banner appears (with the correct href) after voting for a
   named artist; voting "Unknown artist" never shows it.
 - `tests/DisplayPage.spec.ts` (Playwright) - surface 3: the rail's Artist
