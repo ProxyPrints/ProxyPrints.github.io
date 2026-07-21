@@ -6,6 +6,17 @@ The validation rail is what makes weak OCR safe to vote on at all: a parsed (set
 number) pair only casts a vote when it matches EXACTLY ONE of the card's own name-candidates
 (cardpicker.local_identify_printing_tags.CandidateNameIndex) - this module extracts a
 best-effort reading, it never has to be trusted on its own.
+
+`preprocess_fallback_variants`/`ALTERNATE_TESSERACT_CONFIG` (issue #259, "Stage D no-text bucket:
+OCR preprocessing/crop recovery") are FALLBACK-ONLY additions - callers decide when to reach for
+them (image_evidence.py's `collector_line_ocr` extractor's own multi-tier attempt loop is the one
+call site that does, since that extractor is what the #259 diagnostic was run against; this
+module's other two consumers, `local_fallback.py` and `local_identify_printing_tags.py` - both
+PROTECTED CORE - are untouched and still only ever call the ORIGINAL `preprocess_variants`/
+`run_tesseract`, exactly as before). Nothing in this module changes what those two callers do -
+`run_tesseract`/`run_tesseract_text_and_words` gained an optional `config` kwarg (default
+unchanged, `TESSERACT_CONFIG`), so every existing single-argument call site keeps its exact prior
+behavior.
 """
 
 import logging
@@ -14,7 +25,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 import pytesseract
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
 if TYPE_CHECKING:
     from cardpicker.local_identify_printing_tags import CandidatePrinting
@@ -48,6 +59,20 @@ DEFAULT_CROP_BOX: tuple[float, float, float, float] = (0.06, 0.90, 0.35, 0.965)
 # ("single text line") cannot handle: verified live against a real card image, PSM 7 jumbled
 # both lines into nonsense ("is : 7") while PSM 6 read them cleanly ("R146" / "MIR EN...").
 TESSERACT_CONFIG = "--psm 6"
+
+# FALLBACK-ONLY (issue #259's B bucket, "garbled but present" text - 76.8% of the no-text skip
+# population): PSM 6's "single uniform block" assumption is exactly what TESSERACT_CONFIG's own
+# comment above picked it FOR, but that same assumption is a liability once the crop is noisy
+# enough that tesseract's line/block segmentation itself goes wrong (not just the character
+# recognition) - forcing two real lines into one garbled block, or splitting one real line into
+# nonsense fragments. PSM 11 ("sparse text - find as much text as possible, in no particular
+# order") drops the block-structure assumption entirely, which recovers real text specifically
+# WHEN the failure is segmentation, not pixel quality - a different failure mode than
+# `preprocess_fallback_variants` below targets (which re-processes the pixels, not the page-
+# segmentation assumption). Only ever tried as a later attempt, after every PSM-6 attempt
+# (original + fallback-preprocessed variants) has already failed to parse a collector number -
+# see image_evidence.py's own `collector_line_ocr` extractor for the attempt ordering.
+ALTERNATE_TESSERACT_CONFIG = "--psm 11"
 
 # set code: 3-5 alnum (covers the common 3-char case and 4-5 char codes like promo/commander
 # sets); collector number: digits, optionally with a single trailing letter (variant suffix,
@@ -153,8 +178,82 @@ def preprocess_variants(cropped: "Image.Image", upscale: int = 3) -> list["Image
     return [dark_text_on_light, light_text_on_dark]
 
 
-def run_tesseract(image: "Image.Image") -> str:
-    return pytesseract.image_to_string(image, config=TESSERACT_CONFIG)
+def _median_from_histogram(histogram: list[int]) -> int:
+    """The pixel value (0-255) at which an 8-bit grayscale histogram's cumulative count first
+    reaches half its total - i.e. the image's own median intensity. `128` (a reasonable default
+    for a genuinely empty/degenerate histogram, matching `preprocess_variants`' own fixed cut)
+    if the histogram is empty (zero total pixels - shouldn't happen for a real crop, guarded
+    defensively rather than raising a ZeroDivisionError)."""
+    total = sum(histogram)
+    if total == 0:
+        return 128
+    half = total / 2
+    cumulative = 0
+    for value, count in enumerate(histogram):
+        cumulative += count
+        if cumulative >= half:
+            return value
+    return 255
+
+
+def preprocess_fallback_variants(cropped: "Image.Image", upscale: int = 5) -> list["Image.Image"]:
+    """
+    FALLBACK-ONLY additional preprocessing (issue #259, "Stage D no-text bucket: OCR
+    preprocessing/crop recovery") - never on the happy path. Callers should only reach for this
+    once every `preprocess_variants` attempt has already failed to parse a collector number (see
+    image_evidence.py's own `collector_line_ocr` extractor for the attempt ordering this is
+    designed to slot into) - it is strictly more expensive per variant (a larger upscale factor,
+    an extra filter pass) than `preprocess_variants`, and exists to recover the two failure modes
+    the #259 diagnostic identified over the no-text skip population, NOT to replace the fast
+    path for the common case.
+
+    Two independent recovery angles, both polarities each (matching `preprocess_variants`' own
+    dark-on-light/light-on-dark rationale - frame color varies by card, not knowable upfront).
+    The PERCENTILE pair is tried first, the SHARPENED pair second - deliberately, not
+    alphabetically/arbitrarily: `collector_line_ocr`'s own caller stops at the first attempt
+    whose text parses *any* plausible collector number, and an `UnsharpMask` pass amplifies
+    high-frequency content indiscriminately (real text edges AND noise alike) - live-verified
+    (not just argued) to occasionally manufacture a spurious digit-shaped fragment from pure
+    noise on a heavily-blurred crop, which would otherwise win the "first parse" race over the
+    percentile pair's genuinely-correct-but-later read. Trying the less noise-amplifying
+    transform first reduces (does not eliminate - Stage D's own candidate-matching validation
+    rail is what actually screens a false parse out, per this module's own opening docstring)
+    how often that ordering-sensitive false-positive risk fires in practice.
+
+    1. A percentile (median-anchored) threshold instead of `preprocess_variants`' fixed 128 cut -
+       targets the "garbled but present" failure mode (76.8% of the #259 no-text population): a
+       genuinely uneven-brightness crop (glare, foil, an off-center bleed margin caught in the
+       crop) can have its real text/background split sitting well off the 0-255 midpoint, which
+       `ImageOps.autocontrast` alone doesn't correct for (autocontrast stretches the FULL
+       observed range to 0-255, it does not relocate WHERE the true split point falls within
+       that stretched range). Anchoring the cut to the crop's own median intensity
+       (`_median_from_histogram`) adapts to that per-image imbalance instead of assuming it's
+       centered, the same "adjust to each image's own range" spirit `preprocess_variants`' own
+       docstring already claims for its fixed cut - this is the version of that idea that
+       actually holds for an unevenly-lit crop.
+    2. Heavier upscale (default 5x vs `preprocess_variants`' 3x) + an `ImageFilter.UnsharpMask`
+       pass BEFORE thresholding - targets the blurry-upload failure mode (the #259 diagnostic's
+       bottom-quartile `blur_variance` finding): a soft/blurry crop's true edges are smeared
+       across more pixels than a sharp one, so sharpening before the binary threshold recovers an
+       edge a flat fixed-point cut would otherwise blur into a false middle-gray.
+    """
+    grayscale = ImageOps.grayscale(cropped)
+    upscaled = grayscale.resize((grayscale.width * upscale, grayscale.height * upscale), Image.Resampling.LANCZOS)
+    normalised = ImageOps.autocontrast(upscaled)
+
+    median = _median_from_histogram(normalised.histogram())
+    percentile_dark_on_light = normalised.point(lambda p: 255 if p > median else 0)
+    percentile_light_on_dark = ImageOps.invert(percentile_dark_on_light)
+
+    sharpened = normalised.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
+    sharp_dark_on_light = sharpened.point(lambda p: 255 if p > 128 else 0)
+    sharp_light_on_dark = ImageOps.invert(sharp_dark_on_light)
+
+    return [percentile_dark_on_light, percentile_light_on_dark, sharp_dark_on_light, sharp_light_on_dark]
+
+
+def run_tesseract(image: "Image.Image", config: str = TESSERACT_CONFIG) -> str:
+    return pytesseract.image_to_string(image, config=config)
 
 
 def _words_from_tesseract_data(data: dict[str, list[Any]]) -> list[dict[str, Any]]:
@@ -218,7 +317,9 @@ def run_tesseract_tsv(image: "Image.Image") -> list[dict[str, Any]]:
     return _words_from_tesseract_data(data)
 
 
-def run_tesseract_text_and_words(image: "Image.Image") -> tuple[str, list[dict[str, Any]]]:
+def run_tesseract_text_and_words(
+    image: "Image.Image", config: str = TESSERACT_CONFIG
+) -> tuple[str, list[dict[str, Any]]]:
     """
     OCR call-cost reduction (2026-07-20, docs/reports/2026-07-20-pipeline-compute-profile.md's
     ocr_group/legal_line finding, 58% of Stage C's per-card compute cost): a single
@@ -230,8 +331,13 @@ def run_tesseract_text_and_words(image: "Image.Image") -> tuple[str, list[dict[s
     rather than a change to `run_tesseract`/`run_tesseract_tsv`'s own signatures - both of those
     are called directly by `local_fallback.py` (PROTECTED CORE) and `local_identify_printing_tags
     .py`'s live pilot pass, neither of which this cost-reduction pass touches or needs to change.
+
+    `config` (issue #259 addition): defaults to `TESSERACT_CONFIG` (PSM 6, unchanged for every
+    pre-existing call site that doesn't pass one explicitly) - image_evidence.py's
+    `collector_line_ocr` extractor passes `ALTERNATE_TESSERACT_CONFIG` for its own alternate-PSM
+    fallback tier, once every PSM-6 attempt has already failed to parse a collector number.
     """
-    data = pytesseract.image_to_data(image, config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT)
+    data = pytesseract.image_to_data(image, config=config, output_type=pytesseract.Output.DICT)
     return _text_from_tesseract_data(data), _words_from_tesseract_data(data)
 
 
@@ -359,10 +465,13 @@ def validate_against_candidates(
 __all__ = [
     "DEFAULT_CROP_BOX",
     "LEGAL_LINE_CROP_BOX",
+    "TESSERACT_CONFIG",
+    "ALTERNATE_TESSERACT_CONFIG",
     "OcrParseResult",
     "LegalLineParseResult",
     "crop_collector_line",
     "preprocess_variants",
+    "preprocess_fallback_variants",
     "run_tesseract",
     "run_tesseract_tsv",
     "run_tesseract_text_and_words",

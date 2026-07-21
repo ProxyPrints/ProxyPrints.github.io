@@ -1741,6 +1741,43 @@ same CI-documented named skips) including the real-tesseract
 reuse test, run explicitly to confirm the short-circuit doesn't starve `artist_ocr`'s own
 reuse-before-recompute path.
 
+**Stage D no-text bucket: OCR preprocessing/crop recovery + supersede/re-vote tooling (issue
+#259)** — a diagnostic over run `staged-write-20260721T0434Z`'s 9,675 join-key `no-text` skips
+found 88.8% carry recoverable signal, not a genuine coverage ceiling: 76.8% show non-empty
+garbled collector text (a region was found and read, unparseably) and the population skews
+bottom-quartile `blur_variance` (blurry uploads). Fixed at the `collector_line_ocr` extractor
+level (`image_evidence.py`), NOT by changing `parse_collector_line`'s own regexes: a new,
+lazily-evaluated attempt tier (`_collector_line_ocr_attempts`) tries `local_ocr. preprocess_variants`' original two PSM-6 polarity variants first (unchanged happy path), then —
+only once BOTH have failed to parse a collector number — a fallback tier (`local_ocr. preprocess_fallback_variants`: heavier 5x upscale + `ImageFilter.UnsharpMask` for blur, plus a
+median-anchored percentile threshold for uneven-brightness "garbled" crops, percentile tried
+first since `UnsharpMask` can amplify noise into a spurious digit-shaped fragment that would
+otherwise win the "first successful parse" race), then a re-try of the original variants under
+`ALTERNATE_TESSERACT_CONFIG` (`--psm 11`, sparse-text mode — targets a segmentation failure, not
+a pixel-quality one). Worst case 8 tesseract calls (up from 2) — only paid by cards the happy
+path already failed on. Real, reproducible recovery demonstrated at the `local_ocr` function
+level (`test_local_ocr.py::TestFallbackTierRecoversBlurryUpload` — a `GaussianBlur(1.1)` crop
+where tesseract 4.1.1 misreads "158" as "168" under the base tier and the fallback tier reads it
+correctly) — an end-to-end `extract_card_evidence`-level demonstration was attempted but not
+achieved: the same blur parameters produce a hard pass/fail cliff through the real
+`crop_coordinates`-derived box geometry, with no stable band where the base tier cleanly fails
+and the fallback tier cleanly recovers in reasonable search effort; aggregate recovery rate is
+therefore an open question for the real gated re-extraction, not something this PR's fixtures
+can quantify. Companion tooling: `reparse_collector_evidence` (new management command, dry-run
+by default) re-parses `ImageEvidence.collector_line_raw_text` with the CURRENT parser and
+retracts the stale `stage-d-join-key-v1` vote/scan-log for exactly the cards whose join-key
+CONCLUSION changed (compared against the RECORDED `CardPrintingTag`/`CardScanLog` state, not
+against `ImageEvidence`'s own stored parse — see that command's own module docstring for why the
+naive stored-field comparison is a silent no-op for the no-text cohort), gated by a card-level
+`resolve_printing(card) is not None` safety check (covers both a resolved printing and a
+resolved `NO_MATCH`) that lists a currently-resolved card for human review instead of retracting.
+`--selector parser-bug` targets the #260 bug's own misparse shape and is immediately actionable
+(zero re-extraction needed); `--selector no-text --stage-d-run-id RUN_ID` needs a PRIOR
+`run_image_evidence_cohort --card-ids-file <cohort>` re-extraction pass (new flag, bypasses both
+priority ordering and the resume filter for explicit ids) before it finds anything to retract.
+28 new tests (13 `test_local_ocr.py`, 6 new in `test_image_evidence.py`, 17
+`test_reparse_collector_evidence.py`, 2 `test_run_image_evidence_cohort.py`); full backend suite
+green (1268 passed / 4 skipped, same CI-documented named skips).
+
 Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
