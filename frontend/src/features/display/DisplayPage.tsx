@@ -72,6 +72,14 @@
  * small button+modal pairing - reusing MemoizedCommonCardbackGridSelector's existing
  * GridSelectorModal verbatim - rather than mounting CommonCardback itself, since that component's
  * swatch/prev-next CardFooter chrome belongs to the editor's right panel, not a toolbar button.
+ *
+ * Issue #241 (Export ▾ toolbar parity, design doc §5's export-beyond-PDF row) - the last of the
+ * three toolbar-parity findings from the same audit. DisplayExportMenu.tsx composes the same
+ * unchanged ExportXML/ExportImages/ExportDecklist Dropdown.Items Export.tsx already mounts on the
+ * classic editor's own "Download" dropdown - same hooks, same gating selectors. ExportPDF.tsx's
+ * own item is deliberately excluded, since this page's Generate PDF button already reuses
+ * useDownloadPDF directly rather than opening the classic PDFGenerator modal that item dispatches
+ * to (see the inline-export region comment below).
  */
 import styled from "@emotion/styled";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -109,6 +117,7 @@ import { AttributesSection } from "@/features/display/AttributesSection";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
+import { DisplayExportMenu } from "@/features/export/DisplayExportMenu";
 import { PostExportContributionPrompt } from "@/features/export/PostExportContributionPrompt";
 import { wasLatestCardsPdfDownloadSuccessful } from "@/features/export/postExportContributionPrompt";
 import { usePostExportContributionPrompt } from "@/features/export/usePostExportContributionPrompt";
@@ -1005,6 +1014,12 @@ export function DisplayPage() {
         <CardbackToolbarButton />
 
         <div className="ms-auto d-flex align-items-center gap-2">
+          {/* Issue #241 (design doc §5's export-beyond-PDF row) - XML/Card Images/Decklist,
+              relocated unmodified from the classic editor's own "Download" dropdown. Sits
+              beside Save to Drive/Generate PDF per the design doc's own instruction, not inside
+              them - those two buttons are this page's own PDF export entry points, this menu is
+              everything else. */}
+          <DisplayExportMenu />
           {isGoogleDriveAppConfigured() && (
             <Button
               size="sm"
