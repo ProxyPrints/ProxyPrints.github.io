@@ -825,6 +825,17 @@ test.describe("DisplayPage - phone viewport (issue #266)", () => {
     const rail = page.getByTestId("display-rail");
     await expect(rail).not.toBeInViewport();
 
+    // Live report (commit 85bd3a37, deployed): `toBeInViewport()` above is an aria/intersection
+    // check, not a literal geometry one - it stayed green even while the R5 fix below was missing
+    // (see LeftRailOffcanvas's own comment), since a merely-shrunken-but-still-open sheet is a
+    // different bug than a genuinely visible-when-closed one. Assert the actual bounding box
+    // instead: Bootstrap's `.offcanvas-bottom` (closed, no `.show`) is `position: fixed; bottom: 0;
+    // transform: translateY(100%)` - its box's own top edge must sit at/after the viewport's own
+    // bottom edge, i.e. not one visible pixel of it inside the 844px-tall viewport.
+    const closedBox = await rail.boundingBox();
+    expect(closedBox).not.toBeNull();
+    expect(closedBox?.y ?? -Infinity).toBeGreaterThanOrEqual(844);
+
     await page.getByTestId("page-preview-slot").first().click();
 
     // Now visible as a real drawer (react-bootstrap's portaled Offcanvas), showing the tapped
@@ -833,6 +844,16 @@ test.describe("DisplayPage - phone viewport (issue #266)", () => {
     await expect(page.getByTestId("display-rail-header")).toContainText(
       "Slot 1"
     );
+
+    // The design doc's own 72vh (see docs/proposals/proposal-h-display-layout-spec.md's R5 row,
+    // and the approved mockup's `.rail-left{height:72vh}` rule) - not Bootstrap's stock 30vh
+    // ($offcanvas-vertical-height default), which is what the live report's "mostly non visible"
+    // sliver actually was: a real, in-viewport, but far-too-short drawer.
+    const openBox = await rail.boundingBox();
+    expect(openBox).not.toBeNull();
+    const expectedHeight = 0.72 * 844;
+    expect(openBox?.height ?? 0).toBeGreaterThan(expectedHeight - 20);
+    expect(openBox?.height ?? Infinity).toBeLessThan(expectedHeight + 20);
 
     // Dismissible (design doc §4.1's bottom-sheet - react-bootstrap's own Offcanvas keyboard
     // handling, unmodified here). Checked via the dialog role rather than `rail` (the shared

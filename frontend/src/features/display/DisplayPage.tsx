@@ -537,8 +537,20 @@ const DisplayBodyRegion = styled.div`
 // tiers" instruction. The bottom-sheet's 72vh height + rounded top corners (design doc §4.1) are
 // scoped to `.offcanvas-bottom` specifically, since this same node also renders as `.offcanvas-
 // start` on tablet (leftPlacement below) - the two placements should not share sizing.
+//
+// Live report follow-up (deployed commit 85bd3a37): the "72vh height" half of the paragraph above
+// was true in intent only - never actually written below - so the phone bottom sheet fell back to
+// Bootstrap's own stock $offcanvas-vertical-height default (30vh, bootstrap/scss/_variables.scss),
+// not this doc's 72vh. Closed state was NOT the bug (confirmed against the live site: Bootstrap's
+// own visibility: hidden plus transform: translateY(100%) both still applied correctly to the
+// closed, statically-rendered node - see react-bootstrap's Offcanvas.js, the
+// "!showOffcanvas && responsive" render branch) - what the owner's live report actually saw
+// ("pinned to the bottom and mostly non visible") was a genuinely-open drawer only 30vh tall, most
+// of its own content clipped below that. The explicit height (not max-height) below matches the
+// approved mockup's own bottom-sheet rule exactly - see the design doc's R5 row.
 const LeftRailOffcanvas = styled(Offcanvas)`
   &.offcanvas-bottom {
+    height: 72vh;
     border-top-left-radius: 0.75rem;
     border-top-right-radius: 0.75rem;
   }
