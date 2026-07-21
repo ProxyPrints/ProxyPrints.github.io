@@ -60,6 +60,18 @@ TESSERACT_CONFIG = "--psm 6"
 _SET_CODE_RE = re.compile(r"\b([A-Za-z0-9]{3,5})\b")
 _COLLECTOR_NUMBER_RE = re.compile(r"★?(\d{1,4}[A-Za-z]?)\b")
 
+# print-run denominator + rarity, glued together with no separating space (e.g. "361R" in a
+# real "354/361R\nCMR ¢ EN..." collector line, card_id 59, run staged-write-20260721T0434Z) -
+# looks exactly like a plausible 3-5 char set-code token to _SET_CODE_RE (alnum, not pure
+# digits), but it's the SAME kind of OCR-glued noise _COLLECTOR_NUMBER_RE's own no-space
+# tolerance already documents above, just on the other side of the slash. Real MTG collector
+# lines never print a genuine set code directly after a "/" - that position is exclusively the
+# print-run denominator's own territory - so this is detected by POSITION (immediately preceded
+# by "/", ignoring intervening whitespace), not by shape alone: a real code CAN be digit-led
+# (e.g. "40K" for the Warhammer 40,000 Universes Beyond set), so a blanket "digit-run + trailing
+# letter" shape-only skip would risk discarding a genuine code elsewhere in the line.
+_DENOMINATOR_RARITY_TOKEN_RE = re.compile(r"^\d{1,4}[A-Za-z]?$")
+
 # legal/copyright line (Stage C issue #151/task #159): same y-band DEFAULT_CROP_BOX was tuned
 # against (bottom 90-96.5% height - see that constant's own comment for the tuning history),
 # widened to the FULL card width rather than DEFAULT_CROP_BOX's narrow left-hand 6-35% window -
@@ -246,11 +258,18 @@ def parse_collector_line(raw_text: str) -> OcrParseResult:
         after = raw_text[collector_match.end() :]
 
         def _find_set_code(segment: str) -> Optional[str]:
-            for candidate in _SET_CODE_RE.findall(segment):
+            for match in _SET_CODE_RE.finditer(segment):
+                candidate = match.group(1)
                 # a pure-digit token is never a set code (it's more collector-number noise); a
                 # token that's actually the collector number's own digits (stray re-match) is
                 # skipped too
                 if candidate.isdigit() or candidate.lower() == collector_number:
+                    continue
+                # print-run denominator glued to its rarity letter (see
+                # _DENOMINATOR_RARITY_TOKEN_RE's own comment) - only skipped when the token is
+                # actually positioned right after a "/", never on shape alone
+                preceding = segment[: match.start()].rstrip()
+                if preceding.endswith("/") and _DENOMINATOR_RARITY_TOKEN_RE.match(candidate):
                     continue
                 return candidate.lower()
             return None
