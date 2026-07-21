@@ -15,6 +15,13 @@ jobs:
   test:
     name: Frontend tests (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
     runs-on: ubuntu-latest
+    # Playwright's browsers + OS deps are pre-baked into this image (matching
+    # frontend/package-lock.json's pinned @playwright/test version), so the
+    # composite action below no longer needs to `playwright install`/
+    # `install-deps` - that apt work was the dominant cost of this job.
+    container:
+      image: mcr.microsoft.com/playwright:v1.57.0-noble
+      options: --user 1001
     env:
       NEXT_TELEMETRY_DISABLED: 1
     strategy:
