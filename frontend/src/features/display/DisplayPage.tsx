@@ -115,6 +115,35 @@
  *     content is reused as-is in the new placements), the D4-D6 4x2/margins/bleed defaults and D8
  *     color calibration (new scope beyond #266-268, own future issues), the #267 search-bar
  *     migration/action-bar sticky wrapper, and the #268 saved-decks landing.
+ *
+ * Issue #267 (design doc §3/§6 T2-T5/I1, ADDENDUM D12/D13/D15 - owner's locked comment on #267,
+ * 2026-07-21) finishes the populated-state action bar #266 deferred, plus the row-mapped polish
+ * additions:
+ *   - The search bar (§3): a dual-mode Add/Browse `ToggleButtonGroup` prefix, one shared
+ *     `searchBarText` state. Add mode mounts `ImportText`'s new "inline" `variant` prop (T3 -
+ *     additive, default-unchanged, so every existing block-variant caller is untouched) - Enter
+ *     runs the exact same `convertLinesIntoSlotProjectMembers`/`addMembers` pipeline the block
+ *     variant does. Browse mode (D12, owner's locked comment: "v1 is FILTERS-FIRST plus plain
+ *     text - typed operator grammar is #276, explicitly out of scope") binds the SAME text state
+ *     to a plain controlled `Form.Control` instead - `ImportText` itself stays entirely unaware
+ *     of Browse mode, per the "shared components gain only additive optional props" constraint.
+ *     Beside the input, the existing `Import.tsx` dropdown (D15, = T4 restated) mounts verbatim -
+ *     Text/XML/CSV/URL, zero new importer UI, closing the "add cards to a non-empty project"
+ *     parity gap.
+ *   - Browse results (D12/F10): a new `CatalogBrowseResults.tsx` (own module comment has the full
+ *     reasoning, including a documented tile-reuse deviation) renders in the CENTER region,
+ *     behind a "Print sheets"/"Browse results" `ToggleButtonGroup` bound to the SAME
+ *     `isBrowseMode` state as the search bar's own mode toggle - one state, two controls, per the
+ *     mockup's own demonstrated behavior (not the more elaborate two-independent-states reading
+ *     the spec prose alone could suggest).
+ *   - Invalid-identifiers feedback (D13's landing/search-bar half only - the right-rail Status
+ *     row is issue #272's own remaining scope, not this one): `InvalidIdentifiersStatus` (already
+ *     self-hiding, already dispatching `showModal("invalidIdentifiers")` into the globally-mounted
+ *     `InvalidIdentifiersModal` - see `Layout.tsx`'s `<Modals />`) is mounted unmodified in both
+ *     the populated-state action bar and the empty-project `DeckInputLanding`.
+ *   - Phone condensation (T5): `ActionBarSearchGroup`'s own `@media (max-width: 767.98px)` rule
+ *     gives the search-bar group the design doc §1 region table's specified "Full-width 2nd row"
+ *     treatment, not just whatever a bare `flex-wrap` reflow happens to produce.
  */
 import styled from "@emotion/styled";
 import React, {
@@ -131,6 +160,8 @@ import Form from "react-bootstrap/Form";
 import Offcanvas, { OffcanvasPlacement } from "react-bootstrap/Offcanvas";
 import ProgressBar from "react-bootstrap/ProgressBar";
 import Row from "react-bootstrap/Row";
+import ToggleButton from "react-bootstrap/ToggleButton";
+import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 
 import {
   Back,
@@ -156,6 +187,7 @@ import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { ArtistSection } from "@/features/display/ArtistSection";
 import { AttributesSection } from "@/features/display/AttributesSection";
+import { CatalogBrowseResults } from "@/features/display/CatalogBrowseResults";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
@@ -167,10 +199,12 @@ import { usePostExportContributionPrompt } from "@/features/export/usePostExport
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { SelectVersionResults } from "@/features/gridSelector/SelectVersionResults";
 import { useGridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
+import { Import } from "@/features/import/Import";
 import { ImportCSV } from "@/features/import/ImportCSV";
 import { ImportText } from "@/features/import/ImportText";
 import { ImportURL } from "@/features/import/ImportURL";
 import { ImportXML } from "@/features/import/ImportXML";
+import { InvalidIdentifiersStatus } from "@/features/invalidIdentifiers/InvalidIdentifiersStatus";
 import { computeLayout } from "@/features/pdf/layout";
 import {
   PagePreview,
@@ -460,6 +494,12 @@ const DeckInputLanding = () => (
       <Col lg={6} md={6} sm={12} xs={12} className="px-2">
         <h5>Enter a Card List</h5>
         <ImportText />
+        {/* Design doc ADDENDUM D13 (issue #267's landing/search-bar feedback half) - the same
+            self-contained, self-hiding status component (visible only when
+            selectInvalidIdentifiersCount > 0) the populated-state action bar mounts below;
+            attached here too so an import that leaves unresolved identifiers is visible on the
+            empty-project landing, not just once a project already exists. */}
+        <InvalidIdentifiersStatus />
       </Col>
       <Col lg={6} md={6} sm={12} xs={12} className="px-2">
         <h5>Import a File or URL</h5>
@@ -593,6 +633,24 @@ const TabletRailHandle = styled(Button)`
     writing-mode: vertical-rl;
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
+  }
+`;
+
+// Issue #267 (design doc §1's region table + §6 T5) - "Add-cards search bar ... Full-width 2nd
+// row" on phone specifically, not just whatever a bare `flex-wrap` reflow happens to produce
+// (the mockup's own `.addbar{flex-basis:100%;order:9;}` chunk - see display-mockup.html). Below
+// `md`, this group becomes its own full-width row (ordered after the sheet-indicator/SavedDeckPanel
+// pair, before the gear) instead of squeezing into whatever horizontal space is left in the bar.
+const ActionBarSearchGroup = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1 1 240px;
+  min-width: 0;
+
+  @media (max-width: 767.98px) {
+    flex-basis: 100%;
+    order: 9;
   }
 `;
 
@@ -747,6 +805,18 @@ export function DisplayPage() {
   );
   const [selectedSlotRef, setSelectedSlotRef] =
     useState<SelectedSlotRef | null>(null);
+
+  // Issue #267 (design doc ADDENDUM D12/F9) - the populated-state search bar's dual Add/Browse
+  // mode. One boolean drives BOTH the search bar's own mode toggle and the center region's
+  // "Print sheets"/"Browse results" switch (see DisplayBodyRegion's own render below) - the
+  // mockup's real JS (setBrowse(on)) demonstrates these as one combined state, not two
+  // independently toggleable pieces of state, so that's what's implemented here rather than the
+  // more elaborate reading the spec prose alone could suggest. The search bar's own text is
+  // shared between both modes too (Add mode's ImportText "inline" variant vs. Browse mode's
+  // CatalogBrowseResults query) - see the action bar's own render below for why ImportText
+  // itself stays entirely unaware of Browse mode (additive-prop-only constraint).
+  const [isBrowseMode, setIsBrowseMode] = useState(false);
+  const [searchBarText, setSearchBarText] = useState("");
 
   // Issue #266 (design doc §4) - which tier drives the left rail's drawer placement (phone:
   // bottom sheet, tablet: start drawer; laptop/desktop: inline, where placement is moot - see
@@ -1140,11 +1210,15 @@ export function DisplayPage() {
 
   return (
     <div className="d-flex flex-column" data-testid="display-page">
-      {/* Issue #266 (design doc §3/§6 R4) - reduced to identity + the gear that opens the right
-          rail; the settings/export controls this toolbar used to hold unconditionally now live in
+      {/* Issue #266 (design doc §3/§6 R4) - identity + the gear that opens the right rail; the
+          settings/export controls this toolbar used to hold unconditionally now live in
           RightRailOffcanvas below (necessarily also half of design doc row T1 - see this file's
-          own module comment for why). The populated-state add-cards search bar row (§3, issue
-          #267) is NOT added here - that's issue #267's own scope, untouched by this change. */}
+          own module comment for why). Issue #267 (design doc §3/§6 T2-T5, ADDENDUM D12/D15) adds
+          the populated-state add-cards/browse search bar: a dual-mode Add/Browse
+          ToggleButtonGroup, the shared search-bar input (ImportText's "inline" variant in Add
+          mode, a plain controlled Form.Control in Browse mode - see ActionBarSearchGroup's own
+          comment for why ImportText itself stays unaware of Browse mode), and the existing
+          Import.tsx dropdown (D15 - Text/XML/CSV/URL, verbatim, unforked). */}
       <div
         className="d-flex align-items-center flex-wrap gap-2 px-3 py-2 border-bottom"
         data-testid="display-toolbar"
@@ -1166,6 +1240,70 @@ export function DisplayPage() {
             anticipated saved decks, since Proposal G landed after that doc's own pass - see
             saved-decks.md's "Where it's wired in" section for the full cross-reference). */}
         <SavedDeckPanel className="" />
+
+        <ActionBarSearchGroup data-testid="display-search-bar-group">
+          <ToggleButtonGroup
+            type="radio"
+            name="display-search-mode"
+            value={isBrowseMode ? "browse" : "add"}
+            onChange={(value) => setIsBrowseMode(value === "browse")}
+          >
+            <ToggleButton
+              id="display-search-mode-add"
+              value="add"
+              variant="outline-secondary"
+              size="sm"
+              data-testid="display-search-mode-add"
+            >
+              Add
+            </ToggleButton>
+            <ToggleButton
+              id="display-search-mode-browse"
+              value="browse"
+              variant="outline-secondary"
+              size="sm"
+              data-testid="display-search-mode-browse"
+            >
+              Browse
+            </ToggleButton>
+          </ToggleButtonGroup>
+
+          {isBrowseMode ? (
+            // Browse mode: the same shared searchBarText state, bound to a plain controlled
+            // input rather than ImportText - CatalogBrowseResults (mounted in the center region
+            // below) debounces off this value itself, there is no submit step here at all.
+            <Form.Control
+              size="sm"
+              type="text"
+              placeholder="Search the catalog… (e.g. Lightning Bolt)"
+              value={searchBarText}
+              onChange={(event) => setSearchBarText(event.target.value)}
+              aria-label="catalog-browse-search"
+              data-testid="display-browse-search-input"
+            />
+          ) : (
+            <ImportText
+              variant="inline"
+              textValue={searchBarText}
+              onTextChange={setSearchBarText}
+              onImportComplete={() => setSearchBarText("")}
+            />
+          )}
+
+          {/* Design doc ADDENDUM D15 (= §6 T4, restated) - the existing Import.tsx dropdown
+              (Text/XML/CSV/URL *Button modal variants), mounted verbatim: no new importer UI,
+              closes the "add cards to a non-empty project" parity gap #267 names. */}
+          <Import />
+        </ActionBarSearchGroup>
+
+        {/* Design doc ADDENDUM D13 (issue #267's landing/search-bar feedback half) - self-hides
+            when selectInvalidIdentifiersCount === 0, so this costs nothing when the project is
+            clean. Its own flex-basis:100% (see the className below) keeps it from squeezing the
+            bar's other controls - it wraps onto its own row only when it actually has something
+            to show. */}
+        <div className="w-100" style={{ order: 20 }}>
+          <InvalidIdentifiersStatus />
+        </div>
 
         {/* Design doc §1's region table: hidden entirely at desktop (≥1200, xl) where the right
             rail is already inline - visible at every narrower tier, where it's the only way to
@@ -1262,57 +1400,92 @@ export function DisplayPage() {
           data-testid="display-sheet-region"
           style={{ minWidth: 0, width: "100%" }}
         >
-          {sheets.map((sheet) => (
-            <div
-              key={sheet.pageIndex}
-              ref={(element) => {
-                sheetRefs.current[sheet.pageIndex] = element;
-              }}
-              data-sheet-index={sheet.pageIndex}
-              data-testid="display-sheet-wrapper"
-              className="d-flex flex-column align-items-center mb-4 p-2 border rounded"
+          {/* Design doc ADDENDUM D12/F10 - the center region's own "Print sheets"/"Browse
+              results" switch, bound to the SAME isBrowseMode state the action bar's Add/Browse
+              toggle drives (see that state's own comment) - two controls for one state, not two
+              independent ones, matching the mockup's real behavior. */}
+          <ToggleButtonGroup
+            type="radio"
+            name="display-center-view"
+            value={isBrowseMode ? "browse" : "sheets"}
+            onChange={(value) => setIsBrowseMode(value === "browse")}
+            className="mb-2"
+          >
+            <ToggleButton
+              id="display-center-view-sheets"
+              value="sheets"
+              variant="outline-secondary"
+              size="sm"
+              data-testid="display-center-view-sheets"
             >
+              Print sheets
+            </ToggleButton>
+            <ToggleButton
+              id="display-center-view-browse"
+              value="browse"
+              variant="outline-secondary"
+              size="sm"
+              data-testid="display-center-view-browse"
+            >
+              Browse results
+            </ToggleButton>
+          </ToggleButtonGroup>
+
+          {isBrowseMode ? (
+            <CatalogBrowseResults query={searchBarText} />
+          ) : (
+            sheets.map((sheet) => (
               <div
-                className="text-muted small mb-2"
-                data-testid="display-sheet-label"
+                key={sheet.pageIndex}
+                ref={(element) => {
+                  sheetRefs.current[sheet.pageIndex] = element;
+                }}
+                data-sheet-index={sheet.pageIndex}
+                data-testid="display-sheet-wrapper"
+                className="d-flex flex-column align-items-center mb-4 p-2 border rounded"
               >
-                Sheet {sheet.pageIndex + 1} of {sheets.length}
-              </div>
-              {/* Sheet-level virtualization (Item 3's benchmark-gated requirement): only the
+                <div
+                  className="text-muted small mb-2"
+                  data-testid="display-sheet-label"
+                >
+                  Sheet {sheet.pageIndex + 1} of {sheets.length}
+                </div>
+                {/* Sheet-level virtualization (Item 3's benchmark-gated requirement): only the
                   sheet(s) within one sheet-height of the viewport actually mount their
                   PagePreview (real <img> tags); everything further away is a fixed-height
                   placeholder div, per RenderIfVisible's own contract - see this component's
                   module comment for why a from-scratch IntersectionObserver wasn't needed here.
                   The first sheet starts mounted unconditionally so the common single-sheet case
                   never waits on an observer round-trip. */}
-              <RenderIfVisible
-                initialVisible={sheet.pageIndex === 0}
-                defaultHeight={sheetPixelHeightPx}
-                visibleOffset={sheetPixelHeightPx}
-              >
-                <PagePreview
-                  pageWidthMM={sheetWidthMM}
-                  pageHeightMM={sheetHeightMM}
-                  bleedEdgeMM={settings.bleedEdgeMM}
-                  margins={margins}
-                  spacing={spacing}
-                  slots={sheet.slots}
-                  showCutLines={settings.showCutLines}
-                  maxWidthPx={sheetRenderWidthPx}
-                  onSlotClick={(indexOnPage) =>
-                    handleSlotClick(sheet.pageIndex, indexOnPage)
-                  }
-                  selectedSlotIndex={
-                    selectedSheetIndex === sheet.pageIndex
-                      ? sheet.entries.findIndex(
-                          (entry) => entry.slot === selectedSlotRef?.slot
-                        )
-                      : undefined
-                  }
-                />
-              </RenderIfVisible>
-            </div>
-          ))}
+                <RenderIfVisible
+                  initialVisible={sheet.pageIndex === 0}
+                  defaultHeight={sheetPixelHeightPx}
+                  visibleOffset={sheetPixelHeightPx}
+                >
+                  <PagePreview
+                    pageWidthMM={sheetWidthMM}
+                    pageHeightMM={sheetHeightMM}
+                    bleedEdgeMM={settings.bleedEdgeMM}
+                    margins={margins}
+                    spacing={spacing}
+                    slots={sheet.slots}
+                    showCutLines={settings.showCutLines}
+                    maxWidthPx={sheetRenderWidthPx}
+                    onSlotClick={(indexOnPage) =>
+                      handleSlotClick(sheet.pageIndex, indexOnPage)
+                    }
+                    selectedSlotIndex={
+                      selectedSheetIndex === sheet.pageIndex
+                        ? sheet.entries.findIndex(
+                            (entry) => entry.slot === selectedSlotRef?.slot
+                          )
+                        : undefined
+                    }
+                  />
+                </RenderIfVisible>
+              </div>
+            ))
+          )}
         </div>
 
         {/* Issue #266 (design doc §4.2) - editing settings + preparing print, ONE node, all

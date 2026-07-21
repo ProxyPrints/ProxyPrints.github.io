@@ -383,6 +383,40 @@ export const searchResultsThreeResults = http.post(
     )
 );
 
+// Issue #267 (design doc ADDENDUM D12) - like searchResultsThreeResults, but ALSO resolves a
+// direct-add-by-identifier line built the same way AddCardToProjectForm.tsx's own
+// handleAddToProject constructs one (`${quantity} ${cardDocument.searchq}${SelectedImageSeparator}
+// ${cardDocument.identifier}`) - here, for cardDocument2. Without this second hash key,
+// listenerMiddleware.ts's "ensure selected images are valid" listener (fires on every
+// fetchSearchResults.fulfilled) finds cardDocument2's query ("card 2") resolving to an empty
+// result set - the plain searchResultsThreeResults handler is canned to ONE hash key regardless of
+// the actual request body - and deselects the very image AddCardToProjectForm just set, which is
+// exactly the trap AddCardToProjectForm.spec.ts's own existing precedent avoids by using a query
+// whose mock (searchResultsOneResultCorrectSearchq) already matches the added card's own searchq.
+export const searchResultsThreeResultsPlusCard2SelfQuery = http.post(
+  buildRoute("3/editorSearch/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [computeSearchQueryHashKey({
+            query: "my search query",
+            cardType: CardType.Card,
+          })]: [
+            cardDocument1.identifier,
+            cardDocument2.identifier,
+            cardDocument3.identifier,
+          ],
+          [computeSearchQueryHashKey({
+            query: cardDocument2.searchq,
+            cardType: CardType.Card,
+          })]: [cardDocument2.identifier],
+        },
+      },
+      { status: 200 }
+    )
+);
+
 // Two sources: card1+card2 from source1, card7 from source2
 export const searchResultsTwoSources = http.post(
   buildRoute("3/editorSearch/"),

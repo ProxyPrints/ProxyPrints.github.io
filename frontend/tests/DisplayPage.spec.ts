@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import {
   cardDocument1,
   cardDocument2,
+  cardDocument3,
   cardDocument8,
   localBackendURL,
 } from "@/common/test-constants";
@@ -18,6 +19,7 @@ import {
   searchResultsNoResults,
   searchResultsResolvedPrintingMatch,
   searchResultsThreeResults,
+  searchResultsThreeResultsPlusCard2SelfQuery,
   searchResultsUnresolvedCanonicalImport,
   sourceDocumentsOneResult,
   tagConsensusTwoUnresolvedTags,
@@ -776,6 +778,98 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(
       page.getByTestId("page-preview-slot").locator("img")
     ).toHaveCount(1);
+  });
+
+  // Issue #267 (design doc ADDENDUM D12/F9/F10, owner's locked comment on #267) - the one
+  // genuinely-new journey this PR adds: toggling the populated-state search bar into Browse
+  // mode queries the catalog (the same doSearch/3-editorSearch machinery a slot's own query
+  // uses - see CatalogBrowseResults.tsx's own module comment), renders results in the center
+  // region behind the "Print sheets"/"Browse results" switch, and each result's inline
+  // "+Add"/"Add to Project" affordance (AddCardToProjectForm, unforked) actually lands a new
+  // slot in the deck.
+  test("toggling the search bar to Browse mode searches the catalog, shows results in the center region, and Add to Project adds a result to the deck", async ({
+    page,
+    network,
+  }) => {
+    // searchResultsThreeResultsPlusCard2SelfQuery (not the plain searchResultsThreeResults every
+    // other test in this file uses): AddCardToProjectForm's own "+Add" line
+    // (`${quantity} ${cardDocument.searchq}${SelectedImageSeparator}${cardDocument.identifier}`)
+    // gives the new slot cardDocument2's OWN query ("card 2"), and listenerMiddleware.ts's
+    // "ensure selected images are valid" listener re-checks every selectedImage against its own
+    // query's search results on every fetchSearchResults.fulfilled - a canned mock keyed only to
+    // "my search query" resolves "card 2" to an empty result set and immediately deselects the
+    // image AddCardToProjectForm just set. This mock adds the second hash key so "card 2" itself
+    // resolves to [cardDocument2.identifier] too - the same trap AddCardToProjectForm.spec.ts's
+    // own precedent avoids via searchResultsOneResultCorrectSearchq.
+    network.use(
+      cardDocumentsThreeResults,
+      sourceDocumentsOneResult,
+      searchResultsThreeResultsPlusCard2SelfQuery,
+      tagConsensusTwoUnresolvedTags,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    // One slot to start - the project already has cardDocument1 (the first of
+    // searchResultsThreeResults' three identifiers) selected for it.
+    await importText(page, "my search query");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+
+    await expect(page.getByTestId("display-page")).toBeVisible();
+    await expect(
+      page.getByTestId("page-preview-slot").locator("img")
+    ).toHaveCount(1);
+
+    // Add mode is the default - the center region shows the print-sheet stack, not browse
+    // results, and the search bar mounts ImportText's own inline variant.
+    await expect(page.getByTestId("import-text-inline")).toBeVisible();
+    await expect(page.getByTestId("catalog-browse-results")).toHaveCount(0);
+
+    await page.getByTestId("display-search-mode-browse").click();
+
+    // Toggling the search bar's own mode also flips the center region's switch (one shared
+    // isBrowseMode state, not two independent ones - see DisplayPage.tsx's own comment).
+    await expect(page.getByTestId("import-text-inline")).toHaveCount(0);
+    await expect(page.getByTestId("display-browse-search-input")).toBeVisible();
+    await expect(page.getByTestId("catalog-browse-results")).toBeVisible();
+    // The print-sheet stack is not rendered at all while browsing (not just visually hidden) -
+    // matches the mockup's own body.browse toggling behaviour.
+    await expect(page.getByTestId("display-sheet-wrapper")).toHaveCount(0);
+
+    await page
+      .getByTestId("display-browse-search-input")
+      .fill("my search query");
+
+    const browseResults = page.getByTestId("catalog-browse-results");
+    await expect(
+      browseResults.getByTestId(
+        `catalog-browse-tile-${cardDocument1.identifier}`
+      )
+    ).toBeVisible();
+    await expect(
+      browseResults.getByTestId(
+        `catalog-browse-tile-${cardDocument2.identifier}`
+      )
+    ).toBeVisible();
+    await expect(
+      browseResults.getByTestId(
+        `catalog-browse-tile-${cardDocument3.identifier}`
+      )
+    ).toBeVisible();
+
+    // Add the SECOND catalog result (not the one already in the deck) via its inline
+    // AddCardToProjectForm - the same "+Add" path CardDetailedViewModal already exposes.
+    await browseResults
+      .getByTestId(`catalog-browse-tile-${cardDocument2.identifier}`)
+      .getByRole("button", { name: /Add to Project/ })
+      .click();
+
+    // Switch back to the sheet view (the same shared toggle, from either control) to confirm the
+    // newly-added card actually landed in the deck, not just a client-side notification.
+    await page.getByTestId("display-center-view-sheets").click();
+    await expect(page.getByTestId("catalog-browse-results")).toHaveCount(0);
+    const slotImages = page.getByTestId("page-preview-slot").locator("img");
+    await expect(slotImages).toHaveCount(2);
+    await expect(slotImages.last()).toHaveAttribute("alt", cardDocument2.name);
   });
 });
 

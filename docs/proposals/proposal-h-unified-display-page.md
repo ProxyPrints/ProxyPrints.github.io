@@ -53,7 +53,20 @@ spec's own issue-mapping and this repo's implementing PR): the
 own follow-up), D4–D6's 4×2/margins/bleed default changes and D8's
 color calibration (new scope beyond #266–268, filed as their own
 issues), and issues #267 (search-bar migration)/#268 (saved-decks
-landing) themselves).
+landing) themselves); and, most recently, **#267's own mapped rows**
+(the populated-state action bar `proposal-h-display-layout-spec.md`'s
+§266-review round deferred — see that doc's own updated "Implementation
+status" line): a dual-mode Add/Browse search bar (ADDENDUM D12 v1 —
+`CatalogBrowseResults.tsx`, filters-first plain text, no typed operator
+grammar yet — that's #276), the existing `Import.tsx` Text/XML/CSV/URL
+dropdown mounted verbatim beside it (D15), and `InvalidIdentifiersStatus`
+mounted at both the populated-state search bar and the empty-project
+landing (D13's landing/search-bar feedback half only — the right-rail
+Status row is issue #272's own remaining scope). Deliberately NOT part
+of #267 either: D9–D11/D14/D16 (own future issues) and D17/D18 (a later
+sheet-presentation/spacing refinement to #266 that appeared in the spec
+after #267's own task was scoped — #266-adjacent, not yet mapped to any
+filed issue).
 Still not built: §6 step 5/6 (switchover to make `/display` the
 default nav entry point, then retiring `/editor` + the classic PDF tab).
 A related but deliberately
