@@ -181,6 +181,7 @@ ImageEvidence's own docstring for the exact voted/skipped/dropped definitions.
 """
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional
@@ -252,6 +253,13 @@ class ExtractionResult:
     purposes (see module docstring). `skip_reasons` holds a named reason for every extractor
     that ran but declined to produce a real value (e.g. fetch failure) - always a subset of
     extractor_versions' keys.
+
+    `short_circuited` (2026-07-21, docs/features/catalog-completion-plan.md's "Recovery-arc
+    lessons" item 1): True iff this card's `collector_line_ocr` pass hit the pre-classification
+    short-circuit (tier-1 digit-free, tiers 2-3 skipped). Diagnostic-only, same "never persisted
+    onto ImageEvidence" convention as `compute_card_evidence`'s own `profile` parameter - the
+    plan's own "open verification gap" note calls for counting this population during the real
+    197k-card run, not storing a fact per card; `persist_evidence` never reads this attribute.
     """
 
     card_id: int
@@ -259,6 +267,7 @@ class ExtractionResult:
     fields: dict[str, Any] = field(default_factory=dict)
     extractor_versions: dict[str, str] = field(default_factory=dict)
     skip_reasons: dict[str, str] = field(default_factory=dict)
+    short_circuited: bool = False
 
 
 def _crop_box_to_pixels(
@@ -280,15 +289,19 @@ def _compute_region_phash(image: Any, box: list[int]) -> int:
     return twos_complement(str(imagehash.phash(region)), _SYMBOL_HASH_BITS)
 
 
-def _collector_line_ocr_attempts(cropped: Any) -> Iterator[tuple[Any, str]]:
+def _collector_line_ocr_attempts(cropped: Any) -> Iterator[tuple[Any, str, int]]:
     """
-    Ordered, LAZY (image, tesseract_config) attempts for the `collector_line_ocr` extractor
+    Ordered, LAZY (image, tesseract_config, tier) attempts for the `collector_line_ocr` extractor
     (issue #259, "Stage D no-text bucket: OCR preprocessing/crop recovery") - cheapest/fastest
     first, each later tier strictly more expensive than the one before it. A generator (not a
     plain list) specifically so the caller's own "stop at the first attempt that parses a
     collector number" loop never actually pays for a later tier's preprocessing/OCR cost unless
     every earlier tier has already failed - `preprocess_fallback_variants(cropped)` below is not
     even CALLED, let alone OCR'd, for the common case where an early attempt already succeeds.
+    The `tier` element (added for the "Recovery-arc lessons" item 1 pre-classification
+    short-circuit, docs/features/catalog-completion-plan.md, 2026-07-21) lets the caller detect
+    "both tier-1 attempts are now exhausted" without hardcoding or re-deriving tier boundaries
+    from attempt position/count.
 
     - Tier 1 (attempts 1-2, PSM 6): `preprocess_variants`' original two polarity variants -
       UNCHANGED from before this issue, still the fast/happy path for the large majority of
@@ -305,21 +318,61 @@ def _collector_line_ocr_attempts(cropped: Any) -> Iterator[tuple[Any, str]]:
       never targeting in the first place.
 
     Worst case (a card that never parses anything, e.g. a genuine coverage-ceiling case) pays for
-    all 8 attempts - up to 4x the pre-#259 cost (2 attempts). This only hits cards whose collector
-    line genuinely never resolves to a collector number under ANY of these attempts; the happy
-    path (an early tier-1 parse) is unaffected in cost or behavior.
+    all 8 attempts - up to 4x the pre-#259 cost (2 attempts), UNLESS the pre-classification
+    short-circuit below fires first for a tier-1-digit-free card. This only hits cards whose
+    collector line genuinely never resolves to a collector number under ANY of these attempts
+    (and, since the short-circuit, whose tier-1 text also contains at least one digit character);
+    the happy path (an early tier-1 parse) is unaffected in cost or behavior either way.
     """
     variants = preprocess_variants(cropped)
     for variant in variants:
-        yield variant, TESSERACT_CONFIG
+        yield variant, TESSERACT_CONFIG, 1
     for variant in preprocess_fallback_variants(cropped):
-        yield variant, TESSERACT_CONFIG
+        yield variant, TESSERACT_CONFIG, 2
     for variant in variants:
-        yield variant, ALTERNATE_TESSERACT_CONFIG
+        yield variant, ALTERNATE_TESSERACT_CONFIG, 3
+
+
+# Tier 1 is exactly `preprocess_variants`' own two polarity variants (see that function's own
+# docstring - "both polarities of an adaptive-ish threshold") - hardcoded here rather than
+# re-derived via a redundant extra preprocessing call just to learn the count. If that function's
+# own variant count ever changes, this constant and `_collector_line_ocr_attempts`' own tier=1
+# yield count must be updated together (already an implicit coupling the "8 attempts total"
+# bookkeeping in that function's own docstring already assumes).
+_COLLECTOR_LINE_TIER1_ATTEMPT_COUNT = 2
+
+# Escape hatch for the pre-classification short-circuit (docs/features/catalog-completion-plan.md
+# "Recovery-arc lessons" item 1, 2026-07-21) - STAGE_C_NO_SHORTCIRCUIT=1 (or "true"/"yes")
+# disables it, for a measurement run that needs the full multi-tier escalation on every no-text
+# card (e.g. to gather the "would a zero-digit-at-tier-1 card ever have recovered at a later
+# tier" validation data the plan's own "open verification gap" note flags as not yet closeable
+# from stored data alone). Same STAGE_C_* env-var convention as DEFAULT_WORKERS/
+# DEFAULT_FETCH_THREADS in run_image_evidence_cohort.py.
+STAGE_C_NO_SHORTCIRCUIT_ENV = "STAGE_C_NO_SHORTCIRCUIT"
+
+
+def _short_circuit_enabled_by_env() -> bool:
+    """Read at CALL TIME (not import time, so a test or a per-invocation env change takes effect
+    without reimporting this module) - `compute_card_evidence`'s own `short_circuit=None` default
+    resolves to this."""
+    return os.environ.get(STAGE_C_NO_SHORTCIRCUIT_ENV, "").strip().lower() not in ("1", "true", "yes")
+
+
+def _contains_digit(text: str) -> bool:
+    """Cheap in-memory string scan (module docstring's "no new image work, no new tesseract
+    call") - deliberately a plain character scan, NOT a re-run of `_COLLECTOR_NUMBER_RE` (that
+    regex requires a specific bounded shape - see its own comment - so a digit CAN be present in
+    text that regex still fails to extract a token from; the short-circuit's own condition is
+    coarser and cheaper than the real parse on purpose, per the plan's own "STRUCTURE, not the
+    parse itself" framing)."""
+    return any(character.isdigit() for character in text)
 
 
 def extract_card_evidence(
-    card: Card, dpi: Optional[int] = DEFAULT_FETCH_DPI, profile: Optional[dict[str, float]] = None
+    card: Card,
+    dpi: Optional[int] = DEFAULT_FETCH_DPI,
+    profile: Optional[dict[str, float]] = None,
+    short_circuit: Optional[bool] = None,
 ) -> ExtractionResult:
     """
     The per-card callable work unit - fetch, then compute. `card.content_phash` (not recomputed
@@ -347,6 +400,9 @@ def extract_card_evidence(
     never persisted onto `ImageEvidence` itself, per docs/features/catalog-completion-plan.md's
     Stage C instrumentation spec ("aggregated into the run's own summary logging rather than a
     new persisted ImageEvidence field").
+
+    `short_circuit`, if given, is forwarded straight through to `compute_card_evidence` below - see
+    that function's own docstring for the pre-classification short-circuit this controls.
     """
 
     fetch_started_at = time.monotonic()
@@ -359,7 +415,9 @@ def extract_card_evidence(
         raise
     fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
 
-    return compute_card_evidence(card.pk, card.content_phash, image, fetch_latency_ms, profile=profile)
+    return compute_card_evidence(
+        card.pk, card.content_phash, image, fetch_latency_ms, profile=profile, short_circuit=short_circuit
+    )
 
 
 def compute_card_evidence(
@@ -368,6 +426,7 @@ def compute_card_evidence(
     image: Optional[Any],
     fetch_latency_ms: float,
     profile: Optional[dict[str, float]] = None,
+    short_circuit: Optional[bool] = None,
 ) -> ExtractionResult:
     """
     Compute-only continuation of `extract_card_evidence` above - everything that function does
@@ -392,7 +451,22 @@ def compute_card_evidence(
     `extract_card_evidence` (bundled fetch+compute, one process/call) or the decoupled compute
     stage calling this directly with a `fetch_latency_ms` its own separate fetch stage already
     measured.
+
+    `short_circuit` (2026-07-21, docs/features/catalog-completion-plan.md's "Recovery-arc lessons"
+    item 1): controls the `collector_line_ocr` pre-classification short-circuit - once BOTH tier-1
+    attempts fail to parse a collector number, if neither attempt's raw text contains a single
+    digit character, tiers 2-3 (6 more tesseract calls) are skipped and the extractor goes
+    straight to its existing "no-text" outcome, matching the measured finding that 99.7% of a
+    real no-text cohort's tier-1 reads were already digit-free and never gained a collector number
+    from the heavier tiers either. `None` (the default) resolves to `_short_circuit_enabled_by_env`
+    (the `STAGE_C_NO_SHORTCIRCUIT` env var) - an explicit `True`/`False` overrides that
+    resolution directly, which is what every test in this module and `run_image_evidence_cohort`'s
+    own `--no-shortcircuit` CLI flag do, rather than relying on env-var monkeypatching. Digit-
+    bearing tier-1 text that still fails to parse always escalates exactly as before - the
+    short-circuit is strictly narrower than the full "no-text" outcome it pre-empts, never wider.
     """
+    if short_circuit is None:
+        short_circuit = _short_circuit_enabled_by_env()
 
     fields: dict[str, Any] = {"fetch_latency_ms": fetch_latency_ms}
     extractor_versions: dict[str, str] = {}
@@ -464,6 +538,7 @@ def compute_card_evidence(
     # the *_crop_px pixel boxes crop_coordinates just computed above rather than recomputing them
     # - see module docstring. No candidate matching happens here (Stage D's job).
     _ocr_group_started_at = time.monotonic()
+    card_short_circuited = False
     if image is None:
         skip_reasons["collector_line_ocr"] = "fetch_failed"
         skip_reasons["artist_ocr"] = "fetch_failed"
@@ -488,23 +563,51 @@ def compute_card_evidence(
         # PSM re-try) that are only ever reached - and only ever cost a tesseract call - once
         # every earlier attempt has already failed to parse a collector number. See that
         # function's own docstring for the full tier breakdown and worst-case cost.
+        #
+        # Pre-classification short-circuit (2026-07-21, docs/features/catalog-completion-plan.md's
+        # "Recovery-arc lessons" item 1): once both tier-1 attempts are exhausted with no parse, a
+        # tier-1-digit-free card skips tiers 2-3 entirely rather than paying for 6 more tesseract
+        # calls to re-read the same non-collector-number text more clearly - measured (2026-07-21,
+        # a 6,643-card no-text cohort) at 99.7% of the genuinely-unrecoverable population, 0% loss
+        # on that sample. A digit-bearing tier-1 read that still fails to parse always escalates
+        # exactly as before - `_contains_digit` is a coarser, cheaper check than
+        # `_COLLECTOR_NUMBER_RE` itself (see that helper's own docstring), so this can only ever
+        # short-circuit a STRICT SUBSET of cards that would have ended in "no-text" anyway, never
+        # a card that could have parsed at tier 1.
         collector_texts_and_words: list[tuple[str, list[dict[str, Any]]]] = []
         selected_index = 0
         parsed = parse_collector_line("")
-        for i, (variant, config) in enumerate(_collector_line_ocr_attempts(collector_crop)):
+        matched = False
+        short_circuited = False
+        tier1_raw_texts: list[str] = []
+        for i, (variant, config, tier) in enumerate(_collector_line_ocr_attempts(collector_crop)):
             raw_text, word_boxes = run_tesseract_text_and_words(variant, config=config)
             collector_texts_and_words.append((raw_text, word_boxes))
             candidate_parse = parse_collector_line(raw_text)
             if candidate_parse.collector_number is not None:
                 parsed = candidate_parse
                 selected_index = i
+                matched = True
                 break
-        else:
-            # every attempt (every tier) was tried and none parsed a collector number - keep the
-            # first attempt's (empty-ish) parse as the deterministic stored artifact, matching
-            # the pre-existing fallback precedence.
-            if collector_texts_and_words:
-                parsed = parse_collector_line(collector_texts_and_words[0][0])
+            if tier == 1:
+                tier1_raw_texts.append(raw_text)
+                if (
+                    short_circuit
+                    and len(tier1_raw_texts) == _COLLECTOR_LINE_TIER1_ATTEMPT_COUNT
+                    and not any(_contains_digit(text) for text in tier1_raw_texts)
+                ):
+                    short_circuited = True
+                    break
+        if not matched and collector_texts_and_words:
+            # every attempt actually tried (every tier, OR a short-circuit exit after tier 1)
+            # found no parse - keep the first attempt's (empty-ish) parse as the deterministic
+            # stored artifact, matching the pre-existing fallback precedence. Safe to reuse
+            # unconditionally on a short-circuit exit too: `_contains_digit` false for both tier-1
+            # texts means `_COLLECTOR_NUMBER_RE` (a strict subset check - see `_contains_digit`'s
+            # own docstring) cannot have matched either, so re-parsing text[0] here can only ever
+            # reproduce the same collector_number=None outcome already implied.
+            parsed = parse_collector_line(collector_texts_and_words[0][0])
+        card_short_circuited = short_circuited
 
         collector_raw_texts = [text for text, _words in collector_texts_and_words]
         fields["collector_line_raw_text"] = (
@@ -687,6 +790,7 @@ def compute_card_evidence(
         fields=fields,
         extractor_versions=extractor_versions,
         skip_reasons=skip_reasons,
+        short_circuited=card_short_circuited,
     )
 
 

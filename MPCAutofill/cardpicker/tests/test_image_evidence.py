@@ -805,12 +805,16 @@ class TestExtractCardEvidenceCollectorLineOcr:
         assert result.fields["collector_line_collector_number"] == ""
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
 
-    def test_no_legible_text_exhausts_every_fallback_tier_before_giving_up(self, db, monkeypatch):
-        """issue #259: a blank crop must genuinely try every tier (2 base + 4 fallback + 2
-        alternate-PSM = 8 attempts) before recording "no-text" - counted via a wrapper around
-        `run_tesseract_text_and_words` rather than asserting a specific OCR result (a blank crop
-        reliably reads as empty text under every config in this environment; the ATTEMPT COUNT,
-        not the text, is what this test is about)."""
+    def test_no_legible_text_short_circuits_after_tier_one_by_default(self, db, monkeypatch):
+        """2026-07-21, docs/features/catalog-completion-plan.md's "Recovery-arc lessons" item 1:
+        a blank (digit-free) crop's tier-1 attempts contain no digit character at all, so with the
+        short-circuit ON (the new default), tiers 2-3 are never even attempted - only the 2 tier-1
+        tesseract calls happen before "no-text" is recorded. Supersedes this test's own former
+        "exhausts every tier" assertion, which is now `test_no_legible_text_exhausts_every_
+        fallback_tier_when_short_circuit_is_disabled` below (same fixture, `short_circuit=False`).
+        Counted via a wrapper around `run_tesseract_text_and_words` rather than asserting a
+        specific OCR result (a blank crop reliably reads as empty text under every config in this
+        environment; the ATTEMPT COUNT, not the text, is what this test is about)."""
         card = CardFactory(content_phash=1)
         image = _build_card_image([(DEFAULT_CROP_BOX, "")])
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
@@ -827,9 +831,95 @@ class TestExtractCardEvidenceCollectorLineOcr:
         result = extract_card_evidence(card)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
+        assert len(configs_used) == 2  # tier 1 only - short-circuited before tiers 2-3
+        assert configs_used == [module.TESSERACT_CONFIG] * 2
+        assert result.short_circuited is True
+
+    def test_no_legible_text_exhausts_every_fallback_tier_when_short_circuit_is_disabled(self, db, monkeypatch):
+        """issue #259's original behavior, preserved behind the escape hatch (2026-07-21, item 1):
+        a blank crop must genuinely try every tier (2 base + 4 fallback + 2 alternate-PSM = 8
+        attempts) before recording "no-text" when `short_circuit=False` - the measurement-run
+        path a real re-profile would use to gather the plan's own "open verification gap" data."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        configs_used: list[str] = []
+        original = module.run_tesseract_text_and_words
+
+        def counting(image_arg, config):
+            configs_used.append(config)
+            return original(image_arg, config=config)
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", counting)
+
+        result = extract_card_evidence(card, short_circuit=False)
+
+        assert result.skip_reasons["collector_line_ocr"] == "no-text"
         assert len(configs_used) == 8
         assert configs_used.count(module.TESSERACT_CONFIG) == 6  # 2 base + 4 fallback, PSM 6
         assert configs_used.count(module.ALTERNATE_TESSERACT_CONFIG) == 2  # base variants, PSM 11
+        assert result.short_circuited is False
+
+    def test_digit_bearing_tier_one_failure_still_escalates_by_default(self, db, monkeypatch):
+        """2026-07-21, item 1: the short-circuit's own condition is narrower than "tier 1 failed
+        to parse" - a tier-1 read that contains a digit character but still fails to parse a
+        collector number (`_contains_digit` is coarser than `_COLLECTOR_NUMBER_RE`, see that
+        helper's own docstring) must still escalate through every tier exactly as before. Uses a
+        monkeypatched `run_tesseract_text_and_words` (not real tesseract) to force an exact,
+        controlled tier-1 text, since reliably provoking this specific OCR failure mode from a
+        real rendered crop would be fragile."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        # A digit run with a word character directly abutting BOTH ends has no position where
+        # `_COLLECTOR_NUMBER_RE`'s trailing `\b` can land next to a 1-4-digit token (verified
+        # directly: `_COLLECTOR_NUMBER_RE.search("abc123456789xyz")` is `None`) - digit-bearing
+        # (so `_contains_digit` is True), never parses. Real word boxes are irrelevant to this
+        # test, so a fixed dummy is returned.
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return "abc123456789xyz", []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(card)
+
+        assert result.skip_reasons["collector_line_ocr"] == "no-text"
+        assert len(calls) == 8  # every tier tried - digit-bearing tier-1 text never short-circuits
+        assert result.short_circuited is False
+
+    def test_short_circuit_only_fires_once_both_tier_one_attempts_are_digit_free(self, db, monkeypatch):
+        """The short-circuit's own condition requires BOTH tier-1 attempts to be digit-free, not
+        just the first - a card whose first tier-1 attempt happens to be digit-free but whose
+        SECOND carries a digit (even an unparseable one - the same long-digit-run shape the
+        previous test uses) must still escalate (matches `_collector_line_ocr_attempts`' own
+        two-polarity tier-1 design - either attempt could be the one that reads real text)."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        # attempt 1: digit-free. attempt 2: digit-bearing but unparseable (same shape as
+        # test_digit_bearing_tier_one_failure_still_escalates_by_default above). Attempts 3-8
+        # (tiers 2-3): blank, never parses either - the point is that escalation happens AT ALL,
+        # not what tiers 2-3 themselves find.
+        texts = iter(["no digits here", "abc123456789xyz", "", "", "", "", "", ""])
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return next(texts), []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(card)
+
+        assert result.skip_reasons["collector_line_ocr"] == "no-text"
+        assert len(calls) == 8  # escalated past tier 1 despite attempt 1 alone being digit-free
+        assert result.short_circuited is False
 
     def test_happy_path_never_computes_fallback_preprocessing(self, db, monkeypatch):
         """issue #259: a card whose collector line parses cleanly on the very first (base, PSM
@@ -885,11 +975,13 @@ class TestExtractCardEvidenceCollectorLineOcr:
 
 class TestCollectorLineOcrAttempts:
     """Direct tests of `_collector_line_ocr_attempts` (issue #259) - the lazy, ordered
-    (image, tesseract_config) generator `collector_line_ocr`'s own loop consumes. No tesseract
-    call happens in these tests (only `preprocess_variants`' PIL-only grayscale/threshold work,
-    plus - when the fallback tier is actually reached - `preprocess_fallback_variants`' own
-    PIL-only work) - these tests are about the ORDERING/laziness contract, not OCR output, so
-    they're fast and don't need a real card image."""
+    (image, tesseract_config, tier) generator `collector_line_ocr`'s own loop consumes. The `tier`
+    element (2026-07-21, "Recovery-arc lessons" item 1) lets the caller detect "both tier-1
+    attempts exhausted" for the pre-classification short-circuit. No tesseract call happens in
+    these tests (only `preprocess_variants`' PIL-only grayscale/threshold work, plus - when the
+    fallback tier is actually reached - `preprocess_fallback_variants`' own PIL-only work) - these
+    tests are about the ORDERING/laziness contract, not OCR output, so they're fast and don't need
+    a real card image."""
 
     def test_yields_eight_attempts_in_the_documented_tier_order(self):
         crop = Image.new("RGB", (60, 24), "black")
@@ -897,8 +989,10 @@ class TestCollectorLineOcrAttempts:
         attempts = list(module._collector_line_ocr_attempts(crop))
 
         assert len(attempts) == 8
-        configs = [config for _variant, config in attempts]
+        configs = [config for _variant, config, _tier in attempts]
         assert configs == [module.TESSERACT_CONFIG] * 6 + [module.ALTERNATE_TESSERACT_CONFIG] * 2
+        tiers = [tier for _variant, _config, tier in attempts]
+        assert tiers == [1, 1, 2, 2, 2, 2, 3, 3]
 
     def test_never_calls_fallback_variants_if_consumer_stops_after_tier_one(self, monkeypatch):
         crop = Image.new("RGB", (60, 24), "black")

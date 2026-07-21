@@ -1848,7 +1848,14 @@ targeted validation pass (re-running tier 1 alone, in isolation, against a sampl
 cards' already-cached fetched images, comparing against their known-successful escalated outcome)
 is recommended before trusting the short-circuit at full-remainder scale — not run here (out of
 scope for this docs-first PR, and the 99.7%/0.27% split above is strong enough evidence to spec
-the short-circuit, not strong enough to certify zero regression on its own).
+the short-circuit, not strong enough to certify zero regression on its own). **Partially closed
+by the implementation (2026-07-21)**: `run_image_evidence_cohort`'s own `short_circuited` counter
+(`ExtractionResult.short_circuited` → `_CohortStats.short_circuited`, printed in both the
+progress line and the final `DONE` summary) means the 197k-card remainder run itself now produces
+a real short-circuit-rate measurement as a side effect of running — this still doesn't answer
+"how many would have recovered at tiers 2-3" directly, but a large gap between the remainder's
+own rate and the 99.7% figure above would be an early warning worth investigating before trusting
+the projection in item 5 below at full scale.
 
 **2. Atomic cast-and-route — corrected finding, not the premise as originally stated.** Read
 `local_calculate_verdicts.py`'s `Command.handle()` directly: `run_join_key_calculator` and
@@ -2024,6 +2031,16 @@ runbook/process rule with no code change proposed (a future code-enforced guard 
 candidate, not decided). Item 4 needs an owner call on which moderation sink to use before any
 code is written at all — nothing to build yet. A separate implementation PR per item, once each
 is owner-approved, is the right shape — not attempted here.
+
+**Follow-up status (2026-07-21, owner-approved)**: item 1's short-circuit is now BUILT
+(`image_evidence._collector_line_ocr_attempts`/`compute_card_evidence`'s `short_circuit` param,
+default ON, `--no-shortcircuit`/`STAGE_C_NO_SHORTCIRCUIT` escape hatch) — see this section's own
+"moderator-flag signal" write-up above for the companion correction (the marker withhold this
+item's own CRITICAL correction flagged is retired too, in the same PR) and
+`reparse_collector_evidence --selector proxy-marker-veto` for the matching re-scan tooling.
+Item 2 (the retraction-tooling slow-path-delete gap), item 3 (a code-enforced dry-run guard), and
+item 4 (the marker-absence compliance scan) remain unbuilt, owner-gated as this section originally
+scoped them.
 
 Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,

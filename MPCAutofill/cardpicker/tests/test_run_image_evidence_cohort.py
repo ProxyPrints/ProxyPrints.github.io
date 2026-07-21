@@ -84,12 +84,15 @@ def _stub_compute_ok(
     dry_run: bool,
     run_id: str,
     profile: bool = False,
-) -> tuple[int, str, Optional[dict[str, float]]]:
+    short_circuit: Optional[bool] = None,
+) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Replaces the real compute-stage step - no PIL decode, no extractors, no persist_evidence
-    call, just the (card_id, outcome, profile) tuple `_run_cohort` consumes. `profile` (2026-07-20
-    diagnostic addition, #235) is accepted but unused here - the stub never produces a real timing
-    breakdown, matching the real function's own `None` when `--profile` is not passed."""
-    return card_id, "ok", None
+    call, just the (card_id, outcome, profile, short_circuited) tuple `_run_cohort` consumes.
+    `profile` (2026-07-20 diagnostic addition, #235) is accepted but unused here - the stub never
+    produces a real timing breakdown, matching the real function's own `None` when `--profile` is
+    not passed. `short_circuit` (2026-07-21, Recovery-arc lessons item 1) is likewise accepted but
+    unused - the stub always reports `short_circuited=False`."""
+    return card_id, "ok", None, False
 
 
 @pytest.fixture(autouse=True)
@@ -271,6 +274,7 @@ class TestComputeOneCard:
             image: Any,
             fetch_latency_ms: float,
             profile: Optional[dict[str, float]] = None,
+            short_circuit: Optional[bool] = None,
         ) -> Any:
             captured["card_id"] = card_id
             captured["content_hash"] = content_hash
@@ -279,6 +283,7 @@ class TestComputeOneCard:
 
             class _Result:
                 fields = {"fetch_ok": True}
+                short_circuited = False
 
             return _Result()
 
@@ -287,13 +292,14 @@ class TestComputeOneCard:
         monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _stub_compute_card_evidence)
         monkeypatch.setattr(image_evidence_module, "persist_evidence", lambda result, run_id=None: None)
 
-        card_id, outcome, profile_dict = cohort_command._compute_one_card(
+        card_id, outcome, profile_dict, short_circuited = cohort_command._compute_one_card(
             card_id=7, content_hash=99, image_bytes=raw_bytes, fetch_latency_ms=12.3, dry_run=False, run_id="r"
         )
 
         assert card_id == 7
         assert outcome == "ok"
         assert profile_dict is None
+        assert short_circuited is False
         assert captured["card_id"] == 7
         assert captured["content_hash"] == 99
         assert captured["image_size"] == (10, 10)
@@ -309,11 +315,13 @@ class TestComputeOneCard:
             image: Any,
             fetch_latency_ms: float,
             profile: Optional[dict[str, float]] = None,
+            short_circuit: Optional[bool] = None,
         ) -> Any:
             captured["image"] = image
 
             class _Result:
                 fields = {"fetch_ok": False}
+                short_circuited = False
 
             return _Result()
 
@@ -322,7 +330,7 @@ class TestComputeOneCard:
         monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _stub_compute_card_evidence)
         monkeypatch.setattr(image_evidence_module, "persist_evidence", lambda result, run_id=None: None)
 
-        card_id, outcome, profile_dict = cohort_command._compute_one_card(
+        card_id, outcome, profile_dict, _short_circuited = cohort_command._compute_one_card(
             card_id=7, content_hash=None, image_bytes=None, fetch_latency_ms=0.0, dry_run=False, run_id="r"
         )
 
@@ -338,6 +346,7 @@ class TestComputeOneCard:
 
         class _Result:
             fields = {"fetch_ok": True}
+            short_circuited = False
 
         monkeypatch.setattr(image_evidence_module, "compute_card_evidence", lambda *a, **k: _Result())
         monkeypatch.setattr(
@@ -367,6 +376,7 @@ class TestComputeOneCard:
             image: Any,
             fetch_latency_ms: float,
             profile: Optional[dict[str, float]] = None,
+            short_circuit: Optional[bool] = None,
         ) -> Any:
             if profile is not None:
                 profile["fetch_ms"] = fetch_latency_ms
@@ -374,13 +384,14 @@ class TestComputeOneCard:
 
             class _Result:
                 fields = {"fetch_ok": True}
+                short_circuited = False
 
             return _Result()
 
         monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _stub_compute_card_evidence)
         monkeypatch.setattr(image_evidence_module, "persist_evidence", lambda result, run_id=None: None)
 
-        card_id, outcome, profile_dict = cohort_command._compute_one_card(
+        card_id, outcome, profile_dict, _short_circuited = cohort_command._compute_one_card(
             card_id=7,
             content_hash=None,
             image_bytes=None,
@@ -402,11 +413,12 @@ class TestComputeOneCard:
 
         class _Result:
             fields = {"fetch_ok": True}
+            short_circuited = False
 
         monkeypatch.setattr(image_evidence_module, "compute_card_evidence", lambda *a, **k: _Result())
         monkeypatch.setattr(image_evidence_module, "persist_evidence", lambda result, run_id=None: None)
 
-        _card_id, _outcome, profile_dict = cohort_command._compute_one_card(
+        _card_id, _outcome, profile_dict, _short_circuited = cohort_command._compute_one_card(
             card_id=7, content_hash=None, image_bytes=None, fetch_latency_ms=0.0, dry_run=True, run_id="r"
         )
 
@@ -470,15 +482,16 @@ class TestRunCohortProfileOutput:
             dry_run: bool,
             run_id: str,
             profile: bool = False,
-        ) -> tuple[int, str, Optional[dict[str, float]]]:
+            short_circuit: Optional[bool] = None,
+        ) -> tuple[int, str, Optional[dict[str, float]], bool]:
             profile_dict = {"fetch_ms": fetch_latency_ms, "wall_ms": 1.0} if profile else None
-            return card_id, "ok", profile_dict
+            return card_id, "ok", profile_dict, False
 
         monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
         monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_with_profile)
 
         profile_file = io.StringIO()
-        completed, fetch_failures, lockout_hit = cohort_command._run_cohort(
+        completed, fetch_failures, lockout_hit, short_circuited = cohort_command._run_cohort(
             cohort_ids=[1, 2, 3],
             fetch_threads=2,
             workers=1,
@@ -493,6 +506,7 @@ class TestRunCohortProfileOutput:
         assert completed == 3
         assert fetch_failures == 0
         assert lockout_hit is False
+        assert short_circuited == 0
 
         lines = [json.loads(line) for line in profile_file.getvalue().splitlines()]
         assert len(lines) == 3
