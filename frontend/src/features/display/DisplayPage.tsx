@@ -144,6 +144,20 @@
  *   - Phone condensation (T5): `ActionBarSearchGroup`'s own `@media (max-width: 767.98px)` rule
  *     gives the search-bar group the design doc §1 region table's specified "Full-width 2nd row"
  *     treatment, not just whatever a bare `flex-wrap` reflow happens to produce.
+ *
+ * Issue #268 (design doc §5/§6 rows S1-S3, landing cohesion with saved decks) - the empty-project
+ * `DeckInputLanding` gains a saved-decks column (`SavedDecksLandingPanel.tsx`) beside the existing
+ * paste/URL/XML/CSV import surfaces, `Col lg={4}` decks / `Col lg={8}` import at >=992px, decks
+ * first when stacked below that. `DeckRow` (now exported, gained an `openLabel` prop) and a new
+ * `useLoadSavedDeck` hook are extracted from `MyDecksPage.tsx` - the exact same open/load
+ * (`loadProject`/`loadFinishSettings`/`setCurrentSavedDeck`, unlock prompt, and dirty-project
+ * safety-save orchestration), just without the `navigateTo` hop MyDecksPage itself still uses, so
+ * loading a deck from here simply populates the current project in place; this page's own
+ * `isProjectEmpty` re-render (already relied on by #238's inline importers) takes it from there.
+ * `useHasSavedDecksForLanding` decides whether the grid column is reserved at all - false (no
+ * empty shell) for an anonymous session or one with zero saved rows ever created; see
+ * SavedDecksLandingPanel.tsx's own module comment for the full two-tier visibility rationale,
+ * including why the locked-session unlock prompt is deliberately NOT suppressed here.
  */
 import styled from "@emotion/styled";
 import React, {
@@ -190,6 +204,10 @@ import { AttributesSection } from "@/features/display/AttributesSection";
 import { CatalogBrowseResults } from "@/features/display/CatalogBrowseResults";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
+import {
+  SavedDecksLandingPanel,
+  useHasSavedDecksForLanding,
+} from "@/features/display/SavedDecksLandingPanel";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
 import { useViewportTier } from "@/features/display/useViewportTier";
 import { DisplayExportMenu } from "@/features/export/DisplayExportMenu";
@@ -488,52 +506,80 @@ const ChooseImageSection = ({
 // (if the prop is provided at all) calls onImportComplete as its very last statement with no
 // state updates afterwards - nothing here depends on this page's own subtree remaining mounted
 // once that callback fires.
-const DeckInputLanding = () => (
-  <div className="p-3" data-testid="display-empty-state">
-    <Row className="g-0">
-      <Col lg={6} md={6} sm={12} xs={12} className="px-2">
-        <h5>Enter a Card List</h5>
-        <ImportText />
-        {/* Design doc ADDENDUM D13 (issue #267's landing/search-bar feedback half) - the same
-            self-contained, self-hiding status component (visible only when
-            selectInvalidIdentifiersCount > 0) the populated-state action bar mounts below;
-            attached here too so an import that leaves unresolved identifiers is visible on the
-            empty-project landing, not just once a project already exists. */}
-        <InvalidIdentifiersStatus />
-      </Col>
-      <Col lg={6} md={6} sm={12} xs={12} className="px-2">
-        <h5>Import a File or URL</h5>
-        <Accordion defaultActiveKey="url">
-          <Accordion.Item eventKey="url">
-            <Accordion.Header>
-              <RightPaddedIcon bootstrapIconName="link-45deg" /> URL
-            </Accordion.Header>
-            <Accordion.Body>
-              <ImportURL />
-            </Accordion.Body>
-          </Accordion.Item>
-          <Accordion.Item eventKey="xml">
-            <Accordion.Header>
-              <RightPaddedIcon bootstrapIconName="file-code" /> XML
-            </Accordion.Header>
-            <Accordion.Body>
-              <ImportXML />
-            </Accordion.Body>
-          </Accordion.Item>
-          <Accordion.Item eventKey="csv">
-            <Accordion.Header>
-              <RightPaddedIcon bootstrapIconName="file-earmark-spreadsheet" />{" "}
-              CSV
-            </Accordion.Header>
-            <Accordion.Body>
-              <ImportCSV />
-            </Accordion.Body>
-          </Accordion.Item>
-        </Accordion>
-      </Col>
-    </Row>
-  </div>
+//
+// Issue #268 (design doc §5/§6 rows S1-S3) - a signed-in session with at least one unlocked
+// saved deck gets a third, LEADING column: SavedDecksLandingPanel.tsx, `Col lg={4}` beside the
+// import surfaces' own `Col lg={8}` at >=992px, stacked above them (saved decks first) below
+// that. `useSavedDecksForLanding` returns null for an anonymous or deck-less session - in that
+// case the layout falls straight back to today's plain two-column import grid, never reserving
+// an empty column for a panel with nothing to show.
+const ImportColumns = () => (
+  <>
+    <Col lg={6} md={6} sm={12} xs={12} className="px-2">
+      <h5>Enter a Card List</h5>
+      <ImportText />
+      {/* Design doc ADDENDUM D13 (issue #267's landing/search-bar feedback half) - the same
+          self-contained, self-hiding status component (visible only when
+          selectInvalidIdentifiersCount > 0) the populated-state action bar mounts below;
+          attached here too so an import that leaves unresolved identifiers is visible on the
+          empty-project landing, not just once a project already exists. */}
+      <InvalidIdentifiersStatus />
+    </Col>
+    <Col lg={6} md={6} sm={12} xs={12} className="px-2">
+      <h5>Import a File or URL</h5>
+      <Accordion defaultActiveKey="url">
+        <Accordion.Item eventKey="url">
+          <Accordion.Header>
+            <RightPaddedIcon bootstrapIconName="link-45deg" /> URL
+          </Accordion.Header>
+          <Accordion.Body>
+            <ImportURL />
+          </Accordion.Body>
+        </Accordion.Item>
+        <Accordion.Item eventKey="xml">
+          <Accordion.Header>
+            <RightPaddedIcon bootstrapIconName="file-code" /> XML
+          </Accordion.Header>
+          <Accordion.Body>
+            <ImportXML />
+          </Accordion.Body>
+        </Accordion.Item>
+        <Accordion.Item eventKey="csv">
+          <Accordion.Header>
+            <RightPaddedIcon bootstrapIconName="file-earmark-spreadsheet" /> CSV
+          </Accordion.Header>
+          <Accordion.Body>
+            <ImportCSV />
+          </Accordion.Body>
+        </Accordion.Item>
+      </Accordion>
+    </Col>
+  </>
 );
+
+const DeckInputLanding = () => {
+  const hasSavedDecks = useHasSavedDecksForLanding();
+  return (
+    <div className="p-3" data-testid="display-empty-state">
+      {hasSavedDecks ? (
+        <Row className="g-0">
+          <Col lg={4} className="px-2">
+            <SavedDecksLandingPanel />
+          </Col>
+          <Col lg={8} className="px-2">
+            <Row className="g-0">
+              <ImportColumns />
+            </Row>
+          </Col>
+        </Row>
+      ) : (
+        <Row className="g-0">
+          <ImportColumns />
+        </Row>
+      )}
+    </div>
+  );
+};
 
 //# endregion
 

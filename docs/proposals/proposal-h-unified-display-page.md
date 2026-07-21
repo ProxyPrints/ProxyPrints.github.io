@@ -66,7 +66,18 @@ Status row is issue #272's own remaining scope). Deliberately NOT part
 of #267 either: D9–D11/D14/D16 (own future issues) and D17/D18 (a later
 sheet-presentation/spacing refinement to #266 that appeared in the spec
 after #267's own task was scoped — #266-adjacent, not yet mapped to any
-filed issue).
+filed issue); and, most recently, **#268's own mapped rows** (landing
+cohesion with saved decks, `proposal-h-display-layout-spec.md`'s §5/§6
+rows S1–S3 — see that doc's own updated "Implementation status" line):
+the empty-project `DeckInputLanding` gains a saved-decks column
+(`SavedDecksLandingPanel.tsx`) beside the existing paste/URL/XML/CSV
+import surfaces, `Col lg={4}`/`Col lg={8}` at ≥992px (decks first when
+stacked), reusing `DeckRow` (now exported, `openLabel` prop) and a new
+`useLoadSavedDeck` hook extracted from `MyDecksPage.tsx` — the identical
+open/load/unlock/safety-save path, just without MyDecksPage's own
+`navigateTo` hop, so loading a deck from the landing populates the
+current project in place. Renders neither the panel nor its grid column
+for an anonymous or zero-saved-deck session.
 Still not built: §6 step 5/6 (switchover to make `/display` the
 default nav entry point, then retiring `/editor` + the classic PDF tab).
 A related but deliberately

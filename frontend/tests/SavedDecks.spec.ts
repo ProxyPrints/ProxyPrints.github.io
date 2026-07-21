@@ -5,6 +5,7 @@ import * as os from "os";
 import * as path from "path";
 
 import { createCryptoProfile } from "@/common/savedDeckCrypto";
+import { CardType } from "@/common/schema_types";
 import {
   buildMockSavedDeckSummary,
   existingProfileHandler,
@@ -129,6 +130,66 @@ test.describe("saved decks", () => {
     await expect(
       page.getByTestId("display-toolbar").getByRole("button", { name: "Save" })
     ).not.toBeVisible();
+  });
+
+  // Issue #268 (design doc §5/§6 rows S1-S3, landing cohesion with saved decks) - a signed-in
+  // session with a saved deck sees it right on the empty-project /display landing, beside the
+  // paste-a-decklist input, and can load it in place without ever visiting /myDecks. Reaches
+  // /display via page.goto (loadPageWithDefaultBackend's default pageName), since the whole point
+  // is the landing shown on a direct, fresh visit - unlike the toolbar tests above, there's no
+  // prior /editor project to carry over.
+  test("display landing shows saved decks beside the paste input; loading one populates the project", async ({
+    page,
+    network,
+  }) => {
+    const profile = await createCryptoProfile(PASSPHRASE, TEST_ITERATIONS);
+    const namedDeck = await buildMockSavedDeckSummary(
+      "deck-landing-1",
+      "deck",
+      {
+        version: 2,
+        name: "Boros Burn",
+        members: [
+          {
+            front: {
+              query: { query: "my search query", cardType: CardType.Card },
+            },
+            back: null,
+          },
+        ],
+        cardback: null,
+        manualOverrides: {},
+        finishSettings: { cardstock: "(S30) Standard Smooth", foil: false },
+        revision: 1,
+        modifiedAt: "2026-01-01T00:00:00.000Z",
+      },
+      profile.masterKey,
+      { createdAt: "2026-01-01", updatedAt: "2026-01-02" }
+    );
+    network.use(
+      whoamiSignedInNotModerator,
+      existingProfileHandler(profile),
+      getSavedDecksHandler([namedDeck]),
+      ...threeCardHandlers
+    );
+    await loadPageWithDefaultBackend(page, "display");
+    await expect(page.getByTestId("display-empty-state")).toBeVisible();
+
+    // The panel mounts the moment it has something to show (a saved deck exists), which
+    // auto-prompts the passphrase unlock exactly as /myDecks does - see
+    // SavedDecksLandingPanel.tsx's own module comment for why that's deliberate here.
+    await page.getByLabel("unlock-passphrase").fill(PASSPHRASE);
+    await page.getByRole("button", { name: "Unlock" }).click();
+
+    const panel = page.getByTestId("saved-decks-landing-panel");
+    await expect(panel.getByTestId("landing-named-decks-list")).toContainText(
+      "Boros Burn"
+    );
+    await panel.getByRole("button", { name: "Load" }).click();
+
+    await expect(page.getByTestId("display-empty-state")).toHaveCount(0);
+    await expect(page.getByTestId("display-page")).toBeVisible();
+    await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
   });
 
   // PR-6, post-v1 "deck portability" (docs/proposals/proposal-g-user-accounts-saved-decks.md) -
