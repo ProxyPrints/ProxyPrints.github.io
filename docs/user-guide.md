@@ -28,6 +28,26 @@ and export a PDF ready to print and cut.
 Local-folder and Google Drive options for coming back to a project
 later.
 
+## Saved decks, export, and the standalone decrypt tool
+
+Signed in with Discord? The editor and display page's Save button
+persists your deck to your account, and the **My Decks** page lists
+everything you've saved, decrypted right there in your browser — the
+server only ever stores encrypted, opaque bytes it can't read.
+
+My Decks also has **Export my decks** and **Import decks** buttons: export
+bundles every saved deck into one downloadable file for backup or moving
+between accounts/instances, and import decrypts a previously-exported
+file (with your passphrase or recovery key) and adds its decks to your
+current account. If this site ever goes away, your exported file is still
+readable on its own — a small, dependency-free command-line tool
+(`decrypt-saved-deck-export/` in the repo) decrypts it using nothing but
+Node.js's built-in crypto, no ProxyPrints server or codebase required.
+
+See [`features/saved-decks.md`](features/saved-decks.md) for the full
+design (including the zero-knowledge encryption model and per-deck share
+links).
+
 ---
 
 _Have a question this page doesn't answer yet? Open an issue on the
