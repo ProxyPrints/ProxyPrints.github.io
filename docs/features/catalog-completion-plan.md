@@ -1778,6 +1778,240 @@ priority ordering and the resume filter for explicit ids) before it finds anythi
 `test_reparse_collector_evidence.py`, 2 `test_run_image_evidence_cohort.py`); full backend suite
 green (1268 passed / 4 skipped, same CI-documented named skips).
 
+### Recovery-arc lessons — precondition artifact for the 197,428-card Stage C remainder GO (2026-07-21)
+
+Five owner-authorized runs executed directly against prod on 2026-07-21 (parser-bug reparse/
+retraction, an AI-art tag-detector write, the no-text-cohort re-extraction, and two further Stage
+D join-key passes — `docs/reports/2026-07-21-recovery-arc.md`, verifying
+`docs/reports/2026-07-21-staged-write.md`'s original write) surfaced five operational lessons,
+folded in here as the precondition artifact for authorizing a full-catalog Stage C harvest of the
+remaining 197,428 cards (confirmed still current: `Card.objects.filter(content_phash__isnull=False).count()`
+= 218,228 minus 20,800 distinct cards with a current `ImageEvidence` row today, unchanged since
+`docs/reports/2026-07-21-stagec-20k-extraction.md`/`docs/reports/2026-07-21-staged-write.md` both
+recorded the same figure — no further Stage C extraction has happened since).
+
+**1. Remainder-run ordering — cheap pre-classification short-circuit.** The `collector_line_ocr`
+extractor's issue #259 multi-tier attempt loop (`image_evidence._collector_line_ocr_attempts`)
+currently escalates from tier 1 (the original 2 PSM-6 attempts) through tiers 2–3 (4
+heavier-preprocessed variants + a PSM-11 re-try, 6 more tesseract calls) for EVERY card whose tier
+1 fails to parse a collector number — regardless of whether tier 1 found no text at all, or found
+real (but non-collector-line) text. Verified against today's own recovery data
+(`ImageEvidence.collector_line_raw_text` for a card that never parses anything across all 8
+attempts is, by construction, exactly tier 1's own first-attempt text — see
+`compute_card_evidence`'s own fallback-to-`collector_texts_and_words[0][0]` behavior): of the
+6,643 cards still carrying a `no-text` join-key skip after today's full re-extraction (the
+`ntx-0721` cohort, post-escalation), **6,625 (99.7%) have literally zero digit characters
+anywhere in their tier-1 OCR text** (1,778 blank, 4,847 non-blank-but-digit-free) — meaning
+tiers 2–3's heavier preprocessing was paying full cost to re-read the SAME non-digit text more
+clearly, never to manufacture a collector number that wasn't there in any form. Only 18/6,643
+(0.27%) had a digit-bearing tier-1 read that still never validated, even after every escalation
+tier — and escalating didn't help those either.
+
+Proposed short-circuit (spec only, not built in this PR — see implementation-scope judgment
+below): after tier 1's own two attempts both fail to parse a collector number, check whether
+EITHER attempt's raw text contains any digit character (a cheap in-memory string scan against
+already-computed OCR text — no new image work, no new tesseract call) before reaching for tiers
+2–3. If neither attempt found a single digit, skip straight to the `no-text` outcome; escalate
+only when tier 1 found digit-bearing (if unparseable) text.
+
+**CRITICAL correction, owner-stated, encoded verbatim**: proxy/NOT-FOR-SALE marker PRESENCE is
+NOT a custom-card signal — the catalog REQUIRES every card, real printings included, to carry
+proxy marking; only the collector line's own STRUCTURE (does it contain a plausible collector
+number, regardless of what else is on the line) discriminates a genuine Wizards printing from a
+custom/proxy upload. The short-circuit above is deliberately keyed on digit-bearing STRUCTURE in
+the collector-line crop's own OCR text, never on whether a proxy/NOT-FOR-SALE marker was detected
+anywhere (that's a different crop — `legal_line`, issue #151/#159 — and a different, existing
+signal entirely, already wired as the moderator-flag veto in `_apply_agreement_checks`, item 4
+below). Marker-text deductions are bonus signals only, never a stand-in for the collector-line
+structure check.
+
+**Open verification gap, not fully closeable from stored data**: whether ANY of the 3,032 cards
+`ntx-0721` genuinely recovered a collector number via tiers 2–3 would have had literally ZERO
+digits at tier 1 alone (which the short-circuit above would then incorrectly skip, silently
+losing that one recovery) cannot be checked from what's persisted today — `ImageEvidence` only
+stores the WINNING variant's raw text, not every tier's own intermediate output, so a card that
+needed escalation to succeed has no surviving record of what tier 1 alone produced. A small,
+targeted validation pass (re-running tier 1 alone, in isolation, against a sample of these 3,032
+cards' already-cached fetched images, comparing against their known-successful escalated outcome)
+is recommended before trusting the short-circuit at full-remainder scale — not run here (out of
+scope for this docs-first PR, and the 99.7%/0.27% split above is strong enough evidence to spec
+the short-circuit, not strong enough to certify zero regression on its own).
+
+**2. Atomic cast-and-route — corrected finding, not the premise as originally stated.** Read
+`local_calculate_verdicts.py`'s `Command.handle()` directly: `run_join_key_calculator` and
+`run_slow_path_calculator` already run in ONE invocation/`run_id`, unconditionally, every time
+`--write` is passed — this is not a gap in the command itself. The very first write run
+(`staged-write-20260721T0434Z`) proves this end-to-end: 8,925 join-key votes AND 16,928 slow-path
+routing rows landed atomically in that one invocation
+(`docs/reports/2026-07-21-staged-write.md`).
+
+What actually happened today, verified live against the DB (not inferred from logs): pass 2
+(`staged2-0721`, the 100-card parser-bug retraction cohort) and pass 3 (`staged3-0721`, the
+3,032-card no-text re-extraction cohort) both ran this SAME atomic command, but
+`CardScanLog.objects.filter(anonymous_id="stage-d-slow-path-v1")` shows rows from
+`staged-write-20260721T0434Z` ONLY — zero rows for either `staged2-0721` or `staged3-0721`.
+Root cause, confirmed by reading `reparse_collector_evidence.reparse_and_retract` directly: it
+retracts a card's stale `stage-d-join-key-v1` `CardPrintingTag`/`CardScanLog` rows before
+re-voting, but never touches that card's own `stage-d-slow-path-v1` `CardScanLog` row from the
+ORIGINAL routing pass. `_slow_path_eligible_cards_queryset` excludes any card already carrying a
+`stage-d-slow-path-v1` row, permanently — so a card retracted-and-revoted at the join-key layer
+is silently excluded from ever being re-routed at the slow-path layer, even though
+`local_calculate_verdicts --write` correctly re-ran both stages in the same invocation
+immediately afterward. Exact count, queried live: **3,042 cards** (30 from pass 2 — 14
+`border-mismatch` + 16 `proxy-marker-veto` — plus 3,012 from pass 3 — 2,990 `is_no_match` votes +
+15 `border-mismatch` + 4 `ambiguous` + 3 `proxy-marker-veto`) carry a join-key conclusion that
+postdates their only `stage-d-slow-path-v1` row.
+
+**This is NOT the same as "invisible to the shipped clustering backend," and that framing is
+withdrawn here after direct verification** — the task brief and
+`docs/reports/2026-07-21-recovery-arc.md`'s own next-step item 2 both assumed these cards need a
+FUTURE slow-path routing pass to become visible; reading `cardpicker/review_clusters.py` directly
+shows this is wrong. `_review_queue_card_ids()` only checks for the EXISTENCE of a
+`stage-d-slow-path-v1`/`to-review` row (any `run_id`, any point in time) — these 3,042 cards
+already have one, from the original run. `_eligible_review_cards()` additionally requires
+`printing_tag_status=UNRESOLVED`, which all 3,042 still are (a single 0.5-weight machine vote
+can't cross the resolution threshold alone — confirmed by this same arc's own gate re-derivation,
+0/12,684). And `_current_evidence_by_card_id` re-reads each card's CURRENT `ImageEvidence` row
+fresh, keyed on live `content_phash` — not from anything stored on the stale `CardScanLog` row
+itself (which, additionally, has never stored a per-card reason at all: `skip_reason` is
+hardcoded to the literal string `"to-review"` for every row this calculator ever writes — there
+is no stale "reason" field to be wrong). **All 3,042 cards are therefore already visible and
+correctly clusterable in the shipped review-cluster backend (#262/#265) today, with fresh
+signals** — confirmed by code reading, not assumed.
+
+What IS real, and worth fixing as hygiene (not as a remainder-GO blocker): the retraction
+tooling's incompleteness is a latent gap, currently harmless only because today's one consumer of
+the slow-path marker (#262/#265) never reads anything from that row beyond its bare existence. A
+future consumer that reads something more specific from it (e.g., a per-card "why was this
+routed" reason, which doesn't exist today but could be added later) would silently inherit stale
+state through this same path. Fix spec (owner-gated, not built in this PR): extend
+`reparse_collector_evidence.reparse_and_retract` to also delete the retracted card's own
+`stage-d-slow-path-v1` `CardScanLog` row in the same pass it deletes the `stage-d-join-key-v1`
+rows — mirroring the existing delete, same safety gate (`resolve_printing(card) is not None`
+refusal), same `--write`-gated convention. Once that ships, no separate "one-off routing pass"
+command is needed for today's 3,042: they are already correctly visible, and the fix only matters
+for the NEXT retraction pass, not this one.
+
+**For the remainder run specifically: no fix is needed.** The 197,428 remaining cards have never
+been touched by any engine — no stale `stage-d-slow-path-v1` row exists for any of them, so
+`local_calculate_verdicts --write` will atomically cast-and-route them exactly as it did for the
+original 20,800-card cohort (proven: 8,925 votes + 16,928 routed, same invocation, fully
+reconciled). The atomicity property the remainder GO depends on already holds; today's gap is
+specific to retraction/state-clear passes over PREVIOUSLY-touched cards, a distinct concern from
+the remainder harvest.
+
+**3. State-clear safety — mandatory dry-run before any `--selector` state-clear write.** Today's
+runbook ran `reparse_collector_evidence --selector parser-bug` as a dry-run/write pair (dry-run
+first, confirmed identical counts, then `--write`), but ran
+`--selector no-text --stage-d-run-id staged-write-20260721T0434Z` (the state-clear step ahead of
+Stage D pass 3) straight to `--write`, with no preceding dry-run — the one place in the whole
+arc's runbook this happened
+(`docs/reports/2026-07-21-recovery-arc.md`'s own "Run parameters" table: every other pair has a
+matching dry-run row, row 19 does not). This was also the one step whose omission — skipped
+ahead of pass 2 as "redundant" — caused a real, silent scope gap: pass 2 never touched the
+3,032-card no-text-recovered cohort at all, because those cards still carried a stale `no-text`
+join-key skip row until the state-clear step retracted it, only caught before pass 3 by
+re-checking the runbook, not by any automated gate.
+
+**Binding runbook rule, effective immediately for every future invocation of this command**: a
+dry-run of the EXACT same `--selector`/`--stage-d-run-id`/`--card-ids-file` invocation is
+mandatory before its corresponding `--write` — no exceptions for a selector that "should be
+mechanical" (the no-text selector's own narrower, more mechanical retraction logic was exactly
+the reasoning offered for skipping it today, and it was still the one place the process gap
+surfaced). This is a documented process discipline, not a code-enforced gate in this PR — a code
+guard (e.g., requiring evidence of a matching prior dry-run before accepting `--write` for the
+same selector/cohort) is a plausible future hardening, tracked here as a candidate, not built
+(implementation-scope judgment below).
+
+**4. Marker-absence compliance scan — owner requirement, verified against the current build:
+nothing scans for it today.** Owner, verbatim: "all cards in the catalog should show proxy/not
+for sale somewhere even if they are an actual printing. that is a catalog requirement, we scan it
+to pass on to moderation when not there." Checked directly, not assumed:
+`legal_line_proxy_marker_detected` (issue #151/#159) is read in exactly one place in the
+codebase, `local_calculate_verdicts._apply_agreement_checks`, and only for the case where it's
+`True` (the moderator-flag VETO — a detected marker makes an otherwise-good join-key match
+untrustworthy, per item 1's own CRITICAL correction above). The OPPOSITE case —
+`legal_line_proxy_marker_detected == False`, marker genuinely absent — is never read, checked, or
+routed anywhere. `CardReport`/`CardReportReason` (`docs/features/moderation.md`'s report-button
+system) has no reason choice for this at all (`NSFW`/`LOW_QUALITY`/`WRONG_CARD`/`BROKEN_IMAGE`/
+`OTHER` only), and no management command or extractor writes a `CardReport` row automatically.
+**Verdict: not built anywhere — this is a real gap against a stated catalog requirement, not
+already covered by existing machinery.**
+
+Current population (read-only, live DB, 2026-07-21): of the 20,800 cards with a current
+`legal_line` evidence row, **14,412 (69.3%) show `legal_line_proxy_marker_detected=False`**
+(marker absent), 6,337 (30.5%) show `True` (marker present), 51 (0.2%) are `NULL` (the extractor
+never reached a conclusion, e.g. a truncated/failed fetch). This 14,412 count is a snapshot of
+today's 20,800-card Stage C cohort only — it will grow roughly proportionally as the 197,428-card
+remainder is extracted, not a fixed ceiling.
+
+Spec (not built in this PR — owner-gated): a new, dedicated scan (its own management command or a
+mode of an existing reconciliation pass, run per Stage C extraction batch — "cadence: per
+extraction run," matching every other reconciliation report in this pipeline) that queries
+current `ImageEvidence` rows for `legal_line_proxy_marker_detected=False`, excludes cards already
+flagged (idempotent, same exact-match-`anonymous_id`/append-only convention every other engine in
+this codebase uses — e.g. a dedicated `anonymous_id` value on a new `CardReport` row, or a new
+`CardReportReason` choice if that model is judged the right sink), and routes the result to the
+EXISTING moderation queue (`docs/features/moderation.md`'s already-shipped report/review
+machinery — the owner's own wording, "pass it on to moderation," names the existing sink rather
+than a new one). Population: cards with current evidence only (the 14,412 above, growing with the
+remainder). Not built here: this needs the same dry-run/write convention, safety gate, and test
+coverage every other tool in this pipeline carries, and a decision on which existing moderation
+surface (a new `CardReportReason`, or a distinct machine-only flag) is the right sink — an owner
+call, not made here.
+
+**5. Multi-pass OCR tiers are now the deployed Stage C default (banked); projected remainder
+runtime, with vs. without the short-circuit.** Issue #259's multi-tier `collector_line_ocr`
+escalation (item 1 above) is live in the current `master` build — every future Stage C extraction
+run, including the remainder, uses it automatically; there is no separate opt-in. Using today's
+two real measured rates: **5.4 cards/s "plain"** (the 20,000-card cohort's own 5.367 cards/s,
+`docs/reports/2026-07-21-stagec-20k-extraction.md` — measured 2026-07-21T02:27Z, which predates
+issue #259's merge (2026-07-21T10:48Z UTC) by ~8h, so this is genuinely the pre-multi-pass,
+tier-1-only baseline rate) and **3.5 cards/s "multi-pass-heavy"** (the `ntx-0721` no-text
+re-extraction run's own measured 3.492 cards/s, `~/writes-20260721-recovery.log` — a
+100%-escalation-guaranteed cohort by construction, every one of its 9,675 cards had already
+failed tier 1 once before, so this is the real worst-case per-card cost once every tier runs).
+
+Projection (estimate, not a direct measurement — stated assumptions below), for the 197,428-card
+remainder:
+
+- **Without the short-circuit** (today's actual deployed default): extrapolating the original
+  join-key cohort's own `no-text` fraction (9,675/20,677 ≈ 46.8% of cards failed tier 1 entirely
+  under the pre-#259 baseline) onto the remainder, and blending the two measured rates by that
+  split (weighted-average per-card cost, `0.468 × 1/3.492 + 0.532 × 1/5.367 ≈ 0.233s/card` ⇒
+  ≈4.29 cards/s blended): **197,428 ÷ ~4.29 ≈ 46,000s ≈ ~12.8h** — a ~25% erosion of the
+  design doc's own ~10.2h target (`docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md`'s
+  decoupling design, restated as the 20k-cohort's own gate in
+  `docs/reports/2026-07-21-stagec-20k-extraction.md`), driven entirely by cards paying full
+  6-tesseract-call escalation cost for zero benefit.
+- **With the short-circuit** (item 1's proposal): since 99.7% of the genuinely-unrecoverable
+  tier-1-failure population is non-digit-bearing at tier 1 (this arc's own measured figure) and
+  would exit at tier-1-equivalent cost rather than paying for tiers 2–3, only ≈0.14% of the total
+  remainder (46.8% × 0.27%) would still pay the heavy multi-pass cost: **≈
+  (197,428 − 276) ÷ 5.367 + 276 ÷ 3.492 ≈ 36,800s ≈ ~10.2h** — back in line with the original
+  design-doc target.
+
+Assumptions stated plainly: (a) the 46.8% tier-1-failure fraction is extrapolated from the
+original 20,677-card cohort, not independently measured for the untouched remainder; (b) blending
+by blended per-card cost assumes throughput scales roughly linearly with per-card compute cost,
+consistent with the compute-profile report's own finding that OCR/legal-line extraction dominates
+per-card cost (`ocr_group` 41.7% + `legal_line` 16.2% ≈ 58%,
+`docs/reports/2026-07-20-pipeline-compute-profile.md`); (c) the short-circuit's own regex-check
+cost is treated as negligible (a cheap in-memory string scan, no new I/O or image work).
+
+**Implementation-scope judgment for this PR**: docs-only. None of items 1–4's code changes are
+bundled here. Reasoning, stated per item rather than as one blanket call: item 1's short-circuit
+and item 2's retraction-tooling fix both touch already-shipped, in-production extraction/retraction
+tooling that carries its own dry-run/safety-gate/test conventions (`_collector_line_ocr_attempts`,
+`reparse_and_retract`'s safety gate) — correctly extending either needs its own test coverage
+(a real, not-yet-collected fixture demonstrating the short-circuit doesn't regress a genuine
+digit-bearing recovery; a retraction test proving the new slow-path delete never fires when the
+gate refuses) and its own review cycle, not a same-PR add-on to a docs update. Item 3 is a
+runbook/process rule with no code change proposed (a future code-enforced guard is named as a
+candidate, not decided). Item 4 needs an owner call on which moderation sink to use before any
+code is written at all — nothing to build yet. A separate implementation PR per item, once each
+is owner-approved, is the right shape — not attempted here.
+
 Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
