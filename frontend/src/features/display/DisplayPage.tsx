@@ -48,10 +48,13 @@
  *
  * Issue #166 (post-export contribution prompt) - after a genuinely successful "Generate PDF" or
  * "Save PDF to Google Drive", a dismissible prompt points the user at the existing "What's That
- * Card?" vote-queue funnel (docs/features/printing-tags.md). See
- * features/export/postExportContributionPrompt.ts + usePostExportContributionPrompt.ts for the
- * success-detection and show-once-per-session logic - the same hook/component pair is also
- * mounted from PDFGenerator.tsx itself, so the classic "Print!" tab gets it too.
+ * Card?" vote-queue funnel (docs/features/printing-tags.md), via
+ * features/export/postExportContributionPrompt.ts + usePostExportContributionPrompt.ts's
+ * success-detection and show-once-per-session logic. Originally mounted from BOTH this page's
+ * own inline export (item 2, below) and PDFGenerator.tsx itself; issue #275 removed this page's
+ * inline export entirely (see that issue's own module comment further down), so PDFGenerator.tsx
+ * - now the sole place PDF generation happens, reached via the Print page (D10, pages/print.tsx)
+ * - is this feature's only remaining mount.
  *
  * Issue #238 (deck-input landing, design doc §4.1) - the `isProjectEmpty` early return used to
  * render only a plain "head to /editor" link, meaning this page could never start a project
@@ -77,9 +80,8 @@
  * three toolbar-parity findings from the same audit. DisplayExportMenu.tsx composes the same
  * unchanged ExportXML/ExportImages/ExportDecklist Dropdown.Items Export.tsx already mounts on the
  * classic editor's own "Download" dropdown - same hooks, same gating selectors. ExportPDF.tsx's
- * own item is deliberately excluded, since this page's Generate PDF button already reuses
- * useDownloadPDF directly rather than opening the classic PDFGenerator modal that item dispatches
- * to (see the inline-export region comment below).
+ * own item is deliberately excluded, since PDF generation itself lives on the Print page (D10,
+ * pages/print.tsx) now, not this one - see issue #275's own module comment further down.
  *
  * Issue #266 (mobile responsive shell - docs/proposals' /display layout spec, owner-approved
  * 2026-07-21, §2/§4/§6 rows R1/R2/R4/R5/R6) replaced the single always-rendered `RailWrapper`
@@ -158,6 +160,37 @@
  * empty shell) for an anonymous session or one with zero saved rows ever created; see
  * SavedDecksLandingPanel.tsx's own module comment for the full two-tier visibility rationale,
  * including why the locked-session unlock prompt is deliberately NOT suppressed here.
+ *
+ * Issue #275 (proposal-h-display-layout-spec.md ADDENDUM D9/D10) replaces the old "Prepare Print
+ * footer" three-button stack (Export ▾/Save PDF to Google Drive/Generate PDF) with the new
+ * FinishFooter.tsx: `Save Deck` and `Print / Export →` as CO-EQUAL `btn-primary` buttons, plus
+ * the same unchanged `Export ▾` below them. Per D9's own hard owner constraint ("save deck
+ * should come before PDF completes because we have to rely on clients available mem for the
+ * PDF"), the memory-heavy Generate PDF / Save PDF to Google Drive operations - and this page's
+ * entire item-2 inline export pipeline that drove them (useDownloadPDF/useSaveToDrivePDF/
+ * ImageFailureConfirmModal/the fetch-progress bar/the post-export contribution prompt) - are
+ * REMOVED from this page outright, not merely hidden: the Print page (D10, `pages/print.tsx`)
+ * now owns PDF generation exclusively, via its own unchanged `FinishedMyProject`/`PDFGenerator`,
+ * which already mounts `PostExportContributionPrompt` itself (so the /whatsthat funnel still
+ * fires there, for free - no regression). `useProjectDraftBackup.ts` (F1) mirrors the working
+ * project to `localStorage` (indexes/settings only, governing premise "we index, we do not
+ * store images") on a debounce, offers a restore nudge on `DeckInputLanding` when a prior
+ * session's draft outlives an emptied project, and fires D9(2)'s promotion nudge post-import;
+ * `PrePrintSaveGate.tsx` (F3) runs the D9(3) flush-then-optionally-prompt-then-navigate sequence
+ * the Finish footer's "Print / Export →" button triggers, landing on the new `pages/print.tsx`
+ * (D10/F5) - a thin wrapper mirroring `pages/myDecks.tsx`'s own `MyDecksPage` pattern,
+ * `FinishedMyProject.tsx` itself UNCHANGED. Deliberately NOT built here (D10's own owner
+ * addendum, tracked as its own follow-up): the Print page's tab REORDER/new PDF default, and the
+ * PDF tab's own preview removal - see `pages/print.tsx`'s own module comment.
+ *
+ * Known, deliberately-out-of-scope gap this leaves (documented, not silently accepted): this
+ * page's own Page Setup controls (paper size/bleed edge/guides - plain `DisplaySheetSettings`
+ * component state, never persisted) don't carry over to the Print page's classic `PDFGenerator`,
+ * which has always had its own separate settings and doesn't read this page's margin-profile/
+ * card-spacing redux slices either. A user who configures those here and then prints lands on a
+ * PDFGenerator with its own unrelated defaults - a genuine settings-parity gap, out of scope for
+ * this issue (D9/D10 resolve the SAVE-vs-PRINT ordering and the route linkage, not settings
+ * portability), left for a future issue.
  */
 import styled from "@emotion/styled";
 import React, {
@@ -172,7 +205,6 @@ import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Form from "react-bootstrap/Form";
 import Offcanvas, { OffcanvasPlacement } from "react-bootstrap/Offcanvas";
-import ProgressBar from "react-bootstrap/ProgressBar";
 import Row from "react-bootstrap/Row";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
@@ -189,30 +221,29 @@ import {
 import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { RightPaddedIcon } from "@/components/icon";
 import { RenderIfVisible } from "@/components/RenderIfVisible";
-import { Spinner } from "@/components/Spinner";
 import { CardbackToolbarButton } from "@/features/card/CommonCardback";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
 import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
-import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { ArtistSection } from "@/features/display/ArtistSection";
 import { AttributesSection } from "@/features/display/AttributesSection";
 import { CardSpacingControl } from "@/features/display/CardSpacingControl";
 import { CatalogBrowseResults } from "@/features/display/CatalogBrowseResults";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
+import { FinishFooter } from "@/features/display/FinishFooter";
 import { MarginProfileControl } from "@/features/display/MarginProfileControl";
 import { MARGIN_PROFILES } from "@/features/display/marginProfiles";
+import { usePrePrintSaveGate } from "@/features/display/PrePrintSaveGate";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
 import {
   SavedDecksLandingPanel,
   useHasSavedDecksForLanding,
 } from "@/features/display/SavedDecksLandingPanel";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
+import {
+  ProjectDraftSummary,
+  useProjectDraftBackup,
+} from "@/features/display/useProjectDraftBackup";
 import { useViewportTier } from "@/features/display/useViewportTier";
-import { DisplayExportMenu } from "@/features/export/DisplayExportMenu";
-import { PostExportContributionPrompt } from "@/features/export/PostExportContributionPrompt";
-import { wasLatestCardsPdfDownloadSuccessful } from "@/features/export/postExportContributionPrompt";
-import { usePostExportContributionPrompt } from "@/features/export/usePostExportContributionPrompt";
-import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import { SelectVersionResults } from "@/features/gridSelector/SelectVersionResults";
 import { useGridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
 import { Import } from "@/features/import/Import";
@@ -227,13 +258,7 @@ import {
   PagePreview,
   PagePreviewSlotContent,
 } from "@/features/pdf/PagePreview";
-import { getPageSizeMM, PageSize, PDFProps } from "@/features/pdf/PDF";
-import {
-  ImageFailureConfirmModal,
-  useDownloadPDF,
-  useSaveToDrivePDF,
-} from "@/features/pdf/PDFGenerator";
-import { ImageFetchFailure } from "@/features/pdf/pdfImage";
+import { getPageSizeMM, PageSize } from "@/features/pdf/PDF";
 import { SavedDeckPanel } from "@/features/savedDecks/SavedDeckPanel";
 import { SearchSettings } from "@/features/searchSettings/SearchSettings";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
@@ -249,7 +274,6 @@ import {
 } from "@/store/slices/marginProfileSlice";
 import {
   selectIsProjectEmpty,
-  selectManualOverrides,
   selectProjectCardback,
   selectProjectMember,
   selectProjectMembers,
@@ -572,10 +596,53 @@ const ImportColumns = () => (
   </>
 );
 
-const DeckInputLanding = () => {
+interface DeckInputLandingProps {
+  // Issue #275 (design doc ADDENDUM D9(1)/F1) - useProjectDraftBackup's own restore nudge:
+  // non-null only when a prior session's draft outlives this one's now-empty project. Passed in
+  // rather than a second hook instance here, since DisplayPage already owns the one instance
+  // actually driving the debounced writes (see this file's own module comment).
+  restorableDraft: ProjectDraftSummary | null;
+  onRestoreDraft: () => void;
+  onDismissDraft: () => void;
+}
+
+const DeckInputLanding = ({
+  restorableDraft,
+  onRestoreDraft,
+  onDismissDraft,
+}: DeckInputLandingProps) => {
   const hasSavedDecks = useHasSavedDecksForLanding();
   return (
     <div className="p-3" data-testid="display-empty-state">
+      {restorableDraft != null && (
+        <div
+          className="d-flex align-items-center gap-2 border rounded p-2 mb-3"
+          data-testid="display-restore-draft-banner"
+        >
+          <span className="me-auto">
+            Restore your unsaved work? A local backup of{" "}
+            {restorableDraft.memberCount} card
+            {restorableDraft.memberCount !== 1 ? "s" : ""} from this browser is
+            still here.
+          </span>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={onRestoreDraft}
+            data-testid="display-restore-draft-accept"
+          >
+            Restore
+          </Button>
+          <Button
+            size="sm"
+            variant="outline-secondary"
+            onClick={onDismissDraft}
+            data-testid="display-restore-draft-dismiss"
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
       {hasSavedDecks ? (
         <Row className="g-0">
           <Col lg={4} className="px-2">
@@ -873,6 +940,17 @@ export function DisplayPage() {
   const frontsVisible = useAppSelector(selectFrontsVisible);
   const cardDocumentsByIdentifier = useCardDocumentsByIdentifier();
 
+  // Issue #275 (design doc ADDENDUM D9) - the silent local draft auto-backup (F1) and the
+  // pre-print save gate (F3). ONE instance of each, here - both FinishFooter and
+  // DeckInputLanding below are handed the relevant pieces as props rather than each mounting
+  // their own hook instance (see useProjectDraftBackup.ts's own module comment on why a second
+  // instance would duplicate the debounced-write effect).
+  const draftBackup = useProjectDraftBackup();
+  const prePrintSaveGate = usePrePrintSaveGate({
+    flushDraftNow: draftBackup.flushDraftNow,
+    notifyPromoteDraftPrePrint: draftBackup.notifyPromoteDraftPrePrint,
+  });
+
   const [settings, setSettings] = useState<DisplaySheetSettings>(
     DEFAULT_SHEET_SETTINGS
   );
@@ -999,142 +1077,10 @@ export function DisplayPage() {
   // the on-screen sheet and the exported PDF in lockstep with no extra plumbing.
   const spacing = useAppSelector(selectCardSpacing);
 
-  //# region inline export (item 2, owner's hands-on review) - the real export pipeline, run
-  // in-page rather than navigating to the classic PDF tab. Reuses PDFGenerator.tsx's own
-  // useDownloadPDF/useSaveToDrivePDF/ImageFailureConfirmModal verbatim (exported for this, not
-  // forked) - same #81 paced-fetcher/retry machinery, same in-app failure-confirm modal, same
-  // Google Drive upload path. Only this page's own settings feed it (paper size, bleed edge,
-  // guides, the sheet's current fronts/backs view) - every other PDFProps field neither exposed
-  // here nor meaningful for this page's default "export what you see" use case (card selection
-  // mode, cut-line geometry, quality/DPI, spacing/margins, SCM mode) takes PDFGenerator's own
-  // documented default, matching its classic-tab behavior exactly for anyone who hasn't touched
-  // those settings there either.
-
-  const { clientSearchService } = useClientSearchContext();
+  // Still needed below (ChooseImageSection's own backendURL prop) - issue #275 removed every
+  // OTHER consumer this used to have (the inline export pipeline, see this file's own module
+  // comment for where that pipeline moved).
   const backendURL = useAppSelector(selectRemoteBackendURL);
-  const manualOverrides = useAppSelector(selectManualOverrides);
-
-  const [isDownloading, setIsDownloading] = useState<boolean>(false);
-  const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
-  const [imageFetchProgress, setImageFetchProgress] = useState<{
-    completed: number;
-    total: number;
-  } | null>(null);
-  // Determinate while images are still being fetched (a real count, "N of ~M"); indeterminate
-  // once every image has resolved but @react-pdf/renderer is still assembling the file itself -
-  // pdfRenderService/pdf.worker.ts only report per-image progress, so "assembling" is inferred
-  // the moment completed reaches total, not a separate signal the worker sends.
-  const [exportPhase, setExportPhase] = useState<
-    "fetching" | "assembling" | null
-  >(null);
-  const [pendingFailureConfirm, setPendingFailureConfirm] = useState<{
-    failures: Array<ImageFetchFailure>;
-    resolve: (value: boolean) => void;
-  } | null>(null);
-  const confirmDespiteFailures = (
-    failures: Array<ImageFetchFailure>
-  ): Promise<boolean> =>
-    new Promise((resolve) => setPendingFailureConfirm({ failures, resolve }));
-
-  const setExportProgress = (
-    progress: { completed: number; total: number } | null
-  ) => {
-    setImageFetchProgress(progress);
-    if (progress == null) {
-      setExportPhase(null);
-    } else {
-      setExportPhase(
-        progress.total > 0 && progress.completed >= progress.total
-          ? "assembling"
-          : "fetching"
-      );
-    }
-  };
-
-  // CUSTOM + explicit width/height, not the named pageSize alone - PDF.tsx's getPageSizeMM only
-  // honours pageWidth/pageHeight when pageSize is "CUSTOM" (otherwise it returns that name's own
-  // portrait dimensions), so this is what makes the exported file match this page's own
-  // landscape sheet (sheetWidthMM/sheetHeightMM, computed just below) rather than silently
-  // reverting to portrait.
-  const exportPdfProps: Omit<PDFProps, "fileHandles"> = {
-    cardSelectionMode: "frontsAndDistinctBacks",
-    pageSize: "CUSTOM",
-    pageWidth: sheetWidthMM,
-    pageHeight: sheetHeightMM,
-    bleedEdgeMM: settings.bleedEdgeMM,
-    roundCorners: false,
-    drawCardCutLines: settings.showCutLines,
-    drawPageCutLines: true,
-    cutLineLengthMM: 2,
-    cutLineOffsetMM: 0,
-    cutLineThicknessMM: 0.2,
-    cutLineColor: "#FF0000",
-    cutLinePlacement: "Inside",
-    cutLineShape: "InsideOnly",
-    cardSpacingRowMM: spacing.row,
-    cardSpacingColMM: spacing.col,
-    pageMarginTopMM: margins.top,
-    pageMarginBottomMM: margins.bottom,
-    pageMarginLeftMM: margins.left,
-    pageMarginRightMM: margins.right,
-    cardDocumentsByIdentifier: cardDocumentsByIdentifier,
-    projectMembers: projectMembers,
-    projectCardback: projectCardback,
-    bleedOverrides: manualOverrides,
-    scmMode: false,
-    scmPaperSize: "letter",
-    scmVariant: "default",
-    scmRegistration: 3,
-    scmDuplex: true,
-    scmOffsetXMM: 0,
-    scmOffsetYMM: 0,
-    scmOffsetAngleDeg: 0,
-    imageQuality: "full-resolution",
-    imageDPI: 600,
-    jpgQuality: 100,
-  };
-
-  const generatePdf = useDownloadPDF(
-    exportPdfProps,
-    clientSearchService,
-    dispatch,
-    setIsDownloading,
-    backendURL,
-    setExportProgress,
-    confirmDespiteFailures
-  );
-  const saveToDrive = useSaveToDrivePDF(
-    exportPdfProps,
-    clientSearchService,
-    dispatch,
-    setIsSavingToDrive,
-    backendURL,
-    setExportProgress,
-    confirmDespiteFailures
-  );
-
-  // Issue #166 - post-export contribution prompt. useDownloadPDF's returned promise resolves
-  // void (its own useDoFileDownload wrapper swallows the inner success boolean - see
-  // postExportContributionPrompt.ts's own comment), so success is read back out of the same
-  // fileDownloads redux slice the download manager UI already populates, once this exact click's
-  // download has finished. useSaveToDrivePDF has no such wrapper - .finally() passes its
-  // .then()'s resolved boolean straight through, so awaiting saveToDrive() directly already
-  // gives the real success/cancelled value.
-  const contributionPrompt = usePostExportContributionPrompt();
-  const onGeneratePdfClick = async () => {
-    await generatePdf();
-    if (wasLatestCardsPdfDownloadSuccessful()) {
-      contributionPrompt.notifyExportSucceeded();
-    }
-  };
-  const onSaveToDriveClick = async () => {
-    const succeeded = await saveToDrive();
-    if (succeeded === true) {
-      contributionPrompt.notifyExportSucceeded();
-    }
-  };
-
-  //# endregion
 
   const layout = useMemo(
     // Mirrors PagePreview's own computeLayout() call so cardsPerPage here matches exactly
@@ -1268,35 +1214,14 @@ export function DisplayPage() {
   );
 
   if (isProjectEmpty) {
-    return <DeckInputLanding />;
+    return (
+      <DeckInputLanding
+        restorableDraft={draftBackup.restorableDraft}
+        onRestoreDraft={draftBackup.restoreDraft}
+        onDismissDraft={draftBackup.dismissRestoreDraft}
+      />
+    );
   }
-
-  // Issue #266 (design doc §2/§4/§6 R4) - the export fetch-progress bar, extracted so both its
-  // old top-of-page placement's markup and its new right-rail-footer placement below render the
-  // exact same element rather than two hand-copied blocks that could drift.
-  const exportProgressBar = exportPhase != null && (
-    <div className="py-2" data-testid="display-export-progress">
-      {exportPhase === "fetching" && imageFetchProgress != null ? (
-        <ProgressBar
-          now={
-            imageFetchProgress.total > 0
-              ? (imageFetchProgress.completed / imageFetchProgress.total) * 100
-              : 0
-          }
-          label={`Fetching images: ${imageFetchProgress.completed} of ~${imageFetchProgress.total}`}
-          data-testid="display-export-progress-bar"
-        />
-      ) : (
-        <ProgressBar
-          now={100}
-          animated
-          striped
-          label="Assembling PDF…"
-          data-testid="display-export-progress-bar"
-        />
-      )}
-    </div>
-  );
 
   return (
     <div className="d-flex flex-column" data-testid="display-page">
@@ -1407,22 +1332,6 @@ export function DisplayPage() {
           Print &amp; Settings
         </Button>
       </div>
-
-      {/* Issue #166 - shown once per session, immediately after this button's first genuine
-          export success (see usePostExportContributionPrompt.ts) - never blocks the export
-          result above it, dismissible, and never re-fires again this session per its own
-          show-once logic. */}
-      {contributionPrompt.visible && (
-        <div
-          className="px-3 pt-2"
-          data-testid="display-contribution-prompt-wrapper"
-        >
-          <PostExportContributionPrompt
-            show={contributionPrompt.visible}
-            onDismiss={contributionPrompt.dismiss}
-          />
-        </div>
-      )}
 
       <DisplayBodyRegion>
         {/* Issue #266 (design doc §4.1) - ONE node, all widths: inline sticky 380px column at
@@ -1753,36 +1662,15 @@ export function DisplayPage() {
             </div>
 
             {/* Design doc §4.2's "Prepare Print footer - pinned, always visible at the rail's
-                bottom (flex column: body scrolls, footer doesn't)". */}
-            <div className="border-top p-3 d-grid gap-2">
-              {exportProgressBar}
-              {/* Issue #241 (design doc §5's export-beyond-PDF row) - XML/Card Images/Decklist,
-                  relocated unmodified from the classic editor's own "Download" dropdown. */}
-              <DisplayExportMenu />
-              {isGoogleDriveAppConfigured() && (
-                <Button
-                  size="sm"
-                  variant="outline-primary"
-                  onClick={onSaveToDriveClick}
-                  disabled={isSavingToDrive || isDownloading}
-                  data-testid="display-save-to-drive"
-                >
-                  {isSavingToDrive ? (
-                    <Spinner size={1.2} />
-                  ) : (
-                    "Save PDF to Google Drive"
-                  )}
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={onGeneratePdfClick}
-                disabled={isDownloading || isSavingToDrive}
-                data-testid="display-generate-pdf"
-              >
-                {isDownloading ? <Spinner size={1.2} /> : "Generate PDF"}
-              </Button>
+                bottom (flex column: body scrolls, footer doesn't)". Issue #275 (ADDENDUM D9/F2)
+                replaces the old three-button stack with FinishFooter's own co-equal Save
+                Deck/Print - Export pair + the unchanged Export dropdown - see this file's own
+                module comment for the full rationale. */}
+            <div className="border-top p-3">
+              <FinishFooter
+                hasBackedUpThisSession={draftBackup.hasBackedUpThisSession}
+                onPrintClick={prePrintSaveGate.startPrintFlow}
+              />
             </div>
           </Offcanvas.Body>
         </RightRailOffcanvas>
@@ -1800,17 +1688,7 @@ export function DisplayPage() {
         Card details
       </TabletRailHandle>
 
-      <ImageFailureConfirmModal
-        failures={pendingFailureConfirm?.failures ?? null}
-        onCancel={() => {
-          pendingFailureConfirm?.resolve(false);
-          setPendingFailureConfirm(null);
-        }}
-        onContinue={() => {
-          pendingFailureConfirm?.resolve(true);
-          setPendingFailureConfirm(null);
-        }}
-      />
+      {prePrintSaveGate.element}
     </div>
   );
 }

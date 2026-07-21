@@ -406,12 +406,15 @@ printings, artists, tags, and moderation from one screen.
   after a genuinely successful PDF export (either "Generate PDF" or "Save
   PDF to Google Drive"), linking straight to `/whatsthat` via the exact
   same route `Navbar.tsx`/`HomepagePanel.tsx` already use. Mounted from
-  both real export surfaces — `frontend/src/features/display/DisplayPage.tsx`'s
-  own inline export (Proposal H, item 2) and `PDFGenerator.tsx` itself
-  (so the classic "Print!" tab / `PDFGeneratorModal.tsx` / `ProjectEditor.tsx`
-  mounts get it too, since they all render the same component) — one
+  `PDFGenerator.tsx` itself (so the classic "Print!" tab / standalone
+  `pages/print.tsx` (issue #275) / `PDFGeneratorModal.tsx` / `ProjectEditor.tsx`
+  mounts all get it, since they render the same component) — one
   `usePostExportContributionPrompt`/`PostExportContributionPrompt.tsx`
-  pair (`frontend/src/features/export/`), not two copies. "Never repeats
+  pair (`frontend/src/features/export/`), not two copies. This used to
+  ALSO be mounted from `DisplayPage.tsx`'s own inline export (Proposal H,
+  item 2) — issue #275 retired that pipeline entirely, so PDF generation
+  (and this prompt) now lives solely on the Print page, reached from
+  `/display`'s Finish footer via a pre-print save gate. "Never repeats
   within a session" (this is the "separate post-export contribution
   toast, task #31" the unified-display-page proposal's own §4.4′ footnote
   references) — a `sessionStorage` flag set the moment the prompt is

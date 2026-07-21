@@ -164,8 +164,13 @@ because the two hooks return differently:
   `await saveToDrive()` already gives the real success/cancelled value
   directly.
 
-The same hook/component pair is also mounted from `frontend/src/features/ display/DisplayPage.tsx`'s own inline export (Proposal H, item 2) — one
-implementation shared by both real export surfaces, not two. See
+This used to also be mounted from `DisplayPage.tsx`'s own inline export
+(Proposal H, item 2) — issue #275 retired that pipeline entirely (the
+memory-heavy Generate PDF/Save-to-Drive operations now live solely here,
+reached from `/display`'s Finish footer via a pre-print save gate; see
+`docs/proposals/proposal-h-display-layout-spec.md`'s ADDENDUM D9/D10), so
+this component's mounts are now: this tab, `PDFGeneratorModal.tsx`, and
+`ProjectEditor.tsx` — one implementation, not a forked second copy. See
 `docs/features/printing-tags.md`'s own entry for the full detail (why
 `/whatsthat` and not a new route, the `sessionStorage`-backed "never
 repeats within a session" rule) and `docs/features/print-export-page.md`

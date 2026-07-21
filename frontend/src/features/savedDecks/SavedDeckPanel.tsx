@@ -13,22 +13,21 @@
  * this component). The component itself is entirely route-agnostic (reads/writes projectSlice +
  * savedDeckSessionSlice only), so the only thing that differs between callers is spacing - hence
  * the className prop rather than a second, forked component.
+ *
+ * Issue #275 (proposal-h-display-layout-spec.md ADDENDUM D9) extracted the passphrase-setup/
+ * unlock/save modal-chain orchestration below into useSaveDeckFlow.ts, so the new Finish footer's
+ * own "Save Deck" button (FinishFooter.tsx) and PrePrintSaveGate.tsx's "Save" choice can trigger
+ * the exact same flow without forking it - this component is its first, unchanged caller.
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import Button from "react-bootstrap/Button";
 
 import { useAppDispatch, useAppSelector } from "@/common/types";
-import { useCryptoSession } from "@/features/savedDecks/cryptoSession";
-import { PassphraseSetupModal } from "@/features/savedDecks/PassphraseSetupModal";
-import { SaveDeckModal } from "@/features/savedDecks/SaveDeckModal";
-import { UnlockModal } from "@/features/savedDecks/UnlockModal";
+import { useSaveDeckFlow } from "@/features/savedDecks/useSaveDeckFlow";
 import { useGetWhoamiQuery } from "@/store/api";
-import { selectIsProjectEmpty } from "@/store/slices/projectSlice";
 import { selectCurrentSavedDeck } from "@/store/slices/savedDeckSessionSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
-
-type PendingModal = "passphrase-setup" | "unlock" | "save" | null;
 
 interface SavedDeckPanelProps {
   // Defaults to the original ProjectEditor placement's own spacing (a block stacked under the
@@ -40,12 +39,16 @@ interface SavedDeckPanelProps {
 
 export function SavedDeckPanel({ className = "pt-2" }: SavedDeckPanelProps) {
   const dispatch = useAppDispatch();
+  // Kept as its own query (RTK Query dedupes against useSaveDeckFlow's own identical call) rather
+  // than reading `isAuthenticated` back out of the hook below - this effect needs the RAW
+  // `whoami.data?.authenticated` (`undefined` while the query is still loading), not the hook's
+  // already-coerced boolean, so an already-authenticated user's initial undefined->true
+  // resolution can't be mistaken for a genuine live sign-in transition (see the `was === false`
+  // check below - `undefined !== false`, so only a real anonymous->authenticated flip fires it).
   const whoami = useGetWhoamiQuery();
-  const isAuthenticated = whoami.data?.authenticated === true;
-  const session = useCryptoSession();
   const currentSavedDeck = useAppSelector(selectCurrentSavedDeck);
-  const isProjectEmpty = useAppSelector(selectIsProjectEmpty);
-  const [pendingModal, setPendingModal] = useState<PendingModal>(null);
+  const { element, triggerSave, isAuthenticated, isProjectEmpty } =
+    useSaveDeckFlow();
 
   // Anonymous -> login adopt-by-save toast: surfaced once, right at the moment whoami flips to
   // authenticated, only if there's actually a non-empty in-memory project worth offering to
@@ -76,16 +79,6 @@ export function SavedDeckPanel({ className = "pt-2" }: SavedDeckPanelProps) {
     return null;
   }
 
-  const handleSaveClick = () => {
-    if (session.status === "no-profile") {
-      setPendingModal("passphrase-setup");
-    } else if (session.status === "locked") {
-      setPendingModal("unlock");
-    } else if (session.status === "unlocked") {
-      setPendingModal("save");
-    }
-  };
-
   return (
     <>
       <div className={`d-flex align-items-center gap-2 ${className}`.trim()}>
@@ -98,26 +91,12 @@ export function SavedDeckPanel({ className = "pt-2" }: SavedDeckPanelProps) {
           size="sm"
           variant="outline-primary"
           disabled={isProjectEmpty}
-          onClick={handleSaveClick}
+          onClick={() => triggerSave()}
         >
           Save
         </Button>
       </div>
-      <PassphraseSetupModal
-        show={pendingModal === "passphrase-setup"}
-        onCancel={() => setPendingModal(null)}
-        onComplete={() => setPendingModal("save")}
-      />
-      <UnlockModal
-        show={pendingModal === "unlock"}
-        onCancel={() => setPendingModal(null)}
-        onUnlocked={() => setPendingModal("save")}
-      />
-      <SaveDeckModal
-        show={pendingModal === "save"}
-        onCancel={() => setPendingModal(null)}
-        onSaved={() => setPendingModal(null)}
-      />
+      {element}
     </>
   );
 }
