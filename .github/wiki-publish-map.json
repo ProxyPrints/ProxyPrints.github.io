@@ -17,6 +17,11 @@
         },
         { "source": "docs/theory.md", "wiki": "Theory", "targets": ["wiki"] },
         {
+          "source": "docs/identification-pipeline.md",
+          "wiki": "Identification-Pipeline",
+          "targets": ["wiki"]
+        },
+        {
           "source": "docs/federation-v1.md",
           "wiki": "Federation-v1",
           "targets": ["wiki"]
