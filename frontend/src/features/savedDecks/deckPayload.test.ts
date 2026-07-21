@@ -18,6 +18,7 @@ import {
   encryptDeckPayloadForSave,
   encryptFinalizedDeckPayload,
   parseDeckPayload,
+  projectFromDeckPayload,
   serializeDeckPayload,
 } from "@/features/savedDecks/deckPayload";
 
@@ -176,4 +177,78 @@ test("encryptFinalizedDeckPayload preserves an already-finalized payload's revis
   );
   expect(decrypted.payload.revision).toEqual(42);
   expect(decrypted.payload.modifiedAt).toEqual("2020-01-01T00:00:00.000Z");
+});
+
+// Proposal H D18/D19 (docs/proposals/proposal-h-display-layout-spec.md) - cardSpacing persistence.
+describe("buildDeckPayload/projectFromDeckPayload - cardSpacing (D18/D19)", () => {
+  test("buildDeckPayload defaults cardSpacing to the D18 default when the caller omits it - every pre-D19 call site keeps compiling with no changes", () => {
+    const content = buildDeckPayload(
+      "My Deck",
+      emptyProject,
+      emptyFinishSettings,
+      {}
+    );
+    expect(content.cardSpacing).toEqual({ row: 14.5, col: 0 });
+  });
+
+  test("buildDeckPayload carries an explicitly-passed cardSpacing value through verbatim", () => {
+    const content = buildDeckPayload(
+      "My Deck",
+      emptyProject,
+      emptyFinishSettings,
+      {},
+      { row: 3, col: 2.5 }
+    );
+    expect(content.cardSpacing).toEqual({ row: 3, col: 2.5 });
+  });
+
+  test("projectFromDeckPayload round-trips a saved cardSpacing value verbatim", () => {
+    const payload = {
+      ...v1Payload("Modern"),
+      version: 2 as const,
+      revision: 1,
+      modifiedAt: "2026-01-01T00:00:00.000Z",
+      cardSpacing: { row: 8, col: 1 },
+    };
+    const { cardSpacing } = projectFromDeckPayload(payload);
+    expect(cardSpacing).toEqual({ row: 8, col: 1 });
+  });
+
+  test("projectFromDeckPayload backfills the D18 default cardSpacing for a legacy (pre-D19) payload with no cardSpacing field", () => {
+    const legacyPayload = {
+      ...v1Payload("Legacy"),
+      version: 2 as const,
+      revision: 1,
+      modifiedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const { cardSpacing } = projectFromDeckPayload(legacyPayload);
+    expect(cardSpacing).toEqual({ row: 14.5, col: 0 });
+  });
+
+  test("a legacy payload's dirty-check baseline (deckContentForComparison) agrees with a freshly-rebuilt payload's default cardSpacing - no false-dirty on load", () => {
+    const legacyPayload = {
+      ...v1Payload("Legacy"),
+      version: 2 as const,
+      revision: 1,
+      modifiedAt: "2026-01-01T00:00:00.000Z",
+    };
+    // Mirrors useLoadSavedDeck's real sequence: the baseline is built from the loaded payload
+    // (no cardSpacing key at all), while the "current" side is a fresh build seeded from
+    // whatever projectFromDeckPayload backfilled into the live redux state - both must produce
+    // the identical serialized string, or a legacy deck would read as dirty before any edit.
+    const baseline = serializeDeckPayload(
+      deckContentForComparison(legacyPayload)
+    );
+    const { cardSpacing } = projectFromDeckPayload(legacyPayload);
+    const freshlyRebuilt = serializeDeckPayload(
+      buildDeckPayload(
+        legacyPayload.name,
+        emptyProject,
+        emptyFinishSettings,
+        {},
+        cardSpacing
+      )
+    );
+    expect(freshlyRebuilt).toEqual(baseline);
+  });
 });

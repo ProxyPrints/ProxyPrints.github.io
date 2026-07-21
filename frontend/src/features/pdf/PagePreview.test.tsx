@@ -368,3 +368,52 @@ describe("PagePreview - card constants", () => {
     expect(CardHeightMM).toBe(88);
   });
 });
+
+// Proposal H R7/D17 (docs/proposals/proposal-h-display-layout-spec.md) - the /display-only
+// screen-presentation variant. PDFGenerator.tsx's own fast preview never passes
+// screenPresentation, so its call site must keep today's white-page/box-shadow look with zero
+// behavior change - a future refactor that silently flipped the default would otherwise only be
+// caught by eyeballing a screenshot.
+describe("PagePreview - screenPresentation prop (R7/D17)", () => {
+  it("defaults to the classic white page + box-shadow look when the prop is omitted (PDFGenerator's own call site)", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    const page = screen.getByTestId("page-preview-page");
+    expect(page).toHaveStyle({ background: "white" });
+    expect(page.style.boxShadow).not.toBe("");
+    expect(page.style.border).toBe("");
+  });
+
+  it("renders a fully clear page with a hairline border and rounded corners instead, when screenPresentation is true (/display's own call site)", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[]}
+        showCutLines={false}
+        maxWidthPx={400}
+        screenPresentation
+      />
+    );
+
+    const page = screen.getByTestId("page-preview-page");
+    expect(page).toHaveStyle({ background: "transparent" });
+    expect(page.style.boxShadow).toBe("");
+    expect(page.style.border).not.toBe("");
+    expect(page.style.borderRadius).not.toBe("");
+  });
+});

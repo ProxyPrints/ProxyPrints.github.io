@@ -184,6 +184,18 @@ export interface FinishSettingsState {
   foil: boolean;
 }
 
+/**
+ * Proposal H D18/D19 (docs/proposals/proposal-h-display-layout-spec.md) - the /display sheet's
+ * inter-card gutter, in mm. Deliberately the same field names as `LayoutSpacing`
+ * (features/pdf/layout.ts) rather than a separate shape, since this state IS that layout
+ * primitive's live value: `col` is the horizontal gutter between columns (the width axis),
+ * `row` the vertical gutter between rows (the height axis).
+ */
+export interface CardSpacingState {
+  row: number;
+  col: number;
+}
+
 export type FileDownloadStatus = "success" | "failed" | "terminated";
 export type FileDownloadType =
   | "image"

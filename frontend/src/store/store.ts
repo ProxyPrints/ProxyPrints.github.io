@@ -14,6 +14,7 @@ import backendReducer, {
 } from "@/store/slices/backendSlice";
 import cardbacksReducer from "@/store/slices/cardbackSlice";
 import cardDocumentsReducer from "@/store/slices/cardDocumentsSlice";
+import cardSpacingReducer from "@/store/slices/cardSpacingSlice";
 import favoritesReducer from "@/store/slices/favoritesSlice";
 import fileDownloadsReducer from "@/store/slices/fileDownloadsSlice";
 import finishSettingsReducer from "@/store/slices/finishSettingsSlice";
@@ -34,6 +35,7 @@ const rootReducer = combineReducers({
   searchSettings: searchSettingsReducer,
   searchResults: searchResultsReducer,
   cardDocuments: cardDocumentsReducer,
+  cardSpacing: cardSpacingReducer,
   cardbacks: cardbacksReducer,
   sourceDocuments: sourceDocumentsReducer,
   project: projectReducer,

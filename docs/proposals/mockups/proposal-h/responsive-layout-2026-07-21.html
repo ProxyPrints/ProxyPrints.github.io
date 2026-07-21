@@ -82,8 +82,21 @@ button { cursor: pointer; }
 .page-body { display: flex; align-items: flex-start; }
 .sheet-region {
   flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
-  align-items: center; padding: 8px; gap: 10px; /* minimal inter-page waste (D6) */
+  align-items: center; padding: 8px; gap: 4px; /* D17: minimize inter-page waste */
 }
+/* D17: pages read as a tight continuous stack, not a spaced-out gallery */
+.sheet-stack { width: min(960px, 100%); display: flex; flex-direction: column; gap: 4px; }
+/* D17: single floating "n/M" indicator — sticky, off to the RIGHT of the center
+   column, updates while scrolling. Child of the center flex column, so it is
+   structurally confined there and can never collide with either rail/drawer. */
+.page-indicator {
+  position: sticky; top: calc(var(--stripH, 36px) + 96px); z-index: 5;
+  align-self: flex-end; margin-right: 8px; margin-bottom: -26px; pointer-events: none;
+  padding: 2px 10px; font-size: 12px; font-variant-numeric: tabular-nums;
+  background: rgba(22, 32, 43, .9); border: 1px solid #4E5D6C; border-radius: 20px;
+  color: #EBEBEB;
+}
+.page-indicator .pi-sep { opacity: .5; margin: 0 1px; }
 
 /* Sheet: US LETTER **LANDSCAPE** (279.4 x 215.9 mm), 4x2 (owner D4).
    Default shown = D5 near-zero margins + D6 MPC-standard 3.175mm bleed:
@@ -94,17 +107,23 @@ button { cursor: pointer; }
    OUTLINE ONLY — no white page fill, subtle frame, slightly rounded
    corners, minimal space between pages.
    FIT-TO-WIDTH RULE (issue #266): width = min(960px, 100%). */
-.sheet-wrap { width: min(960px, 100%); }
-.sheet-label { text-align: center; margin-bottom: 2px; }
+.sheet-wrap { width: 100%; }
 .sheet {
   width: 100%; aspect-ratio: 279.4 / 215.9;
-  background: transparent; border: 1px solid rgba(235,235,235,.35);
-  border-radius: 8px;
+  /* D17: fully clear fill + a HAIRLINE PINLINE (not a drawn box) with rounded corners */
+  background: transparent; border: 1px solid rgba(235,235,235,.18);
+  border-radius: 7px;
   container-type: inline-size;
   display: grid; grid-template-columns: repeat(4, auto);
   grid-template-rows: repeat(2, auto);
   justify-content: center; align-content: center;
-  gap: 2.27cqw; /* = 2 x 3.175mm bleed between adjacent trim boxes */
+  /* D18: ASYMMETRIC default inter-card spacing (spacing.col=0 / spacing.row=14.5mm,
+     mapping owner's "HORIZONTAL 0 / VERTICAL 14.5" to computeLayout's LayoutSpacing).
+     1cqw = 2.794mm (sheet inline-size represents 279.4mm). Gaps are trim-to-trim:
+       column-gap = 2*3.175mm bleed + 0mm spacing   = 6.35mm  = 2.27cqw (columns touch)
+       row-gap    = 2*3.175mm bleed + 14.5mm spacing = 20.85mm = 7.46cqw (rows separated) */
+  column-gap: 2.27cqw;
+  row-gap: 7.46cqw;
 }
 .card63 {
   width: 22.55cqw; /* 63mm / 279.4mm */ aspect-ratio: 63 / 88;
@@ -161,6 +180,31 @@ button { cursor: pointer; }
 }
 .rail-right input[type="number"] { width: 70px; }
 
+/* --- D19: Card Spacing (mm) group in Page Setup — X/Y numeric inputs with a
+   LINK/UNLINK toggle between them. Linked = one value drives both axes; unlinked
+   = independent. Defaults 0 / 14.5 (D18) are asymmetric, so the group opens
+   UNLINKED. Writes the DisplayPage.tsx spacing memo (spacing.col = X / horizontal,
+   spacing.row = Y / vertical). Behavior emulated from an owner-provided screenshot
+   of an AGPL tool — patterns only, no source consulted (see spec PROVENANCE note). */
+.spacing-group { display: grid; gap: 6px; }
+.spacing-group .sg-label {
+  display: flex; align-items: center; justify-content: space-between;
+  color: #aab7c4; font-size: 12px;
+}
+.spacing-axes { display: flex; align-items: flex-end; gap: 8px; }
+.spacing-axes .axis {
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 2px; flex: 1 1 auto; justify-content: flex-start;
+}
+.spacing-axes .axis span { font-size: 11px; color: #aab7c4; }
+.spacing-axes .axis input[type="number"] { width: 100%; }
+.link-toggle {
+  flex: 0 0 auto; margin-bottom: 1px; padding: 4px 8px;
+  background: transparent; border: 1px solid #7f8fa0; color: #EBEBEB; font-size: 12px;
+}
+.link-toggle.linked { background: #DF691A; border-color: #DF691A; color: #fff; }
+.spacing-help { font-size: 11px; color: #8fa0b0; }
+
 .details-handle {
   display: none; position: fixed; left: 0; top: 45%; z-index: 1030;
   writing-mode: vertical-rl; padding: 10px 4px;
@@ -189,6 +233,123 @@ button { cursor: pointer; }
 }
 body.empty .app-populated { display: none; }
 body:not(.empty) .landing { display: none; }
+
+/* ============================================================
+   POLISH ROUND additions (D9–D16). See display-layout-spec.md's
+   ADDENDUM. All self-contained; no CDN.
+   ============================================================ */
+
+/* --- dual-mode search: Add / Browse segmented toggle (D12) --- */
+.modetoggle { display: inline-flex; flex: 0 0 auto; }
+.modetoggle .seg {
+  padding: 4px 10px; background: #22303f; border: 1px solid #4E5D6C;
+  border-right-width: 0; font-size: 12px;
+}
+.modetoggle .seg:last-child { border-right-width: 1px; }
+.modetoggle .seg.active { background: #DF691A; border-color: #DF691A; color: #fff; }
+
+/* --- search-bar invalid-identifiers status feedback (D13, surface 1) ---
+   Repurposes InvalidIdentifiersStatus (a warning Jumbotron+button). */
+.import-alert {
+  display: none; align-items: center; gap: 8px; flex-basis: 100%; order: 20;
+  padding: 6px 10px; background: #3a2a12; border: 1px solid #DF691A;
+  color: #ffce9e; font-size: 12px;
+}
+body.hasinvalid .import-alert { display: flex; }
+.import-alert .btn { margin-left: auto; }
+
+/* --- confidence element in the left-rail PROMOTED identity zone (D14) --- */
+.confidence {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 6px; padding: 6px 8px; background: #2B3E50;
+  border: 1px solid #16202b; border-radius: 6px; font-size: 12px;
+}
+.set-symbol {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%; background: #4E5D6C;
+  border: 1px solid #7f8fa0; font-weight: 700; font-size: 11px; cursor: help;
+  position: relative;
+}
+/* Scryfall-on-hover popover — display-serving only (CDN), nothing stored */
+.set-symbol .scry-pop {
+  display: none; position: absolute; bottom: 120%; left: 50%;
+  transform: translateX(-50%); width: 120px; z-index: 60;
+  background: #16202b; border: 1px solid #DF691A; border-radius: 6px;
+  padding: 6px; text-align: center;
+}
+.set-symbol:hover .scry-pop { display: block; }
+.scry-pop .scry-img {
+  width: 100%; aspect-ratio: 63/88; border-radius: 4px;
+  background: linear-gradient(160deg, #7a2f2f, #2d0f0f);
+}
+.conf-badge { padding: 1px 6px; border: 1px solid #4E5D6C; border-radius: 10px; }
+.conf-badge.confirmed { border-color: #3f7a2f; color: #a7e08a; }
+.conf-badge.suggested { border-color: #DF691A; color: #ffb27d; }
+.conf-x {
+  margin-left: auto; padding: 2px 8px; font-size: 11px;
+  background: transparent; border: 1px solid #7f8fa0; color: #ffb27d;
+}
+
+/* --- right-rail Status row (D13, surface 2) --- */
+.status-row {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border-bottom: 1px solid #16202b; font-size: 12px;
+}
+.status-row .dot { width: 9px; height: 9px; border-radius: 50%; background: #3f7a2f; flex: 0 0 auto; }
+body.hasinvalid .status-row .dot { background: #DF691A; }
+.status-row .warncount { margin-left: auto; }
+body:not(.hasinvalid) .status-row .warncount { display: none; }
+body.hasinvalid .status-row .clean { display: none; }
+
+/* --- Cardback swatch strip (D16) --- */
+.swatch-strip { display: flex; gap: 6px; margin-bottom: 8px; }
+.swatch {
+  width: 34px; aspect-ratio: 63/88; border: 1px solid #4E5D6C; border-radius: 3px;
+  cursor: pointer; background: linear-gradient(160deg, #2f5a7a, #0f1f2d);
+}
+.swatch.active { outline: 2px solid #DF691A; outline-offset: 1px; }
+
+/* --- Finish (foil/cardstock) section controls reuse .banner-controls --- */
+
+/* --- co-equal Finish footer (D9) --- */
+.finish-footer-primaries { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.finish-footer-primaries .btn-primary { text-align: center; }
+.draft-note {
+  display: flex; align-items: center; gap: 6px; font-size: 11px; color: #a7e08a;
+}
+.export-secondary { display: flex; }
+.export-secondary .btn { flex: 1 1 auto; }
+
+/* --- center-region Sheets / Browse switch + browse results (D12) --- */
+.center-switch {
+  display: inline-flex; align-self: center; margin-bottom: 4px;
+}
+.center-switch .seg {
+  padding: 3px 12px; background: #22303f; border: 1px solid #4E5D6C;
+  border-right-width: 0; font-size: 12px;
+}
+.center-switch .seg:last-child { border-right-width: 1px; }
+.center-switch .seg.active { background: #DF691A; border-color: #DF691A; color: #fff; }
+.browse-wrap { width: min(960px, 100%); display: none; }
+body.browse .browse-wrap { display: block; }
+body.browse .sheet-wrap { display: none; }
+.browse-filters {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;
+  padding: 8px; background: #22303f; border: 1px solid #16202b; font-size: 12px;
+}
+.browse-filters select, .browse-filters input {
+  background: #2B3E50; border: 1px solid #16202b; color: #EBEBEB; padding: 2px 6px;
+}
+.browse-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+}
+.browse-card { position: relative; }
+.browse-card .card63 { width: 100%; }
+.browse-card .add-btn {
+  position: absolute; top: 4px; right: 4px; padding: 2px 7px; font-size: 11px;
+  background: #DF691A; border: 1px solid #DF691A; color: #fff;
+}
 </style>
 <style id="bp"></style><!-- breakpoint-variant CSS injected here by JS -->
 </head>
@@ -202,7 +363,8 @@ body:not(.empty) .landing { display: none; }
   <button class="btn" data-mode="tablet">Tablet</button>
   <button class="btn" data-mode="phone">Phone</button>
   <button class="btn" id="stateToggle">State: populated</button>
-  <span class="hint">· tap a card → left rail (card) · ⚙ → right rail (print/settings)</span>
+  <button class="btn" id="warnToggle">Warnings: on</button>
+  <span class="hint">· tap a card → left rail (card) · ⚙ → right rail (print/settings) · Add/Browse · Save+Print co-equal</span>
 </div>
 
 <div id="app">
@@ -213,17 +375,28 @@ body:not(.empty) .landing { display: none; }
 
 <!-- ======== ACTION BAR (#267): identity + add-cards search bar ======== -->
 <header class="actionbar app-populated">
-  <span class="small muted">Sheet 1 of 2</span>
+  <!-- D17: per-page "Sheet N of M" readout removed here; now a floating pill in the
+       center region (see .page-indicator) that updates live while scrolling. -->
   <span class="deckname">
     <span class="name muted small">Editing: Boros Burn</span>
     <button class="btn btn-outline small">Save</button>
   </span>
+  <!-- D12: dual-mode search — Add (addMembers) vs Browse (catalog search) -->
+  <span class="modetoggle" role="group" aria-label="Search mode">
+    <button class="btn seg active" id="modeAdd" title="Add cards to the deck">Add</button>
+    <button class="btn seg" id="modeBrowse" title="Browse the catalog">Browse</button>
+  </span>
   <!-- populated-state search bar: single-line ImportText variant + Import dropdown -->
   <span class="addbar" title="Add cards — same addMembers pipeline as ImportText">
-    <input type="text" placeholder="Add cards… e.g. 3x Lightning Bolt (2X2 117)">
-    <button class="btn" title="Import URL / XML / CSV (existing Import dropdown)">Import ▾</button>
+    <input type="text" id="searchInput" placeholder="Add cards… e.g. 3x Lightning Bolt (2X2 117)">
+    <button class="btn" title="Import Text / XML / CSV / URL (existing Import dropdown)">Import ▾</button>
   </span>
   <button class="btn gear" id="gearBtn" aria-expanded="false" title="Print &amp; settings">⚙ Print &amp; Settings</button>
+  <!-- D13 surface 1: InvalidIdentifiersStatus feedback near the search bar -->
+  <div class="import-alert" role="status">
+    ⚠ 3 cards couldn't be found in your last import.
+    <button class="btn small">Review invalid cards</button>
+  </div>
 </header>
 
 <!-- ======== BODY: LEFT rail (card) + sheets + RIGHT rail (project) ======== -->
@@ -240,6 +413,18 @@ body:not(.empty) .landing { display: none; }
         <!-- D3 PROMOTED: artist support is always visible, top of the rail -->
         <div class="small" style="margin-top:4px">Art by Christopher Moeller ·
           <span style="color:#DF691A">Support this artist ↗</span></div>
+        <!-- D14 PROMOTED: printing-confidence funnel (#271). SetIcon + confidence
+             read (resolved/suggested) + Scryfall-on-hover (CDN, nothing stored)
+             + one-click "not this printing" casting a real human vote. -->
+        <div class="confidence">
+          <span class="set-symbol" title="2X2 — hover for the Scryfall image of this printing">2X2
+            <span class="scry-pop"><span class="scry-img"></span>
+              <span class="small muted">Scryfall preview</span></span>
+          </span>
+          <span>2X2 · 117</span>
+          <span class="conf-badge confirmed" title="Human-resolved canonicalCard — high confidence">✓ confirmed</span>
+          <button class="conf-x" title="Casts a human vote via the existing consensus path">✗ not this printing</button>
+        </div>
       </div>
       <button class="btn btn-outline small rail-close" data-close style="margin-left:auto" aria-label="Close">✕</button>
     </div>
@@ -284,15 +469,31 @@ body:not(.empty) .landing { display: none; }
     </div>
   </aside>
 
-  <!-- SHEETS (center region) — fit-to-width landscape Letter, 4x2, outline-only -->
+  <!-- SHEETS (center region) — fit-to-width landscape Letter, 4x2, outline-only.
+       D12: a Sheets / Browse switch flips the center between the print-sheet
+       stack and the catalog browse-results grid. -->
   <section class="sheet-region">
-    <div class="sheet-wrap">
-      <div class="sheet-label muted small">Sheet 1 of 2 — Letter (landscape), 4×2 borderless</div>
-      <div class="sheet" id="sheet1"></div>
+    <!-- D17: single floating page indicator, updates while scrolling -->
+    <div class="page-indicator" id="pageIndicator" aria-live="polite">1<span class="pi-sep">/</span>6</div>
+    <div class="center-switch" role="group" aria-label="Center view">
+      <button class="btn seg active" id="viewSheets">Print sheets</button>
+      <button class="btn seg" id="viewBrowse">Browse results</button>
     </div>
-    <div class="sheet-wrap">
-      <div class="sheet-label muted small">Sheet 2 of 2 — Letter (landscape), 4×2 borderless</div>
-      <div class="sheet" id="sheet2"></div>
+    <!-- D4/D7/D17: fit-to-width landscape Letter 4×2 sheets, clear fill + hairline
+         pinline, tight continuous stack, no per-page label lines -->
+    <div class="sheet-stack" id="sheetStack"></div>
+    <!-- D12 browse-results demo state: SelectVersionResults tiles on CardGrid's
+         responsive Row/Col template; each tile has an inline + Add. -->
+    <div class="browse-wrap">
+      <div class="browse-filters">
+        <span class="muted">Filters (GridSelectorFilters):</span>
+        <select><option>Source: all</option><option>Chilli's Drive</option></select>
+        <select><option>Printing tag: any</option><option>full art</option></select>
+        <select><option>Language: any</option><option>English</option></select>
+        <input type="text" placeholder="operators: set:2x2 t:instant" style="min-width:150px">
+      </div>
+      <div class="muted small" style="margin-bottom:8px">Browsing catalog · 48 results for “lightning” · <u>+ Add</u> a result to your deck</div>
+      <div class="browse-grid" id="browseGrid"></div>
     </div>
   </section>
 
@@ -302,6 +503,12 @@ body:not(.empty) .landing { display: none; }
       <strong>Print &amp; Settings</strong>
       <button class="btn btn-outline small rail-close" data-close style="margin-left:auto" aria-label="Close">✕</button>
     </div>
+    <!-- D13 surface 2: right-rail Status row (Status.tsx aggregation) -->
+    <div class="status-row">
+      <span class="dot"></span>
+      <span class="clean muted">No issues with your project</span>
+      <span class="warncount badge degraded">3 warnings</span>
+    </div>
     <div class="rail-body">
       <div class="acc open"><button class="acc-h">Page Setup</button>
         <div class="acc-b banner-controls">
@@ -309,6 +516,27 @@ body:not(.empty) .landing { display: none; }
           <label title="MPC standard 1/8 inch (D6); 4x2 at this bleed needs borderless — bordered profiles cap it (see spec D4/D5)">
             Bleed (mm) <input type="number" value="3.175" step="0.025" min="0" max="3.412"></label>
           <label>Margins <select><option>Borderless (0mm)</option><option>Bordered (3mm min)</option><option>Rear feed (+20mm trail)</option></select></label>
+          <!-- D19: Card Spacing (mm) — X/Y numeric inputs + LINK/UNLINK toggle. Writes the
+               DisplayPage.tsx spacing memo (spacing.col = X horizontal, spacing.row = Y vertical);
+               D18 defaults 0 / 14.5, persisted per deck alongside the other print defaults.
+               Behavior emulated from an owner-provided AGPL-tool screenshot (patterns only,
+               no source consulted — see spec PROVENANCE note). -->
+          <div class="spacing-group">
+            <div class="sg-label">
+              <span>Card spacing (mm)</span>
+              <button class="link-toggle" id="spacingLink" aria-pressed="false"
+                title="Linked: one value drives both axes. Unlinked: X and Y independent (default 0 / 14.5).">🔗 Link</button>
+            </div>
+            <div class="spacing-axes">
+              <label class="axis" title="Horizontal gutter between columns → spacing.col (mm)">
+                <span>Horizontal (X)</span>
+                <input type="number" id="spacingX" value="0" step="0.5" min="0"></label>
+              <label class="axis" title="Vertical gutter between rows → spacing.row (mm)">
+                <span>Vertical (Y)</span>
+                <input type="number" id="spacingY" value="14.5" step="0.5" min="0"></label>
+            </div>
+            <div class="spacing-help">Separate axes ease cutting — 0 horizontal butts columns for strip cutting; a vertical gap suits die cutters.</div>
+          </div>
           <label>Cut-line guides <input type="checkbox" checked></label>
         </div>
       </div>
@@ -317,7 +545,19 @@ body:not(.empty) .landing { display: none; }
           <label>Showing fronts <input type="checkbox" checked></label>
         </div>
       </div>
-      <div class="acc"><!-- D8: PDF-side color calibration (ET-8500 Linux driver
+      <div class="acc"><!-- D11: FinishSettings relocated here (foil/cardstock);
+           same component /editor's MakePlayingCards step mounts, not forked -->
+        <button class="acc-h">Finish</button>
+        <div class="acc-b banner-controls">
+          <label>Cardstock <select>
+            <option>(S30) Standard Smooth</option><option>(S33) Superior Smooth</option>
+            <option>(M31) Linen</option><option>Plastic</option><option>(P10) Premium Plastic</option>
+          </select></label>
+          <label>Foil <input type="checkbox"></label>
+          <div class="muted small">Foil disabled for non-foil-compatible stocks.</div>
+        </div>
+      </div>
+      <div class="acc"><!-- D8/#270: PDF-side color calibration (ET-8500 Linux driver
            only exposes B/S/C, so color-cast correction lives in our PDF output;
            on-screen preview = CSS-filter approximation, exact math at render) -->
         <button class="acc-h">Color Calibration</button>
@@ -325,6 +565,7 @@ body:not(.empty) .landing { display: none; }
           <label>Cyan <input type="range" min="-50" max="50" value="0"></label>
           <label>Magenta <input type="range" min="-50" max="50" value="0"></label>
           <label>Yellow <input type="range" min="-50" max="50" value="0"></label>
+          <label>Black (K) <input type="range" min="-50" max="50" value="0"></label>
           <label>Brightness <input type="range" min="-50" max="50" value="0"></label>
           <label>Saturation <input type="range" min="-50" max="50" value="0"></label>
           <label>Contrast <input type="range" min="-50" max="50" value="0"></label>
@@ -333,14 +574,29 @@ body:not(.empty) .landing { display: none; }
         </div>
       </div>
       <div class="acc"><button class="acc-h">Cardback</button>
-        <div class="acc-b"><button class="btn btn-outline small">Choose cardback…</button></div></div>
+        <div class="acc-b"><!-- D16: compact swatch strip over CommonCardback's gallery -->
+          <div class="swatch-strip">
+            <span class="swatch active" title="Default cardback"></span>
+            <span class="swatch" title="Cardback 2"></span>
+            <span class="swatch" title="Cardback 3"></span>
+          </div>
+          <button class="btn btn-outline small">Choose cardback…</button></div></div>
       <div class="acc"><button class="acc-h">Search Settings</button>
         <div class="acc-b"><button class="btn btn-outline small">Open search settings…</button></div></div>
     </div>
-    <div class="rail-foot"><!-- preparing print: always visible -->
-      <button class="btn">Export ▾ <span class="muted small">(XML · images · decklist)</span></button>
-      <button class="btn btn-outline">🗀 Save PDF to Google Drive</button>
-      <button class="btn btn-primary">⤓ Generate PDF</button>
+    <div class="rail-foot"><!-- D9: Prepare Print footer — Save & Print co-equal.
+         Persistence precedes PDF render (owner: PDF relies on client mem).
+         Heavy PDF gen / Save-to-Drive moved OUT to the Print page (D10). -->
+      <div class="draft-note" title="Silent localStorage draft — indexes+settings only, no images (governing premise). Survives an OOM/crash mid-PDF.">
+        ✓ Draft backed up locally
+      </div>
+      <div class="finish-footer-primaries">
+        <button class="btn btn-primary" title="Encrypted, account-bound save (SaveDeckModal). Never gated by PDF.">💾 Save Deck</button>
+        <button class="btn btn-primary" id="printBtn" title="Pre-print save gate → Print page (D10)">🖨 Print / Export →</button>
+      </div>
+      <div class="export-secondary">
+        <button class="btn btn-outline small">Export ▾ <span class="muted small">(XML · decklist · images — lightweight)</span></button>
+      </div>
     </div>
   </aside>
 </div>
@@ -365,6 +621,11 @@ body:not(.empty) .landing { display: none; }
         <h3>Enter a card list</h3>
         <textarea class="paste-ta" placeholder="4x Lightning Bolt&#10;2x Monastery Swiftspear&#10;…"></textarea>
         <p style="margin-top:8px"><button class="btn btn-primary">Add cards</button></p>
+        <!-- D13: same InvalidIdentifiersStatus feedback attaches under the paste column -->
+        <div class="import-alert" style="order:0" role="status">
+          ⚠ 3 cards couldn't be found.
+          <button class="btn small">Review invalid cards</button>
+        </div>
       </div>
       <div class="panel">
         <h3>Import a file or URL</h3>
@@ -531,28 +792,55 @@ document.querySelectorAll(".acc-h").forEach(function (h) {
   h.addEventListener("click", function () { h.parentElement.classList.toggle("open"); });
 });
 
-// ---- build 4x2 landscape sheets (D4); tap selects + opens the card rail ----
+// ---- build N 4x2 landscape sheets (D4) into the stack; tap selects + opens rail.
+//      Six sheets so the D17 floating indicator visibly updates while scrolling. ----
 var names = ["Lightning Bolt", "Monastery Swiftspear", "Boros Charm",
              "Skewer the Critics", "Lava Spike", "Rift Bolt",
              "Searing Blaze", "Eidolon of the Great Revel", "Sacred Foundry"];
-["sheet1", "sheet2"].forEach(function (id, s) {
-  var sheet = document.getElementById(id);
+var TOTAL_SHEETS = 6;
+var sheetStack = document.getElementById("sheetStack");
+function cardClick() {
+  document.querySelectorAll(".sheet .card63.selected").forEach(function (el) {
+    el.classList.remove("selected");
+  });
+  this.classList.add("selected");
+  document.getElementById("railCardName").textContent =
+    this.querySelector("span").textContent;
+  openLeft();
+}
+for (var s = 0; s < TOTAL_SHEETS; s++) {
+  var wrap = document.createElement("div");
+  wrap.className = "sheet-wrap";
+  var sheet = document.createElement("div");
+  sheet.className = "sheet";
+  sheet.dataset.page = s + 1;
   for (var i = 0; i < 8; i++) {
     var c = document.createElement("div");
     c.className = "card63 g" + ((i + s) % 5 + 1);
     c.innerHTML = "<span>" + names[(i + s * 8) % 9] + "</span>";
-    c.addEventListener("click", function () {
-      document.querySelectorAll(".sheet .card63.selected").forEach(function (el) {
-        el.classList.remove("selected");
-      });
-      this.classList.add("selected");
-      document.getElementById("railCardName").textContent =
-        this.querySelector("span").textContent;
-      openLeft();
-    });
+    c.addEventListener("click", cardClick);
     sheet.appendChild(c);
   }
-});
+  wrap.appendChild(sheet);
+  sheetStack.appendChild(wrap);
+}
+
+// ---- D17: floating page indicator updates live while scrolling.
+//      Mirrors DisplayPage.tsx's existing "Sheet N of M" IntersectionObserver,
+//      now writing the floating pill instead of an action-bar label. ----
+var pageIndicator = document.getElementById("pageIndicator");
+var currentPage = 1;
+function renderIndicator() {
+  pageIndicator.innerHTML = currentPage + '<span class="pi-sep">/</span>' + TOTAL_SHEETS;
+}
+var pageObserver = new IntersectionObserver(function (entries) {
+  entries.forEach(function (e) {
+    if (e.isIntersecting) currentPage = +e.target.dataset.page;
+  });
+  renderIndicator();
+}, { rootMargin: "-45% 0px -45% 0px", threshold: 0 });
+sheetStack.querySelectorAll(".sheet").forEach(function (el) { pageObserver.observe(el); });
+renderIndicator();
 
 // ---- empty vs. populated (search-bar states, #267/#268) ----
 document.getElementById("stateToggle").addEventListener("click", function () {
@@ -560,6 +848,71 @@ document.getElementById("stateToggle").addEventListener("click", function () {
   closeRails();
   this.textContent = "State: " + (empty ? "empty (landing)" : "populated");
 });
+
+// ---- D13: warnings on/off (invalid identifiers) demo toggle ----
+document.getElementById("warnToggle").addEventListener("click", function () {
+  var on = document.body.classList.toggle("hasinvalid");
+  this.textContent = "Warnings: " + (on ? "on" : "off");
+});
+document.body.classList.add("hasinvalid"); // default on so screenshots show D13
+
+// ---- D12: dual-mode search (Add / Browse) + center Sheets/Browse switch ----
+var modeAdd = document.getElementById("modeAdd");
+var modeBrowse = document.getElementById("modeBrowse");
+var viewSheets = document.getElementById("viewSheets");
+var viewBrowse = document.getElementById("viewBrowse");
+var searchInput = document.getElementById("searchInput");
+function setBrowse(on) {
+  document.body.classList.toggle("browse", on);
+  modeAdd.classList.toggle("active", !on);
+  modeBrowse.classList.toggle("active", on);
+  viewSheets.classList.toggle("active", !on);
+  viewBrowse.classList.toggle("active", on);
+  searchInput.placeholder = on
+    ? "Search the catalog… (set:2x2 t:instant …)"
+    : "Add cards… e.g. 3x Lightning Bolt (2X2 117)";
+}
+modeAdd.addEventListener("click", function () { setBrowse(false); });
+modeBrowse.addEventListener("click", function () { setBrowse(true); });
+viewSheets.addEventListener("click", function () { setBrowse(false); });
+viewBrowse.addEventListener("click", function () { setBrowse(true); });
+
+// ---- build the D12 browse-results grid (SelectVersionResults tiles) ----
+(function buildBrowse() {
+  var grid = document.getElementById("browseGrid");
+  if (!grid) return;
+  var sets = ["2X2 117", "STA 42", "CLB 401", "M11 146", "PRM 63", "LEA 161",
+              "A25 141", "MB1 1", "J21 12", "CMR 202", "40K 91", "DMR 130"];
+  for (var i = 0; i < sets.length; i++) {
+    var w = document.createElement("div");
+    w.className = "browse-card";
+    w.innerHTML =
+      '<div class="card63 g' + (i % 5 + 1) + '"><span>' + sets[i] + '</span></div>' +
+      '<button class="add-btn" title="Add this printing to the deck (AddCardToProjectForm)">+ Add</button>';
+    grid.appendChild(w);
+  }
+})();
+
+// ---- D19: Card Spacing link/unlink. Linked = one value drives both axes
+//      (X writes Y and vice-versa); unlinked = independent. In the real page both
+//      inputs write DisplayPage.tsx's spacing memo (X→spacing.col, Y→spacing.row),
+//      persisted per deck with the other print defaults. ----
+(function () {
+  var link = document.getElementById("spacingLink");
+  var x = document.getElementById("spacingX");
+  var y = document.getElementById("spacingY");
+  if (!link || !x || !y) return;
+  var linked = false;
+  link.addEventListener("click", function () {
+    linked = !linked;
+    link.classList.toggle("linked", linked);
+    link.setAttribute("aria-pressed", linked ? "true" : "false");
+    link.textContent = linked ? "🔗 Linked" : "🔗 Link";
+    if (linked) y.value = x.value; // collapse to a single value on link
+  });
+  x.addEventListener("input", function () { if (linked) y.value = x.value; });
+  y.addEventListener("input", function () { if (linked) x.value = y.value; });
+})();
 
 applyMode("auto");
 </script>

@@ -201,6 +201,7 @@ import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { ArtistSection } from "@/features/display/ArtistSection";
 import { AttributesSection } from "@/features/display/AttributesSection";
+import { CardSpacingControl } from "@/features/display/CardSpacingControl";
 import { CatalogBrowseResults } from "@/features/display/CatalogBrowseResults";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
@@ -239,6 +240,11 @@ import { SavedDeckPanel } from "@/features/savedDecks/SavedDeckPanel";
 import { SearchSettings } from "@/features/searchSettings/SearchSettings";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
+import {
+  selectCardSpacing,
+  setCardSpacingCol,
+  setCardSpacingRow,
+} from "@/store/slices/cardSpacingSlice";
 import {
   selectIsProjectEmpty,
   selectManualOverrides,
@@ -965,7 +971,13 @@ export function DisplayPage() {
     sheetRenderWidthPx * (sheetHeightMM / sheetWidthMM);
 
   const margins = useMemo(() => ({ top: 5, bottom: 5, left: 5, right: 5 }), []);
-  const spacing = useMemo(() => ({ row: 0, col: 0 }), []);
+  // Proposal H D18/D19 (docs/proposals/proposal-h-display-layout-spec.md) - no longer a hardcoded
+  // constant: this is now live state (cardSpacingSlice), seeded from D18's asymmetric default
+  // (0mm horizontal / 14.5mm vertical) and made user-editable by the right rail's Card Spacing
+  // control below. Every existing consumer (computeLayout, PagePreview's spacing prop,
+  // exportPdfProps' cardSpacingRowMM/ColMM) stays wired to this same value, so the control moves
+  // the on-screen sheet and the exported PDF in lockstep with no extra plumbing.
+  const spacing = useAppSelector(selectCardSpacing);
 
   //# region inline export (item 2, owner's hands-on review) - the real export pipeline, run
   // in-page rather than navigating to the classic PDF tab. Reuses PDFGenerator.tsx's own
@@ -1281,14 +1293,10 @@ export function DisplayPage() {
         className="d-flex align-items-center flex-wrap gap-2 px-3 py-2 border-bottom"
         data-testid="display-toolbar"
       >
-        <div className="d-flex align-items-center gap-2">
-          {/* Passive scroll-position readout, not a control - see the visibleSheetIndex
-              IntersectionObserver above. The whole deck is one continuous vertical stack now
-              (Item 3, flat scroll amendment); there's nothing left here to page between. */}
-          <span data-testid="display-sheet-indicator">
-            Sheet {clampedVisibleSheetIndex + 1} of {sheets.length}
-          </span>
-        </div>
+        {/* D17 (proposal-h-display-layout-spec.md ADDENDUM) retired this action-bar readout in
+            favor of ONE floating "n/M" pill living in the center sheet region itself (see
+            display-sheet-position-indicator below) - the visibleSheetIndex IntersectionObserver
+            above now drives that pill instead of this span. */}
 
         {/* Issue #165, Proposal G save integration - the same reverse-breadcrumb + Save
             button ProjectEditor.tsx mounts (SavedDeckPanel is fully route-agnostic; only
@@ -1492,57 +1500,85 @@ export function DisplayPage() {
           {isBrowseMode ? (
             <CatalogBrowseResults query={searchBarText} />
           ) : (
-            sheets.map((sheet) => (
+            <>
+              {/* D17 (proposal-h-display-layout-spec.md ADDENDUM) - the single floating "n/M"
+                  sheet-position indicator that replaces BOTH the removed per-sheet "Sheet N of M"
+                  label lines below and the action bar's own retired static readout (see that
+                  comment above). `position: sticky` + `alignSelf: flex-end` floats it at the
+                  top-right of this flex column; it's a child of the center region only, so it's
+                  structurally confined there and can never collide with either rail/drawer at any
+                  breakpoint (they're siblings or portaled elsewhere). `pointerEvents: none` so it
+                  never eats a scroll/tap. Driven by the same visibleSheetIndex
+                  IntersectionObserver above - no new observer, just a new place to write it. */}
               <div
-                key={sheet.pageIndex}
-                ref={(element) => {
-                  sheetRefs.current[sheet.pageIndex] = element;
+                data-testid="display-sheet-position-indicator"
+                aria-live="polite"
+                className="bg-dark bg-opacity-75 text-light rounded-pill px-3 py-1 small border"
+                style={{
+                  position: "sticky",
+                  top: 8,
+                  alignSelf: "flex-end",
+                  marginBottom: -30,
+                  zIndex: 5,
+                  pointerEvents: "none",
+                  fontVariantNumeric: "tabular-nums",
                 }}
-                data-sheet-index={sheet.pageIndex}
-                data-testid="display-sheet-wrapper"
-                className="d-flex flex-column align-items-center mb-4 p-2 border rounded"
               >
-                <div
-                  className="text-muted small mb-2"
-                  data-testid="display-sheet-label"
-                >
-                  Sheet {sheet.pageIndex + 1} of {sheets.length}
-                </div>
-                {/* Sheet-level virtualization (Item 3's benchmark-gated requirement): only the
-                  sheet(s) within one sheet-height of the viewport actually mount their
-                  PagePreview (real <img> tags); everything further away is a fixed-height
-                  placeholder div, per RenderIfVisible's own contract - see this component's
-                  module comment for why a from-scratch IntersectionObserver wasn't needed here.
-                  The first sheet starts mounted unconditionally so the common single-sheet case
-                  never waits on an observer round-trip. */}
-                <RenderIfVisible
-                  initialVisible={sheet.pageIndex === 0}
-                  defaultHeight={sheetPixelHeightPx}
-                  visibleOffset={sheetPixelHeightPx}
-                >
-                  <PagePreview
-                    pageWidthMM={sheetWidthMM}
-                    pageHeightMM={sheetHeightMM}
-                    bleedEdgeMM={settings.bleedEdgeMM}
-                    margins={margins}
-                    spacing={spacing}
-                    slots={sheet.slots}
-                    showCutLines={settings.showCutLines}
-                    maxWidthPx={sheetRenderWidthPx}
-                    onSlotClick={(indexOnPage) =>
-                      handleSlotClick(sheet.pageIndex, indexOnPage)
-                    }
-                    selectedSlotIndex={
-                      selectedSheetIndex === sheet.pageIndex
-                        ? sheet.entries.findIndex(
-                            (entry) => entry.slot === selectedSlotRef?.slot
-                          )
-                        : undefined
-                    }
-                  />
-                </RenderIfVisible>
+                {clampedVisibleSheetIndex + 1}
+                <span className="mx-1 text-secondary">/</span>
+                {sheets.length}
               </div>
-            ))
+              {sheets.map((sheet) => (
+                <div
+                  key={sheet.pageIndex}
+                  ref={(element) => {
+                    sheetRefs.current[sheet.pageIndex] = element;
+                  }}
+                  data-sheet-index={sheet.pageIndex}
+                  data-testid="display-sheet-wrapper"
+                  className="d-flex flex-column align-items-center"
+                  style={{ marginBottom: 4 }}
+                >
+                  {/* Sheet-level virtualization (Item 3's benchmark-gated requirement): only the
+                    sheet(s) within one sheet-height of the viewport actually mount their
+                    PagePreview (real <img> tags); everything further away is a fixed-height
+                    placeholder div, per RenderIfVisible's own contract - see this component's
+                    module comment for why a from-scratch IntersectionObserver wasn't needed here.
+                    The first sheet starts mounted unconditionally so the common single-sheet case
+                    never waits on an observer round-trip. */}
+                  <RenderIfVisible
+                    initialVisible={sheet.pageIndex === 0}
+                    defaultHeight={sheetPixelHeightPx}
+                    visibleOffset={sheetPixelHeightPx}
+                  >
+                    <PagePreview
+                      pageWidthMM={sheetWidthMM}
+                      pageHeightMM={sheetHeightMM}
+                      bleedEdgeMM={settings.bleedEdgeMM}
+                      margins={margins}
+                      spacing={spacing}
+                      slots={sheet.slots}
+                      showCutLines={settings.showCutLines}
+                      maxWidthPx={sheetRenderWidthPx}
+                      // R7/D17 - screen-only presentation (no white fill/box-shadow, a hairline
+                      // pinline instead); the exported PDF (exportPdfProps above) never reads
+                      // this prop, so print output is untouched.
+                      screenPresentation
+                      onSlotClick={(indexOnPage) =>
+                        handleSlotClick(sheet.pageIndex, indexOnPage)
+                      }
+                      selectedSlotIndex={
+                        selectedSheetIndex === sheet.pageIndex
+                          ? sheet.entries.findIndex(
+                              (entry) => entry.slot === selectedSlotRef?.slot
+                            )
+                          : undefined
+                      }
+                    />
+                  </RenderIfVisible>
+                </div>
+              ))}
+            </>
           )}
         </div>
 
@@ -1629,6 +1665,19 @@ export function DisplayPage() {
                       showCutLines: event.target.checked,
                     }))
                   }
+                />
+
+                {/* D19 (proposal-h-display-layout-spec.md ADDENDUM) - Horizontal (X ->
+                    spacing.col) / Vertical (Y -> spacing.row) numeric inputs + a link/unlink
+                    toggle, seeded from D18's asymmetric default and persisted per deck via the
+                    cardSpacing redux slice -> deckPayload.ts (mirrors finishSettingsSlice's own
+                    precedent - see that slice's module comment). Extracted into its own
+                    component (CardSpacingControl.tsx) for a plain unit-test target on the
+                    link/unlink behavior. */}
+                <CardSpacingControl
+                  spacing={spacing}
+                  onChangeCol={(value) => dispatch(setCardSpacingCol(value))}
+                  onChangeRow={(value) => dispatch(setCardSpacingRow(value))}
                 />
               </div>
 
