@@ -47,6 +47,7 @@ from cardpicker.constants import (
     EXPLORE_SEARCH_MAX_PAGE_SIZE,
     NSFW,
     PRINTING_TAG_QUEUE_PAGE_SIZE,
+    REVIEW_CLUSTER_PAGE_SIZE,
     SAVED_DECK_SNAPSHOT_RING_SIZE,
 )
 from cardpicker.documents import CardSearch
@@ -89,6 +90,13 @@ from cardpicker.printing_consensus import (
     resolve_printing,
 )
 from cardpicker.question_feed import get_next_question_feed_item, get_remaining_estimate
+from cardpicker.review_clusters import (
+    ReviewCluster,
+    compute_review_clusters,
+    find_cluster,
+    get_cached_review_clusters,
+    invalidate_review_cluster_cache,
+)
 from cardpicker.schema_types import (
     ArtistCandidatesRequest,
     ArtistCandidatesResponse,
@@ -102,6 +110,8 @@ from cardpicker.schema_types import Cards as SampleCards
 from cardpicker.schema_types import (
     CardsRequest,
     CardsResponse,
+    ConfirmReviewClusterRequest,
+    ConfirmReviewClusterResponse,
     ContributionsResponse,
     CreateDeckShareRequest,
     CreateDeckShareResponse,
@@ -158,6 +168,14 @@ from cardpicker.schema_types import (
     ReportCardResponse,
     ResetSavedDecksRequest,
     ResetSavedDecksResponse,
+    ReviewClusterDetailRequest,
+    ReviewClusterDetailResponse,
+    ReviewClusterListRequest,
+    ReviewClusterListResponse,
+    ReviewClusterMember,
+    ReviewClusterSignal,
+    ReviewClusterSignalType,
+    ReviewClusterSummary,
     RevokeDeckShareRequest,
     RevokeDeckShareResponse,
     SampleCardsResponse,
@@ -1529,6 +1547,178 @@ def post_moderation_remove_drive(request: HttpRequest) -> HttpResponse:
         logger.exception("Failed to bulk-remove source %s from Elasticsearch before deletion", source.pk)
     source.delete()
     return JsonResponse(ModerationRemoveDriveResponse(removed=True, cardsRemoved=cards_removed).model_dump())
+
+
+def _serialise_review_cluster(cluster: ReviewCluster) -> ReviewClusterSummary:
+    return ReviewClusterSummary(
+        clusterId=cluster.cluster_id,
+        size=cluster.size,
+        signals=[
+            ReviewClusterSignal(
+                signalType=ReviewClusterSignalType(signal.signal_type),
+                value=signal.value,
+                memberCount=signal.member_count,
+            )
+            for signal in cluster.signals
+        ],
+        members=[
+            ReviewClusterMember(identifier=m.identifier, name=m.name, smallThumbnailUrl=m.small_thumbnail_url)
+            for m in cluster.members
+        ],
+    )
+
+
+# Deterministic per-moderator anonymous_id (issue #262 item 2's "idempotent per (user, card)"
+# ask) - reuses CardPrintingTag's EXISTING (card, anonymous_id) uniqueness/replace-on-resubmit
+# machinery (see post_submit_printing_tag above) rather than inventing a second idempotency
+# mechanism keyed on `user` directly. A stable, moderator-specific anonymous_id means a retried
+# or repeated batch-confirm from the same moderator always replaces their own prior vote for
+# that card rather than accumulating a second row - exactly "one human vote per card" scoped to
+# THIS moderator, same as any other voter's anonymous_id scopes their own vote.
+REVIEW_CLUSTER_CONFIRM_VOTE_SURFACE = "review_cluster_confirm"
+
+
+def _review_cluster_confirm_anonymous_id(user: User) -> str:
+    return f"review-cluster-confirm-{user.pk}"
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_review_cluster_list(request: HttpRequest) -> HttpResponse:
+    """
+    Moderator-only paginated listing of review-queue clusters (issue #262,
+    docs/features/moderation.md), sorted by size descending (biggest batch-confirm payoff
+    first) - see cardpicker.review_clusters for the clustering itself and its own cache/compute
+    rationale. Only multi-card clusters are ever listed (a singleton carries no shared signal
+    and isn't a useful batch-confirm target) - this endpoint's `hits`/`pages` are over that
+    multi-card population, not the full review queue.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ReviewClusterListRequest.model_validate(json.loads(request.body))
+    clusters = get_cached_review_clusters()
+    paginator: Paginator[ReviewCluster] = Paginator(clusters, REVIEW_CLUSTER_PAGE_SIZE)
+    if not (paginator.num_pages >= req.page > 0):
+        raise BadRequestException(f"Invalid page {req.page} specified - must be between 1 and {paginator.num_pages}.")
+    return JsonResponse(
+        ReviewClusterListResponse(
+            hits=paginator.count,
+            pages=paginator.num_pages,
+            items=[_serialise_review_cluster(c) for c in paginator.page(req.page).object_list],
+        ).model_dump()
+    )
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_review_cluster_detail(request: HttpRequest) -> HttpResponse:
+    """
+    Moderator-only single-cluster lookup (issue #262) - the drill-down from
+    post_review_cluster_list a moderator lands on before batch-confirming. Served from the same
+    cache the list endpoint uses (a few minutes of staleness here is harmless - the confirm
+    action itself always re-validates against a fresh recompute, see
+    post_confirm_review_cluster).
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ReviewClusterDetailRequest.model_validate(json.loads(request.body))
+    cluster = find_cluster(get_cached_review_clusters(), req.clusterId)
+    if cluster is None:
+        raise BadRequestException(f"No review cluster found with id {req.clusterId!r}.")
+    return JsonResponse(ReviewClusterDetailResponse(cluster=_serialise_review_cluster(cluster)).model_dump())
+
+
+@csrf_exempt
+@reject_untrusted_origin
+@require_moderator
+@ErrorWrappers.to_json
+def post_confirm_review_cluster(request: HttpRequest) -> HttpResponse:
+    """
+    Moderator-only batch no-match confirmation (issue #262): casts the acting moderator's OWN
+    human no-match vote (`CardPrintingTag(is_no_match=True, source=VoteSource.USER)`) for every
+    card in `memberIdentifiers`, through the EXACT vote-casting path post_submit_printing_tag
+    above already uses (same model, same fields, same resolve_and_persist_printing call) - no
+    shortcut, no separate consensus rule for cluster-confirmed votes. Idempotent per (user,
+    card) via a deterministic per-moderator anonymous_id (see
+    _review_cluster_confirm_anonymous_id) rather than the client-generated one an ordinary vote
+    carries - a retried or repeated confirm from the same moderator always replaces their own
+    prior vote for that card, never accumulates a second one.
+
+    `memberIdentifiers` is the frontend's own record of what the moderator actually saw and
+    approved - NEVER re-expanded here to whatever the cluster currently contains. This view
+    deliberately bypasses the list/detail endpoints' cache and recomputes clusters fresh
+    (`compute_review_clusters()`) purely to validate that every submitted identifier is still a
+    real member of the named cluster right now; a stale cache could otherwise let a moderator
+    confirm a card that drifted out of the cluster (or that a concurrent action already
+    resolved) without anyone noticing. Any identifier that isn't currently a member rejects the
+    WHOLE request (400) rather than silently dropping it - the moderator's approval was of a
+    specific set, not "whichever of these still qualify".
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+
+    req = ConfirmReviewClusterRequest.model_validate(json.loads(request.body))
+    if not req.memberIdentifiers:
+        raise BadRequestException("memberIdentifiers must be a non-empty list.")
+
+    fresh_clusters = compute_review_clusters()
+    cluster = find_cluster(fresh_clusters, req.clusterId)
+    if cluster is None:
+        raise BadRequestException(
+            f"No review cluster found with id {req.clusterId!r} - it may already be fully resolved."
+        )
+
+    current_member_identifiers = {m.identifier for m in cluster.members}
+    # de-duplicate while preserving the caller's own submitted order, same convention as
+    # elsewhere in this file where request-supplied ordering is echoed back verbatim.
+    requested_identifiers = list(dict.fromkeys(req.memberIdentifiers))
+    unknown_identifiers = [i for i in requested_identifiers if i not in current_member_identifiers]
+    if unknown_identifiers:
+        raise BadRequestException(
+            f"The following identifiers are not currently members of cluster {req.clusterId!r} "
+            f"(it may have changed since you last fetched it): {unknown_identifiers}. Refresh the "
+            "cluster and try again."
+        )
+
+    moderator = _authenticated_user(request)
+    anonymous_id = _review_cluster_confirm_anonymous_id(moderator)
+    confirmed_identifiers: list[str] = []
+    for identifier in requested_identifiers:
+        card = _get_card_or_400(identifier)
+        with transaction.atomic():
+            CardPrintingTag.objects.filter(card=card, anonymous_id=anonymous_id).delete()
+            CardPrintingTag.objects.create(
+                card=card,
+                printing=None,
+                is_no_match=True,
+                anonymous_id=anonymous_id,
+                source=VoteSource.USER,
+                user=moderator,
+                vote_surface=REVIEW_CLUSTER_CONFIRM_VOTE_SURFACE,
+            )
+            resolve_and_persist_printing(card)
+        confirmed_identifiers.append(identifier)
+
+    invalidate_review_cluster_cache()
+    logger.info(
+        "Moderator %s batch-confirmed no-match for review cluster %s: %d card(s) - %s",
+        moderator.username,
+        req.clusterId,
+        len(confirmed_identifiers),
+        confirmed_identifiers,
+    )
+
+    return JsonResponse(
+        ConfirmReviewClusterResponse(
+            clusterId=req.clusterId, confirmedIdentifiers=confirmed_identifiers, votesCast=len(confirmed_identifiers)
+        ).model_dump()
+    )
 
 
 @csrf_exempt

@@ -795,6 +795,57 @@ class CardsResponse(BaseModel):
         return result
 
 
+class ConfirmReviewClusterRequest(BaseModel):
+    clusterId: str
+    memberIdentifiers: List[str]
+    """The exact set of member identifiers the moderator actually saw and approved in this
+    cluster - never re-expanded server-side to whatever the cluster currently contains. Every
+    entry must currently be a member of the freshly-recomputed cluster named by clusterId, or
+    the whole request is rejected (400) rather than partially applied.
+    """
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ConfirmReviewClusterRequest":
+        assert isinstance(obj, dict)
+        clusterId = from_str(obj.get("clusterId"))
+        memberIdentifiers = from_list(from_str, obj.get("memberIdentifiers"))
+        return ConfirmReviewClusterRequest(clusterId, memberIdentifiers)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["clusterId"] = from_str(self.clusterId)
+        result["memberIdentifiers"] = from_list(from_str, self.memberIdentifiers)
+        return result
+
+
+class ConfirmReviewClusterResponse(BaseModel):
+    clusterId: str
+    confirmedIdentifiers: List[str]
+    """Echo of the member identifiers this call cast a no-match vote for, in the same order they
+    were submitted.
+    """
+    votesCast: int
+    """Number of CardPrintingTag no-match votes cast by this call - always equal to
+    len(confirmedIdentifiers), included for a frontend toast/summary without recounting the
+    array itself.
+    """
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ConfirmReviewClusterResponse":
+        assert isinstance(obj, dict)
+        clusterId = from_str(obj.get("clusterId"))
+        confirmedIdentifiers = from_list(from_str, obj.get("confirmedIdentifiers"))
+        votesCast = from_int(obj.get("votesCast"))
+        return ConfirmReviewClusterResponse(clusterId, confirmedIdentifiers, votesCast)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["clusterId"] = from_str(self.clusterId)
+        result["confirmedIdentifiers"] = from_list(from_str, self.confirmedIdentifiers)
+        result["votesCast"] = from_int(self.votesCast)
+        return result
+
+
 class SourceContribution(BaseModel):
     avgdpi: str
     description: str
@@ -2056,6 +2107,168 @@ class ResetSavedDecksResponse(BaseModel):
         return result
 
 
+class ReviewClusterDetailRequest(BaseModel):
+    clusterId: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ReviewClusterDetailRequest":
+        assert isinstance(obj, dict)
+        clusterId = from_str(obj.get("clusterId"))
+        return ReviewClusterDetailRequest(clusterId)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["clusterId"] = from_str(self.clusterId)
+        return result
+
+
+class ReviewClusterMember(BaseModel):
+    identifier: str
+    """Card.identifier - the same stable, opaque identifier every other endpoint addresses a
+    card by.
+    """
+    name: str
+    smallThumbnailUrl: str
+    """Display-serving thumbnail identifier only - never pixel data from our own side
+    (CLAUDE.md's Governing premise). The frontend turns this into a display-serving CDN URL
+    exactly as it already does for Card.smallThumbnailUrl.
+    """
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ReviewClusterMember":
+        assert isinstance(obj, dict)
+        identifier = from_str(obj.get("identifier"))
+        name = from_str(obj.get("name"))
+        smallThumbnailUrl = from_str(obj.get("smallThumbnailUrl"))
+        return ReviewClusterMember(identifier, name, smallThumbnailUrl)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["identifier"] = from_str(self.identifier)
+        result["name"] = from_str(self.name)
+        result["smallThumbnailUrl"] = from_str(self.smallThumbnailUrl)
+        return result
+
+
+class ReviewClusterSignalType(str, Enum):
+    contentphash = "content_phash"
+    legallinetext = "legal_line_text"
+    symbolphash = "symbol_phash"
+
+
+class ReviewClusterSignal(BaseModel):
+    memberCount: int
+    """How many of this cluster's members share this exact signal value - not necessarily the
+    cluster's full size, since a cluster can be the transitive union of several signal groups.
+    """
+    signalType: ReviewClusterSignalType
+    value: str
+    """The shared value that binds this signal's members together - a decimal string for
+    content_phash/symbol_phash (avoids JS bigint precision issues), or the normalized
+    legal-line text itself for legal_line_text.
+    """
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ReviewClusterSignal":
+        assert isinstance(obj, dict)
+        memberCount = from_int(obj.get("memberCount"))
+        signalType = ReviewClusterSignalType(obj.get("signalType"))
+        value = from_str(obj.get("value"))
+        return ReviewClusterSignal(memberCount, signalType, value)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["memberCount"] = from_int(self.memberCount)
+        result["signalType"] = to_enum(ReviewClusterSignalType, self.signalType)
+        result["value"] = from_str(self.value)
+        return result
+
+
+class ReviewClusterSummary(BaseModel):
+    clusterId: str
+    """Opaque, stable handle for this cluster - the identifier of its lowest-card-id member.
+    Pass straight back on 2/reviewClusterDetail/ and 2/confirmReviewCluster/.
+    """
+    members: List[ReviewClusterMember]
+    signals: List[ReviewClusterSignal]
+    """Which of the three clustering signals bind this cluster's members together - can be more
+    than one entry (a cluster can be the transitive union of several signal groups) or, in
+    principle, empty (a cluster reached only via a chain the caller isn't shown individually)
+    - practically always non-empty since every edge in this cluster came from one of these
+    three signal types.
+    """
+    size: int
+    """Number of member cards in this cluster."""
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ReviewClusterSummary":
+        assert isinstance(obj, dict)
+        clusterId = from_str(obj.get("clusterId"))
+        members = from_list(ReviewClusterMember.from_dict, obj.get("members"))
+        signals = from_list(ReviewClusterSignal.from_dict, obj.get("signals"))
+        size = from_int(obj.get("size"))
+        return ReviewClusterSummary(clusterId, members, signals, size)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["clusterId"] = from_str(self.clusterId)
+        result["members"] = from_list(lambda x: to_class(ReviewClusterMember, x), self.members)
+        result["signals"] = from_list(lambda x: to_class(ReviewClusterSignal, x), self.signals)
+        result["size"] = from_int(self.size)
+        return result
+
+
+class ReviewClusterDetailResponse(BaseModel):
+    cluster: ReviewClusterSummary
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ReviewClusterDetailResponse":
+        assert isinstance(obj, dict)
+        cluster = ReviewClusterSummary.from_dict(obj.get("cluster"))
+        return ReviewClusterDetailResponse(cluster)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["cluster"] = to_class(ReviewClusterSummary, self.cluster)
+        return result
+
+
+class ReviewClusterListRequest(BaseModel):
+    page: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ReviewClusterListRequest":
+        assert isinstance(obj, dict)
+        page = from_int(obj.get("page"))
+        return ReviewClusterListRequest(page)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["page"] = from_int(self.page)
+        return result
+
+
+class ReviewClusterListResponse(BaseModel):
+    hits: int
+    items: List[ReviewClusterSummary]
+    pages: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ReviewClusterListResponse":
+        assert isinstance(obj, dict)
+        hits = from_int(obj.get("hits"))
+        items = from_list(ReviewClusterSummary.from_dict, obj.get("items"))
+        pages = from_int(obj.get("pages"))
+        return ReviewClusterListResponse(hits, items, pages)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["hits"] = from_int(self.hits)
+        result["items"] = from_list(lambda x: to_class(ReviewClusterSummary, x), self.items)
+        result["pages"] = from_int(self.pages)
+        return result
+
+
 class RevokeDeckShareRequest(BaseModel):
     shareId: str
 
@@ -2781,6 +2994,38 @@ def QuestionFeedResponsetodict(x: QuestionFeedResponse) -> Any:
     return to_class(QuestionFeedResponse, x)
 
 
+def ReviewClusterMemberfromdict(s: Any) -> ReviewClusterMember:
+    return ReviewClusterMember.from_dict(s)
+
+
+def ReviewClusterMembertodict(x: ReviewClusterMember) -> Any:
+    return to_class(ReviewClusterMember, x)
+
+
+def ReviewClusterSignalfromdict(s: Any) -> ReviewClusterSignal:
+    return ReviewClusterSignal.from_dict(s)
+
+
+def ReviewClusterSignaltodict(x: ReviewClusterSignal) -> Any:
+    return to_class(ReviewClusterSignal, x)
+
+
+def ReviewClusterSignalTypefromdict(s: Any) -> ReviewClusterSignalType:
+    return ReviewClusterSignalType(s)
+
+
+def ReviewClusterSignalTypetodict(x: ReviewClusterSignalType) -> Any:
+    return to_enum(ReviewClusterSignalType, x)
+
+
+def ReviewClusterSummaryfromdict(s: Any) -> ReviewClusterSummary:
+    return ReviewClusterSummary.from_dict(s)
+
+
+def ReviewClusterSummarytodict(x: ReviewClusterSummary) -> Any:
+    return to_class(ReviewClusterSummary, x)
+
+
 def SearchQueryfromdict(s: Any) -> SearchQuery:
     return SearchQuery.from_dict(s)
 
@@ -2979,6 +3224,22 @@ def CardsResponsefromdict(s: Any) -> CardsResponse:
 
 def CardsResponsetodict(x: CardsResponse) -> Any:
     return to_class(CardsResponse, x)
+
+
+def ConfirmReviewClusterRequestfromdict(s: Any) -> ConfirmReviewClusterRequest:
+    return ConfirmReviewClusterRequest.from_dict(s)
+
+
+def ConfirmReviewClusterRequesttodict(x: ConfirmReviewClusterRequest) -> Any:
+    return to_class(ConfirmReviewClusterRequest, x)
+
+
+def ConfirmReviewClusterResponsefromdict(s: Any) -> ConfirmReviewClusterResponse:
+    return ConfirmReviewClusterResponse.from_dict(s)
+
+
+def ConfirmReviewClusterResponsetodict(x: ConfirmReviewClusterResponse) -> Any:
+    return to_class(ConfirmReviewClusterResponse, x)
 
 
 def ContributionsResponsefromdict(s: Any) -> ContributionsResponse:
@@ -3355,6 +3616,38 @@ def ResetSavedDecksResponsefromdict(s: Any) -> ResetSavedDecksResponse:
 
 def ResetSavedDecksResponsetodict(x: ResetSavedDecksResponse) -> Any:
     return to_class(ResetSavedDecksResponse, x)
+
+
+def ReviewClusterDetailRequestfromdict(s: Any) -> ReviewClusterDetailRequest:
+    return ReviewClusterDetailRequest.from_dict(s)
+
+
+def ReviewClusterDetailRequesttodict(x: ReviewClusterDetailRequest) -> Any:
+    return to_class(ReviewClusterDetailRequest, x)
+
+
+def ReviewClusterDetailResponsefromdict(s: Any) -> ReviewClusterDetailResponse:
+    return ReviewClusterDetailResponse.from_dict(s)
+
+
+def ReviewClusterDetailResponsetodict(x: ReviewClusterDetailResponse) -> Any:
+    return to_class(ReviewClusterDetailResponse, x)
+
+
+def ReviewClusterListRequestfromdict(s: Any) -> ReviewClusterListRequest:
+    return ReviewClusterListRequest.from_dict(s)
+
+
+def ReviewClusterListRequesttodict(x: ReviewClusterListRequest) -> Any:
+    return to_class(ReviewClusterListRequest, x)
+
+
+def ReviewClusterListResponsefromdict(s: Any) -> ReviewClusterListResponse:
+    return ReviewClusterListResponse.from_dict(s)
+
+
+def ReviewClusterListResponsetodict(x: ReviewClusterListResponse) -> Any:
+    return to_class(ReviewClusterListResponse, x)
 
 
 def RevokeDeckShareRequestfromdict(s: Any) -> RevokeDeckShareRequest:

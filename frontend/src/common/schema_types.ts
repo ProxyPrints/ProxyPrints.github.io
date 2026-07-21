@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
+//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, ReviewClusterMember, ReviewClusterSignal, ReviewClusterSignalType, ReviewClusterSummary, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ConfirmReviewClusterRequest, ConfirmReviewClusterResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, ReviewClusterDetailRequest, ReviewClusterDetailResponse, ReviewClusterListRequest, ReviewClusterListResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
@@ -22,6 +22,10 @@
 //   const questionFeedCounts = Convert.toQuestionFeedCounts(json);
 //   const questionFeedItem = Convert.toQuestionFeedItem(json);
 //   const questionFeedResponse = Convert.toQuestionFeedResponse(json);
+//   const reviewClusterMember = Convert.toReviewClusterMember(json);
+//   const reviewClusterSignal = Convert.toReviewClusterSignal(json);
+//   const reviewClusterSignalType = Convert.toReviewClusterSignalType(json);
+//   const reviewClusterSummary = Convert.toReviewClusterSummary(json);
 //   const searchQuery = Convert.toSearchQuery(json);
 //   const searchSettings = Convert.toSearchSettings(json);
 //   const searchTypeSettings = Convert.toSearchTypeSettings(json);
@@ -47,6 +51,8 @@
 //   const cardbacksResponse = Convert.toCardbacksResponse(json);
 //   const cardsRequest = Convert.toCardsRequest(json);
 //   const cardsResponse = Convert.toCardsResponse(json);
+//   const confirmReviewClusterRequest = Convert.toConfirmReviewClusterRequest(json);
+//   const confirmReviewClusterResponse = Convert.toConfirmReviewClusterResponse(json);
 //   const contributionsResponse = Convert.toContributionsResponse(json);
 //   const createDeckShareRequest = Convert.toCreateDeckShareRequest(json);
 //   const createDeckShareResponse = Convert.toCreateDeckShareResponse(json);
@@ -94,6 +100,10 @@
 //   const reportCardResponse = Convert.toReportCardResponse(json);
 //   const resetSavedDecksRequest = Convert.toResetSavedDecksRequest(json);
 //   const resetSavedDecksResponse = Convert.toResetSavedDecksResponse(json);
+//   const reviewClusterDetailRequest = Convert.toReviewClusterDetailRequest(json);
+//   const reviewClusterDetailResponse = Convert.toReviewClusterDetailResponse(json);
+//   const reviewClusterListRequest = Convert.toReviewClusterListRequest(json);
+//   const reviewClusterListResponse = Convert.toReviewClusterListResponse(json);
 //   const revokeDeckShareRequest = Convert.toRevokeDeckShareRequest(json);
 //   const revokeDeckShareResponse = Convert.toRevokeDeckShareResponse(json);
 //   const sampleCardsResponse = Convert.toSampleCardsResponse(json);
@@ -392,6 +402,32 @@ export interface CardsRequest {
 
 export interface CardsResponse {
   results: { [key: string]: Card };
+}
+
+export interface ConfirmReviewClusterRequest {
+  clusterId: string;
+  /**
+   * The exact set of member identifiers the moderator actually saw and approved in this
+   * cluster - never re-expanded server-side to whatever the cluster currently contains. Every
+   * entry must currently be a member of the freshly-recomputed cluster named by clusterId, or
+   * the whole request is rejected (400) rather than partially applied.
+   */
+  memberIdentifiers: string[];
+}
+
+export interface ConfirmReviewClusterResponse {
+  clusterId: string;
+  /**
+   * Echo of the member identifiers this call cast a no-match vote for, in the same order they
+   * were submitted.
+   */
+  confirmedIdentifiers: string[];
+  /**
+   * Number of CardPrintingTag no-match votes cast by this call - always equal to
+   * len(confirmedIdentifiers), included for a frontend toast/summary without recounting the
+   * array itself.
+   */
+  votesCast: number;
 }
 
 export interface ContributionsResponse {
@@ -766,6 +802,81 @@ export interface ResetSavedDecksResponse {
   deletedDeckCount: number;
 }
 
+export interface ReviewClusterDetailRequest {
+  clusterId: string;
+}
+
+export interface ReviewClusterDetailResponse {
+  cluster: ReviewClusterSummary;
+}
+
+export interface ReviewClusterSummary {
+  /**
+   * Opaque, stable handle for this cluster - the identifier of its lowest-card-id member.
+   * Pass straight back on 2/reviewClusterDetail/ and 2/confirmReviewCluster/.
+   */
+  clusterId: string;
+  members: ReviewClusterMember[];
+  /**
+   * Which of the three clustering signals bind this cluster's members together - can be more
+   * than one entry (a cluster can be the transitive union of several signal groups) or, in
+   * principle, empty (a cluster reached only via a chain the caller isn't shown individually)
+   * - practically always non-empty since every edge in this cluster came from one of these
+   * three signal types.
+   */
+  signals: ReviewClusterSignal[];
+  /**
+   * Number of member cards in this cluster.
+   */
+  size: number;
+}
+
+export interface ReviewClusterMember {
+  /**
+   * Card.identifier - the same stable, opaque identifier every other endpoint addresses a
+   * card by.
+   */
+  identifier: string;
+  name: string;
+  /**
+   * Display-serving thumbnail identifier only - never pixel data from our own side
+   * (CLAUDE.md's Governing premise). The frontend turns this into a display-serving CDN URL
+   * exactly as it already does for Card.smallThumbnailUrl.
+   */
+  smallThumbnailUrl: string;
+}
+
+export interface ReviewClusterSignal {
+  /**
+   * How many of this cluster's members share this exact signal value - not necessarily the
+   * cluster's full size, since a cluster can be the transitive union of several signal groups.
+   */
+  memberCount: number;
+  signalType: ReviewClusterSignalType;
+  /**
+   * The shared value that binds this signal's members together - a decimal string for
+   * content_phash/symbol_phash (avoids JS bigint precision issues), or the normalized
+   * legal-line text itself for legal_line_text.
+   */
+  value: string;
+}
+
+export enum ReviewClusterSignalType {
+  ContentPhash = "content_phash",
+  LegalLineText = "legal_line_text",
+  SymbolPhash = "symbol_phash",
+}
+
+export interface ReviewClusterListRequest {
+  page: number;
+}
+
+export interface ReviewClusterListResponse {
+  hits: number;
+  items: ReviewClusterSummary[];
+  pages: number;
+}
+
 export interface RevokeDeckShareRequest {
   shareId: string;
 }
@@ -1087,6 +1198,44 @@ export class Convert {
     return JSON.stringify(uncast(value, r("QuestionFeedResponse")), null, 2);
   }
 
+  public static toReviewClusterMember(json: string): ReviewClusterMember {
+    return cast(JSON.parse(json), r("ReviewClusterMember"));
+  }
+
+  public static reviewClusterMemberToJson(value: ReviewClusterMember): string {
+    return JSON.stringify(uncast(value, r("ReviewClusterMember")), null, 2);
+  }
+
+  public static toReviewClusterSignal(json: string): ReviewClusterSignal {
+    return cast(JSON.parse(json), r("ReviewClusterSignal"));
+  }
+
+  public static reviewClusterSignalToJson(value: ReviewClusterSignal): string {
+    return JSON.stringify(uncast(value, r("ReviewClusterSignal")), null, 2);
+  }
+
+  public static toReviewClusterSignalType(
+    json: string
+  ): ReviewClusterSignalType {
+    return cast(JSON.parse(json), r("ReviewClusterSignalType"));
+  }
+
+  public static reviewClusterSignalTypeToJson(
+    value: ReviewClusterSignalType
+  ): string {
+    return JSON.stringify(uncast(value, r("ReviewClusterSignalType")), null, 2);
+  }
+
+  public static toReviewClusterSummary(json: string): ReviewClusterSummary {
+    return cast(JSON.parse(json), r("ReviewClusterSummary"));
+  }
+
+  public static reviewClusterSummaryToJson(
+    value: ReviewClusterSummary
+  ): string {
+    return JSON.stringify(uncast(value, r("ReviewClusterSummary")), null, 2);
+  }
+
   public static toSearchQuery(json: string): SearchQuery {
     return cast(JSON.parse(json), r("SearchQuery"));
   }
@@ -1305,6 +1454,38 @@ export class Convert {
 
   public static cardsResponseToJson(value: CardsResponse): string {
     return JSON.stringify(uncast(value, r("CardsResponse")), null, 2);
+  }
+
+  public static toConfirmReviewClusterRequest(
+    json: string
+  ): ConfirmReviewClusterRequest {
+    return cast(JSON.parse(json), r("ConfirmReviewClusterRequest"));
+  }
+
+  public static confirmReviewClusterRequestToJson(
+    value: ConfirmReviewClusterRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ConfirmReviewClusterRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toConfirmReviewClusterResponse(
+    json: string
+  ): ConfirmReviewClusterResponse {
+    return cast(JSON.parse(json), r("ConfirmReviewClusterResponse"));
+  }
+
+  public static confirmReviewClusterResponseToJson(
+    value: ConfirmReviewClusterResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ConfirmReviewClusterResponse")),
+      null,
+      2
+    );
   }
 
   public static toContributionsResponse(json: string): ContributionsResponse {
@@ -1845,6 +2026,70 @@ export class Convert {
     value: ResetSavedDecksResponse
   ): string {
     return JSON.stringify(uncast(value, r("ResetSavedDecksResponse")), null, 2);
+  }
+
+  public static toReviewClusterDetailRequest(
+    json: string
+  ): ReviewClusterDetailRequest {
+    return cast(JSON.parse(json), r("ReviewClusterDetailRequest"));
+  }
+
+  public static reviewClusterDetailRequestToJson(
+    value: ReviewClusterDetailRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ReviewClusterDetailRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toReviewClusterDetailResponse(
+    json: string
+  ): ReviewClusterDetailResponse {
+    return cast(JSON.parse(json), r("ReviewClusterDetailResponse"));
+  }
+
+  public static reviewClusterDetailResponseToJson(
+    value: ReviewClusterDetailResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ReviewClusterDetailResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toReviewClusterListRequest(
+    json: string
+  ): ReviewClusterListRequest {
+    return cast(JSON.parse(json), r("ReviewClusterListRequest"));
+  }
+
+  public static reviewClusterListRequestToJson(
+    value: ReviewClusterListRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ReviewClusterListRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toReviewClusterListResponse(
+    json: string
+  ): ReviewClusterListResponse {
+    return cast(JSON.parse(json), r("ReviewClusterListResponse"));
+  }
+
+  public static reviewClusterListResponseToJson(
+    value: ReviewClusterListResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ReviewClusterListResponse")),
+      null,
+      2
+    );
   }
 
   public static toRevokeDeckShareRequest(json: string): RevokeDeckShareRequest {
@@ -2493,6 +2738,21 @@ const typeMap: any = {
     [{ json: "results", js: "results", typ: m(r("Card")) }],
     false
   ),
+  ConfirmReviewClusterRequest: o(
+    [
+      { json: "clusterId", js: "clusterId", typ: "" },
+      { json: "memberIdentifiers", js: "memberIdentifiers", typ: a("") },
+    ],
+    false
+  ),
+  ConfirmReviewClusterResponse: o(
+    [
+      { json: "clusterId", js: "clusterId", typ: "" },
+      { json: "confirmedIdentifiers", js: "confirmedIdentifiers", typ: a("") },
+      { json: "votesCast", js: "votesCast", typ: 0 },
+    ],
+    false
+  ),
   ContributionsResponse: o(
     [
       { json: "cardCountByType", js: "cardCountByType", typ: m(0) },
@@ -2919,6 +3179,52 @@ const typeMap: any = {
     [{ json: "deletedDeckCount", js: "deletedDeckCount", typ: 0 }],
     false
   ),
+  ReviewClusterDetailRequest: o(
+    [{ json: "clusterId", js: "clusterId", typ: "" }],
+    false
+  ),
+  ReviewClusterDetailResponse: o(
+    [{ json: "cluster", js: "cluster", typ: r("ReviewClusterSummary") }],
+    false
+  ),
+  ReviewClusterSummary: o(
+    [
+      { json: "clusterId", js: "clusterId", typ: "" },
+      { json: "members", js: "members", typ: a(r("ReviewClusterMember")) },
+      { json: "signals", js: "signals", typ: a(r("ReviewClusterSignal")) },
+      { json: "size", js: "size", typ: 0 },
+    ],
+    false
+  ),
+  ReviewClusterMember: o(
+    [
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "name", js: "name", typ: "" },
+      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
+    ],
+    false
+  ),
+  ReviewClusterSignal: o(
+    [
+      { json: "memberCount", js: "memberCount", typ: 0 },
+      {
+        json: "signalType",
+        js: "signalType",
+        typ: r("ReviewClusterSignalType"),
+      },
+      { json: "value", js: "value", typ: "" },
+    ],
+    false
+  ),
+  ReviewClusterListRequest: o([{ json: "page", js: "page", typ: 0 }], false),
+  ReviewClusterListResponse: o(
+    [
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "items", js: "items", typ: a(r("ReviewClusterSummary")) },
+      { json: "pages", js: "pages", typ: 0 },
+    ],
+    false
+  ),
   RevokeDeckShareRequest: o(
     [{ json: "shareId", js: "shareId", typ: "" }],
     false
@@ -3173,5 +3479,6 @@ const typeMap: any = {
   ],
   LoadDeckResponseKind: ["deck", "snapshot"],
   Reason: ["broken_image", "low_quality", "nsfw", "other", "wrong_card"],
+  ReviewClusterSignalType: ["content_phash", "legal_line_text", "symbol_phash"],
   VoteQueueRequestKind: ["artist", "printing", "tag"],
 };
