@@ -15,23 +15,22 @@ for what actually shipped vs. what's still open; and, most recently, the
 milestone's post-export contribution prompt — issue #166,
 `frontend/src/features/export/usePostExportContributionPrompt.ts` +
 `PostExportContributionPrompt.tsx` — see `docs/features/printing-tags.md`'s
-own entry for the full detail). Still not built: the tablet off-canvas
-drawer / mobile bottom-sheet interaction patterns (§3); §6 step 5/6
-(switchover to make `/display` the default nav entry point, then retiring
-`/editor` + the classic PDF tab); and, per a 2026-07-20 feature-parity
-audit against `/editor` that this pass folds in, four further confirmed
-gaps this doc's body now accounts for but nothing had previously scoped
-or tracked — **deck-input landing** (§4.1, rewritten this pass:
-`/display` currently mounts zero import surfaces at all for an empty
-project, just a link back to `/editor` — the most urgent of the four
-given the route-name decision in Open decision 1, since it blocks
-`/display` from ever starting a project standalone; issue #238), **Search
-Settings** (§5, `SearchSettings.tsx`; issue #239), **project-wide
+own entry for the full detail; and, most recently, **deck-input landing**
+(§4.1, issue #238 — `/display`'s `isProjectEmpty` early return now mounts
+`ImportText`/`ImportURL`/`ImportXML`/`ImportCSV` inline, the same
+components `ProjectEditor.tsx`'s `AddCardsPanel` uses, in place of the
+old plain "go to `/editor`" link — see §4.1's own updated status line).
+Still not built: the tablet off-canvas drawer / mobile bottom-sheet
+interaction patterns (§3); §6 step 5/6 (switchover to make `/display` the
+default nav entry point, then retiring `/editor` + the classic PDF tab);
+and, per a 2026-07-20 feature-parity audit against `/editor` that folded
+four further confirmed gaps into this doc's body, three still open —
+**Search Settings** (§5, `SearchSettings.tsx`; issue #239), **project-wide
 cardback selection** (§5, `CommonCardback.tsx`; issue #240), and **export
 surfaces beyond PDF** (§5, `ExportXML.tsx`/`ExportImages.tsx`/
 `ExportDecklist.tsx` — `ExportPDF.tsx` itself is already covered via the
-toolbar's Generate PDF/Save-to-Drive mapping; issue #241) — see §6 steps
-3/4 for the new sequencing these four add. A related but deliberately
+toolbar's Generate PDF/Save-to-Drive mapping; issue #241) — see §6 step 4
+for these three's sequencing. A related but deliberately
 unscoped finding from the same pass: `FinishSettings.tsx` (cardstock +
 foil) is a genuinely distinct component from `CardQualitySettings`
 (§5's existing PDFGenerator-settings row) — not a naming collision — yet
@@ -372,19 +371,21 @@ Each flow below is the same import/select/confirm/export sequence
 already live in the editor + PDF tabs today, restated as it plays out
 on one page instead of two.
 
-### 4.1 Deck-input landing — NOT BUILT (2026-07-20 feature-parity audit, issue #238)
+### 4.1 Deck-input landing — BUILT (issue #238)
 
-Status: **not built**, corrected from this section's original text
-(below, restated as the actual build spec issue #238 tracks). Direct
-read of `frontend/src/features/display/DisplayPage.tsx` confirms it
-mounts zero import components today: its `isProjectEmpty` early return
-renders only "Your project is empty at the moment," followed by a plain
-`next/link` reading "Head to the editor to add cards, then come back
-here" — no paste/CSV/XML/URL surface exists on this page at all. This is
-the most urgent of the four audit findings the top summary now lists,
-given the route-name decision (Open decision 1): as long as this gap
-stands, `/display` cannot start a project standalone, which blocks it
-from ever actually superseding `/editor`'s own URL.
+Status: **built**. `DisplayPage.tsx`'s `isProjectEmpty` early return now
+renders `DeckInputLanding` — the same plain `ImportText`/`ImportURL`/
+`ImportXML`/`ImportCSV` components `ProjectEditor.tsx`'s `AddCardsPanel`
+mounts on the classic editor's own "Add Cards" tab, reused (not forked)
+in place of the old "Head to the editor" `next/link`. Items 1–3 below
+are what issue #238's own "Summary of the build" scoped and what
+shipped; item 4 (a degraded-style indicator on the sheet's own
+thumbnail) was **not** part of that issue's scope — it's a general
+sheet-display concern that applies to any imported deck regardless of
+which surface it arrived through, not something specific to this
+landing state, and the issue body itself never mentioned it. Left as an
+open, unscoped follow-up (not silently dropped, not silently built) —
+see the note after item 4 below.
 
 1. When `isProjectEmpty` is true, render the same import components
    `ProjectEditor.tsx`'s `AddCardsPanel` already mounts today for the
@@ -414,14 +415,25 @@ from ever actually superseding `/editor`'s own URL.
 4. If any line's search was searched-then-retried without its printing
    filter (`degradedQueries`), the affected slot's sheet thumbnail
    carries the same degraded-style indicator the requested-printing
-   badge already uses in the rail — see §5's mapping.
+   badge already uses in the rail — see §5's mapping. **Not built by
+   issue #238** (see this section's status line above) —
+   `PagePreviewSlotContent` (`PagePreview.tsx`) has no degraded field
+   today, so this remains a real gap: a degraded query's
+   only visible indicator anywhere on `/display` today is the rail's own
+   `RequestedPrintingBadge`, once that specific slot is selected: there's
+   still no sheet-level (small-scale, always-visible) signal. Noted here
+   as a follow-up, not filed as its own issue yet.
 
 Layout note: `AddCardsPanel`'s own existing two-column split (a text
 paste column beside a File-or-URL accordion column, `ProjectEditor.tsx`
-lines ~46–92) is the closest existing precedent for how this should
-render inline on `/display`; the mockups (§ mockups/README.md) don't
-cover this state — not designed further here, left to issue #238's own
-build.
+lines ~46–92) is the closest existing precedent for how this rendered
+inline on `/display` — reused directly (`DeckInputLanding` in
+`DisplayPage.tsx`), minus `AddCardsPanel`'s own `OverflowCol` wrapper
+(sized via `NavPillButtonHeight + NavbarHeight`, both editor-tab-
+specific and the latter a currently-wrong hardcoded constant per issue
+#250 — see that component's own comment for why this landing instead
+just flows inside `Layout.tsx`'s existing scroll container rather than
+computing its own forced height).
 
 ### 4.2 Slot select
 
@@ -675,13 +687,13 @@ Small PRs, existing editor left fully intact until the last step:
    persistence it depends on — sequenced after, not blocking this
    proposal's other instruments). Each PR is reviewable independently
    because each instrument is a self-contained existing component.
-3. **Deck-input landing parity (issue #238)** — the most urgent of the
-   four gaps a 2026-07-20 feature-parity audit against `/editor` found
-   (see the top summary and §4.1): mount `ImportText`/`ImportURL`/
+3. **Deck-input landing parity (issue #238) — DONE.** The most urgent of
+   the four gaps a 2026-07-20 feature-parity audit against `/editor`
+   found (see the top summary and §4.1): mounts `ImportText`/`ImportURL`/
    `ImportXML`/`ImportCSV` inline on `/display` when `isProjectEmpty` is
-   true, replacing the current "go to /editor" link, per §4.1's rewritten
-   flow. Independently shippable once the step 1 shell exists — no
-   dependency on step 2's rail instruments.
+   true, replacing the old "go to /editor" link, per §4.1's flow (items
+   1–3; item 4's sheet-level degraded indicator was out of this issue's
+   own scope — see §4.1's status line).
 4. **Toolbar instrument parity (issues #239, #240, #241)** — the other
    three findings from the same audit, each its own small PR since each
    is a self-contained existing component being relocated, not rebuilt:

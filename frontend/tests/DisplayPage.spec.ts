@@ -70,7 +70,10 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   // first-touch artifact of this being a brand-new page, not a runtime perf issue.
   test.describe.configure({ timeout: 60_000 });
 
-  test("shows an empty-state message and a link back to the editor when the project has no cards", async ({
+  // Issue #238 (design doc §4.1) - the empty-state used to be just a message plus a plain link
+  // back to /editor; it now mounts the same inline import surfaces AddCardsPanel uses on the
+  // classic editor's own "Add Cards" tab, so a project can be started on /display directly.
+  test("shows the inline import surfaces (not a link back to the editor) when the project has no cards", async ({
     page,
     network,
   }) => {
@@ -78,8 +81,49 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await loadPageWithDefaultBackend(page, "display");
     await expect(page.getByTestId("display-empty-state")).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "Head to the editor" })
+      page.getByRole("textbox", { name: "import-text" })
     ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "import-text-submit" })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Import a File or URL" })
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "XML" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "CSV" })).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Head to the editor" })
+    ).toHaveCount(0);
+  });
+
+  test("submitting the inline text importer on the empty-state landing starts a project and lands directly on the sheet+rail layout", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page, "display");
+    await expect(page.getByTestId("display-empty-state")).toBeVisible();
+
+    await page
+      .getByRole("textbox", { name: "import-text" })
+      .fill("my search query");
+    await page.getByRole("button", { name: "import-text-submit" }).click();
+
+    await expect(page.getByTestId("display-empty-state")).toHaveCount(0);
+    await expect(page.getByTestId("display-page")).toBeVisible();
+    await expect(page.getByTestId("display-sheet-indicator")).toContainText(
+      "Sheet 1 of 1"
+    );
+    await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
+
+    // The rail starts idle - selecting the newly-imported slot swaps it in, exactly as it would
+    // for a deck that arrived via /editor instead (§4.1 step 3: onImportComplete has nothing to
+    // switch to here since there's no separate tab, just this one layout re-rendering itself).
+    await expect(page.getByTestId("display-rail-idle")).toBeVisible();
+    await page.getByTestId("page-preview-slot").first().click();
+    await expect(page.getByTestId("display-rail-header")).toContainText(
+      "Slot 1"
+    );
   });
 
   test("renders a live 4x2 sheet of the imported deck and starts with the rail idle", async ({
