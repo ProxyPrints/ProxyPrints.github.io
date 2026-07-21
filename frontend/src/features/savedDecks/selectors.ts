@@ -6,6 +6,7 @@ import {
 } from "@/features/savedDecks/deckPayload";
 import { selectCardSpacing } from "@/store/slices/cardSpacingSlice";
 import { selectFinishSettings } from "@/store/slices/finishSettingsSlice";
+import { selectMarginProfile } from "@/store/slices/marginProfileSlice";
 import {
   selectIsProjectEmpty,
   selectManualOverrides,
@@ -34,6 +35,7 @@ export const selectIsCurrentProjectDirty = createSelector(
   (state: RootState) => selectManualOverrides(state),
   (state: RootState) => selectFinishSettings(state),
   (state: RootState) => selectCardSpacing(state),
+  (state: RootState) => selectMarginProfile(state),
   (state: RootState) => state.cardDocuments.cardDocuments,
   (
     isProjectEmpty,
@@ -43,6 +45,7 @@ export const selectIsCurrentProjectDirty = createSelector(
     manualOverrides,
     finishSettings,
     cardSpacing,
+    marginProfile,
     cardDocuments
   ): boolean => {
     if (isProjectEmpty) {
@@ -63,7 +66,8 @@ export const selectIsCurrentProjectDirty = createSelector(
         },
         finishSettings,
         cardDocuments,
-        cardSpacing
+        cardSpacing,
+        marginProfile
       )
     );
     return currentSerialized !== savedDeckSession.lastSavedSerialized;
