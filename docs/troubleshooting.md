@@ -888,6 +888,66 @@ symptom with a longer Playwright timeout or a spec edit. The deeper fix
 whole class of bug recurs the next time a link is added to that row) but
 is out of scope for a single-link addition.
 
+## A `reparse_collector_evidence`/Stage D retraction pass silently never routes its own newly-touched cards to slow-path review
+
+**Symptom**: `manage.py local_calculate_verdicts --write` runs cleanly
+over a cohort that was previously retracted/re-scanned (e.g. via
+`reparse_collector_evidence --selector parser-bug`/`--selector no-text`),
+casts real join-key votes/skips (`[join-key] considered=N votes=...`),
+and the gate passes — but
+`CardScanLog.objects.filter(anonymous_id="stage-d-slow-path-v1", run_id=<this run>)`
+comes back empty. The command's own `[slow-path]` log line for that
+invocation shows `considered=0`/`routed=0` (or is easy to miss entirely
+if only the `[join-key]` line is being read) even though the same
+invocation's join-key stage just produced fresh no-match votes/no-hit
+skips that should qualify for routing.
+
+**Cause**: `reparse_collector_evidence.reparse_and_retract` deletes a
+retracted card's stale `stage-d-join-key-v1` `CardPrintingTag`/
+`CardScanLog` rows before re-voting, but never touches that card's own
+`stage-d-slow-path-v1` `CardScanLog` row from whichever ORIGINAL routing
+pass first flagged it. `local_calculate_verdicts._slow_path_eligible_cards_queryset`
+excludes any card that already carries a `stage-d-slow-path-v1` row,
+unconditionally — this is the calculator's own idempotence/resume
+mechanism (never re-route a card twice), but it has no way to
+distinguish "already correctly routed under its current conclusion" from
+"routed once, under a conclusion that's since been retracted and
+replaced." A card retracted-and-revoted at the join-key layer is
+therefore silently excluded from ever being re-routed at the slow-path
+layer, even though `local_calculate_verdicts --write` correctly re-ran
+BOTH stages in the same invocation immediately afterward — the atomic
+combination worked exactly as designed, it just had nothing new to do
+for these specific cards.
+
+**How to confirm it's this**: for the cards in question, check
+`CardScanLog.objects.filter(anonymous_id="stage-d-slow-path-v1", card_id__in=<cohort>)`
+— if a row exists with a `run_id` OLDER than the retraction that just
+ran, that's the stale marker; the calculator saw it and (correctly, per
+its own exclusion logic) didn't write a second one.
+
+**Practical read on severity, verified 2026-07-21**: this is currently
+harmless for `#262`/`#265`'s review-cluster backend specifically —
+`cardpicker/review_clusters.py`'s `_review_queue_card_ids()` only checks
+for the EXISTENCE of a `stage-d-slow-path-v1` row (any `run_id`), and its
+clustering signals are re-read fresh from each card's CURRENT
+`ImageEvidence` row at query time, never from anything stored on the
+stale `CardScanLog` row itself (which, additionally, has no per-card
+"why routed" field to be stale in the first place —
+`skip_reason` is hardcoded to the literal `"to-review"` for every row
+this calculator ever writes). A card in this state is therefore still
+fully visible and correctly clusterable today. The gap only becomes a
+real bug for a FUTURE consumer that reads something more specific from
+that row (e.g. a per-card routing reason, which doesn't exist yet).
+
+**Fix** (spec'd, not yet built — see
+`docs/features/catalog-completion-plan.md`'s "Recovery-arc lessons"
+section): extend `reparse_and_retract` to also delete the retracted
+card's own `stage-d-slow-path-v1` `CardScanLog` row in the same pass it
+deletes the `stage-d-join-key-v1` rows, mirroring the existing delete
+and reusing the same safety gate. Until that ships, treat any retraction
+pass as needing a manual check of whether its cohort also needs its
+slow-path marker cleared before the next `local_calculate_verdicts --write` can actually re-route it under its new conclusion.
+
 ## Playwright tests behave like a 1280×720 desktop viewport even though `playwright.config.ts` sets 800×600
 
 **Symptom**: a change that's supposed to be invisible/behave differently
