@@ -24,6 +24,13 @@ visual/text recognition problem into something closer to classical
 channel (the scan/photo and its filename), and a decoding rule that
 either outputs one codeword or abstains.
 
+A note on scope, before the channels: this section formalizes the
+**original pilot architecture** — three independent channels (OCR,
+phash, fallback), each modeled separately below. The **production**
+deduction chain, formalized in §7, is a narrower composition of the
+same primitives into a single join-key calculator; the closed-codebook
+model and the decode-or-abstain rule are common to both.
+
 Three independent noisy channels feed the decoder, each modeled
 separately rather than fused into one score:
 
@@ -228,7 +235,11 @@ contribution: three independent noisy channels over a **closed,
 per-record candidate set** (not an open-world search), each with an
 explicit abstention path rather than a forced decision, feeding into a
 consensus layer with a **structural** (not just statistical) guarantee
-that machine evidence alone can never resolve anything.
+that machine evidence alone can never resolve anything. (In production
+these same primitives are composed into the single join-key calculator
+of §7 rather than run as three parallel channels; the contribution is
+the composition and its structural guarantee, not the particular
+channel arrangement.)
 
 The transferable pattern is: **user-submitted media identified against a
 canonical registry, using multiple independent weak-evidence channels,
@@ -372,8 +383,9 @@ printing.
 
 - **`g₁` — join-key parse.** Reconstructs an `OcrParseResult` from the
   already-persisted `collector_line_set_code`/`collector_line_collector_number`
-  (`local_ocr.parse_collector_line`; no re-OCR — Stage C already ran
-  it). Output: a token `t = (ŝ, ĉ)` or `∅`. Error term
+  fields (produced in Stage C by `local_ocr.parse_collector_line`; Stage
+  D builds the `OcrParseResult` from the persisted values — no re-OCR
+  and no re-parse). Output: a token `t = (ŝ, ĉ)` or `∅`. Error term
   `ε₁ = P(t is a confusable misread — syntactically valid, but not the true (s*, c*))`. **Unmeasured** as a rate; structurally bounded
   because `t` must clear the parser's own shape constraints (`_SET_CODE_RE`
   = 3–5 alnum, `_COLLECTOR_NUMBER_RE` = 1–4 digits + optional letter)
@@ -454,9 +466,11 @@ product of mostly-unmeasured conditional terms**. What is anchored
 empirically about it: `ε₂`'s admits-more-than-one rate (2/20,677) and
 `g₄`'s firing counts above. What is **not** anchored: `ε₁`, `ε₃`, and
 each veto's conditional catch-precision inside `ε₄`. We therefore do
-**not** claim a numeric value for this product — only that it is a
-product of independent reductions, each ≤ 1, over a closed candidate
-set, and that the two factors we _can_ see are small.
+**not** claim a numeric value for this product — only that it
+factors by the chain rule into a sequence of conditional terms, each
+≤ 1 (each stage can only narrow or withhold, never manufacture a
+match), over a closed candidate set, and that the two factors we _can_
+see are small.
 
 **Resolution-level false accept** (a wrong printing actually committed
 to the catalog by machine evidence alone):
