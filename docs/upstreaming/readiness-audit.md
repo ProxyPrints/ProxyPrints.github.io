@@ -32,6 +32,19 @@ question is answered, since both are frontend chunks and their value
 depends on there still being a Node.js frontend for upstream to accept
 changes into.
 
+**Container-width prop, prep-only (2026-07-21)**: assessed whether
+upstream's own `ContentMaxWidth=1200` cap (`Layout.tsx`) is a genuine
+upstream defect worth a PR, not just a fork-side `/display` problem —
+verdict: defensible (upstream's own `CardGrid.tsx` `xxl={4}` breakpoint
+can never earn the width it was written for at ≥1400px viewports, a
+self-consistency gap between two pieces of upstream's own code, not just
+our fork's three-region layout). No branch cut — the fork implementation
+this would extract from (issue #287) hasn't landed yet. Draft motivation
+
+- PR-body skeleton at
+  [`drafts/upstream-feat-container-width-prop.md`](drafts/upstream-feat-container-width-prop.md),
+  to be revisited once #287 ships.
+
 **CI added for the ladder, 2026-07-18** (while dormant, per a separate
 request): `.github/workflows/upstream-branch-verification.yml` and
 `upstream-drift-monitor.yml`, detection-only, described in full in
