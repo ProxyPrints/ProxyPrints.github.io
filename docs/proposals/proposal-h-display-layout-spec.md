@@ -424,10 +424,13 @@ Landing (#268):
    verbatim); the gear in the top bar preserves "settings reachable from the top"
    on small screens. The implementing PR should note this on issue #267.
 3. **`ContentMaxWidth` 1200px cap** (`Layout.tsx`): two inline rails (380+300)
-   leave only ~520px of sheet inside the cap — cramped. The spec handles it by
-   gating the inline right rail to ≥1200 and keeping it a drawer at laptop, but if
-   /display may widen its container (a `ProjectContainer` prop), desktop gains
-   real sheet width. Owner decision; spec default keeps the cap.
+   leave only ~520px of sheet inside the cap — cramped. RESOLVED (issue #287):
+   `ProjectContainer` gained an additive, optional `fullWidth` prop (default
+   `false`, every other caller unchanged) and `/display` opts in — at ≥1200px
+   viewports with both rails inline, the sheet region now measures its own
+   uncapped available width (~720px at the audit's 1400×900 reference, matching
+   the naturally-uncapped <1200px laptop tier) instead of the ~520px the cap
+   left it.
 4. **Proposal H §3's "no fixed positioning below md" vs. bottom sheet**:
    consciously overridden by #266's owner-driven bottom-sheet ask; Bootstrap's own
    Offcanvas (portaled, z-1045) is the app's existing phone pattern (Navbar's
