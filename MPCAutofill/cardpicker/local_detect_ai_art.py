@@ -19,26 +19,27 @@ gate logic even applies). See `run_ai_art_detector`'s own docstring for how this
 that gate empirically after every write, reusing `purge_machine_votes.verify_no_machine_only_
 resolutions` rather than re-deriving an equivalent check.
 
-SENSITIVE-TAG DECISION (issue #261's own open question, resolved here): "AI-Generated" is
-additionally marked `TagModerationClass.SENSITIVE` (see `cardpicker.sensitive_tags`) - a SECOND,
-independent gate on top of the human-backed one above, requiring a privileged (moderator)
-co-sign before ANY crowd consensus (human or mixed) on this tag can resolve at all. Mirrors the
-precedent `sensitive_tags.py`'s own `"appropriate-bleed"` entry already set: a tag a machine can
-usefully flag, but whose real-world consequence (here: publicly labelling a human artist's work
-as AI-generated) carries enough reputational risk that even a confident crowd consensus must
-wait for a human moderator, not just clear the ordinary human-backed threshold. The tag itself
-was already seeded (as `TagModerationClass.STANDARD`, the model default) via `cardpicker.
-default_tags.DEFAULT_TAGS`'s pre-existing `("AI-Generated", ["Midjourney"], None)` entry, which
-exists for a DIFFERENT, orthogonal purpose - `cardpicker.tags.Tags`' filename-bracket matcher
-(e.g. a source file literally named `"... [Midjourney].png"`) applies it directly to `Card.tags`
-at import time, bypassing the vote system entirely, exactly as every other `DEFAULT_TAGS` entry
-does. That pathway is untouched by this change (out of scope - it is not a machine "detection"
-in this issue's sense, it is filename metadata the uploader supplied themselves) and is a
-SEPARATE, deliberately-not-modified reason the tag continues to exist in `DEFAULT_TAGS` as well
-as `SENSITIVE_TAGS` - `sensitive_tags.seed_sensitive_tags` upgrades whichever row already exists
-(created by either seeding path, in either order - see that function's own idempotent
-"upgrades moderation_class to SENSITIVE if it isn't already" contract) to SENSITIVE, so the
-moderation gate ends up active regardless of seeding order.
+SENSITIVE-TAG DECISION (issue #261's own open question, resolved in PR #263, THEN REVERSED by
+owner decision 2026-07-21): "AI-Generated" briefly carried an additional `TagModerationClass.
+SENSITIVE` marking (see `cardpicker.sensitive_tags`) - a second, independent gate requiring a
+privileged (moderator) co-sign before ANY crowd consensus on this tag could resolve at all,
+mirroring `sensitive_tags.py`'s own `"appropriate-bleed"` entry. The owner reverted that one
+aspect (verbatim: "ordinary human votes is fine for AI I think. or at least not moderator eyes.
+they will go contested if there is not an immediate human consensus that is the system working
+as intended") - so this tag is now plain `TagModerationClass.STANDARD` again, exactly as it was
+seeded (as the model default) via `cardpicker.default_tags.DEFAULT_TAGS`'s pre-existing
+`("AI-Generated", ["Midjourney"], None)` entry, which exists for a DIFFERENT, orthogonal purpose
+- `cardpicker.tags.Tags`' filename-bracket matcher (e.g. a source file literally named
+`"... [Midjourney].png"`) applies it directly to `Card.tags` at import time, bypassing the vote
+system entirely, untouched by any of this. The shared human-backed gate below (a lone machine
+vote can never resolve ANY tag alone, regardless of moderation_class) is unaffected and remains
+the only gate on this tag: an ordinary confident crowd consensus now resolves it same as any
+other STANDARD tag, and a genuinely contested crowd stays CONTESTED/UNRESOLVED rather than
+silently resolving wrong - the system working as intended, per the owner's own framing above.
+A future privileged-co-sign requirement for this specific tag is tracked as a possible follow-up,
+not built here - see `docs/features/moderation.md`'s AI-Generated paragraph. `sensitive_tags.
+FORMERLY_SENSITIVE_TAG_NAMES` lets `seed_sensitive_tags` sync this downgrade on any instance that
+already ran the #263-era seed and has the row stuck at SENSITIVE.
 
 OWNER AMENDMENT (2026-07-21, issue #261): generator-SITE URLs (e.g. CardConjurer.com) are
 EXCLUDED from the marker list - they identify a rendering/compositing TOOL usable with ordinary
@@ -324,9 +325,9 @@ def run_ai_art_detector(
     purge_machine_votes.verify_no_machine_only_resolutions` rather than re-deriving an equivalent
     "is any touched card resolved on machine-only weight" check - see that function's own
     docstring for why "resolved to APPLY with only machine-sourced survivors" is the correct
-    invariant, not "never resolves at all" - the AI-Generated tag being additionally SENSITIVE
-    means it also can't resolve to APPLY without a privileged co-sign even once human-backed, an
-    even stronger guarantee than the shared human-backed gate alone provides).
+    invariant, not "never resolves at all"). "AI-Generated" is plain `TagModerationClass.
+    STANDARD` (see the module docstring's SENSITIVE-TAG DECISION section) - the shared
+    human-backed gate is this tag's only gate, same as any other STANDARD tag.
     """
     run_id = run_id or generate_run_id()
     result = AiArtDetectorResult(dry_run=dry_run, run_id=run_id)
@@ -334,8 +335,7 @@ def run_ai_art_detector(
     tag = Tag.objects.filter(name=AI_GENERATED_TAG_NAME).first()
     if tag is None:
         raise RuntimeError(
-            f"Tag {AI_GENERATED_TAG_NAME!r} does not exist yet - run `seed_default_tags` (and "
-            "`seed_sensitive_tags`, for the moderation gate) before this calculator."
+            f"Tag {AI_GENERATED_TAG_NAME!r} does not exist yet - run `seed_default_tags` " "before this calculator."
         )
 
     votes_batch: list[CardTagVote] = []

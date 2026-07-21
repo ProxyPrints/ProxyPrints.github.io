@@ -116,7 +116,7 @@ and need nothing.
 ## Sensitive taxonomy
 
 `Tag.moderation_class` (`standard` | `sensitive`, default standard).
-`manage.py seed_sensitive_tags` seeds five (command, not data migration —
+`manage.py seed_sensitive_tags` seeds four (command, not data migration —
 same rationale as the other taxonomies, see [[printing-tags.md]]):
 
 | name                | display name        | report reason |
@@ -125,7 +125,6 @@ same rationale as the other taxonomies, see [[printing-tags.md]]):
 | `low-res`           | Low quality         | `low_quality` |
 | `incorrect-info`    | Incorrect card info | `wrong_card`  |
 | `appropriate-bleed` | Appropriate Bleed   | — (no chip)   |
-| `AI-Generated`      | AI-Generated        | — (no chip)   |
 
 `appropriate-bleed` is deliberately the **positive** framing ("verified to
 include the full bleed margin required for printing") rather than a negative
@@ -149,27 +148,37 @@ lowercased key). Seeding upgrades a pre-existing standard row to sensitive but
 never clobbers a manually edited `display_name`. Names are immutable
 federation contracts.
 
-`AI-Generated` (public issue #261, 2026-07-21) was upgraded to sensitive from
-its pre-existing `standard` row (seeded by `cardpicker.default_tags. DEFAULT_TAGS` for a different, orthogonal reason — filename-bracket tagging,
-e.g. `[Midjourney]`, applies it directly at import time, exactly like
-`[NSFW]` above, untouched by this change). The upgrade exists because
-`cardpicker.local_detect_ai_art` now casts real machine votes for it — a
-calculator that scans already-stored OCR evidence (artist credit line, legal
-line, collector line) for known AI-generator marker strings (Midjourney,
-DALL-E, Stable Diffusion, SDXL, Gemini, Imagen, Adobe Firefly, Leonardo AI,
-NightCafe, Bing Image Creator, "AI art"/"AI generated" — deliberately
-excluding generator-SITE/tool names like CardConjurer, which indicate a
-rendering tool usable with ordinary human art, not AI provenance) under its
-own machine identity (`ai-art-detector-v1`, `VoteSource.OCR`). Same
-`appropriate-bleed` logic applies here, doubled: a lone machine vote can
-never resolve any tag at all (the shared human-backed gate), and even a
-confident crowd consensus on this one specifically still needs a moderator
-co-sign before it goes live — publicly labelling a real human artist's work
-as AI-generated is a reputational harm serious enough to warrant the same
-"machine can flag it, human must confirm it" treatment as the mature-content
-and quality tags above, not just the ordinary crowd threshold. Positive-
-detection only: a missing marker proves nothing, so this calculator never
-casts a negative vote, only `APPLY`.
+`AI-Generated` (public issue #261) was briefly upgraded to sensitive
+(2026-07-21, this same day) from its pre-existing `standard` row (seeded by
+`cardpicker.default_tags.DEFAULT_TAGS` for a different, orthogonal reason —
+filename-bracket tagging, e.g. `[Midjourney]`, applies it directly at
+import time, exactly like `[NSFW]` above, untouched by any of this) —
+then reverted back to `standard` the same day by owner decision, once
+`cardpicker.local_detect_ai_art` (a calculator that scans already-stored OCR
+evidence — artist credit line, legal line, collector line — for known
+AI-generator marker strings: Midjourney, DALL-E, Stable Diffusion, SDXL,
+Gemini, Imagen, Adobe Firefly, Leonardo AI, NightCafe, Bing Image Creator,
+"AI art"/"AI generated" — deliberately excluding generator-SITE/tool names
+like CardConjurer, which indicate a rendering tool usable with ordinary
+human art, not AI provenance — and casts votes for it under its own machine
+identity `ai-art-detector-v1`, `VoteSource.OCR`) went live and the owner
+weighed in on the open question that upgrade had been guessing at (verbatim):
+"ordinary human votes is fine for AI I think. or at least not moderator
+eyes. they will go contested if there is not an immediate human consensus
+that is the system working as intended." So `AI-Generated` now behaves like
+any other `standard` tag: the shared human-backed gate is unchanged (a lone
+machine vote still can never resolve any tag at all, regardless of
+moderation_class), but an ordinary confident crowd consensus resolves it
+without a moderator co-sign, and a genuinely contested crowd stays
+contested — which is the intended outcome, not a gap. A future
+privileged-co-sign requirement specifically for this tag remains a
+possible follow-up idea, not built now. `cardpicker.sensitive_tags. FORMERLY_SENSITIVE_TAG_NAMES` (currently just `{"AI-Generated"}`) lets
+`seed_sensitive_tags` sync this downgrade on any instance that already ran
+the brief sensitive-era seed and has the row stuck at `sensitive` — running
+`manage.py seed_sensitive_tags` again reports it as `downgraded`, alongside
+the usual `created`/`updated` counts. Positive-detection only, unchanged:
+a missing marker proves nothing, so this calculator never casts a negative
+vote, only `APPLY`.
 
 Two knock-ons worth knowing: the seeded tags become visible/votable in the
 card modal's tag grid for everyone (intended — votes accumulate as pending),
