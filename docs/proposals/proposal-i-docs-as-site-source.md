@@ -12,8 +12,12 @@ extended version of the existing publish map.
 map schema extension, §4's `deploy-frontend.yml` trigger fix), proven
 end-to-end against exactly one doc (`docs/overview.md`, live at `/guide`)
 per the owner's own "prove the plumbing before widening it" scope — see
-"Shipped vs. not yet built" below for the real detail. **PR-I-2+ — not yet
-started**: the §0 source restructures (`catalog-completion-plan.md`'s
+"Shipped vs. not yet built" below for the real detail. **A first widening
+pass — shipped**: `docs/user-guide.md` added as a second `site` target
+(`/guide/using-it`) and a `Nav.Link` to `/guide` added to `Navbar.tsx`,
+closing two of this doc's three "not yet built" items (below);
+`docs/self-hosting.md` and `docs/theory.md` remain unwidened. **PR-I-2+ —
+not yet started**: the §0 source restructures (`catalog-completion-plan.md`'s
 status prose → a marked table, `theory.md`'s constant citations → a marked
 block), each landing as an ordinary docs PR that unlocks its own data
 extract per §3's mechanism, which itself is not yet built (§1b).
@@ -420,12 +424,13 @@ silently dropped):
    Waits on PR-I-2+'s source restructures per §0 — building the extractor
    ahead of a real marked-table source to extract would mean testing it
    against nothing real.
-2. **Widening §2's site-target list** beyond `overview.md` — `user-guide.md`,
-   `self-hosting.md`, `theory.md` per this doc's own proposed initial
-   mapping — deliberately deferred, per "prove the plumbing before
-   widening it."
-3. **A nav link to `/guide`** — no entry was added to `Navbar.tsx`; the
-   route works and is reachable by direct URL, but isn't discoverable from
-   the site's own chrome yet. Left out deliberately (a nav change is a
-   real, visible UX decision this pass's "prove the plumbing" scope didn't
-   ask for) rather than added silently.
+2. **Widening §2's site-target list** beyond `overview.md` — **partially
+   done**: `docs/user-guide.md` shipped (`/guide/using-it`, first widening
+   pass, owner-approved). `docs/self-hosting.md` and `docs/theory.md` per
+   this doc's own proposed initial mapping remain deferred.
+3. **A nav link to `/guide`** — **shipped** as part of the same widening
+   pass: a `Nav.Link` in `frontend/src/features/ui/Navbar.tsx`, ungated
+   (same placement logic as `Download` — `/guide` has no backend
+   dependency), active-highlighted via `router.pathname.startsWith("/guide")`
+   since `/guide/[[...slug]].tsx` is one catch-all page file and
+   `router.route` can't exact-match every `/guide/*` URL.

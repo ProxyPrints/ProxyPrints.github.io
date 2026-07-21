@@ -109,7 +109,8 @@
         {
           "source": "docs/user-guide.md",
           "wiki": "User-Guide",
-          "targets": ["wiki"]
+          "targets": ["wiki", "site"],
+          "sitePath": "/guide/using-it"
         },
         {
           "source": "docs/self-hosting.md",

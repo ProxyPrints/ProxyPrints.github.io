@@ -162,6 +162,36 @@ export default function ProjectNavbar() {
               </Nav.Link>
             </Nav>
             <Nav className="ms-auto d-flex align-items-center">
+              {/* Guide lives in this less-crowded right-hand cluster rather than alongside
+                  Editor/Explore/etc. above - the left-hand Nav's flex row is already at its
+                  wrapping budget once every gated link is visible (fully authenticated + every
+                  backend feature enabled): Bootstrap's flex items there shrink rather than
+                  overflow, so a long label ("What's That Card?") wraps internally and the whole
+                  fixed navbar grows taller than the app's hardcoded NavbarHeight offset
+                  (frontend/src/common/constants.ts) - already true on master at this exact
+                  width/state (top slice of the My Decks page's Export/Import buttons was
+                  already grazing the navbar's real bottom edge), confirmed by screenshot diff
+                  against origin/master. Adding one more always-visible link to that same row
+                  was what tipped a marginal, still-clickable overlap into a fully-blocking one
+                  (Playwright's SavedDecks Export/Import specs started failing - the "Editor"
+                  link intercepted every click). Not gated on
+                  anyBackendConfigured/remoteBackendConfigured (unlike Editor/Explore/etc.) -
+                  /guide is build-time-static content sourced from docs/ (see
+                  docs/proposals/proposal-i-docs-as-site-source.md), with no backend dependency.
+                  router.route can't be matched exactly here since /guide/[[...slug]].tsx is one
+                  catch-all page file serving every /guide/* route - router.pathname is the
+                  literal page-file path ("/guide/[[...slug]]") for all of them, so a
+                  startsWith("/guide") check on it is what actually highlights this link on both
+                  /guide and /guide/using-it. */}
+              <Nav.Link
+                as={Link}
+                href="/guide"
+                className="m-0 py-0"
+                active={router.pathname.startsWith("/guide")}
+                eventKey="/guide"
+              >
+                Guide
+              </Nav.Link>
               {/* Deliberately NOT a Nav.Link (unlike its siblings below) - react-bootstrap's
                   Nav.Link-with-eventKey renders its own <a href="#"> around whatever children
                   it's given, and AuthWidget already supplies a real <a> of its own for both the
