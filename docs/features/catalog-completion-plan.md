@@ -2319,14 +2319,22 @@ across two calculators (D1 OCR, D2 symbol) before an advisor review flagged
 that as contradicting the design frame's own "one join key" framing —
 folded into one calculator before this PR was built out further.
 
-**The moderator-flag veto** (the design frame's explicit ask):
-`legal_line_proxy_marker_detected` (issue #151/#212's real motivating case
-— a "NOT FOR SALE"/proxy watermark misparsing as a plausible collector
-line) is checked only at the moment a join-key match would otherwise be
-trusted, never against a genuine no-match/ambiguous outcome. A vetoed match
-is a named skip (`"proxy-marker-veto"`), not an `is_no_match` vote — a
-vetoed reading is untrustworthy evidence FOR the matched printing, not
-evidence AGAINST every other candidate.
+**The moderator-flag signal** (the design frame's original explicit ask,
+corrected 2026-07-21 — see this section's own "Recovery-arc lessons" item
+1's "CRITICAL correction" note above for the full owner-ruling writeup):
+`legal_line_proxy_marker_detected`
+(issue #151/#212's real motivating case — a "NOT FOR SALE"/proxy watermark
+misparsing as a plausible collector line) was originally checked only at
+the moment a join-key match would otherwise be trusted, withholding it as a
+named skip (`"proxy-marker-veto"`) rather than casting an `is_no_match`
+vote. **Retired as a veto 2026-07-21**: the catalog requires proxy/NOT-FOR-
+SALE marking on every genuine upload, real printings' proxies included, so
+the field's presence carries no discriminating power over whether any
+specific match is right or wrong — a live trace found it discarding 1,552
+already-validated matches, 99.4% with a real, DB-matching set/number parse.
+The match now proceeds unaffected (no withhold, no confidence change) —
+`legal_line_proxy_marker_detected` is read but has zero effect on the
+outcome.
 
 Casts `CardPrintingTag` votes via the unmodified `VoteSource.OCR`/
 `resolve_and_persist_printing` machinery (own
@@ -2442,8 +2450,11 @@ evidence would deterministically recompute the identical mismatch forever.
    to vote for), only a `CardScanLog(skip_reason="to-review")` durable
    marker once a card gets a real `is_no_match` vote or a non-rescannable
    join-key/agreement-layer skip (`ambiguous`, `no-text`,
-   `proxy-marker-veto`, `border-mismatch`, `frame-mismatch`,
-   `truncated-image`, `copyright-year-mismatch`). No new storage: the
+   `border-mismatch`, `frame-mismatch`, `truncated-image`,
+   `copyright-year-mismatch` — `proxy-marker-veto` is no longer PRODUCED as
+   of the 2026-07-21 moderator-flag-signal correction above, but stays in
+   `JOIN_KEY_NO_HIT_SKIP_REASONS` deliberately so a pre-correction stale row
+   still routes correctly until `reparse_collector_evidence --selector proxy-marker-veto` retracts it). No new storage: the
    signals themselves already live in `ImageEvidence` (Stage C's job) —
    `SlowPathVerdict.raw_signals` is an in-memory packaging of that same
    data for whatever consumes it next, not a second copy.
