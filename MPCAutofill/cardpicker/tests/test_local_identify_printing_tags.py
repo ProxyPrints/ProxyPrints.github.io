@@ -690,6 +690,57 @@ class TestLegalLineParsing:
         parsed = parse_legal_line("in close proximity to the border")
         assert parsed.proxy_marker_detected is False
 
+    # playtest family (owner decision, 2026-07-21: playtest cards and their variants count as
+    # proxy markers - see local_ocr.py's own _PROXY_MARKER_RE comment, family 3, for the full
+    # reasoning). The diagnostic that motivated this found ~14 additional marker-absent evidence
+    # rows (distinct from the ~512 proxy-plural rows above) carrying this family - the two real
+    # examples below are pulled directly from those rows.
+
+    def test_detects_playtest_one_word(self):
+        parsed = parse_legal_line("playtest")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_play_test_with_space_all_caps(self):
+        parsed = parse_legal_line("PLAY TEST")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_play_test_with_hyphen(self):
+        parsed = parse_legal_line("Play-Test card")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_playtest_real_diagnostic_sample_omniproxy(self):
+        # real observed row (evidence pk 5812, gathered via the 2026-07-21 diagnostic) - matches
+        # twice over (family 2's bare "proxy" and family 3's "playtest"), but this test isolates
+        # family 3's own contribution: see test_detects_bare_proxy_word above for family 2 alone.
+        parsed = parse_legal_line("OMNIPROXY - PLAYTEST COPY")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_playtest_real_diagnostic_sample_rustom(self):
+        # real observed row (evidence pk 11244, gathered via the same diagnostic) - a genuinely
+        # garbled OCR read that still contains "Playtest" as a clean substring.
+        parsed = parse_legal_line("Rustom Playtest Card - Not for Sate")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_playtest_with_suffix_deliberately(self):
+        # deliberate design choice (see local_ocr.py's own comment): no \b is enforced after
+        # "test", so a suffixed form like "playtester"/"playtesting" is intentionally INCLUDED,
+        # not excluded - any playtest-prefixed token signals the same non-authentic-card fact.
+        parsed = parse_legal_line("Looking for a playtester for this deck")
+        assert parsed.proxy_marker_detected is True
+
+    def test_play_embedded_in_longer_word_does_not_false_positive(self):
+        # word-boundary sanity check: \b IS still enforced before "play", so a "play" with no
+        # boundary immediately before it (embedded in "cosplay"/"display"/"replay") must not pull
+        # in a "test" that happens to follow.
+        parsed = parse_legal_line("cosplay test photos, please display test results")
+        assert parsed.proxy_marker_detected is False
+
+    def test_replay_test_does_not_false_positive(self):
+        # same word-boundary sanity check as test_play_embedded_in_longer_word_does_not_false_positive
+        # above, isolated to "replay test" alone.
+        parsed = parse_legal_line("replay test scheduled for next week")
+        assert parsed.proxy_marker_detected is False
+
 
 class TestOcrValidationRail:
     CANDIDATES = [
