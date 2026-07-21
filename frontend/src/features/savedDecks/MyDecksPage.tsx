@@ -29,6 +29,7 @@ import {
 import { ImportDeckModal } from "@/features/savedDecks/ImportDeckModal";
 import { LoadSafetyModal } from "@/features/savedDecks/LoadSafetyModal";
 import { selectIsCurrentProjectDirty } from "@/features/savedDecks/selectors";
+import { ShareDeckModal } from "@/features/savedDecks/ShareDeckModal";
 import { UnlockModal } from "@/features/savedDecks/UnlockModal";
 import {
   useDeleteDeckMutation,
@@ -49,15 +50,29 @@ function DeckRow({
   deck,
   onOpen,
   onDelete,
+  onShare,
 }: {
   deck: DecryptedSavedDeck;
   onOpen: (deck: DecryptedSavedDeck) => void;
   onDelete: (deck: DecryptedSavedDeck) => void;
+  // Sharing is a `kind=deck` concept only (see post_create_deck_share) - omitted for snapshot
+  // rows, which never get a Share button.
+  onShare?: (deck: DecryptedSavedDeck) => void;
 }) {
   return (
     <ListGroup.Item className="d-flex justify-content-between align-items-center">
       <span>{deck.name || "(untitled)"}</span>
       <div>
+        {onShare != null && (
+          <Button
+            size="sm"
+            variant="outline-primary"
+            className="me-2"
+            onClick={() => onShare(deck)}
+          >
+            Share
+          </Button>
+        )}
         <Button
           size="sm"
           variant="primary"
@@ -109,6 +124,9 @@ export function MyDecksPage() {
   const [showImport, setShowImport] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [sharingDeck, setSharingDeck] = useState<DecryptedSavedDeck | null>(
+    null
+  );
 
   useEffect(() => {
     if (session.status === "locked") {
@@ -225,6 +243,17 @@ export function MyDecksPage() {
     deleteDeck({ key: deck.key });
   };
 
+  // Raw (still-wrapped) fields for whichever deck is currently being shared - ShareDeckModal
+  // needs the deck's CURRENT wrappedDek/wrappedDekNonce (straight off the summary this page
+  // already fetched), not anything from the already-decrypted DecryptedSavedDeck shape.
+  const sharingDeckSummary = useMemo(
+    () =>
+      sharingDeck == null
+        ? undefined
+        : savedDecksQuery.data?.decks.find((s) => s.key === sharingDeck.key),
+    [sharingDeck, savedDecksQuery.data]
+  );
+
   const handleReset = () => {
     if (!confirmingReset) {
       setConfirmingReset(true);
@@ -287,6 +316,16 @@ export function MyDecksPage() {
           masterKey={session.masterKey}
         />
       )}
+      {sharingDeck != null && sharingDeckSummary != null && (
+        <ShareDeckModal
+          show
+          onClose={() => setSharingDeck(null)}
+          deckKey={sharingDeck.key}
+          deckName={sharingDeck.name}
+          wrappedDek={sharingDeckSummary.wrappedDek}
+          wrappedDekNonce={sharingDeckSummary.wrappedDekNonce}
+        />
+      )}
       {session.status === "locked" && !showUnlock && (
         <p>
           <Button onClick={() => setShowUnlock(true)}>
@@ -347,6 +386,7 @@ export function MyDecksPage() {
                   deck={deck}
                   onOpen={openInEditor}
                   onDelete={handleDelete}
+                  onShare={setSharingDeck}
                 />
               ))}
             </ListGroup>

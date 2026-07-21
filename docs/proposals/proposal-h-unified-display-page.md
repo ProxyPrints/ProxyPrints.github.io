@@ -1,4 +1,4 @@
-As of: 2026-07-19
+As of: 2026-07-20
 What this is: Proposal H — survey + design + static HTML mockups for a
 single unified display page that replaces both the "Choose Art" grid
 editor and the separate PDF-preview/export step with one page that IS
@@ -16,11 +16,30 @@ milestone's post-export contribution prompt — issue #166,
 `frontend/src/features/export/usePostExportContributionPrompt.ts` +
 `PostExportContributionPrompt.tsx` — see `docs/features/printing-tags.md`'s
 own entry for the full detail). Still not built: the tablet off-canvas
-drawer / mobile bottom-sheet interaction patterns (§3), and §6 step 3/4
+drawer / mobile bottom-sheet interaction patterns (§3); §6 step 5/6
 (switchover to make `/display` the default nav entry point, then retiring
-`/editor` + the classic PDF tab) — see `docs/features/grid-selector.md`,
-`docs/features/print-export-page.md`, and `docs/features/pdf-generator.md`
-for the surfaces this page is meant to eventually absorb.
+`/editor` + the classic PDF tab); and, per a 2026-07-20 feature-parity
+audit against `/editor` that this pass folds in, four further confirmed
+gaps this doc's body now accounts for but nothing had previously scoped
+or tracked — **deck-input landing** (§4.1, rewritten this pass:
+`/display` currently mounts zero import surfaces at all for an empty
+project, just a link back to `/editor` — the most urgent of the four
+given the route-name decision in Open decision 1, since it blocks
+`/display` from ever starting a project standalone; issue #238), **Search
+Settings** (§5, `SearchSettings.tsx`; issue #239), **project-wide
+cardback selection** (§5, `CommonCardback.tsx`; issue #240), and **export
+surfaces beyond PDF** (§5, `ExportXML.tsx`/`ExportImages.tsx`/
+`ExportDecklist.tsx` — `ExportPDF.tsx` itself is already covered via the
+toolbar's Generate PDF/Save-to-Drive mapping; issue #241) — see §6 steps
+3/4 for the new sequencing these four add. A related but deliberately
+unscoped finding from the same pass: `FinishSettings.tsx` (cardstock +
+foil) is a genuinely distinct component from `CardQualitySettings`
+(§5's existing PDFGenerator-settings row) — not a naming collision — yet
+has zero mapping anywhere in this doc either; see §5's new row and Open
+decision 7 for why this stays a correction, not a fifth tracked gap. See
+`docs/features/grid-selector.md`, `docs/features/print-export-page.md`,
+and `docs/features/pdf-generator.md` for the surfaces this page is meant
+to eventually absorb.
 
 ## 0. Vision, in our own words
 
@@ -353,21 +372,56 @@ Each flow below is the same import/select/confirm/export sequence
 already live in the editor + PDF tabs today, restated as it plays out
 on one page instead of two.
 
-### 4.1 Deck-input landing
+### 4.1 Deck-input landing — NOT BUILT (2026-07-20 feature-parity audit, issue #238)
 
-1. User pastes/imports a decklist (unchanged: existing paste/CSV/XML/
-   URL import surfaces, `features/import/*`).
+Status: **not built**, corrected from this section's original text
+(below, restated as the actual build spec issue #238 tracks). Direct
+read of `frontend/src/features/display/DisplayPage.tsx` confirms it
+mounts zero import components today: its `isProjectEmpty` early return
+renders only "Your project is empty at the moment," followed by a plain
+`next/link` reading "Head to the editor to add cards, then come back
+here" — no paste/CSV/XML/URL surface exists on this page at all. This is
+the most urgent of the four audit findings the top summary now lists,
+given the route-name decision (Open decision 1): as long as this gap
+stands, `/display` cannot start a project standalone, which blocks it
+from ever actually superseding `/editor`'s own URL.
+
+1. When `isProjectEmpty` is true, render the same import components
+   `ProjectEditor.tsx`'s `AddCardsPanel` already mounts today for the
+   classic editor's own "Add Cards" tab — `ImportText`, `ImportURL`,
+   `ImportXML`, `ImportCSV` (`frontend/src/features/import/*.tsx`) —
+   inline, in place of the current "go to /editor" link. These are not
+   the `Import.tsx` dropdown's `*Button` modal variants (a different
+   mount, used for the persistent "Add Cards" dropdown elsewhere in the
+   classic editor); they're the plain components `AddCardsPanel` embeds
+   directly, each already accepting an `onImportComplete` callback prop
+   for exactly this purpose (confirmed by direct read of
+   `ImportText.tsx`'s own prop shape). No new import logic needed: same
+   components, same `addMembers`/`convertLinesIntoSlotProjectMembers`
+   pipeline, same `onImportComplete` contract these components already
+   expose.
 2. Each decklist line becomes a slot exactly as today
    (`projectSlice`'s `SlotProjectMembers`), best-match image
    auto-selected per the existing search-and-select behavior.
-3. Instead of landing on the editor grid, the user lands directly on
-   this page: sheet page 1 of the new deck renders immediately, showing
-   real thumbnail art already selected per slot — no separate
-   "now go export" step exists to skip.
+3. `onImportComplete` has nothing to switch to here — unlike
+   `ProjectEditor.tsx`'s own use of it to flip `Tab.Pane`s, this page has
+   only the one layout. It's wired as a no-op (or omitted entirely):
+   once `addMembers` fires, `isProjectEmpty` (the same selector
+   `DisplayPage.tsx` already reads) flips false, and the component
+   re-renders straight into the sheet + rail layout on its own — no
+   separate "now go export" step exists to skip, matching this
+   section's original intent.
 4. If any line's search was searched-then-retried without its printing
    filter (`degradedQueries`), the affected slot's sheet thumbnail
    carries the same degraded-style indicator the requested-printing
    badge already uses in the rail — see §5's mapping.
+
+Layout note: `AddCardsPanel`'s own existing two-column split (a text
+paste column beside a File-or-URL accordion column, `ProjectEditor.tsx`
+lines ~46–92) is the closest existing precedent for how this should
+render inline on `/display`; the mockups (§ mockups/README.md) don't
+cover this state — not designed further here, left to issue #238's own
+build.
 
 ### 4.2 Slot select
 
@@ -582,22 +636,26 @@ coverage.
 
 ## 5. Component mapping table
 
-| Existing component / state                                                                                                                                                                        | New location on this page                                                                                                                             | Change needed                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PagePreview.tsx` + `layout.ts`'s `computeLayout()`                                                                                                                                               | The sheet region, main surface                                                                                                                        | None — reused as-is, still fed small/mid-tier thumbnail URLs already resident in memory                                                                                                                                                                                                                                                                          |
-| `CardSlot.tsx` (minus its own grid-selector modal chrome)                                                                                                                                         | Individual sheet slots                                                                                                                                | Restyle only: slot dimensions/positioning already come from `PagePreview`'s own absolute-mm layout, not `CardSlot`'s current grid-flow CSS; the click target and per-slot Redux wiring (`selectedImage`, `toggleMemberSelection`, etc.) carry over unchanged                                                                                                     |
-| `AutofillCollapse.tsx`                                                                                                                                                                            | Rail's section chrome — one instance per accordion section (Choose Image / Attributes / Print Options / Artist / Slot Actions)                        | None — same component `PDFGenerator.tsx`'s own settings groups already use (`PageSizeSettings`, `EdgeSettings`, etc.); each rail section is one more caller with its own local `expanded` boolean, defaults per §2's amendment                                                                                                                                   |
-| `GridSelectorModal.tsx` + `GridSelectorFilters.tsx` + `JumpToVersion.tsx`                                                                                                                         | Rail's **Choose Image** accordion section (open by default), §4.4                                                                                     | Props-level: rendered inline inside `AutofillCollapse`'s body instead of inside a `react-bootstrap` `Modal`; internal filter/search/debounce logic unchanged                                                                                                                                                                                                     |
-| `DeckbuilderConfirmAffordance.tsx`                                                                                                                                                                | Rail's **always-visible header** (outside the accordion — status, not a setting)                                                                      | None — same component, mounted once for the selected slot instead of once per visible grid slot                                                                                                                                                                                                                                                                  |
-| `AttributeChipPanel.tsx` / `attributeChips.ts`                                                                                                                                                    | Rail's **Attributes** accordion section (collapsed by default)                                                                                        | Props-level: currently composed around a `cardSlot` node for the question-feed's ring layout (`CardArea`); the rail mounts the same `ChipRing`/`TopArea`/`LeftArea`/`RightArea` styled parts directly in a vertical arrangement inside the section body, rather than around a centered card image — the tri-state cycling and vote-submission logic is unchanged |
-| Requested-printing badge (currently rendered inline per search-query display logic)                                                                                                               | Rail's **always-visible header** (outside the accordion — status, not a setting)                                                                      | Restyle + a new degraded-state style variant keyed off `degradedQueries` (existing field, not new data)                                                                                                                                                                                                                                                          |
-| Manual bleed override (`ManualOverride`/`resolveBleedPlan` in `bleedNormalize.ts`)                                                                                                                | Rail's **Print Options** accordion section (collapsed by default)                                                                                     | **New UI** — the algorithm exists but the control and its persistence are explicitly not-yet-built per Proposal B's own status doc (§1); this design assigns it a rail section but its build is Proposal B PR-2's scope, not this proposal's                                                                                                                     |
-| Artist line + support link                                                                                                                                                                        | Rail's **Artist** accordion section (collapsed by default)                                                                                            | **New UI** — no existing "Art by `<Name>`" line or outbound support link was found in the current codebase (see §1); artist name itself is already available wherever `canonicalCard`/candidate metadata carries it (e.g. `ArtistVotePicker.tsx`'s own artist-name handling) — this is new presentational wiring over existing data, not a new data source       |
-| `CardSlotMenuActions.ts` + `CardSlotContextMenu.tsx` (the shared 3-dot/right-click action list)                                                                                                   | Rail's **Slot Actions** accordion section (collapsed by default)                                                                                      | None — same action list, rendered as a plain action list inside the section body instead of a dropdown/context-menu overlay                                                                                                                                                                                                                                      |
-| `PDFGenerator.tsx`'s settings sub-components (`PageSizeSettings`, `CardSelectionSettings`, `CardQualitySettings`, `EdgeSettings`, `CutLinesSettings`, `SpacingAndMarginsSettings`, `SCMSettings`) | Top toolbar (popover-collapsed below `lg`)                                                                                                            | Restyle/relocate only — same state, same `PDFProps` shape                                                                                                                                                                                                                                                                                                        |
-| `downloadPDF`/`saveToDrivePDF`/`useDownloadPDF`/`useSaveToDrivePDF`                                                                                                                               | Top toolbar's Generate PDF / Save to Drive buttons                                                                                                    | None                                                                                                                                                                                                                                                                                                                                                             |
-| Page pagination (today implicit in `PDFGenerator`'s `fastPreviewFirstPage`-only fast preview)                                                                                                     | Top toolbar's "Page N of M ◀▶"                                                                                                                        | **New** — today's fast preview only ever renders the _first_ page; this proposal's sheet needs real pagination across every page `CardSelectionModeToPaginator` produces, not just page 1                                                                                                                                                                        |
-| `SavedDeckPanel.tsx` (Proposal G, `docs/features/saved-decks.md`) — reverse breadcrumb + Save button                                                                                              | Top toolbar (doubles as this row's own "deck name" slot, per §2's IA — that slot went unbuilt here since Proposal G landed after this doc's own pass) | Props-level only (issue #165, "Proposal G save integration"): the component gained an optional `className` prop so it can drop its original vertical-stack `pt-2` and sit as one more item in the toolbar's horizontal flex-wrap row; renders nothing for an anonymous session, same as its `ProjectEditor.tsx` mount                                            |
+| Existing component / state                                                                                                                                                                                                                                          | New location on this page                                                                                                                             | Change needed                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PagePreview.tsx` + `layout.ts`'s `computeLayout()`                                                                                                                                                                                                                 | The sheet region, main surface                                                                                                                        | None — reused as-is, still fed small/mid-tier thumbnail URLs already resident in memory                                                                                                                                                                                                                                                                                                                                                      |
+| `CardSlot.tsx` (minus its own grid-selector modal chrome)                                                                                                                                                                                                           | Individual sheet slots                                                                                                                                | Restyle only: slot dimensions/positioning already come from `PagePreview`'s own absolute-mm layout, not `CardSlot`'s current grid-flow CSS; the click target and per-slot Redux wiring (`selectedImage`, `toggleMemberSelection`, etc.) carry over unchanged                                                                                                                                                                                 |
+| `AutofillCollapse.tsx`                                                                                                                                                                                                                                              | Rail's section chrome — one instance per accordion section (Choose Image / Attributes / Print Options / Artist / Slot Actions)                        | None — same component `PDFGenerator.tsx`'s own settings groups already use (`PageSizeSettings`, `EdgeSettings`, etc.); each rail section is one more caller with its own local `expanded` boolean, defaults per §2's amendment                                                                                                                                                                                                               |
+| `GridSelectorModal.tsx` + `GridSelectorFilters.tsx` + `JumpToVersion.tsx`                                                                                                                                                                                           | Rail's **Choose Image** accordion section (open by default), §4.4                                                                                     | Props-level: rendered inline inside `AutofillCollapse`'s body instead of inside a `react-bootstrap` `Modal`; internal filter/search/debounce logic unchanged                                                                                                                                                                                                                                                                                 |
+| `DeckbuilderConfirmAffordance.tsx`                                                                                                                                                                                                                                  | Rail's **always-visible header** (outside the accordion — status, not a setting)                                                                      | None — same component, mounted once for the selected slot instead of once per visible grid slot                                                                                                                                                                                                                                                                                                                                              |
+| `AttributeChipPanel.tsx` / `attributeChips.ts`                                                                                                                                                                                                                      | Rail's **Attributes** accordion section (collapsed by default)                                                                                        | Props-level: currently composed around a `cardSlot` node for the question-feed's ring layout (`CardArea`); the rail mounts the same `ChipRing`/`TopArea`/`LeftArea`/`RightArea` styled parts directly in a vertical arrangement inside the section body, rather than around a centered card image — the tri-state cycling and vote-submission logic is unchanged                                                                             |
+| Requested-printing badge (currently rendered inline per search-query display logic)                                                                                                                                                                                 | Rail's **always-visible header** (outside the accordion — status, not a setting)                                                                      | Restyle + a new degraded-state style variant keyed off `degradedQueries` (existing field, not new data)                                                                                                                                                                                                                                                                                                                                      |
+| Manual bleed override (`ManualOverride`/`resolveBleedPlan` in `bleedNormalize.ts`)                                                                                                                                                                                  | Rail's **Print Options** accordion section (collapsed by default)                                                                                     | **New UI** — the algorithm exists but the control and its persistence are explicitly not-yet-built per Proposal B's own status doc (§1); this design assigns it a rail section but its build is Proposal B PR-2's scope, not this proposal's                                                                                                                                                                                                 |
+| Artist line + support link                                                                                                                                                                                                                                          | Rail's **Artist** accordion section (collapsed by default)                                                                                            | **New UI** — no existing "Art by `<Name>`" line or outbound support link was found in the current codebase (see §1); artist name itself is already available wherever `canonicalCard`/candidate metadata carries it (e.g. `ArtistVotePicker.tsx`'s own artist-name handling) — this is new presentational wiring over existing data, not a new data source                                                                                   |
+| `CardSlotMenuActions.ts` + `CardSlotContextMenu.tsx` (the shared 3-dot/right-click action list)                                                                                                                                                                     | Rail's **Slot Actions** accordion section (collapsed by default)                                                                                      | None — same action list, rendered as a plain action list inside the section body instead of a dropdown/context-menu overlay                                                                                                                                                                                                                                                                                                                  |
+| `PDFGenerator.tsx`'s settings sub-components (`PageSizeSettings`, `CardSelectionSettings`, `CardQualitySettings`, `EdgeSettings`, `CutLinesSettings`, `SpacingAndMarginsSettings`, `SCMSettings`)                                                                   | Top toolbar (popover-collapsed below `lg`)                                                                                                            | Restyle/relocate only — same state, same `PDFProps` shape. (2026-07-20 audit: `CardQualitySettings` here is image export DPI/JPG quality only — confirmed a genuinely distinct component from `FinishSettings.tsx` below, not a naming variant of it.)                                                                                                                                                                                       |
+| `FinishSettings.tsx` (cardstock select + foil toggle, `finishSettingsSlice`) — audit finding, 2026-07-20                                                                                                                                                            | Top toolbar (same deck-level reasoning as the `PDFGenerator.tsx` settings row above)                                                                  | **New UI, deliberately not one of the four tracked gaps/issues below** — zero mapping anywhere in this doc prior to this audit pass; a corrective row only, its own toolbar treatment left to a future pass — see Open decision 7                                                                                                                                                                                                            |
+| `downloadPDF`/`saveToDrivePDF`/`useDownloadPDF`/`useSaveToDrivePDF`                                                                                                                                                                                                 | Top toolbar's Generate PDF / Save to Drive buttons                                                                                                    | None                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Page pagination (today implicit in `PDFGenerator`'s `fastPreviewFirstPage`-only fast preview)                                                                                                                                                                       | Top toolbar's "Page N of M ◀▶"                                                                                                                        | **New** — today's fast preview only ever renders the _first_ page; this proposal's sheet needs real pagination across every page `CardSelectionModeToPaginator` produces, not just page 1                                                                                                                                                                                                                                                    |
+| `SavedDeckPanel.tsx` (Proposal G, `docs/features/saved-decks.md`) — reverse breadcrumb + Save button                                                                                                                                                                | Top toolbar (doubles as this row's own "deck name" slot, per §2's IA — that slot went unbuilt here since Proposal G landed after this doc's own pass) | Props-level only (issue #165, "Proposal G save integration"): the component gained an optional `className` prop so it can drop its original vertical-stack `pt-2` and sit as one more item in the toolbar's horizontal flex-wrap row; renders nothing for an anonymous session, same as its `ProjectEditor.tsx` mount                                                                                                                        |
+| `SearchSettings.tsx` + its sub-panels (`SearchTypeSettings.tsx`, `FilterSettings.tsx`, `SourceSettings.tsx`) — audit finding, 2026-07-20, issue #239                                                                                                                | Top toolbar (new button, alongside the paper/bleed/guides controls)                                                                                   | Relocate only — same `Modal`, same `searchSettingsSlice` read/write, same `setLocalStorageSearchSettings` persistence path; the toolbar gains one more trigger button, no new state                                                                                                                                                                                                                                                          |
+| `CommonCardback.tsx` + its own `GridSelectorModal` instance + `projectSlice`'s `setSelectedCardback` — audit finding, 2026-07-20, issue #240                                                                                                                        | Top toolbar (new "Cardback" button opening the same self-contained modal `CommonCardback.tsx` already owns)                                           | Relocate only — reuses `MemoizedCommonCardbackGridSelector`'s existing `GridSelectorModal` verbatim. NOT the same "no modal, ever" exception §4.4′ carves out for the per-slot Choose Image picker — that ban is specifically about a second modal stacking over an already-open rail/drawer; a standalone project-wide cardback picker triggered directly from the toolbar has no such stacking hazard, so its existing modal is left as-is |
+| `ExportXML.tsx` (`useDownloadXML`), `ExportImages.tsx` (`useDoImageDownload`), `ExportDecklist.tsx` (`useDownloadDecklist`) — audit finding, 2026-07-20, issue #241 (`ExportPDF.tsx` itself excluded — already covered by the Generate PDF/Save-to-Drive row above) | Top toolbar, composed into an "Export ▾" dropdown alongside the existing Generate PDF / Save to Drive buttons                                         | Relocate only — same `Dropdown.Item`s, same download hooks, same `selectIsProjectEmpty`/`selectAnyImagesDownloadable` gating; `ExportPDF.tsx`'s own `Dropdown.Item` is deliberately NOT included, since this page's Generate PDF already reuses `useDownloadPDF` directly rather than opening the classic `PDFGenerator` modal `ExportPDF.tsx` dispatches to                                                                                 |
 
 ## 6. Migration/sequencing
 
@@ -617,18 +675,36 @@ Small PRs, existing editor left fully intact until the last step:
    persistence it depends on — sequenced after, not blocking this
    proposal's other instruments). Each PR is reviewable independently
    because each instrument is a self-contained existing component.
-3. **Switchover** — once the flag-gated page has full instrument
-   parity with the editor + PDF tab combined, flip the default nav
-   entry point to the new page; keep `/editor` and the PDF tab reachable
-   behind a "classic view" link for one deprecation window.
-4. **Retire old routes** — remove `/editor`'s grid-only view and the
+3. **Deck-input landing parity (issue #238)** — the most urgent of the
+   four gaps a 2026-07-20 feature-parity audit against `/editor` found
+   (see the top summary and §4.1): mount `ImportText`/`ImportURL`/
+   `ImportXML`/`ImportCSV` inline on `/display` when `isProjectEmpty` is
+   true, replacing the current "go to /editor" link, per §4.1's rewritten
+   flow. Independently shippable once the step 1 shell exists — no
+   dependency on step 2's rail instruments.
+4. **Toolbar instrument parity (issues #239, #240, #241)** — the other
+   three findings from the same audit, each its own small PR since each
+   is a self-contained existing component being relocated, not rebuilt:
+   a Search Settings toolbar button (`SearchSettings.tsx`, unchanged
+   modal, issue #239); a Cardback toolbar button (`CommonCardback.tsx`,
+   unchanged modal — see §5's note on why this one keeps its own modal
+   rather than following the Choose Image "no modal" exception, issue
+   #240); and an Export ▾ dropdown composing `ExportXML`/`ExportImages`/
+   `ExportDecklist` alongside the existing Generate PDF / Save to Drive
+   buttons (issue #241). See §5 for the full component mapping.
+5. **Switchover** — once the flag-gated page has full instrument
+   parity with the editor + PDF tab combined (steps 2–4 above), flip the
+   default nav entry point to the new page; keep `/editor` and the PDF tab
+   reachable behind a "classic view" link for one deprecation window.
+6. **Retire old routes** — remove `/editor`'s grid-only view and the
    standalone PDF-generator tab once usage data / owner sign-off says
    it's safe; delete the flag.
 
 This sequencing means nothing in this proposal blocks on nothing else
-in it except step 4 on step 3, and the bleed-override rail slot on
-Proposal B's own separate PR-2 — every other instrument is independently
-shippable in any order once the shell from step 1 exists.
+in it except step 6 on step 5, and the bleed-override rail slot on
+Proposal B's own separate PR-2 — every other instrument (including the
+new steps 3 and 4 above) is independently shippable in any order once
+the shell from step 1 exists.
 
 ## Open decisions
 
@@ -662,3 +738,16 @@ shippable in any order once the shell from step 1 exists.
    today's editor grid cards. Whether the sheet needs its own zoom
    control (independent of the browser's own zoom) is unresolved — noted
    as a possible follow-up, not designed here.
+7. **`FinishSettings.tsx` (cardstock + foil) scoping.** A 2026-07-20
+   audit confirmed this is a genuinely distinct component from
+   `CardQualitySettings` (§5) — not a naming collision — and that it has
+   zero mapping anywhere in this doc. Deliberately not scoped as one of
+   the four tracked gaps/issues (see §5's new row); needs a future pass
+   to decide its toolbar treatment before it's built.
+8. **Adding more cards to a non-empty `/display` project.** Issue #238's
+   fix (§4.1) only covers the empty-project landing case. `/editor`'s
+   right panel keeps its `Import` dropdown mounted permanently, so more
+   cards can be added at any time; `/display` has no equivalent toolbar
+   affordance once a project is non-empty. Real gap for the "FULL
+   feature parity" goal, but outside issue #238's own scope — noted here,
+   not designed or filed as its own issue yet.

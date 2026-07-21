@@ -7,9 +7,11 @@ Spec: [`proposals/proposal-g-user-accounts-saved-decks.md`](../proposals/proposa
 5 sequenced PRs, all merged: schema+backend (#85), sign-in relocation (#86),
 the opaque-blob API (#94, a recreation after #88's stacked-PR base-deletion
 auto-close — see [`../lessons.md`](../lessons.md)), the client-side crypto
-module (#89), and the frontend UI wiring (#93). "PR-6, post-v1: deck
-portability" (export/import + the standalone decrypt tool) shipped as a
-later, separate frontend-only change — see its own section below.
+module (#89), and the frontend UI wiring (#93). PR-5 (per-deck share links,
+the spec's own "PR-5, post-v1" section) landed as a follow-up — see
+"Per-deck share links" below. "PR-6, post-v1: deck portability"
+(export/import + the standalone decrypt tool) shipped as a later, separate
+frontend-only change — see its own section below.
 
 ## Where it's wired in
 
@@ -139,6 +141,73 @@ cannot decrypt, by design, not by policy.
   shared `Toasts` system has no action-button support, so this doesn't
   embed a "save now" action in the toast itself.
 
+## Per-deck share links (PR-5)
+
+Key-in-URL-fragment sharing (spec's "PR-5, post-v1: per-deck share links") —
+the share URL's server-side request never carries key material, since the
+`shareKey` travels only in the fragment (`#...`), which no host ever
+receives.
+
+- **Backend** (`MPCAutofill/cardpicker/`): `SavedDeckShare` model (migration
+  `0076`), 4 endpoints — `POST 2/createDeckShare/`, `GET 2/deckShares/`
+  (owner-only, metadata: shareId/deckKey/createdAt/expiresAt, never
+  ciphertext), `POST 2/revokeDeckShare/` (owner-only, hard delete), and
+  `POST 2/getSharedDeck/` (the ONLY unauthenticated saved-decks endpoint —
+  no session/cookie/Origin-check involved at all, by design). Sharing is
+  restricted to `kind=deck` rows — snapshots can't be shared.
+  `SAVED_DECK_SHARE_MAX_PER_DECK` (default 20) is the per-deck abuse-guard
+  cap, mirroring `SAVED_DECK_MAX_PER_USER`'s reasoning.
+- **DELIBERATE, DOCUMENTED DEVIATION from the spec's literal prose**: a
+  share's `ciphertext`/`ciphertext_nonce` are a FROZEN COPY taken from the
+  owning deck at share-creation time, not a live reference to the deck's
+  current ciphertext (the spec's own wording — "unwraps that deck's
+  existing DEK... re-wraps that same DEK with the new shareKey" — reads as
+  a live-coupled design). This is forced by an already-shipped PR-4
+  invariant this PR builds on top of: `encryptDeckPayloadForSave` mints a
+  FRESH DEK on every ordinary save (`SaveDeckModal.tsx`'s ordinary
+  "Update" path, not just first-save) — a live-referencing share would
+  silently break the instant the owner made one ordinary edit to a shared
+  deck, which nothing in the spec documents as an accepted limitation.
+  Precedent for a frozen point-in-time copy already exists in this schema
+  (`SavedDeckKind.SNAPSHOT` rows); `SavedDeckShare` applies the same idea.
+  One consequence, also deliberate: rotating a deck's DEK (the "paranoid"
+  option, done via the ordinary `saveDeck` path — re-decrypt client-side,
+  re-encrypt under a fresh DEK, no bespoke backend endpoint needed for this)
+  does **not** invalidate any other still-outstanding share on that same
+  deck, since each share's snapshot is fully self-contained — a divergence
+  from the spec's prose ("other shares... need re-issuing"), reasoned
+  through and necessary given the shipped fresh-DEK-per-save behaviour it
+  interacts with. See `cardpicker.models.SavedDeckShare`'s docstring and
+  [`../troubleshooting.md`](../troubleshooting.md)'s matching entry.
+- **Frontend**: `savedDeckCrypto.ts` gained `generateShareKey`/
+  `wrapDeckKeyForShare`/`unwrapDeckKeyFromShare` and base64url helpers
+  (`bytesToBase64Url`/`base64UrlToBytes` — the spec names base64url
+  explicitly for the fragment). `features/savedDecks/deckShare.ts` composes
+  these with the existing `deckPayload.ts` parser (unmodified) into
+  `prepareDeckShare`/`decryptSharedDeck`. `ShareDeckModal.tsx` (owner-side:
+  create + list + revoke, wired into `MyDecksPage.tsx`'s named-deck rows
+  only) and `SharedDeckPage.tsx` + `SharedDeckViewer.tsx` (recipient-side,
+  behind the thin `pages/shared.tsx` wrapper — same split as
+  `MyDecksPage.tsx`/`pages/myDecks.tsx`) round it out. The recipient view is
+  deliberately **local-state only**, never touching the app's Redux
+  `project`/`cardDocuments` slices — a recipient never edits, so there's no
+  need to route a shared deck through `ProjectEditor`'s live state.
+- **URL shape deviation**: the spec's literal
+  `/shared/<shareId>#<shareKey-base64url>` puts `shareId` in a path
+  segment. This app is a Next.js static export on GitHub Pages, which has
+  no wildcard route fallback — a `[shareId]` dynamic path would need every
+  possible id enumerated at build time (`getStaticPaths`), impossible for
+  ids created at runtime. `shareId` therefore travels as a query param
+  instead (`/shared?shareId=<uuid>#<shareKey-base64url>`) — this changes
+  nothing about the property that's actually security-load-bearing: the
+  `shareKey` itself still travels only in the fragment.
+- **Tests**: the four scenarios the spec names explicitly (share
+  round-trip, a revoked share's fetch failing for all subsequent attempts,
+  rotation-on-revoke, and cross-deck isolation) are implemented as this
+  PR's own requirement — crypto-level in
+  `frontend/src/features/savedDecks/deckShare.test.ts`, endpoint-level in
+  `MPCAutofill/cardpicker/tests/test_saved_deck_share_views.py`.
+
 ## Deck portability (PR-6)
 
 Formalizes what the zero-knowledge, server-unbound design already implies:
@@ -198,8 +267,6 @@ changes, since export/import are fully served by the existing
 
 ## Not yet built (design-only addenda in the spec doc)
 
-- **PR-5, per-deck share links**: key-in-URL-fragment sharing, so a share
-  link's server-side request never carries key material. Nothing built.
 - **PR-7, art provenance**: per-slot provenance (`driveId`, `sourceName`,
   `sourceType`, optional `contentPhash`, `indexedBy`) in a future
   `deckPayload` version, so an un-indexed slot renders a direct-from-drive

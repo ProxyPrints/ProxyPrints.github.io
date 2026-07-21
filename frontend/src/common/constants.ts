@@ -103,6 +103,7 @@ export enum QueryTags {
   SampleCards = "sampleCards",
   SavedDecks = "savedDecks",
   CryptoProfile = "cryptoProfile",
+  DeckShares = "deckShares",
 }
 
 // docs/proposals/proposal-g-user-accounts-saved-decks.md §8 - matches the backend's

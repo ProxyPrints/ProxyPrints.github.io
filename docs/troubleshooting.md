@@ -771,3 +771,73 @@ says built it (`get_baked_git_sha`/`GIT_SHA` file, `cardpicker.utils`) file
 list, not just a spot-check of the files you happen to be touching — this
 gap was found by accident (checking whether a stub needed updating), not by
 a systematic audit, so other quietly-missing files may exist unnoticed.
+
+## A later "share/export this deck" design assumes a saved deck's DEK is stable, but it isn't
+
+**Symptom**: implementing a feature that shares or otherwise re-uses a saved
+deck's existing DEK across time (e.g. a share link that's supposed to keep
+tracking a deck's _live_ ciphertext) breaks the instant the deck is edited
+again — or, when designing such a feature, a spec's prose implies the
+deck's DEK only changes on an explicit action ("rotate"), never as a side
+effect of ordinary use.
+
+**Cause**: `encryptDeckPayloadForSave` (`frontend/src/features/savedDecks/deckPayload.ts`)
+mints a FRESH DEK on every single call to `saveDeck` — including an
+ordinary content-editing "Update {name}" save of an already-saved deck, not
+just first-save (see `SaveDeckModal.tsx`'s `handleSubmit`, which always
+calls `encryptDeckPayloadForSave` regardless of whether `key` is null).
+There is no code path that reuses an existing deck's DEK across saves. A
+design (this repo's own "PR-5, per-deck share links" spec included) can be
+written assuming the DEK is a stable, rarely-changing secret that only a
+deliberate "rotate" action touches — that assumption doesn't hold in this
+codebase and was never going to, once PR-4 shipped fresh-DEK-per-save.
+
+**Fix**: don't build anything that expects a saved deck's DEK, or its
+wrapped form, to survive an ordinary edit-save unchanged. Instead, snapshot
+whatever needs to be independent of future edits (ciphertext, wrapped-DEK
+material, etc.) at the moment it's captured — exactly what
+`SavedDeckKind.SNAPSHOT` already does for the load-safety flow, and what
+`SavedDeckShare` (PR-5) does for share links: a frozen copy taken at
+creation time, not a live reference. See
+[`features/saved-decks.md`](features/saved-decks.md)'s "Per-deck share
+links" section for the full writeup of this exact case.
+
+## `psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "pg_type_typname_nsp_index"` in django/worker startup logs during a rebuild
+
+**Symptom**: a raw `IntegrityError` traceback (Postgres `UniqueViolation`
+on `pg_type_typname_nsp_index`, a catalog-level constraint on
+composite/enum type names, not anything defined in this repo's own
+models) appears in the `django` or `worker` container's startup log
+during `migrate`, immediately after a prod rebuild — looking identical,
+at a glance, to the "entrypoint migrate crash" failure mode documented
+above.
+
+**Cause**: `docker/django/entrypoint.sh` runs `migrate` on **both**
+`django` and `worker` container startup (see "Entrypoint + migrate
+composition traps" above), and a prod rebuild starts both containers
+close together. When a migration creates a Postgres composite/enum type
+(anything that registers a row in `pg_type`), two concurrent `migrate`
+invocations can both pass Django's own "has this migration already
+applied" check before either commits, then both attempt the same
+type-creating DDL — one wins, the other raises this `UniqueViolation`.
+This is a benign startup race between the two containers' own `migrate`
+steps, not data loss or a corrupt migration.
+
+**How to confirm it's this and not real damage**: check that the
+migration named in the traceback shows as applied
+(`python manage.py showmigrations <app>`) and that the table/type it
+creates has the expected schema (`\d <table>` in `psql`, or
+`Model.objects.first()` field-by-field) — if both check out, the losing
+container's `migrate` simply no-opped after the race and the winning
+one's write stands; no rerun or manual intervention needed. Confirmed
+exactly this outcome for `0076_saveddeckshare` on 2026-07-20 (8 columns,
+schema correct, migration applied) immediately after seeing this
+traceback in a fresh rebuild's logs.
+
+**Fix**: none applied — this is an accepted, self-healing race inherent
+to running `migrate` from two containers on the same startup, not a bug
+in the migration itself. If it starts blocking a container from reaching
+a healthy state (rather than just logging once and continuing), that
+would indicate a real regression and is worth revisiting; gating one of
+the two containers' `migrate` calls behind a lock, or having only one
+container run it, is a fix not yet implemented.

@@ -1,0 +1,20 @@
+{
+  "title": "Get Shared Deck Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ciphertext": { "type": "string" },
+    "ciphertextNonce": { "type": "string" },
+    "wrappedDek": { "type": "string" },
+    "wrappedDekNonce": { "type": "string" },
+    "createdAt": { "type": "string" }
+  },
+  "required": [
+    "ciphertext",
+    "ciphertextNonce",
+    "wrappedDek",
+    "wrappedDekNonce",
+    "createdAt"
+  ],
+  "additionalProperties": false
+}

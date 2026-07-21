@@ -185,6 +185,20 @@ class UserCryptoProfileFactory(factory.django.DjangoModelFactory):
     recovery_wrapped_master_key_nonce = factory.LazyFunction(lambda: os.urandom(12))
 
 
+class SavedDeckShareFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.SavedDeckShare
+
+    # no SubFactory default for `deck` - callers always pass an explicit SavedDeckFactory
+    # instance, same convention as SavedDeckFactory's `owner` note above. ciphertext/nonces/
+    # wrapped_dek are opaque to the backend, same reasoning as SavedDeckFactory.
+    ciphertext = factory.LazyFunction(lambda: os.urandom(64))
+    ciphertext_nonce = factory.LazyFunction(lambda: os.urandom(12))
+    wrapped_dek = factory.LazyFunction(lambda: os.urandom(48))
+    wrapped_dek_nonce = factory.LazyFunction(lambda: os.urandom(12))
+    expires_at = None
+
+
 class ImageEvidenceFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = models.ImageEvidence

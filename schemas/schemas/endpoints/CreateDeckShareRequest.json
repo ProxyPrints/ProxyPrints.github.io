@@ -1,0 +1,13 @@
+{
+  "title": "Create Deck Share Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "deckKey": { "type": "string" },
+    "wrappedDek": { "type": "string" },
+    "wrappedDekNonce": { "type": "string" },
+    "expiresInDays": { "type": ["integer", "null"] }
+  },
+  "required": ["deckKey", "wrappedDek", "wrappedDekNonce", "expiresInDays"],
+  "additionalProperties": false
+}
