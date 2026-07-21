@@ -7,6 +7,7 @@ module consumes stored `ImageEvidence` rows only, same "host venv, no network" p
 `test_local_calculate_verdicts.py` already establishes for this pipeline's later stages.
 """
 
+from cardpicker.default_tags import seed_default_tags
 from cardpicker.local_detect_ai_art import (
     AI_ART_ANONYMOUS_ID,
     AI_ART_CONFIDENCE_MULTI_FIELD,
@@ -42,6 +43,13 @@ _COMPLETE_EXTRACTOR_VERSIONS = {
 
 
 def _seed_tag() -> Tag:
+    # AI-Generated is plain STANDARD (owner decision, 2026-07-21) - seeded via
+    # cardpicker.default_tags (its DEFAULT_TAGS entry, the filename-bracket-tagging path), not
+    # cardpicker.sensitive_tags. seed_sensitive_tags() is still called here too so this fixture
+    # also exercises FORMERLY_SENSITIVE_TAG_NAMES' downgrade-sync no-op path on a fresh/never-
+    # sensitive row (it's a harmless no-op either way, and matches real seeding order in
+    # management commands, which run both).
+    seed_default_tags()
     seed_sensitive_tags()
     return Tag.objects.get(name=AI_GENERATED_TAG_NAME)
 
@@ -188,7 +196,9 @@ class TestRunAiArtDetector:
 
     def test_write_casts_a_vote_and_never_resolves_alone(self, db):
         tag = _seed_tag()
-        assert tag.moderation_class == TagModerationClass.SENSITIVE
+        # owner decision 2026-07-21: AI-Generated is plain STANDARD, not SENSITIVE - ordinary
+        # crowd consensus is fine for this tag; see sensitive_tags.py's SENSITIVE_TAGS comment.
+        assert tag.moderation_class == TagModerationClass.STANDARD
         card = CardFactory(name="Some Card", content_phash=42)
         _evidence(card, legal_line_raw_text="2024 not for resale trademtgen midjourney")
 

@@ -13,4 +13,7 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         stats = seed_sensitive_tags()
-        print(f"Sensitive tags: {stats['created']} created, {stats['updated']} updated.")
+        print(
+            f"Sensitive tags: {stats['created']} created, {stats['updated']} updated, "
+            f"{stats['downgraded']} downgraded."
+        )
