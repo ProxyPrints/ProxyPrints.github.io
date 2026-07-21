@@ -873,6 +873,40 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   });
 });
 
+// Issue #287 (docs/proposals/proposal-h-display-layout-spec.md §7 conflict #3) - the audit's own
+// reference viewport (1400x900, wider than the default 1280x720 Desktop-tier one every other test
+// in this file uses) with both rails inline: before this fix, the app-wide 1200px ContentMaxWidth
+// cap left the center sheet region only ~520px wide (1200 - 380 left rail - 300 right rail)
+// regardless of how much real viewport width was available past 1200px; ProjectContainer's new
+// `fullWidth` opt-out (Layout.tsx) lets /display's sheet region use the actual available width
+// instead, ~720px at this viewport - matching the naturally-uncapped <1200px laptop tier the audit
+// used as its own reference point. Scoped to its own describe block (test.use({ viewport })) per
+// this file's own established pattern (see the phone-viewport block below).
+test.describe("DisplayPage - wide desktop viewport (issue #287)", () => {
+  test.use({ viewport: { width: 1400, height: 900 } });
+
+  test("the center sheet region is measured near the audit's uncapped ~720px figure, not the capped ~520px one", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "my search query");
+    await page.getByRole("link", { name: "Display (beta)" }).click();
+
+    await expect(page.getByTestId("display-page")).toBeVisible();
+    const sheetRegion = page.getByTestId("display-sheet-region");
+    await expect(sheetRegion).toBeVisible();
+    const box = await sheetRegion.boundingBox();
+    expect(box).not.toBeNull();
+    // Comfortably above the old ~520px cap-derived figure and close to the audit's own ~720px
+    // uncapped reference (a small tolerance band, not an exact px match, since the region's own
+    // padding/scrollbar presence isn't part of either figure's arithmetic).
+    expect(box?.width ?? 0).toBeGreaterThan(650);
+    expect(box?.width ?? 0).toBeLessThan(790);
+  });
+});
+
 // Issue #266 (docs' /display responsive layout spec, §4/§6 R2/R6) - the phone-tier journey that
 // gates the whole #231 switchover decision: "tapping a card highlights it but surfaces nothing"
 // (the owner's own repro) is fixed by the left rail becoming a real bottom-sheet drawer below

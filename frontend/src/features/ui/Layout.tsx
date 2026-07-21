@@ -45,21 +45,45 @@ const ContentContainer = styled(Container)`
   height: calc(100dvh - ${NavbarHeight}px); // handles the ios address bar
 `;
 
-const MaxWidthContainer = styled(Container)`
-  max-width: ${ContentMaxWidth}px;
+interface MaxWidthContainerProps {
+  fullWidth?: boolean;
+}
+
+// Issue #287 - `fullWidth` is an additive, optional escape hatch from the app-wide
+// `ContentMaxWidth` cap (default `false`/unset, i.e. every existing caller's behaviour is
+// unchanged). Container isn't a native DOM tag, so Emotion forwards every prop to it by default
+// (including this component-only one) unless told not to - shouldForwardProp keeps `fullWidth`
+// stopping at this boundary rather than leaking onto the underlying `<div>` (same
+// "React does not recognize the X prop" fix OverflowCol.tsx already uses for its own style-only
+// props). When true, the max-width override is removed entirely (not swapped for some other fixed
+// value) - `fluid` is passed straight through to react-bootstrap's `Container` alongside it so its
+// own default (non-fluid) breakpoint max-widths don't reassert themselves once our override is
+// gone. See this prop's own call site in display.tsx for why /display needs this: two
+// 1200px-breakpoint-inline rails otherwise leave the sheet region only ~520px wide inside the cap,
+// vs. ~720px uncapped - docs/proposals/proposal-h-display-layout-spec.md §7 conflict #3.
+const MaxWidthContainer = styled(Container, {
+  shouldForwardProp: (prop) => prop !== "fullWidth",
+})<MaxWidthContainerProps>`
+  max-width: ${(props) => (props.fullWidth ? "none" : `${ContentMaxWidth}px`)};
 `;
 
 interface ProjectContainerProps {
   gutter?: number;
+  fullWidth?: boolean;
 }
 
 export function ProjectContainer({
   gutter = 2,
+  fullWidth = false,
   children,
 }: PropsWithChildren<ProjectContainerProps>) {
   return (
     <ContentContainer fluid className={`g-${gutter}`}>
-      <MaxWidthContainer className={`g-${gutter}`}>
+      <MaxWidthContainer
+        fluid={fullWidth}
+        fullWidth={fullWidth}
+        className={`g-${gutter}`}
+      >
         {children}
       </MaxWidthContainer>
     </ContentContainer>

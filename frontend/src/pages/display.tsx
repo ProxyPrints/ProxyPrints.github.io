@@ -33,7 +33,12 @@ export default function Display() {
     );
   }
   return (
-    <ProjectContainer gutter={0}>
+    // Issue #287 - opts out of the app-wide 1200px ContentMaxWidth cap: at >=1200px viewports
+    // with both rails inline, the cap otherwise leaves only ~520px for the center sheet region
+    // (1200 - 380 left rail - 300 right rail) where the approved design calls for ~720px (the
+    // same width the naturally-uncapped <1200px laptop tier already renders at). See Layout.tsx's
+    // ProjectContainer/MaxWidthContainer for the additive mechanism this opts into.
+    <ProjectContainer gutter={0} fullWidth>
       <Head>
         <title>Display (Preview)</title>
         <meta
