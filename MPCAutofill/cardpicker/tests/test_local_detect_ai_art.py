@@ -25,6 +25,7 @@ from cardpicker.models import (
     CardTagVote,
     Tag,
     TagModerationClass,
+    TagVoteStatus,
     VotePolarity,
     VoteSource,
 )
@@ -203,8 +204,10 @@ class TestRunAiArtDetector:
 
         card.refresh_from_db()
         # a single VoteSource.OCR vote (weight 0.5, no human-backed vote alongside it) can never
-        # clear resolve_weighted_consensus's own human-backed gate, regardless of moderation_class.
-        assert card.tag_vote_statuses.get(AI_GENERATED_TAG_NAME) != "resolved_apply"
+        # clear resolve_weighted_consensus's own human-backed gate, regardless of moderation_class -
+        # exactly UNRESOLVED (not CONTESTED/PENDING_APPROVAL/RESOLVED_*), asserted against the real
+        # enum value rather than a literal string.
+        assert card.tag_vote_statuses.get(AI_GENERATED_TAG_NAME) == TagVoteStatus.UNRESOLVED
         assert AI_GENERATED_TAG_NAME not in card.tags
 
         # the same gate-check pattern Stage D uses (local_calculate_verdicts/purge_machine_votes) -
