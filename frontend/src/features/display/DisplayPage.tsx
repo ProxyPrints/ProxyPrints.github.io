@@ -65,6 +65,13 @@
  * source reordering/toggling at all on this page. SearchSettings.tsx (the same self-contained
  * trigger-button-plus-modal ProjectEditor.tsx already mounts) is relocated in, unmodified - same
  * Modal, same searchSettingsSlice read/write, same setLocalStorageSearchSettings persistence path.
+ *
+ * Issue #240 (Cardback toolbar parity, design doc §5's CommonCardback row) - the toolbar
+ * previously had no way to reach the project-wide cardback picker at all on this page (only the
+ * classic editor's own right panel could). CardbackToolbarButton (CommonCardback.tsx) is a new,
+ * small button+modal pairing - reusing MemoizedCommonCardbackGridSelector's existing
+ * GridSelectorModal verbatim - rather than mounting CommonCardback itself, since that component's
+ * swatch/prev-next CardFooter chrome belongs to the editor's right panel, not a toolbar button.
  */
 import styled from "@emotion/styled";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -93,6 +100,7 @@ import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { RightPaddedIcon } from "@/components/icon";
 import { RenderIfVisible } from "@/components/RenderIfVisible";
 import { Spinner } from "@/components/Spinner";
+import { CardbackToolbarButton } from "@/features/card/CommonCardback";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
 import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
@@ -987,6 +995,14 @@ export function DisplayPage() {
             dividing line, so it belongs beside the other deck-level controls above, not in the
             per-slot rail. */}
         <SearchSettings />
+
+        {/* Issue #240 (design doc §5's CommonCardback row) - a project-wide setting (§2's own
+            dividing line: true of the whole deck, not one selected slot), so it belongs here
+            beside the other deck-level controls rather than in the per-slot rail. Opens the same
+            GridSelectorModal instance CommonCardback.tsx's editor mount already owns - see that
+            component's own CardbackToolbarButton comment for why this is a new button rather
+            than mounting CommonCardback itself. */}
+        <CardbackToolbarButton />
 
         <div className="ms-auto d-flex align-items-center gap-2">
           {isGoogleDriveAppConfigured() && (

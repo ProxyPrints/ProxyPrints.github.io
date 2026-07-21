@@ -5,10 +5,12 @@
  */
 
 import React, { memo, useState } from "react";
+import Button from "react-bootstrap/Button";
 
 import { Back } from "@/common/constants";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { wrapIndex } from "@/common/utils";
+import { RightPaddedIcon } from "@/components/icon";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import { CardFooter } from "@/features/card/CardFooter";
 import { GridSelectorModal } from "@/features/gridSelector/GridSelectorModal";
@@ -169,6 +171,50 @@ export function CommonCardback({ selectedImage }: CommonCardbackProps) {
         />
       )}
     </div>
+  );
+}
+
+//# endregion
+
+//# region cardback toolbar button (issue #240, design doc §5's CommonCardback row)
+
+/**
+ * A standalone trigger for the same self-contained cardback picker `CommonCardback` (above)
+ * already owns - for a surface with no per-slot swatch/prev-next `CardFooter` to hang a "change"
+ * button off (the unified display page's toolbar, `DisplayPage.tsx`), this exposes just the
+ * button+modal half directly rather than the full swatch card. Reuses
+ * `MemoizedCommonCardbackGridSelector`'s existing `GridSelectorModal` verbatim - same
+ * `searchCardbacks` results, same `bulkReplaceSelectedImage`/`setSelectedCardback` dispatch on
+ * selection. NOT the same "no modal, ever" exception the design doc's §4.4′ carves out for the
+ * per-slot Choose Image picker - that ban is specifically about a second modal stacking over an
+ * already-open rail/drawer; this standalone, project-wide picker opens directly from the toolbar
+ * with nothing else open behind it, so it keeps its existing modal as-is (see §5's row).
+ */
+export function CardbackToolbarButton() {
+  const searchResults = useAppSelector(selectCardbacks);
+
+  const [showGridSelector, setShowGridSelector] = useState<boolean>(false);
+  const handleShowGridSelector = () => setShowGridSelector(true);
+  const handleCloseGridSelector = () => setShowGridSelector(false);
+
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="outline-secondary"
+        onClick={handleShowGridSelector}
+      >
+        <RightPaddedIcon bootstrapIconName="image" />
+        Cardback
+      </Button>
+      {showGridSelector && (
+        <MemoizedCommonCardbackGridSelector
+          searchResults={searchResults}
+          show={showGridSelector}
+          handleClose={handleCloseGridSelector}
+        />
+      )}
+    </>
   );
 }
 
