@@ -47,6 +47,19 @@ ALLOWLIST = {
         "architecture (publish_wiki.py/publish_site.py) — not a live "
         "reference, not a forward-reference to something not yet built"
     ),
+    "frontend/src/features/display/useProjectDraftBackup.ts": (
+        "docs/proposals/proposal-h-display-layout-spec.md's ADDENDUM D9/F1 — "
+        "a forward reference to a proposed-but-not-yet-built file (the deck "
+        "auto-backup hook), explicitly flagged in that same doc's §A2 as "
+        "needing its own future issue; issue #267's implementation (this "
+        "repo's most recent /display PR) deliberately did not build it"
+    ),
+    "frontend/src/pages/print.tsx": (
+        "docs/proposals/proposal-h-display-layout-spec.md's ADDENDUM D10/F5 — "
+        "a forward reference to a proposed-but-not-yet-built thin route "
+        "wrapper (the Print-page rehoming), tracked under issue #272 item 3; "
+        "issue #267's implementation deliberately did not build it"
+    ),
 }
 
 PATH_EXTENSIONS = (

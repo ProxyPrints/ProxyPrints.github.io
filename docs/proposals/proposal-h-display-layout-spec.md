@@ -3,8 +3,25 @@
 Design target for the unified display page (`frontend/src/features/display/DisplayPage.tsx`,
 route `frontend/src/pages/display.tsx`). Companion mockup: `display-mockup.html` (same
 directory; open standalone via file://, use its top demo strip to force any breakpoint's
-view at any window width). All primitives are react-bootstrap 2.10.10 / Bootstrap 5.3.8
-(confirmed installed, including responsive-Offcanvas). No new dependencies.
+view at any window width) — the committed mockup under
+`docs/proposals/mockups/proposal-h/` predates this file's ADDENDUM (polish round) and
+D17/D18 additions; syncing it is tracked separately, not part of this doc's own text sync.
+All primitives are react-bootstrap 2.10.10 / Bootstrap 5.3.8 (confirmed installed,
+including responsive-Offcanvas). No new dependencies.
+
+**Implementation status (2026-07-21):** #266 shipped (PR #274 — sheet fit-to-width,
+both rails as `Offcanvas` nodes). This PR ships #267's own mapped rows only: **D12 v1**
+(dual-mode Add/Browse `ToggleButtonGroup` + `CatalogBrowseResults.tsx`, filters-first
+plain text — the typed operator grammar is explicitly out of scope, tracked as #276),
+**D15** (the existing `Import.tsx` Text/XML/CSV/URL dropdown, mounted verbatim), and
+**D13's landing/search-bar feedback half** (`InvalidIdentifiersStatus`, mounted in both
+the populated-state action bar and the empty-project landing — the right-rail Status
+row is D13's OTHER half, issue #272's own remaining scope, not this PR's). Deliberately
+NOT built here: D9–D11/D14/D16 (own future issues, per §A2's own issue mapping), and
+D17/D18 (sheet-presentation refinement + default card-spacing change — #266-adjacent,
+appeared in this spec after #267's implementation task was scoped, mapped to neither
+#267 nor any other filed issue yet; flagged for the owner to file as its own follow-up
+rather than folded into this PR sight-unseen).
 
 Issue mapping (explicit):
 
@@ -363,6 +380,13 @@ Print defaults + calibration (D4–D6, D8):
 - **C2** `frontend/src/features/pdf/pdfImage.ts` / `pdf.worker.ts` — canvas
   color-matrix application of the calibration at image-render; CSS `filter`
   approximation applied to `PagePreview` slot images for live preview.
+- **M2** (D18) `DisplayPage.tsx:646` — the `spacing` memo default
+  `{ row: 0, col: 0 }` → `{ row: 14.5, col: 0 }` (asymmetric inter-card gutter:
+  0mm horizontal, 14.5mm vertical). One-line change; the memo already feeds
+  `computeLayout`, `PagePreview`'s `spacing` prop, and `exportPdfProps`'
+  `cardSpacingRowMM`/`cardSpacingColMM`, so preview and PDF move together.
+  `layout.ts` untouched (it takes spacing as an argument). No new control surface
+  — this is a default only; a user spacing editor is out of scope here.
 
 Action bar / search (#267):
 
@@ -438,3 +462,458 @@ the right rail is visible on a ~390px phone. "State" button flips populated ↔
 empty (landing). Landscape Letter 4×2 borderless sheets (D4–D6), outline-only
 presentation (D7), Color Calibration group in the right rail (D8), left-rail
 content ordered per D3.
+
+---
+
+# ADDENDUM — polish round (2026-07-21): finish workflow, browse, status, confidence
+
+Scope: the second design round the owner scoped in issue #272's comment
+("deck auto-backup + Save-co-equal-with-Print finish footer, and rehoming the
+4-tab print page as the funnel destination") plus the placement decisions on
+#272 items 2/4/5/7 and the #271 confidence funnel. **D1–D8 are unchanged**;
+§1–§8 above stand. This addendum adds decisions D9–D16, extends the change
+inventory (§6) with new rows, and extends the issue mapping. Standing
+constraints from the base spec still bind: repurpose /editor components (never
+fork), compose in display-side containers so shared components stay
+upstream-clean, react-bootstrap primitives only, three-region language.
+
+## A0. Owner decisions log (polish round)
+
+- **D9 — Finish footer: Save Deck and Print/Export are CO-EQUAL primaries, and
+  persistence always precedes PDF rendering.** HARD OWNER CONSTRAINT (verbatim):
+  _"save deck should come before PDF completes because we have to rely on
+  clients available mem for the PDF."_ PDF generation is the client's most
+  memory-hungry step and can OOM/crash the tab; therefore the working project
+  is persisted BEFORE any PDF render begins, and PDF completion is never the
+  gate to saving. Three mechanisms, layered:
+
+  1. **Silent local draft auto-backup** (new `useProjectDraftBackup` hook,
+     `localStorage`). The working project — decklist identifiers, per-slot
+     queries/overrides, and the page/finish/calibration settings — is mirrored
+     to `localStorage` on a debounced write after every project mutation. This
+     stores **indexes and settings only, never image pixels**, so it satisfies
+     the governing premise ("we index, we do not store images") on our own disk
+     as strictly as on the wire. It is anonymous-safe (no account, no server,
+     no crypto) and is the crash/OOM safety net specifically: if the tab dies
+     mid-PDF-render, the draft survives. On next `/display` visit with a
+     non-empty draft and an empty project, a one-line "Restore your unsaved
+     work?" nudge offers to rehydrate it. Serialization reuses
+     `deckPayload.ts`'s `buildDeckPayload` **plaintext** shape (NOT the
+     encrypted wire format — it is the user's own browser); a `draftVersion`
+     rides the same forward-upgrade path `parseDeckPayload` already uses.
+  2. **Promotion nudge** ("draft backed up — name and save it?"). At natural
+     moments — post-import (project just went from empty to populated) and
+     pre-print (Print/Export pressed) — a non-blocking nudge invites promoting
+     the local draft to a real, encrypted, account-bound saved deck. Reuses the
+     existing `Toasts` system and the existing mid-session-sign-in nudge
+     precedent (saved-decks.md: "a one-time, informational-only toast nudges an
+     anonymous user who signs in"). Anonymous users' nudge routes through sign-in
+     first (server save is authenticated-only — Discord OAuth — by construction;
+     the local draft is the anonymous user's only persistence, and that is fine).
+  3. **Pre-print save prompt flow.** Pressing **Print/Export** runs a persist
+     step FIRST, before any navigation or render: (a) flush the local draft
+     synchronously; (b) if authenticated AND the project is dirty
+     (`savedDeckSessionSlice` dirty-check / `lastSavedRevision`), show a
+     lightweight "Save before printing?" prompt (Save `SaveDeckModal` / Skip) —
+     mirroring the existing `LoadSafetyModal` "always take a safety copy before a
+     destructive step" pattern, here applied to the PDF-render step instead of a
+     deck-load step; (c) only after persistence resolves does navigation to the
+     Print page (D10), and therefore any PDF render, begin. Saving gates PDF;
+     PDF never gates saving.
+
+  Footer layout (replaces §4.2's "Prepare Print footer" three-button stack):
+  the pinned `rail-foot` holds **two co-equal `btn-primary` buttons of equal
+  width side by side — `Save Deck` and `Print / Export →`** — with a secondary
+  `Export ▾` (the lightweight `DisplayExportMenu`: XML / decklist / images, none
+  of which are memory-heavy) below them. The memory-heavy operations (Generate
+  PDF, Save PDF to Google Drive) move OUT of the footer to the Print page (D10),
+  so the footer itself can never trigger an OOM. Component sources:
+  `SavedDeckPanel.tsx`/`SaveDeckModal.tsx` (Save), `savedDeckSessionSlice`
+  (dirty check), `LoadSafetyModal.tsx` (the safety-save precedent),
+  `DisplayExportMenu` (lightweight exports). NEW code: `useProjectDraftBackup`
+  hook + a `PrePrintSaveGate` composition. This surface needs its OWN issue.
+
+- **D10 — The 4-tab "Print!" page is the funnel DESTINATION, kept intact.**
+  `FinishedMyProject.tsx` (the MakePlayingCards / NotMPC / PringlePrints supplier
+  tabs + the `PDFGenerator` "PDF" sub-tab) is unchanged. Today it is only
+  reachable as the /editor "Print!" tab (`ProjectEditor.tsx`'s `PrintPanel`,
+  there is no standalone route). D10 gives it a thin route wrapper —
+  **`pages/print.tsx` mounting `PrintPanel`/`FinishedMyProject`** — mirroring the
+  established `pages/myDecks.tsx`→`MyDecksPage` and `pages/shared.tsx`→
+  `SharedDeckPage` wrapper pattern (compose, don't fork). The Finish footer's
+  `Print / Export →` button navigates there via client-side nav, which preserves
+  the in-memory project (DisplayPage.tsx already relies on this for the
+  /display↔/editor hop). The D9 pre-print persist runs before this navigation.
+  **Where the MPC/supplier links live:** they stay in the Print page's own tabs —
+  that page IS the print off-ramp (#272 item 3). They are NOT duplicated into the
+  /display right rail; the rail funnels to the page, the page owns the supplier
+  links and the heavy PDF generation. `PDFGenerator` keeps mounting
+  `PostExportContributionPrompt` itself, so the /whatsthat funnel fires on the
+  Print page for free (print-export-page.md). The /editor "Print!" tab keeps
+  working unchanged — both /display and /editor now funnel to the same
+  destination.
+
+  **D10 owner addendum (2026-07-21, relayed):** two changes to the Print page's
+  own tabs, folded into this funnel-destination design:
+
+  1. **Tab REORDER + default.** Owner order (verbatim, autocorrect noise
+     resolved): _"PDF is default, then MPC, then NotMOC, then Pringle."_ Mapped
+     to the page's actual tab names (`FinishedMyProject.tsx`'s
+     `FinishedMyProjectExportType` keys / `navBannerItems`, per
+     print-export-page.md):
+
+     - `PDF` → **PDF** tab (`"pdf"`)
+     - `MPC` → **MakePlayingCards** tab (`"mpc"` — the key is literally `mpc`;
+       the tab is titled MakePlayingCards)
+     - `NotMOC` → **NotMPC** tab (`"notmpc"` — "NotMOC" is autocorrect for NotMPC)
+     - `Pringle` → **PringlePrints** tab (`"pringleprints"`)
+
+     New order: **PDF · MakePlayingCards · NotMPC · PringlePrints**, with **PDF as
+     the default/first active tab** (today the array order is PDF / PringlePrints
+     / MakePlayingCards / NotMPC and the default active tab is `pringleprints` —
+     both change). The mapping is unambiguous, so no open question here.
+
+  2. **PDF tab drops its own preview.** The `PDFGenerator` PDF sub-tab currently
+     renders its own live PDF preview; on /display the CENTER sheet region (§2,
+     the fit-to-width landscape stack) is now the single preview, so the Print
+     page's PDF tab keeps **generation + settings only** and drops the embedded
+     preview. This is a change to `PDFGenerator`'s composition when mounted via
+     the funnel — express it as a prop on the shared component (e.g.
+     `showPreview={false}`) composed from the display-side caller, NOT a fork, so
+     the /editor "Print!" tab can keep its own preview if desired. (Since the
+     right-rail footer's heavy PDF generation already moves to this tab per D10,
+     the preview-less PDF tab is purely the generate/settings surface reached
+     after the D9 save gate.)
+
+- **D11 — FinishSettings (foil/finish) → right-rail settings drawer** (owner
+  decision, #272 item 4). `features/finishSettings/FinishSettings.tsx` (a
+  cardstock `Form.Select` of 5 stocks + a Foil/Non-Foil `Toggle`, auto-disabled
+  for non-foil-compatible stocks via `CardstockFoilCompatibility`, backed by
+  `finishSettingsSlice`) mounts as a collapsed-by-default **`Finish` section**
+  (`AutofillCollapse`) in the right rail's settings region (§4.2), placed after
+  **View** and before **Cardback**. No fork — the same component /editor's
+  MakePlayingCards finish step mounts. Already persists per saved deck via the
+  `finishSettingsSlice`→`deckPayload.ts` precedent (the exact path D8's
+  `colorCalibrationSlice` rides), so no new persistence plumbing.
+
+- **D12 — Catalog browse via a DUAL-MODE search bar** (owner decision, #272 item
+  5 + #267 — replaces porting `CardGrid` as its own page). The #267 populated-
+  state search bar (§3) gains two modes:
+
+  - **Add** (default): Enter runs the existing
+    `convertLinesIntoSlotProjectMembers`/`addMembers` pipeline — adds to the deck
+    (unchanged from §3).
+  - **Browse**: the same input queries the CATALOG and renders results in the
+    CENTER region, reusing the GridSelector search machine —
+    `useGridSelectorSearch.ts` + `GridSelectorFilters.tsx` +
+    `SelectVersionResults.tsx`'s `SelectVersionTile`/`MemoizedEditorCard` tiles
+    (the same family already mounted in the left rail's Select Version section).
+
+  **Component-reuse honesty (corrects the base spec's shorthand):** `CardGrid.tsx`
+  is NOT the catalog — it renders the _project's own members_ as slots
+  (front/back arrays of `MemoizedCardSlot`). So the browse-results grid is built
+  from `SelectVersionResults`'s tile + `useGridSelectorSearch`'s
+  `sortedFilteredIdentifiers`, using `CardGrid`'s responsive `Row`/`Col`
+  layout (`xxl=4 lg=3 md=2 sm=1 xs=1`) only as the visual template — CardGrid
+  itself is not forked or re-mounted for browse.
+
+  **Search feature-set scope (honest gap):** the source-filter / DPI / size /
+  language / printing-tag / fuzzy-vs-precise settings the owner named already
+  exist as `features/searchSettings/` (`SourceSettings`, `FilterSettings` over
+  `features/filters/`, `SearchTypeSettings`) and are reused directly. But a
+  **Scryfall-style operator/tag query grammar** (`set:2x2 t:instant …`) has **no
+  UI today** — the freeform query grammar currently lives only in the import-text
+  path (`common/processing.ts`), per-line, not a live search bar. Browse mode's
+  operator support is therefore partly net-new: it reuses the existing filter
+  settings verbatim and adds an operator-aware query parse over the browse input.
+  Flagged as an open question — how much operator grammar is in-scope for v1.
+
+  **Mode UX.** A segmented `ToggleButtonGroup` (two buttons, `Add` / `Browse`)
+  sits at the LEFT edge of the search bar as its mode prefix; the active mode
+  also drives the input placeholder (`Add cards… e.g. 3x Lightning Bolt` vs
+  `Search the catalog… (set:2x2 t:instant …)`). In Browse mode a filter row
+  (repurposed `GridSelectorFilters` — source/DPI/size/language/printing-tag
+  filters) appears directly under the bar. **Where results render:** the CENTER
+  region gains a two-state switch — **`Print sheets` / `Browse results`** — so the
+  user always knows what the center is showing; entering Browse mode flips the
+  center to the results grid, leaving Print sheets one tap away. **Browse result →
+  deck add:** each result tile carries an inline **`+ Add`** affordance reusing
+  `AddCardToProjectForm`'s existing add path (the same one the card-detail modal
+  exposes) — turning a browse hit into a deck slot without leaving Browse.
+  Clearing the query (or tapping `Print sheets`) returns the center to the sheet
+  stack. No new page — the machinery is composed into a display-side
+  `CatalogBrowseResults` container.
+
+- **D13 — Project status surface** (#272 item 2). Import failures (invalid
+  identifiers) and runtime image failures get two coordinated homes, both
+  repurposing existing components (`features/status/Status.tsx`,
+  `features/invalidIdentifiers/InvalidIdentifiersStatus.tsx` +
+  `InvalidIdentifiersModal.tsx`, `invalidIdentifiersSlice`):
+
+  1. **Landing / search-bar feedback**: right after an import (paste or
+     Import-dropdown), unresolved identifiers surface inline beside the search
+     bar via the existing `InvalidIdentifiersStatus` component (a
+     `variant="primary"` Jumbotron with a `variant="warning"` "Review Invalid
+     Cards" button that dispatches `showModal("invalidIdentifiers")` → the
+     `InvalidIdentifiersModal` slot/face/query/identifier table). It self-hides
+     when `selectInvalidIdentifiersCount === 0`, so it costs nothing when clean.
+     On the empty-project landing the same component attaches under the paste
+     column.
+  2. **Right-rail status row**: a persistent **Status row** at the TOP of the
+     right rail (above Page Setup) that mounts `Status.tsx` (=
+     `InvalidIdentifiersStatus` + `ProjectStatus`) as a compact aggregation —
+     when clean it collapses to a single "No issues" line; when
+     `selectInvalidIdentifiersCount > 0` (or an image failed) it shows a
+     `degraded`-styled "N warnings" summary opening the same modal. This is the
+     "something's wrong with your project" surface /display lacks today, reachable
+     from the gear below xl.
+
+- **D14 — Printing-confidence funnel in the left-rail PROMOTED identity zone**
+  (#271). A compact **confidence element** joins the always-visible identity
+  header (§4.1 promoted zone — this is identity information, not demoted
+  metadata), directly under the card name + `RequestedPrintingBadge`:
+
+  `[⛨ set symbol] SET · 117 · 92% confident · [✗ not this printing]`
+
+  - **Set symbol**: the existing `SetIcon` (`components/SetIcon.tsx`, a Keyrune
+    `ss ss-<code>` glyph) — already mounted in `CardDetailedViewModal`,
+    `PrintingTagPicker`, `QuestionFeed`.
+  - **Confidence read**: reuses the `resolved`/`suggested` status the printing
+    grouping already computes (`selectVersionGrouping.ts` —
+    `canonicalCard` present ⇒ human-resolved/high-confidence; only
+    `suggestedCanonicalCard` ⇒ machine-suggested/lower-confidence; the
+    `suggestedCanonicalCard`/`tagVoteStatuses` plumbing marked shipped in #236).
+    A `resolved` printing reads "confirmed"; a `suggested` one shows the
+    machine-suggested confidence.
+  - **Scryfall image on hover**: an `OverlayTrigger`+`Popover` on the set symbol
+    shows the Scryfall image of that printing — **display-serving only, from
+    Scryfall's own CDN, nothing stored** (satisfies the governing premise and
+    #271's own note).
+  - **One-click "incorrect"**: the `✗ not this printing` control casts a REAL
+    human vote through the existing consensus path (`useTagVoting` /
+    `AttributeVotingPanel`'s submission — no new vote semantics), the human half
+    of the Stage D machine-vote funnel (#271), composing with the review queue
+    (#262).
+
+  Reconciliation with #271's "don't push to design" note: that hold was against
+  the _then-current_ #266–268 mockup round; the owner has now explicitly scoped
+  the confidence funnel INTO this polish round (task item 6), so it is designed
+  here. The implementation still sequences after the #266–268 layout lands, per
+  #271.
+
+- **D15 — Import variety confirmed in the search-bar Import dropdown** (#272 item
+  1 + #267). The populated-state search bar's `Import ▾` dropdown carries the
+  full set the /editor `AddCardsPanel` already mounts — **URL / XML / CSV**
+  (`ImportURL` / `ImportXML` / `ImportCSV` modal variants from `Import.tsx`), with
+  paste covered by the inline `ImportText` input itself. This is the §3 T4 row,
+  restated as an explicit coverage confirmation: no new importer UI, the CSV/XML/
+  URL trio is the existing dropdown reused verbatim. Import failures feed D13's
+  status surface.
+
+- **D16 — Cardback swatch strip in the right-rail Cardback section (optional,
+  lightweight — KEPT).** #272 item 7 (CommonCardback's swatch gallery chrome,
+  which #240's button shipped without). It fits the right rail cleanly: the
+  Cardback section (§4.2) becomes a compact **horizontal swatch strip** (the
+  project's cardback options as small tappable thumbnails, active one outlined)
+  above the existing "Choose cardback…" button that opens the full
+  `CommonCardback` modal. It is a thin repurpose of `CommonCardback`'s own
+  gallery data, no new modal. **If it crowds the rail at 300px it is acceptable
+  to drop it back to the button-only form** — it is genuinely optional and the
+  modal already covers the function; the strip is a convenience, not a
+  requirement.
+
+- **D17 — Sheet-presentation refinement (SUPERSEDES D7 where they differ).** Owner
+  refinement of the screen-only sheet presentation; D7's "outline only, no white
+  fill, minimal inter-page space, rounded corners" stands, but its "subtle border
+  frame" framing is sharpened and the per-page label is removed:
+
+  1. **Page boundary = a HAIRLINE PINLINE, not a drawn box.** The page fill stays
+     fully clear (no white — already so under D7); the boundary is a hairline-weight
+     pinline with rounded corners — deliberately subtle, read as a hint of a page
+     edge, NOT a visible frame. In the render this is a ~1px, very-low-opacity
+     border (mockup: `rgba(235,235,235,.18)`), radius ~7px. `PagePreview.tsx`'s
+     screen-presentation variant (R7) carries this exact weight; the PDF output is
+     still untouched.
+  2. **Inter-page spacing minimized further** ("we waste a lot of space right now").
+     The inter-sheet gap tightens to a hairline of its own (mockup: 4px) — pages
+     read as a tight continuous stack, not a spaced-out gallery. Tightens R7's
+     "inter-sheet spacing" note and §2's `mb-4`→minimal claim to ~4px.
+  3. **Kill the per-page "Sheet N of M" header LINE; replace with a compact
+     floating indicator.** The per-sheet label line (mockup's `.sheet-label`, and
+     the §1/§3 action-bar "Sheet N of M" readout it duplicated) is removed
+     entirely. In its place: ONE compact floating **`n/M`** pill (tabular-nums,
+     pill-shaped, translucent) that lives INSIDE the center sheet region, `position: sticky` and `align-self: flex-end` so it floats at the top-RIGHT of the
+     center column and **updates live as the user scrolls** (driven by the existing
+     "Sheet N of M" `IntersectionObserver` DisplayPage.tsx already runs — see §context;
+     now it writes the floating pill instead of an action-bar label). **Collision
+     safety at every breakpoint:** because the pill is a child of the center flex
+     column (a sibling of, never overlapping, the left/right rails), it is
+     structurally confined to the center region — it cannot collide with an inline
+     rail (desktop/laptop) nor with an off-canvas drawer (tablet/phone, which
+     portal above everything anyway). `pointer-events: none` so it never eats a
+     scroll/tap. This makes the floating indicator the SINGLE sheet-position
+     readout, replacing both the per-sheet lines and the action-bar element in §1's
+     region-inventory row "Sheet indicator" (that row's Action-bar home is retired
+     in favor of the center-region floating pill at all breakpoints).
+
+- **D18 — Default inter-card spacing on the sheet: HORIZONTAL 0, VERTICAL 14.5.**
+  Owner reviewed D17 on desktop ("looks good") and added this asymmetric default
+  gutter. Parameter mapping to the real engine (`frontend/src/features/pdf/layout.ts`,
+  `computeLayout`): the only spacing knob is `spacing: LayoutSpacing = { row, col }`,
+  both in **mm** (the whole module is mm — every argument is `*MM`). `spacing.col`
+  is consumed by `fitCardsInDimension` on the **width/column** axis (the gutter
+  _between columns_, i.e. the horizontal gap); `spacing.row` on the
+  **height/row** axis (the gutter _between rows_, the vertical gap). Therefore:
+
+  - owner **HORIZONTAL 0** → **`spacing.col = 0`** (columns' bleed boxes touch)
+  - owner **VERTICAL 14.5** → **`spacing.row = 14.5`** (14.5mm added between rows)
+
+  Real change site: `DisplayPage.tsx:646` `const spacing = useMemo(() => ({ row: 0, col: 0 }), [])` → `({ row: 14.5, col: 0 })`; this single memo already feeds all
+  three consumers — `computeLayout` (§2), `PagePreview` (`spacing` prop), and
+  `exportPdfProps` (`cardSpacingRowMM`/`cardSpacingColMM`) — so the on-screen sheet
+  and the exported PDF stay in lockstep with no extra plumbing. Units are mm and
+  unambiguous in-code; no flag raised.
+
+  **Fit re-check, 4×2 Letter landscape** at D5 borderless margins (0/0/0/0) + D6
+  bleed 3.175 + `spacing.col=0` + `spacing.row=14.5`, using
+  `fitCardsInDimension`'s exact `count·slot + (count−1)·spacing + 0.1` formula:
+
+  - Width axis (slot 63+2·3.175 = 69.35): `4·69.35 + 3·0 + 0.1 = 277.5 < 279.4`
+    (5 would need 346.85) ⇒ **4 columns**, container 277.5mm, **slack 1.9mm**.
+  - Height axis (slot 88+2·3.175 = 94.35): `2·94.35 + 1·14.5 + 0.1 = 203.3 < 215.9`
+    (3 would need 312.15) ⇒ **2 rows**, container 203.3mm, **slack 12.6mm**.
+
+  **Fits.** (Matches the sanity estimate 2·94.35 + 14.5 = 203.2, +0.1 fudge =
+  203.3.) **Binding constraint is UNCHANGED — still the width/column axis** (1.9mm
+  slack) as under D4/D6; the new 14.5mm row gutter only eats row-axis slack from
+  25.1mm down to 12.6mm, and the row axis stays non-binding (it would tolerate
+  vertical spacing up to ~27.0mm, or bleed up to ~6.32mm, before losing the 2nd
+  row). So D18 costs nothing dimensionally: borderless + full MPC bleed + 4×2
+  still holds, and the D6 max-bleed-for-4×2 table (governed by the width axis) is
+  untouched.
+
+- **D8-note (not a new decision): color calibration is CMYK, not just CMY.**
+  #270 extends D8's per-channel controls from cyan/magenta/yellow to full
+  **CMYK (adds black/K)** plus brightness/saturation/contrast. This is an
+  implementation-scope note on the existing D8 group, folded in here so the
+  mockup's Color Calibration group shows the K channel; no layout change.
+
+## A1. Change inventory (new rows, extending §6)
+
+Finish workflow (D9, D10):
+
+- **F1** new `frontend/src/features/display/useProjectDraftBackup.ts` —
+  debounced `localStorage` mirror of the working project (indexes+settings only),
+  restore-nudge on next visit; serialization via `deckPayload.ts`'s
+  `buildDeckPayload` plaintext shape + a `draftVersion`.
+- **F2** `DisplayPage.tsx` right-rail footer — replace the three-button stack
+  with the two co-equal `btn-primary` (`Save Deck` = `SavedDeckPanel` Save path;
+  `Print / Export →` = D10 nav) + secondary `Export ▾` (`DisplayExportMenu`,
+  lightweight only). Move Generate PDF / Save-PDF-to-Drive OUT to the Print page.
+- **F3** new `PrePrintSaveGate` (in `DisplayPage.tsx` or a sibling) — the D9(3)
+  sequence: flush draft → (auth+dirty) `SaveDeckModal`/Skip → then navigate.
+  Reuses `savedDeckSessionSlice` dirty-check + `LoadSafetyModal` precedent.
+- **F4** promotion nudge — one `Toasts` entry fired post-import and pre-print,
+  reusing the mid-session-sign-in nudge precedent (saved-decks.md).
+- **F5** new `frontend/src/pages/print.tsx` — thin route wrapper mounting
+  `PrintPanel`/`FinishedMyProject` (mirrors `pages/myDecks.tsx`). `FinishedMyProject.tsx`
+  itself UNCHANGED. The export progress bar + Generate-PDF live here now, not the
+  rail footer.
+
+Settings relocation (D11, D16, D8-note):
+
+- **F6** `DisplayPage.tsx` right rail — mount `FinishSettings.tsx` as a `Finish`
+  `AutofillCollapse` section (after View, before Cardback). No component change.
+- **F7** `DisplayPage.tsx` Cardback section — compact swatch strip over
+  `CommonCardback`'s gallery data (D16), above the existing Choose-cardback
+  button. Optional/droppable.
+- **F8** (folds into C1/C2) Color Calibration group gains the K channel (D8-note
+  / #270) — one extra slider, no layout change.
+
+Browse + status + confidence (D12, D13, D14, D15):
+
+- **F9** `DisplayPage.tsx` search bar — `ToggleButtonGroup` Add/Browse mode
+  prefix; Browse-mode filter row (`GridSelectorFilters`); placeholder swap.
+- **F10** new `frontend/src/features/display/CatalogBrowseResults.tsx` —
+  center-region results grid composing `useGridSelectorSearch` +
+  `SelectVersionResults`'s tile, laid out on `CardGrid`'s responsive Row/Col
+  template (not CardGrid itself — that renders project members), each tile with
+  an inline `+ Add` (`AddCardToProjectForm` path). Center-region `Print sheets` /
+  `Browse results` switch. Operator-grammar parse over the browse input is the
+  one net-new piece (see D12 honesty note).
+- **F11** `DisplayPage.tsx` — landing/search-bar invalid-identifiers `Alert`
+  (repurpose `InvalidIdentifiersStatus`/`InvalidIdentifiersModal`) + a right-rail
+  top **Status row** (repurpose `Status.tsx` aggregation). No component fork.
+- **F12** `DisplayPage.tsx` left-rail identity header — the D14 confidence
+  element: `SetIcon` + resolved/suggested confidence read + Scryfall
+  `OverlayTrigger`/`Popover` (CDN-only) + `✗ not this printing` casting a
+  `useTagVoting` vote.
+- **F13** search-bar `Import ▾` dropdown — confirm URL/XML/CSV via `Import.tsx`
+  variants (D15; = §6 T4, restated). No new UI.
+
+## A2. Issue mapping (extending the base §"Issue mapping")
+
+- **#267** (search bar) — additionally: D12 dual-mode Add/Browse (F9/F10),
+  D15 Import-dropdown variety (F13), D13 search-bar status feedback (F11).
+- **#270** (color calibration) — D8-note: extend the D8 group to full CMYK
+  (F8). Implementation issue; already filed.
+- **#271** (confidence funnel) — D14 (F12). Already filed; design now provided.
+- **#272** (parity switchover checklist) — item 2 → D13 status surface (F11);
+  item 3 → D10 Print-page rehoming (F5); item 4 → D11 FinishSettings (F6); item
+  5 → D12 browse (F9/F10); item 7 → D16 cardback swatch (F7); item 1 → D15
+  import variety (F13).
+- **NEW issue needed** — **D9 finish footer + deck auto-backup** (F1–F4). The
+  owner named this in #272's comment as polish-round scope but it has no issue
+  number of its own; it is the one genuinely-new surface here (local-draft
+  persistence + co-equal Save/Print + pre-print save gate) and should be filed
+  as its own issue at implementation time. D10's `pages/print.tsx` route
+  (F5) can ride #272 item 3 or the same new issue.
+
+## A3. Conflicts / tensions (new, honest)
+
+1. **Server save is authenticated-only; the OOM safety net must not be.** The
+   zero-knowledge saved-decks design (saved-decks.md) means a real "Save Deck"
+   requires Discord OAuth. The owner's constraint is about not losing work to a
+   PDF-render OOM, which must hold for anonymous users too. D9 resolves this by
+   making the _local draft_ (F1) the universal safety net and the _server save_
+   the authenticated promotion — they are two layers, not one. The nudge copy
+   must not imply an anonymous user's work is unsaved when the local draft has it.
+2. **D10 moves Generate PDF off /display.** Some users expect to generate a PDF
+   without leaving the page. The trade is deliberate: keeping the heavy render on
+   the dedicated Print page is exactly what honors the owner's "PDF relies on
+   client mem" constraint (a single place, after the save gate, that can OOM
+   without taking unsaved work with it). If the owner wants a quick inline PDF
+   too, it must sit AFTER the same F3 save gate — flag as open question.
+3. **Center-region contention (D12 browse vs. the sheet stack).** Browse results
+   and the print-sheet stack both want the center. The `Print sheets`/`Browse results` switch is the resolution, but on phones the center is already tight
+   (letterboxed sheet, §2); browse results there render as a single-column scroll
+   list rather than a grid. Not a blocker, but the phone browse view is a reduced
+   grid by necessity.
+4. **Confidence "confirmed" wording.** The `resolved`/`suggested` status is a
+   two-state proxy, not a true probability; showing a literal "92% confident"
+   risks implying a calibrated model output that isn't there for `resolved`
+   cards. The element should read a _resolved_ card as "confirmed" and only show
+   a numeric confidence where the backend actually exposes one for a _suggested_
+   card — otherwise it overstates certainty. Owner/impl to confirm the exact copy.
+
+## A4. Mockup notes (polish additions)
+
+`display-mockup.html` gains, without disturbing the demo strip or the scaled
+forced-view mechanism (§8): the two-co-equal-primary Finish footer (Save Deck /
+Print & Export) + secondary Export row and a "draft backed up ✓" indicator (D9);
+the dual-mode Add/Browse toggle on the search bar with a center-region `Sheets | Browse` switch and a browse-results demo state (D12); a right-rail Status row and
+a search-bar invalid-identifiers alert (D13); the left-rail confidence element
+(set symbol + confidence + Scryfall-hover note + "not this printing", D14); the
+Finish (foil/cardstock) section and a Cardback swatch strip in the right rail
+(D11/D16); and the Color Calibration group extended with a K (black) channel
+(#270). It also demonstrates D17: the sheets now render with a hairline pinline
+(no drawn frame), a tightened inter-page gap, no per-sheet label lines, and a
+single floating `n/M` pill (six demo sheets) wired to an `IntersectionObserver`
+that updates it live while scrolling — sticky to the top-right of the center
+column so it never collides with the rails/drawers at any breakpoint. All new
+interactive bits are vanilla-JS toggles consistent with the existing mockup; no
+CDN, still file://-openable. **D18**: the print sheets now render the asymmetric
+default gutter — the `.sheet` grid splits its single `gap` into `column-gap: 2.27cqw` (2·3.175mm bleed only, `spacing.col=0`, columns touching) and `row-gap: 7.46cqw` (2·3.175mm bleed + 14.5mm = 20.85mm, `spacing.row=14.5`, rows visibly
+separated); `1cqw = 2.794mm` since the sheet's inline-size represents 279.4mm.
+Applies at every breakpoint (the sheet is `container-type: inline-size`, so the
+gutter scales with the fit-to-width sheet on phone/tablet/desktop alike).

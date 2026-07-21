@@ -44,6 +44,19 @@ interface ImportTextProps {
   textareaRef?: React.RefObject<HTMLTextAreaElement>;
   textValue?: string;
   onTextChange?: (value: string) => void;
+  /**
+   * Issue #267 (design doc §3/§6 T3) - additive, default-unchanged prop so the unified display
+   * page's populated-state action bar can mount this exact component as a single-line search-bar
+   * input (Enter runs the same convertLinesIntoSlotProjectMembers/addMembers pipeline as the
+   * block variant) rather than forking a second copy of the submit/pipeline wiring. `"block"`
+   * (the default) renders byte-for-byte what AddCardsPanel.tsx's editor tab has always rendered -
+   * every existing caller is unaffected. `"inline"` renders a single-line `Form.Control` in place
+   * of the syntax guide/textarea/hint stack; the same `handleSubmit`/`onImportComplete` wiring
+   * below is shared by both variants, so Enter (there is no other field in this tiny form, so a
+   * plain HTML form submit already fires on Enter with no extra keydown handling needed) runs the
+   * identical pipeline either way.
+   */
+  variant?: "block" | "inline";
 }
 
 export function ImportText({
@@ -51,6 +64,7 @@ export function ImportText({
   textareaRef,
   textValue: controlledTextValue,
   onTextChange,
+  variant = "block",
 }: ImportTextProps) {
   const dispatch = useAppDispatch();
   const sampleCardsQuery = useGetSampleCardsQuery();
@@ -94,6 +108,32 @@ export function ImportText({
     sampleCardsQuery.data != null
       ? formatPlaceholderText(sampleCardsQuery.data)
       : "";
+
+  if (variant === "inline") {
+    // No syntax guide/hint/Submit button here - this is the action bar's own compact search-bar
+    // row (design doc §3), not a full "Add Cards" surface. There is exactly one field in this
+    // form and no other button, so a plain browser form submit already fires on Enter - the same
+    // handleSubmit above runs either way, no separate keydown wiring needed (see this prop's own
+    // comment).
+    return (
+      <Form
+        onSubmit={handleSubmit}
+        className="flex-grow-1"
+        data-testid="import-text-inline"
+      >
+        <Form.Control
+          size="sm"
+          type="text"
+          placeholder="Add cards… e.g. 3x Lightning Bolt"
+          required={true}
+          disabled={disabled}
+          value={textValue}
+          onChange={(event) => setTextValue(event.target.value)}
+          aria-label="import-text-inline"
+        />
+      </Form>
+    );
+  }
 
   return (
     <>
