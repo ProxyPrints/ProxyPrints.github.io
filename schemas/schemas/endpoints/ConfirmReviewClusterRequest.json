@@ -1,0 +1,15 @@
+{
+  "title": "Confirm Review Cluster Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "clusterId": { "type": "string" },
+    "memberIdentifiers": {
+      "description": "The exact set of member identifiers the moderator actually saw and approved in this cluster - never re-expanded server-side to whatever the cluster currently contains. Every entry must currently be a member of the freshly-recomputed cluster named by clusterId, or the whole request is rejected (400) rather than partially applied.",
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["clusterId", "memberIdentifiers"],
+  "additionalProperties": false
+}

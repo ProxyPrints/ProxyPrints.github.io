@@ -243,6 +243,56 @@ unrelated to report review; nothing here requires a `CardReport` to exist.
   delete; Postgres stays authoritative even if the ES side fails (same
   swallow-and-log rationale as `reindex_card_safely` in documents.py).
 
+## Review clusters (batch no-match confirmation, issue #262 - backend only)
+
+Cuts the no-match/review-queue human cost by grouping likely-duplicate review-queue cards so a
+moderator confirms a whole batch as no-match in one action instead of one-at-a-time. Backend
+only as of this section - no frontend UI yet (a follow-up task consumes the API contract below).
+
+**Population clustered**: cards currently carrying the slow-path "to-review" routing marker
+(`CardScanLog(anonymous_id=local_calculate_verdicts.SLOW_PATH_ANONYMOUS_ID, skip_reason="to-review")`) that are still `printing_tag_status=UNRESOLVED` - a card that
+resolves (through this feature or independently) drops out of the next computation.
+
+**Clustering signals - CONSERVATIVE, exact-match only** (`cardpicker/review_clusters.py`), per
+issue #262's own read-only measurement (2026-07-21, 16,928-card review queue): exact
+`Card.content_phash` union exact `ImageEvidence.symbol_phash` union exact normalized legal-line
+text (lowercase, alphanumeric-only, with a minimum-length + alphanumeric-density guardrail so
+short OCR noise like `"4"` never becomes a grouping signal) - plain union-find over these three
+EXACT relations, cross-signal-type transitivity intentional (A-B via content_phash, B-C via
+legal text still merges A/B/C). The measurement proved Hamming-distance near-duplicate
+clustering fails (single-linkage chaining welded a 1,582-card cluster whose true max pairwise
+distance was 32) - **this is deliberately not implemented**, on record so it isn't re-derived.
+Only clusters with >= 2 members are ever surfaced (a singleton carries no shared signal and
+isn't a useful batch-confirm target).
+
+**Cache/compute**: computed on demand, cached whole for 5 minutes (Django's default per-process
+cache - safe only because this app runs a single gunicorn worker, see that module's own
+docstring for the full reasoning and the 200k-scale caveat). The confirm action below always
+bypasses this cache for its own membership check and invalidates it afterwards.
+
+**API** (moderator-gated, same `require_moderator`/`reject_untrusted_origin` stack as the
+Drives/Reports endpoints above):
+
+- `POST 2/reviewClusters/` - paginated list, sorted by size descending, each item: cluster id
+  (the lowest-card-id member's own `Card.identifier`), size, which signal(s) bind it (with the
+  shared value/normalized text), and member summaries (identifier/name/small-thumbnail-url only
+  - never pixel data, same "we index, we do not store images" posture as everywhere else).
+- `POST 2/reviewClusterDetail/` - single-cluster drill-down, served from the same cache.
+- `POST 2/confirmReviewCluster/` - given a cluster id + the EXACT member identifier list the
+  frontend actually showed the moderator (never re-expanded server-side to whatever the cluster
+  currently contains - any submitted identifier that isn't a current member of a fresh
+  recompute rejects the whole request), casts the acting moderator's own human no-match vote
+  per card through the exact same path `2/submitPrintingTag/` already uses
+  (`CardPrintingTag(is_no_match=True, source=VoteSource.USER)` +
+  `printing_consensus.resolve_and_persist_printing`) - no shortcut, normal consensus rules (a
+  single moderator vote alone does not resolve a card any more than a single crowd vote would;
+  `PRINTING_TAG_MIN_VOTES` still applies). Idempotent per (moderator, card) via a deterministic
+  `anonymous_id` (`review-cluster-confirm-<user pk>`) rather than a client-generated one, so a
+  retried/repeated confirm replaces that moderator's own prior vote instead of duplicating it.
+  Invalidates the list/detail cache on success and logs the action
+  (`logger.info` - no dedicated audit-log model exists in this codebase yet, same convention
+  every other moderator write action here already follows).
+
 ## Consequence: NSFW hidden from search by default
 
 Already true mechanically (default `excludesTags: ["NSFW"]`); this stage makes
@@ -338,7 +388,9 @@ documented here so the reasoning survives if either file is ever touched:
   (report review deliberately absent - see "Moderation tab" above),
   `cardpicker/views.py` (whoami / reportCard / moderationQueue /
   moderationDrives / moderationDriveCards / moderationRemoveCard /
-  moderationRemoveDrive), `accounts/adapter.py`, `MPCAutofill/MPCAutofill/settings.py`.
+  moderationRemoveDrive / reviewClusters / reviewClusterDetail /
+  confirmReviewCluster), `cardpicker/review_clusters.py` (issue #262's clustering + cache),
+  `accounts/adapter.py`, `MPCAutofill/MPCAutofill/settings.py`.
 - Frontend: `features/reporting/ReportCardPanel.tsx`,
   `features/moderation/AuthWidget.tsx` (Discord-branded login button) +
   `ModerationTab.tsx` (Reports/Drives sub-tab switcher) + `ReportsPanel.tsx`
@@ -348,6 +400,8 @@ documented here so the reasoning survives if either file is ever touched:
 - Tests: `cardpicker/tests/test_moderation_gate.py`,
   `test_moderation_views.py`, `test_sensitive_tags.py`, `test_question_feed.py`
   (asserts pending-approval pairs never surface in the ordinary feed);
+  `test_review_clusters.py` (clustering unit tests), `test_review_cluster_views.py`
+  (API auth/pagination/batch-confirm tests);
   `frontend/src/features/reporting/ReportCardPanel.test.tsx`;
   `frontend/tests/{ReportCard,ModerationQueue,ModerationTab,MatureContentToggle}.spec.ts`.
 
@@ -356,6 +410,8 @@ documented here so the reasoning survives if either file is ever touched:
 - Discord guild-role sync for a federation-wide moderator roster (see "Who is
   a moderator").
 - Federation export/import of moderation verdicts is v1.1
+- Review-cluster frontend UI (issue #262) - the backend/API above is code-only as of this
+  section; the Moderation tab has no cluster-browsing/batch-confirm surface yet.
   ([[../federation-v1.md]]) — explicitly out of scope here.
 - No consequences yet for resolved `low-res` / `incorrect-info`.
 - The rate limiter shares the existing single-gunicorn-worker in-process-cache

@@ -1,0 +1,18 @@
+{
+  "title": "Review Cluster Signal",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "signalType": { "$ref": "./ReviewClusterSignalType.json" },
+    "value": {
+      "description": "The shared value that binds this signal's members together - a decimal string for content_phash/symbol_phash (avoids JS bigint precision issues), or the normalized legal-line text itself for legal_line_text.",
+      "type": "string"
+    },
+    "memberCount": {
+      "description": "How many of this cluster's members share this exact signal value - not necessarily the cluster's full size, since a cluster can be the transitive union of several signal groups.",
+      "type": "integer"
+    }
+  },
+  "required": ["signalType", "value", "memberCount"],
+  "additionalProperties": false
+}

@@ -1,0 +1,18 @@
+{
+  "title": "Review Cluster Member",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "identifier": {
+      "description": "Card.identifier - the same stable, opaque identifier every other endpoint addresses a card by.",
+      "type": "string"
+    },
+    "name": { "type": "string" },
+    "smallThumbnailUrl": {
+      "description": "Display-serving thumbnail identifier only - never pixel data from our own side (CLAUDE.md's Governing premise). The frontend turns this into a display-serving CDN URL exactly as it already does for Card.smallThumbnailUrl.",
+      "type": "string"
+    }
+  },
+  "required": ["identifier", "name", "smallThumbnailUrl"],
+  "additionalProperties": false
+}

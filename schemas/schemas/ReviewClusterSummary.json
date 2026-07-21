@@ -1,0 +1,26 @@
+{
+  "title": "Review Cluster Summary",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "clusterId": {
+      "description": "Opaque, stable handle for this cluster - the identifier of its lowest-card-id member. Pass straight back on 2/reviewClusterDetail/ and 2/confirmReviewCluster/.",
+      "type": "string"
+    },
+    "size": {
+      "description": "Number of member cards in this cluster.",
+      "type": "integer"
+    },
+    "signals": {
+      "description": "Which of the three clustering signals bind this cluster's members together - can be more than one entry (a cluster can be the transitive union of several signal groups) or, in principle, empty (a cluster reached only via a chain the caller isn't shown individually) - practically always non-empty since every edge in this cluster came from one of these three signal types.",
+      "type": "array",
+      "items": { "$ref": "./ReviewClusterSignal.json" }
+    },
+    "members": {
+      "type": "array",
+      "items": { "$ref": "./ReviewClusterMember.json" }
+    }
+  },
+  "required": ["clusterId", "size", "signals", "members"],
+  "additionalProperties": false
+}

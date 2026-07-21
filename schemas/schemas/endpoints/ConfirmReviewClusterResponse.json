@@ -1,0 +1,19 @@
+{
+  "title": "Confirm Review Cluster Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "clusterId": { "type": "string" },
+    "confirmedIdentifiers": {
+      "description": "Echo of the member identifiers this call cast a no-match vote for, in the same order they were submitted.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "votesCast": {
+      "description": "Number of CardPrintingTag no-match votes cast by this call - always equal to len(confirmedIdentifiers), included for a frontend toast/summary without recounting the array itself.",
+      "type": "integer"
+    }
+  },
+  "required": ["clusterId", "confirmedIdentifiers", "votesCast"],
+  "additionalProperties": false
+}
