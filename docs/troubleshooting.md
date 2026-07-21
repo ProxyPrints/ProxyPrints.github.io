@@ -801,3 +801,43 @@ material, etc.) at the moment it's captured — exactly what
 creation time, not a live reference. See
 [`features/saved-decks.md`](features/saved-decks.md)'s "Per-deck share
 links" section for the full writeup of this exact case.
+
+## `psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "pg_type_typname_nsp_index"` in django/worker startup logs during a rebuild
+
+**Symptom**: a raw `IntegrityError` traceback (Postgres `UniqueViolation`
+on `pg_type_typname_nsp_index`, a catalog-level constraint on
+composite/enum type names, not anything defined in this repo's own
+models) appears in the `django` or `worker` container's startup log
+during `migrate`, immediately after a prod rebuild — looking identical,
+at a glance, to the "entrypoint migrate crash" failure mode documented
+above.
+
+**Cause**: `docker/django/entrypoint.sh` runs `migrate` on **both**
+`django` and `worker` container startup (see "Entrypoint + migrate
+composition traps" above), and a prod rebuild starts both containers
+close together. When a migration creates a Postgres composite/enum type
+(anything that registers a row in `pg_type`), two concurrent `migrate`
+invocations can both pass Django's own "has this migration already
+applied" check before either commits, then both attempt the same
+type-creating DDL — one wins, the other raises this `UniqueViolation`.
+This is a benign startup race between the two containers' own `migrate`
+steps, not data loss or a corrupt migration.
+
+**How to confirm it's this and not real damage**: check that the
+migration named in the traceback shows as applied
+(`python manage.py showmigrations <app>`) and that the table/type it
+creates has the expected schema (`\d <table>` in `psql`, or
+`Model.objects.first()` field-by-field) — if both check out, the losing
+container's `migrate` simply no-opped after the race and the winning
+one's write stands; no rerun or manual intervention needed. Confirmed
+exactly this outcome for `0076_saveddeckshare` on 2026-07-20 (8 columns,
+schema correct, migration applied) immediately after seeing this
+traceback in a fresh rebuild's logs.
+
+**Fix**: none applied — this is an accepted, self-healing race inherent
+to running `migrate` from two containers on the same startup, not a bug
+in the migration itself. If it starts blocking a container from reaching
+a healthy state (rather than just logging once and continuing), that
+would indicate a real regression and is worth revisiting; gating one of
+the two containers' `migrate` calls behind a lock, or having only one
+container run it, is a fix not yet implemented.
