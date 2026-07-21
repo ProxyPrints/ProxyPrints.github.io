@@ -656,6 +656,40 @@ class TestLegalLineParsing:
         parsed = parse_legal_line("NOT HOY SLE")
         assert parsed.proxy_marker_detected is False
 
+    # plural/passive forms (2026-07-21 marker diagnostic: ~512 marker-absent evidence rows
+    # carried the exact substring "proxies"/"proxied" that the old singular-only \bproxy\b could
+    # never match, since \b requires a word break immediately after the "y" - see local_ocr.py's
+    # own _PROXY_MARKER_RE comment for the fix). Real examples from that diagnostic.
+
+    def test_detects_proxies_plural(self):
+        parsed = parse_legal_line("Proxies by Smaug")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_proxies_plural_all_caps(self):
+        parsed = parse_legal_line("2025 Pogo Proxies")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_proxies_plural_after_brand_name(self):
+        parsed = parse_legal_line("TAFFMAN PROXIES")
+        assert parsed.proxy_marker_detected is True
+
+    def test_detects_proxied_passive(self):
+        parsed = parse_legal_line("PROXIED")
+        assert parsed.proxy_marker_detected is True
+
+    def test_approximate_does_not_false_positive(self):
+        # word-boundary sanity check: "approximate" contains neither "proxy", "proxies", nor
+        # "proxied" as a substring at all, so it must not match regardless of the new
+        # alternatives.
+        parsed = parse_legal_line("approximate value shown")
+        assert parsed.proxy_marker_detected is False
+
+    def test_proximity_does_not_false_positive(self):
+        # same word-boundary sanity check as test_approximate_does_not_false_positive above,
+        # for "proximity".
+        parsed = parse_legal_line("in close proximity to the border")
+        assert parsed.proxy_marker_detected is False
+
 
 class TestOcrValidationRail:
     CANDIDATES = [

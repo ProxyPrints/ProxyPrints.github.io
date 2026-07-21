@@ -121,8 +121,14 @@ _BARE_YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 # the moderator flag with no other downstream signal to catch it, so a pattern that could start
 # matching genuine legal text this taxonomy hasn't seen is a worse trade than an occasional miss
 # on garbled OCR. Case-insensitive, tolerant of "NOT-FOR-SALE"/"NOT   FOR SALE" spacing/hyphen
-# variants only - not of letter-substitution noise.
-_PROXY_MARKER_RE = re.compile(r"not[\s-]*for[\s-]*sale|\bproxy\b", re.IGNORECASE)
+# variants only - not of letter-substitution noise. Matches "proxy"/"proxies"/"proxied" as
+# distinct word-bounded alternatives (a marker diagnostic, 2026-07-21, found ~512 marker-absent
+# evidence rows carrying the exact substring "proxies"/"proxied" - e.g. "Proxies by Smaug",
+# "POGO PROXIES", "PROXIED" - that the singular-only \bproxy\b could never match, since \b
+# requires a word break immediately after the "y") - this is the same mechanical plural/passive
+# gap as an earlier missed-match fix elsewhere in this module, not a relaxation of the exactness
+# this comment argues for above; each alternative is still a plain, complete literal word.
+_PROXY_MARKER_RE = re.compile(r"not[\s-]*for[\s-]*sale|\bprox(?:y|ies|ied)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
