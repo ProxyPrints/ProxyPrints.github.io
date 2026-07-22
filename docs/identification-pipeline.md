@@ -72,7 +72,26 @@ identity, and (safety) nothing already resolved. Then five stages per card:
   never resolve a card alone (verified 0 machine-only resolutions across
   12,684 gate-checked cards, spanning both the printing- and tag-consensus
   engines — see `docs/reports/2026-07-21-recovery-arc.md`). Confident
-  no-matches cast a no-match vote under the same rules.
+  no-matches cast a no-match vote under the same rules. **Sharpened by the
+  owner-ratified 2026-07-22 vote-weight scenario matrix** (implemented in
+  PR #325; raw ruling at [`reference/vote-weight-matrix.md`](reference/vote-weight-matrix.md)):
+  it's no longer just "a human vote must be present" — machine weight (and
+  two other non-human-backed classes added the same day: a low-weight,
+  hard-capped `IMPLICIT` vote cast passively when someone picks a
+  candidate under an active `/editor` filter chip, and a `FEDERATED` vote
+  imported from a peer instance) is now excluded **entirely** from who
+  wins and from the share math the moment there's a genuine
+  human-vs-human disagreement, or the moment a human-backed winner has
+  already cleared the resolution bar on its own. Practically: machine
+  agreement can still help a lone human's vote resolve a previously
+  undecided card (that's still allowed and intended — it's the whole
+  point of the deductive backfill below), but machine or implicit
+  disagreement can no longer do either of the two things it used to be
+  able to do — tip an actual human-vs-human tie, or quietly flip an
+  already-human-resolved card back to unresolved by diluting its share.
+  That second failure mode was real and reachable at the scale this
+  catalog now runs at (any 2-human-vote printing with 3+ contradicting
+  machine votes), and is what the ratification specifically closed.
 
 **Everything unresolved routes to humans**: skips and no-matches go to the
 slow path — durable review-queue markers carrying the raw signals — where the
