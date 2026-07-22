@@ -1,6 +1,11 @@
 import { expect } from "@playwright/test";
+import { http, HttpResponse } from "msw";
 
-import { cardDocument1, printingCandidate1 } from "@/common/test-constants";
+import {
+  cardDocument1,
+  localBackendURL,
+  printingCandidate1,
+} from "@/common/test-constants";
 import {
   defaultHandlers,
   questionFeedConfirmSuggestion,
@@ -9,6 +14,10 @@ import {
 
 import { test } from "../playwright.setup";
 import { loadPageWithDefaultBackend } from "./test-utils";
+
+function buildRoute(route: string) {
+  return `${localBackendURL}/${route}`;
+}
 
 // Rectangles intersect iff they overlap on both axes - the standard axis-aligned bounding box
 // (AABB) test. Any edge-touching (a.right === b.left) counts as NOT intersecting, matching how
@@ -136,7 +145,18 @@ test.describe("question feed - Level 2 layout reconciliation (real-device regres
 // Level 1 has no grid to reorder at all, so it's not a fit for this ordering check anymore
 // (see QuestionFeed.spec.ts for Level 1's own coverage).
 test.describe("question feed - mobile layout", () => {
-  test("at a mobile viewport, the mystery card renders above the answer candidates, not below them", async ({
+  // Mobile-row fix round (owner live-review) - the card no longer renders ABOVE the candidates
+  // in a vertical stack at all; it renders BESIDE them (its own compact grid column to the
+  // left - see HeroGrid's mobile grid-template-areas in QuestionFeed.tsx), the same axis
+  // relationship as the desktop test below rather than the pre-fix mobile stack. The `y`
+  // assertion below still holds either way for a different, still-true reason: the card has
+  // no badge/prompt text stacked above it the way the candidate grid does, so its top edge
+  // still lands at/above the candidate grid's own top edge - but the ORIGINAL rationale (card
+  // reachable "before" the candidates in scroll/stacking order) no longer describes the real
+  // mechanism, so this comment is corrected rather than left to imply a layout this page no
+  // longer has. See "mobile card/questions never overlap" below for the actual regression
+  // guard the fix round needed.
+  test("at a mobile viewport, the mystery card's top edge is not pushed below the candidate grid's own top edge", async ({
     page,
     network,
   }) => {
@@ -302,6 +322,86 @@ test.describe("question feed - mobile layout", () => {
       expect(box!.y + box!.height).toBeLessThanOrEqual(900);
       expect(box!.y).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+// Owner live-review fix ("STICKY OVERLAP: on scroll, the subject card COVERS the questions on
+// mobile") - confirmed live via a real Pixel 7 portrait screenshot + getBoundingClientRect()
+// diff (this task's own report): the old mobile layout stacked "words"/"card"/"questions" in
+// one column with HeroCardArea's own `position: sticky; z-index: 5` bar riding on top of
+// HeroQuestionsArea as the page scrolled - the two areas shared the same horizontal space by
+// construction, so the sticky card was always going to end up geometrically nested inside the
+// questions box's own bounds once scrolled (not a flaky edge case - guaranteed by the shared-
+// column geometry). The fix gives the card its own disjoint grid COLUMN beside the questions
+// (see QuestionFeed.tsx's HeroGrid/HeroCardArea) - this is the direct regression guard for that:
+// a real `page.mouse.wheel()` scroll (not a targeted `el.scrollTop` write - see the desktop
+// pinning test above for why that distinction matters), then an axis-aligned bounding-box
+// intersection check between the card's own area and the questions area, both before AND after
+// scrolling. Uses a dozen synthetic candidates (not the default fixture's two) specifically to
+// force the page tall enough to need a real scroll - the live bug only manifested once there
+// was enough candidate content to scroll past.
+test.describe("question feed - mobile card/questions never overlap (owner live-review fix)", () => {
+  test("at portrait mobile width, the card and the questions area never intersect, before or after a real scroll", async ({
+    page,
+    network,
+  }) => {
+    const manyCandidates = Array.from({ length: 12 }, (_, i) => ({
+      ...printingCandidate1,
+      identifier: `overlap-guard-candidate-${i}`,
+      collectorNumber: `${i}`,
+    }));
+    network.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "identify_printing",
+              card: cardDocument1,
+              candidates: manyCandidates,
+              tagConfidence: {},
+            },
+            remainingEstimate: {
+              total: 12,
+              confirmable: 0,
+              contested: 0,
+              fresh: 12,
+            },
+          },
+          { status: 200 }
+        )
+      ),
+      ...defaultHandlers
+    );
+    await page.setViewportSize({ width: 390, height: 700 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const cardArea = page.getByTestId("question-feed-hero-card-area");
+    const questionsArea = page.getByTestId("question-feed-questions-area");
+    await expect(cardArea).toBeVisible();
+    await expect(questionsArea).toBeVisible();
+
+    const assertNoOverlap = async () => {
+      const cardBox = (await cardArea.boundingBox())!;
+      const questionsBox = (await questionsArea.boundingBox())!;
+      expect(cardBox).not.toBeNull();
+      expect(questionsBox).not.toBeNull();
+      // Standard axis-aligned bounding-box (AABB) intersection test - true iff the two boxes
+      // overlap on BOTH axes; edge-touching counts as NOT intersecting, matching how two
+      // adjacent, non-overlapping columns normally abut each other.
+      const intersects =
+        cardBox.x < questionsBox.x + questionsBox.width &&
+        cardBox.x + cardBox.width > questionsBox.x &&
+        cardBox.y < questionsBox.y + questionsBox.height &&
+        cardBox.y + cardBox.height > questionsBox.y;
+      expect(intersects).toBe(false);
+    };
+
+    await assertNoOverlap();
+
+    await page.mouse.wheel(0, 1500);
+    await page.waitForTimeout(300);
+
+    await assertNoOverlap();
   });
 });
 

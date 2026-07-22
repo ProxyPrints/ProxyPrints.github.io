@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 import { http, HttpResponse } from "msw";
 
+import { getWorkerImageURL } from "@/common/image";
 import {
   cardDocument1,
   localBackendURL,
@@ -219,21 +220,49 @@ test.describe("What's That Card? - sliced-word pop + hero card pulse (issue #305
   // the gate holds - every other fixture in this file uses an empty mediumThumbnailUrl (no
   // real network request at all), so this test gives the card a real, interceptable URL
   // instead, specifically so the delay is real and not just a fast/instant mock resolution.
+  //
+  // Fix round (owner live-review, "the subject card renders the full-size source image",
+  // #whatsthat-mobile-owner-review) - QuestionFeed.tsx's hero `<img>` now resolves through
+  // `getWorkerImageURL` (the same image-CDN Worker every other card surface uses) rather than
+  // rendering `card.mediumThumbnailUrl` directly, so the URL this test needs to intercept is
+  // the CDN worker URL, not an arbitrary same-origin path - computed via the exact same helper
+  // production code calls, not hand-constructed, so this test can't silently drift from
+  // whatever QuestionFeed.tsx actually requests. `mediumThumbnailUrl` still needs to be
+  // non-empty on the fixture (QuestionFeed.tsx's own "" sentinel short-circuits straight to the
+  // settled fast-path, same as every other fixture in this file - see that component's own
+  // comment) - its actual VALUE is irrelevant now since getWorkerImageURL builds the request
+  // URL from identifier/sourceType, not from this field.
   test("the animation sequence does not start until the card image actually loads", async ({
     page,
     network,
   }) => {
-    const DELAYED_IMAGE_URL = `${localBackendURL}/delayed-card-image.png`;
+    const testCard = {
+      ...cardDocument1,
+      mediumThumbnailUrl: "non-empty-sentinel-see-comment-above",
+    };
+    // getWorkerImageURL reads process.env.NEXT_PUBLIC_IMAGE_WORKER_URL directly - set for the
+    // BROWSER bundle by playwright.config.ts's webServer.env (baked in at that dev server's own
+    // build time), but NOT inherited into this Playwright test-runner Node process, which has
+    // no bundling step to inline it into. Setting it here just mirrors that same config value
+    // for this one Node-side computation (matching webServer.env's own
+    // NEXT_PUBLIC_IMAGE_WORKER_URL) - it has no effect on the already-running browser, which
+    // resolves this independently against its own build-time value.
+    process.env.NEXT_PUBLIC_IMAGE_WORKER_URL = "https://cdn.proxyprints.ca";
+    const CDN_IMAGE_URL = getWorkerImageURL(testCard, "small")!;
+    // page.route()'s string form is a GLOB pattern, not a literal string - the CDN URL's own
+    // `?jpgQuality=100` query suffix means its literal "?" would otherwise be read as a glob
+    // wildcard (matching exactly one arbitrary character) rather than the real query-string
+    // separator. An escaped RegExp matches the URL literally instead.
+    const CDN_IMAGE_URL_PATTERN = new RegExp(
+      `^${CDN_IMAGE_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`
+    );
     network.use(
       http.get(buildRoute("2/questionFeed/"), () =>
         HttpResponse.json(
           {
             item: {
               type: "identify_printing",
-              card: {
-                ...cardDocument1,
-                mediumThumbnailUrl: DELAYED_IMAGE_URL,
-              },
+              card: testCard,
               candidates: [printingCandidate1, printingCandidate2],
               tagConfidence: {},
             },
@@ -256,7 +285,7 @@ test.describe("What's That Card? - sliced-word pop + hero card pulse (issue #305
     const imageGate = new Promise<void>((resolve) => {
       releaseImage = resolve;
     });
-    await page.route(DELAYED_IMAGE_URL, async (route) => {
+    await page.route(CDN_IMAGE_URL_PATTERN, async (route) => {
       await imageGate;
       await route.fulfill({ path: "public/blank.png" });
     });
