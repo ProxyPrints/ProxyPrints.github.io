@@ -91,6 +91,30 @@ const StarburstBackground = styled.div`
   flex: 1 1 auto;
   min-height: 0;
 
+  /* Fix round (owner blocker, post-#310) - below md the whole page still scrolls normally
+     (PageColumn has no explicit height there - see that component's own comment), so this
+     padding/margin cost nothing structurally. At >= md all three are a direct subtraction
+     from HeroGrid's own bounded height (the same budget the word-stack fix in
+     WhatsThatWords.tsx and HeroGrid's own row-gap trim in QuestionFeed.tsx are also drawing
+     from - see the Word component's own comment for the full arithmetic), so all three are
+     trimmed here rather than left at the same values as the unconstrained mobile case -
+     padding-bottom/margin-bottom to 0 outright, padding-top to a much smaller 0.5rem (kept
+     nonzero, unlike the other two, purely so the burst/card visuals below the fixed navbar
+     keep a little breathing room rather than touching it edge-to-edge).
+     Second pass (rebase onto #313's three-tier Footer redesign) - Footer.tsx now carries its
+     own margin-top (1.25rem) plus its own top padding (1.75rem) - 48px of top spacing - where
+     the old single-tier Footer had much less, so the bottom buffer this padding/margin used
+     to provide is now fully redundant double-spacing rather than the breathing room it was
+     originally trimmed from - safe to remove entirely at >= md instead of merely shrinking
+     it. The new Footer's extra height also ate further into HeroGrid's own budget than the
+     first pass anticipated, hence trimming the top padding too this time, not just the
+     bottom. */
+  @media (min-width: 768px) {
+    padding-top: 0.5rem;
+    padding-bottom: 0;
+    margin-bottom: 0;
+  }
+
   /* The questions region simply inherits the sitewide theme now (wtc-redesign-spec.md W7) -
      the ACCENT_NAVY override this page used to carry existed only because buttons/links/pills
      sat on the old #ff4719 orange field (nothing light cleared AA on it). Off that field and

@@ -180,9 +180,44 @@ const WordsColumn = styled.div`
 // word is still shrinking as the next grows) rather than three isolated pops - see
 // wtc-redesign-spec.md §5's timeline. `both` fill holds the pre-delay start frame and the
 // post-animation end frame, so there's no flash at a different size before/after the pop.
-const Word = styled.svg<{ $delayMs: number }>`
+// Fix round (owner live-review blocker, post-#310): each word used to be a fixed 3.75rem/
+// 4.5rem tall (60px/72px) - roughly 1.4x the height wtc-mockup.html's own approved design
+// actually renders at (measured via a real headless render of that file with its demo-only
+// scale transform removed: the L1 word stack's own line-box height is 164px total for all
+// three words at 1280px wide, not the ~220px this used to render at). That's a "graphic",
+// not a "header" - and since #310 bounded the WHOLE hero to one viewport-height row (the
+// owner's pinning addendum), every extra pixel spent on the words came directly out of
+// HeroQuestionsArea's own budget (HeroGrid's `auto` row - see that component's comment) -
+// exactly why even Level 1 stopped fitting without an internal scroll.
+// Even mockup's own 164px figure isn't quite enough headroom once bounded to one viewport row
+// (mockup itself was never height-constrained - its hero simply grew as tall as it needed,
+// with the page scrolling normally below), so this goes a further step smaller than the
+// mockup's own absolute number - clamp()'d to a fraction of the viewport height (not a flat
+// rem guess) so it structurally can't reclaim the fix on a shorter viewport than 1400x900 was
+// checked at, while never rendering smaller than genuinely legible (min bound) or larger than
+// a true "header" ought to look (max bound).
+// Second pass (rebase onto #313's three-tier Footer redesign) - the new Footer is
+// substantially taller (its own margin-top plus top padding alone add up to 48px, on top of
+// its actual three-tier content), which pushed HeroGrid's own available height down further
+// still. Re-measured directly via this task's own Playwright diagnostics rather than
+// re-deriving by hand: the >= md clamp() bound is reduced again here so the words read
+// smaller still - closer to a compact wordmark "sticker" than even the first pass's header
+// scale - specifically to restore real margin under Level 1's hard no-scroll assertion
+// against this heavier footer, not because the mockup proportion itself changed.
+// Fix round (owner blocker, "the pulse doesn't sync with the pop") - the whole choreography
+// (blue cover fade + this pop sequence + CardPulseWrapper's card pulse, cardPanel.tsx) is now
+// anchored to the subject card image's own load event, not to this component's mount time (see
+// QuestionFeed.tsx's imageLoaded state and the comment on its cardImage block). `$playing`
+// starts false (the animation is frozen at its own delay/0% frame - CSS's own
+// `animation-play-state: paused`, applied from this component's very first style computation,
+// never lets the timeline - delay included - advance at all) and flips true only once
+// QuestionFeed.tsx confirms the image has actually settled, so a slow network can't run this
+// pop against a still-loading (or half-painted) card. Reduced-motion is unaffected by this prop
+// - the `@media (prefers-reduced-motion: reduce)` override below still wins regardless of
+// `$playing`'s value, exactly as before this fix round.
+const Word = styled.svg<{ $delayMs: number; $playing: boolean }>`
   display: block;
-  height: 3.75rem;
+  height: clamp(1.5rem, 3.2dvh, 2rem);
   width: auto;
   max-width: 100%;
   /* A root <svg> (unlike a nested one) defaults to overflow: visible per the SVG spec's own UA
@@ -193,9 +228,10 @@ const Word = styled.svg<{ $delayMs: number }>`
   transform: rotate(var(--wtc-word-rotate, 0deg));
   animation: ${wtcWordPop} 480ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
   animation-delay: ${(props) => props.$delayMs}ms;
+  animation-play-state: ${(props) => (props.$playing ? "running" : "paused")};
 
   @media (min-width: 768px) {
-    height: 4.5rem;
+    height: clamp(1.15rem, 2.1dvh, 1.6rem);
   }
 
   /* Suppresses the pop (words render statically at rest size) - reduced-motion never gets a
@@ -227,9 +263,13 @@ interface WhatsThatWordsProps {
   // W9: "re-armed by keying the words container on the item id") - pass the current queue
   // item's card identifier so a fresh card always restarts the ripple from WHAT'S.
   animationKey: string;
+  // Fix round (owner blocker) - see the Word component's own comment. False (the default new
+  // callers should pass explicitly, see QuestionFeed.tsx) holds every word paused at its own
+  // delay/0% frame; true starts the whole staggered sequence from that frozen point.
+  playing: boolean;
 }
 
-export function WhatsThatWords({ animationKey }: WhatsThatWordsProps) {
+export function WhatsThatWords({ animationKey, playing }: WhatsThatWordsProps) {
   return (
     // Purely decorative re-statement of the page's own <h1> (see whatsthat.tsx) - hidden from
     // assistive tech rather than duplicating the accessible name. aria-hidden lives on the
@@ -240,6 +280,7 @@ export function WhatsThatWords({ animationKey }: WhatsThatWordsProps) {
         <Word
           key={`${word.label}-${animationKey}`}
           $delayMs={word.delayMs}
+          $playing={playing}
           viewBox={word.viewBox}
           style={
             { "--wtc-word-rotate": `${word.rotateDeg}deg` } as

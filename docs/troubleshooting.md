@@ -216,6 +216,37 @@ server. If the isolated run passes, restart the main session's dev server
 trusting further results from the stale one. Don't spend time root-causing
 the exact HMR/cache mechanism unless it recurs after this fix.
 
+**Addendum (2026-07-22, /whatsthat animation-sync fix)**: this exact
+symptom — `revealed` (backing `question-feed`'s loading spinner) stuck
+`false` forever, `<img src="">` never settling — recurred on a
+genuinely fresh, isolated dev server (a brand-new worktree, freshly
+killed and restarted, confirmed via `ps`/`readlink -f /proc/<pid>/cwd`
+that no other session's server was reused), so it was **not** always the
+stale-server artifact described above. The real cause that time: a
+`useEffect` keyed on `item?.card.identifier` doing settle/gate logic
+whose _reset_ lived unconditionally in the fetch handler
+(`setRevealed(false)` etc. on every resolution, not just ones landing on
+a genuinely new identifier). Two consecutive feed items can legitimately
+share an
+identifier (the existing fetch-handler comment already documents this
+for `chipStates`), and dev-mode React Strict Mode's double effect
+invocation makes a duplicate resolution routine even outside that case
+— when it happens, the reset fires again but the identifier-keyed catch-
+up effect has no dependency change to re-trigger it on, permanently
+stranding the reset state. **Fix**: don't key a catch-up/settle effect on
+a value that can legitimately repeat between consecutive items — key it
+on a counter bumped unconditionally in the same reset block instead
+(`imageGeneration` in `QuestionFeed.tsx`), so the effect re-runs every
+time the reset does, with no dependency on whether the identifier text
+itself changed. **Distinguishing the two causes**: the stale-server
+version reproduces identically regardless of source code (swapping
+branches on the _same_ long-running server fails the same way); this
+version reproduces intermittently even on a fresh server and stops
+reproducing (verified via a 15-iteration `--workers=1` loop with zero
+source edits mid-run) once the generation-counter fix lands — a single
+clean pass proves nothing for an intermittent race like this, only a
+multi-iteration loop does.
+
 ## `npx prettier --write` reformats far more of a frontend file than you touched (trailing commas, wrapped ternaries appearing everywhere)
 
 **Symptom**: running `npx prettier --write` on a file you made one small,

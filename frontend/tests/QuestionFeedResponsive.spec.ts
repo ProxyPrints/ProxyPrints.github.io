@@ -252,6 +252,57 @@ test.describe("question feed - mobile layout", () => {
       .evaluate((el) => el.scrollTop);
     expect(contentContainerScrollTop).toBe(0);
   });
+
+  // Owner blocker (post-#310 live review) - the sliced WHAT'S/THAT/CARD? word stack rendered
+  // far larger than wtc-mockup.html's own approved proportion (measured directly off that file
+  // with its demo-only scale transform removed: 164px total for all three words at 1280px wide,
+  // versus 220px live), and since #310 bounded the WHOLE hero to one viewport-height row
+  // (HeroGrid's own `grid-template-rows: auto minmax(0, 1fr)` - the `auto` row sizes to
+  // HeroWordsArea's own content height, which comes directly out of the `questions` row's
+  // budget), every extra pixel the words claimed was one HeroQuestionsArea didn't get. At
+  // 1400x900 this left even Level 1 (suggested-match card + all four answer controls, no
+  // candidate grid to scroll) short by ~140px, forcing an internal scroll that clipped the
+  // card mid-view - exactly the "not even the simplest case fits" symptom this guards against.
+  // See WhatsThatWords.tsx's Word component for the sizing fix itself.
+  test("at 1400x900, Level 1's suggested-match card and all four answer controls fit without an internal scroll", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await expect(page.getByTestId("question-feed-level1-yes")).toBeVisible();
+
+    const questionsArea = page.getByTestId("question-feed-questions-area");
+    const overflow = await questionsArea.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    // scrollHeight is defined as never less than clientHeight (a box with room to spare still
+    // reports the two as equal, not scrollHeight < clientHeight) - so this only ever proves
+    // "no overflow", never "how much margin" on its own. That's fine here: the assertion this
+    // task actually asked for is exactly "no internal scroll", i.e. scrollHeight <= clientHeight.
+    expect(overflow.scrollHeight).toBeLessThanOrEqual(overflow.clientHeight);
+
+    const referenceImage = page.getByTestId(
+      "question-feed-level1-reference-image"
+    );
+    const yes = page.getByTestId("question-feed-level1-yes");
+    const notSure = page.getByTestId("question-feed-level1-not-sure");
+    const no = page.getByTestId("question-feed-level1-no");
+    const skip = page.getByTestId("question-feed-level1-skip");
+
+    for (const control of [referenceImage, yes, notSure, no, skip]) {
+      await expect(control).toBeVisible();
+      const box = await control.boundingBox();
+      expect(box).not.toBeNull();
+      // Fully within the 900px-tall viewport, not merely "visible" per Playwright's own
+      // visibility check (which only requires a non-zero intersection, not full containment).
+      expect(box!.y + box!.height).toBeLessThanOrEqual(900);
+      expect(box!.y).toBeGreaterThanOrEqual(0);
+    }
+  });
 });
 
 // Fix round (PR #305/#308 owner review) - HeroQuestionsArea's overflow-y: auto (needed for the
