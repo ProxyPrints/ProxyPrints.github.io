@@ -319,10 +319,12 @@ def _collector_line_ocr_attempts(cropped: Any) -> Iterator[tuple[Any, str, int]]
 
     Worst case (a card that never parses anything, e.g. a genuine coverage-ceiling case) pays for
     all 8 attempts - up to 4x the pre-#259 cost (2 attempts), UNLESS the pre-classification
-    short-circuit below fires first for a tier-1-digit-free card. This only hits cards whose
-    collector line genuinely never resolves to a collector number under ANY of these attempts
-    (and, since the short-circuit, whose tier-1 text also contains at least one digit character);
-    the happy path (an early tier-1 parse) is unaffected in cost or behavior either way.
+    short-circuit below fires first for a card whose tier-1 attempts are both confidently
+    digit-free (2026-07-22: non-blank AND digit-free, see `_confidently_digit_free`'s own
+    docstring - a blank/failed tier-1 read no longer short-circuits). This only hits cards whose
+    collector line genuinely never resolves to a collector number under ANY of these attempts and
+    whose tier-1 text is either blank or digit-bearing-but-unparseable; the happy path (an early
+    tier-1 parse) is unaffected in cost or behavior either way.
     """
     variants = preprocess_variants(cropped)
     for variant in variants:
@@ -366,6 +368,24 @@ def _contains_digit(text: str) -> bool:
     coarser and cheaper than the real parse on purpose, per the plan's own "STRUCTURE, not the
     parse itself" framing)."""
     return any(character.isdigit() for character in text)
+
+
+def _confidently_digit_free(tier1_raw_texts: list[str]) -> bool:
+    """Gate for the pre-classification short-circuit (2026-07-22, pipeline-fidelity parity
+    replay #154 "unexplained" divergence autopsy - 155 of 373 conservative-abstention
+    divergences traced to this exact gap): the short-circuit's original condition
+    (`not any(_contains_digit(text) for text in tier1_raw_texts)`) fired identically whether
+    tier-1 read real, digit-free TEXT or read literally NOTHING - an empty/whitespace-only
+    tesseract result is not evidence there's no collector number, it's evidence tier-1 failed to
+    read anything at all, which is exactly the case a heavier-preprocessed tier 2/an alternate-PSM
+    tier 3 exists to recover from. A CONFIDENT digit-free read (tier-1 produced real, non-blank
+    text - a genuine word, watermark, or garbled-but-present line - that simply has no digit
+    character in it) is a much stronger "there's nothing here to find" signal than silence is, and
+    is the only case this now allows to short-circuit. Requires BOTH tier-1 texts to be non-blank
+    AND digit-free - a single blank tier-1 attempt (even alongside a confidently digit-free one)
+    still forces escalation, matching the existing "both attempts" requirement this gate was
+    already layered onto."""
+    return all(text.strip() for text in tier1_raw_texts) and not any(_contains_digit(text) for text in tier1_raw_texts)
 
 
 def extract_card_evidence(
@@ -454,16 +474,30 @@ def compute_card_evidence(
 
     `short_circuit` (2026-07-21, docs/features/catalog-completion-plan.md's "Recovery-arc lessons"
     item 1): controls the `collector_line_ocr` pre-classification short-circuit - once BOTH tier-1
-    attempts fail to parse a collector number, if neither attempt's raw text contains a single
-    digit character, tiers 2-3 (6 more tesseract calls) are skipped and the extractor goes
-    straight to its existing "no-text" outcome, matching the measured finding that 99.7% of a
-    real no-text cohort's tier-1 reads were already digit-free and never gained a collector number
-    from the heavier tiers either. `None` (the default) resolves to `_short_circuit_enabled_by_env`
-    (the `STAGE_C_NO_SHORTCIRCUIT` env var) - an explicit `True`/`False` overrides that
-    resolution directly, which is what every test in this module and `run_image_evidence_cohort`'s
-    own `--no-shortcircuit` CLI flag do, rather than relying on env-var monkeypatching. Digit-
-    bearing tier-1 text that still fails to parse always escalates exactly as before - the
-    short-circuit is strictly narrower than the full "no-text" outcome it pre-empts, never wider.
+    attempts fail to parse a collector number, if BOTH attempts' raw text is non-blank and neither
+    contains a single digit character (`_confidently_digit_free`), tiers 2-3 (6 more tesseract
+    calls) are skipped and the extractor goes straight to its existing "no-text" outcome, matching
+    the measured finding that a large majority of a real no-text cohort's tier-1 reads were
+    already digit-free and never gained a collector number from the heavier tiers either. `None`
+    (the default) resolves to `_short_circuit_enabled_by_env` (the `STAGE_C_NO_SHORTCIRCUIT` env
+    var) - an explicit `True`/`False` overrides that resolution directly, which is what every test
+    in this module and `run_image_evidence_cohort`'s own `--no-shortcircuit` CLI flag do, rather
+    than relying on env-var monkeypatching. Digit-bearing tier-1 text that still fails to parse
+    always escalates exactly as before - the short-circuit is strictly narrower than the full
+    "no-text" outcome it pre-empts, never wider.
+
+    2026-07-22 tightening (pipeline-fidelity parity replay #154's "unexplained" divergence
+    autopsy): the original gate's "digit-free" check alone treated a BLANK/whitespace-only tier-1
+    read identically to a confident digit-free read - 155 of the replay's 373 conservative-
+    abstention divergences turned out to be cards whose tier-1 attempts came back completely
+    empty (a tesseract read FAILURE, not a confident "no collector number here" finding) yet were
+    short-circuited anyway, silently skipping the deeper tiers that would have recovered the real
+    collector line. `_confidently_digit_free` now additionally requires both tier-1 texts to be
+    non-blank - an empty/failed tier-1 read always escalates to tiers 2-3, exactly like a
+    digit-bearing unparseable read already did. This is strictly a NARROWING of the short-circuit
+    (a strict subset of what used to qualify still does), so its own worst-case-cost bound above
+    is unaffected; the perf win is simply now scoped to genuinely-content-bearing, genuinely
+    digit-free reads rather than also swallowing outright read failures.
     """
     if short_circuit is None:
         short_circuit = _short_circuit_enabled_by_env()
@@ -565,13 +599,15 @@ def compute_card_evidence(
         # function's own docstring for the full tier breakdown and worst-case cost.
         #
         # Pre-classification short-circuit (2026-07-21, docs/features/catalog-completion-plan.md's
-        # "Recovery-arc lessons" item 1): once both tier-1 attempts are exhausted with no parse, a
-        # tier-1-digit-free card skips tiers 2-3 entirely rather than paying for 6 more tesseract
-        # calls to re-read the same non-collector-number text more clearly - measured (2026-07-21,
-        # a 6,643-card no-text cohort) at 99.7% of the genuinely-unrecoverable population, 0% loss
-        # on that sample. A digit-bearing tier-1 read that still fails to parse always escalates
-        # exactly as before - `_contains_digit` is a coarser, cheaper check than
-        # `_COLLECTOR_NUMBER_RE` itself (see that helper's own docstring), so this can only ever
+        # "Recovery-arc lessons" item 1; tightened 2026-07-22, parity replay #154 - see
+        # `_confidently_digit_free`'s own docstring for the full autopsy): once both tier-1
+        # attempts are exhausted with no parse, a card whose tier-1 texts are BOTH non-blank and
+        # digit-free skips tiers 2-3 entirely rather than paying for 6 more tesseract calls to
+        # re-read the same non-collector-number text more clearly. A digit-bearing tier-1 read
+        # that still fails to parse always escalates exactly as before - `_contains_digit` is a
+        # coarser, cheaper check than `_COLLECTOR_NUMBER_RE` itself (see that helper's own
+        # docstring) - and so does a BLANK tier-1 read (2026-07-22: blank is a read FAILURE, not a
+        # confident "nothing here" signal, so it no longer qualifies either). This can only ever
         # short-circuit a STRICT SUBSET of cards that would have ended in "no-text" anyway, never
         # a card that could have parsed at tier 1.
         collector_texts_and_words: list[tuple[str, list[dict[str, Any]]]] = []
@@ -594,7 +630,7 @@ def compute_card_evidence(
                 if (
                     short_circuit
                     and len(tier1_raw_texts) == _COLLECTOR_LINE_TIER1_ATTEMPT_COUNT
-                    and not any(_contains_digit(text) for text in tier1_raw_texts)
+                    and _confidently_digit_free(tier1_raw_texts)
                 ):
                     short_circuited = True
                     break

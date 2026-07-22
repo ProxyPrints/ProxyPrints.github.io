@@ -585,6 +585,48 @@ class TestOcrParsing:
         assert parsed.collector_number == "354"
         assert parsed.set_code == "cmr"
 
+    def test_language_marker_character_glued_onto_set_code_is_stripped(self):
+        # 2026-07-22, pipeline-fidelity parity replay #154's "unexplained" divergence autopsy -
+        # real production case, card_id 41559 ("Verazol, the Split Current") - a stray lowercase
+        # "e" glued onto the tail of the real set code "ZNR" (Zendikar Rising), immediately
+        # followed by a correctly-read "EN" language marker of its own. Confirmed against
+        # CandidateNameIndex: the card's real candidate printings include ("znr", "239"), not
+        # ("znre", "239") - the pilot correctly matched znr/239, this parser previously did not.
+        parsed = parse_collector_line("239/280 R\nZNRe EN b> DAARKEN")
+        assert parsed.collector_number == "239"
+        assert parsed.set_code == "znr"
+
+    def test_language_marker_character_glued_onto_set_code_duplicate_card(self):
+        # card_id 165637 shares the exact same raw collector-line text as 41559 above (same
+        # printing scanned twice) - kept as its own regression pin since it's one of the task's
+        # own named sample card_ids, not just a duplicate assertion.
+        parsed = parse_collector_line("239/280 R\nZNRe EN b> DAARKEN")
+        assert parsed.collector_number == "239"
+        assert parsed.set_code == "znr"
+
+    def test_glued_character_not_adjacent_to_a_language_marker_is_left_alone(self):
+        # 2026-07-22 same autopsy, deliberate SCOPE BOUNDARY: card_id 9934's raw text also carries
+        # a single extra trailing character on its set-code token ("A25S", real candidate set
+        # "a25" per CandidateNameIndex) - but that extra "S" sits directly before a rarity SYMBOL
+        # ("¢"), not directly before a language marker, so `_LANGUAGE_MARKER_ADJACENCY_RE` never
+        # matches at that position and the guard correctly does NOT fire. Pinned as a regression
+        # test precisely because it's superficially similar to the 41559 case above but must NOT
+        # be touched by this narrow, position-based guard (parse_collector_line has no candidate
+        # access to otherwise tell these apart - see this module's own module docstring).
+        parsed = parse_collector_line("034/249 C\nA25S ¢ EN be MARTINA P")
+        assert parsed.collector_number == "034"
+        assert parsed.set_code == "a25s"
+
+    def test_duplicated_trailing_character_before_a_symbol_is_left_alone(self):
+        # 2026-07-22 same autopsy, second scope-boundary pin: card_id 181116's raw text
+        # ("WWkK « EN © WARREN", real candidate set "wwk" per CandidateNameIndex) has an
+        # extra character glued onto its set-code token immediately before a symbol (not a
+        # language marker either) - same reasoning and same "left alone" outcome as the test
+        # above, kept as a separate pin since the specific glued character/token shape differs.
+        parsed = parse_collector_line("121/145 R\nWWkK « EN © WARREN")
+        assert parsed.collector_number == "121"
+        assert parsed.set_code == "wwkk"
+
 
 class TestLegalLineParsing:
     """public issue #151, "Legal-line extractor + moderator flag + volume report (task #159)" -

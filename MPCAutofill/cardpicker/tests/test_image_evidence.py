@@ -805,16 +805,21 @@ class TestExtractCardEvidenceCollectorLineOcr:
         assert result.fields["collector_line_collector_number"] == ""
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
 
-    def test_no_legible_text_short_circuits_after_tier_one_by_default(self, db, monkeypatch):
-        """2026-07-21, docs/features/catalog-completion-plan.md's "Recovery-arc lessons" item 1:
-        a blank (digit-free) crop's tier-1 attempts contain no digit character at all, so with the
-        short-circuit ON (the new default), tiers 2-3 are never even attempted - only the 2 tier-1
-        tesseract calls happen before "no-text" is recorded. Supersedes this test's own former
-        "exhausts every tier" assertion, which is now `test_no_legible_text_exhausts_every_
-        fallback_tier_when_short_circuit_is_disabled` below (same fixture, `short_circuit=False`).
-        Counted via a wrapper around `run_tesseract_text_and_words` rather than asserting a
-        specific OCR result (a blank crop reliably reads as empty text under every config in this
-        environment; the ATTEMPT COUNT, not the text, is what this test is about)."""
+    def test_blank_tier_one_no_longer_short_circuits_by_default(self, db, monkeypatch):
+        """2026-07-22, pipeline-fidelity parity replay #154's "unexplained" divergence autopsy
+        (docs/features/catalog-completion-plan.md's "Recovery-arc lessons" item 1, tightened - see
+        `_confidently_digit_free`'s own docstring): a blank crop's tier-1 attempts read back
+        completely EMPTY, not "confidently digit-free" - `_confidently_digit_free` now requires
+        non-blank text on both attempts too, so this case must escalate through every tier exactly
+        like `test_no_legible_text_exhausts_every_fallback_tier_when_short_circuit_is_disabled`
+        below, even with the short-circuit flag left at its default (True). Supersedes this test's
+        own former "blank crop short-circuits" assertion - the replay found 155 of 373 conservative
+        -abstention divergences were exactly this case (a real tier-1 read FAILURE wrongly treated
+        as a confident "no collector number here" finding, silently skipping the deeper tiers that
+        would have recovered the real collector line). Counted via a wrapper around
+        `run_tesseract_text_and_words` rather than asserting a specific OCR result (a blank crop
+        reliably reads as empty text under every config in this environment; the ATTEMPT COUNT,
+        not the text, is what this test is about)."""
         card = CardFactory(content_phash=1)
         image = _build_card_image([(DEFAULT_CROP_BOX, "")])
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
@@ -831,8 +836,36 @@ class TestExtractCardEvidenceCollectorLineOcr:
         result = extract_card_evidence(card)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
-        assert len(configs_used) == 2  # tier 1 only - short-circuited before tiers 2-3
-        assert configs_used == [module.TESSERACT_CONFIG] * 2
+        assert len(configs_used) == 8  # blank tier-1 no longer qualifies - every tier tried
+        assert configs_used.count(module.TESSERACT_CONFIG) == 6
+        assert configs_used.count(module.ALTERNATE_TESSERACT_CONFIG) == 2
+        assert result.short_circuited is False
+
+    def test_confidently_digit_free_tier_one_still_short_circuits_by_default(self, db, monkeypatch):
+        """2026-07-22: the short-circuit's own perf win must still exist for the case it's
+        actually meant for - tier-1 text tesseract genuinely READ (non-blank), just with no digit
+        character in it (e.g. real but unrelated text, or a garbled-but-present line), as opposed
+        to the blank/failed-read case the test above now excludes. Uses a monkeypatched
+        `run_tesseract_text_and_words` (not real tesseract) for an exact, controlled non-blank
+        digit-free tier-1 text, mirroring `test_digit_bearing_tier_one_failure_still_escalates_
+        by_default` below's own style for the opposite (digit-bearing) case."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return "no digits anywhere in this line", []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(card)
+
+        assert result.skip_reasons["collector_line_ocr"] == "no-text"
+        assert len(calls) == 2  # tier 1 only - confidently digit-free, still short-circuits
+        assert calls == [module.TESSERACT_CONFIG] * 2
         assert result.short_circuited is True
 
     def test_no_legible_text_exhausts_every_fallback_tier_when_short_circuit_is_disabled(self, db, monkeypatch):
