@@ -267,24 +267,31 @@ store images", CLAUDE.md's Governing premise):
   ambiguous) is NOT excluded - it still has no confident automated hit and belongs in the review
   queue exactly as before.
 
-PIECE 2 - CONSTANT #3 (`docs/pipeline-fidelity-gate.md` SS3 item 3,
-`docs/reports/2026-07-22-knowledge-inventory.md`'s MISSING item 3): `_eligible_cards_queryset` now
-also excludes any card already carrying a `VoteSource.DEDUCTION` printing vote - the pilot never
-re-voted a card `deductive_backfill.py`'s own `DEDUCTIVE_BACKFILL_ANONYMOUS_ID="deductive-backfill-v1"`
-pass had already voted for (28,112 live production votes, `run_id=None`, per the gate page's SS6).
-Filtered by `source=VoteSource.DEDUCTION` rather than the literal `anonymous_id` value -
-deliberately generalized (this PR's own task brief) so ANY prior deduction-class vote (a future
-second deduction engine, not just this one literal identity) is excluded the same way, without a
-hard import-time dependency on `deductive_backfill.py`'s own constant (matching this module's own
-`JOIN_KEY_CONFIDENCE_BOTH` comment's "avoid a hard cross-module dependency over one constant"
-precedent) - `deductive_backfill.py`'s own module docstring confirms it is the sole producer of
-`VoteSource.DEDUCTION` votes today, so this changes nothing operationally now and only
-future-proofs. Applied inside the ONE shared `_eligible_cards_queryset` helper both the join-key
-and fallback calculators call - the operational guard that makes a repeated multi-pass Stage D
-fire idempotent against the backfill population, independent of which calculator runs. Explicitly
-NOT bundling constants #1 (`RESOLUTION_FLOOR_DPI`) or #2 (`EXCLUDED_RESOLVED_TAGS`) here - their
-forward-impact sizing is still open per the gate page, and the owner did not include them in this
-PRE-FIRE PREP.
+CONSTANT #3 - INTENTIONALLY NOT RESTORED (owner ruling, 2026-07-22, superseding an earlier draft
+of this PR that DID add a `.exclude(printing_tags__source=VoteSource.DEDUCTION)` clause here):
+`docs/pipeline-fidelity-gate.md` SS3 item 3 / `docs/reports/2026-07-22-knowledge-inventory.md`'s
+former MISSING item 3 flagged that the pilot never re-voted a card
+`deductive_backfill.py`'s own `DEDUCTIVE_BACKFILL_ANONYMOUS_ID="deductive-backfill-v1"` pass had
+already voted for (28,112 live production votes, `run_id=None`, per the gate page's SS6). A
+read-only backfill investigation found this exclusion would be a net-negative single-cohort
+carve-out, not a restoration worth making: that 2026-07-14 backfill is pure name/metadata
+deduction (never phash/OCR - zero image inspection, see `deductive_backfill.py`'s own module
+docstring), its votes are sound (a 15-card sample checked all correct), and excluding those cards
+from Stage D would strand ~27,819 sound-but-UNRESOLVED cards outside the new pipeline for no
+protective benefit. Re-evaluating them is safe: the human-backed consensus gate
+(`vote_consensus.resolve_weighted_consensus`, PROTECTED CORE, unmodified) still prevents any
+machine-only vote accumulation from resolving a card by itself regardless of how many engines
+vote on it, agreement between the backfill's vote and a fresh Stage D vote simply dedups (no harm
+done), and a disagreement surfaces the card to human review (a genuine corroboration signal, not
+noise). The pilot's own exclusion was a PERFORMANCE optimization (skip a card its own weaker
+engines couldn't add anything to), not a soundness mechanism - restoring it here would trade real
+coverage for a protection Stage D's vote-consensus layer already provides independently.
+`_eligible_cards_queryset`'s pre-existing per-calculator stable-`anonymous_id` exclusion (its own
+long-standing idempotence mechanism, entirely independent of this constant) is unaffected and
+unchanged by this decision - see that function's own docstring.
+
+Constants #1 (`RESOLUTION_FLOOR_DPI`) and #2 (`EXCLUDED_RESOLVED_TAGS`) remain open pending
+forward-impact sizing per the gate page, unaffected by this ruling on #3.
 
 This PR is CODE ONLY: it does not run the full-catalog Stage D fire, the targeted re-extraction of
 issue #340's 373-card cohort, or any other prod extraction/write - both remain separate,
@@ -736,12 +743,15 @@ def _eligible_cards_queryset(
     instead, since the two calculators' own skip vocabularies mean different things by the same
     "transient, re-selectable" concept.
 
-    CONSTANT #3 (module docstring's PIECE 2, `docs/pipeline-fidelity-gate.md` SS3 item 3):
-    also excludes any card already carrying a `VoteSource.DEDUCTION` printing vote - see the
-    module docstring's PIECE 2 section for the full reasoning (why `source=DEDUCTION` rather than
-    the literal `deductive_backfill.DEDUCTIVE_BACKFILL_ANONYMOUS_ID`). Shared by BOTH calculators
-    that call this helper (join-key and fallback) - the guard that makes a repeated multi-pass
-    Stage D fire idempotent against the backfill population, independent of which calculator runs.
+    Idempotence for a repeated multi-pass Stage D fire comes entirely from the stable, per-
+    calculator `anonymous_id` exclusion above (`.exclude(printing_tags__anonymous_id=anonymous_id)`)
+    - deliberately the ONLY vote-population exclusion here. An earlier draft of this module also
+    excluded any card already carrying a `VoteSource.DEDUCTION` printing vote (the pilot's own
+    "don't re-vote a card the deductive backfill already covered" behavior, `docs/pipeline-
+    fidelity-gate.md` SS3 item 3) - owner-ruled OUT (2026-07-22, see module docstring's own
+    "CONSTANT #3" section for the full reasoning): that exclusion would strand ~27,819
+    sound-but-UNRESOLVED cards outside Stage D for no protective benefit, since the human-backed
+    consensus gate already makes re-evaluating them safe. Do not re-add it without a fresh ruling.
     """
     non_rescannable_scanned_card_ids = (
         CardScanLog.objects.filter(anonymous_id=anonymous_id)
@@ -755,7 +765,6 @@ def _eligible_cards_queryset(
             card_type=CardTypes.CARD,
         )
         .exclude(printing_tags__anonymous_id=anonymous_id)
-        .exclude(printing_tags__source=VoteSource.DEDUCTION)
         .exclude(pk__in=non_rescannable_scanned_card_ids)
         .distinct()
         .select_related("source")
@@ -1040,8 +1049,8 @@ def _fallback_eligible_cards_queryset() -> "QuerySet[Card]":
     `_slow_path_eligible_cards_queryset` below selects from (a real `is_no_match` vote, or a
     non-rescannable skip in `JOIN_KEY_NO_HIT_SKIP_REASONS`) - that this calculator's own
     `STAGE_D_FALLBACK_ANONYMOUS_ID` hasn't already processed (scanned OR voted), via the shared
-    `_eligible_cards_queryset` helper (which also carries PIECE 2's own deduction-vote exclusion,
-    applied identically to both calculators).
+    `_eligible_cards_queryset` helper (idempotence mechanism only - see that function's own
+    docstring for why a deduction-vote exclusion was considered and deliberately not added).
     """
     join_key_no_match_card_ids = CardPrintingTag.objects.filter(
         anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True

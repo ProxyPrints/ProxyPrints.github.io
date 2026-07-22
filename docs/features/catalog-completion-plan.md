@@ -2624,55 +2624,63 @@ clean (no model change — every field these checks read already existed on
   votes, no backup needed, since nothing is persisted. Production cutover
   is the only phase that uses `--write --run-id <fresh>`.
 
-**Pre-fire prep — the fallback channel calculator + constant #3 (built
-2026-07-22, bundled ahead of the full-catalog fire per owner ruling; see
-[[../pipeline-fidelity-gate.md]] §3 for the gate context)**: two pieces,
-both code-only — neither runs the full-catalog fire, the targeted
-re-extraction of issue #340's 373-card cohort, or any other prod
-extraction/write, both of which remain separate, owner-gated prod steps.
+**Pre-fire prep — the fallback channel calculator (built 2026-07-22,
+bundled ahead of the full-catalog fire per owner ruling; see
+[[../pipeline-fidelity-gate.md]] §3 for the gate context)**: code-only —
+does not run the full-catalog fire, the targeted re-extraction of issue
+#340's 373-card cohort, or any other prod extraction/write, both of which
+remain separate, owner-gated prod steps.
 
-1. **`calculate_fallback_verdict`/`run_fallback_calculator`** (own
-   `anonymous_id="stage-d-fallback-v1"`) — Stage D's own port of
-   `local_fallback.py`'s pilot "Pass 2" evidence-combination model (that
-   module's own docstring: fires only when pass 1 yields no accepted vote
-   for a card), run over exactly the cards `run_join_key_calculator`
-   already concluded have no confident hit — the SAME population
-   `run_slow_path_calculator` routes to human review. Unlike the pilot's
-   own `run_fallback_for_card` (which crops/scans a LIVE image), this
-   calculator operates entirely off already-persisted `ImageEvidence`
-   fields: `layout_class`/`artist_ocr_name` feed straight into
-   `local_fallback.filter_by_border_color`/`match_artist` (PROTECTED CORE,
-   called not modified), and a new `_filter_by_symbol_phash` compares
-   `symbol_phash` against each candidate's rendered keyrune glyph
-   (`local_fallback.render_set_symbol`, PROTECTED CORE) via the same
-   pure-Hamming-distance-arithmetic reimplementation
-   `_symbol_phash_tiebreak` already established for the join-key
-   calculator's own symbol tie-break. A vote is cast ONLY when the
-   intersection across every sub-check that produced a reading narrows to
-   EXACTLY ONE candidate — `local_fallback.py`'s own documented rule,
-   reproduced exactly, with no added agreement/corroboration layer (that
-   layer doesn't exist in `local_fallback.py`, so this is a faithful port,
-   not an augmented one). `source=VoteSource.OCR` (not `DEDUCTION`) — the
-   enum's own docstring in `models.py` explicitly names "the
-   border/artist/symbol evidence-combination fallback" as part of OCR's
-   own umbrella definition. Wired into the management command between the
-   join-key and slow-path calculators (its own gate check via
-   `verify_zero_resolutions`, same as the join-key calculator's own), and
-   `_slow_path_eligible_cards_queryset` now also excludes any card this
-   calculator successfully voted on, so a card it resolves is not also
-   routed to human review in the same invocation.
-2. **Constant #3** (`docs/pipeline-fidelity-gate.md` §3 item 3 /
-   `docs/reports/2026-07-22-knowledge-inventory.md`'s MISSING item 3): the
-   shared `_eligible_cards_queryset` helper (both calculators call it) now
-   also excludes any card already carrying a `VoteSource.DEDUCTION`
-   printing vote — the pilot never re-voted a card
-   `deductive_backfill.py`'s own `deductive-backfill-v1` pass had already
-   voted for (28,112 live production votes). Filtered by
-   `source=VoteSource.DEDUCTION` rather than the literal `anonymous_id`
-   value — deliberately generalized so any future deduction-class engine
-   is excluded the same way. Constants #1 (`RESOLUTION_FLOOR_DPI`) and #2
-   (`EXCLUDED_RESOLVED_TAGS`) are explicitly NOT part of this bundle —
-   their forward-impact sizing is still open per the gate page.
+**`calculate_fallback_verdict`/`run_fallback_calculator`** (own
+`anonymous_id="stage-d-fallback-v1"`) — Stage D's own port of
+`local_fallback.py`'s pilot "Pass 2" evidence-combination model (that
+module's own docstring: fires only when pass 1 yields no accepted vote
+for a card), run over exactly the cards `run_join_key_calculator`
+already concluded have no confident hit — the SAME population
+`run_slow_path_calculator` routes to human review. Unlike the pilot's
+own `run_fallback_for_card` (which crops/scans a LIVE image), this
+calculator operates entirely off already-persisted `ImageEvidence`
+fields: `layout_class`/`artist_ocr_name` feed straight into
+`local_fallback.filter_by_border_color`/`match_artist` (PROTECTED CORE,
+called not modified), and a new `_filter_by_symbol_phash` compares
+`symbol_phash` against each candidate's rendered keyrune glyph
+(`local_fallback.render_set_symbol`, PROTECTED CORE) via the same
+pure-Hamming-distance-arithmetic reimplementation
+`_symbol_phash_tiebreak` already established for the join-key
+calculator's own symbol tie-break. A vote is cast ONLY when the
+intersection across every sub-check that produced a reading narrows to
+EXACTLY ONE candidate — `local_fallback.py`'s own documented rule,
+reproduced exactly, with no added agreement/corroboration layer (that
+layer doesn't exist in `local_fallback.py`, so this is a faithful port,
+not an augmented one). `source=VoteSource.OCR` (not `DEDUCTION`) — the
+enum's own docstring in `models.py` explicitly names "the
+border/artist/symbol evidence-combination fallback" as part of OCR's
+own umbrella definition. Wired into the management command between the
+join-key and slow-path calculators (its own gate check via
+`verify_zero_resolutions`, same as the join-key calculator's own), and
+`_slow_path_eligible_cards_queryset` now also excludes any card this
+calculator successfully voted on, so a card it resolves is not also
+routed to human review in the same invocation. Idempotence across a
+repeated fire comes entirely from `_eligible_cards_queryset`'s own
+per-calculator stable-`anonymous_id` exclusion (unchanged, pre-existing).
+
+**Constant #3 considered and NOT restored (owner ruling, 2026-07-22)**: an
+earlier same-day revision of this PR also added a
+`.exclude(printing_tags__source=VoteSource.DEDUCTION)` clause to the
+shared `_eligible_cards_queryset` helper, addressing `docs/pipeline- fidelity-gate.md` §3 item 3 / `docs/reports/2026-07-22-knowledge- inventory.md`'s former MISSING item 3 (the pilot never re-voted a card
+`deductive_backfill.py`'s own `deductive-backfill-v1` pass had already
+voted for). A read-only investigation of that 2026-07-14 backfill found
+this would be a net-negative single-cohort carve-out, not a worthwhile
+restoration: the backfill is pure name/metadata deduction (never
+phash/OCR), its votes check out sound (15-card sample all correct), and
+excluding those cards would strand ~27,819 sound-but-UNRESOLVED cards
+outside Stage D for no protective benefit — re-evaluating them is safe
+under the human-backed consensus gate (agreement dedups, disagreement
+surfaces to human review). The pilot's own exclusion was a performance
+optimization, not a soundness mechanism. Removed before merge; see
+`docs/pipeline-fidelity-gate.md` §3 item 3 for the canonical record.
+Constants #1 (`RESOLUTION_FLOOR_DPI`) and #2 (`EXCLUDED_RESOLVED_TAGS`)
+remain open pending forward-impact sizing, unaffected by this ruling.
 
 **Stage E resume contract (owner directive, 2026-07-19 — full spec on
 task #147, acceptance test folded into task #156's soak gate)**:
