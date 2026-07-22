@@ -1025,6 +1025,61 @@ printings, artists, tags, and moderation from one screen.
     `reducedMotion: "reduce"` default means every _other_ existing spec
     never has to account for this animation at all; this file explicitly
     overrides it per-test where it needs the animation actually running.
+- **Artist write-in with autocomplete** (backend only this pass — frontend
+  ships separately). Lets a voter on `/whatsthat`'s artist question and
+  `/display`'s Artist sidebar suggest an artist not in the candidate list,
+  for when `ArtistVotePicker.tsx`'s existing ranked-candidates/typeahead
+  modes (`post_artist_candidates`, exact-name `SubmitArtistVoteRequest`)
+  come up empty. Two new endpoints, both additive — no change to
+  `cardpicker.artist_consensus` (PROTECTED CORE) or to
+  `post_artist_candidates`/`post_submit_artist_vote`, which are untouched:
+  - `POST 2/artistAutocomplete/` (`ArtistAutocompleteRequest{query}` ->
+    `ArtistAutocompleteResponse{results: [{id, name}]}`) — unscoped (no
+    card `identifier`), catalogue-wide, case-insensitive, prefix-then-
+    substring name search, capped at `ARTIST_AUTOCOMPLETE_PAGE_SIZE` (10)
+    results. Unauthenticated-OK (public, read-only data, no
+    `reject_untrusted_origin`) but rate-limited per-IP
+    (`ARTIST_AUTOCOMPLETE_RATE`, default `120/m`) since it's expected to
+    fire on every keystroke. Returns an `id` (unlike
+    `post_artist_candidates`'s bare-name results) so the cast endpoint
+    below can be called unambiguously.
+  - `POST 2/submitArtistWriteInVote/`
+    (`SubmitArtistWriteInVoteRequest{identifier, anonymousId, artistId?, freeText?, voteSurface?}` -> `SubmitArtistWriteInVoteResponse` — the
+    same consensus shape as `ArtistConsensusResponse` plus `castArtist`
+    and `createdNewArtist`). Exactly one of `artistId` (the autocomplete-
+    pick path, the PRIMARY normalization route) or `freeText` is
+    required. `freeText` is control-character-stripped, whitespace-
+    collapsed, length-capped (`ARTIST_WRITEIN_NAME_MAX_LENGTH`, 100), then
+    matched case-insensitively against existing `CanonicalArtist.name`
+    values — a match REUSES that row (no twin of an existing artist under
+    a different casing); only a genuinely new normalized name creates a
+    new row. Either way the vote that gets cast is a completely ordinary
+    USER-source `CardArtistVote`, through the exact same
+    `resolve_and_persist_artist` path as `post_submit_artist_vote` — same
+    weight, same gates, same rate budget (shares
+    `PRINTING_TAG_SUBMISSION_RATE` via the existing
+    `_printing_tag_rate_limit_key`/`_rate`, not a separate budget) —
+    write-ins get no special treatment in consensus. Guarded with
+    `reject_untrusted_origin`, same as every other vote-casting endpoint.
+    No guard against an already-RESOLVED card (mirrors
+    `post_submit_artist_vote`/`post_submit_printing_tag`, neither of
+    which gate on that either).
+  - No new `CanonicalArtist` field for write-in provenance: a write-in-
+    created row is indistinguishable from any catalog-imported one by
+    design (per spec, it gets no special consensus treatment), and an
+    unreferenced write-in row (name created, vote later retracted/
+    superseded) is judged harmless to persist — a `CanonicalArtist` row
+    is a few bytes of text, not image data, and the admin panel already
+    supports a manual rename/merge if one ever needs cleaning up.
+  - KNOWN LIMITATION, flagged rather than silently fixed: the write-in
+    reuse match is case-insensitive, but the Scryfall/MTG catalog sync
+    path (`integrations/game/mtg.py`'s `artists_by_name` dict) dedupes
+    existing `CanonicalArtist` rows by EXACT, case-sensitive name. A
+    write-in stored with unconventional casing that's later confirmed by
+    an official Scryfall entry under different casing will still produce
+    a duplicate row at the next sync — deferred, not eliminated. Fixing
+    that touches the catalog sync integration, not the vote/consensus
+    system this task targets, so it's out of scope here.
 
 ## Key files (Stages 1–7; Stage 8+ files are in [[catalog-completion-plan.md]])
 

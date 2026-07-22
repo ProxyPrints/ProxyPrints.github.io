@@ -538,6 +538,54 @@ class QuestionFeedResponse(BaseModel):
         return result
 
 
+class ArtistAutocompleteRequest(BaseModel):
+    query: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistAutocompleteRequest":
+        assert isinstance(obj, dict)
+        query = from_str(obj.get("query"))
+        return ArtistAutocompleteRequest(query)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["query"] = from_str(self.query)
+        return result
+
+
+class ArtistAutocompleteResult(BaseModel):
+    id: int
+    name: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistAutocompleteResult":
+        assert isinstance(obj, dict)
+        id = from_int(obj.get("id"))
+        name = from_str(obj.get("name"))
+        return ArtistAutocompleteResult(id, name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["id"] = from_int(self.id)
+        result["name"] = from_str(self.name)
+        return result
+
+
+class ArtistAutocompleteResponse(BaseModel):
+    results: List[ArtistAutocompleteResult]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistAutocompleteResponse":
+        assert isinstance(obj, dict)
+        results = from_list(ArtistAutocompleteResult.from_dict, obj.get("results"))
+        return ArtistAutocompleteResponse(results)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["results"] = from_list(lambda x: to_class(ArtistAutocompleteResult, x), self.results)
+        return result
+
+
 class ArtistCandidatesRequest(BaseModel):
     identifier: str
     query: Optional[str] = None
@@ -2562,6 +2610,66 @@ class SubmitArtistVoteRequest(BaseModel):
         return result
 
 
+class SubmitArtistWriteInVoteRequest(BaseModel):
+    anonymousId: str
+    identifier: str
+    artistId: Optional[int] = None
+    freeText: Optional[str] = None
+    voteSurface: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitArtistWriteInVoteRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        artistId = from_union([from_none, from_int], obj.get("artistId"))
+        freeText = from_union([from_none, from_str], obj.get("freeText"))
+        voteSurface = from_union([from_none, from_str], obj.get("voteSurface"))
+        return SubmitArtistWriteInVoteRequest(anonymousId, identifier, artistId, freeText, voteSurface)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        if self.artistId is not None:
+            result["artistId"] = from_union([from_none, from_int], self.artistId)
+        if self.freeText is not None:
+            result["freeText"] = from_union([from_none, from_str], self.freeText)
+        if self.voteSurface is not None:
+            result["voteSurface"] = from_union([from_none, from_str], self.voteSurface)
+        return result
+
+
+class SubmitArtistWriteInVoteResponse(BaseModel):
+    castArtist: ArtistAutocompleteResult
+    createdNewArtist: bool
+    isUnknown: bool
+    voteTally: List[ArtistVoteTallyEntry]
+    resolvedArtist: Optional[CanonicalArtistClass] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitArtistWriteInVoteResponse":
+        assert isinstance(obj, dict)
+        castArtist = ArtistAutocompleteResult.from_dict(obj.get("castArtist"))
+        createdNewArtist = from_bool(obj.get("createdNewArtist"))
+        isUnknown = from_bool(obj.get("isUnknown"))
+        voteTally = from_list(ArtistVoteTallyEntry.from_dict, obj.get("voteTally"))
+        resolvedArtist = from_union([from_none, CanonicalArtistClass.from_dict], obj.get("resolvedArtist"))
+        return SubmitArtistWriteInVoteResponse(castArtist, createdNewArtist, isUnknown, voteTally, resolvedArtist)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["castArtist"] = to_class(ArtistAutocompleteResult, self.castArtist)
+        result["createdNewArtist"] = from_bool(self.createdNewArtist)
+        result["isUnknown"] = from_bool(self.isUnknown)
+        result["voteTally"] = from_list(lambda x: to_class(ArtistVoteTallyEntry, x), self.voteTally)
+        if self.resolvedArtist is not None:
+            result["resolvedArtist"] = from_union(
+                [from_none, lambda x: to_class(CanonicalArtistClass, x)], self.resolvedArtist
+            )
+        return result
+
+
 class SubmitPrintingTagRequest(BaseModel):
     anonymousId: str
     identifier: str
@@ -2915,6 +3023,30 @@ class WhoamiResponse(BaseModel):
         result["logoutUrl"] = from_union([from_none, from_str], self.logoutUrl)
         result["username"] = from_union([from_none, from_str], self.username)
         return result
+
+
+def ArtistAutocompleteRequestfromdict(s: Any) -> ArtistAutocompleteRequest:
+    return ArtistAutocompleteRequest.from_dict(s)
+
+
+def ArtistAutocompleteRequesttodict(x: ArtistAutocompleteRequest) -> Any:
+    return to_class(ArtistAutocompleteRequest, x)
+
+
+def ArtistAutocompleteResultfromdict(s: Any) -> ArtistAutocompleteResult:
+    return ArtistAutocompleteResult.from_dict(s)
+
+
+def ArtistAutocompleteResulttodict(x: ArtistAutocompleteResult) -> Any:
+    return to_class(ArtistAutocompleteResult, x)
+
+
+def ArtistAutocompleteResponsefromdict(s: Any) -> ArtistAutocompleteResponse:
+    return ArtistAutocompleteResponse.from_dict(s)
+
+
+def ArtistAutocompleteResponsetodict(x: ArtistAutocompleteResponse) -> Any:
+    return to_class(ArtistAutocompleteResponse, x)
 
 
 def ArtistVoteTallyEntryfromdict(s: Any) -> ArtistVoteTallyEntry:
@@ -3811,6 +3943,22 @@ def SubmitArtistVoteRequestfromdict(s: Any) -> SubmitArtistVoteRequest:
 
 def SubmitArtistVoteRequesttodict(x: SubmitArtistVoteRequest) -> Any:
     return to_class(SubmitArtistVoteRequest, x)
+
+
+def SubmitArtistWriteInVoteRequestfromdict(s: Any) -> SubmitArtistWriteInVoteRequest:
+    return SubmitArtistWriteInVoteRequest.from_dict(s)
+
+
+def SubmitArtistWriteInVoteRequesttodict(x: SubmitArtistWriteInVoteRequest) -> Any:
+    return to_class(SubmitArtistWriteInVoteRequest, x)
+
+
+def SubmitArtistWriteInVoteResponsefromdict(s: Any) -> SubmitArtistWriteInVoteResponse:
+    return SubmitArtistWriteInVoteResponse.from_dict(s)
+
+
+def SubmitArtistWriteInVoteResponsetodict(x: SubmitArtistWriteInVoteResponse) -> Any:
+    return to_class(SubmitArtistWriteInVoteResponse, x)
 
 
 def SubmitPrintingTagRequestfromdict(s: Any) -> SubmitPrintingTagRequest:

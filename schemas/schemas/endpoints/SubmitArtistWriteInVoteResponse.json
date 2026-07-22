@@ -1,0 +1,17 @@
+{
+  "title": "Submit Artist Write In Vote Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "isUnknown": { "type": "boolean" },
+    "voteTally": {
+      "type": "array",
+      "items": { "$ref": "../ArtistVoteTallyEntry.json" }
+    },
+    "resolvedArtist": { "$ref": "../CanonicalArtist.json" },
+    "castArtist": { "$ref": "../ArtistAutocompleteResult.json" },
+    "createdNewArtist": { "type": "boolean" }
+  },
+  "required": ["isUnknown", "voteTally", "castArtist", "createdNewArtist"],
+  "additionalProperties": false
+}

@@ -107,6 +107,13 @@ CARD_REPORT_RATE = env("CARD_REPORT_RATE", default="10/d")
 # just by paging through candidates, a much higher natural cadence than a deliberate tag tap, so
 # this is deliberately its own (lower) rate string rather than sharing PRINTING_TAG_SUBMISSION_RATE.
 PRINTING_TAG_IMPLICIT_SUBMISSION_RATE = env("PRINTING_TAG_IMPLICIT_SUBMISSION_RATE", default="60/h")
+# Artist write-in autocomplete (cardpicker.views.post_artist_autocomplete) - read-only, public,
+# unauthenticated, but keyed by IP rather than a client-generated anonymous_id (no vote is being
+# cast, so there's no anonymousId in the request body to key on). A generous per-minute budget
+# since this fires on every keystroke of a typeahead field, a much higher natural cadence than a
+# deliberate vote submission - deliberately its own setting rather than sharing
+# PRINTING_TAG_SUBMISSION_RATE (an hourly budget), which would throttle normal typing.
+ARTIST_AUTOCOMPLETE_RATE = env("ARTIST_AUTOCOMPLETE_RATE", default="120/m")
 
 # Saved decks (see docs/proposals/proposal-g-user-accounts-saved-decks.md, decision 4). A
 # generous, configurable soft cap on named decks (SavedDeckKind.DECK rows only - snapshot rows
