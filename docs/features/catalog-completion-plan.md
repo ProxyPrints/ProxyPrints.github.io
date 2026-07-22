@@ -2291,6 +2291,34 @@ skipped, same CI-documented named skips); `makemigrations --check` clean (no
 model change). Not yet re-profiled against live prod — that's the owner's
 next authorized run, not part of this change.
 
+**CORRECTION (2026-07-22) — the memory-budget arithmetic above assumed a bound the
+implementation never enforced, and it leaked in production.** The "worst-case buffers alive at
+once ≈ fetch threads in flight + queue depth + one per compute worker ≈ 31" arithmetic a few
+paragraphs up silently assumed fetch COMPLETION was bounded by `queue_depth` the same way compute
+submission was — the shipped `_run_cohort` never actually enforced that: it submitted every
+`cohort_ids` entry to the fetch thread pool up front and only gated compute submission behind
+`queue_depth`. Since fetch (paced by `GOOGLE_IMAGE`'s 6-way concurrency limiter) completes cards
+materially faster than the 7-process CPU-bound compute stage consumes them, fetch raced
+arbitrarily far ahead of consumption in a real multi-hour run — every completed-but-not-yet-
+consumed fetch result retains its raw image buffer, so the buffer count actually scaled with total
+cards fetched-so-far, not with the small constant this arithmetic assumed. Two production
+incidents on the 197,428-card remainder run surfaced this: an unwatched run OOM-killed the whole
+box overnight at ~21GB parent RSS; a re-run the following night was caught by a watchdog and
+stopped cleanly at 17.3GB after 66,355 cards (~250-350KB retained per card — the size of one raw
+fetched image buffer, confirming the mechanism). Fixed (`run_image_evidence_cohort.py`'s
+`_run_cohort`): fetch submission is now drip-fed via `_submit_more_fetch`, bounded by the SAME
+`queue_depth` knob on both sides of the fetch/compute boundary, plus a secondary fix (a
+`fetch_futures` set that was never pruned as futures were consumed — a smaller, ~1%-of-the-effect
+leak in the same code path, closed in the same change). The parent process also now logs its own
+RSS every progress line, and an optional `--max-rss-mb` makes an excessive parent RSS a clean,
+resumable stop instead of relying on the OS OOM-killer. A synthetic repro (tracked, weakref-
+observable payloads standing in for real image bytes, no live run) reproduced the mechanism
+directly: ~100% of a 400-card synthetic cohort's payloads simultaneously alive at peak with the
+un-windowed submission pattern, vs. ~5% (bounded by `queue_depth`) once fetch submission was also
+windowed — see the fix's own PR description for the full numbers. Not yet re-run against live prod
+at full remainder scale; the next 197k-card invocation is the owner's own authorized run, not part
+of this fix.
+
 **Stage D — join-key calculator (framework + first slice, built 2026-07-20,
 public issue #152, "Stage D: calculators D1-D6")**: the owner directive
 dispatching this work named "calculators D1-D6", but no numbered D1-D6 spec

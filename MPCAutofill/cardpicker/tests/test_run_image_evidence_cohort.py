@@ -23,8 +23,18 @@ This test file never spawns a real OS-level worker process/thread doing real fet
 stand-in (`_SyncPoolStub`, works for either since both share the stdlib `Executor` interface), and
 the module-level `_fetch_one_card`/`_compute_one_card` work units are stubbed too, so the test
 suite stays cheap and fast while still exercising the real dispatch/backpressure logic in
-`_run_cohort` (`as_completed`/`wait`/`FIRST_COMPLETED` are all real stdlib, unmocked, running
-against the stub pool's already-resolved `Future` objects).
+`_run_cohort` (`wait`/`FIRST_COMPLETED` are real stdlib, unmocked, running against the stub pool's
+already-resolved `Future` objects).
+
+2026-07-22 update (parent-process memory leak fix, see the command's own module docstring's
+"PARENT-PROCESS MEMORY LEAK" section for the two production incidents and root cause): fetch-stage
+submission is now windowed (drip-fed via `_submit_more_fetch`, bounded by `queue_depth`) rather
+than submitted for the whole cohort up front, and `_run_cohort`'s return tuple gained a fifth
+`rss_limit_hit` value. `TestRunCohortFetchMemoryBound` below is the regression guard for the fix
+itself - it asserts the actual property that broke (peak simultaneously-alive fetch buffers stays
+bounded by `queue_depth`, not by cohort size), using the same real-`ThreadPoolExecutor` +
+manually-driven-compute-stub pattern `TestRunCohortBackpressure` already established for
+observing `_run_cohort` mid-flight.
 """
 
 import threading
@@ -35,6 +45,7 @@ from typing import Any, Optional
 import pytest
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.management.commands import run_image_evidence_cohort as cohort_command
@@ -491,7 +502,7 @@ class TestRunCohortProfileOutput:
         monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_with_profile)
 
         profile_file = io.StringIO()
-        completed, fetch_failures, lockout_hit, short_circuited = cohort_command._run_cohort(
+        completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit = cohort_command._run_cohort(
             cohort_ids=[1, 2, 3],
             fetch_threads=2,
             workers=1,
@@ -507,6 +518,7 @@ class TestRunCohortProfileOutput:
         assert fetch_failures == 0
         assert lockout_hit is False
         assert short_circuited == 0
+        assert rss_limit_hit is False
 
         lines = [json.loads(line) for line in profile_file.getvalue().splitlines()]
         assert len(lines) == 3
@@ -632,3 +644,269 @@ class TestRunCohortBackpressure:
         assert resolved == len(cohort_ids)
         assert max_outstanding <= queue_depth
         assert result["value"][0] == len(cohort_ids)  # completed count
+
+
+class TestRunCohortFetchMemoryBound:
+    """Regression guard for the 2026-07-22 parent-process memory leak (command module docstring's
+    "PARENT-PROCESS MEMORY LEAK" section - two production incidents: an unwatched 197k-card
+    remainder run OOM-killed the whole box overnight at ~21GB parent RSS; a re-run the following
+    night was caught by a watchdog at 17.3GB after 66,355 cards). The pre-fix `_run_cohort`
+    submitted every `cohort_ids` entry to the fetch thread pool up front and never bounded how far
+    fetch could complete ahead of compute consumption - a repro (this PR's own description)
+    measured close to 100% of a synthetic cohort's raw-image-sized payloads simultaneously alive
+    at peak. This test asserts the actual fixed property directly against the real `_run_cohort`,
+    not just that some constant looks smaller: peak simultaneously-alive fetch-stage payloads must
+    stay bounded by `queue_depth` (a small constant), never grow with cohort size."""
+
+    def test_peak_alive_fetch_payloads_bounded_by_queue_depth_not_cohort_size(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import gc
+        import time as _time
+        import weakref
+        from concurrent.futures import ThreadPoolExecutor as _RealThreadPoolExecutor
+
+        queue_depth = 2
+        cohort_size = 40  # much larger than queue_depth - the discriminating property
+        live_payload_ids: set[int] = set()
+        live_lock = threading.Lock()
+
+        class _Payload:
+            """Stand-in for a raw fetched image buffer - `__slots__` includes `__weakref__` so a
+            `weakref.finalize` callback can tell the test exactly when each instance is actually
+            collected, rather than inferring liveness from refcounts."""
+
+            __slots__ = ("card_id", "blob", "__weakref__")
+
+            def __init__(self, card_id: int) -> None:
+                self.card_id = card_id
+                self.blob = b"x" * 1024
+
+        def _mark_dead(card_id: int) -> None:
+            with live_lock:
+                live_payload_ids.discard(card_id)
+
+        def _make_payload(card_id: int) -> "_Payload":
+            payload = _Payload(card_id)
+            with live_lock:
+                live_payload_ids.add(card_id)
+            weakref.finalize(payload, _mark_dead, card_id)
+            return payload
+
+        def _stub_fetch(card_id: int, stop_event: threading.Event) -> "cohort_command._FetchOutcome":
+            return cohort_command._FetchOutcome(
+                card_id=card_id, content_hash=1, image_bytes=_make_payload(card_id), outcome=None
+            )
+
+        constructed: list["_ManualComputePoolTrackingOnlyCardId"] = []
+
+        class _ManualComputePoolTrackingOnlyCardId:
+            """`ProcessPoolExecutor` stand-in whose `submit()` never runs `fn` - hands back a
+            fresh, unresolved `Future` and records ONLY the card_id (args[0]), deliberately
+            dropping the rest of `args` (which includes the fetched payload) immediately, so this
+            test harness itself never becomes a second place retaining the payload beyond what a
+            real `ProcessPoolExecutor` would (which pickles args across a process boundary rather
+            than keeping the parent's own object reference resident) - the assertion below must
+            measure the property under test, not an artifact of the stub."""
+
+            def __init__(self, max_workers: Optional[int] = None, initializer: Any = None) -> None:
+                self.live: list[tuple[Future, int]] = []
+                self.lock = threading.Lock()
+                constructed.append(self)
+
+            def __enter__(self) -> "_ManualComputePoolTrackingOnlyCardId":
+                return self
+
+            def __exit__(self, *exc_info: Any) -> bool:
+                return False
+
+            def submit(self, fn: Any, *args: Any) -> "Future[Any]":
+                future: "Future[Any]" = Future()
+                with self.lock:
+                    self.live.append((future, args[0]))
+                return future
+
+        monkeypatch.setattr(cohort_command, "ThreadPoolExecutor", _RealThreadPoolExecutor)
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch)
+        monkeypatch.setattr(cohort_command, "ProcessPoolExecutor", _ManualComputePoolTrackingOnlyCardId)
+
+        cohort_ids = list(range(1, cohort_size + 1))
+        result: dict[str, Any] = {}
+
+        def _run() -> None:
+            result["value"] = cohort_command._run_cohort(
+                cohort_ids=cohort_ids,
+                fetch_threads=4,
+                workers=1,
+                queue_depth=queue_depth,
+                dry_run=True,
+                run_id="test",
+                stdout_write=lambda _msg: None,
+            )
+
+        run_thread = threading.Thread(target=_run)
+        run_thread.start()
+
+        deadline = _time.monotonic() + 10
+        while not constructed and _time.monotonic() < deadline:
+            _time.sleep(0.005)
+        assert constructed, "ProcessPoolExecutor was never constructed - _run_cohort didn't reach the compute stage"
+        pool = constructed[0]
+
+        peak_live = 0
+        resolved = 0
+        while resolved < cohort_size and _time.monotonic() < deadline:
+            with pool.lock:
+                unresolved = [(future, card_id) for future, card_id in pool.live if not future.done()]
+            gc.collect()
+            with live_lock:
+                peak_live = max(peak_live, len(live_payload_ids))
+            if unresolved:
+                future, card_id = unresolved[0]
+                future.set_result((card_id, "ok", None, False))
+                resolved += 1
+            else:
+                _time.sleep(0.005)
+
+        run_thread.join(timeout=10)
+        assert not run_thread.is_alive(), "background _run_cohort thread never finished"
+        assert resolved == cohort_size
+        assert result["value"][0] == cohort_size  # completed count
+        assert result["value"][2] is False  # lockout_hit
+        assert result["value"][4] is False  # rss_limit_hit
+
+        # The discriminating assertion: peak simultaneously-alive fetch payloads must be bounded
+        # by a small constant tied to queue_depth, NOT by cohort_size - the pre-fix code let this
+        # grow toward cohort_size itself (all fetches racing ahead of consumption unbounded).
+        assert peak_live <= queue_depth * 2 + 2, (
+            f"peak_live={peak_live} scaled with cohort_size={cohort_size} rather than staying "
+            f"bounded near queue_depth={queue_depth} - the parent-process memory leak regressed"
+        )
+
+
+class TestGetRssMb:
+    """`_get_rss_mb` (2026-07-22) is the RSS-logging primitive both the progress line and
+    `--max-rss-mb` depend on - best-effort, never raises."""
+
+    def test_returns_a_positive_float_on_linux(self) -> None:
+        rss_mb = cohort_command._get_rss_mb()
+        # This test suite only runs on Linux (the pilot venv, CI) - /proc/self/status should
+        # always be readable here, so a hard None would itself be a regression worth seeing fail.
+        assert rss_mb is not None
+        assert rss_mb > 0
+
+    def test_never_raises_when_proc_status_is_unreadable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _raise_oserror(*args: Any, **kwargs: Any) -> Any:
+            raise OSError("no /proc here")
+
+        monkeypatch.setattr("builtins.open", _raise_oserror)
+
+        assert cohort_command._get_rss_mb() is None
+
+
+class TestCohortStatsRssLogging:
+    """`_CohortStats.record` (2026-07-22): every progress line now also logs the parent's own
+    RSS, and an optional `max_rss_mb` turns crossing a threshold into a clean, observable stop."""
+
+    def test_progress_line_includes_rss_mb(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cohort_command, "_get_rss_mb", lambda: 512.0)
+        lines: list[str] = []
+        stats = cohort_command._CohortStats(total=1, stdout_write=lines.append)
+
+        stats.record("ok")
+
+        assert len(lines) == 1
+        assert "rss_mb=512" in lines[0]
+
+    def test_progress_line_shows_placeholder_when_rss_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cohort_command, "_get_rss_mb", lambda: None)
+        lines: list[str] = []
+        stats = cohort_command._CohortStats(total=1, stdout_write=lines.append)
+
+        stats.record("ok")
+
+        assert "rss_mb=?" in lines[0]
+
+    def test_exceeding_max_rss_mb_sets_stop_event_and_rss_limit_hit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cohort_command, "_get_rss_mb", lambda: 2000.0)
+        stop_event = threading.Event()
+        lines: list[str] = []
+        stats = cohort_command._CohortStats(
+            total=1, stdout_write=lines.append, stop_event=stop_event, max_rss_mb=1000.0
+        )
+
+        stats.record("ok")
+
+        assert stats.rss_limit_hit is True
+        assert stop_event.is_set()
+        assert any("RSS limit exceeded" in line for line in lines)
+
+    def test_under_max_rss_mb_never_sets_stop_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cohort_command, "_get_rss_mb", lambda: 100.0)
+        stop_event = threading.Event()
+        stats = cohort_command._CohortStats(
+            total=1, stdout_write=lambda _msg: None, stop_event=stop_event, max_rss_mb=1000.0
+        )
+
+        stats.record("ok")
+
+        assert stats.rss_limit_hit is False
+        assert not stop_event.is_set()
+
+    def test_max_rss_mb_none_never_checks_or_stops(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cohort_command, "_get_rss_mb", lambda: 999999.0)
+        stop_event = threading.Event()
+        stats = cohort_command._CohortStats(total=1, stdout_write=lambda _msg: None, stop_event=stop_event)
+
+        stats.record("ok")
+
+        assert stats.rss_limit_hit is False
+        assert not stop_event.is_set()
+
+
+class TestMaxRssGuardEndToEnd:
+    """End-to-end (`call_command`) coverage for `--max-rss-mb` - the same synchronous-stub pattern
+    every other command-level test in this file uses (see `_stub_pools` autouse fixture)."""
+
+    @pytest.mark.django_db
+    def test_exceeding_max_rss_mb_stops_cleanly_and_exits_non_zero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        CardFactory(content_phash=123456789)
+
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+        monkeypatch.setattr(cohort_command, "_get_rss_mb", lambda: 2000.0)
+
+        with pytest.raises(CommandError, match="max-rss-mb"):
+            call_command(
+                "run_image_evidence_cohort",
+                "--limit",
+                "1",
+                "--workers",
+                "1",
+                "--run-id",
+                "test-rss-exceeded",
+                "--max-rss-mb",
+                "1000",
+            )
+
+        out = capsys.readouterr().out
+        assert "RSS limit exceeded" in out
+        assert "rss_limit_hit=True" in out
+
+    @pytest.mark.django_db
+    def test_max_rss_mb_unset_never_stops_the_run_regardless_of_rss(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        CardFactory(content_phash=123456789)
+
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+        monkeypatch.setattr(cohort_command, "_get_rss_mb", lambda: 999999.0)
+
+        call_command("run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "test-rss-unset")
+
+        out = capsys.readouterr().out
+        assert "DONE" in out
+        assert "rss_limit_hit=False" in out
