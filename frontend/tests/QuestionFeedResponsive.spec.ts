@@ -1,10 +1,13 @@
+import type { NetworkFixture } from "@msw/playwright";
 import { expect } from "@playwright/test";
 import { http, HttpResponse } from "msw";
 
+import { getWorkerImageURL } from "@/common/image";
 import {
   cardDocument1,
   localBackendURL,
   printingCandidate1,
+  printingCandidate2,
 } from "@/common/test-constants";
 import {
   defaultHandlers,
@@ -524,5 +527,177 @@ test.describe("question feed - tap target sizes (mobile funnel pass)", () => {
     expect(box).not.toBeNull();
     expect(box!.height).toBeGreaterThanOrEqual(44);
     expect(box!.width).toBeGreaterThanOrEqual(44);
+  });
+});
+
+// Owner review round on top of the "mobile card/questions never overlap" fix above (own header
+// comment) - that fix put the card in its own disjoint column beside a horizontally-scrolling
+// answer row, which the owner found wasted space and let the question prompt clip behind the
+// card, with "None of these" left inside the scrollable candidate area (below the fold on a
+// real device). This restructure (QuestionFeed.tsx's `Level2NarrowGrid`, cardPanel.tsx's
+// height-capped `CardPanel`/`StaticCardPanel`) stacks the card ABOVE the questions again, caps
+// its height (~32vh) so a STATIC top block (card, name/badge/question text, the "Filter by
+// attribute"/"None of these"/"Art matches"/"Skip" action row) plus the scrollable candidate row
+// below it both fit a real phone viewport with no scrolling anywhere. Desktop/landscape (>= md)
+// is untouched - only these narrow-width assertions are new.
+//
+// Pixel 7's own CSS viewport (412x839 - Playwright's own `devices["Pixel 7"]` descriptor;
+// `page.setViewportSize` rather than full device emulation since `devices["Pixel 7"]` bundles a
+// `defaultBrowserType` that can't be set at describe/test scope - project-level only - and
+// nothing else in this describe block needs the rest of the device profile, e.g. touch/UA).
+// Every other fixture in this file uses the empty-`mediumThumbnailUrl` convention (a genuine,
+// non-empty <img> is needed here - the card's own height cap is expressed as a max-width derived
+// from a target vh, which only manifests once the <img> actually sizes itself via its own
+// width: 100%/aspect-ratio CSS; an empty-src image renders at a small, fixed intrinsic fallback
+// size regardless of that CSS, confirmed via a real Playwright measurement in this task's own
+// report) - mirrors WhatsThatWordsAnimation.spec.ts's own CDN-route-intercept pattern for the
+// identical reason.
+const PIXEL_7_VIEWPORT = { width: 412, height: 839 };
+
+test.describe("question feed - portrait static top block (owner live-review)", () => {
+  async function loadWithRealImage(
+    page: import("@playwright/test").Page,
+    network: NetworkFixture
+  ) {
+    await page.setViewportSize(PIXEL_7_VIEWPORT);
+    const testCard = {
+      ...cardDocument1,
+      mediumThumbnailUrl: "non-empty-sentinel-see-comment-above",
+      smallThumbnailUrl: "non-empty-sentinel-see-comment-above",
+    };
+    process.env.NEXT_PUBLIC_IMAGE_WORKER_URL = "https://cdn.proxyprints.ca";
+    const cdnImageURL = getWorkerImageURL(testCard, "small")!;
+    const cdnImagePattern = new RegExp(
+      `^${cdnImageURL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
+    );
+    await page.route(cdnImagePattern, (route) =>
+      route.fulfill({ path: "public/whatsthat-icon-192.png" })
+    );
+
+    network.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "identify_printing",
+              card: testCard,
+              candidates: [printingCandidate1, printingCandidate2],
+              tagConfidence: {},
+            },
+            remainingEstimate: {
+              total: 3,
+              confirmable: 0,
+              contested: 0,
+              fresh: 3,
+            },
+          },
+          { status: 200 }
+        )
+      ),
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+    await expect(page.getByAltText(testCard.name)).toBeVisible();
+    await expect(
+      page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
+    ).toBeVisible();
+  }
+
+  test("at Pixel 7 portrait, the whole page needs zero vertical scroll to reach every answer control", async ({
+    page,
+    network,
+  }) => {
+    await loadWithRealImage(page, network);
+
+    // The outer document itself never needs to scroll - the static top block (wordmark, card,
+    // text, action row) plus the scrollable candidate row below it are sized to fit entirely
+    // within the viewport (PageColumn/StarburstBackground in whatsthat.tsx now bound height at
+    // every width, not just >= md - see that file's own comment).
+    const documentScroll = await page.evaluate(() => ({
+      scrollHeight: document.documentElement.scrollHeight,
+      clientHeight: document.documentElement.clientHeight,
+    }));
+    expect(documentScroll.scrollHeight).toBeLessThanOrEqual(
+      documentScroll.clientHeight
+    );
+
+    // The candidate row is the ONLY genuinely scrollable region Level 2 has (horizontally, via
+    // MobileCandidateScroller's own overflow-x: auto) - HeroQuestionsArea's own overflow-y: auto
+    // is a defensive fallback for edge cases (own comment, QuestionFeed.tsx), not the intended
+    // mechanism, so this asserts it never actually has to engage on the reference viewport.
+    const questionsAreaScroll = await page
+      .getByTestId("question-feed-questions-area")
+      .evaluate((el) => ({
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      }));
+    expect(questionsAreaScroll.scrollHeight).toBeLessThanOrEqual(
+      questionsAreaScroll.clientHeight
+    );
+  });
+
+  test("the static action row (Filter by attribute / None of these) renders above the scrollable candidate row, not inside it", async ({
+    page,
+    network,
+  }) => {
+    await loadWithRealImage(page, network);
+
+    const filterToggleBox = await page
+      .getByTestId("question-feed-filter-toggle")
+      .boundingBox();
+    const noMatchBox = await page
+      .getByTestId("question-feed-no-match")
+      .boundingBox();
+    const candidateBox = await page
+      .locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
+      .boundingBox();
+    expect(filterToggleBox).not.toBeNull();
+    expect(noMatchBox).not.toBeNull();
+    expect(candidateBox).not.toBeNull();
+
+    // Both static-row controls render fully ABOVE the candidate row's own top edge - resolving
+    // ("Filter by attribute" or "None of these") is always one tap with zero scrolling, never
+    // buried below the fold behind the scrollable candidates the way the pre-fix layout left it.
+    expect(filterToggleBox!.y + filterToggleBox!.height).toBeLessThanOrEqual(
+      candidateBox!.y
+    );
+    expect(noMatchBox!.y + noMatchBox!.height).toBeLessThanOrEqual(
+      candidateBox!.y
+    );
+
+    // Both are also within the viewport with no scroll needed to reach them.
+    const viewportSize = page.viewportSize()!;
+    expect(filterToggleBox!.y + filterToggleBox!.height).toBeLessThanOrEqual(
+      viewportSize.height
+    );
+    expect(noMatchBox!.y + noMatchBox!.height).toBeLessThanOrEqual(
+      viewportSize.height
+    );
+  });
+
+  test("the question text sits directly under the card, not occluded by it or the starburst", async ({
+    page,
+    network,
+  }) => {
+    await loadWithRealImage(page, network);
+
+    const cardImage = page.getByAltText(cardDocument1.name);
+    const cardBox = await cardImage.boundingBox();
+    const badgeBox = await page
+      .getByTestId("question-feed-tier-badge")
+      .boundingBox();
+    const filterToggleBox = await page
+      .getByTestId("question-feed-filter-toggle")
+      .boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(badgeBox).not.toBeNull();
+    expect(filterToggleBox).not.toBeNull();
+
+    // The badge (and, transitively, the question text/action row below it) renders entirely
+    // below the card's own bottom edge - never behind or overlapping the card art or its
+    // starburst, unlike the pre-fix two-column layout this replaces (where the question text
+    // ran behind the reference card - see this task's own report for the reported bug).
+    expect(badgeBox!.y).toBeGreaterThanOrEqual(cardBox!.y + cardBox!.height);
+    expect(filterToggleBox!.y).toBeGreaterThanOrEqual(badgeBox!.y);
   });
 });

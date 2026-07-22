@@ -39,11 +39,22 @@ word every time a new card is shown, while the actual question — the
 candidate printings or attribute chips to pick from — sits in a
 scrolling panel beside it. On a wide screen that question panel scrolls
 on its own while the card stays put, so you never lose sight of what
-you're being asked about; on a narrow screen the card instead sits in
-its own compact column on the left, with the answer options (buttons,
-candidate tiles, or chips, depending on the question) in a single row
-beside it that you scroll sideways rather than up and down — the card
-and the options can never end up overlapping, at any scroll position.
+you're being asked about.
+
+On a phone, the layout instead stacks vertically: the card renders
+above the question, sized to leave room for everything below it, with
+its name, a "Suggested match"/"Needs identification" tag, and the
+question text directly underneath — nothing sits beside the card at
+this width. Right below that, "Filter by attribute" and the answer
+buttons ("None of these", "Art matches, not an official printing",
+"Skip") sit in a compact block that's always fully on-screen, so
+resolving a question never needs any scrolling. Only the candidate
+tiles (when the question is a printing pick, not a yes/no confirm)
+scroll — sideways, in their own row below that block — since there can
+be more of those than fit on screen at once. The title itself also
+switches to a single-line wordmark on a phone screen, rather than the
+three-line stacked version a wider screen shows, so it takes up less
+room.
 
 ## Exporting a print-ready PDF
 

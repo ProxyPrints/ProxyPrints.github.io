@@ -108,6 +108,29 @@ export const CardPanel = styled.div`
   position: relative;
   z-index: 0;
   width: 100%;
+
+  // Fix round (owner live-review, "portrait static top block") - height-caps the reference
+  // card at narrow widths so the static top block (wordmark + card + name/badge/question text
+  // + static action row) plus the scrollable options row below it fits a typical phone
+  // viewport with no page scroll (QuestionFeedResponsive.spec.ts's Pixel-7 no-scroll assertion).
+  // Expressed as a max-WIDTH derived FROM the target height (width = height * 63/88,
+  // CARD_ASPECT_RATIO's own ratio), not a max-height layered on top of the existing width-driven
+  // box below - the img inside (RevealWrapper) still sizes itself via width: 100% plus
+  // aspect-ratio: 63/88, completely unchanged, so capping the WIDTH here to whatever value
+  // yields the target height achieves the same visual result without fighting that existing
+  // mechanism or breaking RevealOverlay's inset: 0 tracking (which follows THIS box's width,
+  // not the image's intrinsic size).
+  //
+  // 32vh, not the first pass's 38vh - a real Playwright measurement (Pixel 7, this task's own
+  // report) with a genuinely-loaded (not empty-src) hero image found 38vh left the candidate
+  // options row only 69-105px of its own ~176px natural height even after also compacting the
+  // action-button grid (Level2NarrowGrid's own comment), forcing HeroQuestionsArea's
+  // overflow-y: auto defensive fallback to activate - not the zero-internal-scroll outcome the
+  // spec asks for. 32vh gives the text/action/options budget back the difference.
+  @media (max-width: 767.98px) {
+    max-width: min(100%, calc(32vh * 63 / 88));
+    margin: 0 auto;
+  }
 `;
 
 // Level 1's compact single-card confirmation screen (QuestionFeed.tsx) has no long scrollable
@@ -120,6 +143,13 @@ export const StaticCardPanel = styled.div`
   position: relative;
   z-index: 0;
   width: 100%;
+
+  // Same height-cap-via-max-width as CardPanel above (see its own comment) - Level 1's
+  // compact single-card screen gets the same 32vh-capped card at narrow widths.
+  @media (max-width: 767.98px) {
+    max-width: min(100%, calc(32vh * 63 / 88));
+    margin: 0 auto;
+  }
 `;
 
 // Sized and centred purely with CSS (percentage width + aspect-ratio, both relative to
@@ -163,6 +193,23 @@ export const BurstSvg = styled.svg<{ $hero?: boolean }>`
   transform: translate(-50%, -50%);
   z-index: -1;
   pointer-events: none;
+
+  // Fix round (owner live-review, "portrait static top block") - the card name/badge/question
+  // text now sits directly under the card (QuestionFeed.tsx), exactly where this hero burst's
+  // enlarged 200% bleed radiates its lower spikes at narrow widths. Rather than shrinking the
+  // burst back down (the owner's own earlier ask keeps it visible at 200% bleed on mobile - see
+  // the fix round above), a bottom-fade mask keeps the top/sides fully opaque (nothing competes
+  // with those) and fades the lower ~35% toward transparent, so the spikes never fight the text
+  // below for contrast. $hero-only - the small per-candidate HoverBurst has no text sitting
+  // underneath it and is unaffected.
+  @media (max-width: 767.98px) {
+    ${(props) =>
+      props.$hero &&
+      `
+      mask-image: linear-gradient(to bottom, black 0%, black 55%, transparent 88%);
+      -webkit-mask-image: linear-gradient(to bottom, black 0%, black 55%, transparent 88%);
+    `}
+  }
 
   @media (min-width: 768px) {
     width: ${(props) => (props.$hero ? "230%" : "55%")};

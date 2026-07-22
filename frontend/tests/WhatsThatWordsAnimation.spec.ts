@@ -334,3 +334,83 @@ test.describe("What's That Card? - sliced-word pop + hero card pulse (issue #305
       .toBe("running");
   });
 });
+
+// Fix round (owner live-review, "portrait static top block") - at narrow widths, the sliced
+// WHAT'S/THAT/CARD? teaser (this file's own subject above) stacks into a three-line column that
+// alone burns real vertical budget the redesign's static top block/scrollable candidate row
+// needs back. `whatsthat-composite.svg` (the mark+wordmark lockup - the ORIGINAL one-line
+// horizontal wordmark this page shipped with before issue #305's sliced/stacked treatment, still
+// on disk since #114's "branding integration" PR) replaces it below md - wide/desktop keeps the
+// sliced, animated version, completely unchanged. Both markups stay mounted at every width (a
+// CSS `display` toggle only, QuestionFeed.tsx's `NarrowWordmark`/`WideWordmark`) rather than
+// conditionally rendering one or the other, so this asserts VISIBILITY (which one actually
+// paints), not presence in the DOM.
+test.describe("What's That Card? - narrow-width wordmark swap (owner live-review)", () => {
+  test("below md, the one-line composite lockup renders and the sliced word stack is hidden", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "identify_printing",
+              card: cardDocument1,
+              candidates: [printingCandidate1, printingCandidate2],
+              tagConfidence: {},
+            },
+            remainingEstimate: {
+              total: 3,
+              confirmable: 0,
+              contested: 0,
+              fresh: 3,
+            },
+          },
+          { status: 200 }
+        )
+      ),
+      ...defaultHandlers
+    );
+    await page.setViewportSize({ width: 412, height: 839 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await expect(page.getByTestId("whatsthat-narrow-wordmark")).toBeVisible();
+    await expect(page.getByTestId("whatsthat-words")).not.toBeVisible();
+  });
+
+  test("at >= md, the sliced word stack renders and the composite lockup is hidden", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "identify_printing",
+              card: cardDocument1,
+              candidates: [printingCandidate1, printingCandidate2],
+              tagConfidence: {},
+            },
+            remainingEstimate: {
+              total: 3,
+              confirmable: 0,
+              contested: 0,
+              fresh: 3,
+            },
+          },
+          { status: 200 }
+        )
+      ),
+      ...defaultHandlers
+    );
+    // default chromium project viewport (800x600) is already >= the md breakpoint
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await expect(page.getByTestId("whatsthat-words")).toBeVisible();
+    await expect(
+      page.getByTestId("whatsthat-narrow-wordmark")
+    ).not.toBeVisible();
+  });
+});

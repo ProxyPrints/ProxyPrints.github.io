@@ -46,26 +46,33 @@ export const HERO_FIELD_BLUE_DEEP = "#123a6b";
 // arithmetic instead of a hand-maintained calc: Footer sizes to its own natural content height
 // as always, and StarburstBackground (flex: 1 1 auto; min-height: 0 below) claims exactly
 // whatever's left, so it structurally can't drift out of sync with Footer's real height again.
-// Only height-constrained at >= md (`useNavbarHeight` below, not the static NavbarHeight
-// constant - see that hook's own comment for why) - below md the page still scrolls normally
-// end to end, matching HeroCardArea's own mobile sticky-bar design intent.
+// Height-constrained at every width (`useNavbarHeight` below, not the static NavbarHeight
+// constant - see that hook's own comment for why).
+//
+// Fix round (owner live-review, "portrait static top block") - this used to only bound height
+// at >= md, leaving the whole page free to scroll normally below md (matching the mobile
+// sticky-bar design that design intended). That design is gone (see HeroCardArea and
+// QuestionFeed.tsx's own comments) - below md the reference card, its name/badge/question text,
+// and the static "Filter by attribute"/"None of these" action row must now all be reachable
+// with zero scrolling, and only the candidate row below them scrolls (horizontally). That's only
+// possible if the whole hero is bounded to the viewport at narrow widths too, the same way it
+// already was at >= md, so QuestionFeedResponsive.spec.ts's Pixel-7 "no page scroll needed"
+// assertion has a real, resolvable height to size the candidate row's remaining space against.
 const PageColumn = styled.div<{ $navbarHeight: number }>`
   display: flex;
   flex-direction: column;
-
-  @media (min-width: 768px) {
-    height: calc(100dvh - ${(props) => props.$navbarHeight}px);
-  }
+  height: calc(100dvh - ${(props) => props.$navbarHeight}px);
 `;
 
 const StarburstBackground = styled.div`
   position: relative;
-  /* Deliberately clip-path, not overflow: hidden - QuestionFeed.tsx's mobile HeroCardArea
-     uses position: sticky for its condensed card bar, and an overflow value other than
-     visible on ANY ancestor of a sticky element - even one that never actually scrolls -
-     silently breaks its stickiness (a well-documented CSS gotcha: it changes what the sticky
-     element's nearest scrolling ancestor resolves to). clip-path clips the same way visually
-     without establishing a scroll container, so it doesn't have that side effect. */
+  /* clip-path, not overflow: hidden - SUPERSEDED reasoning (this used to protect
+     QuestionFeed.tsx's mobile HeroCardArea's own position: sticky condensed card bar, since
+     an overflow value other than visible on ANY ancestor of a sticky element silently breaks
+     its stickiness). That mobile sticky bar is gone (fix round, owner live-review, "portrait
+     static top block" - see HeroCardArea's own comment), but clip-path is kept anyway - it
+     clips the full-bleed background the same way overflow: hidden would, with no functional
+     downside now that stickiness is no longer a consideration either way. */
   clip-path: inset(0);
   /* Deep-blue field (wtc-redesign-spec.md W6, issue #305) - retires the page's old loud
      #ff4719 orange full-bleed field, reconciling with the new sitewide orange accent (#302's
@@ -86,33 +93,44 @@ const StarburstBackground = styled.div`
   );
   width: 100vw;
   margin-left: calc(50% - 50vw);
-  padding: 1.5rem 0 2rem;
-  margin-bottom: 1rem;
+  /* Fix round (owner blocker, post-#310; extended below md by the "portrait static top block"
+     fix round) - originally 1.5rem/2rem/1rem, trimmed to 0.5rem/0/0 at >= md only, since below
+     md the whole page used to scroll normally (PageColumn had no explicit height there) and
+     this padding/margin cost nothing structurally. Now that PageColumn bounds height at every
+     width (see its own comment), the trimmed values apply everywhere - every pixel here is a
+     direct subtraction from HeroGrid's own bounded height (the same budget the word-stack
+     fix in WhatsThatWords.tsx and HeroGrid's own row-gap trim in QuestionFeed.tsx also draw
+     from), and the phone-sized hero (reference card, its text, the static action row, and the
+     candidate row) needs every one of those pixels back just as much as the desktop hero does.
+     padding-top stays a nonzero 0.5rem (unlike the other two) purely so the burst/card visuals
+     below the fixed navbar keep a little breathing room rather than touching it edge-to-edge. */
+  padding: 0.5rem 0 0;
+  margin-bottom: 0;
   flex: 1 1 auto;
   min-height: 0;
 
-  /* Fix round (owner blocker, post-#310) - below md the whole page still scrolls normally
-     (PageColumn has no explicit height there - see that component's own comment), so this
-     padding/margin cost nothing structurally. At >= md all three are a direct subtraction
-     from HeroGrid's own bounded height (the same budget the word-stack fix in
-     WhatsThatWords.tsx and HeroGrid's own row-gap trim in QuestionFeed.tsx are also drawing
-     from - see the Word component's own comment for the full arithmetic), so all three are
-     trimmed here rather than left at the same values as the unconstrained mobile case -
-     padding-bottom/margin-bottom to 0 outright, padding-top to a much smaller 0.5rem (kept
-     nonzero, unlike the other two, purely so the burst/card visuals below the fixed navbar
-     keep a little breathing room rather than touching it edge-to-edge).
-     Second pass (rebase onto #313's three-tier Footer redesign) - Footer.tsx now carries its
-     own margin-top (1.25rem) plus its own top padding (1.75rem) - 48px of top spacing - where
-     the old single-tier Footer had much less, so the bottom buffer this padding/margin used
-     to provide is now fully redundant double-spacing rather than the breathing room it was
-     originally trimmed from - safe to remove entirely at >= md instead of merely shrinking
-     it. The new Footer's extra height also ate further into HeroGrid's own budget than the
-     first pass anticipated, hence trimming the top padding too this time, not just the
-     bottom. */
-  @media (min-width: 768px) {
-    padding-top: 0.5rem;
-    padding-bottom: 0;
-    margin-bottom: 0;
+  /* Fix round (owner live-review, "portrait static top block") - Footer.tsx's own responsive
+     layout stacks its columns vertically below md, running considerably taller there than at
+     >= md (confirmed empirically - a real Playwright run at 360px showed this area crushed to
+     ~4px tall, Footer rendering at its full natural height instead, once PageColumn started
+     bounding height below md too). min-height: 0 above lets this area shrink to make room for
+     Footer's own natural size WHENEVER that combined total still fits PageColumn's own bounded
+     height (true at >= md, where Footer is compact) - but Footer's own default min-height: auto
+     gives it an un-overridable floor at its own natural content size, so on a viewport where
+     Footer's real (stacked, multi-row) mobile height alone approaches or exceeds PageColumn's
+     entire budget, flexbox has nowhere else to draw the deficit from and crushes THIS box
+     instead, toward zero - exactly backwards from the actual priority (the hero, not Footer, is
+     what the whole "static top block/scrollable candidate row" redesign needs protected).
+     min-height: 100% below md restores that priority: this box now has a hard floor at
+     PageColumn's own FULL height, so if Footer's natural size can't also fit inside that budget,
+     Footer is the one pushed below PageColumn's own bottom edge instead - still fully reachable,
+     just via the page's own ordinary scroll (Layout.tsx's ContentContainer), the same way any
+     long page's footer normally is. Scoped to below md only - >= md's existing "genuinely share
+     the fixed budget with Footer, whichever is shorter" behavior (Footer fully visible with no
+     scroll needed) is unchanged; only below md gets the hard floor, since only below md does
+     Footer's own real height threaten to exceed the budget in the first place. */
+  @media (max-width: 767.98px) {
+    min-height: 100%;
   }
 
   /* The questions region simply inherits the sitewide theme now (wtc-redesign-spec.md W7) -
@@ -133,9 +151,9 @@ const StarburstBackground = styled.div`
 // traces back to PageColumn's real measured navbar height with no separate guess of its own.
 // Safe for the moderator Tab.Container branch too (see PrintingQueueOrDefault below) - that
 // branch simply doesn't opt into `flex: 1`, so it keeps its previous natural/auto height,
-// unchanged. Below md, PageColumn itself has no explicit height (see its own comment), so this
-// `height: 100%` resolves against nothing and is silently inert - today's mobile behaviour
-// (whole page scrolls normally) is unaffected.
+// unchanged. PageColumn now bounds height at every width, not just >= md (fix round, owner
+// live-review, "portrait static top block" - see that component's own comment), so this
+// `height: 100%` is meaningful below md too.
 const StarburstContent = styled.div`
   position: relative;
   z-index: 1;
