@@ -42,12 +42,19 @@ export interface UseGridSelectorSearchArgs {
   active: boolean;
   /** When false, ignore project-level search settings and use unconstrained defaults instead. */
   applySearchSettings?: boolean;
+  /** Editor-completion package, E3/X2 (Bkg 5) - additive, optional override for the initial
+   * `settingsVisible` value. `undefined` (every existing caller - GridSelectorModal) preserves
+   * today's width-based default below; the /display rail passes `false` so the Filters
+   * disclosure starts collapsed there regardless of viewport width, instead of auto-opening
+   * cramped inside the 380px rail. */
+  initialSettingsVisible?: boolean;
 }
 
 export function useGridSelectorSearch({
   imageIdentifiers,
   active,
   applySearchSettings = true,
+  initialSettingsVisible,
 }: UseGridSelectorSearchArgs) {
   //# region queries and hooks
 
@@ -66,8 +73,9 @@ export function useGridSelectorSearch({
 
   const [settingsVisible, setSettingsVisible] = useState<boolean>(
     () =>
-      typeof window === "undefined" ||
-      window.innerWidth >= SmallViewportFiltersBreakpointPx
+      initialSettingsVisible ??
+      (typeof window === "undefined" ||
+        window.innerWidth >= SmallViewportFiltersBreakpointPx)
   );
 
   const [filterSettings, setFilterSettings] = useState<FilterSettings>(

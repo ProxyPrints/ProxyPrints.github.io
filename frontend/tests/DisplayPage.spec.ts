@@ -169,7 +169,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(page.getByTestId("display-rail-idle")).toBeVisible();
   });
 
-  test("selecting a slot swaps the rail from idle to that slot's header + accordion, defaulting to Choose Image open", async ({
+  test("selecting a slot swaps the rail from idle to that slot's header + promoted zone, with Select Version always open", async ({
     page,
     network,
   }) => {
@@ -186,19 +186,21 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(railHeader).toContainText("Slot 1");
     await expect(railHeader).toContainText("front");
 
-    // Compressed view (viewSettingsSlice's real, hardcoded default) renders only the bare card
-    // image - no per-card "Option N" text - so toggle it off first, same precedent as
-    // CardSlot.spec.ts's own version-picker test.
-    await page.getByText("Compressed").click();
-
-    // Choose Image is open by default (real candidate grid, wired in PR 2a); the other four
-    // sections start collapsed - per the owner's accordion amendment (design doc §2).
-    await expect(page.getByText("Option 1")).toBeVisible();
+    // Editor-completion package (E2/E3/L4) - Select Version is promoted + always open (no
+    // collapse chrome at all, renamed from "Choose Image"); the rail hard-pins compressed=true
+    // (E4/L9), so the candidate tiles never show "Option N" text - the tile's own <img alt> is
+    // the reliable selector instead (see the next test).
+    await expect(
+      page.getByRole("heading", { name: "Select Version" })
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("display-rail-content").getByAltText(cardDocument1.name)
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: /Filters/ })).toBeVisible();
     await expect(page.getByTestId("attribute-chip-Full Art")).not.toBeVisible();
   });
 
-  test("selecting a candidate image in Choose Image updates the sheet's slot immediately", async ({
+  test("selecting a candidate image in Select Version updates the sheet's slot immediately", async ({
     page,
     network,
   }) => {
@@ -209,11 +211,11 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     const sheetSlot = page.getByTestId("page-preview-slot").first();
     await sheetSlot.click();
-    // Compressed view (the default) hides "Option N" text entirely - see the previous test.
-    await page.getByText("Compressed").click();
     // searchResultsThreeResults (mocks/handlers.ts) resolves "my search query" to
-    // [cardDocument1, cardDocument2, cardDocument3] in that order - Option 1 is cardDocument1.
-    await page.getByText("Option 2").click();
+    // [cardDocument1, cardDocument2, cardDocument3] in that order. The rail always renders
+    // compressed tiles (E4/L9), so there's no "Option N" text to click - the tile's own <img alt>
+    // (present in both compressed and uncompressed rendering, Card.tsx) is what's clickable.
+    await page.getByAltText(cardDocument2.name).click();
 
     await expect(sheetSlot.locator("img")).toHaveAttribute("alt", "Card 2");
     // The rail's own header (identity text) reflects the same real-time selection - same Redux
@@ -223,7 +225,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
   });
 
-  test("the embedded Choose Image section has no OverflowCol-style forced scroll region (would double-scroll inside the rail)", async ({
+  test("the embedded Select Version section has no OverflowCol-style forced scroll region (would double-scroll inside the rail)", async ({
     page,
     network,
   }) => {
@@ -232,10 +234,10 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await importText(page, "my search query");
     await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
-    // Compressed view (the default) hides "Option N" text entirely - see the earlier tests.
-    await page.getByText("Compressed").click();
 
-    const candidateCard = page.getByText("Option 1");
+    const candidateCard = page
+      .getByTestId("display-rail-content")
+      .getByAltText(cardDocument1.name);
     await expect(candidateCard).toBeVisible();
     // GridSelectorResults' "modal" variant wraps this in an OverflowCol, which sets
     // overflow-y: scroll unconditionally - a second, competing scroll region nested inside the
@@ -288,20 +290,19 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     const slots = page.getByTestId("page-preview-slot");
     await slots.first().click();
-    // Compressed view (the default) hides "Option N" text entirely - see the earlier tests.
-    // This is a global view setting, not slot-specific state, so toggling it once here holds
-    // for the rest of the test (including after selecting the second slot below).
-    await page.getByText("Compressed").click();
     await page
       .getByRole("heading", { name: "Attributes", exact: true })
       .click();
     await expect(page.getByTestId("attribute-chip-Full Art")).toBeVisible();
 
     // Selecting the other real slot swaps the rail's whole subtree - Attributes should be back
-    // to collapsed, not still expanded from the last slot.
+    // to collapsed, not still expanded from the last slot. Select Version (always open, E2/E3)
+    // still shows its candidate tile regardless.
     await slots.nth(1).click();
     await expect(page.getByTestId("attribute-chip-Full Art")).not.toBeVisible();
-    await expect(page.getByText("Option 1")).toBeVisible();
+    await expect(
+      page.getByTestId("display-rail-content").getByAltText(cardDocument1.name)
+    ).toBeVisible();
   });
 
   test("the Fronts/Backs toggle button reflects the shared frontsVisible view setting", async ({
@@ -593,7 +594,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     ).toHaveCount(0);
   });
 
-  test("the Confirm? affordance's NO expands the Choose Image accordion section instead of opening a modal (the rail has no modal to open)", async ({
+  test("the Confirm? affordance's NO is a no-op on Select Version's always-open state (E2/E3 promoted the section, so there's nothing left to expand)", async ({
     page,
     network,
   }) => {
@@ -612,14 +613,10 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
-    // Choose Image is open by default - collapse it first so NO's "expand it" effect is
-    // observable, rather than trivially already true.
-    await page
-      .getByRole("heading", { name: "Choose Image", exact: true })
-      .click();
-    await expect(
-      page.getByRole("button", { name: /Filters/ })
-    ).not.toBeVisible();
+    // Select Version is promoted + always open now (E2/E3/L4) - no accordion left for NO to
+    // "expand"; onOpenGridSelector is a documented no-op (see RailHeader's own comment). The
+    // surface is visible both before and after clicking NO.
+    await expect(page.getByRole("button", { name: /Filters/ })).toBeVisible();
 
     const header = page.getByTestId("display-rail-header");
     await header.getByTestId("deckbuilder-confirm-badge").hover();
@@ -771,7 +768,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(select).toHaveValue("force-bleed");
   });
 
-  test("the Artist section shows a support link for a card with a known canonical artist", async ({
+  test("the promoted artist line shows a support link for a card with a known canonical artist (E2 - promoted, no longer a collapsed accordion)", async ({
     page,
     network,
   }) => {
@@ -786,7 +783,6 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await importText(page, "1 card 8 (xyz) 001");
     await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
-    await page.getByRole("heading", { name: "Artist", exact: true }).click();
 
     const link = page.getByTestId("artist-support-link");
     await expect(link).toBeVisible();
