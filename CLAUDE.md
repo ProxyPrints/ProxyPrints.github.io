@@ -264,10 +264,11 @@ external reader's orientation to the whole fork, see
   `theory.md`'s formal decoding model.
 - [`docs/pipeline-fidelity-gate.md`](docs/pipeline-fidelity-gate.md) —
   canonical status page for the pipeline-fidelity gate (GitHub issue
-  #154): artifact 1/2 status, the two open owner decisions (the three
-  MISSING constants, the corrected parity-replay methodology), and a
-  verified data snapshot. Single source of truth for this gate's
-  status — don't restate gate status/decisions elsewhere, link here.
+  #154): artifact 1 (parity replay — DONE, owner-accepted 2026-07-22)
+  and artifact 2 (knowledge-inventory sweep) status, the still-open
+  owner decision on two of the three MISSING constants, and a verified
+  data snapshot. Single source of truth for this gate's status — don't
+  restate gate status/decisions elsewhere, link here.
 - [`docs/documentation-process.md`](docs/documentation-process.md) — docs/
   as source of truth, the wiki as a generated view of it, mechanical lint
   vs. the quarterly judgment pass, upstream wiki tracking.
