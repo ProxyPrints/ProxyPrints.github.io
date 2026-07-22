@@ -10,6 +10,16 @@ it. See [`documentation-process.md`](documentation-process.md).
 How to search the catalog, read search results, and pick a printing for
 a slot in your decklist.
 
+The **Display** page's search bar is dual-mode: an **Add / Browse**
+toggle next to the input switches between adding cards to your project
+(the usual decklist-line paste/search box) and browsing the whole
+catalog without touching your project — browsing renders a grid of
+matching cards you can add individually, and the center of the page
+follows the same toggle, switching between your print sheet preview and
+the browse results. The **+ Add Cards** dropdown next to the search box
+covers the same Text / XML / CSV / URL import options available
+elsewhere in the app.
+
 ## "What's That Card?" — helping identify printings
 
 ProxyPrints crowdsources which real Magic printing a community-submitted
@@ -17,6 +27,17 @@ card image depicts, so search results and filters (Full Art, Borderless,
 etc.) can be more precise. If you spot the vote queue while browsing,
 here's what it's asking and why your input helps everyone's search
 results.
+
+The vote queue at **What's That Card?** presents each question as a
+quiz-reveal hero: the card image in question sits in its own column on
+a deep-blue hero field (with an animated starburst behind it) alongside
+a title that pops into place word by word every time a new card is
+shown, while the actual question — the candidate printings or attribute
+chips to pick from — sits in a scrolling panel beside it. On a wide
+screen that question panel scrolls on its own while the card stays put,
+so you never lose sight of what you're being asked about; on a narrow
+screen the card instead pins near the top of the screen while the
+questions scroll underneath it.
 
 ## Exporting a print-ready PDF
 
@@ -31,10 +52,29 @@ sheet; the other two trade some bleed for a printer-supported margin,
 and the page warns (rather than silently shrinking your bleed value) if
 your current bleed exceeds what the selected profile can fit.
 
+The same section's **Card spacing (mm)** control sets the gutter between
+cards independently on each axis — Horizontal (X) and Vertical (Y)
+default to 0mm and 14.5mm respectively, so columns butt together for
+strip-cutting while rows keep a gap that suits a die cutter. A
+**Link**/**Linked** toggle next to it locks the two axes to move
+together when you'd rather set one value for both.
+
+Once your sheet is ready, the **Display** page's Finish footer has two
+equal-weight buttons: **Save Deck** (or **Sign in to Save**, if you're
+not signed in) and **Print / Export →**, plus the existing **Export**
+dropdown for lightweight XML/card-image/decklist exports. Your project is
+also quietly backed up to this browser as you work — a small "Draft
+backed up locally" note under the buttons confirms it — and pressing
+**Print / Export →** while signed in with unsaved changes offers to save
+your deck first, since the print/PDF step can use a lot of your
+browser's memory and you don't want to lose your work if it struggles.
+
 ## Saving and re-using a project
 
 Local-folder and Google Drive options for coming back to a project
-later.
+later. If you're signed in and have saved decks already, the **Display**
+page's empty-project landing screen lists them directly so you can jump
+back into one without a trip to **My Decks** first.
 
 ## Saved decks, export, and the standalone decrypt tool
 
