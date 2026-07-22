@@ -60,7 +60,6 @@ import { GenericErrorPage } from "@/features/ui/GenericErrorPage";
 import { APISubmitTagVote } from "@/store/api";
 import { selectCardDocumentsByIdentifiers } from "@/store/slices/cardDocumentsSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
-import { selectCompressed } from "@/store/slices/viewSettingsSlice";
 
 const ATTRIBUTE_TAG_NAMES = new Set(
   ALL_ATTRIBUTE_CHIPS.map((chip) => chip.tagName)
@@ -359,6 +358,19 @@ interface SelectVersionResultsProps {
   search: GridSelectorSearch;
   requestedPrinting: RequestedPrinting | undefined;
   backendURL: string;
+  /** Editor-completion package, E3/X3 (Bkg 2/4/5) - additive, optional layout switch. Default
+   * `"sidebar"` is today's unchanged `Col lg={3}` filters-beside-results split (this component's
+   * one existing caller, DisplayPage.tsx's ChooseImageSection, is about to become the rail's
+   * "stacked" caller below - there is no other caller today, but the prop stays optional/
+   * additive per the standing "shared components gain only additive props" discipline).
+   * `"stacked"` drops the Row/Col split entirely: the disclosed Filters render full-width, top-
+   * to-bottom in the rail's own scroll container (fixes "Jump to Version" wrapping vertically
+   * and the bottom controls clipping at the rail edge), and the always-on FilterChipBar - a
+   * permanent multi-row height sink even when unused - is removed from this surface (folded into
+   * the Filters disclosure isn't needed since the chip bar's own filtering is orthogonal to the
+   * Filter/Sort/Jump controls; it simply doesn't render in the rail at all, per the redline's
+   * kill list). */
+  layout?: "sidebar" | "stacked";
 }
 
 export function SelectVersionResults({
@@ -369,9 +381,17 @@ export function SelectVersionResults({
   search,
   requestedPrinting,
   backendURL,
+  layout = "sidebar",
 }: SelectVersionResultsProps) {
   const getTagDisplayName = useTagDisplayName();
-  const compressed = useAppSelector(selectCompressed);
+  // Editor-completion package, E4/L9 (Bkg 4) - this component's one caller is the /display rail
+  // (see this file's own module comment), which the redline pins to always-compressed tiles: the
+  // 380px rail forces compact tiles regardless, and the "Card display style" toggle that would
+  // otherwise flip this is killed from the rail's Filters disclosure (GridSelectorFilters'
+  // hiddenSections=["view"] below) - so this no longer reads the shared, editor-wide
+  // viewSettingsSlice.compressed flag at all, to guarantee the rail can never render uncompressed
+  // tiles even if that shared flag happens to be false from some other surface.
+  const compressed = true;
   const cardDocumentsByIdentifier = useAppSelector((state) =>
     selectCardDocumentsByIdentifiers(state, search.sortedFilteredIdentifiers)
   );
@@ -549,26 +569,107 @@ export function SelectVersionResults({
     groups.nonCanonical.length === 0 &&
     groups.unknown.length === 0;
 
+  const filtersElement = (
+    <GridSelectorFilters
+      imageIdentifiers={imageIdentifiers}
+      focusRef={focusRef}
+      selectImage={onSelectImage}
+      sortBy={search.sortBy}
+      setSortBy={search.setSortBy}
+      printings={search.printings}
+      setPrintings={search.setPrintings}
+      artists={search.artists}
+      setArtists={search.setArtists}
+      filterSettings={search.filterSettings}
+      setFilterSettings={search.setFilterSettings}
+      sourceSettings={search.sourceSettings}
+      setSourceSettings={search.setSourceSettings}
+      projectFilter={search.projectFilter}
+      // E4/X4 (Bkg 3/4) - only the stacked (rail) caller hides "View" (Group-by/Compressed);
+      // the sidebar (modal/browse) callers are unaffected.
+      hiddenSections={layout === "stacked" ? ["view"] : undefined}
+    />
+  );
+
+  // E4/Bkg 1 - the always-on FilterChipBar wall is a permanent multi-row height sink; removed
+  // from the stacked (rail) surface entirely, kept for the sidebar layout (no other caller today,
+  // but this stays additive per the standing discipline - see this component's own prop comment).
+  const resultsElement = (
+    <>
+      {layout !== "stacked" && (
+        <FilterChipBar
+          activeTagNames={activeAttributeTags}
+          onToggle={toggleAttributeTag}
+        />
+      )}
+      {groups.canonical.length > 0 && (
+        <div data-testid="select-version-group-canonical">
+          {groups.canonical.map(renderPrintingGroup)}
+        </div>
+      )}
+      {groups.nonCanonical.length > 0 && (
+        <div data-testid="select-version-group-non-canonical">
+          {groups.nonCanonical.map(renderReasonTagGroup)}
+        </div>
+      )}
+      {groups.unknown.length > 0 && (
+        <div data-testid="select-version-group-unknown">
+          {groups.unknown.map((identifier) => {
+            // No printing/reason-tag identity to label this tile with (the "honest residue" -
+            // see selectVersionGrouping.ts) - falls back to the same "Option N" numbering the
+            // flat grid this section replaces always used (search.originalIndexMap, the same
+            // map GridSelectorResults/CardResultSet already thread through for consistent
+            // numbering), rather than inventing a new, less informative label.
+            const originalIndex = search.originalIndexMap.get(identifier);
+            const label =
+              originalIndex != null ? `Option ${originalIndex + 1}` : "Unknown";
+            return (
+              <SelectVersionTile
+                key={identifier}
+                {...tileProps(identifier, label, false)}
+              />
+            );
+          })}
+        </div>
+      )}
+      {noResults && (
+        <GenericErrorPage
+          title="No results :("
+          text={["Your filters didn't match any results."]}
+        />
+      )}
+    </>
+  );
+
+  if (layout === "stacked") {
+    // E3/X3 (Bkg 2/4/5) - no Row/Col split at all: the disclosed Filters (when settingsVisible)
+    // render full-width, top-to-bottom, in the rail's own overflow-y:auto scroll container - the
+    // `.rail .sv-filters` lifted-CSS hook (E1/§5) targets this wrapper. E4/Bkg 1 - the
+    // FilterChipBar moves IN here too (moment (b)'s art-as-filter mechanic is real, shipped
+    // behavior - the redline's L5 fix folds the wall into the Filters disclosure rather than
+    // deleting it outright, so it's still reachable, just no longer a permanent height sink atop
+    // every result).
+    return (
+      <div data-testid="select-version-section">
+        {search.settingsVisible && (
+          <div className="sv-filters border-bottom mb-2 pb-2">
+            <FilterChipBar
+              activeTagNames={activeAttributeTags}
+              onToggle={toggleAttributeTag}
+            />
+            {filtersElement}
+          </div>
+        )}
+        {resultsElement}
+      </div>
+    );
+  }
+
   return (
     <Row className="g-0" data-testid="select-version-section">
       {search.settingsVisible && (
         <Col lg={3} sm={4} xs={6} className="border-end p-0">
-          <GridSelectorFilters
-            imageIdentifiers={imageIdentifiers}
-            focusRef={focusRef}
-            selectImage={onSelectImage}
-            sortBy={search.sortBy}
-            setSortBy={search.setSortBy}
-            printings={search.printings}
-            setPrintings={search.setPrintings}
-            artists={search.artists}
-            setArtists={search.setArtists}
-            filterSettings={search.filterSettings}
-            setFilterSettings={search.setFilterSettings}
-            sourceSettings={search.sourceSettings}
-            setSourceSettings={search.setSourceSettings}
-            projectFilter={search.projectFilter}
-          />
+          {filtersElement}
         </Col>
       )}
       <Col
@@ -577,48 +678,7 @@ export function SelectVersionResults({
         xs={search.settingsVisible ? 6 : 12}
         className="p-0"
       >
-        <FilterChipBar
-          activeTagNames={activeAttributeTags}
-          onToggle={toggleAttributeTag}
-        />
-        {groups.canonical.length > 0 && (
-          <div data-testid="select-version-group-canonical">
-            {groups.canonical.map(renderPrintingGroup)}
-          </div>
-        )}
-        {groups.nonCanonical.length > 0 && (
-          <div data-testid="select-version-group-non-canonical">
-            {groups.nonCanonical.map(renderReasonTagGroup)}
-          </div>
-        )}
-        {groups.unknown.length > 0 && (
-          <div data-testid="select-version-group-unknown">
-            {groups.unknown.map((identifier) => {
-              // No printing/reason-tag identity to label this tile with (the "honest residue" -
-              // see selectVersionGrouping.ts) - falls back to the same "Option N" numbering the
-              // flat grid this section replaces always used (search.originalIndexMap, the same
-              // map GridSelectorResults/CardResultSet already thread through for consistent
-              // numbering), rather than inventing a new, less informative label.
-              const originalIndex = search.originalIndexMap.get(identifier);
-              const label =
-                originalIndex != null
-                  ? `Option ${originalIndex + 1}`
-                  : "Unknown";
-              return (
-                <SelectVersionTile
-                  key={identifier}
-                  {...tileProps(identifier, label, false)}
-                />
-              );
-            })}
-          </div>
-        )}
-        {noResults && (
-          <GenericErrorPage
-            title="No results :("
-            text={["Your filters didn't match any results."]}
-          />
-        )}
+        {resultsElement}
       </Col>
     </Row>
   );

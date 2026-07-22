@@ -71,9 +71,12 @@ more isolated follow-up per the owner's Phase-2 direction.
 
 ## Select Version section (issue #167, Proposal H §4.4′)
 
-The unified display page's (`/display`) rail "Choose Image" accordion
-body no longer renders the flat `GridSelectorResults`/`CardResultSet`
-grid — it mounts `SelectVersionResults.tsx`, which groups the same
+The unified display page's (`/display`) rail's Select Version surface
+(promoted + always open since the editor-completion package's left-panel
+fidelity rebuild - see that section's own note below; was the "Choose
+Image" accordion before that round) no longer renders the flat
+`GridSelectorResults`/`CardResultSet` grid — it mounts
+`SelectVersionResults.tsx`, which groups the same
 candidate identifier list into the three ordered groups
 `docs/proposals/proposal-h-unified-display-page.md`'s §4.4′ specifies,
 and weaves in its three verification moments. **Scope: this replaces the
@@ -149,11 +152,30 @@ still back that modal.
   `altered-frame > custom-art > ai-art`
   (`SELECT_VERSION_REASON_TAG_PRIORITY`), an arbitrary but documented
   choice, since the spec doesn't pin `custom-art` vs. `ai-art`'s relative
-  order. (2) The "Choose Image" accordion title/testids were kept
-  as-is (not renamed to "Select Version") to avoid churning every
-  existing passing test that references that exact heading text — a
-  pure-copy rename is a small, separate follow-up if the owner wants the
-  label itself to match the spec's own name for this section.
+  order.
+- **Resolved by the editor-completion package's left-panel fidelity
+  rebuild (E2/E3/L4)**: the rail heading is now genuinely "Select
+  Version" (the once-deferred pure-copy rename above), promoted to an
+  always-visible, always-open surface with no `AutofillCollapse` wrapper
+  at all - it's no longer one accordion among several (D3: art selection
+  is the primary surface, not something a user has to expand). The same
+  round also fixed the rail-specific fidelity breakages this section used
+  to carry: `initialSettingsVisible={false}` on `useGridSelectorSearch`
+  (Filters starts collapsed in the rail regardless of viewport width -
+  previously auto-opened cramped on any desktop-width rail) and
+  `layout="stacked"` on `SelectVersionResults` (the Filters disclosure
+  renders full-width, stacked, in the rail's own scroll container instead
+  of the modal's `Col lg={3}` sidebar split - "Jump to Version" no longer
+  wraps vertically, bottom controls no longer clip at the rail edge). The
+  always-on `FilterChipBar` wall moved INTO the Filters disclosure for
+  the stacked/rail caller (still reachable, no longer a permanent
+  multi-row height sink atop every result); `GridSelectorFilters` gained
+  an additive `hiddenSections` prop the rail uses to drop "View"
+  (Group-by/Compressed - both redundant in the rail: it groups results
+  itself, and the 380px rail already forces compact tiles). Every one of
+  these is additive/optional and defaults to today's modal behavior -
+  `GridSelectorModal.tsx`'s own caller passes none of them and is
+  unaffected.
 
 ## Key files
 
@@ -184,11 +206,11 @@ still back that modal.
   a 150-synthetic-card grid in a mocked sandbox; it doesn't reproduce
   real backend/ES latency or real image-CDN load timing at that scale.
 - Issue #167's Select Version section: see its own "Open items" bullet
-  above for the two owner-decidable gaps (group 2's ai-art/custom-art
-  order, and the un-renamed "Choose Image" label). The Filters column
-  (`GridSelectorFilters`) reused inside the rail still uses the same
-  viewport-keyed Bootstrap column breakpoints as the classic modal's
-  `FiltersColumn` (pre-existing, not introduced by this build) — cramped
-  at the rail's ~380px width, a known layout gap `CardRow`'s own
-  "embedded" variant comment already flags for the results grid and
-  wasn't in this issue's scope to fix for the filters column too.
+  above for the one still-owner-decidable gap (group 2's ai-art/custom-art
+  order). The rail's own Filters-column cramping (the previous bullet
+  here) was fixed by the editor-completion package's left-panel fidelity
+  rebuild - see this section's own "Resolved by..." paragraph above
+  (`layout="stacked"` drops the `Col lg={3}` sidebar split for the rail
+  caller specifically; `GridSelectorModal.tsx`'s own sidebar layout is
+  unchanged, so this is a rail-only fix, not a change to the shared
+  column-breakpoint default itself).

@@ -26,7 +26,8 @@ const selectVersionHandlers = [
 
 // Issue #167 - the unified Select Version section
 // (docs/proposals/proposal-h-unified-display-page.md §4.4′), mounted as the display page rail's
-// "Choose Image" accordion body. cardDocumentsSelectVersionMixedResults/
+// always-open "Select Version" surface (editor-completion package, E2/E3/L4 - promoted, renamed
+// from "Choose Image", no longer a collapsible accordion). cardDocumentsSelectVersionMixedResults/
 // searchResultsSelectVersionMixedResults (mocks/handlers.ts) cover all three of the spec's
 // groups in one result set - see those fixtures' own comments for the exact shape.
 test.describe("SelectVersionSection (issue #167)", () => {
@@ -39,9 +40,15 @@ test.describe("SelectVersionSection (issue #167)", () => {
     await importText(page, "my search query");
     await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
-    // Compressed view (the real, hardcoded default) hides per-card header text - same precedent
-    // as DisplayPage.spec.ts's own tests.
-    await page.getByText("Compressed").click();
+    // The rail always renders compressed tiles now (editor-completion package, E4/L9 - the
+    // toggle is gone entirely, hard-pinned true) - no "Compressed" click needed any more.
+  };
+
+  // The filter-chip bar moved inside the Filters disclosure (editor-completion package, E4/Bkg 1
+  // - see SelectVersionResults.tsx's own comment); the rail also starts with Filters collapsed
+  // by default (E3/Bkg 5), so the two filter-chip-bar tests below need it opened first.
+  const openFilters = async (page: import("@playwright/test").Page) => {
+    await page.getByRole("button", { name: /Filters/ }).click();
   };
 
   test("groups candidates into canonical (by printing), non-canonical (by reason tag), and unknown sections", async ({
@@ -136,6 +143,7 @@ test.describe("SelectVersionSection (issue #167)", () => {
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
+    await openFilters(page);
 
     // cardDocument18 (in the unknown group) has a resolved "Full Art" tag - its "More like this"
     // button should activate the Full Art filter chip.
@@ -161,6 +169,7 @@ test.describe("SelectVersionSection (issue #167)", () => {
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
+    await openFilters(page);
 
     // Manually activate the "Old Border" filter chip - cardDocument18 carries a *suggested* (not
     // resolved) Old Border vote, so it should still be filtered in (per this task's documented
