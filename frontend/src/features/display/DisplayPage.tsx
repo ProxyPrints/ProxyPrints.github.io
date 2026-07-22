@@ -5,7 +5,7 @@
  * + accordion (AutofillCollapse, per the owner's accordion amendment). Choose Image is wired to
  * the real candidate/version picker (originally Step 2 PR 2a's flat GridSelectorResults grid,
  * replaced by the unified Select Version section - issue #167, SelectVersionResults.tsx - see
- * ChooseImageSection below; still shares useGridSelectorSearch.ts's search/filter state machine
+ * SelectVersionSection below; still shares useGridSelectorSearch.ts's search/filter state machine
  * with GridSelectorModal.tsx's own unchanged modal variant). The always-visible header now
  * carries the real requested-printing badge (Step 2 PR 2b - degraded-style variant keyed off
  * EditorSearchResponse.degradedQueries, wired end to end through searchResultsSlice's
@@ -191,6 +191,16 @@
  * PDFGenerator with its own unrelated defaults - a genuine settings-parity gap, out of scope for
  * this issue (D9/D10 resolve the SAVE-vs-PRINT ordering and the route linkage, not settings
  * portability), left for a future issue.
+ *
+ * Editor-completion package, E19/X19 (lime rounded corner-only cut guides) inherits this exact
+ * same gap: PagePreview.tsx's screenPresentation variant now renders the reference's lime corner
+ * guides on THIS page's own live sheet (screen-only, gated on screenPresentation - PDFGenerator's
+ * own fast preview is unaffected), but the REAL exported PDF's guide style is drawn by
+ * PDFGenerator.tsx/PDF.tsx's own independent cutLineColor/cutLineShape settings on the Print page -
+ * upstream already carries the corner-only geometry this needs (`CutLineCorner`, `cutLineShape:
+ * "InsideOnly"` - confirmed by reading `upstream/master`'s `PDF.tsx` directly, not assumed), so no
+ * new PDF engine work is required, only wiring a lime preset through - genuine screen/print parity
+ * for the guide COLOR is blocked on the same settings-portability gap above, not attempted here.
  */
 import styled from "@emotion/styled";
 import React, {
@@ -224,10 +234,17 @@ import { RenderIfVisible } from "@/components/RenderIfVisible";
 import { CardbackToolbarButton } from "@/features/card/CommonCardback";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
 import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
+import {
+  CardDownloadFavorite,
+  CardMetaTable,
+  PrintingTagsBlock,
+  ReportBlock,
+} from "@/features/cardDetailedView/CardDetailedViewBody";
 import { ArtistSection } from "@/features/display/ArtistSection";
 import { AttributesSection } from "@/features/display/AttributesSection";
 import { CardSpacingControl } from "@/features/display/CardSpacingControl";
 import { CatalogBrowseResults } from "@/features/display/CatalogBrowseResults";
+import { ConfidenceElement } from "@/features/display/ConfidenceElement";
 import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { FinishFooter } from "@/features/display/FinishFooter";
 import { MarginProfileControl } from "@/features/display/MarginProfileControl";
@@ -238,6 +255,7 @@ import {
   SavedDecksLandingPanel,
   useHasSavedDecksForLanding,
 } from "@/features/display/SavedDecksLandingPanel";
+import { buildScryfallReferenceUrl } from "@/features/display/scryfallReference";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
 import {
   ProjectDraftSummary,
@@ -323,20 +341,32 @@ const SHEET_MAX_WIDTH_PX = 960;
 //# endregion
 
 //# region accordion sections
+//
+// Editor-completion package, left-panel fidelity rebuild (E1-E6, X1) - the redline's "demoted
+// zone" (§1's D3 hierarchy): every section here is a collapsed AutofillCollapse near the bottom
+// of the rail, in the E5 order Card Details -> Attributes -> Printing Tags -> Print Options ->
+// Slot Actions -> Report. "Choose Image" and "Artist" are gone from this type entirely - they're
+// now part of the always-visible PROMOTED zone (RailHeader + ArtistSection + ConfidenceElement +
+// the always-open Select Version surface), not collapsible sections at all. Card Details/
+// Printing Tags/Report are net-new (L13-L15, §7.5 - the CardDetailedViewBody extraction, E6/X5) -
+// the metadata/report/tagging surfaces the modal has always had, never mounted in the rail
+// before this round.
 
 type AccordionSectionKey =
-  | "chooseImage"
+  | "cardDetails"
   | "attributes"
+  | "printingTags"
   | "printOptions"
-  | "artist"
-  | "slotActions";
+  | "slotActions"
+  | "report";
 
 const DEFAULT_EXPANDED: Record<AccordionSectionKey, boolean> = {
-  chooseImage: true,
+  cardDetails: false,
   attributes: false,
+  printingTags: false,
   printOptions: false,
-  artist: false,
   slotActions: false,
+  report: false,
 };
 
 interface RailSectionProps {
@@ -374,7 +404,6 @@ interface RailHeaderProps {
   cardName: string | undefined;
   cardIdentifier: string | undefined;
   searchQuery: SearchQuery | undefined;
-  onOpenChooseImage: () => void;
 }
 
 const RailHeader = ({
@@ -383,9 +412,11 @@ const RailHeader = ({
   cardName,
   cardIdentifier,
   searchQuery,
-  onOpenChooseImage,
 }: RailHeaderProps) => (
-  <div className="p-2 border-bottom" data-testid="display-rail-header">
+  <div
+    className="p-2 border-bottom rail-head"
+    data-testid="display-rail-header"
+  >
     <div className="fw-bold">
       Slot {slot + 1}{" "}
       <span className="text-muted text-uppercase small ms-1">{face}</span>
@@ -402,15 +433,15 @@ const RailHeader = ({
       <RequestedPrintingBadge query={searchQuery} />
     </div>
     {/* Adapts CardSlot.tsx's own mount of this component (same props, same gating logic inside
-        DeckbuilderConfirmAffordance itself - not forked) for the rail's status header: N's
-        "open the grid selector" becomes "expand (or keep expanded, if already open) the Choose
-        Image accordion section" here instead of opening GridSelectorModal, since the rail has
-        no modal to open - see the design doc's §4.3/§4.4. */}
+        DeckbuilderConfirmAffordance itself - not forked) for the rail's status header. The
+        editor-completion package's E2/L4 promotes Select Version to an always-open surface (no
+        collapse chrome), so N no longer needs to "expand" anything - onOpenGridSelector is a
+        no-op here now; the surface is already visible below. */}
     {cardIdentifier != null && (
       <DeckbuilderConfirmAffordance
         cardIdentifier={cardIdentifier}
         searchQuery={searchQuery}
-        onOpenGridSelector={onOpenChooseImage}
+        onOpenGridSelector={() => undefined}
       />
     )}
   </div>
@@ -418,9 +449,44 @@ const RailHeader = ({
 
 //# endregion
 
-//# region Choose Image section (issue #167 - the unified Select Version section, spec §4.4′)
+//# region promoted zone - Artist line + Confidence element (E2, L2/L3)
+//
+// Editor-completion package, E2 (#2/#3) - the always-visible zone between the status header and
+// the (also always-open) Select Version surface below. ArtistSection.tsx is reused verbatim, not
+// forked (D3: artist support is top-priority, always visible - a collapsed accordion hid the one
+// thing D3 says must be promoted); only its mount location and outer chrome (the `.artist-line`
+// lifted-CSS class, E1/§5) changed - the "Artist" AutofillCollapse wrapper this used to sit inside
+// is simply gone. ConfidenceElement.tsx is net-new (D14/L3 - see that file's own module comment
+// for why this round ships the narrower placeholder cut, not the full interactive version).
 
-interface ChooseImageSectionProps {
+interface PromotedZoneProps {
+  cardDocument: CardDocument | undefined;
+}
+
+const PromotedZone = ({ cardDocument }: PromotedZoneProps) => (
+  <>
+    <div className="artist-line px-2 py-1 border-bottom small">
+      <ArtistSection cardDocument={cardDocument} />
+    </div>
+    <div className="px-2">
+      <ConfidenceElement cardDocument={cardDocument} />
+    </div>
+  </>
+);
+
+//# endregion
+
+//# region Select Version section (issue #167 - the unified Select Version section, spec §4.4′)
+//
+// Editor-completion package, E2/E3/L4 (Bkg 1/2/4/5) - promoted to the always-visible, always-open
+// art surface (renamed "Select Version", no AutofillCollapse wrapper at all - it's no longer a
+// collapsible section, "Choose Image" as an accordion key is gone from AccordionSectionKey
+// entirely). `initialSettingsVisible={false}` on useGridSelectorSearch and `layout="stacked"` on
+// SelectVersionResults fix the redline's Bkg 2/4/5 breakages (filters auto-opening cramped inside
+// the 380px rail, "Jump to Version" wrapping vertically, bottom controls clipping at the rail
+// edge) - see those two files' own prop comments.
+
+interface SelectVersionSectionProps {
   face: Faces;
   slot: number;
   query: SearchQuery | undefined;
@@ -437,13 +503,13 @@ interface ChooseImageSectionProps {
 // SelectVersionResults (issue #167) - grouped by printing/reason-tag/unknown per the spec's §4.4′
 // rather than GridSelectorResults' flat CardResultSet grid; GridSelectorModal.tsx's own modal
 // variant (CardSlot.tsx's editor grid) is untouched, out of this issue's scope.
-const ChooseImageSection = ({
+const SelectVersionSection = ({
   face,
   slot,
   query,
   selectedImage,
   backendURL,
-}: ChooseImageSectionProps) => {
+}: SelectVersionSectionProps) => {
   const dispatch = useAppDispatch();
   const searchResultsForQuery =
     useAppSelector((state) =>
@@ -457,9 +523,13 @@ const ChooseImageSection = ({
       )
     ) ?? [];
   const focusRef = useRef<HTMLInputElement>(null);
+  // E3/X2 (Bkg 5) - the rail always starts with Filters collapsed, regardless of viewport width
+  // (the modal's own GridSelectorModal caller doesn't pass this, so its width-based default is
+  // unchanged).
   const search = useGridSelectorSearch({
     imageIdentifiers: searchResultsForQuery,
     active: true,
+    initialSettingsVisible: false,
   });
 
   const onSelectImage = (identifier: string) => {
@@ -473,10 +543,28 @@ const ChooseImageSection = ({
   };
 
   if (searchResultsForQuery.length === 0) {
+    // E17 - the Select-Version empty state is one of the two directed-help homes the spec names
+    // (the other is the on-card sheet slot, see PagePreview's own loadState="failed" rendering);
+    // a deterministic Scryfall reference link costs zero backend work (buildScryfallReferenceUrl,
+    // scryfallReference.ts).
+    const findCardUrl = buildScryfallReferenceUrl(query);
     return (
-      <p className="text-muted small mb-0">
-        No candidate images found for this slot&apos;s query.
-      </p>
+      <div>
+        <p className="text-muted small mb-1">
+          No candidate images found for this slot&apos;s query.
+        </p>
+        {findCardUrl != null && (
+          <a
+            href={findCardUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="small"
+            data-testid="display-select-version-find-card-link"
+          >
+            Find this card ↗
+          </a>
+        )}
+      </div>
     );
   }
 
@@ -515,6 +603,7 @@ const ChooseImageSection = ({
             : undefined
         }
         backendURL={backendURL}
+        layout="stacked"
       />
     </>
   );
@@ -794,6 +883,72 @@ const ActionBarSearchGroup = styled.div`
   }
 `;
 
+// Editor-completion package, E1/X6 - the mockup's rail stylesheet, lifted verbatim per the
+// owner's grant (spec §5: "the left rail MAY lift the mockup's CSS verbatim rather than
+// re-approximate through react-bootstrap idioms"). Scoped to this one wrapper (not global) so it
+// only ever touches the /display rail's own promoted-zone markup (PromotedZone/ConfidenceElement
+// above) - nothing here overrides AutofillCollapse's own chrome for the demoted accordion
+// sections below (the owner's grant covers dropping that look "where fidelity requires"; the
+// promoted zone is where it's required, the demoted accordions keep today's proven pattern).
+const RailRoot = styled.div`
+  .rail-head {
+    background: #22303f;
+  }
+  .artist-line {
+    background: #22303f;
+  }
+  .select-version-heading {
+    margin: 0;
+    padding: 8px 0 4px;
+    font-weight: 600;
+  }
+  .confidence {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 6px 0;
+    padding: 6px 8px;
+    background: #2b3e50;
+    border: 1px solid #16202b;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .set-symbol {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #4e5d6c;
+    border: 1px solid #7f8fa0;
+    font-weight: 700;
+    font-size: 11px;
+  }
+  .conf-badge {
+    padding: 1px 6px;
+    border: 1px solid #4e5d6c;
+    border-radius: 10px;
+  }
+  .conf-badge.confirmed {
+    border-color: #3f7a2f;
+    color: #a7e08a;
+  }
+  .conf-badge.suggested {
+    border-color: #df6919;
+    color: #ffb27d;
+  }
+  .conf-x {
+    margin-left: auto;
+    padding: 2px 8px;
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid #7f8fa0;
+    color: #ffb27d;
+  }
+`;
+
 interface RailProps {
   selectedSlotRef: SelectedSlotRef | null;
   // CardDocument | undefined, not just CardDocument: useCardDocumentsByIdentifier's own return
@@ -846,35 +1001,68 @@ const Rail = ({
       ...previous,
       [key]: !previous[key],
     }));
-  // "focus, if already open" (design doc §4.3.4) - always force-open, never toggle-closed, so
-  // the Confirm affordance's N path can't accidentally collapse a section the user already had
-  // open.
-  const onOpenChooseImage = () =>
-    setExpandedSections((previous) => ({ ...previous, chooseImage: true }));
+
+  const selectedCardDocument =
+    selectedImage != null
+      ? cardDocumentsByIdentifier[selectedImage]
+      : undefined;
 
   return (
-    <div data-testid="display-rail-content">
+    <RailRoot data-testid="display-rail-content">
       <RailHeader
         face={selectedSlotRef.face}
         slot={selectedSlotRef.slot}
         cardName={cardName}
         cardIdentifier={selectedImage}
         searchQuery={query}
-        onOpenChooseImage={onOpenChooseImage}
       />
-      <RailSection
-        sectionKey="chooseImage"
-        title="Choose Image"
-        expandedSections={expandedSections}
-        onToggle={onToggle}
-      >
-        <ChooseImageSection
+      {/* E2 (#2/#3) - the promoted, always-visible zone: artist support line + confidence
+          element, both retired as/never-were collapsible accordion sections (D3). */}
+      <PromotedZone cardDocument={selectedCardDocument} />
+      {/* E2/E3/L4 - Select Version, promoted + always open (renamed from "Choose Image", no
+          collapse chrome at all - the primary art surface, not one accordion among several). */}
+      <div className="px-2 pt-2">
+        <h6 className="select-version-heading">Select Version</h6>
+        <SelectVersionSection
           face={selectedSlotRef.face}
           slot={selectedSlotRef.slot}
           query={query}
           selectedImage={selectedImage}
           backendURL={backendURL}
         />
+      </div>
+      {/* E5 - the demoted zone, collapsed AutofillCollapse sections in the D3 order: Card
+          Details -> Attributes -> Printing Tags -> Print Options -> Slot Actions -> Report. Card
+          Details/Printing Tags/Report are net-new here (L13-L15, §7.5's CardDetailedViewBody
+          extraction, E6/X5) - AddCardToProjectForm is deliberately not mounted (the slot is
+          already in the project). */}
+      <RailSection
+        sectionKey="cardDetails"
+        title="Card Details"
+        expandedSections={expandedSections}
+        onToggle={onToggle}
+      >
+        {/* Lazy-mount, unlike the other demoted sections below: AutofillCollapse keeps every
+            section's children in the DOM regardless of collapse state (Attributes/Print
+            Options/Slot Actions already rely on that - see this file's own test-fixture comment
+            on Attributes' unconditional tag-consensus fetch), but this section's own content
+            (CardMetaTable's language lookup, PrintingTagsBlock's printing-candidates/consensus
+            fetch below) is real new backend traffic /display never issued before this round -
+            mounting it on every slot selection, whether or not the user ever opens it, would be
+            a silent new per-click cost. Gating on expandedSections keeps it opt-in, same as the
+            user actually clicking to open the section. */}
+        {!expandedSections.cardDetails ? (
+          <></>
+        ) : selectedCardDocument != null ? (
+          <>
+            <CardMetaTable cardDocument={selectedCardDocument} />
+            <CardDownloadFavorite cardDocument={selectedCardDocument} />
+          </>
+        ) : (
+          <p className="text-muted small mb-0">
+            Select an image for this slot first.
+          </p>
+        )}
       </RailSection>
       <RailSection
         sectionKey="attributes"
@@ -888,32 +1076,30 @@ const Rail = ({
         />
       </RailSection>
       <RailSection
+        sectionKey="printingTags"
+        title="Printing Tags"
+        expandedSections={expandedSections}
+        onToggle={onToggle}
+      >
+        {/* Lazy-mount - see the Card Details section's own comment above; PrintingTagsBlock's
+            PrintingTagPicker is the specific real backend call this guards. */}
+        {!expandedSections.printingTags ? (
+          <></>
+        ) : selectedCardDocument != null ? (
+          <PrintingTagsBlock cardDocument={selectedCardDocument} />
+        ) : (
+          <p className="text-muted small mb-0">
+            Select an image for this slot first.
+          </p>
+        )}
+      </RailSection>
+      <RailSection
         sectionKey="printOptions"
         title="Print Options"
         expandedSections={expandedSections}
         onToggle={onToggle}
       >
-        <PrintOptionsSection
-          cardDocument={
-            selectedImage != null
-              ? cardDocumentsByIdentifier[selectedImage]
-              : undefined
-          }
-        />
-      </RailSection>
-      <RailSection
-        sectionKey="artist"
-        title="Artist"
-        expandedSections={expandedSections}
-        onToggle={onToggle}
-      >
-        <ArtistSection
-          cardDocument={
-            selectedImage != null
-              ? cardDocumentsByIdentifier[selectedImage]
-              : undefined
-          }
-        />
+        <PrintOptionsSection cardDocument={selectedCardDocument} />
       </RailSection>
       <RailSection
         sectionKey="slotActions"
@@ -928,7 +1114,23 @@ const Rail = ({
           onDeleted={onSlotDeleted}
         />
       </RailSection>
-    </div>
+      <RailSection
+        sectionKey="report"
+        title="Report"
+        expandedSections={expandedSections}
+        onToggle={onToggle}
+      >
+        {!expandedSections.report ? (
+          <></>
+        ) : selectedCardDocument != null ? (
+          <ReportBlock cardDocument={selectedCardDocument} />
+        ) : (
+          <p className="text-muted small mb-0">
+            Select an image for this slot first.
+          </p>
+        )}
+      </RailSection>
+    </RailRoot>
   );
 };
 
@@ -938,6 +1140,14 @@ export function DisplayPage() {
   const projectCardback = useAppSelector(selectProjectCardback);
   const isProjectEmpty = useAppSelector(selectIsProjectEmpty);
   const frontsVisible = useAppSelector(selectFrontsVisible);
+  // E17/E18 (X18) - the sheet's own dark loading/failed slot states use the SAME coarse,
+  // whole-app fetch-status flag CardGrid.tsx already reads for its own loading affordance,
+  // rather than a per-query resolved-candidates check (which would need per-slot store access
+  // from inside a plain .map() callback, outside a selector context) - an approximation, not
+  // E17's literal per-query condition, documented as a deviation in this task's own report.
+  const searchResultsLoading = useAppSelector(
+    (state) => state.searchResults.status === "loading"
+  );
   const cardDocumentsByIdentifier = useCardDocumentsByIdentifier();
 
   // Issue #275 (design doc ADDENDUM D9) - the silent local draft auto-backup (F1) and the
@@ -1077,7 +1287,7 @@ export function DisplayPage() {
   // the on-screen sheet and the exported PDF in lockstep with no extra plumbing.
   const spacing = useAppSelector(selectCardSpacing);
 
-  // Still needed below (ChooseImageSection's own backendURL prop) - issue #275 removed every
+  // Still needed below (SelectVersionSection's own backendURL prop) - issue #275 removed every
   // OTHER consumer this used to have (the inline export pipeline, see this file's own module
   // comment for where that pipeline moved).
   const backendURL = useAppSelector(selectRemoteBackendURL);
@@ -1140,15 +1350,33 @@ export function DisplayPage() {
                     : ""
                 }`
               : undefined;
+          // E17/E18 (X18) - a slot with an active query but no resolved image is either still
+          // being fetched (dark loading sweep) or definitively empty (dark "no art" mark + the
+          // deterministic Scryfall reference link, E17 v1); a genuinely query-less slot (e.g. a
+          // shared-cardback back face) gets neither, same as before this round.
+          const hasQuery =
+            (query?.query != null && query.query.length > 0) ||
+            query?.expansionCode != null;
+          const loadState: "loading" | "failed" | undefined =
+            identifier == null && hasQuery
+              ? searchResultsLoading
+                ? "loading"
+                : "failed"
+              : undefined;
           const content: PagePreviewSlotContent = {
             imageUrl: cardDocument?.mediumThumbnailUrl,
             name: cardDocument?.name ?? `Slot ${entry.slot + 1}`,
             queryText,
+            loadState,
+            findCardUrl:
+              loadState === "failed"
+                ? buildScryfallReferenceUrl(query)
+                : undefined,
           };
           return content;
         }),
       })),
-    [pages, activeFace, cardDocumentsByIdentifier]
+    [pages, activeFace, cardDocumentsByIdentifier, searchResultsLoading]
   );
 
   const handleSlotClick = (pageIndex: number, indexOnPage: number) => {

@@ -2,38 +2,30 @@
  * If the user clicks a card in the project editor, this component will be displayed,
  * which is a modal that shows a higher-resolution version of the card,
  * some more information (e.g. size, dote uploaded, etc.), and a button to download the full res image.
+ *
+ * The editor-completion package's §7.5/R3 extraction (E6/X5) moved this modal's own right-column
+ * body content out into CardDetailedViewBody.tsx's region-level sub-blocks, so the /display left
+ * rail's demoted Card Details/Printing Tags/Report sections can mount the same content
+ * individually (see that file's own module comment). This component's render below is
+ * deliberately unchanged in shape - same Modal chrome, same left-column image, same right-column
+ * content, now sourced from CardDetailedViewBody rather than inlined - so
+ * tests/visual/CardDetailedViewModal.visual.spec.ts's aria snapshot keeps passing unmodified,
+ * which is this extraction's own acceptance test.
  */
 
-import React, { memo, useState } from "react";
-import Badge from "react-bootstrap/Badge";
+import React, { memo } from "react";
 import Button from "react-bootstrap/Button";
 import Modal from "react-bootstrap/Modal";
 import Row from "react-bootstrap/Row";
 
 import { getCardDataAttributes } from "@/common/cardDom";
-import { PrintingConsensusResponse } from "@/common/schema_types";
-import { useTagDisplayName } from "@/common/tagDisplayNames";
-import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
-import { imageSizeToMBString, toTitleCase } from "@/common/utils";
-import { ArtistSupportLink } from "@/components/ArtistSupportLink";
-import { AutofillTable } from "@/components/AutofillTable";
-import { ClickToCopy } from "@/components/ClickToCopy";
+import { CardDocument } from "@/common/types";
 import DisableSSR from "@/components/DisableSSR";
-import { RightPaddedIcon } from "@/components/icon";
-import { SetIcon } from "@/components/SetIcon";
-import { AttributeVotingPanel } from "@/features/attributeVoting/AttributeVotingPanel";
-import { AddCardToFavorites } from "@/features/card/AddCardToFavorites";
-import { AddCardToProjectForm } from "@/features/card/AddCardToProjectForm";
 import {
   MemoizedCardImage,
   MemoizedCardProportionWrapper,
 } from "@/features/card/Card";
-import { useDoImageDownload } from "@/features/download/downloadImages";
-import { PrintingTagPicker } from "@/features/printingTags/PrintingTagPicker";
-import { ReportCardPanel } from "@/features/reporting/ReportCardPanel";
-import { useGetLanguagesQuery } from "@/store/api";
-import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
-import { setNotification } from "@/store/slices/toastsSlice";
+import { CardDetailedViewBody } from "@/features/cardDetailedView/CardDetailedViewBody";
 
 interface CardDetailedViewProps {
   cardDocument: CardDocument;
@@ -49,27 +41,6 @@ export function CardDetailedViewModal({
   show,
   handleClose,
 }: CardDetailedViewProps) {
-  //# region queries and hooks
-
-  const dispatch = useAppDispatch();
-  const queueImageDownload = useDoImageDownload();
-  const getLanguagesQuery = useGetLanguagesQuery();
-  const backendURL = useAppSelector(selectRemoteBackendURL);
-  const getTagDisplayName = useTagDisplayName();
-
-  const [printingConsensus, setPrintingConsensus] =
-    useState<PrintingConsensusResponse | null>(null);
-
-  //# endregion
-
-  //# region computed constants
-
-  const languageNameByCode = Object.fromEntries(
-    (getLanguagesQuery.data ?? []).map((row) => [row.code, row.name])
-  );
-
-  //# endregion
-
   return (
     <DisableSSR>
       <Modal
@@ -98,136 +69,7 @@ export function CardDetailedViewModal({
               </MemoizedCardProportionWrapper>
             </div>
             <div className="col-lg-7">
-              <h4>{cardDocument.name}</h4>
-              <AutofillTable
-                headers={[]}
-                data={[
-                  [
-                    "Source Name",
-                    cardDocument.sourceExternalLink != null &&
-                    cardDocument.sourceExternalLink.length > 0 ? (
-                      <a href={cardDocument.sourceExternalLink} target="_blank">
-                        {cardDocument.sourceVerbose}
-                      </a>
-                    ) : (
-                      cardDocument.sourceVerbose
-                    ),
-                  ],
-                  ["Source Type", cardDocument.sourceType],
-                  ["Class", toTitleCase(cardDocument.cardType)],
-                  [
-                    "Identifier",
-                    <ClickToCopy
-                      key={`${cardDocument.identifier}-click-to-copy`}
-                      text={cardDocument.identifier}
-                    />,
-                  ],
-                  ["Language", languageNameByCode[cardDocument.language]],
-                  [
-                    "Tags",
-                    cardDocument.tags.length > 0 ? (
-                      <>
-                        {cardDocument.tags.map((tag) => (
-                          <Badge key={tag} pill>
-                            {getTagDisplayName(tag)}
-                          </Badge>
-                        ))}
-                      </>
-                    ) : (
-                      "Untagged"
-                    ),
-                  ],
-                  ["Resolution", `${cardDocument.dpi} DPI`],
-                  ["Date Created", cardDocument.dateCreated],
-                  ["Date Modified", cardDocument.dateModified],
-                  ["File Size", imageSizeToMBString(cardDocument.size, 2)],
-                  [
-                    "Canonical Card",
-                    cardDocument.canonicalCard ? (
-                      <>
-                        <SetIcon
-                          expansionCode={
-                            cardDocument.canonicalCard.expansionCode
-                          }
-                        />{" "}
-                        {cardDocument.canonicalCard.expansionCode.toUpperCase()}{" "}
-                        {cardDocument.canonicalCard.collectorNumber}
-                      </>
-                    ) : (
-                      "Unknown"
-                    ),
-                  ],
-                  [
-                    "Canonical Aritst",
-                    cardDocument.canonicalArtist != null ? (
-                      <ArtistSupportLink
-                        artistName={cardDocument.canonicalArtist.name}
-                      >
-                        {cardDocument.canonicalArtist.name}
-                      </ArtistSupportLink>
-                    ) : (
-                      "Unknown"
-                    ),
-                  ],
-                ]}
-                hover={true}
-                alignment={"left"}
-                uniformWidth={false}
-                columnLabels={true}
-              />
-              {cardDocument.sourceType === "Google Drive" && (
-                <div className="d-grid gap-0">
-                  <Button
-                    variant="primary"
-                    onClick={async () => {
-                      queueImageDownload(cardDocument);
-                      dispatch(
-                        setNotification([
-                          Math.random().toString(),
-                          {
-                            name: "Enqueued Downloads",
-                            message: `Enqueued 1 image download!`,
-                            level: "info",
-                          },
-                        ])
-                      );
-                    }}
-                  >
-                    <RightPaddedIcon bootstrapIconName="cloud-arrow-down" />{" "}
-                    Download Image
-                  </Button>
-                </div>
-              )}
-              <AddCardToFavorites cardDocument={cardDocument} />
-              <AddCardToProjectForm cardDocument={cardDocument} />
-              <ReportCardPanel cardDocument={cardDocument} />
-              <hr />
-              <h5>What&apos;s That Card?</h5>
-              <p className="text-muted small mb-2">
-                Help us figure out which real-world printing this card is!
-              </p>
-              <PrintingTagPicker
-                cardIdentifier={cardDocument.identifier}
-                cardName={cardDocument.name}
-                onConsensusChange={setPrintingConsensus}
-              />
-              {printingConsensus != null &&
-                printingConsensus.resolvedPrinting == null &&
-                backendURL != null && (
-                  <>
-                    <hr />
-                    <AttributeVotingPanel
-                      backendURL={backendURL}
-                      cardIdentifier={cardDocument.identifier}
-                      confidentlyKnownArtistName={
-                        cardDocument.canonicalArtist != null &&
-                        !cardDocument.canonicalArtistIsFromVoteOnly
-                          ? cardDocument.canonicalArtist.name
-                          : null
-                      }
-                    />
-                  </>
-                )}
+              <CardDetailedViewBody cardDocument={cardDocument} />
             </div>
           </Row>
         </Modal.Body>
