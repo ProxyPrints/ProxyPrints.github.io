@@ -38,6 +38,11 @@ function renderFeed() {
 // every test below, same as a real animation completing.
 async function revealCard() {
   const overlay = await screen.findByTestId("question-feed-reveal-overlay");
+  // Owner review round 2 ("?" motif on every blue unrevealed card) - a regression guard for the
+  // overlay's own "?" child (cardPanel.tsx's RevealOverlay), asserted here rather than only in
+  // Playwright since every caller of this helper already exercises the overlay's pre-reveal
+  // moment; this fires before the fade (fireEvent.animationEnd below) removes it from the DOM.
+  expect(overlay).toHaveTextContent("?");
   fireEvent.animationEnd(overlay);
   await waitFor(() =>
     expect(

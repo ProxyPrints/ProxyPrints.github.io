@@ -104,6 +104,36 @@ import { setNotification } from "@/store/slices/toastsSlice";
 type FollowUp = "none" | "no-match-reason";
 type CandidateStage = "level1" | "level2" | "level3";
 
+// Fix round (owner review round 2, "golden buttons") - every quiz action button on this page
+// (Level 1's Yes/Not sure/No/Skip, Level 2's None of these/Art matches/Skip, Level 3's chip
+// picker/Confirm/Skip, and the Filter-by-attribute toggle below) used its own Bootstrap variant
+// (success/outline-secondary/outline-danger/link/primary) designed against the SITE'S neutral/
+// orange-tinted background, not this page's own deep-blue starburst field (whatsthat.tsx's
+// StarburstBackground, #123a6b-#1d4d82). Measured contrast for the worst offender - the default
+// grey `outline-secondary` text/border ("None of these"/"Skip"/"Not sure") against the field's
+// deep-blue stop - was ~2.4:1, well under WCAG AA's 4.5:1 floor for text (and its 3:1 floor for
+// UI-component borders): exactly the "hard to read" the owner reported live. Every one of these
+// buttons now shares one gold treatment instead of its original semantic variant colour - gold
+// outline/text at rest, filling solid gold with a dark-navy text swap on hover/focus/press - both
+// using the wordmark's own two colours (`#F8D42B`, the composite/mark SVGs' own top gradient
+// stop, and `#124063`, their own dark-navy stroke - see public/whatsthat-mark.svg) rather than
+// inventing new ones. Measured contrast ratios (both computed the same way as the ~2.4:1 figure
+// above): gold text on the field's deep-blue stop 7.84:1, gold text on the field's lighter
+// highlight stop 5.93:1, dark-navy text on filled gold 7.45:1 - all comfortably past AA, most
+// past AAA too (docs/features/printing-tags.md has the full table). This intentionally
+// overrides EVERY variant used here (success/outline-danger/outline-secondary/link/primary) with
+// the same gold language rather than keeping each one's own semantic colour - the owner's ask
+// was for one consistent, readable treatment across the whole action row, not a per-variant
+// patch. Page-scoped: only these three styled components (ThumbButton/FilterToggleButton/
+// ThumbChip, all local to this file) are touched - Bootstrap's own variant classes and the
+// sitewide orange theme are untouched everywhere else in the app. NoMatchReasonStrip's own
+// chips (ChipCard.tsx) are deliberately left alone - that component is shared with
+// ReportCardPanel.tsx on a different page, so recolouring it here would leak past this page's
+// scope; its existing blue-outline treatment already clears AA (docs/features/printing-tags.md).
+const QUIZ_BUTTON_GOLD = "#f8d42b";
+const QUIZ_BUTTON_GOLD_HOVER = "#d6ab11";
+const QUIZ_BUTTON_NAVY = "#124063";
+
 // Mobile funnel pass (thumb-native tap targets): Bootstrap's own default .btn height is
 // ~38px (0.375rem vertical padding + 1.5 line-height + border) - short of the 44px minimum
 // both Apple's HIG and WCAG 2.5.5 (Target Size, AA) call for. Every stacked full-width action
@@ -113,11 +143,47 @@ type CandidateStage = "level1" | "level2" | "level3";
 // call site (and one place to revisit if the target size guidance ever changes). flex centering
 // keeps short labels ("No", "Skip") vertically centered once the box is taller than its text,
 // rather than leaving them pinned to the button's own top-padding baseline.
+//
+// Gold treatment (own comment above `QUIZ_BUTTON_GOLD`) splits on Bootstrap's own rendered
+// `.btn-link` class (the Skip buttons' variant) vs every other variant used here - `.btn-link`
+// never had a border or fill to begin with (plain underlined text), so it only gets a colour
+// swap; every bordered/filled variant (success/outline-secondary/outline-danger/primary) gets
+// the full outline-at-rest/filled-on-interaction treatment. `&&` doubles this selector's own
+// specificity (Emotion's standard trick for this) so it reliably wins over Bootstrap's own
+// single-class `.btn-success`/`.btn-outline-danger`/etc rules regardless of injection order.
 const ThumbButton = styled(Button)`
   min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
+
+  &&:not(.btn-link) {
+    color: ${QUIZ_BUTTON_GOLD};
+    border-color: ${QUIZ_BUTTON_GOLD};
+    background-color: transparent;
+  }
+
+  &&:not(.btn-link):hover,
+  &&:not(.btn-link):focus,
+  &&:not(.btn-link):active {
+    color: ${QUIZ_BUTTON_NAVY};
+    background-color: ${QUIZ_BUTTON_GOLD};
+    border-color: ${QUIZ_BUTTON_GOLD};
+  }
+
+  &&.btn-link {
+    color: ${QUIZ_BUTTON_GOLD};
+  }
+
+  &&.btn-link:hover,
+  &&.btn-link:focus,
+  &&.btn-link:active {
+    color: ${QUIZ_BUTTON_GOLD_HOVER};
+  }
+
+  &&:disabled {
+    opacity: 0.6;
+  }
 `;
 
 // "Filter by attribute" / "Hide filters" - a variant="link" toggle, not one of the stacked
@@ -126,11 +192,24 @@ const ThumbButton = styled(Button)`
 // own line-height (~24px, measured) - well under the 44px floor despite being the ONLY way to
 // reach the attribute-chip filter on Level 2. Padding restores a real hit area without
 // resembling a filled button (still variant="link" - text + underline, no background/border).
+//
+// Gold treatment - same colour pair and rationale as ThumbButton's own `.btn-link` case above
+// (this is always variant="link" itself, so no bordered/filled case to split on here).
 const FilterToggleButton = styled(Button)`
   min-height: 44px;
   display: inline-flex;
   align-items: center;
   padding: 0.5rem 0;
+
+  && {
+    color: ${QUIZ_BUTTON_GOLD};
+  }
+
+  &&:hover,
+  &&:focus,
+  &&:active {
+    color: ${QUIZ_BUTTON_GOLD_HOVER};
+  }
 `;
 
 // Level 3's per-attribute chip picker (a wrapped row of inline pills, not stacked full-width -
@@ -138,8 +217,34 @@ const FilterToggleButton = styled(Button)`
 // Bootstrap variant - shorter still than the already-under-target default. min-height alone
 // (not ThumbButton's display/alignment) since these need to stay inline-sized to their own
 // label, wrapping naturally in the row.
+//
+// Gold treatment - these toggle between two variants to show selection state (`outline-
+// secondary` untouched, `primary` once tapped - see the `state === "positive" ? "primary" :
+// "outline-secondary"` call site below), so the gold swap reuses that same split rather than a
+// hover-only one: `.btn-primary` (selected) is PERSISTENTLY filled gold/navy-text - the same
+// pairing ThumbButton only shows transiently on hover - so a selected chip stays visibly
+// "pressed" rather than reverting to plain outline the instant the pointer leaves it.
 const ThumbChip = styled(Button)`
   min-height: 44px;
+
+  &&.btn-outline-secondary {
+    color: ${QUIZ_BUTTON_GOLD};
+    border-color: ${QUIZ_BUTTON_GOLD};
+    background-color: transparent;
+  }
+
+  &&.btn-outline-secondary:hover,
+  &&.btn-outline-secondary:focus {
+    color: ${QUIZ_BUTTON_NAVY};
+    background-color: ${QUIZ_BUTTON_GOLD};
+    border-color: ${QUIZ_BUTTON_GOLD};
+  }
+
+  &&.btn-primary {
+    color: ${QUIZ_BUTTON_NAVY};
+    background-color: ${QUIZ_BUTTON_GOLD};
+    border-color: ${QUIZ_BUTTON_GOLD};
+  }
 `;
 
 // ---------------------------------------------------------------------------------------

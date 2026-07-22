@@ -32,14 +32,21 @@ here's what it's asking and why your input helps everyone's search
 results.
 
 The vote queue at **What's That Card?** presents each question as a
-quiz-reveal hero: the card image in question sits in its own column on
-a deep-blue hero field (with an animated starburst behind it, visible
-at every screen size) alongside a title that pops into place word by
-word every time a new card is shown, while the actual question — the
-candidate printings or attribute chips to pick from — sits in a
-scrolling panel beside it. On a wide screen that question panel scrolls
-on its own while the card stays put, so you never lose sight of what
-you're being asked about.
+quiz-reveal hero: the card image in question starts covered by a blue
+placeholder with a "?" on it, fading away to reveal the real art once
+it's loaded, and sits in its own column on a deep-blue hero field (with
+an animated starburst behind it, visible at every screen size) alongside
+a title that pops into place word by word every time a new card is
+shown, while the actual question — the candidate printings or attribute
+chips to pick from (each shown as its own "?"-marked placeholder until
+its art loads too) — sits in a scrolling panel beside it. On a wide
+screen that question panel scrolls on its own while the card stays put,
+so you never lose sight of what you're being asked about. Every action
+button on this page ("Filter by attribute", "None of these", the
+candidate-grid answers, and the rest of the quiz's yes/no/skip controls)
+uses a gold outline that fills solid gold when you interact with it,
+chosen for readability against the page's own dark-blue background
+rather than the site's usual orange.
 
 On a phone, the layout instead stacks vertically: the card renders
 above the question, sized to leave room for everything below it, with

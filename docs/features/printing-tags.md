@@ -928,6 +928,79 @@ printings, artists, tags, and moderation from one screen.
         fully above the candidate row's own top edge; the question badge/
         prompt render entirely below the card's own bottom edge (never
         occluded by it or its starburst).
+    - **Owner review round 2 (live device follow-up on the block above)**:
+      three asks — a "?" motif on every blue "unrevealed" card, fading
+      with the blue as it reveals; dropping the narrow-width standalone
+      "?" if one exists distinct from the wordmark's own glyph; and a
+      golden treatment for every quiz action button, since Bootstrap's
+      per-variant colours (grey/red/green/blue) were designed against the
+      site's neutral background, not this page's own deep-blue field.
+      - **"?" motif**: already implemented going into this round —
+        `RevealOverlay` (`cardPanel.tsx`) has always rendered `?` as its
+        own child text, so the blue field and the "?" fade together via
+        the SAME parent `opacity` animation (`revealAnimation`); the
+        candidate grid's `ArtPlaceholder` "mystery card" tiles carry the
+        same glyph via a CSS `::before { content: "?" }`, at every
+        viewport. Confirmed via real (non-empty-src) Playwright
+        measurements at both Pixel 7 (412×839) and desktop (1280×900) —
+        an earlier apparent desktop "collapse" (the reveal overlay
+        rendering as a thin, mostly-clipped sliver) turned out to be an
+        artifact of a manually-started dev server missing the
+        `NEXT_PUBLIC_IMAGE_WORKER_URL` env var used by Playwright's own
+        `webServer` config, not a real product bug — reproducing it
+        against a correctly-configured server showed a full-height,
+        fully-legible "?" at both viewports. New regression coverage
+        (`QuestionFeedResponsive.spec.ts`'s "question-mark motif + golden
+        action buttons" describe block): the overlay's own text content is
+        asserted at both viewports, and `ArtPlaceholder`'s pseudo-element
+        `content` is asserted directly (Playwright's own mechanism for a
+        CSS-generated-content assertion, since it isn't real DOM text);
+        `QuestionFeed.test.tsx`'s shared `revealCard()` jest helper also
+        asserts the overlay's text content before dispatching the
+        animation-end event every existing jest test already relies on.
+      - **Standalone "?" (mobile)**: NOT removed. The narrow-width
+        wordmark (`whatsthat-composite.svg`, see the "portrait static top
+        block" bullet above) bakes its own "?" mascot glyph directly into
+        the same flattened image as the "WHAT'S THAT CARD?" text (its own
+        path data is a scaled/repositioned copy of `whatsthat-mark.svg`'s
+        "?"-only mark, confirmed by inspecting both SVGs directly) — there
+        is no separate, distinct "?" DOM element at narrow widths to drop
+        without altering the wordmark image itself. This is the exact
+        ambiguity the task's own fallback anticipated, so it's left
+        untouched here and reported instead (see this PR's own body).
+      - **Golden action buttons**: `ThumbButton` (Level 1's Yes/Not sure/
+        No/Skip, Level 2's None of these/Art matches/Skip, Level 3's
+        Confirm & continue/Skip), `FilterToggleButton` ("Filter by
+        attribute"), and `ThumbChip` (Level 3's attribute picker) — all
+        three styled components local to `QuestionFeed.tsx` — now share
+        one gold treatment (`#f8d42b`, `whatsthat-mark.svg`'s own top
+        gradient stop; `#124063`, that same SVG's dark-navy stroke)
+        instead of each Bootstrap variant's own semantic colour
+        (success/outline-danger/outline-secondary/link/primary). Measured
+        contrast (WCAG's standard relative-luminance formula): the
+        pre-existing default grey `outline-secondary` text/border against
+        the field's deep-blue stop (`#123a6b`) was ~2.4:1, under AA's
+        4.5:1 text floor (and its 3:1 UI-component floor) — the "hard to
+        read" the owner reported live; gold text against that same stop is
+        7.84:1, against the field's lighter highlight stop (`#1d4d82`) is
+        5.93:1, and dark-navy text on filled gold is 7.45:1 — all past AA,
+        most past AAA. Bordered/filled variants (`ThumbButton`'s non-
+        `.btn-link` cases) get gold outline/text at rest, filling solid
+        gold with dark-navy text on hover/focus/press; `.btn-link` (the
+        Skip buttons, `FilterToggleButton`) gets a colour-only swap (no
+        border/fill added, preserving the existing plain-text-link look);
+        `ThumbChip` reuses its own existing selected/unselected variant
+        split (`primary`/`outline-secondary`) to make a selected chip
+        PERSISTENTLY filled gold rather than only on hover. `&&` (Emotion's
+        specificity-doubling trick) on every override, so it reliably wins
+        over Bootstrap's own single-class variant rules regardless of CSS
+        injection order. Page-scoped: only these three styled components
+        are touched; `ChipCard.tsx` (the no-match-reason chips, shared with
+        `ReportCardPanel.tsx` on a different page) is deliberately left
+        alone, and the sitewide orange theme is untouched. New regression
+        coverage (same describe block as above): computed `color` on the
+        filter toggle and "None of these"; computed `color`/
+        `background-color` on a selected vs. unselected Level 3 chip.
     - **Fix round (PR #305/#308 owner review)**: the original
       `HeroGrid { max-height: calc(100dvh - NavbarHeight - 2rem) }`
       passed CI but let the whole page scroll live — the flat `2rem`

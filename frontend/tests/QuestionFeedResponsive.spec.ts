@@ -13,6 +13,7 @@ import {
   defaultHandlers,
   questionFeedConfirmSuggestion,
   questionFeedIdentifyPrinting,
+  submitPrintingTagResolvesToPrintingCandidate2,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
@@ -699,5 +700,179 @@ test.describe("question feed - portrait static top block (owner live-review)", (
     // ran behind the reference card - see this task's own report for the reported bug).
     expect(badgeBox!.y).toBeGreaterThanOrEqual(cardBox!.y + cardBox!.height);
     expect(filterToggleBox!.y).toBeGreaterThanOrEqual(badgeBox!.y);
+  });
+});
+
+// Owner review round 2 (live device follow-up on top of the portrait static top block above) -
+// three asks: (1) a question-mark motif on every blue "unrevealed" card, fading away together
+// with the blue as the card reveals, at every viewport; (2) drop the narrow-width standalone "?"
+// if one exists distinct from the wordmark's own glyph; (3) recolour every quiz action button
+// gold, since Bootstrap's per-variant colours (grey/red/green/blue) were designed against the
+// site's neutral background, not this page's own deep-blue starburst field, and measured out at
+// ~2.4:1 contrast for the worst offender - see cardPanel.tsx/QuestionFeed.tsx's own comments.
+//
+// Only (1) and (3) get new assertions here - (1) turned out to already be implemented (the
+// hero reveal overlay already rendered "?" as its own child, fading via the shared parent
+// opacity animation - see RevealOverlay's own comment in cardPanel.tsx), so these are a
+// regression guard, not new functionality. (2) has no code change: the narrow-width wordmark
+// (`whatsthat-composite.svg`) bakes its own "?" mascot glyph directly into the same flattened
+// image as the "WHAT'S THAT CARD?" text - there is no separate, distinct "?" DOM element at
+// narrow widths to remove without altering the wordmark itself (see this PR's own body for the
+// full ambiguity writeup) - so it's deliberately left untouched here, matching
+// WhatsThatWordsAnimation.spec.ts's existing narrow/wide wordmark visibility coverage.
+test.describe("question feed - question-mark motif + golden action buttons (owner review round 2)", () => {
+  // rgb() equivalents of QuestionFeed.tsx's QUIZ_BUTTON_GOLD/QUIZ_BUTTON_NAVY constants -
+  // getComputedStyle always resolves to this form regardless of how the source CSS wrote the
+  // colour, so asserting against it directly (rather than re-parsing to hex) is both simpler
+  // and exactly what a real browser would report.
+  const QUIZ_BUTTON_GOLD_RGB = "rgb(248, 212, 43)"; // #f8d42b
+  const QUIZ_BUTTON_NAVY_RGB = "rgb(18, 64, 99)"; // #124063
+
+  // A real (non-empty-src) card image resolves near-instantly against this suite's local mock
+  // server - fast enough that a plain `loadPageWithDefaultBackend` call routinely already has
+  // `revealed: true` (overlay unmounted) by the time an assertion runs, since RevealOverlay's
+  // own 0.8s reveal fade has nothing slower to wait on. A deliberate, generous route delay holds
+  // the pre-reveal moment open long enough to assert against reliably - mirrors the "portrait
+  // static top block" describe block's own `loadWithRealImage` helper above (own comment there
+  // explains why a genuinely non-empty src is needed at all), just with an added delay since that
+  // helper's own callers only care about the SETTLED state, not the transient pre-reveal one.
+  async function loadWithDelayedImage(
+    page: import("@playwright/test").Page,
+    network: NetworkFixture
+  ) {
+    const testCard = {
+      ...cardDocument1,
+      mediumThumbnailUrl: "non-empty-sentinel-see-comment-above",
+      smallThumbnailUrl: "non-empty-sentinel-see-comment-above",
+    };
+    process.env.NEXT_PUBLIC_IMAGE_WORKER_URL = "https://cdn.proxyprints.ca";
+    const cdnImageURL = getWorkerImageURL(testCard, "small")!;
+    const cdnImagePattern = new RegExp(
+      `^${cdnImageURL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
+    );
+    await page.route(cdnImagePattern, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await route.fulfill({ path: "public/whatsthat-icon-192.png" });
+    });
+
+    network.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "identify_printing",
+              card: testCard,
+              candidates: [printingCandidate1, printingCandidate2],
+              tagConfidence: {},
+            },
+            remainingEstimate: {
+              total: 3,
+              confirmable: 0,
+              contested: 0,
+              fresh: 3,
+            },
+          },
+          { status: 200 }
+        )
+      ),
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+    await expect(page.getByAltText(testCard.name)).toBeVisible();
+  }
+
+  for (const [label, viewport] of [
+    ["mobile", PIXEL_7_VIEWPORT],
+    ["desktop", { width: 1280, height: 900 }],
+  ] as const) {
+    test(`the hero reveal overlay renders a '?' motif (not a bare blue box) before the card reveals - ${label}`, async ({
+      page,
+      network,
+    }) => {
+      await page.setViewportSize(viewport);
+      await loadWithDelayedImage(page, network);
+      const overlay = page.getByTestId("question-feed-reveal-overlay");
+      await expect(overlay).toBeVisible();
+      await expect(overlay).toHaveText("?");
+    });
+  }
+
+  test("the candidate grid's 'mystery card' placeholders also carry the '?' motif", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    // ArtPlaceholder's "?" is a CSS ::before pseudo-element, not real DOM text - not directly
+    // queryable via getByText/toHaveText, so this reads the pseudo-element's own computed
+    // `content` value instead (the standard way to assert generated content in Playwright).
+    // ArtPlaceholder is CandidateButton's own immediate child div (JSX: <CandidateButton><
+    // ArtPlaceholder>...) - `data-card-identifier` lives on CandidateButton itself (a <button>),
+    // so its first `div` descendant is always ArtPlaceholder.
+    const placeholderDiv = page
+      .locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
+      .locator("div")
+      .first();
+    const pseudoContent = await placeholderDiv.evaluate(
+      (el) => window.getComputedStyle(el, "::before").content
+    );
+    expect(pseudoContent).toBe('"?"');
+  });
+
+  test("every quiz action button (Filter toggle / None of these / Art matches / Skip) uses the shared gold treatment, not Bootstrap's default variant colours", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    for (const testId of [
+      "question-feed-filter-toggle",
+      "question-feed-no-match",
+    ]) {
+      const color = await page
+        .getByTestId(testId)
+        .evaluate((el) => window.getComputedStyle(el).color);
+      expect(color).toBe(QUIZ_BUTTON_GOLD_RGB);
+    }
+  });
+
+  test("a selected Level 3 attribute chip stays filled gold (not Bootstrap's default blue 'primary'), while an unselected chip stays gold-outlined", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedIdentifyPrinting,
+      submitPrintingTagResolvesToPrintingCandidate2,
+      ...defaultHandlers
+    );
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+    await page
+      .locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
+      .click();
+    await page.getByTestId("question-feed-level3").waitFor();
+
+    const selectedChip = page.getByTestId(
+      "question-feed-level3-chip-White Border"
+    );
+    await selectedChip.click();
+    const selectedStyles = await selectedChip.evaluate((el) => {
+      const s = window.getComputedStyle(el);
+      return { color: s.color, backgroundColor: s.backgroundColor };
+    });
+    expect(selectedStyles.backgroundColor).toBe(QUIZ_BUTTON_GOLD_RGB);
+    expect(selectedStyles.color).toBe(QUIZ_BUTTON_NAVY_RGB);
+
+    const unselectedChip = page.getByTestId(
+      "question-feed-level3-chip-Black Border"
+    );
+    const unselectedColor = await unselectedChip.evaluate(
+      (el) => window.getComputedStyle(el).color
+    );
+    expect(unselectedColor).toBe(QUIZ_BUTTON_GOLD_RGB);
   });
 });
