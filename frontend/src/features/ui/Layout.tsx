@@ -5,13 +5,14 @@ import { PropsWithChildren } from "react";
 import Container from "react-bootstrap/Container";
 import { Provider } from "react-redux";
 
-import { ContentMaxWidth, NavbarHeight } from "@/common/constants";
+import { ContentMaxWidth } from "@/common/constants";
 import {
   getLocalStorageFavorites,
   getLocalStorageManualOverrides,
 } from "@/common/cookies";
 import { useAppDispatch } from "@/common/types";
 import { useChunkErrorRecovery } from "@/common/useChunkErrorRecovery";
+import { useNavbarHeight } from "@/common/useNavbarHeight";
 import { useBackendSetter } from "@/features/backend/useBackendSetter";
 import { ClientSearchContextProvider } from "@/features/clientSearch/clientSearchContext";
 import { clientSearchService } from "@/features/clientSearch/clientSearchService";
@@ -34,15 +35,34 @@ const OverscrollProvider = styled(Provider)`
   overflow-y: hidden; // https://stackoverflow.com/a/69589919/13021511
 `;
 
-const ContentContainer = styled(Container)`
+// `top`/`height` are driven by useNavbarHeight() (issue #250) rather than the static
+// NavbarHeight constant - a real, measured value rather than a guess that regularly
+// undercounts the navbar's actual rendered height (confirmed 64-88px vs the constant's 50px
+// once enough nav links are visible/wrapped - see docs/troubleshooting.md). Getting this wrong
+// isn't just a cosmetic few-px overlap: it's this container's own top-of-content offset, so an
+// undercount hides that many pixels of every page's own top content behind the real fixed
+// navbar (confirmed live on both /whatsthat's hero title and /display's toolbar - see
+// docs/features/printing-tags.md's questionFeed section). Emotion's `css`-prop-style dynamic
+// interpolation (a function of props) re-renders this rule whenever the measured height
+// changes, same as any other prop-driven styled-component.
+const ContentContainer = styled(Container, {
+  // Container is react-bootstrap's own component, not a native element - emotion only auto-
+  // filters non-DOM props for native `styled.div`-style tags (via @emotion/is-prop-valid), so a
+  // custom prop on a wrapped third-party component gets forwarded all the way down to the
+  // underlying <div> unless told not to (the same "React does not recognize the X prop" fix
+  // MaxWidthContainer below already needs for its own `fullWidth`).
+  shouldForwardProp: (prop) => prop !== "$navbarHeight",
+})<{ $navbarHeight: number }>`
   overflow-y: scroll;
   overflow-x: hidden;
-  top: ${NavbarHeight}px;
+  top: ${(props) => props.$navbarHeight}px;
   position: fixed;
   height: calc(
-    100vh - ${NavbarHeight}px
+    100vh - ${(props) => props.$navbarHeight}px
   ); // for compatibility with older browsers
-  height: calc(100dvh - ${NavbarHeight}px); // handles the ios address bar
+  height: calc(
+    100dvh - ${(props) => props.$navbarHeight}px
+  ); // handles the ios address bar
 `;
 
 interface MaxWidthContainerProps {
@@ -77,8 +97,14 @@ export function ProjectContainer({
   fullWidth = false,
   children,
 }: PropsWithChildren<ProjectContainerProps>) {
+  const navbarHeight = useNavbarHeight();
   return (
-    <ContentContainer fluid className={`g-${gutter}`}>
+    <ContentContainer
+      fluid
+      className={`g-${gutter}`}
+      $navbarHeight={navbarHeight}
+      data-testid="content-container"
+    >
       <MaxWidthContainer
         fluid={fullWidth}
         fullWidth={fullWidth}

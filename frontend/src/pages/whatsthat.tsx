@@ -5,6 +5,7 @@ import Nav from "react-bootstrap/Nav";
 import Tab from "react-bootstrap/Tab";
 
 import { ContentMaxWidth, ProjectName } from "@/common/constants";
+import { useNavbarHeight } from "@/common/useNavbarHeight";
 import { NoBackendDefault } from "@/components/NoBackendDefault";
 import { ModerationTab } from "@/features/moderation/ModerationTab";
 import { QuestionFeed } from "@/features/questionFeed/QuestionFeed";
@@ -32,6 +33,31 @@ export const HERO_FIELD_BLUE_DEEP = "#123a6b";
 // trick, with StarburstContent re-establishing the normal centered reading width for the
 // actual text/controls inside it. Kept off the Footer below, which should still look like the
 // rest of the site's chrome.
+// Fix round (PR #305/#308 owner review): PrintingQueueOrDefault below wraps StarburstBackground
+// + Footer in this flex column instead of two plain siblings - QuestionFeed.tsx's own
+// HERO_MAX_HEIGHT used to reserve `100dvh - navbar - 2rem` for the hero grid alone, which
+// ignored BOTH this element's own padding/margin (4.5rem total, not the flat 2rem it assumed)
+// AND Footer's entire height below it - so the true total content height regularly exceeded
+// ContentContainer's (Layout.tsx) available height even when the navbar-height math was
+// otherwise exactly right, forcing ContentContainer's own scrollbar to activate and the "hero
+// stays pinned" invariant (owner addendum, wtc-redesign-spec.md) to fail live despite passing
+// CI (confirmed via a real wheel-scroll + boundingBox() diff - a scrollTop-only assertion on
+// the inner questions box never exercises this outer container at all). Flex does the
+// arithmetic instead of a hand-maintained calc: Footer sizes to its own natural content height
+// as always, and StarburstBackground (flex: 1 1 auto; min-height: 0 below) claims exactly
+// whatever's left, so it structurally can't drift out of sync with Footer's real height again.
+// Only height-constrained at >= md (`useNavbarHeight` below, not the static NavbarHeight
+// constant - see that hook's own comment for why) - below md the page still scrolls normally
+// end to end, matching HeroCardArea's own mobile sticky-bar design intent.
+const PageColumn = styled.div<{ $navbarHeight: number }>`
+  display: flex;
+  flex-direction: column;
+
+  @media (min-width: 768px) {
+    height: calc(100dvh - ${(props) => props.$navbarHeight}px);
+  }
+`;
+
 const StarburstBackground = styled.div`
   position: relative;
   /* Deliberately clip-path, not overflow: hidden - QuestionFeed.tsx's mobile HeroCardArea
@@ -41,20 +67,29 @@ const StarburstBackground = styled.div`
      element's nearest scrolling ancestor resolves to). clip-path clips the same way visually
      without establishing a scroll container, so it doesn't have that side effect. */
   clip-path: inset(0);
-  /* Deep-blue radial vignette (wtc-redesign-spec.md W6, issue #305) - retires the page's old
-     loud #ff4719 orange full-bleed field, reconciling with the new sitewide orange accent
-     (#302's retheme) rather than clashing with it. Sells the "blue and white starbursts"
-     hero (#305) and matches the quiz-reveal reference. */
+  /* Deep-blue field (wtc-redesign-spec.md W6, issue #305) - retires the page's old loud
+     #ff4719 orange full-bleed field, reconciling with the new sitewide orange accent (#302's
+     retheme) rather than clashing with it. Sells the "blue and white starbursts" hero (#305)
+     and matches the quiz-reveal reference.
+     Fix round (PR #305/#308 owner review, "the blue fade feels unnatural") - the original
+     three-stop radial (a lighter highlight fading through the deep blue down to a much darker
+     near-black edge, 78% away) read as a much stronger vignette than intended. Flattened to
+     a small, subtle highlight around the starburst's own center that settles into a flat
+     deep blue well before the edges (no third, darker stop at all - the
+     gradient simply has nothing left to fade toward past its one real transition), so the
+     field reads as near-flat deep blue rather than a spotlight/vignette effect. The starburst
+     itself (BurstSvg/HoverBurst, unchanged) is still blue/white as approved. */
   background: radial-gradient(
-    120% 130% at 30% 42%,
-    #1a4f8a 0%,
-    ${HERO_FIELD_BLUE_DEEP} 46%,
-    #0f2537 78%
+    120% 120% at 30% 40%,
+    #1d4d82 0%,
+    ${HERO_FIELD_BLUE_DEEP} 55%
   );
   width: 100vw;
   margin-left: calc(50% - 50vw);
   padding: 1.5rem 0 2rem;
   margin-bottom: 1rem;
+  flex: 1 1 auto;
+  min-height: 0;
 
   /* The questions region simply inherits the sitewide theme now (wtc-redesign-spec.md W7) -
      the ACCENT_NAVY override this page used to carry existed only because buttons/links/pills
@@ -66,12 +101,26 @@ const StarburstBackground = styled.div`
 
 // Sits above CardPanel's own local stacking context (see cardPanel.tsx) so the burst bleeding
 // out from behind the card doesn't cover the words/questions columns rendered alongside it.
+//
+// `display: flex; flex-direction: column; height: 100%` (PageColumn/StarburstBackground fix
+// round above) hands QuestionFeed.tsx's own root a real, resolvable height to flex against -
+// QuestionFeed.tsx's own FeedRoot opts into `flex: 1; min-height: 0` to consume it (replacing
+// HeroGrid's old NavbarHeight-derived `max-height` calc), so the hero's own height ultimately
+// traces back to PageColumn's real measured navbar height with no separate guess of its own.
+// Safe for the moderator Tab.Container branch too (see PrintingQueueOrDefault below) - that
+// branch simply doesn't opt into `flex: 1`, so it keeps its previous natural/auto height,
+// unchanged. Below md, PageColumn itself has no explicit height (see its own comment), so this
+// `height: 100%` resolves against nothing and is silently inert - today's mobile behaviour
+// (whole page scrolls normally) is unaffected.
 const StarburstContent = styled.div`
   position: relative;
   z-index: 1;
   max-width: ${ContentMaxWidth}px;
   margin: 0 auto;
   padding: 0 1.5rem;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 `;
 
 // The wordmark's sliced-word teaser (WhatsThatWords, rendered inside QuestionFeed.tsx's hero
@@ -97,9 +146,10 @@ function PrintingQueueOrDefault() {
   // regardless (see docs/features/moderation.md)
   const whoami = useGetWhoamiQuery();
   const isModerator = whoami.data?.moderator === true;
+  const navbarHeight = useNavbarHeight();
 
   return remoteBackendConfigured ? (
-    <>
+    <PageColumn $navbarHeight={navbarHeight}>
       <StarburstBackground>
         <StarburstContent>
           <VisuallyHiddenHeading>What&apos;s That Card?</VisuallyHiddenHeading>
@@ -137,7 +187,7 @@ function PrintingQueueOrDefault() {
         </StarburstContent>
       </StarburstBackground>
       <Footer />
-    </>
+    </PageColumn>
   ) : (
     <NoBackendDefault requirement="remote" />
   );

@@ -473,9 +473,9 @@ describe("QuestionFeed", () => {
     renderFeed();
     await revealCard();
 
-    const headline = await screen.findByTestId("question-feed-headline");
-    expect(headline.textContent).toBe("Still need help with: 3 cards");
-    expect(headline.textContent).not.toMatch(/undefined/);
+    const stats = await screen.findByTestId("question-feed-stats");
+    expect(stats.textContent).toBe("0 ready · 3 in catalog · 0 contested");
+    expect(stats.textContent).not.toMatch(/undefined/);
   });
 
   it("shows the rate-limit banner (not a toast) when a printing vote is rejected with 429", async () => {

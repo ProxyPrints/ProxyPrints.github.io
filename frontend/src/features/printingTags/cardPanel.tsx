@@ -319,7 +319,17 @@ export const CandidateButton = styled(Button)`
 // cheap. Centred on and scaled up from the button's own box, the same way the page-level
 // burst is centred on the subject card. Faded/scaled in via CSS on CandidateButton's
 // `:hover` above rather than JS state, so nothing needs to track which card is hovered.
-export const HoverBurst = styled.svg`
+// `$edge` (fix round, PR #305/#308) - the candidate grid's scroll box (HeroQuestionsArea,
+// QuestionFeed.tsx) genuinely clips this burst's full 331.2% bloom for the leftmost/rightmost
+// column in every row (confirmed via a real boundingBox()-vs-container overlap check, not just
+// a visual read): even with that box's own added bleed room (2.5rem each side), a burst this
+// oversized still overhangs past it for an edge column specifically (a middle column's bloom
+// safely overlaps its neighbours instead, which is the existing, accepted "on-aesthetic bleed"
+// look). Shrinking ONLY the edge columns' burst - not every candidate's - keeps the approved,
+// full-size glow everywhere it geometrically fits, trading a uniformly smaller effect
+// (which would look identical everywhere but weaker) for a fully unclipped one that's only
+// slightly reduced right at the two edges where there's genuinely no more room to give it.
+export const HoverBurst = styled.svg<{ $edge?: boolean }>`
   position: absolute;
   top: 50%;
   left: 50%;
@@ -330,4 +340,8 @@ export const HoverBurst = styled.svg`
   transition: opacity 0.18s ease-out, transform 0.18s ease-out;
   pointer-events: none;
   z-index: -1;
+
+  @media (min-width: 768px) {
+    width: ${(props) => (props.$edge ? "150%" : "331.2%")};
+  }
 `;
