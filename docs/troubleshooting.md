@@ -1257,23 +1257,46 @@ even though the branch actually being merged into isn't master.
 
 **Cause**: `guard_master.py`'s `git merge`/`git push` rules judged branch
 state via `current_branch(cwd)`, where `cwd` is the session's registered
-working directory — not wherever the command's own `cd <path> &&` prefix
-(or a `git -C <path>` flag) actually pointed git at. A session whose
-registered cwd happens to be a master checkout gets every `cd <other-dir> && git merge ...` it runs judged against master, regardless of
-what's actually checked out at `<other-dir>`. Confirmed in production
-2026-07-22: this wrongly blocked legitimate feature-branch conflict
-resolution.
+working directory — not wherever the command's own `cd <path> &&` chain
+actually pointed git at. A session whose registered cwd happens to be a
+master checkout gets every `cd <other-dir> && git merge ...` it runs
+judged against master, regardless of what's actually checked out at
+`<other-dir>`. Confirmed in production 2026-07-22: this wrongly blocked
+legitimate feature-branch conflict resolution.
 
-**Fix** (2026-07-22): added `effective_dir(command, session_cwd)` — resolves
-the directory a `cd <path> &&`-prefixed or `git -C <path>`-scoped command
-actually runs git in, when that path exists on disk; falls back to
-`session_cwd` (today's behavior) otherwise, so a resolution failure never
-becomes more permissive than before. Used in both the `git merge` and `git push` worktree rules' `current_branch(...) == "master"` checks. Unchanged:
-the unconditional `gh pr merge` denial, the `--ff-only` exemption, all deny
-messages, `log_stub`'s behavior, and the push rule's `in_worker_worktree`
-gate (still computed from raw session cwd, since it identifies which
-_session_ is running, not which directory a given command targets). See
-`.claude/hooks/test_guard_master.py` for the regression cases.
+**Fix** (2026-07-22): added `effective_dir(command, session_cwd, target_re)`
+— splits the command into simple-command segments on `;`, `&`, `|`, `&&`,
+and `||`, locates the segment matching the merge/push the calling rule
+already detected, then walks backward from it collecting only the
+segments joined to it by an unbroken chain of `&&` (a `cd` behind a `;`,
+single `&`, `|`, or `||` boundary is a different shell statement and is
+deliberately not followed — real `&&` semantics mean only a genuinely
+chained `cd` can be trusted to have actually run before the merge/push
+did). Processes that chain applying each whole-segment `cd <path>` in
+turn; falls back to `session_cwd` (today's pre-fix behavior) whenever
+there's no leading `cd` chain, or any `cd` in it targets a path that
+isn't a real directory — a resolution failure is never more permissive
+than session-cwd-only judging. Used in both the `git merge` and `git push` worktree rules' `current_branch(...) == "master"` checks.
+Unchanged: the unconditional `gh pr merge` denial, the `--ff-only`
+exemption, all deny messages, `log_stub`'s behavior, and the push rule's
+`in_worker_worktree` gate (still computed from raw session cwd, since it
+identifies which _session_ is running, not which directory a given
+command targets). See `.claude/hooks/test_guard_master.py` for the
+regression cases.
+
+**Same-day tightening**: the first cut of this fix also resolved a bare
+`git -C <path>` anywhere in the command via an unanchored scan. That
+turned out to be a false-ALLOW risk in the opposite, more dangerous
+direction: an earlier, unrelated `git -C /some/repo status && git merge origin/master` could get its unrelated `-C` path substituted in for the
+real merge's own context, wrongly ALLOWing a genuine merge-into-master.
+Confirmed by direct trace, then closed by dropping `git -C` support
+entirely rather than anchoring it — `effective_dir()` now only follows
+`cd` chains. This reopens a narrower, safe gap: a bare `git -C <path> merge/push ...` command isn't recognized as a merge/push attempt at all
+today, since the calling rules' own detection regexes require "git" and
+"merge"/"push" adjacent with no intervening flag — accepted, since
+under-triggering only ever produces an unnecessary DENY, never a wrong
+ALLOW, and `cd`-chains are the pattern that actually occurred in
+production.
 
 ## `DisplayPage.spec.ts`'s "floating sheet-position pill updates live while scrolling at phone width (D17)" fails intermittently with "2/3" instead of "3/3"
 

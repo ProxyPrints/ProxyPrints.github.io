@@ -10,18 +10,29 @@ only from a worker worktree checkout (cwd under .claude/worktrees/).
 production incident where a `cd <feature-worktree> && git merge
 origin/master` run from a session whose registered cwd was a master
 checkout got wrongly denied (see docs/troubleshooting.md). Two layers:
-  - end-to-end `run_hook()` cases exercising the `cd <path> &&` form
-    through the actual `git merge`/`git push` rules (the form those
-    rules' own outer detection regexes can actually match).
+  - end-to-end `run_hook()` cases exercising the `cd <path> &&` chain
+    through the actual `git merge`/`git push` rules.
   - direct unit cases against `effective_dir()` itself (via
-    `load_hook_module()`), covering the `git -C <path>` form too --
-    note that form is *not* separately exercised end-to-end here,
-    because the outer `git\\s+merge`/`git\\s+push` detection regexes
-    (unchanged by this fix) require "git" and "merge"/"push" adjacent
-    with no intervening flag, so a bare `git -C <path> merge ...`
-    command isn't recognized as a merge/push attempt at all today --
-    a pre-existing scope boundary of those regexes, not something this
-    fix introduces or resolves.
+    `load_hook_module()`), covering multi-step `&&` chains, quoted
+    paths, and chain-boundary behavior (`;`/`&`/`|`/`||` correctly
+    NOT carrying a `cd` across).
+
+Same-day follow-up (still 2026-07-22): the first cut of this fix also
+added `git -C <path>` support to `effective_dir()`, using an unanchored
+scan over the whole command. That was flagged as a false-ALLOW risk --
+an earlier, unrelated `git -C <other-path>` in a compound command could
+hijack resolution for a later, unrelated `git merge`/`git push` in the
+same line -- and confirmed by direct trace. Per the orchestrator's
+tightening request, `git -C` support was dropped entirely rather than
+anchored: `effective_dir()` now only follows a `cd <path>` chain
+connected to the merge/push by `&&` (never `git -C`, and never a `cd`
+behind a `;`/single-`&`/`|`/`||` boundary). This keeps the fix's
+under-triggering gap (a bare `git -C <path> merge/push ...` command
+isn't recognized as a merge/push attempt at all today, since the
+calling rules' own detection regexes require "git" and "merge"/"push"
+adjacent with no intervening flag) -- accepted as safe, since
+under-triggering only ever produces an unnecessary DENY, never a wrong
+ALLOW.
 
 On the "does this survive bypassPermissions / --dangerously-skip-permissions"
 requirement: Claude Code's own hook contract guarantees a PreToolUse
@@ -212,6 +223,26 @@ def main():
                 main_master,
                 False,
             ),
+            # Orchestrator-requested regression cases (2026-07-22 tightening,
+            # closing the git -C false-ALLOW gap):
+            (
+                "git -C <unrelated> status && git merge x, session cwd on master -> DENY "
+                "(git -C support dropped entirely -- an unrelated earlier `-C` must NOT hijack "
+                "resolution for the real merge that follows)",
+                "Bash",
+                f"git -C {worker_feature} status && git merge origin/master",
+                main_master,
+                True,
+            ),
+            (
+                "cd <feature worktree> && git fetch && git merge origin/master, session cwd on master -> "
+                "ALLOW (a cd earlier in the SAME && chain, even with an intervening non-cd step, still "
+                "carries forward to the merge)",
+                "Bash",
+                f"cd {worker_feature} && git fetch && git merge origin/master",
+                main_master,
+                False,
+            ),
         ]
 
         failures = 0
@@ -225,80 +256,102 @@ def main():
                 failures += 1
                 print(f"         expected deny={expect_deny}, got deny={denied}, stderr={stderr!r}")
 
-        # Direct unit coverage for effective_dir(), including the `git -C
-        # <path>` form the end-to-end cases above can't reach through the
-        # outer merge/push detection regexes (see module docstring).
+        # Direct unit coverage for effective_dir(), covering the cd-chain
+        # walk and its boundaries (see module docstring / effective_dir()'s
+        # own docstring for what changed 2026-07-22 and why).
         gm = load_hook_module()
+        unrelated_repo = make_repo(root, "unrelated-repo", "some-other-branch")
         effective_dir_cases = [
-            # (label, command, session_cwd, expected_resolved_dir)
+            # (label, command, session_cwd, target_re, expected_resolved_dir)
             (
-                "cd <path> && ... resolves to <path> when it's a real dir",
+                "cd <path> && git merge ... resolves to <path> when it's a real dir",
                 f"cd {worker_feature} && git merge origin/master",
                 main_master,
+                gm.MERGE_LEAD_RE,
                 worker_feature,
             ),
             (
                 "quoted cd path resolves the same as bare",
                 f'cd "{worker_feature}" && git merge origin/master',
                 main_master,
+                gm.MERGE_LEAD_RE,
                 worker_feature,
             ),
             (
-                "no cd/-C redirect falls back to session_cwd",
+                "no cd redirect falls back to session_cwd",
                 "git merge origin/master",
                 main_master,
+                gm.MERGE_LEAD_RE,
                 main_master,
             ),
             (
                 "cd to a nonexistent path fails closed to session_cwd",
                 "cd /nonexistent/path/does/not/exist && git merge origin/master",
                 main_master,
+                gm.MERGE_LEAD_RE,
                 main_master,
             ),
             (
-                "git -C <path> resolves to <path> when it's a real dir",
-                f"git -C {worker_feature} merge origin/master",
+                "cd && <non-cd step> && git merge -- the cd still carries through an "
+                "intervening non-cd step in the same && chain",
+                f"cd {worker_feature} && git fetch && git merge origin/master",
                 main_master,
+                gm.MERGE_LEAD_RE,
                 worker_feature,
             ),
             (
-                "git -C <nonexistent path> fails closed to session_cwd",
-                "git -C /nonexistent/path/does/not/exist merge origin/master",
+                "cd <path>; git merge -- a cd behind a ';' is a different statement, " "must NOT carry forward",
+                f"cd {worker_feature}; git merge origin/master",
                 main_master,
+                gm.MERGE_LEAD_RE,
                 main_master,
             ),
             (
-                "git -C takes precedence over a preceding cd",
-                f"cd {main_master} && git -C {worker_feature} merge origin/master",
+                "cd <path> & git merge -- a cd behind a single '&' (backgrounding) is a "
+                "different statement, must NOT carry forward",
+                f"cd {worker_feature} & git merge origin/master",
+                main_master,
+                gm.MERGE_LEAD_RE,
+                main_master,
+            ),
+            (
+                "cd <path> || git merge -- a cd behind '||' is a different statement, " "must NOT carry forward",
+                f"cd {worker_feature} || git merge origin/master",
+                main_master,
+                gm.MERGE_LEAD_RE,
+                main_master,
+            ),
+            (
+                "git -C <path> is no longer resolved at all -- falls back to session_cwd",
+                f"git -C {worker_feature} merge origin/master",
+                main_master,
+                gm.MERGE_LEAD_RE,
+                main_master,
+            ),
+            (
+                "the false-ALLOW gap this tightening closes: an unrelated earlier `git -C` "
+                "must NOT hijack resolution for a real, later merge in the same line",
+                f"git -C {unrelated_repo} status && git merge origin/master",
+                main_master,
+                gm.MERGE_LEAD_RE,
+                main_master,
+            ),
+            (
+                "same cd-chain resolution for the push rule's target_re",
+                f"cd {worker_feature} && git push",
                 worker_master,
+                gm.PUSH_LEAD_RE,
                 worker_feature,
             ),
         ]
-        for label, command, session_cwd, expected in effective_dir_cases:
-            got = gm.effective_dir(command, session_cwd)
+        for label, command, session_cwd, target_re, expected in effective_dir_cases:
+            got = gm.effective_dir(command, session_cwd, target_re)
             ok = os.path.realpath(got) == os.path.realpath(expected)
             status = "PASS" if ok else "FAIL"
             print(f"[{status}] effective_dir: {label}")
             if not ok:
                 failures += 1
                 print(f"         expected {expected!r}, got {got!r}")
-
-        # KNOWN GAP -- documents current (undesired) behavior, does not
-        # count toward pass/fail. See effective_dir()'s docstring and the
-        # PR body: an unrelated, earlier `git -C <path>` in a compound
-        # command can hijack branch resolution for a later, unrelated
-        # `git merge`/`git push` in the same command. Flagged for an
-        # explicit owner decision, not fixed here (would need to scope the
-        # regex to the specific triggering invocation -- broader than this
-        # fix's remit).
-        unrelated_repo = make_repo(root, "unrelated-repo", "some-other-branch")
-        gap_command = f"git -C {unrelated_repo} status && git merge origin/master"
-        gap_resolved = gm.effective_dir(gap_command, main_master)
-        print(
-            f"[KNOWN GAP] effective_dir() resolves an unrelated earlier `git -C` over the "
-            f"actual merge's own context: resolved to {gap_resolved!r} (unrelated-repo), not "
-            f"{main_master!r} (session cwd, main_master's real branch) -- not counted pass/fail"
-        )
 
         # Malformed input: fail open, never block on a parse error.
         result = subprocess.run([sys.executable, HOOK], input="not json", capture_output=True, text=True, timeout=10)
