@@ -2053,6 +2053,22 @@ empirically-derived constant/threshold/override/skip-reason mapped to
 its home in the new pipeline, or flagged missing) must be clean. Both
 gate task #148 (the owner HOLD deliverable) and any full-catalog fire.
 
+**Gate artifact 2 (knowledge-inventory sweep) status, 2026-07-22**: run —
+`docs/reports/2026-07-22-knowledge-inventory.md`. NOT clean as originally
+worded above: 3 confirmed MISSING items (`RESOLUTION_FLOOR_DPI=200` has no
+Stage C/D analogue at all; `EXCLUDED_RESOLVED_TAGS` custom-art/non-english
+exclusion and the deductive-backfill-covered exclusion are both absent from
+Stage D's `_eligible_cards_queryset`) plus 3 open items (the pilot's
+per-batch checkpoint-flush cadence vs. Stage D's single end-of-run flush;
+`NAME_FREQUENCY_ANONYMOUS_ID`'s structural-elimination engine has no Stage D
+port; printing-vote d≤2 cluster propagation has no confirmed Stage D
+equivalent). None of the three MISSING items are soundness violations (the
+human-backed consensus gate still applies to every vote Stage D casts), but
+the gate's own "must be clean" bar is not met as stated — owner review
+needed on whether these three are must-fix-before-fire or accepted gaps.
+Artifact 1 (the stratified-sample parity replay) is separately queued
+behind the extraction and not addressed by this pass.
+
 **Stage C: fetch/compute decoupling design (2026-07-20, addresses the canary's
 63.1% parallel-efficiency gap)** — the process-pool fix above (PR #224) was a
 real, large improvement (377.8h projected at x6 thread-pool concurrency down
