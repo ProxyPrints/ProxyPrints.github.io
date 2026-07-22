@@ -777,15 +777,14 @@ printings, artists, tags, and moderation from one screen.
     not default browser chrome) — the card's own grid cell never scrolls,
     so the old sticky-plus-negative-z-index mechanism (see the superseded
     `cardPanel.tsx` bullet above) has nothing left to do and was removed.
-    Below `md`, `HeroCardArea` sits beside `HeroQuestionsArea` in its own
-    compact grid COLUMN (`HeroGrid`'s `grid-template-areas: "words words" "card questions"`, `minmax(0, 7.5rem) minmax(0, 1fr)` columns) rather
-    than stacking above/below it — see the fix round immediately below
-    for why this replaced the original mobile stack-plus-sticky-bar
-    design. Verified via `QuestionFeedResponsive.spec.ts`'s scroll-then-
-    reread-`boundingBox()` assertion (full equality, not just visibility)
-    on desktop.
-    - **SUPERSEDED mobile design (owner live-review, "the card covers the
-      questions on scroll")**: below `md` originally collapsed to a
+    Below `md`, `HeroCardArea` renders ABOVE `HeroQuestionsArea` in a
+    single-column stack (`HeroGrid`'s `grid-template-areas: "words" "card" "questions"`) — see the two SUPERSEDED bullets and the "portrait
+    static top block" bullet immediately below them for the two prior
+    mobile designs this one replaced, and why. Verified via
+    `QuestionFeedResponsive.spec.ts`'s scroll-then-reread-`boundingBox()`
+    assertion (full equality, not just visibility) on desktop.
+    - **SUPERSEDED mobile design #1 (owner live-review, "the card covers
+      the questions on scroll")**: below `md` originally collapsed to a
       SINGLE column (`"words" "card" "questions"` stacked top-to-bottom),
       with `HeroCardArea` becoming a `position: sticky; z-index: 5`
       compact bar (shrunk via `max-width: 7.5rem`) riding on top of
@@ -798,39 +797,327 @@ printings, artists, tags, and moderation from one screen.
       screenshot + `getBoundingClientRect()` diff (post-scroll, the
       card's box `[146, 50, w120, h236]` sat fully inside the questions
       box's own `[24, -366, w364, h1376]`), not a rare edge case. Replaced
-      with the disjoint-grid-column layout described above (owner's own
-      live-review layout proposal) — the card and questions structurally
-      cannot overlap regardless of scroll position or either one's own
-      height, mirroring the invariant `md`+ already had via its bounded
-      one-row hero. New regression guard:
-      `QuestionFeedResponsive.spec.ts`'s "mobile card/questions never
-      overlap" test does a real `page.mouse.wheel()` scroll (a dozen
-      synthetic candidates, forcing genuine overflow) then asserts an
-      axis-aligned bounding-box NON-intersection between `HeroCardArea`
-      and `HeroQuestionsArea`, both before and after scrolling.
-    - **Answer options go horizontal below `md`** (owner's live-review
-      layout proposal, same fix round): squeezing Level 1's full-width
-      stacked buttons / Level 2's candidate grid / Level 3's exclusion-
-      group chips into whatever's left beside a ~7.5rem card column would
-      be unreadably narrow, so each instead renders in a single
+      with SUPERSEDED mobile design #2's disjoint-grid-column layout
+      below (owner's own live-review layout proposal) — the card and
+      questions structurally cannot overlap regardless of scroll position
+      or either one's own height, mirroring the invariant `md`+ already
+      had via its bounded one-row hero.
+    - **SUPERSEDED mobile design #2 (owner live-review, "wastes space and
+      clips question text behind the card")**: replaced design #1 above
+      with `HeroCardArea` sitting BESIDE `HeroQuestionsArea` in its own
+      compact grid COLUMN (`minmax(0, 7.5rem) minmax(0, 1fr)`) instead of
+      stacking, with Level 1's full-width buttons/Level 2's candidate
+      grid/Level 3's exclusion chips each rendering in a single
       horizontally-scrollable row beside the card (`MobileButtonRow`/
       `MobileCandidateScroller`/`MobileChipRow`, `QuestionFeed.tsx`) —
-      each control keeps a comfortable minimum width and the row scrolls
-      sideways for overflow, rather than wrapping into many rows or
-      shrinking controls below a usable size. Unchanged at `md`+ (each
-      wrapper is a no-op there — same flex-column button stack/Bootstrap
-      `Row`/`Col` grid/wrapped chip row as before). Deliberately NOT
-      applied to the artist/tag question types (`ArtistVotePicker`/
-      `QueueTagQuestion`) — those are search/autocomplete-shaped UI, not
-      a set of discrete "pick one" options; forcing them into a
-      horizontal filmstrip would make them harder to use, not easier, so
-      they keep their normal vertical stacking at every width. The
-      original fixed-vertical-stacking design (this "SUPERSEDED" bullet
-      above) remains the documented fallback if the new layout doesn't
-      hold up under further review — nothing about the disjoint-grid-
-      column mechanism depends on the horizontal-row treatment
-      specifically; a future revert could keep the column split and put
-      answer options back in a plain vertical stack instead.
+      genuinely fixed the overlap bug design #1 had (card/questions
+      structurally can't share the same space in a column split), but a
+      FOLLOW-UP owner review of that fix found the ~7.5rem card column
+      left most of a phone screen's width empty below the tiny card, and
+      squeezing the question prompt/badge into the narrow remaining
+      column let it clip behind the card at some viewport widths. See
+      "portrait static top block" immediately below for the design that
+      replaced this one. `MobileButtonRow`/`MobileCandidateScroller`/
+      `MobileChipRow` themselves survive into the current design
+      (unchanged mechanism, just no longer sitting beside the card) —
+      only `HeroCardArea`'s own beside-vs-above relationship to the
+      questions column changed.
+    - **Portrait static top block (owner live-review, current design)**:
+      below `md`, the reference card is height-capped (`CardPanel`/
+      `StaticCardPanel` in `cardPanel.tsx`, `max-width: min(100%, calc(32vh * 63 / 88))` — a max-WIDTH expressed in terms of a target
+      HEIGHT, so the existing width-driven `<img>` sizing — `width: 100%; aspect-ratio: 63 / 88` — doesn't need to change at all) and renders
+      as a STATIC (non-scrolling) block together with its name, the
+      "Suggested match"/"Needs identification" badge, the question prompt,
+      and a compact 2×2 grid of the Level 2 action buttons (Filter by
+      attribute / None of these / Art matches / Skip) — all reachable
+      with zero scrolling, one tap. Only the candidate grid below that
+      block scrolls (horizontally, `MobileCandidateScroller`, unchanged
+      mechanism from design #2). Implementation (`QuestionFeed.tsx`):
+      - `Level2NarrowGrid` — Level 2's OWN narrow-width restructuring,
+        `display: grid` with named areas (`text` / `filter`+`none-of-these`
+        / `art-matches`+`skip` / `reason` / `options`) entirely inside
+        `@media (max-width: 767.98px)` with no unguarded base rule, so at
+        `>= md` it's a plain unstyled `<div>` and desktop's existing
+        block-flow layout (DOM order still exactly as before) is
+        byte-for-byte unaffected. `grid-area` (not flex `order`) is the
+        mechanism specifically because the filter-toggle button and the
+        three exit buttons are non-adjacent DOM siblings kept in their
+        EXISTING desktop position/order (`order` only reorders within a
+        shared flex axis, not across independently-wrapped siblings a
+        grid-area can place anywhere regardless of DOM position). A real
+        2×2 grid for the four action buttons — NOT a first-pass "filter
+        alone in a left column, all three exits stacked in a right
+        column" split, which a live Playwright measurement (Pixel 7, this
+        task's own report) found forced the row's height to whichever
+        column was TALLEST (~166px for three stacked buttons), leaving
+        the candidate row only 69–105px of its own ~176px natural height
+        even after every other budget trim below — a proper 2×2 grid caps
+        each row at the taller of just ITS OWN two buttons instead
+        (~44px/~62px), roughly half the height for the same four buttons.
+        Level1/Level3/artist/tag question types are NOT restructured this
+        way (deliberately, per the same owner review) — none of them has
+        a genuinely scrollable grid the way Level 2 does, so they simply
+        render below the (now non-sticky, stacked) card via the existing
+        `HeroQuestionsArea`, unchanged beyond inheriting the shared
+        `HeroGrid`/`HeroCardArea` fixes (no more sticky, card stacks
+        above).
+      - Narrow-only Bootstrap-margin cancellation: the four action-button
+        wrappers' own `mb-2`/`mt-2`/`mt-3` classNames (needed at `>= md`,
+        where they carry no CSS of their own and margin is the only
+        thing spacing one button from the next) DOUBLE `Level2NarrowGrid`'s
+        own `gap: 0.5rem` at narrow — `margin: 0 !important` on each
+        wrapper (Bootstrap's own spacing utilities are `!important`, so
+        an unmarked override can't win) cancels that redundant spacing
+        specifically below `md`.
+      - `NarrowOptionsArea`/`MobileCandidateScroller` — a hard vertical
+        clip boundary (`overflow-y: hidden`, default `align-items: stretch`
+        rather than the first pass's `center`) matching what
+        `overflow-x: auto` already is horizontally, so a tile row that
+        comes out even a few px taller than its own allotted grid row is
+        clipped rather than bleeding out top-and-bottom (`align-items: center`'s own behavior) and reintroducing scroll via
+        `HeroQuestionsArea`'s defensive `overflow-y: auto` fallback (own
+        bullet below).
+      - Candidate tile width trimmed `6.5rem` → `5.5rem` below `md`
+        specifically (proportionally shorter too, via `ArtPlaceholder`'s
+        own aspect-ratio) — still comfortably above the 44px WCAG 2.5.5/
+        Apple HIG floor for the tap target itself (the whole button, not
+        just the art).
+      - The "N ready / N in catalog / N contested" stats line
+        (`question-feed-stats`) is hidden below `md` (`StatsLine`) — a
+        nice-to-have info line, not part of the answer funnel, and real
+        measurement found it was the last few px keeping the
+        `overflow-y: auto` fallback engaged even after every other trim
+        above. Unchanged at `>= md`.
+      - **Wordmark**: below `md`, the sliced/stacked WHAT'S/THAT/CARD?
+        teaser (`WhatsThatWords.tsx`) alone burned ~15% of the viewport as
+        a three-line column — replaced with `whatsthat-composite.svg`
+        (the mark+wordmark lockup — the ORIGINAL one-line horizontal
+        wordmark this page shipped with before issue #305's sliced/
+        stacked treatment, sourced from PR #114's "branding integration"
+        and still on disk, just unused since #305). `NarrowWordmark`/
+        `WideWordmark` (`QuestionFeed.tsx`) toggle via plain CSS
+        `display` (both always mounted — no conditional render, no
+        hydration-mismatch risk, and `WhatsThatWords`' own pop/pulse
+        timing is gated on `imageLoaded`/`$playing` regardless of whether
+        its container is visible). Unchanged at `>= md` (still the
+        sliced, per-card-animated version). Regression coverage:
+        `WhatsThatWordsAnimation.spec.ts`'s "narrow-width wordmark swap"
+        describe block asserts visibility (not just DOM presence) of
+        each version at its own breakpoint.
+      - **Starburst readability**: the hero's own `$hero`-enlarged
+        `BurstSvg` (200% below `md`) now bleeds into exactly the space the
+        card's name/badge/question text occupy (they moved from beside
+        the card to directly under it). Rather than shrinking the burst
+        back down (the owner's own earlier, separate ask keeps it visible
+        at 200% bleed on mobile — see that fix round's own bullet above),
+        a bottom-fade `mask-image`/`-webkit-mask-image` linear gradient
+        (opaque 0–55%, fading to transparent by 88%, `$hero`-only) keeps
+        the top/sides fully visible (nothing competes with those) while
+        fading the lower spikes so they don't fight the text below for
+        contrast.
+      - **No `position: sticky` anywhere** (this codebase's own sticky/
+        overflow lesson, [[../lessons.md]], plus the task's own explicit
+        ask) — `HeroCardArea` is plain, unstyled beyond flex-centering at
+        every width now; nothing needs pinning since PageColumn/
+        StarburstBackground (`whatsthat.tsx`, next bullet) bound the WHOLE
+        hero to the viewport at every width, the same invariant `>= md`
+        has always had.
+      - **PageColumn/StarburstBackground now bound height below `md` too**
+        (`whatsthat.tsx`) — previously `>= md`-only (below `md` the whole
+        page scrolled normally, matching design #2's sticky-adjacent
+        mobile intent); the static-top-block/scrollable-candidate-row
+        split needs the same bounded-viewport chain FeedRoot/HeroGrid
+        already had `>= md` at every width. `StarburstBackground` also
+        gained a below-`md`-only `min-height: 100%` — `Footer.tsx`'s own
+        responsive layout stacks its columns vertically below `md`,
+        running much taller there than at `>= md` (confirmed empirically:
+        without this, a real Playwright run crushed the WHOLE hero to
+        ~4px tall, `Footer` claiming its full natural height instead,
+        since `Footer` has no `min-height: 0` of its own to let it shrink
+        the way `StarburstBackground`'s own `min-height: 0` lets IT
+        shrink — flexbox drew the entire deficit from the box that could
+        actually give). `min-height: 100%` restores the correct priority:
+        the hero claims PageColumn's full height first, and `Footer`,
+        if it doesn't fit, is pushed below PageColumn's own bottom edge —
+        still fully reachable, just via the page's own ordinary scroll
+        (`Layout.tsx`'s `ContentContainer`), the same way any long page's
+        footer normally is. Unchanged at `>= md` (Footer is compact there,
+        genuinely shares the fixed budget with the hero, fully visible
+        with no scroll needed, as before).
+      - Regression coverage: `QuestionFeedResponsive.spec.ts`'s "portrait
+        static top block" describe block (real, genuinely-loaded CDN
+        image via route interception — the empty-`mediumThumbnailUrl`
+        fixture convention every other test in that file uses renders at
+        a small intrinsic fallback size regardless of CSS, which would
+        never exercise the height-cap math at all) asserts, at Pixel 7's
+        own 412×839 CSS viewport: zero page-level scroll AND zero
+        `HeroQuestionsArea`-internal scroll; the static action row renders
+        fully above the candidate row's own top edge; the question badge/
+        prompt render entirely below the card's own bottom edge (never
+        occluded by it or its starburst).
+    - **Owner review round 2 (live device follow-up on the block above)**:
+      three asks — a "?" motif on every blue "unrevealed" card, fading
+      with the blue as it reveals; dropping the narrow-width standalone
+      "?" if one exists distinct from the wordmark's own glyph; and a
+      golden treatment for every quiz action button, since Bootstrap's
+      per-variant colours (grey/red/green/blue) were designed against the
+      site's neutral background, not this page's own deep-blue field.
+      - **"?" motif**: already implemented going into this round —
+        `RevealOverlay` (`cardPanel.tsx`) has always rendered `?` as its
+        own child text, so the blue field and the "?" fade together via
+        the SAME parent `opacity` animation (`revealAnimation`); the
+        candidate grid's `ArtPlaceholder` "mystery card" tiles carry the
+        same glyph via a CSS `::before { content: "?" }`, at every
+        viewport. Confirmed via real (non-empty-src) Playwright
+        measurements at both Pixel 7 (412×839) and desktop (1280×900) —
+        an earlier apparent desktop "collapse" (the reveal overlay
+        rendering as a thin, mostly-clipped sliver) turned out to be an
+        artifact of a manually-started dev server missing the
+        `NEXT_PUBLIC_IMAGE_WORKER_URL` env var used by Playwright's own
+        `webServer` config, not a real product bug — reproducing it
+        against a correctly-configured server showed a full-height,
+        fully-legible "?" at both viewports. New regression coverage
+        (`QuestionFeedResponsive.spec.ts`'s "question-mark motif + golden
+        action buttons" describe block): the overlay's own text content is
+        asserted at both viewports, and `ArtPlaceholder`'s pseudo-element
+        `content` is asserted directly (Playwright's own mechanism for a
+        CSS-generated-content assertion, since it isn't real DOM text);
+        `QuestionFeed.test.tsx`'s shared `revealCard()` jest helper also
+        asserts the overlay's text content before dispatching the
+        animation-end event every existing jest test already relies on.
+      - **Standalone "?" (mobile)**: NOT removed. The narrow-width
+        wordmark (`whatsthat-composite.svg`, see the "portrait static top
+        block" bullet above) bakes its own "?" mascot glyph directly into
+        the same flattened image as the "WHAT'S THAT CARD?" text (its own
+        path data is a scaled/repositioned copy of `whatsthat-mark.svg`'s
+        "?"-only mark, confirmed by inspecting both SVGs directly) — there
+        is no separate, distinct "?" DOM element at narrow widths to drop
+        without altering the wordmark image itself. This is the exact
+        ambiguity the task's own fallback anticipated, so it's left
+        untouched here and reported instead (see this PR's own body).
+      - **Golden action buttons**: `ThumbButton` (Level 1's Yes/Not sure/
+        No/Skip, Level 2's None of these/Art matches/Skip, Level 3's
+        Confirm & continue/Skip), `FilterToggleButton` ("Filter by
+        attribute"), and `ThumbChip` (Level 3's attribute picker) — all
+        three styled components local to `QuestionFeed.tsx` — now share
+        one gold treatment (`#f8d42b`, `whatsthat-mark.svg`'s own top
+        gradient stop; `#124063`, that same SVG's dark-navy stroke)
+        instead of each Bootstrap variant's own semantic colour
+        (success/outline-danger/outline-secondary/link/primary). Measured
+        contrast (WCAG's standard relative-luminance formula): the
+        pre-existing default grey `outline-secondary` text/border against
+        the field's deep-blue stop (`#123a6b`) was ~2.4:1, under AA's
+        4.5:1 text floor (and its 3:1 UI-component floor) — the "hard to
+        read" the owner reported live; gold text against that same stop is
+        7.84:1, against the field's lighter highlight stop (`#1d4d82`) is
+        5.93:1, and dark-navy text on filled gold is 7.45:1 — all past AA,
+        most past AAA. Bordered/filled variants (`ThumbButton`'s non-
+        `.btn-link` cases) get gold outline/text at rest, filling solid
+        gold with dark-navy text on hover/focus/press; `.btn-link` (the
+        Skip buttons, `FilterToggleButton`) gets a colour-only swap (no
+        border/fill added, preserving the existing plain-text-link look);
+        `ThumbChip` reuses its own existing selected/unselected variant
+        split (`primary`/`outline-secondary`) to make a selected chip
+        PERSISTENTLY filled gold rather than only on hover. `&&` (Emotion's
+        specificity-doubling trick) on every override, so it reliably wins
+        over Bootstrap's own single-class variant rules regardless of CSS
+        injection order. Page-scoped: only these three styled components
+        are touched; `ChipCard.tsx` (the no-match-reason chips, shared with
+        `ReportCardPanel.tsx` on a different page) is deliberately left
+        alone, and the sitewide orange theme is untouched. New regression
+        coverage (same describe block as above): computed `color` on the
+        filter toggle and "None of these"; computed `color`/
+        `background-color` on a selected vs. unselected Level 3 chip.
+    - **Owner review round 3 (ruling on round 2's open items)**: three
+      further asks — remove the narrow-width standalone "?" mascot;
+      slow the wordmark's 3-stage pop animation down "a bit"; and build
+      ONE shared blue-card-with-"?" composition used in every blue-card
+      slot on the page, replacing round 2's two independent
+      implementations.
+      - **Narrow-width "?" removal**: `whatsthat-composite.svg` (the
+        narrow wordmark asset, own bullet above) bakes its "?" mascot
+        into the same flattened image as the "WHAT'S THAT CARD?" text —
+        confirmed by inspecting both that file and `whatsthat-mark.svg`
+        (the standalone mascot) directly, their path data for the "?" is
+        an identical shape, just scaled/repositioned. `whatsthat- wordmark.svg` — the SAME text with no separate mascot at all,
+        already on disk (`WhatsThatWords.tsx` already slices this exact
+        file into its three animated words) — is exactly the pre-
+        cropped, text-only asset the owner asked to check for, so
+        `NarrowWordmark`'s `<img src>` was simply swapped to it; no new
+        art or manual SVG surgery was needed. `WideWordmark`
+        (`WhatsThatWords`) was never affected either way — it has always
+        rendered from this same `whatsthat-wordmark.svg` source, never
+        the composite. Regression coverage:
+        `WhatsThatWordsAnimation.spec.ts`'s existing narrow/wide
+        visibility test now also asserts the narrow `<img>`'s own `src`.
+      - **Pop animation slowdown**: `WhatsThatWords.tsx`'s `Word`
+        component (duration 480ms → 640ms) and its `WORDS` array's own
+        delay stagger (0/240/480ms → 0/320/640ms) both scaled by the same
+        4/3 (33.3%) factor — within the owner's own "25-40% longer per
+        stage" target, and a clean fraction that preserves the EXISTING
+        duration:stagger ratio exactly (240ms was already precisely half
+        of 480ms; 320ms is precisely half of 640ms) — "keep the stage
+        ordering/feel identical" means the ripple's own overlap shape has
+        to scale in lockstep with the duration, not just the duration
+        alone. `CardPulseWrapper` (`cardPanel.tsx`) moves in lockstep by
+        the same factor (640ms/320ms delay) since it must stay frame-for-
+        frame synced to THAT's own timing (its own long-standing
+        comment). The hero reveal fade itself (0.8s) is untouched — out
+        of scope, the owner's ask was specifically the wordmark's pop-in.
+        Regression coverage: `WhatsThatWordsAnimation.spec.ts`'s computed-
+        style assertions updated to the new duration/delay values (see
+        [[../lessons.md]]'s cyclic-animation-sampling entry — these
+        assert declarative CSS animation properties directly, not a
+        single sampled frame, so they're not subject to that lesson's own
+        failure mode, but the same "don't trust one point-in-time read"
+        discipline applies to any human eyeballing the new timing live).
+      - **One shared blue mystery card**: `RevealOverlay` (the hero
+        reveal cover, plain `?` text) and `ArtPlaceholder`'s own CSS
+        `::before { content: "?" }` (the candidate-grid/no-match
+        placeholders) — round 2's own two independent implementations of
+        the same idea, sharing only their `STARBURST_OUTER_COLOR`
+        constant — are now ONE component, `MysteryCard`/`MysteryCardFace`
+        (`cardPanel.tsx`). The owner read the large hero card and the
+        small candidate cards as visibly different shades of blue;
+        measured via computed `background-color` on both, they were
+        already byte-identical (`rgb(77, 141, 223)`) — the perceived
+        difference was a context/contrast effect from the hero's own
+        starburst bleed behind the large card, not a real colour
+        mismatch. Consolidating onto one shared component makes any
+        future drift between the two structurally impossible regardless
+        of whether today's colours already matched, which is the actual
+        "so future changes are one place" ask. The "?" itself is now
+        `whatsthat-mark.svg`'s own gold-gradient mascot (not plain text),
+        sized via `height: 66.6667%` on the glyph `<img>` (2/3 of
+        `MysteryCardFace`'s own height — a `position: absolute; inset: 0`
+        box over a definite-height containing block IS itself a definite
+        height, so a percentage-height child resolves normally) rather
+        than a fixed rem value, so the same component reads correctly at
+        both the large hero card and the much smaller candidate tiles.
+        `$playing`/`onAnimationEnd` are optional on `MysteryCard` — only
+        the hero reveal slot passes them (fading away in lockstep with
+        the blue, exactly as `RevealOverlay` did); every candidate-grid/
+        no-match slot omits them and gets the SAME component, just
+        permanently static (falls back to `animation-play-state: paused`
+        forever) — the exact behaviour `ArtPlaceholder`'s old `::before`
+        had, just as a real element instead of generated content.
+        Existing regression tests rewritten against the new structure:
+        the reveal-overlay "?" assertions (jest's `revealCard()` helper,
+        Playwright's "question-mark motif" describe block) now check the
+        glyph `<img>`'s own `src` instead of text content/pseudo-element
+        `content`; two pre-existing Playwright tests that queried a
+        candidate tile's own `<img>` generically (Level 1's reference-
+        image test, the hover-zoom edge-clipping test) had to be narrowed
+        (`getByRole("img")`/`img:not([alt=""])`) since `MysteryCard`'s own
+        `alt=""` glyph is now a SECOND `<img>` in the same container,
+        ahead of the real thumbnail in DOM order — a bare `.locator("img" ).first()` silently resolved to the non-interactive glyph instead
+        after this change, which would have quietly broken those tests'
+        own intent (measuring the wrong element) without failing outright.
+        New regression coverage: the glyph's own height-to-card-height
+        ratio (both the hero card and a candidate tile, asserting it's
+        relative sizing rather than a fixed value that happens to work
+        for both); every blue card on the page rendering the identical
+        `whatsthat-mark.svg` glyph asset.
     - **Fix round (PR #305/#308 owner review)**: the original
       `HeroGrid { max-height: calc(100dvh - NavbarHeight - 2rem) }`
       passed CI but let the whole page scroll live — the flat `2rem`

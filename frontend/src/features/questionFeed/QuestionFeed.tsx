@@ -78,8 +78,8 @@ import {
   CardPanel,
   CardPulseWrapper,
   HoverBurst,
+  MysteryCard,
   randomFlavorText,
-  RevealOverlay,
   RevealWrapper,
   StaticCardPanel,
   useStarburstFrame,
@@ -104,6 +104,36 @@ import { setNotification } from "@/store/slices/toastsSlice";
 type FollowUp = "none" | "no-match-reason";
 type CandidateStage = "level1" | "level2" | "level3";
 
+// Fix round (owner review round 2, "golden buttons") - every quiz action button on this page
+// (Level 1's Yes/Not sure/No/Skip, Level 2's None of these/Art matches/Skip, Level 3's chip
+// picker/Confirm/Skip, and the Filter-by-attribute toggle below) used its own Bootstrap variant
+// (success/outline-secondary/outline-danger/link/primary) designed against the SITE'S neutral/
+// orange-tinted background, not this page's own deep-blue starburst field (whatsthat.tsx's
+// StarburstBackground, #123a6b-#1d4d82). Measured contrast for the worst offender - the default
+// grey `outline-secondary` text/border ("None of these"/"Skip"/"Not sure") against the field's
+// deep-blue stop - was ~2.4:1, well under WCAG AA's 4.5:1 floor for text (and its 3:1 floor for
+// UI-component borders): exactly the "hard to read" the owner reported live. Every one of these
+// buttons now shares one gold treatment instead of its original semantic variant colour - gold
+// outline/text at rest, filling solid gold with a dark-navy text swap on hover/focus/press - both
+// using the wordmark's own two colours (`#F8D42B`, the composite/mark SVGs' own top gradient
+// stop, and `#124063`, their own dark-navy stroke - see public/whatsthat-mark.svg) rather than
+// inventing new ones. Measured contrast ratios (both computed the same way as the ~2.4:1 figure
+// above): gold text on the field's deep-blue stop 7.84:1, gold text on the field's lighter
+// highlight stop 5.93:1, dark-navy text on filled gold 7.45:1 - all comfortably past AA, most
+// past AAA too (docs/features/printing-tags.md has the full table). This intentionally
+// overrides EVERY variant used here (success/outline-danger/outline-secondary/link/primary) with
+// the same gold language rather than keeping each one's own semantic colour - the owner's ask
+// was for one consistent, readable treatment across the whole action row, not a per-variant
+// patch. Page-scoped: only these three styled components (ThumbButton/FilterToggleButton/
+// ThumbChip, all local to this file) are touched - Bootstrap's own variant classes and the
+// sitewide orange theme are untouched everywhere else in the app. NoMatchReasonStrip's own
+// chips (ChipCard.tsx) are deliberately left alone - that component is shared with
+// ReportCardPanel.tsx on a different page, so recolouring it here would leak past this page's
+// scope; its existing blue-outline treatment already clears AA (docs/features/printing-tags.md).
+const QUIZ_BUTTON_GOLD = "#f8d42b";
+const QUIZ_BUTTON_GOLD_HOVER = "#d6ab11";
+const QUIZ_BUTTON_NAVY = "#124063";
+
 // Mobile funnel pass (thumb-native tap targets): Bootstrap's own default .btn height is
 // ~38px (0.375rem vertical padding + 1.5 line-height + border) - short of the 44px minimum
 // both Apple's HIG and WCAG 2.5.5 (Target Size, AA) call for. Every stacked full-width action
@@ -113,11 +143,47 @@ type CandidateStage = "level1" | "level2" | "level3";
 // call site (and one place to revisit if the target size guidance ever changes). flex centering
 // keeps short labels ("No", "Skip") vertically centered once the box is taller than its text,
 // rather than leaving them pinned to the button's own top-padding baseline.
+//
+// Gold treatment (own comment above `QUIZ_BUTTON_GOLD`) splits on Bootstrap's own rendered
+// `.btn-link` class (the Skip buttons' variant) vs every other variant used here - `.btn-link`
+// never had a border or fill to begin with (plain underlined text), so it only gets a colour
+// swap; every bordered/filled variant (success/outline-secondary/outline-danger/primary) gets
+// the full outline-at-rest/filled-on-interaction treatment. `&&` doubles this selector's own
+// specificity (Emotion's standard trick for this) so it reliably wins over Bootstrap's own
+// single-class `.btn-success`/`.btn-outline-danger`/etc rules regardless of injection order.
 const ThumbButton = styled(Button)`
   min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
+
+  &&:not(.btn-link) {
+    color: ${QUIZ_BUTTON_GOLD};
+    border-color: ${QUIZ_BUTTON_GOLD};
+    background-color: transparent;
+  }
+
+  &&:not(.btn-link):hover,
+  &&:not(.btn-link):focus,
+  &&:not(.btn-link):active {
+    color: ${QUIZ_BUTTON_NAVY};
+    background-color: ${QUIZ_BUTTON_GOLD};
+    border-color: ${QUIZ_BUTTON_GOLD};
+  }
+
+  &&.btn-link {
+    color: ${QUIZ_BUTTON_GOLD};
+  }
+
+  &&.btn-link:hover,
+  &&.btn-link:focus,
+  &&.btn-link:active {
+    color: ${QUIZ_BUTTON_GOLD_HOVER};
+  }
+
+  &&:disabled {
+    opacity: 0.6;
+  }
 `;
 
 // "Filter by attribute" / "Hide filters" - a variant="link" toggle, not one of the stacked
@@ -126,11 +192,24 @@ const ThumbButton = styled(Button)`
 // own line-height (~24px, measured) - well under the 44px floor despite being the ONLY way to
 // reach the attribute-chip filter on Level 2. Padding restores a real hit area without
 // resembling a filled button (still variant="link" - text + underline, no background/border).
+//
+// Gold treatment - same colour pair and rationale as ThumbButton's own `.btn-link` case above
+// (this is always variant="link" itself, so no bordered/filled case to split on here).
 const FilterToggleButton = styled(Button)`
   min-height: 44px;
   display: inline-flex;
   align-items: center;
   padding: 0.5rem 0;
+
+  && {
+    color: ${QUIZ_BUTTON_GOLD};
+  }
+
+  &&:hover,
+  &&:focus,
+  &&:active {
+    color: ${QUIZ_BUTTON_GOLD_HOVER};
+  }
 `;
 
 // Level 3's per-attribute chip picker (a wrapped row of inline pills, not stacked full-width -
@@ -138,8 +217,34 @@ const FilterToggleButton = styled(Button)`
 // Bootstrap variant - shorter still than the already-under-target default. min-height alone
 // (not ThumbButton's display/alignment) since these need to stay inline-sized to their own
 // label, wrapping naturally in the row.
+//
+// Gold treatment - these toggle between two variants to show selection state (`outline-
+// secondary` untouched, `primary` once tapped - see the `state === "positive" ? "primary" :
+// "outline-secondary"` call site below), so the gold swap reuses that same split rather than a
+// hover-only one: `.btn-primary` (selected) is PERSISTENTLY filled gold/navy-text - the same
+// pairing ThumbButton only shows transiently on hover - so a selected chip stays visibly
+// "pressed" rather than reverting to plain outline the instant the pointer leaves it.
 const ThumbChip = styled(Button)`
   min-height: 44px;
+
+  &&.btn-outline-secondary {
+    color: ${QUIZ_BUTTON_GOLD};
+    border-color: ${QUIZ_BUTTON_GOLD};
+    background-color: transparent;
+  }
+
+  &&.btn-outline-secondary:hover,
+  &&.btn-outline-secondary:focus {
+    color: ${QUIZ_BUTTON_NAVY};
+    background-color: ${QUIZ_BUTTON_GOLD};
+    border-color: ${QUIZ_BUTTON_GOLD};
+  }
+
+  &&.btn-primary {
+    color: ${QUIZ_BUTTON_NAVY};
+    background-color: ${QUIZ_BUTTON_GOLD};
+    border-color: ${QUIZ_BUTTON_GOLD};
+  }
 `;
 
 // ---------------------------------------------------------------------------------------
@@ -186,11 +291,29 @@ const ThumbChip = styled(Button)`
 // width without wrapping into an unreadable number of rows.
 // ---------------------------------------------------------------------------------------
 
+// Fix round (owner live-review, "portrait static top block") - below md, this used to keep the
+// card in its own narrow LEFT column beside the questions ("words words" / "card questions",
+// minmax(0, 7.5rem) minmax(0, 1fr)) - the mobile-row fix round's answer to the earlier sticky-
+// bar overlap bug. The owner's follow-up review found that arrangement wastes space and clips
+// question text behind the card (nothing wrong with the card/questions non-overlap invariant it
+// gave, just the wrong axis for a narrow screen). Below md now stacks vertically instead
+// ("words" / "card" / "questions", single column) - card above questions, full width, the same
+// shape >= md's own "words" row/"card questions" 2-row layout uses, just collapsed to one
+// column. `flex: 1; min-height: 0` now applies at EVERY width (previously >= md only) - the
+// static top block (wordmark, height-capped card, its name/badge/question text, the static
+// "Filter by attribute"/"None of these" action row) plus the scrollable candidate row below it
+// need the same bounded-viewport-height treatment >= md already had, so
+// QuestionFeedResponsive.spec.ts's Pixel-7 "no page scroll needed" assertion has a real,
+// resolvable height to size against (see PageColumn/StarburstBackground in whatsthat.tsx, now
+// also bounded at every width).
 const HeroGrid = styled.div`
   display: grid;
   gap: 0.75rem 0.5rem;
-  grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr);
-  grid-template-areas: "words words" "card questions";
+  grid-template-columns: 1fr;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas: "words" "card" "questions";
+  flex: 1;
+  min-height: 0;
 
   @media (min-width: 768px) {
     /* Row-gap trimmed from 1.5rem to 1rem, then to 0.5rem on rebase onto #313's taller
@@ -204,12 +327,10 @@ const HeroGrid = styled.div`
     grid-template-columns: minmax(0, 42%) minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas: "card words" "card questions";
-    flex: 1;
-    min-height: 0;
   }
 `;
 
-// QuestionFeed's own root - `flex: 1; min-height: 0` at >= md opts into StarburstContent's
+// QuestionFeed's own root - `flex: 1; min-height: 0` opts into StarburstContent's
 // `display: flex; flex-direction: column; height: 100%` (whatsthat.tsx) so HeroGrid's own
 // `flex: 1` above has a real, resolvable height to consume. Only meaningful when this is a
 // direct flex child of a flex parent with a definite height - true for the common,
@@ -218,66 +339,61 @@ const HeroGrid = styled.div`
 // that flex chain - this deliberately falls back to auto/natural height there instead
 // (unchanged from before this fix round), rather than extending the flex chain through three
 // more react-bootstrap wrapper components for a small, privileged audience.
+//
+// Fix round (owner live-review, "portrait static top block") - previously gated to >= md only
+// (below md, the whole page scrolled normally, so nothing needed this flex chain). Now applies
+// at every width - PageColumn/StarburstBackground (whatsthat.tsx) bound height below md too, so
+// this flex chain needs to run unconditionally for the static-top-block/scrollable-candidate-
+// row split to have a real height budget to divide up.
 const FeedRoot = styled.div`
-  @media (min-width: 768px) {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-  }
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 `;
 
+// Fix round (owner live-review, "portrait static top block") - SUPERSEDES two prior mobile
+// mechanisms in turn: the original stack-plus-`position: sticky` bar (overlapped scrolled
+// questions, the original owner-reported bug), then the disjoint-grid-COLUMN fix round's own
+// `position: sticky; align-self: start` (safe from overlap, but put the card beside the
+// questions instead of above them, wasting horizontal space and letting question text clip
+// behind the card - the NEXT owner-reported bug). No `position: sticky` anywhere now (this
+// codebase's own sticky/overflow lesson - docs/lessons.md - plus the task's own explicit ask):
+// the card sits in normal flow, above the questions, at every width. Nothing left to keep it
+// "pinned" against - PageColumn/StarburstBackground (whatsthat.tsx) now bound the WHOLE hero
+// to the viewport at every width (not just >= md), so the card's own grid cell never scrolls
+// in the first place, the same invariant >= md has always had.
 const HeroCardArea = styled.div`
   grid-area: card;
   display: flex;
   align-items: center;
   justify-content: center;
   min-width: 0;
-
-  // Phone interpretation of the pinning intent (owner addendum, mobile-row fix round) - the
-  // card's own grid COLUMN (HeroGrid's minmax(0, 7.5rem) track, above) is what keeps it
-  // compact now, not a max-width override here; this area simply fills that track. Still
-  // position: sticky; top: 0 so the card stays in view if the questions column ever grows
-  // tall enough to need page scroll (PageColumn/StarburstContent still let the whole page
-  // scroll below md - unchanged) - safe to keep unconditionally now, unlike the SUPERSEDED
-  // sticky bar this replaces: that one shared its horizontal space with HeroQuestionsArea (a
-  // single stacked column) and needed z-index: 5 specifically to paint over it, which is
-  // exactly what let it obscure scrolled-under text. This one lives in its own disjoint grid
-  // column beside HeroQuestionsArea (see HeroGrid's grid-template-areas above) - sticky here
-  // only ever competes for space with the empty column gap, never with the questions column's
-  // own content, so no elevated z-index/opaque backdrop is needed to protect anything.
-  @media (max-width: 767.98px) {
-    position: sticky;
-    top: 0;
-    align-self: start;
-  }
-
-  @media (min-width: 768px) {
-    height: 100%;
-    min-height: 0;
-  }
+  height: 100%;
+  min-height: 0;
 `;
 
 // Below md, the "answer options" for whichever stage is active (Level 1's four stacked
 // buttons, Level 2's candidate grid, Level 3's exclusion-group chips) render in a single
-// horizontally-scrollable row beside the compact card instead of stacking/wrapping to fit the
-// narrower remaining width (owner's live-review layout proposal) - the direct fix for the
-// "the card covers the questions" bug: rather than trying to squeeze full-width stacked
-// controls into whatever's left beside a ~7.5rem card column (unreadably narrow, or forcing
-// the card back into shared/overlapping space to get room back), the controls keep a
-// comfortable minimum width each and the row scrolls sideways for any overflow. `-webkit-
-// overflow-scrolling: touch` + a visible (not hidden - see HeroQuestionsArea's own comment on
-// why a scrollable region should still look scrollable) thin themed scrollbar match the
-// desktop candidate column's existing scrollbar treatment for visual consistency. Reverts to
-// normal (no horizontal scroll, no forced row) at >= md - untouched, each call site's own
-// pre-existing desktop layout (flex-column button stack, Bootstrap Row/Col grid, wrapped chip
-// row) is unaffected there.
+// horizontally-scrollable row instead of stacking/wrapping to fit the narrow width. Originally
+// (mobile-row fix round) this row sat BESIDE a compact card column - the "portrait static top
+// block" fix round moved the card back above the questions (HeroGrid's own comment), but kept
+// this same horizontal-scroll-row mechanism for whichever options a stage actually has: each
+// control keeps a comfortable minimum width and the row scrolls sideways for overflow, rather
+// than wrapping into many rows or shrinking controls below a usable size. Level 2 specifically
+// is now the ONLY genuinely scrollable region in the whole hero at narrow widths (see
+// Level2NarrowGrid below) - everything above it (wordmark, card, name/badge/question text, the
+// static action row) is fixed, non-scrolling chrome. `-webkit-overflow-scrolling: touch` + a
+// visible (not hidden - see HeroQuestionsArea's own comment on why a scrollable region should
+// still look scrollable) thin themed scrollbar match the desktop candidate column's existing
+// scrollbar treatment for visual consistency. Reverts to normal (no horizontal scroll, no
+// forced row) at >= md - untouched, each call site's own pre-existing desktop layout
+// (flex-column button stack, Bootstrap Row/Col grid, wrapped chip row) is unaffected there.
 //
 // Deliberately NOT applied to the artist/tag question types (ArtistVotePicker/
 // QueueTagQuestion) - those are search/autocomplete-shaped UI, not a set of discrete "pick
 // one" options, and forcing them into a horizontal filmstrip would make them harder to use,
-// not easier; they keep their existing normal vertical stacking at every width. See this
-// task's own PR body for the explicit per-stage mapping this scopes to.
+// not easier; they keep their existing normal vertical stacking at every width.
 // Shared scrollbar treatment (visible, not hidden - see HeroQuestionsArea's own comment on why
 // a scrollable region should still look scrollable) for all three mobile-row variants below -
 // factored out as a plain string rather than a fourth wrapper component, since each variant's
@@ -352,6 +468,17 @@ const MobileChipRow = styled.div`
 const MobileCandidateScroller = styled.div`
   @media (max-width: 767.98px) {
     overflow-x: auto;
+    // Fix round (owner live-review, "portrait static top block") - overflow-y: hidden plus
+    // width: 100% (own comment on NarrowOptionsArea, this component's parent) - a hard clip
+    // boundary on the vertical axis, matching what overflow-x: auto already is horizontally,
+    // so a tile row that comes out even a few px taller than its own allotted grid row is
+    // clipped rather than bleeding out and reintroducing scroll elsewhere. width: 100% gives
+    // this a definite width, so it doesn't try to grow to its own (horizontally-overflowing)
+    // content size the way flex's default auto basis normally would - NarrowOptionsArea's flex
+    // row (default align-items: stretch, see that component's own comment) already handles the
+    // matching height side of that same story.
+    width: 100%;
+    overflow-y: hidden;
     padding-bottom: 0.5rem;
     ${mobileScrollbarCSS}
 
@@ -359,10 +486,18 @@ const MobileCandidateScroller = styled.div`
       flex-wrap: nowrap;
       width: max-content;
     }
+    // Fix round (owner live-review, "portrait static top block") - trimmed from 6.5rem to
+    // 5.5rem: a real Playwright measurement (Pixel 7, this task's own report) found the
+    // options row shorter on room than the tiles' own natural height even after the card's own
+    // height cap was trimmed (cardPanel.tsx) and the action-button grid compacted
+    // (Level2NarrowGrid's own comment) - a smaller tile (proportionally shorter too, via
+    // ArtPlaceholder's own aspect-ratio) was the last piece of that budget. Still comfortably
+    // above WCAG 2.5.5/Apple HIG's 44px floor for the tap target itself (the whole button, not
+    // just the art) - only the reference thumbnail shrinks, not the tap area.
     .row > [class*="col"] {
-      flex: 0 0 6.5rem;
-      width: 6.5rem;
-      max-width: 6.5rem;
+      flex: 0 0 5.5rem;
+      width: 5.5rem;
+      max-width: 5.5rem;
     }
   }
 `;
@@ -372,6 +507,58 @@ const HeroWordsArea = styled.div`
 
   @media (min-width: 768px) {
     align-self: end;
+  }
+`;
+
+// Fix round (owner live-review, "portrait static top block") - at narrow widths, the sliced
+// WHAT'S/THAT/CARD? teaser (WhatsThatWords below) stacks into a three-line column that alone
+// burns ~15% of the viewport, direct budget the static top block/scrollable candidate row need
+// back. `whatsthat-composite.svg` (the mark+wordmark lockup, frontend/public/) is the ORIGINAL
+// single-line horizontal wordmark this page shipped with before the quiz-reveal hero redesign
+// (issue #305) introduced the sliced/stacked treatment - see #114's "branding integration" PR
+// for where it came from, still on disk and unused since #305 replaced it. Restoring it at
+// narrow widths only (wide/desktop keeps the sliced, animated version unchanged) trades the
+// per-card pop animation for a fixed one-line wordmark, in exchange for a single ~48px row
+// instead of three ~60px+ stacked lines.
+//
+// Owner review round 3 ("remove the standalone '?' on mobile") - `whatsthat-composite.svg` (the
+// asset above) bakes a large standalone "?" mascot into the same flattened image as the
+// "WHAT'S THAT CARD?" text (round 2's own report on this - see this PR's body for the full
+// investigation), which the owner's live device review read as a wasted, distracting element at
+// narrow widths now that every blue card ALSO carries its own "?" (round 3's own "one blue card"
+// ask). `whatsthat-wordmark.svg` - the SAME text, with no separate mascot at all (it's the
+// un-cropped source WhatsThatWords.tsx already slices into its three animated words below - see
+// that file's own header comment) - already existed as exactly the pre-cropped, text-only asset
+// the owner asked to check for, so no new art/manual SVG surgery was needed. Swapping
+// `NarrowWordmark`'s image source to it is the only change here; `WideWordmark`
+// (`WhatsThatWords`) was never affected either way - it has always rendered from this same
+// `whatsthat-wordmark.svg` source (sliced into three words), never the composite, so desktop's
+// own wordmark is unchanged by this swap.
+//
+// Both `NarrowWordmark`/`WideWordmark` below and their content stay mounted at every width
+// (CSS `display` toggle only, same pattern as MobileButtonRow/etc above) rather than
+// conditionally rendering `WhatsThatWords` only at >= md - avoids any hydration-mismatch risk
+// from a width-dependent conditional render, and WhatsThatWords' own pop/pulse timing is gated
+// on `imageLoaded`/`$playing` regardless of whether its container is visible, so mounting it
+// unconditionally costs nothing functionally, just a bit of always-invisible-below-md DOM.
+const NarrowWordmark = styled.div`
+  text-align: center;
+
+  img {
+    width: min(260px, 85%);
+    height: auto;
+  }
+
+  @media (min-width: 768px) {
+    display: none;
+  }
+`;
+
+const WideWordmark = styled.div`
+  display: none;
+
+  @media (min-width: 768px) {
+    display: block;
   }
 `;
 
@@ -400,13 +587,27 @@ const HeroWordsArea = styled.div`
 // additional clip headroom, not a visible resting-layout change. HoverBurst's own edge-column
 // variant (cardPanel.tsx's $edge prop) targets the remaining gap this alone doesn't cover -
 // its 331.2%-wide glow needs more room than 2.5rem gives on either side.
+// Fix round (owner live-review, "portrait static top block") - `min-height: 0` now applies at
+// every width (previously >= md only) - a grid item's default `min-height: auto` resolves to
+// its own content's intrinsic height, which would otherwise stop this area (and therefore
+// HeroGrid's own bounded "questions" row, now `minmax(0, 1fr)` at every width - see HeroGrid's
+// own comment) from ever shrinking below its content's natural size, defeating the whole
+// bounded-viewport-height chain PageColumn/StarburstBackground (whatsthat.tsx) now provide at
+// every width too. `overflow-y: auto` also becomes a defensive fallback at narrow widths (base
+// rule, not >= md-gated) - Level2NarrowGrid below (Level 2's own static-block/scrollable-
+// candidate-row split) is sized to fit the remaining space by construction and shouldn't need
+// it, but Level 1/3 and the artist/tag question types render their existing (unrestructured)
+// content directly into this area without that same fit-to-remaining-space treatment, and a
+// working (if inelegant) vertical scrollbar in a genuinely-too-tall edge case (a long card name
+// wrapping to extra lines, the rate-limited banner appearing, a very short viewport) is a lot
+// safer than silently making a control unreachable with no scroll mechanism at all.
 const HeroQuestionsArea = styled.div`
   grid-area: questions;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 
   @media (min-width: 768px) {
-    overflow-y: auto;
-    min-height: 0;
     margin: 0 -2.5rem;
     padding: 0 calc(2.5rem + 0.75rem) 0 2.5rem;
     scrollbar-width: thin;
@@ -425,6 +626,131 @@ const HeroQuestionsArea = styled.div`
   }
 `;
 
+// Level 2's narrow-width restructuring (owner live-review, "portrait static top block") - the
+// candidate grid is the ONLY genuinely scrollable content Level 2 has; everything else (the
+// "Suggested match"/"Needs identification" badge, the question prompt, the "Filter by
+// attribute"/"None of these"/"Art matches"/"Skip" action row) must be reachable with zero
+// scrolling. `display: grid` + named areas (not flex + `order`) specifically because these are
+// several SEPARATE, non-adjacent DOM elements (kept in their existing desktop DOM position/
+// order below, so desktop's block-flow layout - order-dependent, unlike grid - stays byte-for-
+// byte unaffected) that need to render as a compact block at narrow widths - CSS grid-area is
+// the one mechanism that can place non-adjacent DOM children into an arbitrary shared layout
+// regardless of their own document order, with no reliance on flex `order` (which only
+// reorders WITHIN a flex container's own linear axis, not across independently-wrapped
+// siblings). Entirely inert at >= md - every rule here lives inside
+// `@media (max-width: 767.98px)` with no base/unguarded rule of its own, so at >= md this is
+// just a plain, unstyled `<div>` (a default-`block` wrapper adds no visual change on its own),
+// restoring today's exact existing layout. The `NarrowTextArea`/`NarrowFilterAction`/
+// `NarrowNoMatchAction`/`NarrowArtMatchesAction`/`NarrowSkipAction`/`NarrowReasonArea`/
+// `NarrowOptionsArea` wrapper components below are built the same narrow-only way, for the
+// same reason.
+//
+// A real 2x2 GRID for the four action buttons (Filter/None-of-these/Art-matches/Skip), each
+// with its OWN individual grid-area - NOT a "Filter alone in a left column, all three exits
+// stacked in a right column" split (this fix round's own first pass, measured live and found
+// wanting): a 1x3 stack forces the row's height to whichever column is TALLEST (that one, at
+// ~166px for three stacked 44-62px buttons), while a proper 2x2 grid caps each row at the
+// taller of just its OWN two buttons (~44px row 1, ~62px row 2 - "Art matches, not an official
+// printing" wraps to two lines) - roughly HALF the height for the same four buttons, real
+// budget the candidate row below needs back (confirmed via a real Playwright measurement in
+// this task's own report: the 1x3 version left the candidate row only 69px of its own ~176px
+// natural height, forcing HeroQuestionsArea's overflow-y: auto fallback to kick in - not the
+// "zero-scroll" outcome the spec asks for).
+const Level2NarrowGrid = styled.div`
+  @media (max-width: 767.98px) {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto auto auto minmax(0, 1fr);
+    grid-template-areas: "text text" "filter none-of-these" "art-matches skip" "reason reason" "options options";
+    gap: 0.5rem;
+    height: 100%;
+    min-height: 0;
+  }
+`;
+
+const NarrowTextArea = styled.div`
+  @media (max-width: 767.98px) {
+    grid-area: text;
+  }
+`;
+
+// Each action wrapper's own call site also carries a Bootstrap margin utility className
+// (mb-2/mt-2/mt-3) - needed at >= md, where these wrappers carry no CSS of their own and the
+// margin is the ONLY thing spacing one button from the next in normal block flow. At narrow,
+// Level2NarrowGrid's own `gap: 0.5rem` already spaces every row - those same classNames are
+// still present in the markup (one shared JSX call site for both widths - see this task's own
+// report) but now DOUBLE that spacing on top of the grid gap. `margin: 0 !important` here
+// cancels them specifically at narrow (Bootstrap's own spacing utilities are declared
+// `!important`, so an unmarked override can't win against them - same reasoning as the
+// `.highlighted .text-muted` override in cardPanel.tsx), recovering that budget for the options
+// row below (measured live, Pixel 7: recovered the last real slice of room the candidate row
+// needed to stop triggering HeroQuestionsArea's overflow-y: auto fallback).
+const NarrowFilterAction = styled.div`
+  @media (max-width: 767.98px) {
+    grid-area: filter;
+    margin: 0 !important;
+  }
+`;
+
+const NarrowNoMatchAction = styled.div`
+  @media (max-width: 767.98px) {
+    grid-area: none-of-these;
+    margin: 0 !important;
+  }
+`;
+
+const NarrowArtMatchesAction = styled.div`
+  @media (max-width: 767.98px) {
+    grid-area: art-matches;
+    margin: 0 !important;
+  }
+`;
+
+const NarrowSkipAction = styled.div`
+  @media (max-width: 767.98px) {
+    grid-area: skip;
+    margin: 0 !important;
+  }
+`;
+
+// The reason-strip (shown instead of the None-of-these/Art-matches/Skip trio once the user has
+// already tapped "None of these" - the two are mutually exclusive, never rendered together) is
+// a bigger block (a whole reason-picker UI, not a single button) - gets its own full-width row
+// rather than trying to squeeze into one of the four button cells above.
+const NarrowReasonArea = styled.div`
+  @media (max-width: 767.98px) {
+    grid-area: reason;
+  }
+`;
+
+// Wraps MobileCandidateScroller - `min-height: 0` so this area can shrink below the candidate
+// row's own natural content height on a genuinely tight viewport instead of forcing this area
+// past its `1fr` share and reintroducing scroll where none is wanted.
+//
+// Fix round (owner live-review, "portrait static top block") - this used to be
+// `display: flex; align-items: center`, centering MobileCandidateScroller within whatever space
+// was left rather than stretching to fill it. `align-items: center` does NOT clip an oversized
+// child to the container's own height (unlike `stretch`, the default) - on a device where the
+// tile grid's natural height comes out even a few px taller than this area's own share (a real
+// Playwright measurement, Pixel 7, found this happening even after every other budget trim in
+// this fix round), the tile row simply bled out both above AND below this box's own bounds,
+// which HeroQuestionsArea's overflow-y: auto defensive fallback then caught, reintroducing an
+// unwanted vertical scroll for content that's supposed to be reachable with zero scrolling
+// (only the tile row's own horizontal scroll, MobileCandidateScroller's `overflow-x: auto`, is
+// meant to ever engage). `align-items` now left at its default (`stretch`), and
+// MobileCandidateScroller gets a matching `overflow-y: hidden` (own comment) - together these
+// make this the same kind of hard, non-negotiable clip boundary `overflow-x: auto` already is
+// on the horizontal axis, so a genuinely-too-tall tile row is clipped (a few invisible px at
+// the very bottom, in the worst case) rather than ever handing control back to the outer
+// vertical scrollbar.
+const NarrowOptionsArea = styled.div`
+  @media (max-width: 767.98px) {
+    grid-area: options;
+    display: flex;
+    min-height: 0;
+  }
+`;
+
 // Artist/tag question types never had a starburst-backed CardPanel (their card is a plain
 // reference image, not the silhouette-reveal "mystery card" the candidate-type items use) -
 // wtc-redesign-spec.md's "reposition, don't redesign" instruction keeps that unchanged, just
@@ -432,6 +758,22 @@ const HeroQuestionsArea = styled.div`
 // centering contract CardPanel/StaticCardPanel give their own callers.
 const PlainHeroCard = styled.div`
   width: 100%;
+`;
+
+// The "N ready / N in catalog / N contested" stats line (rendered after every stage's own
+// content, inside HeroQuestionsArea - see the return statement below) - a nice-to-have info
+// line, not part of the answer funnel itself. Fix round (owner live-review, "portrait static
+// top block") - hidden below md: this line sits as a sibling AFTER whichever stage's content
+// renders (Level2NarrowGrid for Level 2, or the plain stage content for Level 1/3/artist/tag),
+// so at narrow it's extra height competing with the same fixed, no-scroll budget every other
+// piece of this fix round is fighting for - real measurement (Pixel 7, this task's own report)
+// found it was the last few needed px keeping HeroQuestionsArea's overflow-y: auto defensive
+// fallback engaged even after every other trim in this round. Not worth the display cost at a
+// width where every pixel is this contested - still shown, unchanged, at >= md.
+const StatsLine = styled.p`
+  @media (max-width: 767.98px) {
+    display: none;
+  }
 `;
 
 // Frontend and backend deploy independently (GitHub Pages vs. a separate Django API) - there's
@@ -490,7 +832,7 @@ export function QuestionFeed() {
   // a still-loading or half-painted image. `imageLoaded`/`imageErrored` below, together with
   // `cardImageRef`'s mount-time `.complete` check (mirrors Card.tsx's own cached-image
   // workaround - see that component's comment), gate all three animations (via each one's own
-  // `$playing`/`playing` prop - RevealOverlay/CardPulseWrapper in cardPanel.tsx, WhatsThatWords
+  // `$playing`/`playing` prop - MysteryCardFace/CardPulseWrapper in cardPanel.tsx, WhatsThatWords
   // itself) on one single real load-complete moment instead of three independent mount timers.
   const [imageLoaded, setImageLoaded] = useState<boolean>(false);
   // A failed load never gets a legitimate "reveal" moment to sync to - the cover stays up
@@ -608,7 +950,7 @@ export function QuestionFeed() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, fetchToken]);
 
-  // The one moment every animation in the hero (RevealOverlay's fade, WhatsThatWords' pop,
+  // The one moment every animation in the hero (MysteryCard's fade, WhatsThatWords' pop,
   // CardPulseWrapper's pulse) is anchored to - see each of their own comments. Two cases skip
   // the animated queue entirely and jump straight to `revealed`, for different reasons:
   // reduced motion (nothing should ever visibly pop/fade, so there's no animationend event to
@@ -618,7 +960,7 @@ export function QuestionFeed() {
   // the reduced-motion shortcut has to apply on EITHER path, or a reduced-motion session that
   // happens to hit the catch-up path (a cached image, or - only in tests - an empty-string
   // fixture URL that never fires load/error at all) would never flip `revealed` at all, since
-  // reduced motion also means RevealOverlay's fade never plays and therefore never fires the
+  // reduced motion also means MysteryCard's fade never plays and therefore never fires the
   // `onAnimationEnd` that flips it the normal way. That gap is exactly what the reduced-motion
   // Playwright spec (WhatsThatWordsAnimation.spec.ts) caught empirically.
   const onCardImageSettled = (errored: boolean) => {
@@ -1027,13 +1369,11 @@ export function QuestionFeed() {
             of the question UI (badge/buttons/etc, gated on `revealed` elsewhere in this file)
             isn't stranded behind a cover that will never legitimately animate away. */}
         {(!revealed || imageErrored) && (
-          <RevealOverlay
+          <MysteryCard
             data-testid="question-feed-reveal-overlay"
-            $playing={imageLoaded && !imageErrored}
+            playing={imageLoaded && !imageErrored}
             onAnimationEnd={() => setRevealed(true)}
-          >
-            ?
-          </RevealOverlay>
+          />
         )}
       </RevealWrapper>
       <div className="text-center mt-1">{item.card.name}</div>
@@ -1134,6 +1474,7 @@ export function QuestionFeed() {
                   data-testid="question-feed-level1-reference-image"
                 >
                   <ArtPlaceholder>
+                    <MysteryCard />
                     <ZoomableThumbnail>
                       <img
                         src={item.suggestedPrinting.mediumThumbnailUrl}
@@ -1249,66 +1590,91 @@ export function QuestionFeed() {
         </div>
       );
     } else {
-      // Level 2.
+      // Level 2. `Level2NarrowGrid` wraps everything below (own comment above) - it's the ONLY
+      // thing that actually changes structure at narrow widths; every element inside it keeps
+      // its exact existing desktop DOM position/order/classNames, so >= md is byte-for-byte
+      // unaffected. The `Narrow*` wrapper components are similarly narrow-only no-ops at >= md.
       cardNode = filterExpanded ? filterCardPanel : plainCardPanel;
       questionsNode = !revealed ? (
         <div className="text-center py-4">
           <Spinner size={2} />
         </div>
       ) : (
-        <>
-          <Badge
-            bg={item.type === "confirm_suggestion" ? "info" : "secondary"}
-            data-testid="question-feed-tier-badge"
-            className="mb-2"
-          >
-            {item.type === "confirm_suggestion"
-              ? "Suggested match"
-              : "Needs identification"}
-          </Badge>
-          {item.type === "confirm_suggestion" &&
-            item.suggestedPrinting != null &&
-            (suggestionRejectedWithNoneLeft ? (
-              <>
-                {/* Singleton-rejection case (task: eliminate double-asking) - the suggested
-                    printing was the ONLY candidate, so there's nothing left to pick from a
-                    grid. Skips straight to the classified-exit choice below, with the rejected
-                    candidate kept as grayed, non-interactive context (never a button) rather
-                    than vanishing without explanation. */}
+        <Level2NarrowGrid>
+          <NarrowTextArea>
+            <Badge
+              bg={item.type === "confirm_suggestion" ? "info" : "secondary"}
+              data-testid="question-feed-tier-badge"
+              className="mb-2"
+            >
+              {item.type === "confirm_suggestion"
+                ? "Suggested match"
+                : "Needs identification"}
+            </Badge>
+            {item.type === "confirm_suggestion" &&
+              item.suggestedPrinting != null &&
+              (suggestionRejectedWithNoneLeft ? (
+                <>
+                  {/* Singleton-rejection case (task: eliminate double-asking) - the suggested
+                      printing was the ONLY candidate, so there's nothing left to pick from a
+                      grid. Skips straight to the classified-exit choice below, with the
+                      rejected candidate kept as grayed, non-interactive context (never a
+                      button) rather than vanishing without explanation. */}
+                  <p data-testid="question-feed-suggestion-prompt">
+                    Got it - not that one. Is it any official printing at all?
+                  </p>
+                  <div
+                    className="d-flex align-items-center gap-2 mb-3 opacity-50"
+                    data-testid="question-feed-rejected-context"
+                  >
+                    <div style={{ width: 40, flexShrink: 0 }}>
+                      <img
+                        src={item.suggestedPrinting.mediumThumbnailUrl}
+                        alt=""
+                        style={{ width: "100%" }}
+                      />
+                    </div>
+                    <div className="text-muted small">
+                      You said: not{" "}
+                      <SetIcon
+                        expansionCode={item.suggestedPrinting.expansionCode}
+                      />{" "}
+                      {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                      {item.suggestedPrinting.collectorNumber}
+                    </div>
+                  </div>
+                </>
+              ) : (
                 <p data-testid="question-feed-suggestion-prompt">
-                  Got it - not that one. Is it any official printing at all?
+                  Which of these is it?{" "}
+                  <SetIcon
+                    expansionCode={item.suggestedPrinting.expansionCode}
+                  />{" "}
+                  {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                  {item.suggestedPrinting.collectorNumber} was suggested
                 </p>
-                <div
-                  className="d-flex align-items-center gap-2 mb-3 opacity-50"
-                  data-testid="question-feed-rejected-context"
+              ))}
+            {hiddenCount > 0 && (
+              <p
+                className="text-muted small"
+                data-testid="question-feed-hidden-count"
+              >
+                {hiddenCount} hidden by your tags -{" "}
+                <a
+                  href="#"
+                  data-testid="question-feed-clear-filters"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setChipStates(initialChipStates());
+                  }}
                 >
-                  <div style={{ width: 40, flexShrink: 0 }}>
-                    <img
-                      src={item.suggestedPrinting.mediumThumbnailUrl}
-                      alt=""
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                  <div className="text-muted small">
-                    You said: not{" "}
-                    <SetIcon
-                      expansionCode={item.suggestedPrinting.expansionCode}
-                    />{" "}
-                    {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                    {item.suggestedPrinting.collectorNumber}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <p data-testid="question-feed-suggestion-prompt">
-                Which of these is it?{" "}
-                <SetIcon expansionCode={item.suggestedPrinting.expansionCode} />{" "}
-                {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                {item.suggestedPrinting.collectorNumber} was suggested
+                  clear
+                </a>
               </p>
-            ))}
+            )}
+          </NarrowTextArea>
           {!suggestionRejectedWithNoneLeft && (
-            <div className="mb-2">
+            <NarrowFilterAction className="mb-2">
               <FilterToggleButton
                 variant="link"
                 onClick={() => setFilterExpanded((previous) => !previous)}
@@ -1316,101 +1682,87 @@ export function QuestionFeed() {
               >
                 {filterExpanded ? "Hide filters" : "Filter by attribute"}
               </FilterToggleButton>
-            </div>
+            </NarrowFilterAction>
           )}
-          {hiddenCount > 0 && (
-            <p
-              className="text-muted small"
-              data-testid="question-feed-hidden-count"
-            >
-              {hiddenCount} hidden by your tags -{" "}
-              <a
-                href="#"
-                data-testid="question-feed-clear-filters"
-                onClick={(event) => {
-                  event.preventDefault();
-                  setChipStates(initialChipStates());
-                }}
-              >
-                clear
-              </a>
-            </p>
-          )}
-          <MobileCandidateScroller>
-            <Row className="g-2" xs={3} md={4}>
-              {/* Row is 4-wide at >= md (the only breakpoint HeroQuestionsArea's overflow-y:
-                  auto, and therefore its hover-clip risk, applies at - see that component's own
-                  comment) - every 1st/4th candidate in a row sits flush against the scroll box's
-                  own left/right edge, where even the added bleed room isn't enough for
-                  HoverBurst's full-size bloom (see that component's own $edge comment). Below
-                  md, MobileCandidateScroller overrides this Row to a single non-wrapping,
-                  horizontally-scrollable line instead (owner's live-review layout proposal) -
-                  xs={3} is inert there (never gets a chance to actually wrap), kept only so >=
-                  md's md={4} value has a real xs fallback per react-bootstrap's own Row API. */}
-              {visibleCandidates.map((candidate, index) => (
-                <Col key={candidate.identifier}>
-                  <CandidateButton
-                    variant="outline-secondary"
-                    className={`w-100 p-1 border-0${
-                      item.type === "confirm_suggestion" &&
-                      item.suggestedPrinting?.identifier ===
-                        candidate.identifier
-                        ? " highlighted"
-                        : ""
-                    }`}
-                    disabled={submitting}
-                    onClick={() => selectCandidate(candidate, false)}
-                    {...getPrintingCandidateDataAttributes(
-                      item.card.name,
-                      candidate
-                    )}
-                  >
-                    <HoverBurst
-                      className="hover-burst"
-                      viewBox={STARBURST_VIEWBOX}
-                      $edge={index % 4 === 0 || index % 4 === 3}
+          <NarrowOptionsArea>
+            <MobileCandidateScroller>
+              <Row className="g-2" xs={3} md={4}>
+                {/* Row is 4-wide at >= md (the only breakpoint HeroQuestionsArea's overflow-y:
+                    auto, and therefore its hover-clip risk, applies at - see that component's
+                    own comment) - every 1st/4th candidate in a row sits flush against the
+                    scroll box's own left/right edge, where even the added bleed room isn't
+                    enough for HoverBurst's full-size bloom (see that component's own $edge
+                    comment). Below md, MobileCandidateScroller overrides this Row to a single
+                    non-wrapping, horizontally-scrollable line instead - xs={3} is inert there
+                    (never gets a chance to actually wrap), kept only so >= md's md={4} value
+                    has a real xs fallback per react-bootstrap's own Row API. */}
+                {visibleCandidates.map((candidate, index) => (
+                  <Col key={candidate.identifier}>
+                    <CandidateButton
+                      variant="outline-secondary"
+                      className={`w-100 p-1 border-0${
+                        item.type === "confirm_suggestion" &&
+                        item.suggestedPrinting?.identifier ===
+                          candidate.identifier
+                          ? " highlighted"
+                          : ""
+                      }`}
+                      disabled={submitting}
+                      onClick={() => selectCandidate(candidate, false)}
+                      {...getPrintingCandidateDataAttributes(
+                        item.card.name,
+                        candidate
+                      )}
                     >
-                      <polygon
-                        points={STARBURST_OUTER_FRAMES[starburstFrame]}
-                        fill={STARBURST_OUTER_COLOR}
-                      />
-                      <polygon
-                        points={STARBURST_INNER_FRAMES[starburstFrame]}
-                        fill={STARBURST_INNER_COLOR}
-                      />
-                    </HoverBurst>
-                    <ArtPlaceholder>
-                      <ZoomableThumbnail>
-                        <img
-                          src={candidate.mediumThumbnailUrl}
-                          alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                      <HoverBurst
+                        className="hover-burst"
+                        viewBox={STARBURST_VIEWBOX}
+                        $edge={index % 4 === 0 || index % 4 === 3}
+                      >
+                        <polygon
+                          points={STARBURST_OUTER_FRAMES[starburstFrame]}
+                          fill={STARBURST_OUTER_COLOR}
                         />
-                      </ZoomableThumbnail>
-                      {/* Tied to this specific candidate's identifier, not just `submitting` -
-                        the old dimmed-all-buttons treatment gave no way to tell which of
-                        several candidates you actually tapped under any real latency. */}
-                      {submitting &&
-                        selectedCandidateId === candidate.identifier && (
-                          <div
-                            data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
-                          >
-                            <Spinner size={1.5} zIndex={2} positionAbsolute />
-                          </div>
-                        )}
-                    </ArtPlaceholder>
-                    <div>
-                      <SetIcon expansionCode={candidate.expansionCode} />{" "}
-                      {candidate.expansionCode.toUpperCase()}{" "}
-                      {candidate.collectorNumber}
-                    </div>
-                    <div className="text-muted small">{candidate.artist}</div>
-                  </CandidateButton>
-                </Col>
-              ))}
-            </Row>
-          </MobileCandidateScroller>
+                        <polygon
+                          points={STARBURST_INNER_FRAMES[starburstFrame]}
+                          fill={STARBURST_INNER_COLOR}
+                        />
+                      </HoverBurst>
+                      <ArtPlaceholder>
+                        <MysteryCard />
+                        <ZoomableThumbnail>
+                          <img
+                            src={candidate.mediumThumbnailUrl}
+                            alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                          />
+                        </ZoomableThumbnail>
+                        {/* Tied to this specific candidate's identifier, not just
+                          `submitting` - the old dimmed-all-buttons treatment gave no way to
+                          tell which of several candidates you actually tapped under any real
+                          latency. */}
+                        {submitting &&
+                          selectedCandidateId === candidate.identifier && (
+                            <div
+                              data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
+                            >
+                              <Spinner size={1.5} zIndex={2} positionAbsolute />
+                            </div>
+                          )}
+                      </ArtPlaceholder>
+                      <div>
+                        <SetIcon expansionCode={candidate.expansionCode} />{" "}
+                        {candidate.expansionCode.toUpperCase()}{" "}
+                        {candidate.collectorNumber}
+                      </div>
+                      <div className="text-muted small">{candidate.artist}</div>
+                    </CandidateButton>
+                  </Col>
+                ))}
+              </Row>
+            </MobileCandidateScroller>
+          </NarrowOptionsArea>
           {followUp === "no-match-reason" && (
-            <div className="mt-3">
+            <NarrowReasonArea className="mt-3">
               <hr />
               <NoMatchReasonStrip
                 backendURL={backendURL}
@@ -1418,45 +1770,59 @@ export function QuestionFeed() {
                 onDone={advance}
                 onRateLimited={() => setRateLimited(true)}
               />
-            </div>
+            </NarrowReasonArea>
           )}
           {followUp === "none" && (
-            <div className="mt-3 d-flex flex-column gap-2">
-              <ThumbButton
-                variant="outline-secondary"
-                disabled={submitting}
-                onClick={() => selectCandidate(undefined, true)}
-                data-testid="question-feed-no-match"
-              >
-                {submitting && selectedCandidateId === "no-match" ? (
-                  <Spinner size={1} />
-                ) : (
-                  "None of these"
-                )}
-              </ThumbButton>
-              <ThumbButton
-                variant="outline-secondary"
-                disabled={submitting}
-                onClick={classifyAsCustomArt}
-                data-testid="question-feed-custom-art"
-              >
-                {submitting && selectedCandidateId === "custom-art" ? (
-                  <Spinner size={1} />
-                ) : (
-                  "\u{1F3A8} Art matches, not an official printing"
-                )}
-              </ThumbButton>
-              <ThumbButton
-                variant="outline-secondary"
-                disabled={submitting}
-                onClick={skip}
-                data-testid="question-feed-skip"
-              >
-                Skip
-              </ThumbButton>
-            </div>
+            <>
+              {/* A real 2x2 grid at narrow (Level2NarrowGrid's own comment) - three separate
+                  wrapper elements (one per button), not one shared flex-column div, so each can
+                  carry its own grid-area independently. Desktop keeps the exact same visual
+                  stack: mt-3 before the first button, mt-2 between each subsequent pair
+                  reproduces gap-2's 0.5rem spacing via ordinary margin instead of flex gap -
+                  visually identical block-stacked spacing, since these narrow-only wrappers
+                  carry no CSS of their own at >= md (same "inert plain div" guarantee as every
+                  other Narrow* wrapper here). */}
+              <NarrowNoMatchAction className="mt-3">
+                <ThumbButton
+                  variant="outline-secondary"
+                  disabled={submitting}
+                  onClick={() => selectCandidate(undefined, true)}
+                  data-testid="question-feed-no-match"
+                >
+                  {submitting && selectedCandidateId === "no-match" ? (
+                    <Spinner size={1} />
+                  ) : (
+                    "None of these"
+                  )}
+                </ThumbButton>
+              </NarrowNoMatchAction>
+              <NarrowArtMatchesAction className="mt-2">
+                <ThumbButton
+                  variant="outline-secondary"
+                  disabled={submitting}
+                  onClick={classifyAsCustomArt}
+                  data-testid="question-feed-custom-art"
+                >
+                  {submitting && selectedCandidateId === "custom-art" ? (
+                    <Spinner size={1} />
+                  ) : (
+                    "\u{1F3A8} Art matches, not an official printing"
+                  )}
+                </ThumbButton>
+              </NarrowArtMatchesAction>
+              <NarrowSkipAction className="mt-2">
+                <ThumbButton
+                  variant="outline-secondary"
+                  disabled={submitting}
+                  onClick={skip}
+                  data-testid="question-feed-skip"
+                >
+                  Skip
+                </ThumbButton>
+              </NarrowSkipAction>
+            </>
           )}
-        </>
+        </Level2NarrowGrid>
       );
     }
   } else {
@@ -1544,10 +1910,22 @@ export function QuestionFeed() {
           </CardPulseWrapper>
         </HeroCardArea>
         <HeroWordsArea>
-          <WhatsThatWords
-            animationKey={item.card.identifier}
-            playing={imageLoaded && !imageErrored}
-          />
+          {/* Narrow widths: the original one-line wordmark, text only - no standalone "?"
+              mascot (round 3, see NarrowWordmark's own comment) - swapped for the sliced/
+              animated version via CSS `display` only, both always mounted. */}
+          <NarrowWordmark>
+            <img
+              src="/whatsthat-wordmark.svg"
+              alt="What's That Card?"
+              data-testid="whatsthat-narrow-wordmark"
+            />
+          </NarrowWordmark>
+          <WideWordmark>
+            <WhatsThatWords
+              animationKey={item.card.identifier}
+              playing={imageLoaded && !imageErrored}
+            />
+          </WideWordmark>
         </HeroWordsArea>
         <HeroQuestionsArea data-testid="question-feed-questions-area">
           {rateLimited && (
@@ -1580,13 +1958,13 @@ export function QuestionFeed() {
               scroll budget a user has to clear before answering) keeps the information without
               the vertical cost. */}
           {counts != null && (
-            <p
+            <StatsLine
               className="text-muted small mt-3 mb-0"
               data-testid="question-feed-stats"
             >
               {counts.confirmable} ready &middot; {counts.total} in catalog
               &middot; {counts.contested} contested
-            </p>
+            </StatsLine>
           )}
         </HeroQuestionsArea>
       </HeroGrid>
