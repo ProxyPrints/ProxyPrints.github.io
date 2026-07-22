@@ -249,6 +249,49 @@ class TestVoteWeightScenarioMatrixTableB(object):
         assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == expected
 
 
+class TestD4WinnerSelectionRegression:
+    """
+    2026-07-22 hardening, post-review: D4's original implementation checked its trigger
+    condition against the *already-selected* winner (selected by raw `full_weight`), which let
+    a large enough machine/implicit dissent pile win the SELECTION outright (its raw weight
+    exceeding the human group's), then fail the human-backed gate and return `None` instead of
+    correctly resolving the human-backed group. Empirically: RESOLVED(2 USER, A) + N DEDUCTION
+    dissent(B) - N=3 correctly stayed "A" (the case the original test suite covered), but N=4
+    was ORDER-DEPENDENT (a tie in raw weight, 2.0 vs 2.0, resolved by whichever group's votes
+    were iterated/inserted first) and N>=5 deterministically returned `None` (B's raw weight,
+    0.5*N, exceeded A's 2.0, so B won the selection and then failed the human-backed gate).
+
+    The fix moves D4's trigger to BEFORE winner selection (`human_quorum_group_exists`, checked
+    against every group, not just whichever wins raw-weight selection) - these cases must ALL
+    stay "A", independent of N or vote insertion order.
+    """
+
+    @pytest.mark.parametrize("dissent_count", [3, 4, 5, 6, 10, 100])
+    def test_machine_dissent_never_de_resolves_regardless_of_pile_size(self, dissent_count):
+        votes = [VT("A", 1.0, True)] * 2 + [VT("B", 0.5, False)] * dissent_count
+        assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
+
+    def test_n4_tie_case_stays_a_when_human_votes_iterate_first(self):
+        # the exact N=4 tie shape (raw weight A=2.0 vs B=2.0) - human group inserted first
+        votes = [VT("A", 1.0, True)] * 2 + [VT("B", 0.5, False)] * 4
+        assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
+
+    def test_n4_tie_case_stays_a_when_machine_votes_iterate_first(self):
+        # the same N=4 tie shape, but with the machine dissent votes iterated FIRST - kills the
+        # order-dependence the original bug had (dict insertion order no longer matters, since
+        # B's non-human weight is excluded from decision_weight entirely once A's human_weight
+        # alone clears min_weight, regardless of iteration order).
+        votes = [VT("B", 0.5, False)] * 4 + [VT("A", 1.0, True)] * 2
+        assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
+
+    def test_implicit_dissent_at_the_same_scale_is_equally_safe(self):
+        # same regression, IMPLICIT-sourced dissent instead of DEDUCTION - capped well below
+        # min_weight per group regardless, but this proves the fix isn't source-specific.
+        w = settings.PRINTING_TAG_IMPLICIT_WEIGHT
+        votes = [VT("A", 1.0, True)] * 2 + [VT("B", w, False, is_implicit=True) for _ in range(100)]
+        assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
+
+
 class TestPrivilegedGatePinned:
     """T1/T1b from the matrix's TEST-SPEC - unaffected by the D1/D4 restructure, pinned here to
     guard against a future regression in the same change that touches the group accumulation."""

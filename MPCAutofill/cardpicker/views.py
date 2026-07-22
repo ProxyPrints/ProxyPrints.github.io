@@ -1251,9 +1251,15 @@ def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> 
         - shared across every source), so an implicit vote may only ever create a fresh row or
         update a row that is ALREADY implicit ("supersede must not collide" - a later implicit
         pick by the same identity replaces the earlier one, never a real vote cast by that same
-        identity). This is checked with a plain `SELECT` rather than relied on as a DB-level
-        constraint violation, since the desired behaviour on collision is a silent no-op, not an
-        error surfaced to the caller.
+        identity). The check-then-write is done under `select_for_update()` (2026-07-22
+        hardening, post-review) rather than a plain, unlocked `SELECT`: an unlocked read leaves a
+        TOCTOU window where a real vote inserted by this same identity between the read and the
+        `update_or_create` below would be silently clobbered to `IMPLICIT` - locking the existing
+        row (when one exists) for the rest of this transaction serializes against any concurrent
+        write to that same row, closing that window. (A genuinely brand-new row - no existing
+        vote at all yet - has nothing to lock; a true simultaneous double-create race there is a
+        narrower, pre-existing gap shared with every other `update_or_create`/`get_or_create` call
+        site in this module, not introduced by this function.)
 
     Re-runs `resolve_and_persist_tag_votes` in the same transaction as the write, same as
     `_cast_tag_vote_and_resolve`.
@@ -1264,7 +1270,8 @@ def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> 
         return
     with transaction.atomic():
         existing_source = (
-            CardTagVote.objects.filter(card=card, tag=tag, anonymous_id=anonymous_id)
+            CardTagVote.objects.select_for_update()
+            .filter(card=card, tag=tag, anonymous_id=anonymous_id)
             .values_list("source", flat=True)
             .first()
         )

@@ -141,6 +141,23 @@ class TestResolvePrinting:
             CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.DEDUCTION)
         assert resolve_printing(card) == printing_a
 
+    @pytest.mark.parametrize("dissent_count", [4, 5, 6, 10, 100])
+    def test_machine_dissent_cannot_de_resolve_regardless_of_pile_size(self, db, dissent_count):
+        # 2026-07-22 hardening: the original D4 fix only checked its trigger against the
+        # already-selected winner, so a large enough machine dissent pile (raw weight >= the
+        # human group's) could win the winner-SELECTION step outright and then fail the
+        # human-backed gate, returning None instead of resolving printing_a. Confirmed
+        # empirically at N=4 (order-dependent tie) and N>=5 (deterministic de-resolution); this
+        # must stay resolved to printing_a at every N, regardless of vote insertion order.
+        card = CardFactory()
+        printing_a = CanonicalCardFactory()
+        printing_b = CanonicalCardFactory()
+        for _ in range(dissent_count):
+            CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.DEDUCTION)
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        assert resolve_printing(card) == printing_a
+
 
 class TestResolveAndPersistPrintingReindex:
     """

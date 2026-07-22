@@ -163,27 +163,32 @@ def resolve_weighted_consensus(
     from source" convention applies here too: this is an original design against that ratified
     spec, not adapted from anywhere) - stop non-human-backed weight (DEDUCTION/OCR/FEDERATED-as-
     imported-today/IMPLICIT alike) from ever being the thing that actually decides a contest
-    between humans:
+    between humans. Both collapse into ONE shared trigger, `exclude_non_human`, computed BEFORE
+    winner selection (2026-07-22 hardening: an earlier version of this function computed D4's
+    condition from the *already-selected* winner, which let a large enough machine/implicit pile
+    win the selection outright on raw weight, then fail the human-backed gate and return `None`
+    instead of correctly resolving the actual human-backed group - see the matrix's own B4 note
+    and this fix's own test suite for the N=4/5/100-machine-dissent regression cases this closes):
 
-    D1 - "machine weight must not decide a live human-vs-human contest": if two or more outcome
-    groups each carry SOME human-backed weight (a genuine human-vs-human disagreement, not one
-    human side vs. a purely machine-derived one), every group's non-human-backed weight is
-    dropped entirely for BOTH the winner-selection and the gate checks below - only human_weight
-    counts. A machine/implicit pile can still make an already-agreeing human group's total look
-    bigger (see D2 below), but it can never be the deciding weight that flips or resolves an
-    actual human disagreement it isn't part of.
+    `exclude_non_human` is true when EITHER:
+      - **D1** - a live human-vs-human contest: two or more outcome groups each carry SOME
+        human-backed weight (a genuine human-vs-human disagreement, not one human side vs. a
+        purely machine-derived one); OR
+      - **D4** - ANY single group's human_weight ALONE already clears `min_weight` (that group
+        doesn't need machine/implicit help to reach quorum, so no other group's machine/implicit
+        pile should be able to out-weigh it in the selection, no matter how large).
 
-    D4 - "machine dissent can't de-resolve a human-quorum-valid winner": if D1 didn't already
-    trigger, and the (full-weight) winner's OWN human_weight alone already clears `min_weight`,
-    the SHARE computation (both the winner's own numerator and the total denominator) is
-    recomputed from human_weight only, across every group - so a pile of machine/implicit
-    dissent elsewhere can't drag a human-quorum-valid winner's share below `min_share` and
-    silently de-resolve it. This does NOT touch the quorum (`min_weight`) check itself, and does
-    NOT apply when the winner's human_weight alone doesn't already clear `min_weight` - a lone
-    human vote plus agreeing machine weight can still be promoted to a resolution the same way
-    it always could (D2, unaffected by either mechanism: neither condition is met when there's
-    only one outcome group with any human-backed weight and that group's human weight alone is
-    below `min_weight`).
+    When `exclude_non_human` is true, EVERY group's non-human-backed weight (machine + implicit)
+    is dropped entirely for BOTH winner-selection and the share/quorum gate checks below - only
+    `human_weight` counts, for every group, not just the winner. A machine/implicit pile can
+    still make an already-agreeing human group's total look bigger when `exclude_non_human` is
+    false (see D2 below), but it can never be the deciding weight that lets a machine-only group
+    outrank, flip, or de-resolve a human-backed group's own outcome. This does NOT touch the
+    quorum (`min_weight`) check's *threshold* itself, and does NOT trigger when no group's
+    human-backed weight alone clears `min_weight` and there's no live human contest either - a
+    lone human vote plus agreeing machine weight can still be promoted to a resolution the same
+    way it always could (D2: `exclude_non_human` is false in that shape, since there's only one
+    human-backed group and its own human weight doesn't clear `min_weight` by itself).
     """
     votes = list(votes)
     if not votes:
@@ -213,19 +218,22 @@ def resolve_weighted_consensus(
         return group["human_weight"] + group["machine_weight"] + min(group["implicit_weight_raw"], implicit_cap)
 
     # D1: a live human-vs-human contest is >=2 groups each carrying human-backed weight - not
-    # merely >=2 groups existing (a human group vs. a purely-machine/implicit one is NOT this;
-    # that shape is handled by the ordinary human-backed gate and D4 below, not D1).
+    # merely >=2 groups existing (a human group vs. a purely-machine/implicit one is NOT this).
     live_human_contest = sum(1 for group in groups.values() if group["has_human_backed"]) >= 2
+    # D4: ANY group's human weight alone already clears quorum - checked BEFORE winner selection
+    # (not against the already-selected winner - see this function's own docstring for why that
+    # ordering was the bug), so a machine/implicit-only group can never out-select a human-quorum
+    # -valid group in the first place, regardless of how large that machine/implicit pile is.
+    human_quorum_group_exists = any(group["human_weight"] >= min_weight for group in groups.values())
+    exclude_non_human = live_human_contest or human_quorum_group_exists
 
     def decision_weight(group: _VoteGroup) -> float:
-        return group["human_weight"] if live_human_contest else full_weight(group)
+        return group["human_weight"] if exclude_non_human else full_weight(group)
 
     winning_key, winner = max(groups.items(), key=lambda item: decision_weight(item[1]))
     winner_weight = decision_weight(winner)
 
-    if live_human_contest or winner["human_weight"] >= min_weight:
-        # D1 (live_human_contest) or D4 (winner's own human weight already clears quorum): share
-        # is computed from human_weight alone, across every group.
+    if exclude_non_human:
         total_weight = sum(group["human_weight"] for group in groups.values())
         winner_share_weight = winner["human_weight"]
     else:
