@@ -70,6 +70,8 @@ from cardpicker.models import (
     SavedDeckShare,
     Source,
     Tag,
+    TagModerationClass,
+    TagVoteStatus,
     UserCryptoProfile,
     VotePolarity,
     VoteSource,
@@ -110,6 +112,7 @@ from cardpicker.schema_types import Cards as SampleCards
 from cardpicker.schema_types import (
     CardsRequest,
     CardsResponse,
+    CastImplicitVoteRequest,
     ConfirmReviewClusterRequest,
     ConfirmReviewClusterResponse,
     ContributionsResponse,
@@ -168,6 +171,7 @@ from cardpicker.schema_types import (
     ReportCardResponse,
     ResetSavedDecksRequest,
     ResetSavedDecksResponse,
+    RetractImplicitVoteRequest,
     ReviewClusterDetailRequest,
     ReviewClusterDetailResponse,
     ReviewClusterListRequest,
@@ -1210,6 +1214,174 @@ def _cast_tag_vote_and_resolve(
                 },
             )
         resolve_and_persist_tag_votes(card)
+
+
+# `AbstractWeightedVote.vote_surface` value stamped on every VoteSource.IMPLICIT vote - lets
+# any future analysis distinguish these from every other source's surface values (see
+# models.py's VoteSource.IMPLICIT docstring; "prior Tron condition 8" per the owner-ratified
+# 2026-07-22 vote-weight scenario matrix).
+IMPLICIT_VOTE_SURFACE = "display-editor-filter"
+
+# Persisted tag-vote statuses an implicit vote must never be cast against (owner-ratified
+# 2026-07-22 vote-weight scenario matrix, "write-side guards" / prior condition 8): a settled
+# or in-flight-for-moderation pair shouldn't accept a low-weight nudge in either direction.
+# Deliberately does NOT include CONTESTED/UNRESOLVED - an implicit vote on an already-contested
+# or still-unresolved pair is exactly the ordinary case this feature exists to help settle.
+_STATUSES_BLOCKING_IMPLICIT_VOTES = {
+    TagVoteStatus.RESOLVED_APPLY,
+    TagVoteStatus.RESOLVED_REJECT,
+    TagVoteStatus.PENDING_APPROVAL,
+}
+
+
+def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> None:
+    """
+    Casts (or supersedes) one `VoteSource.IMPLICIT` vote for (card, tag, anonymous_id) - the
+    /editor filter-chip signal fired when a person picks a candidate card while that tag's
+    filter chip is active (docs/features/printing-tags.md's implicit-vote section). Silently a
+    no-op (never an error - a guarded tag is an entirely normal case, not a client mistake) when:
+
+      - `tag` is SENSITIVE (docs/features/moderation.md's approval queue is the only path for
+        those; never a passive selection signal);
+      - the pair's persisted `Card.tag_vote_statuses` entry is already
+        RESOLVED_APPLY/RESOLVED_REJECT/PENDING_APPROVAL (`_STATUSES_BLOCKING_IMPLICIT_VOTES`);
+      - an existing vote already occupies this exact (card, tag, anonymous_id) row and it is
+        NOT itself an implicit vote. `CardTagVote`'s uniqueness constraint is keyed on
+        (card, tag, anonymous_id) with no source dimension (models.py's `cardtagvote_unique_vote`
+        - shared across every source), so an implicit vote may only ever create a fresh row or
+        update a row that is ALREADY implicit ("supersede must not collide" - a later implicit
+        pick by the same identity replaces the earlier one, never a real vote cast by that same
+        identity). This is checked with a plain `SELECT` rather than relied on as a DB-level
+        constraint violation, since the desired behaviour on collision is a silent no-op, not an
+        error surfaced to the caller.
+
+    Re-runs `resolve_and_persist_tag_votes` in the same transaction as the write, same as
+    `_cast_tag_vote_and_resolve`.
+    """
+    if tag.moderation_class == TagModerationClass.SENSITIVE:
+        return
+    if card.tag_vote_statuses.get(tag.name) in _STATUSES_BLOCKING_IMPLICIT_VOTES:
+        return
+    with transaction.atomic():
+        existing_source = (
+            CardTagVote.objects.filter(card=card, tag=tag, anonymous_id=anonymous_id)
+            .values_list("source", flat=True)
+            .first()
+        )
+        if existing_source is not None and existing_source != VoteSource.IMPLICIT:
+            return
+        CardTagVote.objects.update_or_create(
+            card=card,
+            tag=tag,
+            anonymous_id=anonymous_id,
+            defaults={
+                "polarity": VotePolarity.APPLY,
+                "source": VoteSource.IMPLICIT,
+                "user": None,
+                "vote_surface": IMPLICIT_VOTE_SURFACE,
+            },
+        )
+        resolve_and_persist_tag_votes(card)
+
+
+def _retract_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> None:
+    """
+    Withdraws a previously-cast implicit vote for (card, tag, anonymous_id) - the /editor
+    filter-chip deselect path. The `source=VoteSource.IMPLICIT` filter is load-bearing: this
+    must only ever delete a row that IS an implicit vote, never a real vote that happens to
+    share the same (card, tag, anonymous_id) key - deselecting a chip must never destroy
+    someone's deliberate vote. A no-op (no re-resolve) when there was nothing to delete.
+    """
+    with transaction.atomic():
+        deleted, _ = CardTagVote.objects.filter(
+            card=card, tag=tag, anonymous_id=anonymous_id, source=VoteSource.IMPLICIT
+        ).delete()
+        if deleted:
+            resolve_and_persist_tag_votes(card)
+
+
+def _implicit_vote_rate_limit_rate(group: str, request: HttpRequest) -> str:
+    # separate, tighter budget from PRINTING_TAG_SUBMISSION_RATE - see that setting's own
+    # comment; a callable (not a plain string) for the same override-ability reason as
+    # `_printing_tag_rate_limit_rate`.
+    rate: str = settings.PRINTING_TAG_IMPLICIT_SUBMISSION_RATE
+    return rate
+
+
+@csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_implicit_vote_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_cast_implicit_vote(request: HttpRequest) -> HttpResponse:
+    """
+    Casts an implicit vote for every tag named in `tagNames` against the picked card - the
+    /editor filter-chip signal fired when a person selects a candidate card while those chips
+    are active (docs/features/printing-tags.md's implicit-vote section). Each tag is
+    independently guarded (see `_cast_implicit_vote_and_resolve`) and an unknown tag name is
+    silently skipped - an empty, partially-guarded, or entirely-guarded `tagNames` list is a
+    harmless no-op, never an error, since a person picking a card with no filters active (or
+    filters that happen to already be resolved/sensitive) is an entirely normal case.
+
+    Rate-limited via the separate, tighter `PRINTING_TAG_IMPLICIT_SUBMISSION_RATE` budget - see
+    that setting's own comment for why this doesn't share `PRINTING_TAG_SUBMISSION_RATE`.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many implicit vote submissions - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    req = CastImplicitVoteRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    tags_by_name = {tag.name: tag for tag in Tag.objects.filter(name__in=req.tagNames)}
+    for tag_name in req.tagNames:
+        tag = tags_by_name.get(tag_name)
+        if tag is None:
+            continue
+        _cast_implicit_vote_and_resolve(card, tag, req.anonymousId)
+
+    return JsonResponse(
+        TagConsensusResponse(tags=[_build_tag_consensus_entry(card, tag) for tag in tags_by_name.values()]).model_dump()
+    )
+
+
+@csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_implicit_vote_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_retract_implicit_vote(request: HttpRequest) -> HttpResponse:
+    """
+    Withdraws a single implicit vote - the /editor filter-chip deselect path. See
+    `_retract_implicit_vote_and_resolve` for the guard that stops this from ever deleting a
+    real vote instead.
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many implicit vote submissions - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    req = RetractImplicitVoteRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    try:
+        tag = Tag.objects.get(name=req.tagName)
+    except Tag.DoesNotExist:
+        raise BadRequestException(f"No tag found with name {req.tagName!r}.")
+
+    _retract_implicit_vote_and_resolve(card, tag, req.anonymousId)
+    return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
 
 
 def _card_report_rate_limit_rate(group: str, request: HttpRequest) -> str:

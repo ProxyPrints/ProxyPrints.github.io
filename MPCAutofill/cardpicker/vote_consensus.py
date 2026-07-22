@@ -18,6 +18,14 @@ _SOURCE_WEIGHTS: dict[str, float] = {
     VoteSource.DEDUCTION: settings.PRINTING_TAG_MACHINE_WEIGHT,
     VoteSource.OCR: settings.PRINTING_TAG_MACHINE_WEIGHT,
     VoteSource.FEDERATED: settings.VOTE_FEDERATED_WEIGHT,
+    # Per-vote weight of an implicit vote (docs/features/printing-tags.md's implicit-vote
+    # section) - deliberately tiny (default 0.25, well below a single USER vote) since this is a
+    # passive by-product of a card *selection* under active filter chips, not a deliberate "yes
+    # this tag applies" click. `resolve_weighted_consensus` additionally hard-caps the SUM of
+    # implicit weight per (outcome, i.e. per polarity side) group at
+    # `PRINTING_TAG_IMPLICIT_CAP` - see that function's own docstring for why a per-vote weight
+    # alone isn't a strong enough guarantee.
+    VoteSource.IMPLICIT: settings.PRINTING_TAG_IMPLICIT_WEIGHT,
 }
 
 # Every source NOT in this set counts as "human-backed" for resolve_weighted_consensus's
@@ -35,7 +43,13 @@ _SOURCE_WEIGHTS: dict[str, float] = {
 # weight, never clears the human-backed gate alone) for when an importer actually exists. No
 # importer exists yet, so this line makes the safe behavior the default now, before one can be
 # built, rather than a thing that importer's author must remember to add.
-_MACHINE_DERIVED_SOURCES: set[str] = {VoteSource.DEDUCTION, VoteSource.OCR, VoteSource.FEDERATED}
+#
+# IMPLICIT is here for the same reason DEDUCTION/OCR are: a passive filter-chip-driven signal
+# must never itself satisfy the human-backed gate, no matter how many implicit votes pile up -
+# the per-(outcome)-group cap in `resolve_weighted_consensus` additionally stops it from ever
+# supplying the *quorum* weight alone, but this set is what stops it from ever supplying the
+# human-backed bit, which the cap alone would not.
+_MACHINE_DERIVED_SOURCES: set[str] = {VoteSource.DEDUCTION, VoteSource.OCR, VoteSource.FEDERATED, VoteSource.IMPLICIT}
 
 
 def is_human_backed_source(source: str) -> bool:
@@ -63,6 +77,15 @@ class VoteTuple(NamedTuple):
     # (sensitive tags - see docs/features/moderation.md); defaulted so the many existing
     # call sites that predate the moderation layer construct VoteTuples unchanged.
     is_privileged: bool = False
+    # True for a `VoteSource.IMPLICIT` vote (docs/features/printing-tags.md's implicit-vote
+    # section) - always paired with `is_human_backed=False` by every caller that sets it.
+    # Deliberately its own flag rather than reusing `source == IMPLICIT` inside this module (same
+    # rationale as `is_human_backed` above: the caller decides, so a future federated import of
+    # an implicit-shaped verdict isn't silently mis-tallied by a source-string comparison here).
+    # Defaulted so every existing call site is unaffected. See `resolve_weighted_consensus`'s
+    # docstring for how this is used: capped per-outcome-group, and excluded entirely (alongside
+    # every other non-human-backed vote) whenever that function's D1/D4 mechanisms engage.
+    is_implicit: bool = False
 
 
 class _PendingPrivileged:
@@ -86,7 +109,15 @@ PENDING_PRIVILEGED = _PendingPrivileged()
 
 
 class _VoteGroup(TypedDict):
-    weight: float
+    # weight contributed by human-backed votes (VoteTuple.is_human_backed=True) - USER/ADMIN
+    # today, plus any future FEDERATED vote a peer explicitly asserts as human-backed.
+    human_weight: float
+    # weight contributed by non-human-backed, non-implicit votes (DEDUCTION/OCR/FEDERATED-as-
+    # imported-today) - "machine-derived" per docs/theory.md's terminology.
+    machine_weight: float
+    # RAW (uncapped) weight contributed by is_implicit=True votes - the cap is applied later,
+    # once per group, not accumulated here, so the raw total remains inspectable if ever needed.
+    implicit_weight_raw: float
     has_human_backed: bool
     has_privileged: bool
 
@@ -120,27 +151,90 @@ def resolve_weighted_consensus(
     because a moderator voting *against* the crowd must not count as the co-sign that lets the
     crowd's outcome through - their vote argues for a different outcome entirely (and at
     privileged weight it usually flips or contests the result through the normal math anyway).
+
+    IMPLICIT weight (docs/features/printing-tags.md) is capped per-outcome-group at
+    `settings.PRINTING_TAG_IMPLICIT_CAP` before it contributes anywhere in the math below - a
+    hard ceiling, strictly below `min_weight` by policy, so no volume of implicit votes on one
+    side can ever supply a whole group's quorum weight by itself (mirrors the human-backed gate's
+    own "volume never wins" invariant, for a different failure mode).
+
+    Two further mechanisms - both owner-ratified 2026-07-22 (see the vote-weight scenario matrix,
+    `docs/upstreaming/license-provenance.md` §3's "reimplement from a written description, never
+    from source" convention applies here too: this is an original design against that ratified
+    spec, not adapted from anywhere) - stop non-human-backed weight (DEDUCTION/OCR/FEDERATED-as-
+    imported-today/IMPLICIT alike) from ever being the thing that actually decides a contest
+    between humans:
+
+    D1 - "machine weight must not decide a live human-vs-human contest": if two or more outcome
+    groups each carry SOME human-backed weight (a genuine human-vs-human disagreement, not one
+    human side vs. a purely machine-derived one), every group's non-human-backed weight is
+    dropped entirely for BOTH the winner-selection and the gate checks below - only human_weight
+    counts. A machine/implicit pile can still make an already-agreeing human group's total look
+    bigger (see D2 below), but it can never be the deciding weight that flips or resolves an
+    actual human disagreement it isn't part of.
+
+    D4 - "machine dissent can't de-resolve a human-quorum-valid winner": if D1 didn't already
+    trigger, and the (full-weight) winner's OWN human_weight alone already clears `min_weight`,
+    the SHARE computation (both the winner's own numerator and the total denominator) is
+    recomputed from human_weight only, across every group - so a pile of machine/implicit
+    dissent elsewhere can't drag a human-quorum-valid winner's share below `min_share` and
+    silently de-resolve it. This does NOT touch the quorum (`min_weight`) check itself, and does
+    NOT apply when the winner's human_weight alone doesn't already clear `min_weight` - a lone
+    human vote plus agreeing machine weight can still be promoted to a resolution the same way
+    it always could (D2, unaffected by either mechanism: neither condition is met when there's
+    only one outcome group with any human-backed weight and that group's human weight alone is
+    below `min_weight`).
     """
     votes = list(votes)
     if not votes:
         return None
 
     groups: dict[Hashable, _VoteGroup] = defaultdict(
-        lambda: _VoteGroup(weight=0.0, has_human_backed=False, has_privileged=False)
+        lambda: _VoteGroup(
+            human_weight=0.0, machine_weight=0.0, implicit_weight_raw=0.0, has_human_backed=False, has_privileged=False
+        )
     )
     for vote in votes:
         group = groups[vote.outcome_key]
-        group["weight"] += vote.weight
+        if vote.is_implicit:
+            group["implicit_weight_raw"] += vote.weight
+        elif vote.is_human_backed:
+            group["human_weight"] += vote.weight
+        else:
+            group["machine_weight"] += vote.weight
         if vote.is_human_backed:
             group["has_human_backed"] = True
         if vote.is_privileged:
             group["has_privileged"] = True
 
-    total_weight = sum(group["weight"] for group in groups.values())
-    winning_key, winner = max(groups.items(), key=lambda item: item[1]["weight"])
-    share = winner["weight"] / total_weight
+    implicit_cap = settings.PRINTING_TAG_IMPLICIT_CAP
 
-    if winner["weight"] >= min_weight and share >= min_share and winner["has_human_backed"]:
+    def full_weight(group: _VoteGroup) -> float:
+        return group["human_weight"] + group["machine_weight"] + min(group["implicit_weight_raw"], implicit_cap)
+
+    # D1: a live human-vs-human contest is >=2 groups each carrying human-backed weight - not
+    # merely >=2 groups existing (a human group vs. a purely-machine/implicit one is NOT this;
+    # that shape is handled by the ordinary human-backed gate and D4 below, not D1).
+    live_human_contest = sum(1 for group in groups.values() if group["has_human_backed"]) >= 2
+
+    def decision_weight(group: _VoteGroup) -> float:
+        return group["human_weight"] if live_human_contest else full_weight(group)
+
+    winning_key, winner = max(groups.items(), key=lambda item: decision_weight(item[1]))
+    winner_weight = decision_weight(winner)
+
+    if live_human_contest or winner["human_weight"] >= min_weight:
+        # D1 (live_human_contest) or D4 (winner's own human weight already clears quorum): share
+        # is computed from human_weight alone, across every group.
+        total_weight = sum(group["human_weight"] for group in groups.values())
+        winner_share_weight = winner["human_weight"]
+    else:
+        total_weight = sum(full_weight(group) for group in groups.values())
+        winner_share_weight = full_weight(winner)
+
+    share = winner_share_weight / total_weight if total_weight else 0.0
+
+    if winner_weight >= min_weight and share >= min_share and winner["has_human_backed"]:
         if require_privileged and not winner["has_privileged"]:
             return PENDING_PRIVILEGED
         return winning_key

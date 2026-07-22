@@ -78,6 +78,17 @@ VOTE_PRIVILEGED_WEIGHT = env.float("VOTE_PRIVILEGED_WEIGHT", default=PRINTING_TA
 # votes yet, so this setting is currently inert, but it's wired into vote_consensus._SOURCE_WEIGHTS
 # alongside the weights above.
 VOTE_FEDERATED_WEIGHT = env.float("VOTE_FEDERATED_WEIGHT", default=1.0)
+# Per-vote weight of a VoteSource.IMPLICIT vote (docs/features/printing-tags.md's implicit-vote
+# section - the /editor filter-chip signal cast when a person picks a card while chips are
+# active). Deliberately tiny relative to a real USER vote (1.0) - this is a passive by-product
+# of a selection, not a deliberate tag confirmation. See vote_consensus._SOURCE_WEIGHTS.
+PRINTING_TAG_IMPLICIT_WEIGHT = env.float("PRINTING_TAG_IMPLICIT_WEIGHT", default=0.25)
+# Hard ceiling on the SUM of implicit weight counted per (card, tag, polarity) outcome group in
+# resolve_weighted_consensus - strictly below PRINTING_TAG_MIN_VOTES (2) by policy, so no volume
+# of implicit votes on one side can ever supply a whole group's quorum weight by itself (owner-
+# ratified 2026-07-22 vote-weight scenario matrix, decision D5/S3). See
+# cardpicker.vote_consensus.resolve_weighted_consensus's own docstring for the full mechanism.
+PRINTING_TAG_IMPLICIT_CAP = env.float("PRINTING_TAG_IMPLICIT_CAP", default=1.0)
 # django-ratelimit rate string (see cardpicker.views.post_submit_printing_tag), keyed by the
 # client-generated anonymous ID (IP as a fallback if that header is somehow missing). Shared
 # across printing-tag/artist-vote/tag-vote submission (_printing_tag_rate_limit_key/_rate are
@@ -91,6 +102,11 @@ VOTE_FEDERATED_WEIGHT = env.float("VOTE_FEDERATED_WEIGHT", default=1.0)
 PRINTING_TAG_SUBMISSION_RATE = env("PRINTING_TAG_SUBMISSION_RATE", default="300/h")
 # same mechanism for the card report button (see cardpicker.views.post_report_card).
 CARD_REPORT_RATE = env("CARD_REPORT_RATE", default="10/d")
+# Separate, tighter budget for implicit votes (cardpicker.views.post_cast_implicit_vote) - a
+# person browsing /editor with filter chips active can generate many implicit votes per minute
+# just by paging through candidates, a much higher natural cadence than a deliberate tag tap, so
+# this is deliberately its own (lower) rate string rather than sharing PRINTING_TAG_SUBMISSION_RATE.
+PRINTING_TAG_IMPLICIT_SUBMISSION_RATE = env("PRINTING_TAG_IMPLICIT_SUBMISSION_RATE", default="60/h")
 
 # Saved decks (see docs/proposals/proposal-g-user-accounts-saved-decks.md, decision 4). A
 # generous, configurable soft cap on named decks (SavedDeckKind.DECK rows only - snapshot rows

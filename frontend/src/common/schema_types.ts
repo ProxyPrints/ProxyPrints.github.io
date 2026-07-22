@@ -223,6 +223,16 @@ export interface Card {
    * endpoint to keep this a zero-cost no-op everywhere it isn't needed).
    */
   suggestedCanonicalCard?: CanonicalCard | null;
+  /**
+   * Tag names leaning APPLY for this card strongly enough to preselect as a /editor filter
+   * chip, per the implicit-vote consensus ruling (docs/features/printing-tags.md's
+   * implicit-vote section): the leaning side's non-implicit weight is >= 1.0, the pair isn't
+   * already RESOLVED_APPLY/RESOLVED_REJECT/PENDING_APPROVAL or genuinely CONTESTED, and the
+   * tag isn't SENSITIVE. null when the serializing endpoint didn't request this field (see
+   * Card.serialise's include_suggested_filter_tags kwarg - opt-in per endpoint, same
+   * zero-cost-when-unused pattern as suggestedCanonicalCard/include_suggested_printing above).
+   */
+  suggestedFilterTagNames?: string[] | null;
   tags: string[];
   /**
    * Suggested-vs-resolved status for every tag with at least one cast vote against this card
@@ -2600,6 +2610,11 @@ const typeMap: any = {
         json: "suggestedCanonicalCard",
         js: "suggestedCanonicalCard",
         typ: u(undefined, u(r("CanonicalCard"), null)),
+      },
+      {
+        json: "suggestedFilterTagNames",
+        js: "suggestedFilterTagNames",
+        typ: u(undefined, u(a(""), null)),
       },
       { json: "tags", js: "tags", typ: a("") },
       {

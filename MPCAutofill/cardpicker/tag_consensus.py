@@ -13,6 +13,7 @@ from cardpicker.models import (
     TagModerationClass,
     TagVoteStatus,
     VotePolarity,
+    VoteSource,
 )
 from cardpicker.moderation import (
     get_moderator_user_ids,
@@ -62,6 +63,7 @@ def resolve_tag(card: Card, tag: Tag, moderator_ids: set[int] | None = None) -> 
                 weight=privileged_weight(vote.source, privileged),
                 is_human_backed=is_human_backed_source(vote.source),
                 is_privileged=privileged,
+                is_implicit=vote.source == VoteSource.IMPLICIT,
             )
         )
     resolved = resolve_weighted_consensus(
@@ -109,8 +111,21 @@ def resolve_and_persist_tag_votes(card: Card) -> None:
     )
 
     votes_by_tag_id: dict[int, set[int]] = defaultdict(set)
-    for tag_id, polarity in card.tag_votes.values_list("tag_id", "polarity"):
+    # Distinct polarities BACKED BY AT LEAST ONE HUMAN-BACKED VOTE, per tag - deliberately
+    # narrower than `votes_by_tag_id` above (which counts every vote, source-agnostic, and still
+    # drives "does this tag have any votes at all"). Used only for the CONTESTED-vs-UNRESOLVED
+    # classification below (owner-ratified 2026-07-22 vote-weight scenario matrix, decision D3):
+    # a machine/implicit-only dissenting side can never win consensus (the human-backed gate in
+    # `resolve_weighted_consensus` already guarantees that), so it shouldn't inflate the *status*
+    # to CONTESTED either - that word is reserved for a genuine human-vs-human disagreement. A
+    # pair with a real human vote on one side and only machine/implicit dissent on the other
+    # still needs a human tiebreak, so it correctly stays in `get_tag_review_queue_pairs`'s
+    # candidate set either way - this only changes which status word it's filed under.
+    human_backed_polarities_by_tag_id: dict[int, set[int]] = defaultdict(set)
+    for tag_id, polarity, source in card.tag_votes.values_list("tag_id", "polarity", "source"):
         votes_by_tag_id[tag_id].add(polarity)
+        if is_human_backed_source(source):
+            human_backed_polarities_by_tag_id[tag_id].add(polarity)
     if not votes_by_tag_id:
         return
 
@@ -135,7 +150,11 @@ def resolve_and_persist_tag_votes(card: Card) -> None:
                 current_tags.discard(tag.name)
                 tags_changed = True
         else:
-            new_status = TagVoteStatus.CONTESTED if len(votes_by_tag_id[tag_id]) > 1 else TagVoteStatus.UNRESOLVED
+            new_status = (
+                TagVoteStatus.CONTESTED
+                if len(human_backed_polarities_by_tag_id.get(tag_id, ())) > 1
+                else TagVoteStatus.UNRESOLVED
+            )
         if statuses.get(tag.name) != new_status:
             statuses[tag.name] = new_status
             statuses_changed = True
@@ -182,14 +201,97 @@ def get_tag_net_polarity(card: Card, tag: Tag) -> float:
     have no analogue for a continuous confidence display - this is the same underlying
     weighted-sum math `get_tag_review_queue_pairs` already computes inline for its own
     ordering, just normalized and exposed as its own function instead of staying buried there.
+
+    EXCLUDES `VoteSource.IMPLICIT` votes entirely (owner-ratified 2026-07-22 vote-weight
+    scenario matrix, decision D6): this scalar drives a user-facing confidence chip, and an
+    implicit vote is a passive filter-chip-selection by-product, not a deliberate opinion about
+    the tag - letting it color the chip's fill would let a person's own earlier candidate pick
+    "explain itself" back to them as if it were independent evidence. A dedicated test asserts
+    this value is invariant to any number of implicit votes for the same (card, tag).
     """
     total_weight = 0.0
     net = 0.0
     for source, polarity in card.tag_votes.filter(tag=tag).values_list("source", "polarity"):
+        if source == VoteSource.IMPLICIT:
+            continue
         weight = _SOURCE_WEIGHTS[source]
         total_weight += weight
         net += polarity * weight
     return net / total_weight if total_weight > 0 else 0.0
+
+
+# Persisted statuses too definitive for a "leaning" filter-chip suggestion - each already
+# carries a stronger signal than get_suggested_filter_tags_overlay's own threshold implies (a
+# real resolution, an already-flagged genuine contest, or a sensitive-tag approval in flight).
+_STATUSES_EXCLUDED_FROM_FILTER_SUGGESTION = {
+    TagVoteStatus.RESOLVED_APPLY,
+    TagVoteStatus.RESOLVED_REJECT,
+    TagVoteStatus.CONTESTED,
+    TagVoteStatus.PENDING_APPROVAL,
+}
+
+
+def get_suggested_filter_tags_overlay(card_ids: Iterable[int]) -> dict[int, list[str]]:
+    """
+    Batched computation of "suggested /editor filter chips" per card (owner-ratified 2026-07-22
+    vote-weight scenario matrix, decision D6's second half) - returns
+    `{card_id: [tag_name, ...]}`, one entry per card that has at least one qualifying tag; a
+    card with none is simply absent (same absent-means-none convention as
+    `get_resolved_tag_overlay`).
+
+    A (card, tag) pair qualifies iff ALL of:
+      - the APPLY side's non-implicit weight is >= 1.0 (a single real vote's worth of signal,
+        `VoteSource.IMPLICIT` excluded throughout - same exclusion, and the same rationale, as
+        `get_tag_net_polarity`'s D6 fix: an implicit vote is a passive selection by-product, not
+        independent evidence, so it can't bootstrap its own filter-chip suggestion) AND is not
+        exceeded by the NOT_APPLICABLE side's own non-implicit weight (a tag leaning *away* from
+        applying is not something a filter chip should preselect as on);
+      - the tag's persisted `Card.tag_vote_statuses` entry (if any) is not one of
+        RESOLVED_APPLY/RESOLVED_REJECT/CONTESTED/PENDING_APPROVAL - each of those already
+        carries a more definitive signal than a "leaning" suggestion should imply (a resolved
+        pair doesn't need suggesting, a genuinely contested one shouldn't be presented as a
+        confident lean, and a sensitive pending-approval pair is still awaiting moderation);
+      - the tag's `moderation_class` is not `SENSITIVE` (the crowd-facing surface for a
+        sensitive tag is the moderation queue, never a self-service filter chip, regardless of
+        where the vote weight currently leans).
+
+    Mirrors `get_resolved_tag_overlay`'s batching shape (one query across all `card_ids`,
+    grouped in Python) - deliberately not `card`-instance-method-shaped, since this is new,
+    zero-consumer surface today (see `Card.serialise`'s `include_suggested_filter_tags` kwarg);
+    a future bulk endpoint enabling this on many candidates at once should call this function
+    directly and attach the result the same way `bulk_sync_objects` attaches
+    `get_resolved_tag_overlay`'s, rather than invoking `serialise()` per card in a loop.
+    """
+    statuses_by_card_id = dict(
+        Card.objects.filter(pk__in=card_ids).exclude(tag_vote_statuses={}).values_list("id", "tag_vote_statuses")
+    )
+    rows = (
+        CardTagVote.objects.filter(card_id__in=card_ids)
+        .exclude(source=VoteSource.IMPLICIT)
+        .values("card_id", "tag_id", "tag__name", "tag__moderation_class", "source", "polarity")
+    )
+    weight_by_card_tag_polarity: dict[tuple[int, int, int], float] = defaultdict(float)
+    tag_name_by_id: dict[int, str] = {}
+    tag_moderation_class_by_id: dict[int, str] = {}
+    for row in rows:
+        tag_name_by_id[row["tag_id"]] = row["tag__name"]
+        tag_moderation_class_by_id[row["tag_id"]] = row["tag__moderation_class"]
+        weight_by_card_tag_polarity[(row["card_id"], row["tag_id"], row["polarity"])] += _SOURCE_WEIGHTS[row["source"]]
+
+    overlay: dict[int, list[str]] = defaultdict(list)
+    seen_card_tag: set[tuple[int, int]] = {(card_id, tag_id) for card_id, tag_id, _ in weight_by_card_tag_polarity}
+    for card_id, tag_id in seen_card_tag:
+        if tag_moderation_class_by_id[tag_id] == TagModerationClass.SENSITIVE:
+            continue
+        tag_name = tag_name_by_id[tag_id]
+        if statuses_by_card_id.get(card_id, {}).get(tag_name) in _STATUSES_EXCLUDED_FROM_FILTER_SUGGESTION:
+            continue
+        apply_weight = weight_by_card_tag_polarity.get((card_id, tag_id, VotePolarity.APPLY), 0.0)
+        reject_weight = weight_by_card_tag_polarity.get((card_id, tag_id, VotePolarity.NOT_APPLICABLE), 0.0)
+        if apply_weight >= 1.0 and apply_weight >= reject_weight:
+            overlay[card_id].append(tag_name)
+
+    return {card_id: sorted(tag_names) for card_id, tag_names in overlay.items()}
 
 
 def get_resolved_tag_overlay(card_ids: Iterable[int]) -> dict[int, dict[str, int]]:
@@ -225,6 +327,7 @@ def get_resolved_tag_overlay(card_ids: Iterable[int]) -> dict[int, dict[str, int
                 weight=privileged_weight(row["source"], privileged),
                 is_human_backed=is_human_backed_source(row["source"]),
                 is_privileged=privileged,
+                is_implicit=row["source"] == VoteSource.IMPLICIT,
             )
         )
 
@@ -357,6 +460,7 @@ __all__ = [
     "resolve_and_persist_tag_votes",
     "get_tag_vote_tally",
     "get_tag_net_polarity",
+    "get_suggested_filter_tags_overlay",
     "get_resolved_tag_overlay",
     "get_contested_tag_pairs",
     "get_tag_review_queue_pairs",

@@ -111,6 +111,36 @@ class TestResolvePrinting:
             CardPrintingTagFactory(card=card, printing=printing, source=machine_source)
         assert resolve_printing(card) is None
 
+    def test_machine_pooling_cannot_decide_a_live_human_vs_human_contest(self, db):
+        # owner-ratified 2026-07-22 vote-weight scenario matrix, decision D1/cell A14 - proof
+        # the resolver-core fix reaches the printing path (not just tag path): a human vote
+        # plus a machine pile on one side (weight 1.0+4*0.5=3.0 raw) must not be able to tip a
+        # contest against a single dissenting human vote (weight 1.0) - this must land as
+        # UNRESOLVED (None), not the printing that has more RAW weight.
+        card = CardFactory()
+        printing_a = CanonicalCardFactory()
+        printing_b = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        for _ in range(4):
+            CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.DEDUCTION)
+        CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
+        assert resolve_printing(card) is None
+
+    def test_machine_dissent_cannot_de_resolve_a_human_quorum_valid_winner(self, db):
+        # owner-ratified 2026-07-22 vote-weight scenario matrix, decision D4/cell B4 - proof
+        # the resolver-core fix reaches the printing path: 2 USER votes already clear quorum on
+        # human weight alone (2.0 >= 2), so 3 DEDUCTION dissent votes (weight 1.5) must not be
+        # able to drag the winner's share below 0.6 and silently revert RESOLVED -> UNRESOLVED
+        # (this is the exact "23k+ deduction votes at scale" concern the matrix flags).
+        card = CardFactory()
+        printing_a = CanonicalCardFactory()
+        printing_b = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        for _ in range(3):
+            CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.DEDUCTION)
+        assert resolve_printing(card) == printing_a
+
 
 class TestResolveAndPersistPrintingReindex:
     """
