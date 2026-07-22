@@ -19,6 +19,7 @@ import {
   questionFeedIdentifyPrinting,
   questionFeedTag,
   submitArtistVoteResolvesToCanonicalArtist1,
+  submitPrintingTagNoMatch,
   submitPrintingTagResolvesToPrintingCandidate1,
   submitPrintingTagResolvesToPrintingCandidate2,
   submitTagVoteResolvesToApply,
@@ -322,20 +323,32 @@ test.describe("question feed - confirm_suggestion question type", () => {
     expect(printingTagSubmitted).toBe(false);
   });
 
-  test("NO on a singleton suggestion (no other candidates) skips the grid entirely and goes straight to the exit choice", async ({
+  test("NO on a singleton suggestion (no other candidates) skips the grid entirely and immediately casts the terminal no-match vote", async ({
     page,
     network,
   }) => {
-    // The specific bug the owner hit live: Level 1 "Is it M21 203?" -> NO -> Level 2 grid
-    // containing ONLY M21 203 again. With a single-candidate mock, rejecting the suggestion
-    // empties the remaining candidate set, so Level 2 should skip straight to the classified
-    // exit choice (None of these / art-matches-not-official / skip) rather than rendering a
-    // grid with nothing selectable in it.
-    let printingTagSubmitted = false;
-    network.use(questionFeedConfirmSuggestionSingleton, ...defaultHandlers);
+    // Owner-reported dedup bug (docs/features/printing-tags.md's questionFeed section): Level 1
+    // "Is it M21 203?" -> NO, where M21 203 was the card's ONLY candidate. Previously (this test
+    // used to assert `printingTagSubmitted === false` here - that assertion WAS the bug, not a
+    // correct behavior spec) "No" cast no vote at all and merely revealed a further "None of
+    // these" tap the user still had to make; if that tap never happened, no CardPrintingTag row
+    // ever existed for question_feed.py's tier-1 exclusion to match against, so the exact same
+    // question resurfaced on the next feed fetch. Since there is nothing else this card's "No"
+    // could mean (no other candidate exists), it must now be treated as the terminal answer:
+    // the same isNoMatch vote "None of these" itself casts is submitted the moment "No" is
+    // tapped, with no further tap required.
+    let submittedPrinting: {
+      printingIdentifier?: string;
+      isNoMatch?: boolean;
+    } = {};
+    network.use(
+      questionFeedConfirmSuggestionSingleton,
+      submitPrintingTagNoMatch,
+      ...defaultHandlers
+    );
     page.on("request", (request) => {
       if (request.url().includes("/2/submitPrintingTag/")) {
-        printingTagSubmitted = true;
+        submittedPrinting = request.postDataJSON();
       }
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
@@ -354,9 +367,12 @@ test.describe("question feed - confirm_suggestion question type", () => {
     const rejectedContext = page.getByTestId("question-feed-rejected-context");
     await expect(rejectedContext).toBeVisible();
     await expect(rejectedContext).toContainText("not");
-    // the exit choices are reachable directly, without a grid in between
-    await expect(page.getByTestId("question-feed-no-match")).toBeVisible();
-    expect(printingTagSubmitted).toBe(false);
+
+    // the terminal no-match vote is cast automatically - no further "None of these" tap needed
+    await expect.poll(() => submittedPrinting.isNoMatch).toBe(true);
+    expect(submittedPrinting.printingIdentifier).toBeUndefined();
+    // ...and hands off to the same "why not" follow-up "None of these" itself opens
+    await expect(page.getByTestId("no-match-reason-strip")).toBeVisible();
   });
 
   test("at a 390px mobile viewport, no answer control overlaps the card art", async ({

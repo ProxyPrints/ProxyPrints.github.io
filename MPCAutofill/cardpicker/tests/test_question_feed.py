@@ -12,7 +12,11 @@ from cardpicker.models import (
     VotePolarity,
     VoteSource,
 )
-from cardpicker.question_feed import get_next_question_feed_item, get_remaining_estimate
+from cardpicker.question_feed import (
+    _tier_1_confirm_suggestion,
+    get_next_question_feed_item,
+    get_remaining_estimate,
+)
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
@@ -95,6 +99,34 @@ class TestGetNextQuestionFeedItem:
         item = get_next_question_feed_item("anon-1")
 
         # falls through past the excluded tier-1 card - no other data exists, so None
+        assert item is None or item.card.identifier != card.identifier
+
+    def test_tier_1_excludes_a_confirm_suggestion_card_after_a_no_match_vote(self, db):
+        """
+        Owner-reported "dedup doesn't work" bug (docs/features/printing-tags.md's questionFeed
+        section): a single-candidate card's confirm_suggestion question kept resurfacing to the
+        same voter after they answered "No". Root cause traced to the frontend
+        (QuestionFeed.tsx's rejectSuggestion): the singleton "No" path never actually called
+        `submitPrintingTag`, so no `CardPrintingTag` row ever existed for that (card,
+        anonymous_id) pair - this exclusion query below had nothing to match against, and the
+        exact same question came back on the next feed fetch. This test proves the backend half
+        was never the problem: an `is_no_match=True` vote excludes a card from tier 1 for that
+        voter exactly like a real positive vote does (see
+        test_tier_1_excludes_cards_this_voter_already_voted_on above) - once the frontend fix
+        actually writes this row the moment "No" is tapped, the resurfacing stops. Scoped to
+        `_tier_1_confirm_suggestion` directly (not the full `get_next_question_feed_item` union)
+        because this card - like any fresh `CardFactory` row - also defaults to an unresolved
+        artist question, and the card legitimately reappearing there afterwards is fine per the
+        task's own semantics ("falls out of the confirmable pool or to a different question
+        type") - it's only a *repeat* confirm_suggestion question that's the bug.
+        """
+        card, _ = make_ai_suggested_card(anonymous_id="ai-bot")
+        CardPrintingTagFactory(
+            card=card, printing=None, is_no_match=True, source=VoteSource.USER, anonymous_id="anon-1"
+        )
+
+        item = _tier_1_confirm_suggestion("anon-1")
+
         assert item is None or item.card.identifier != card.identifier
 
     def test_a_second_voters_own_exclusion_does_not_affect_a_first_voter(self, db):
