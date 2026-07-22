@@ -1196,18 +1196,37 @@ class EditorSearchResponse(BaseModel):
     completely unaffected by this field.
     """
     results: Dict[str, List[str]]
+    operatorErrors: Optional[Dict[str, List[str]]] = None
+    """Search-operator syntax (e.g. `artist:`, `tag:`, `power:` - see
+    cardpicker.search.operator_parser). Hash keys (matching `results`' own keys) of queries
+    whose raw text contained one or more unrecognised `operator:` tokens, mapped to a
+    human-readable message per unrecognised operator (e.g. "unsupported operator: power"). An
+    unrecognised operator's token is dropped from the query entirely (never silently treated
+    as literal search text) - `results` for that hash key still reflects whatever the REST of
+    the query (recognised operators plus residual free text) matched. Deliberately NOT
+    required/optional on the wire - older clients that don't read this field are completely
+    unaffected; its absence or emptiness both mean every query parsed without an unrecognised
+    operator.
+    """
 
     @staticmethod
     def from_dict(obj: Any) -> "EditorSearchResponse":
         assert isinstance(obj, dict)
         degradedQueries = from_list(from_str, obj.get("degradedQueries"))
         results = from_dict(lambda x: from_list(from_str, x), obj.get("results"))
-        return EditorSearchResponse(degradedQueries, results)
+        operatorErrors = from_union(
+            [lambda x: from_dict(lambda x: from_list(from_str, x), x), from_none], obj.get("operatorErrors")
+        )
+        return EditorSearchResponse(degradedQueries, results, operatorErrors)
 
     def to_dict(self) -> dict:
         result: dict = {}
         result["degradedQueries"] = from_list(from_str, self.degradedQueries)
         result["results"] = from_dict(lambda x: from_list(from_str, x), self.results)
+        if self.operatorErrors is not None:
+            result["operatorErrors"] = from_union(
+                [lambda x: from_dict(lambda x: from_list(from_str, x), x), from_none], self.operatorErrors
+            )
         return result
 
 

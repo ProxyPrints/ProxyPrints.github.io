@@ -17,6 +17,7 @@ from cardpicker.documents import CardSearch
 from cardpicker.models import Card, CardTypes, Source
 from cardpicker.printing_consensus import ResolvedPrinting, get_resolved_printings
 from cardpicker.schema_types import CardType, SearchSettings
+from cardpicker.search.operator_parser import ParsedOperator
 from cardpicker.search.sanitisation import to_searchable
 
 thread_local = threading.local()  # Should only be called once per thread
@@ -89,12 +90,72 @@ def get_scaled_maximum_size(search_settings: SearchSettings) -> int:
     return search_settings.filterSettings.maximumSize * 1_000_000
 
 
+_OPERATOR_TO_ES_FIELD = {
+    "border": "border_color",
+    "frame": "frame",
+    "tag": "tags",
+    "set": "expansion_code",
+    "lang": "language",
+}
+
+
+def _apply_operator_filter(s: CardSearch, parsed_filter: ParsedOperator) -> CardSearch:
+    """
+    Compiles one parsed search-operator token (`cardpicker.search.operator_parser.ParsedOperator`)
+    into an additional, independent `.filter()` call on `s` - deliberately never merged into
+    `search_settings.filterSettings`'s own request-global tag/language lists (those are shared
+    across every query in an `/editorSearch` batch; mutating them here would leak one query
+    line's typed operator into every other query line in the same request). Because every
+    `.filter()` call on an elasticsearch_dsl `Search` already ANDs with every other one (this is
+    exactly how the pre-existing dpi/size/source_pk/card_type filters below already compose),
+    this reuses the SAME ES fields the existing structured-filter mechanisms target
+    (tag*s*/expansion_code/language) without needing to reuse their exact Python plumbing -
+    `tag:`/`set:`/`lang:` land on the identical field `includesTags`/`expansion_code`/
+    `languages` would, they just arrive via their own filter clause. A blank operator value
+    (e.g. a bare `artist:""`) is a no-op rather than an accidental empty-string term match.
+    """
+    value = parsed_filter.value
+    if not value:
+        return s
+
+    if parsed_filter.operator == "artist":
+        # `.filter()`, not `.query()` - this must compose with every other constraint via AND
+        # the same way the rest of this function's filters do, and must never affect relevance
+        # scoring (that's the free-text `searchq_fuzzy`/`searchq_precise` match's job alone).
+        artist_match = Match(artist_text={"query": value, "operator": "AND"})
+        return s.filter(Bool(must_not=artist_match)) if parsed_filter.negated else s.filter(artist_match)
+
+    es_field = _OPERATOR_TO_ES_FIELD.get(parsed_filter.operator)
+    if es_field is None:
+        # unreachable for a `ParsedOperator` produced by `operator_parser.parse_query` - it only
+        # ever emits operators from its own known-alias table - but fails safe (no-op) rather
+        # than raising, so a future operator added to the parser without a matching wiring entry
+        # here degrades to "filter silently not applied" instead of a 500.
+        return s
+
+    if parsed_filter.operator == "set":
+        # matches `expansion_code`'s own pre-existing `.upper()` term-filter convention above.
+        term_value = value.upper()
+    elif es_field in ("border_color", "frame", "language"):
+        # these three fields are lowercased at index time (Card.get_border_color/get_frame) or
+        # via `language`'s pre-existing `precise_analyser`/`get_enabled_languages` convention -
+        # lowercasing the query value here is what makes `BORDER:Black`/`Lang:EN` match.
+        term_value = value.lower()
+    else:
+        term_value = value
+
+    if parsed_filter.negated:
+        return s.filter(Bool(must_not=Terms(**{es_field: [term_value]})))
+    return s.filter(Bool(should=Terms(**{es_field: [term_value]}), minimum_should_match=1))
+
+
 def get_search(
     search_settings: SearchSettings,
     query: str | None,
     card_types: list[CardType],
     expansion_code: str | None = None,
     collector_number: str | None = None,
+    operator_filters: list[ParsedOperator] | None = None,
 ) -> CardSearch:
     """
     This is the core search function for MPC Autofill - queries Elasticsearch for `self` given `search_settings`
@@ -152,6 +213,8 @@ def get_search(
         s = s.filter(Bool(should=Terms(tags=search_settings.filterSettings.includesTags), minimum_should_match=1))
     if search_settings.filterSettings.excludesTags:
         s = s.filter(Bool(must_not=Terms(tags=search_settings.filterSettings.excludesTags)))
+    for parsed_filter in operator_filters or []:
+        s = _apply_operator_filter(s, parsed_filter)
     return s
 
 
@@ -204,6 +267,7 @@ def _retrieve_card_identifiers_once(
     card_type: CardType,
     expansion_code: str | None,
     collector_number: str | None,
+    operator_filters: list[ParsedOperator] | None = None,
 ) -> list[str]:
     hits_iterable = (
         get_search(
@@ -212,6 +276,7 @@ def _retrieve_card_identifiers_once(
             card_types=[card_type],
             expansion_code=expansion_code,
             collector_number=collector_number,
+            operator_filters=operator_filters,
         )
         .sort({"priority": {"order": "desc"}})
         .params(preserve_order=True)
@@ -253,6 +318,7 @@ def retrieve_card_identifiers(
     card_type: CardType,
     expansion_code: str | None = None,
     collector_number: str | None = None,
+    operator_filters: list[ParsedOperator] | None = None,
 ) -> tuple[list[str], bool]:
     """
     Returns `(identifiers, degraded)`. `degraded` is True only when a printing-specific search
@@ -261,12 +327,18 @@ def retrieve_card_identifiers(
     number for a printing nobody's uploaded an image for yet, even though the card exists under
     other printings. Exact-match behaviour when hits DO exist under the filter is completely
     unchanged by this - this is a zero-hit fallback only, never a boost/re-rank weakening (see
-    `_resolved_printing_match_tier`'s own docstring, which this doesn't touch).
+    `_resolved_printing_match_tier`'s own docstring, which this doesn't touch). `operator_filters`
+    (parsed `artist:`/`border:`/`frame:`/`tag:`/`set:`/`lang:` tokens - see
+    `cardpicker.search.operator_parser`) are carried through unchanged into BOTH the primary and
+    the degraded-retry search - the degraded retry only ever drops the expansion_code/
+    collector_number term filter, never a user-typed operator.
     """
-    identifiers = _retrieve_card_identifiers_once(search_settings, query, card_type, expansion_code, collector_number)
+    identifiers = _retrieve_card_identifiers_once(
+        search_settings, query, card_type, expansion_code, collector_number, operator_filters
+    )
     degraded = False
     if not identifiers and (expansion_code or collector_number):
-        identifiers = _retrieve_card_identifiers_once(search_settings, query, card_type, None, None)
+        identifiers = _retrieve_card_identifiers_once(search_settings, query, card_type, None, None, operator_filters)
         degraded = True
     return identifiers, degraded
 

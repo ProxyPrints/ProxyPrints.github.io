@@ -215,6 +215,7 @@ from cardpicker.schema_types import (
 )
 from cardpicker.schema_types import VoteQueueRequestKind as VoteQueueKind
 from cardpicker.schema_types import VoteQueueResponse, VoteTallyEntry, WhoamiResponse
+from cardpicker.search.operator_parser import parse_query
 from cardpicker.search.sanitisation import fix_whitespace, to_searchable
 from cardpicker.search.search_functions import (
     SearchExceptions,
@@ -306,19 +307,33 @@ def post_editor_search(request: HttpRequest) -> HttpResponse:
 
     results: dict[str, list[str]] = {}
     degraded_queries: list[str] = []
+    # Search-operator syntax (2026-07-22): additive and optional - a query with no `operator:`
+    # tokens parses to (residual_text == query, filters == [], errors == []) and behaves byte-
+    # identically to before this feature existed. `operator_errors` is only ever populated with
+    # a hash_key whose query contained an unrecognised `operator:` token (e.g. `power:4`) - its
+    # absence from the dict, or the dict being empty, means every query parsed cleanly.
+    operator_errors: dict[str, list[str]] = {}
     for hash_key, search_query in editor_search_request.queries.items():
         if search_query.query is not None and hash_key not in results.keys():
+            parsed = parse_query(search_query.query)
+            if parsed.errors:
+                operator_errors[hash_key] = [f"unsupported operator: {error.operator}" for error in parsed.errors]
             hits, degraded = retrieve_card_identifiers(
                 search_settings=editor_search_request.searchSettings,
-                query=search_query.query,
+                query=parsed.residual_text,
                 card_type=search_query.cardType,
                 expansion_code=search_query.expansionCode,
                 collector_number=search_query.collectorNumber,
+                operator_filters=parsed.filters,
             )
             results[hash_key] = hits
             if degraded:
                 degraded_queries.append(hash_key)
-    return JsonResponse(EditorSearchResponse(results=results, degradedQueries=degraded_queries).model_dump())
+    return JsonResponse(
+        EditorSearchResponse(
+            results=results, degradedQueries=degraded_queries, operatorErrors=operator_errors
+        ).model_dump()
+    )
 
 
 @csrf_exempt

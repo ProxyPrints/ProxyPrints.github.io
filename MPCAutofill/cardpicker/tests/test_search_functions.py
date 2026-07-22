@@ -173,6 +173,7 @@ class TestRetrieveCardIdentifiersDegradation:
             card_type: CardType,
             expansion_code: str | None,
             collector_number: str | None,
+            operator_filters: list | None = None,
         ) -> list[str]:
             calls.append((expansion_code, collector_number))
             return [] if expansion_code else ["fallback-id"]
@@ -216,6 +217,7 @@ class TestRetrieveCardIdentifiersDegradation:
             card_type: CardType,
             expansion_code: str | None,
             collector_number: str | None,
+            operator_filters: list | None = None,
         ) -> list[str]:
             calls.append((expansion_code, collector_number))
             return [] if expansion_code else ["fallback-id"]

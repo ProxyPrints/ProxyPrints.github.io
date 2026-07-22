@@ -636,6 +636,60 @@ class Card(models.Model):
             return self.inferred_canonical_card.collector_number
         return None
 
+    def get_indexed_artist_name(self) -> str:
+        """
+        Feeds `documents.py`'s `artist`/`artist_text` ES fields (search-operator syntax,
+        2026-07-22). Mirrors `Card.serialise()`'s artist fallback chain EXACTLY (canonical_artist
+        > canonical_card.artist > RESOLVED-gated inferred_canonical_card.artist >
+        inferred_canonical_artist) - this deliberately has four rungs, not the two a simplified
+        reading of the fallback might suggest, because the search index must never disagree with
+        what a viewer already sees for the same card. Returns "" (never None) when no rung
+        resolves, since both ES fields expect a plain string.
+        """
+        if self.canonical_artist is not None:
+            return self.canonical_artist.name
+        if self.canonical_card is not None:
+            return self.canonical_card.artist.name
+        if self.printing_tag_status == PrintingTagStatus.RESOLVED and self.inferred_canonical_card is not None:
+            return self.inferred_canonical_card.artist.name
+        if self.inferred_canonical_artist is not None:
+            return self.inferred_canonical_artist.name
+        return ""
+
+    def _get_indexed_printing_metadata(self) -> Optional["CanonicalPrintingMetadata"]:
+        """
+        Same precedence as `get_expansion_code`/`get_collector_number` above (`canonical_card`
+        first, falling back to `inferred_canonical_card` only once printing-tag consensus has
+        actually RESOLVED) - shared by the `border_color`/`frame`/`frame_effects`/`full_art`
+        ES-field getters below, so they can't drift from each other or from the pre-existing
+        expansion_code/collector_number fallback rule.
+        """
+        printing = self.canonical_card
+        if printing is None and self.printing_tag_status == PrintingTagStatus.RESOLVED:
+            printing = self.inferred_canonical_card
+        if printing is None:
+            return None
+        return getattr(printing, "printing_metadata", None)
+
+    def get_border_color(self) -> str:
+        metadata = self._get_indexed_printing_metadata()
+        # lowercased here (not in documents.py) so the ES `border_color` KeywordField is
+        # case-insensitive by construction - mirrors get_expansion_code's own choice to
+        # `.upper()` inline rather than relying on an ES normalizer.
+        return metadata.border_color.lower() if metadata is not None else ""
+
+    def get_frame(self) -> str:
+        metadata = self._get_indexed_printing_metadata()
+        return metadata.frame.lower() if metadata is not None else ""
+
+    def get_frame_effects(self) -> list[str]:
+        metadata = self._get_indexed_printing_metadata()
+        return metadata.frame_effects if metadata is not None else []
+
+    def get_full_art(self) -> bool:
+        metadata = self._get_indexed_printing_metadata()
+        return metadata.full_art if metadata is not None else False
+
     class Meta:
         ordering = ["-priority"]
 

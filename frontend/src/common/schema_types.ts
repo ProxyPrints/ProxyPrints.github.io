@@ -542,6 +542,19 @@ export interface EditorSearchResponse {
    * completely unaffected by this field.
    */
   degradedQueries: string[];
+  /**
+   * Search-operator syntax (e.g. `artist:`, `tag:`, `power:` - see
+   * cardpicker.search.operator_parser). Hash keys (matching `results`' own keys) of queries
+   * whose raw text contained one or more unrecognised `operator:` tokens, mapped to a
+   * human-readable message per unrecognised operator (e.g. "unsupported operator: power"). An
+   * unrecognised operator's token is dropped from the query entirely (never silently treated
+   * as literal search text) - `results` for that hash key still reflects whatever the REST of
+   * the query (recognised operators plus residual free text) matched. Deliberately NOT
+   * required/optional on the wire - older clients that don't read this field are completely
+   * unaffected; its absence or emptiness both mean every query parsed without an unrecognised
+   * operator.
+   */
+  operatorErrors?: { [key: string]: string[] };
   results: { [key: string]: string[] };
 }
 
@@ -3025,6 +3038,11 @@ const typeMap: any = {
   EditorSearchResponse: o(
     [
       { json: "degradedQueries", js: "degradedQueries", typ: a("") },
+      {
+        json: "operatorErrors",
+        js: "operatorErrors",
+        typ: u(undefined, m(a(""))),
+      },
       { json: "results", js: "results", typ: m(a("")) },
     ],
     false

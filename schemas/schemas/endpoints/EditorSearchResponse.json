@@ -14,6 +14,14 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Hash keys (matching `results`' own keys) of queries whose printing-specific search (expansion_code and/or collector_number) found zero hits under that filter and were retried without it. Absence from this list means either the query carried no printing filter at all, or the filter found real hits - exact-match behaviour when hits exist is completely unaffected by this field."
+    },
+    "operatorErrors": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "description": "Search-operator syntax (e.g. `artist:`, `tag:`, `power:` - see cardpicker.search.operator_parser). Hash keys (matching `results`' own keys) of queries whose raw text contained one or more unrecognised `operator:` tokens, mapped to a human-readable message per unrecognised operator (e.g. \"unsupported operator: power\"). An unrecognised operator's token is dropped from the query entirely (never silently treated as literal search text) - `results` for that hash key still reflects whatever the REST of the query (recognised operators plus residual free text) matched. Deliberately NOT required/optional on the wire - older clients that don't read this field are completely unaffected; its absence or emptiness both mean every query parsed without an unrecognised operator."
     }
   },
   "required": ["results", "degradedQueries"],
