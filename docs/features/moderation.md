@@ -158,7 +158,12 @@ then reverted back to `standard` the same day by owner decision, once
 evidence — artist credit line, legal line, collector line — for known
 AI-generator marker strings: Midjourney, DALL-E, Stable Diffusion, SDXL,
 Gemini, Imagen, Adobe Firefly, Leonardo AI, NightCafe, Bing Image Creator,
-"AI art"/"AI generated" — deliberately excluding generator-SITE/tool names
+"AI art"/"AI generated", plus a 2026-07-22 expansion (ChatGPT, Playground AI,
+Niji Journey, and a proactive roster of popular generators including major
+Chinese-market products — Doubao, Jimeng, Dreamina, Seedream, Kling, Kolors,
+Hunyuan, Tongyi Wanxiang/Wanxiang, ERNIE-ViLG, Wenxin Yige, Hailuo, CogView,
+LiblibAI, Meitu, Wujie AI, Qwen, Recraft, Ideogram, Grok Imagine, Flux.1) —
+deliberately excluding generator-SITE/tool names
 like CardConjurer, which indicate a rendering tool usable with ordinary
 human art, not AI provenance — and casts votes for it under its own machine
 identity `ai-art-detector-v1`, `VoteSource.OCR`) went live and the owner
