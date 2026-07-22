@@ -14,18 +14,24 @@ from django.urls import reverse
 
 from cardpicker import views
 from cardpicker.models import (
+    Card,
     CardTypes,
     PrintingTagStatus,
+    TagModerationClass,
     TagVoteStatus,
+    VotePolarity,
     VoteSource,
+    attach_suggested_filter_tags_overlay,
     suggested_printing_votes_prefetch,
 )
+from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
     CardFactory,
     CardPrintingTagFactory,
+    CardTagVoteFactory,
     SourceFactory,
     TagFactory,
 )
@@ -172,6 +178,85 @@ class TestTagVoteStatuses:
         assert card.serialise(include_suggested_printing=True).tagVoteStatuses == {"full-art": "resolved"}
 
 
+class TestSuggestedFilterTagNames:
+    """
+    `Card.serialise(include_suggested_filter_tags=True)` (owner-ratified 2026-07-22 D6
+    vote-weight matrix) - the qualifying-condition logic itself lives in and is fully covered by
+    `test_tag_votes.py::TestGetSuggestedFilterTagsOverlay`; these tests instead pin down
+    `Card._suggested_filter_tag_names`'s own opt-in-kwarg and precomputed-attribute-first
+    plumbing, mirroring `TestSuggestedCanonicalCard` above.
+    """
+
+    def test_none_when_flag_not_set(self, db):
+        card = CardFactory()
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        assert card.serialise().suggestedFilterTagNames is None
+
+    def test_empty_list_not_null_when_flag_set_and_nothing_qualifies(self, db):
+        card = CardFactory()
+        assert card.serialise(include_suggested_filter_tags=True).suggestedFilterTagNames == []
+
+    def test_populated_from_qualifying_vote(self, db):
+        card = CardFactory()
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        assert card.serialise(include_suggested_filter_tags=True).suggestedFilterTagNames == ["Foil"]
+
+    def test_implicit_only_votes_do_not_qualify(self, db):
+        # condition-6 regression: an implicit vote is a passive filter-chip-selection
+        # by-product, not independent evidence (D6) - must not bootstrap its own suggestion.
+        card = CardFactory()
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(
+            card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.IMPLICIT, anonymous_id="impl-1"
+        )
+        assert card.serialise(include_suggested_filter_tags=True).suggestedFilterTagNames == []
+
+    def test_sensitive_tag_never_suggested(self, db):
+        card = CardFactory()
+        tag = TagFactory(name="NSFW", moderation_class=TagModerationClass.SENSITIVE)
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        assert card.serialise(include_suggested_filter_tags=True).suggestedFilterTagNames == []
+
+    def test_resolved_pair_not_suggested(self, db):
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.ADMIN)
+        resolve_and_persist_tag_votes(card)
+        card.refresh_from_db()
+        assert card.serialise(include_suggested_filter_tags=True).suggestedFilterTagNames == []
+
+    def test_precomputed_attribute_avoids_the_per_card_fallback_query(self, db):
+        # attach_suggested_filter_tags_overlay stamps the batched result up front - serialise()
+        # must read that instead of running its own per-card fallback query
+        # (get_suggested_filter_tags_overlay's own two queries, see its docstring).
+        card = CardFactory()
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+
+        unattached = Card.objects.select_related("source", "canonical_card").get(pk=card.pk)
+        with CaptureQueriesContext(connection) as ctx_unattached:
+            unattached_result = unattached.serialise(include_suggested_filter_tags=True).suggestedFilterTagNames
+        assert unattached_result == ["Foil"]
+        assert len(ctx_unattached.captured_queries) == 2
+
+        attached = Card.objects.select_related("source", "canonical_card").get(pk=card.pk)
+        attach_suggested_filter_tags_overlay([attached])
+        with CaptureQueriesContext(connection) as ctx_attached:
+            attached_result = attached.serialise(include_suggested_filter_tags=True).suggestedFilterTagNames
+        assert attached_result == ["Foil"]
+        assert len(ctx_attached.captured_queries) == 0
+
+    def test_unattached_fallback_produces_same_result(self, db):
+        card = CardFactory()
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+
+        unattached = Card.objects.get(pk=card.pk)
+        assert unattached.serialise(include_suggested_filter_tags=True).suggestedFilterTagNames == ["Foil"]
+
+
 def _make_unresolved_card_with_machine_vote(source):
     card = CardFactory(source=source, printing_tag_status=PrintingTagStatus.UNRESOLVED)
     printing = CanonicalCardFactory()
@@ -230,6 +315,84 @@ class TestPostCardsBulkPayload:
         payload = response.json()["results"][card.identifier]
         assert payload["tagVoteStatuses"] == {"full-art": "resolved", "retro-frame": "suggested"}
 
+    def test_suggested_filter_tag_names_present_for_qualifying_vote(self, db, client, django_settings):
+        source = SourceFactory()
+        card = CardFactory(source=source)
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+
+        response = client.post(
+            reverse(views.post_cards), {"cardIdentifiers": [card.identifier]}, content_type="application/json"
+        )
+
+        assert response.status_code == 200
+        payload = response.json()["results"][card.identifier]
+        assert payload["suggestedFilterTagNames"] == ["Foil"]
+
+    def test_suggested_filter_tag_names_empty_list_when_nothing_qualifies(self, db, client, django_settings):
+        source = SourceFactory()
+        card = CardFactory(source=source)
+
+        response = client.post(
+            reverse(views.post_cards), {"cardIdentifiers": [card.identifier]}, content_type="application/json"
+        )
+
+        assert response.status_code == 200
+        payload = response.json()["results"][card.identifier]
+        # opt-in field IS requested by post_cards - empty list, never null, when nothing
+        # qualifies (see schema_types.ts:235's null-only-when-endpoint-didn't-request semantics).
+        assert payload["suggestedFilterTagNames"] == []
+
+    def test_suggested_filter_tag_names_absent_for_implicit_only_votes(self, db, client, django_settings):
+        # condition-6 regression at the API layer: an implicit-only vote must not surface a
+        # suggested filter chip through the real endpoint response, not just the underlying
+        # overlay function (see TestGetSuggestedFilterTagsOverlay in test_tag_votes.py for the
+        # unit-level version of this rule).
+        source = SourceFactory()
+        card = CardFactory(source=source)
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(
+            card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.IMPLICIT, anonymous_id="impl-1"
+        )
+
+        response = client.post(
+            reverse(views.post_cards), {"cardIdentifiers": [card.identifier]}, content_type="application/json"
+        )
+
+        assert response.status_code == 200
+        payload = response.json()["results"][card.identifier]
+        assert payload["suggestedFilterTagNames"] == []
+
+    def test_suggested_filter_tag_names_absent_for_sensitive_tag(self, db, client, django_settings):
+        source = SourceFactory()
+        card = CardFactory(source=source)
+        tag = TagFactory(name="NSFW", moderation_class=TagModerationClass.SENSITIVE)
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+
+        response = client.post(
+            reverse(views.post_cards), {"cardIdentifiers": [card.identifier]}, content_type="application/json"
+        )
+
+        assert response.status_code == 200
+        payload = response.json()["results"][card.identifier]
+        assert payload["suggestedFilterTagNames"] == []
+
+    def test_suggested_filter_tag_names_absent_for_resolved_pair(self, db, client, django_settings):
+        source = SourceFactory()
+        card = CardFactory(source=source, tags=[])
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.ADMIN)
+        resolve_and_persist_tag_votes(card)
+        card.refresh_from_db()
+
+        response = client.post(
+            reverse(views.post_cards), {"cardIdentifiers": [card.identifier]}, content_type="application/json"
+        )
+
+        assert response.status_code == 200
+        payload = response.json()["results"][card.identifier]
+        assert payload["suggestedFilterTagNames"] == []
+
 
 class TestBulkPayloadQueryCount:
     """
@@ -258,6 +421,68 @@ class TestBulkPayloadQueryCount:
 
         # same query count for 2 cards as for 8 - if suggestedCanonicalCard ever regressed to
         # a per-card query, this would instead scale linearly with the batch size.
+        assert small_query_count == large_query_count
+
+    def test_suggested_filter_tag_names_query_count_does_not_scale_with_result_size(self, db, client, django_settings):
+        # attach_suggested_filter_tags_overlay() is exactly two queries (see
+        # get_suggested_filter_tags_overlay's own docstring) for the WHOLE cards list, not per
+        # card - if this ever regressed to Card.serialise(include_suggested_filter_tags=True)
+        # called per card in a loop (the exact anti-pattern that function's own docstring warns
+        # against), query count would scale linearly with batch size instead of staying flat.
+        source = SourceFactory()
+        tag = TagFactory(name="Foil")  # one shared Tag row - Tag.name is unique, see Tag's own docstring
+
+        def _make_card_with_qualifying_tag_vote():
+            card = CardFactory(source=source)
+            CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+            return card
+
+        small_batch = [_make_card_with_qualifying_tag_vote() for _ in range(2)]
+        large_batch = small_batch + [_make_card_with_qualifying_tag_vote() for _ in range(6)]
+
+        def _post_and_count_queries(cards):
+            with CaptureQueriesContext(connection) as ctx:
+                response = client.post(
+                    reverse(views.post_cards),
+                    {"cardIdentifiers": [c.identifier for c in cards]},
+                    content_type="application/json",
+                )
+                assert response.status_code == 200
+                for card in cards:
+                    assert response.json()["results"][card.identifier]["suggestedFilterTagNames"] == ["Foil"]
+            return len(ctx.captured_queries)
+
+        small_query_count = _post_and_count_queries(small_batch)
+        large_query_count = _post_and_count_queries(large_batch)
+
+        assert small_query_count == large_query_count
+
+    def test_suggested_filter_tag_names_query_count_does_not_scale_with_result_size_when_no_votes_exist(
+        self, db, client, django_settings
+    ):
+        # get_suggested_filter_tags_overlay's FIRST query (Card.objects.filter(pk__in=...)) still
+        # touches every card in card_ids regardless of whether it has any votes - a real
+        # grid-selector page is mostly cards with zero tag votes at all, so this is the common
+        # shape, distinct from the "every card has a qualifying vote" test above.
+        source = SourceFactory()
+        small_batch = [CardFactory(source=source) for _ in range(2)]
+        large_batch = small_batch + [CardFactory(source=source) for _ in range(6)]
+
+        def _post_and_count_queries(cards):
+            with CaptureQueriesContext(connection) as ctx:
+                response = client.post(
+                    reverse(views.post_cards),
+                    {"cardIdentifiers": [c.identifier for c in cards]},
+                    content_type="application/json",
+                )
+                assert response.status_code == 200
+                for card in cards:
+                    assert response.json()["results"][card.identifier]["suggestedFilterTagNames"] == []
+            return len(ctx.captured_queries)
+
+        small_query_count = _post_and_count_queries(small_batch)
+        large_query_count = _post_and_count_queries(large_batch)
+
         assert small_query_count == large_query_count
 
 

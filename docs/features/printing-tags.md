@@ -174,11 +174,25 @@ printings, artists, tags, and moderation from one screen.
   `include_suggested_filter_tags` kwarg → `SerialisedCard.suggestedFilterTagNames`
   (`schemas/schemas/Card.json`), same opt-in-per-endpoint,
   zero-cost-when-unused pattern as `suggestedCanonicalCard`/
-  `include_suggested_printing` above — defaults `False` everywhere; no
-  bulk endpoint enables it yet (a future one should call
-  `get_suggested_filter_tags_overlay` directly and attach the result up
-  front, the way `bulk_sync_objects` already does for `get_resolved_tag_overlay`,
-  rather than invoke `serialise()` per card in a loop).
+  `include_suggested_printing` above — defaults `False` everywhere except
+  `post_cards` in `views.py` (the endpoint feeding the /display
+  grid-selector candidate list, `SelectVersionResults.tsx` via
+  `cardDocumentsSlice`), which now enables it and pairs it with
+  `models.attach_suggested_filter_tags_overlay(cards)` called once on the
+  fully-realized `cards` list BEFORE any `.serialise(...)` call — one
+  `get_suggested_filter_tags_overlay()` call (two queries total, see that
+  function's own docstring) for the whole response, not one per card. The
+  precomputed result is stamped onto each instance via
+  `SUGGESTED_FILTER_TAG_NAMES_ATTR` (mirroring `SUGGESTED_PRINTING_VOTES_ATTR`'s
+  shape above, though this one isn't `Prefetch`-shaped so it's a plain
+  call-then-stamp helper rather than a `Prefetch` object);
+  `_suggested_filter_tag_names()` reads that attribute first and only falls
+  back to a single bounded per-instance query when it's absent (a one-off
+  shell/test lookup, never the code path a bulk endpoint should exercise).
+  `post_explore_search` (catalog browse, a different surface) does not
+  enable this field yet — a future bulk endpoint doing so should follow the
+  same `attach_suggested_filter_tags_overlay()` call, never invoke
+  `serialise(include_suggested_filter_tags=True)` per card in a loop.
 - **Search consumption**: `printing_consensus.py::get_resolved_printings(identifiers)`
   is the single shared gate (`printing_tag_status == RESOLVED` only) that
   both the search re-rank (`search_functions.py::retrieve_card_identifiers`,
