@@ -1273,6 +1273,42 @@ export const submitTagVoteResolvesToApply = http.post(
     )
 );
 
+// Funnel round (funnel-spec.md F4b/D20) - the /display art-picker funnel's implicit-support-on-
+// pick mechanic. Response shape mirrors the real endpoint (PR #325's
+// post_cast_implicit_vote/post_retract_implicit_vote): castImplicitVote wraps a list in `tags`
+// (TagConsensusResponse); retractImplicitVote returns a single TagConsensusEntry, no wrapper.
+export const castImplicitVoteSuccess = http.post(
+  buildRoute("2/castImplicitVote/"),
+  () =>
+    HttpResponse.json(
+      {
+        tags: [
+          {
+            tagName: "Old Border",
+            resolvedPolarity: null,
+            netPolarity: 0.25,
+            tally: [{ polarity: 1, count: 1 }],
+          },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
+export const retractImplicitVoteSuccess = http.post(
+  buildRoute("2/retractImplicitVote/"),
+  () =>
+    HttpResponse.json(
+      {
+        tagName: "Old Border",
+        resolvedPolarity: null,
+        netPolarity: 0,
+        tally: [],
+      },
+      { status: 200 }
+    )
+);
+
 export const reportCardSuccess = http.post(buildRoute("2/reportCard/"), () =>
   HttpResponse.json({ reported: true, voteCast: true }, { status: 200 })
 );

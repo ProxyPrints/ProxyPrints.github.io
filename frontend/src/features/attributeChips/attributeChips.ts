@@ -13,6 +13,7 @@
  */
 
 import { PrintingCandidate } from "@/common/schema_types";
+import { CardDocument } from "@/common/types";
 
 export interface AttributeChipDef {
   /** The backend Tag.name this chip votes on - see cardpicker.attribute_tags. */
@@ -184,6 +185,119 @@ export function getAutoTagChips(
   candidate: PrintingCandidate
 ): AttributeChipDef[] {
   return ALL_ATTRIBUTE_CHIPS.filter((chip) => chip.matches(candidate));
+}
+
+/**
+ * The /display art-picker FUNNEL's axis descriptor (funnel-spec.md F2, XF1) - a thin wrapper
+ * over the exclusion groups/standalone chips above so the funnel can render one segmented
+ * `ToggleButtonGroup` per axis (radio for an exclusive group, checkbox for Treatment) instead of
+ * the flat 11-chip wall this taxonomy used to render everywhere. No new taxonomy - `chips` is
+ * always a reference to the same `AttributeChipDef` arrays above.
+ */
+export interface FunnelAxis {
+  id: string;
+  label: string;
+  /** true = mutually-exclusive radio segment (Border/Frame); false = independent checkboxes
+   * (Treatment) - D23: filter chips are positive-or-off here, never the QuestionFeed's
+   * untouched/positive/negative tri-state. */
+  exclusive: boolean;
+  chips: AttributeChipDef[];
+}
+
+export const FUNNEL_AXES: FunnelAxis[] = [
+  {
+    id: BORDER_COLOR_GROUP.id,
+    label: "Border",
+    exclusive: true,
+    chips: BORDER_COLOR_GROUP.chips,
+  },
+  {
+    id: FRAME_STYLE_GROUP.id,
+    label: "Frame",
+    exclusive: true,
+    chips: FRAME_STYLE_GROUP.chips,
+  },
+  {
+    // D23 honesty note (funnel-spec.md): no "finish" axis exists in the catalog taxonomy -
+    // foil/finish is a print SETTING (finishSettingsSlice), not a per-card vote/filter
+    // dimension; "Etched" is the only finish-adjacent chip and it lives here, in Treatment.
+    id: "treatment",
+    label: "Treatment",
+    exclusive: false,
+    chips: STANDALONE_CHIPS,
+  },
+];
+
+/**
+ * A chip's membership state over a set of surviving candidates (funnel-spec.md F3): "settled"
+ * when at least one candidate resolves the tag (`card.tags`, a consensus-resolved fact), or
+ * "suggested" when every candidate that carries the tag only does so via an unconfirmed,
+ * machine-suggested vote (`tagVoteStatuses === "suggested"`). `undefined` means no surviving
+ * candidate carries this attribute at all - the funnel doesn't render the chip (F3's
+ * "aggregation over candidates" rule).
+ *
+ * `votesOn` gates the "suggested" read entirely (F5's votes-off seam): when false, a candidate
+ * that only carries the tag via a suggested vote is treated as not carrying it at all, so the
+ * chip either shows as settled (if some OTHER candidate resolves it) or doesn't render - never
+ * "suggested" - matching F5's "every chip renders SETTLED/plain" base-funnel guarantee.
+ *
+ * DEVIATION (documented, not silent - see this task's own report): the spec's ground-truth
+ * section describes chip membership as readable from raw Scryfall fields via
+ * `chip.matches(candidate)` against a `PrintingCandidate`. The /display funnel's actual
+ * candidate set is `CardDocument[]` (`cardDocumentsByIdentifier`, fed by the search index), which
+ * has NO `borderColor`/`frame`/`fullArt`/etc fields at all - those exist only on the distinct
+ * `PrintingCandidate` schema QuestionFeed.tsx's own feed items carry. Since every chip in this
+ * taxonomy is already backed by a seeded Tag row (this file's own top-of-file comment), the only
+ * signal actually available here is `tags`/`tagVoteStatuses` - exactly what this function reads.
+ * The "metadata" membership state (F3.3) therefore stays honestly unreachable via this helper,
+ * same as the spec's own carve-out for "a future metadata-only chip."
+ */
+export type ChipMembershipState = "settled" | "suggested" | "metadata";
+
+export interface ChipMembershipCandidate {
+  tags: CardDocument["tags"];
+  tagVoteStatuses?: CardDocument["tagVoteStatuses"];
+}
+
+export function chipMembershipState(
+  candidates: Array<ChipMembershipCandidate>,
+  tagName: string,
+  votesOn: boolean
+): ChipMembershipState | undefined {
+  let anyResolved = false;
+  let anySuggested = false;
+  for (const candidate of candidates) {
+    if (candidate.tags.includes(tagName)) {
+      anyResolved = true;
+    } else if (
+      votesOn &&
+      candidate.tagVoteStatuses?.[tagName] === "suggested"
+    ) {
+      anySuggested = true;
+    }
+  }
+  if (anyResolved) return "settled";
+  if (anySuggested) return "suggested";
+  return undefined;
+}
+
+/**
+ * Whether a single candidate satisfies an active filter tag - resolved (`tags`) OR, only when
+ * `votesOn`, suggested-but-unconfirmed (`tagVoteStatuses`). The funnel's own per-axis
+ * survivor-narrowing filter (F1/F2) applies this per active chip, ANDed across chips (same
+ * semantics `filterCandidatesByChipStates` already uses for the QuestionFeed's tri-state chips,
+ * just sourced from Tag-consensus data rather than `chip.matches` - see `chipMembershipState`'s
+ * own comment for why).
+ */
+export function candidateSatisfiesAttributeTag(
+  candidate: ChipMembershipCandidate,
+  tagName: string,
+  votesOn: boolean
+): boolean {
+  return (
+    candidate.tags.includes(tagName) ||
+    (votesOn && candidate.tagVoteStatuses?.[tagName] === "suggested")
+  );
 }
 
 /**

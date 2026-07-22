@@ -21,6 +21,7 @@ import {
   CardbacksResponse,
   CardsRequest,
   CardsResponse,
+  CastImplicitVoteRequest,
   ContributionsResponse,
   CreateDeckShareRequest,
   CreateDeckShareResponse,
@@ -65,6 +66,7 @@ import {
   ReportCardResponse,
   ResetSavedDecksRequest,
   ResetSavedDecksResponse,
+  RetractImplicitVoteRequest,
   RevokeDeckShareRequest,
   RevokeDeckShareResponse,
   SampleCardsResponse,
@@ -783,6 +785,76 @@ export async function APISubmitTagVote(
       return content as TagConsensusResponse["tags"][number];
     }
     // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+/**
+ * 2/castImplicitVote/ (PR #325's backend contract) - the /display art-picker funnel's D20
+ * implicit-support-on-pick mechanic (funnel-spec.md F4b). `tagNames` may be empty (a harmless
+ * no-op server-side); an individually-guarded tag (SENSITIVE, already-resolved, rate-limited) is
+ * silently skipped, never surfaced as a per-tag error - the caller handles a wholesale failure
+ * (network/429) but never needs to distinguish which tag, if any, was actually written.
+ */
+export async function APICastImplicitVote(
+  backendURL: string,
+  identifier: string,
+  anonymousId: string,
+  tagNames: string[]
+): Promise<TagConsensusResponse> {
+  const body: CastImplicitVoteRequest = { anonymousId, identifier, tagNames };
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/castImplicitVote/"),
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.tags != null) {
+      return content as TagConsensusResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+/**
+ * 2/retractImplicitVote/ (PR #325's backend contract) - withdraws a single previously-cast
+ * implicit vote (funnel-spec.md F4d, "retraction = deselection"). Response is a single
+ * `TagConsensusEntry`, not the `{tags: [...]}` wrapper `castImplicitVote`/`submitTagVote` return
+ * (mirrors the backend's own `_build_tag_consensus_entry(...).model_dump()` - see
+ * `post_retract_implicit_vote` in MPCAutofill/cardpicker/views.py).
+ */
+export async function APIRetractImplicitVote(
+  backendURL: string,
+  identifier: string,
+  anonymousId: string,
+  tagName: string
+): Promise<TagConsensusResponse["tags"][number]> {
+  const body: RetractImplicitVoteRequest = { anonymousId, identifier, tagName };
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/retractImplicitVote/"),
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.tagName != null) {
+      return content as TagConsensusResponse["tags"][number];
+    }
     throw {
       name: content.name,
       message: content.message,

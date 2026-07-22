@@ -820,6 +820,68 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     ).toHaveCount(1);
   });
 
+  // Funnel round (funnel-spec.md F6/D22) - the center sheet's context menu: right-click, the
+  // visible ⋯ cue, and long-press (touch) all open the SAME CardSlotContextMenu the /editor grid
+  // already uses, reusing its unchanged 4-action list (Change Query/Duplicate/[Unfilter]/Delete).
+  test("right-clicking a sheet slot opens the shared context menu, and Delete removes that slot", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "2x my search query");
+    await page.getByRole("link", { name: "Editor" }).click();
+
+    const slot = page.getByTestId("page-preview-slot").first();
+    await expect(
+      page.getByTestId("page-preview-slot").locator("img")
+    ).toHaveCount(2);
+
+    await slot.click({ button: "right" });
+    const menu = page.getByTestId("card-slot-context-menu");
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: /Delete/ })).toBeVisible();
+    await expect(
+      menu.getByRole("menuitem", { name: /Change Query/ })
+    ).toBeVisible();
+    await expect(
+      menu.getByRole("menuitem", { name: /Duplicate/ })
+    ).toBeVisible();
+
+    await menu.getByRole("menuitem", { name: /Delete/ }).click();
+    await expect(menu).not.toBeVisible();
+    await expect(
+      page.getByTestId("page-preview-slot").locator("img")
+    ).toHaveCount(1);
+  });
+
+  // D22 - the visible `⋯` cue (its own corner, bottom-right) is the touch-discoverable trigger
+  // for the exact same menu right-click opens; clicking it must open the menu without also
+  // triggering the slot's own onClick (which would open the left rail instead/as well).
+  test("the visible ⋯ menu cue opens the same context menu as right-click, without also opening the left rail", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "my search query");
+    await page.getByRole("link", { name: "Editor" }).click();
+
+    // The rail starts idle (no slot selected yet).
+    await expect(page.getByTestId("display-rail-idle")).toBeVisible();
+
+    const cue = page.getByTestId("page-preview-slot-menu-cue").first();
+    await cue.click();
+
+    await expect(page.getByTestId("card-slot-context-menu")).toBeVisible();
+    // The rail stays idle - the cue click is scoped to the menu (stopPropagation), not the
+    // slot's own onClick (which would otherwise also fire and select the slot).
+    await expect(page.getByTestId("display-rail-idle")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("card-slot-context-menu")).not.toBeVisible();
+  });
+
   // Issue #267 (design doc ADDENDUM D12/F9/F10, owner's locked comment on #267) - the one
   // genuinely-new journey this PR adds: toggling the populated-state search bar into Browse
   // mode queries the catalog (the same doSearch/3-editorSearch machinery a slot's own query

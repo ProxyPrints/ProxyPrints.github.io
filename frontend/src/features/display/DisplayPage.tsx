@@ -220,6 +220,9 @@ import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 
 import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
+import { getOrCreateAnonymousId } from "@/common/cookies";
+import { doesSearchQueryFilterOnPrinting } from "@/common/processing";
+import { useTagDisplayName } from "@/common/tagDisplayNames";
 import {
   CardDocument,
   Faces,
@@ -228,9 +231,12 @@ import {
   useAppDispatch,
   useAppSelector,
 } from "@/common/types";
+import { useLongPress } from "@/common/useLongPress";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { RightPaddedIcon } from "@/components/icon";
 import { RenderIfVisible } from "@/components/RenderIfVisible";
+import { CardSlotContextMenu } from "@/features/card/CardSlotContextMenu";
+import { getCardSlotMenuActions } from "@/features/card/CardSlotMenuActions";
 import { CardbackToolbarButton } from "@/features/card/CommonCardback";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
 import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
@@ -262,7 +268,10 @@ import {
   useProjectDraftBackup,
 } from "@/features/display/useProjectDraftBackup";
 import { useViewportTier } from "@/features/display/useViewportTier";
-import { SelectVersionResults } from "@/features/gridSelector/SelectVersionResults";
+import {
+  SelectVersionResults,
+  VoteLayerProps,
+} from "@/features/gridSelector/SelectVersionResults";
 import { useGridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
 import { Import } from "@/features/import/Import";
 import { ImportCSV } from "@/features/import/ImportCSV";
@@ -279,6 +288,7 @@ import {
 import { getPageSizeMM, PageSize } from "@/features/pdf/PDF";
 import { SavedDeckPanel } from "@/features/savedDecks/SavedDeckPanel";
 import { SearchSettings } from "@/features/searchSettings/SearchSettings";
+import { APICastImplicitVote, APIRetractImplicitVote } from "@/store/api";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
@@ -290,7 +300,11 @@ import {
   selectMarginProfile,
   setMarginProfile,
 } from "@/store/slices/marginProfileSlice";
+import { showChangeQueryModal } from "@/store/slices/modalsSlice";
 import {
+  bulkRemovePrintingFilter,
+  deleteSlots,
+  duplicateSlot,
   selectIsProjectEmpty,
   selectProjectCardback,
   selectProjectMember,
@@ -492,6 +506,15 @@ interface SelectVersionSectionProps {
   query: SearchQuery | undefined;
   selectedImage: string | undefined;
   backendURL: string;
+  /** Funnel round (funnel-spec.md F4/F5, XF6) - the vote layer's cast/retract half, already
+   * bound to this slot's (face, slot) by the caller (DisplayPage's own `handleImplicitSupport`,
+   * which owns the per-slot retract-on-reselect bookkeeping - see that function's own comment for
+   * why it has to live above this component, which fully remounts per slot). `undefined` would
+   * disable the vote layer entirely (F5) - DisplayPage always supplies it in production. */
+  onImplicitSupport?: (
+    candidateIdentifier: string,
+    supportTagNames: string[]
+  ) => void;
 }
 
 // Reuses the same real search/filter machinery GridSelectorModal itself now delegates to
@@ -509,8 +532,30 @@ const SelectVersionSection = ({
   query,
   selectedImage,
   backendURL,
+  onImplicitSupport,
 }: SelectVersionSectionProps) => {
   const dispatch = useAppDispatch();
+  const getTagDisplayName = useTagDisplayName();
+  // Funnel round (F5/F7.2) - the single vote-layer seam SelectVersionResults' "stacked" layout
+  // consults. `suggestedTagNames`/`awarenessCopy` are pure reads over data already on the
+  // CardDocument/active-tag-name list this component already has in scope; `onImplicitSupport`
+  // is the caller-bound cast/retract half (see this component's own prop comment).
+  const voteLayer: VoteLayerProps | undefined =
+    onImplicitSupport != null
+      ? {
+          onImplicitSupport,
+          suggestedTagNames: (card) =>
+            Object.keys(card.tagVoteStatuses ?? {}).filter(
+              (tagName) =>
+                card.tagVoteStatuses?.[tagName] === "suggested" &&
+                !card.tags.includes(tagName)
+            ),
+          awarenessCopy: (activeTagNames) =>
+            `Picking a card here supports ${activeTagNames
+              .map(getTagDisplayName)
+              .join(" · ")} for it. Undo by re-picking.`,
+        }
+      : undefined;
   const searchResultsForQuery =
     useAppSelector((state) =>
       selectSearchResultsForQueryOrDefault(
@@ -568,26 +613,12 @@ const SelectVersionSection = ({
     );
   }
 
+  // Funnel round (funnel-spec.md F1, XF2) - the "N results · ▸ Filters" head line used to live
+  // here, outside SelectVersionResults; it's now rendered INSIDE the funnel itself (head A: count
+  // · active-tag pills · the Filters disclosure toggle), since it's part of the ONE funnel column
+  // the spec describes, not a separate wrapper element.
   return (
     <>
-      <div className="d-flex align-items-center gap-2 flex-wrap mb-2">
-        <span className="text-muted small">
-          {search.resultCount.toLocaleString()} result
-          {search.resultCount !== 1 ? "s" : ""}
-        </span>
-        <Button
-          variant="outline-primary"
-          size="sm"
-          onClick={() => search.setSettingsVisible((v) => !v)}
-        >
-          <i
-            className={`bi bi-chevron-${
-              search.settingsVisible ? "left" : "right"
-            }`}
-          />{" "}
-          Filters
-        </Button>
-      </div>
       <SelectVersionResults
         imageIdentifiers={searchResultsForQuery}
         selectedImage={selectedImage}
@@ -604,6 +635,7 @@ const SelectVersionSection = ({
         }
         backendURL={backendURL}
         layout="stacked"
+        voteLayer={voteLayer}
       />
     </>
   );
@@ -961,6 +993,12 @@ interface RailProps {
   // Called after Slot Actions' Delete - see SlotActionsSection's own prop comment for why the
   // rail needs to hand control back to the page rather than just re-rendering its own subtree.
   onSlotDeleted: () => void;
+  /** Funnel round (F4/F5, XF6) - already bound to this Rail's own (face, slot) by the caller
+   * (see SelectVersionSection's own prop comment); threaded straight through to it. */
+  onImplicitSupport?: (
+    candidateIdentifier: string,
+    supportTagNames: string[]
+  ) => void;
 }
 
 const Rail = ({
@@ -968,6 +1006,7 @@ const Rail = ({
   cardDocumentsByIdentifier,
   backendURL,
   onSlotDeleted,
+  onImplicitSupport,
 }: RailProps) => {
   const [expandedSections, setExpandedSections] =
     useState<Record<AccordionSectionKey, boolean>>(DEFAULT_EXPANDED);
@@ -1029,6 +1068,7 @@ const Rail = ({
           query={query}
           selectedImage={selectedImage}
           backendURL={backendURL}
+          onImplicitSupport={onImplicitSupport}
         />
       </div>
       {/* E5 - the demoted zone, collapsed AutofillCollapse sections in the D3 order: Card
@@ -1292,6 +1332,60 @@ export function DisplayPage() {
   // comment for where that pipeline moved).
   const backendURL = useAppSelector(selectRemoteBackendURL);
 
+  // Funnel round (funnel-spec.md F4d, XF6) - per-slot "what did we last implicitly cast for this
+  // slot's currently-picked candidate" bookkeeping. Lives HERE, above <Rail>, deliberately: Rail
+  // fully remounts (via its own `key`) every time the selected slot changes (see the `<Rail
+  // key=.../>` comment below), so any state this retraction logic needs has to survive that
+  // remount - a plain ref (not reactive state; nothing here ever needs to trigger a re-render)
+  // keyed by "face-slot" is the simplest thing that does.
+  const lastImplicitSupportRef = useRef<
+    Record<string, { identifier: string; tagNames: string[] }>
+  >({});
+
+  // Funnel round (funnel-spec.md F4b/F4d) - called on every pick made through the funnel (see
+  // SelectVersionResults.tsx's own handleSelect), even when `supportTagNames` is empty: retracts
+  // whatever this slot's PREVIOUS pick cast (if anything), then casts `supportTagNames` for the
+  // new one. Both calls are fire-and-forget and silently swallow failures - "the pick itself
+  // always succeeds; voting is a best-effort side effect" (funnel-spec.md F4/D24) - a refused or
+  // failed implicit vote must never surface a user-visible error.
+  const handleImplicitSupport = (
+    face: Faces,
+    slot: number,
+    candidateIdentifier: string,
+    supportTagNames: string[]
+  ) => {
+    if (backendURL == null) {
+      return;
+    }
+    const key = `${face}-${slot}`;
+    const anonymousId = getOrCreateAnonymousId();
+    const previous = lastImplicitSupportRef.current[key];
+    if (previous != null) {
+      previous.tagNames.forEach((tagName) => {
+        APIRetractImplicitVote(
+          backendURL,
+          previous.identifier,
+          anonymousId,
+          tagName
+        ).catch(() => undefined);
+      });
+    }
+    if (supportTagNames.length > 0) {
+      APICastImplicitVote(
+        backendURL,
+        candidateIdentifier,
+        anonymousId,
+        supportTagNames
+      ).catch(() => undefined);
+      lastImplicitSupportRef.current[key] = {
+        identifier: candidateIdentifier,
+        tagNames: supportTagNames,
+      };
+    } else {
+      delete lastImplicitSupportRef.current[key];
+    }
+  };
+
   const layout = useMemo(
     // Mirrors PagePreview's own computeLayout() call so cardsPerPage here matches exactly
     // what the sheet itself will render - both this page and PagePreview compute from the
@@ -1389,6 +1483,32 @@ export function DisplayPage() {
     // rail is a closed-by-default drawer, so selecting a slot must also open it. No-op at `lg`+,
     // where the rail is already inline and ignores `show` entirely.
     openLeftRail();
+  };
+
+  // Funnel round (funnel-spec.md F6/D22, XF7) - the /display center sheet's right-click/long-
+  // press/⋯-cue context menu. Reuses the EXISTING `CardSlotContextMenu` + `getCardSlotMenuActions`
+  // (the same 4-action list `CardSlot.tsx`'s own 3-dot dropdown and SlotActionsSection already
+  // share) - "no new action, just three more ways to reach it on /display" per the spec.
+  const [contextMenuState, setContextMenuState] = useState<{
+    face: Faces;
+    slot: number;
+    query: SearchQuery | undefined;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const handleSlotContextMenu = (
+    pageIndex: number,
+    indexOnPage: number,
+    x: number,
+    y: number
+  ) => {
+    const entry = sheets[pageIndex]?.entries[indexOnPage];
+    if (entry == null) {
+      return;
+    }
+    const query = entry.member[activeFace]?.query;
+    setContextMenuState({ face: activeFace, slot: entry.slot, query, x, y });
   };
 
   // Which sheet (not just which slot-on-a-page) currently holds the selected slot - needed now
@@ -1639,6 +1759,17 @@ export function DisplayPage() {
               cardDocumentsByIdentifier={cardDocumentsByIdentifier}
               backendURL={backendURL ?? ""}
               onSlotDeleted={() => setSelectedSlotRef(null)}
+              onImplicitSupport={
+                selectedSlotRef != null
+                  ? (candidateIdentifier, supportTagNames) =>
+                      handleImplicitSupport(
+                        selectedSlotRef.face,
+                        selectedSlotRef.slot,
+                        candidateIdentifier,
+                        supportTagNames
+                      )
+                  : undefined
+              }
             />
           </Offcanvas.Body>
         </LeftRailOffcanvas>
@@ -1757,6 +1888,14 @@ export function DisplayPage() {
                             )
                           : undefined
                       }
+                      onSlotContextMenu={(indexOnPage, x, y) =>
+                        handleSlotContextMenu(
+                          sheet.pageIndex,
+                          indexOnPage,
+                          x,
+                          y
+                        )
+                      }
                     />
                   </RenderIfVisible>
                 </div>
@@ -1764,6 +1903,57 @@ export function DisplayPage() {
             </>
           )}
         </div>
+
+        {/* Funnel round (funnel-spec.md F6/D22, XF7) - one shared context menu for whichever
+            sheet slot was right-clicked/long-pressed/⋯-tapped; `CardSlotContextMenu` itself is
+            fixed-positioned at (x, y) so mounting it once here (rather than once per slot) is
+            enough. */}
+        {contextMenuState != null && (
+          <CardSlotContextMenu
+            actions={getCardSlotMenuActions({
+              onChangeQuery: () => {
+                const { face, slot, query } = contextMenuState;
+                let stringifiedSearchQuery: string | null = null;
+                if (query?.query) {
+                  stringifiedSearchQuery = query.query;
+                  if (query.expansionCode) {
+                    stringifiedSearchQuery += ` (${query.expansionCode})`;
+                    if (query.collectorNumber) {
+                      stringifiedSearchQuery += ` ${query.collectorNumber}`;
+                    }
+                  }
+                }
+                dispatch(
+                  showChangeQueryModal({
+                    slots: [[face, slot]],
+                    query: stringifiedSearchQuery,
+                  })
+                );
+              },
+              onDuplicate: () =>
+                dispatch(
+                  duplicateSlot({ slot: contextMenuState.slot, quantity: 1 })
+                ),
+              onDelete: () => {
+                dispatch(deleteSlots({ slots: [contextMenuState.slot] }));
+                if (selectedSlotRef?.slot === contextMenuState.slot) {
+                  setSelectedSlotRef(null);
+                }
+              },
+              onUnfilterPrinting: () =>
+                dispatch(
+                  bulkRemovePrintingFilter({
+                    slots: [[contextMenuState.face, contextMenuState.slot]],
+                  })
+                ),
+              showUnfilterPrinting: !!doesSearchQueryFilterOnPrinting(
+                contextMenuState.query
+              ),
+            })}
+            position={{ x: contextMenuState.x, y: contextMenuState.y }}
+            onClose={() => setContextMenuState(null)}
+          />
+        )}
 
         {/* Issue #266 (design doc §4.2) - editing settings + preparing print, ONE node, all
             widths: inline sticky 300px column at `xl`+ (≥1200 - the region table's own "Laptop

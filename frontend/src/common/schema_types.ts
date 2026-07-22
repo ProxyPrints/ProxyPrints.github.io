@@ -980,6 +980,26 @@ export interface SubmitTagVoteRequest {
   voteSurface?: null | string;
 }
 
+/**
+ * 2/castImplicitVote/ - hand-maintained, mirroring MPCAutofill/cardpicker/schema_types.py's
+ * CastImplicitVoteRequest (PR #325's implicit-vote backend contract; the frontend request-type
+ * propagation it deferred - see that PR's own "Deviations" section). No JSON schema source
+ * exists for request types in this repo (same precedent as SubmitTagVoteRequest above) - this is
+ * typed by hand against the real Python pydantic model, not quicktype-generated.
+ */
+export interface CastImplicitVoteRequest {
+  anonymousId: string;
+  identifier: string;
+  tagNames: string[];
+}
+
+/** 2/retractImplicitVote/ - mirrors RetractImplicitVoteRequest (same provenance as above). */
+export interface RetractImplicitVoteRequest {
+  anonymousId: string;
+  identifier: string;
+  tagName: string;
+}
+
 export interface TagConsensusRequest {
   identifier: string;
 }
