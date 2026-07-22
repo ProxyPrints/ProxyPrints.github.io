@@ -193,6 +193,10 @@ external reader's orientation to the whole fork, see
   — the "Print!" export page's ordering tabs and flag icons.
 - [`docs/features/printing-tags.md`](docs/features/printing-tags.md) — the
   "What's That Card?" printing-consensus tagging system, backend + frontend.
+- [`docs/features/search-operator-syntax.md`](docs/features/search-operator-syntax.md)
+  — Scryfall-style `artist:`/`border:`/`frame:`/`tag:`/`set:`/`lang:`
+  search-operator syntax: the pure parser, the fork-coupled wiring seam,
+  the artist fallback-chain precedence, and the deploy step.
 - [`docs/features/moderation.md`](docs/features/moderation.md) — Discord
   OAuth login, the `Moderators` group gate, sensitive-tag approval queue,
   card reports.

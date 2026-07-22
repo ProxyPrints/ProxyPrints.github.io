@@ -1936,6 +1936,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -1963,6 +1965,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -1978,6 +1982,8 @@
       'degradedQueries': list([
         'key1',
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -1992,6 +1998,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -2006,6 +2014,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -2021,6 +2031,8 @@
       'degradedQueries': list([
         'key1',
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -2035,6 +2047,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2050,6 +2064,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2065,6 +2081,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2079,6 +2097,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2094,6 +2114,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2109,6 +2131,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2123,6 +2147,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1dxSLHtw-VwwE09pZCA8OA6LbuWRZPEoU',
@@ -2137,6 +2163,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2161,6 +2189,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
         ]),
@@ -2174,6 +2204,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1dxSLHtw-VwwE09pZCA8OA6LbuWRZPEoU',
@@ -2188,6 +2220,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2202,6 +2236,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
         ]),
@@ -2216,6 +2252,8 @@
       'degradedQueries': list([
         'key2',
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -2233,6 +2271,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -2261,6 +2301,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1IDtqSjJ4Yo45AnNA4SplOiN7ewibifMa',
@@ -2520,6 +2562,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2535,6 +2579,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1dxSLHtw-VwwE09pZCA8OA6LbuWRZPEoU',
@@ -2550,6 +2596,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
         ]),
@@ -2563,6 +2611,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
@@ -2577,6 +2627,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1c4M-sK9gd0Xju0NXCPtqeTW_DQTldVU5',
@@ -2591,6 +2643,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1oigI6wz0zA--pNMuExKTs40kBNH6VRP_',
@@ -2605,6 +2659,8 @@
     'json': dict({
       'degradedQueries': list([
       ]),
+      'operatorErrors': dict({
+      }),
       'results': dict({
         'key1': list([
           '1V5E0avDmNyEUuFfYwx3nA05aj-1HY0rA',
