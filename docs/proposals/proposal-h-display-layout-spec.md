@@ -38,8 +38,26 @@ removed — a soft warning (never a hard clamp) now surfaces when the current bl
 selected profile's D6-table cap for a 4-column sheet, computed dynamically
 (`maxBleedForFourColumns`) rather than copying the table's numbers verbatim. At these shipped
 defaults, /display's sheet now renders the spec's own 4×2 grid (D4) exactly, not the 4×1 this
-doc previously reported as the interim state before D5/D6 landed. Deliberately NOT built here
-(this PR, and not by #266/#267/#268/#284 above either): D9–D11/D14/D16 (own future issues, per
+doc previously reported as the interim state before D5/D6 landed. **D9/D10 shipped (this PR —
+issue #275):** the right-rail Finish footer (`FinishFooter.tsx`) now holds `Save Deck` and
+`Print / Export →` as co-equal `btn-primary` buttons plus the unchanged `Export ▾`, replacing
+the old three-button "Prepare Print" stack; the memory-heavy Generate PDF/Save PDF to Google
+Drive operations (and this page's own item-2 inline export pipeline that drove them) are
+removed from `/display` outright, not merely hidden — PDF generation now lives solely on the new
+`pages/print.tsx` (D10/F5, a thin wrapper mounting the unchanged `FinishedMyProject`, mirroring
+`pages/myDecks.tsx`). `useProjectDraftBackup.ts` (F1) mirrors the working project to
+`localStorage` (indexes/settings only) on a debounce, offers a restore nudge on the empty-project
+landing, and fires D9(2)'s promotion nudge post-import; `PrePrintSaveGate.tsx` (F3) runs the
+D9(3) flush-then-optionally-prompt-then-navigate sequence the footer's `Print / Export →` button
+triggers. Deliberately NOT built by this PR: the Print page's own tab REORDER (owner order PDF ·
+MakePlayingCards · NotMPC · PringlePrints, PDF default) and its PDF tab's preview removal (D10's
+own owner addendum, both tracked as their own follow-up), and a genuine, out-of-scope gap this
+PR leaves documented rather than silently accepted — `/display`'s own Page Setup controls (paper
+size/bleed edge/guides, plain component state, never persisted) don't carry over to the Print
+page's classic `PDFGenerator`, which has its own separate settings and doesn't read this page's
+margin-profile/card-spacing redux slices either; a future issue, not D9/D10's own scope (save-
+vs-print ordering and route linkage, not settings portability). Deliberately NOT built here
+(this PR, and not by #266/#267/#268/#284 above either): D11/D14/D16 (own future issues, per
 §A2's own issue mapping).
 
 Issue mapping (explicit):
@@ -955,12 +973,13 @@ Card spacing control (D19) — **SHIPPED** (this PR, alongside R7/D17/D18):
   item 3 → D10 Print-page rehoming (F5); item 4 → D11 FinishSettings (F6); item
   5 → D12 browse (F9/F10); item 7 → D16 cardback swatch (F7); item 1 → D15
   import variety (F13).
-- **NEW issue needed** — **D9 finish footer + deck auto-backup** (F1–F4). The
-  owner named this in #272's comment as polish-round scope but it has no issue
-  number of its own; it is the one genuinely-new surface here (local-draft
-  persistence + co-equal Save/Print + pre-print save gate) and should be filed
-  as its own issue at implementation time. D10's `pages/print.tsx` route
-  (F5) can ride #272 item 3 or the same new issue.
+- **#275 (filed, shipped)** — **D9 finish footer + deck auto-backup** (F1–F4),
+  plus D10's `pages/print.tsx` route (F5) — the owner named this in #272's
+  comment as polish-round scope; it was filed as its own issue and shipped
+  (see this doc's own "Implementation status" line above). The tab
+  REORDER/PDF-tab-preview-removal half of D10's own owner addendum was
+  deliberately NOT built by #275 — tracked as its own follow-up, not silently
+  dropped.
 
 ## A3. Conflicts / tensions (new, honest)
 

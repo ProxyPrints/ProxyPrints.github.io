@@ -29,14 +29,19 @@ requiring hand-rolled SVG specifically.
 
 ## Post-export contribution prompt (issue #166)
 
-The `PDFGenerator.tsx` mounted inside this tab's own "PDF" sub-tab carries the
-same post-export contribution prompt the unified `/display` page's inline
-export does — a dismissible `Alert` shown once per session after a genuine
-"Generate PDF"/"Save PDF to Google Drive" success, linking to `/whatsthat`.
-One shared implementation (`frontend/src/features/export/ usePostExportContributionPrompt.ts` + `PostExportContributionPrompt.tsx`),
+The `PDFGenerator.tsx` mounted inside this tab's own "PDF" sub-tab carries a
+dismissible `Alert` shown once per session after a genuine "Generate
+PDF"/"Save PDF to Google Drive" success, linking to `/whatsthat`. One shared
+implementation (`frontend/src/features/export/ usePostExportContributionPrompt.ts` + `PostExportContributionPrompt.tsx`),
 mounted from `PDFGenerator.tsx` itself so every real caller of that
-component — this tab, `PDFGeneratorModal.tsx`, `ProjectEditor.tsx` — gets it
-for free, rather than wiring it into `FinishedMyProject.tsx` separately. See
+component — this tab (reachable both via the classic editor's "Print!" tab
+and, since issue #275, standalone at `pages/print.tsx`), `PDFGeneratorModal.tsx`,
+`ProjectEditor.tsx` — gets it for free, rather than wiring it into
+`FinishedMyProject.tsx` separately. (Issue #275 also retired the unified
+`/display` page's OWN separate inline export pipeline and its own mount of
+this same prompt — PDF generation now lives solely here, reached from
+`/display`'s Finish footer via a pre-print save gate; see
+`docs/proposals/proposal-h-display-layout-spec.md`'s ADDENDUM D9/D10.) See
 `docs/features/printing-tags.md`'s own entry for the full detail (session-
 scoped `sessionStorage` flag, success-detection mechanism, why it's a
 funnel entry point rather than a parallel one) and
@@ -48,6 +53,9 @@ of the wiring.
 - `frontend/src/features/export/FinishedMyProject.tsx`
 - `frontend/src/components/flags.tsx`
 - `frontend/public/*.svg` (vendored flag icons)
+- `frontend/src/pages/print.tsx` (issue #275, D10/F5) — thin standalone route
+  wrapper mounting `FinishedMyProject` unchanged, mirroring `pages/myDecks.tsx`;
+  the funnel destination `/display`'s Finish footer navigates to
 
 ## Status
 
