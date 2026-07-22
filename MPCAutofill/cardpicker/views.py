@@ -80,6 +80,7 @@ from cardpicker.models import (
     UserCryptoProfile,
     VotePolarity,
     VoteSource,
+    attach_suggested_filter_tags_overlay,
     suggested_printing_votes_prefetch,
     summarise_contributions,
 )
@@ -446,12 +447,21 @@ def post_cards(request: HttpRequest) -> HttpResponse:
 
     # `include_suggested_printing=True` + `suggested_printing_votes_prefetch()` together
     # populate `suggestedCanonicalCard` (Proposal H §4.4′, issue #184) with no extra query
-    # per card - see that prefetch helper's own docstring.
-    results = {
-        card.identifier: card.serialise(include_suggested_printing=True)
-        for card in Card.objects.select_related("source", "canonical_card")
+    # per card - see that prefetch helper's own docstring. `attach_suggested_filter_tags_overlay()`
+    # does the same for `suggestedFilterTagNames` (owner-ratified 2026-07-22 D6 vote-weight
+    # matrix) - one `get_suggested_filter_tags_overlay()` call for the whole `cards` list below,
+    # not one per card; this is the endpoint feeding the /display grid-selector candidate list
+    # (`SelectVersionResults.tsx` via `cardDocumentsSlice`), which had zero producers of this
+    # field until now.
+    cards = list(
+        Card.objects.select_related("source", "canonical_card")
         .prefetch_related(suggested_printing_votes_prefetch())
         .filter(identifier__in=cards_request.cardIdentifiers)
+    )
+    attach_suggested_filter_tags_overlay(cards)
+    results = {
+        card.identifier: card.serialise(include_suggested_printing=True, include_suggested_filter_tags=True)
+        for card in cards
     }
     return JsonResponse(CardsResponse(results=results).model_dump())
 

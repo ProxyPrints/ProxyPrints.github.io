@@ -2,7 +2,7 @@ import itertools
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from django.contrib.auth.models import User
 from django.contrib.postgres.fields import ArrayField
@@ -43,6 +43,12 @@ _TAG_VOTE_DISPLAY_STATUS_BY_DB_STATUS = {
 # printing votes to - see `suggested_printing_votes_prefetch()` below. Shared constant so the
 # prefetch call site and `Card.serialise()`'s read site can't drift on the attribute name.
 SUGGESTED_PRINTING_VOTES_ATTR = "_suggested_printing_votes"
+
+# Attribute name `attach_suggested_filter_tags_overlay()` stamps the per-card precomputed
+# `suggestedFilterTagNames` list onto - see that function and `Card._suggested_filter_tag_names`
+# below. Shared constant so the two sides can't drift on the attribute name, mirroring
+# `SUGGESTED_PRINTING_VOTES_ATTR` above.
+SUGGESTED_FILTER_TAG_NAMES_ATTR = "_suggested_filter_tag_names_precomputed"
 
 
 class Games(models.TextChoices):
@@ -502,14 +508,22 @@ class Card(models.Model):
         Tag names leaning APPLY for this card strongly enough to preselect as a /editor filter
         chip (owner-ratified 2026-07-22 vote-weight scenario matrix, decision D6) - see
         `cardpicker.tag_consensus.get_suggested_filter_tags_overlay`'s own docstring for the
-        exact qualifying condition. Deliberately a plain per-card query, not prefetch-gated the
-        way `_suggested_canonical_card` is: this field has no bulk consumer yet (see
-        `serialise`'s `include_suggested_filter_tags` kwarg - opt-in, defaults off everywhere).
-        A future bulk endpoint enabling this across many candidates at once should call
-        `get_suggested_filter_tags_overlay` directly and attach the result up front, the same
-        way `bulk_sync_objects` already does for `get_resolved_tag_overlay` - NOT invoke
-        `serialise(include_suggested_filter_tags=True)` per card in a loop.
+        exact qualifying condition.
+
+        Prefers a precomputed value stamped onto `SUGGESTED_FILTER_TAG_NAMES_ATTR` by
+        `attach_suggested_filter_tags_overlay()` (call that on the full list of `Card` instances
+        a response will serialise with `include_suggested_filter_tags=True` BEFORE calling
+        `.serialise(...)` on any of them - this is what `post_cards` in views.py does, one
+        `get_suggested_filter_tags_overlay()` call for the whole response instead of one per
+        card). Falls back to a single bounded per-card query only when called on an
+        un-prefetched instance outside a bulk context (e.g. a one-off shell/test lookup) - never
+        the code path any bulk endpoint should exercise, mirroring `_suggested_canonical_card`'s
+        own fail-safe-not-N+1 fallback above.
         """
+        precomputed = getattr(self, SUGGESTED_FILTER_TAG_NAMES_ATTR, None)
+        if precomputed is not None:
+            return precomputed
+
         from cardpicker.tag_consensus import (
             get_suggested_filter_tags_overlay,  # local import - avoids a models<->tag_consensus cycle
         )
@@ -848,6 +862,32 @@ def suggested_printing_votes_prefetch() -> models.Prefetch:
         .order_by("pk"),
         to_attr=SUGGESTED_PRINTING_VOTES_ATTR,
     )
+
+
+def attach_suggested_filter_tags_overlay(cards: Sequence["Card"]) -> None:
+    """
+    Batches `tag_consensus.get_suggested_filter_tags_overlay` across `cards` (one overlay
+    computation - two queries total, see that function's own implementation - for the entire
+    list, not one per card) and stamps each instance with its own precomputed
+    `suggestedFilterTagNames` result via `SUGGESTED_FILTER_TAG_NAMES_ATTR`, so
+    `Card.serialise(include_suggested_filter_tags=True)` finds it already there.
+
+    This field's underlying query isn't `Prefetch`-shaped the way `suggested_printing_votes_prefetch()`
+    is (it isn't a single related-queryset walk - see `get_suggested_filter_tags_overlay`'s own
+    two-query implementation across `Card.tag_vote_statuses` and `CardTagVote`), so it's a plain
+    call-then-stamp helper instead of a `Prefetch` object. Call this on the fully-realized list
+    of `Card` instances a response will serialise with `include_suggested_filter_tags=True`
+    BEFORE calling `.serialise(...)` on any of them (today: `post_cards` in views.py, the
+    endpoint feeding the /display grid-selector candidate list) - mutates `cards` in place and
+    returns nothing, same shape as `bulk_sync_objects`' own `get_resolved_tag_overlay` attach step.
+    """
+    from cardpicker.tag_consensus import (
+        get_suggested_filter_tags_overlay,  # local import - avoids a cycle
+    )
+
+    overlay = get_suggested_filter_tags_overlay([card.pk for card in cards])
+    for card in cards:
+        setattr(card, SUGGESTED_FILTER_TAG_NAMES_ATTR, overlay.get(card.pk, []))
 
 
 class CardArtistVote(AbstractWeightedVote):

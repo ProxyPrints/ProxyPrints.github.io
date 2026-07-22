@@ -1618,7 +1618,8 @@
           'sourceType': 'Google Drive',
           'sourceVerbose': 'Example Drive 1 but verbose',
           'suggestedCanonicalCard': None,
-          'suggestedFilterTagNames': None,
+          'suggestedFilterTagNames': list([
+          ]),
           'tagVoteStatuses': dict({
           }),
           'tags': list([
@@ -1650,7 +1651,8 @@
           'sourceType': 'Google Drive',
           'sourceVerbose': 'Example Drive 1 but verbose',
           'suggestedCanonicalCard': None,
-          'suggestedFilterTagNames': None,
+          'suggestedFilterTagNames': list([
+          ]),
           'tagVoteStatuses': dict({
           }),
           'tags': list([
@@ -1701,7 +1703,8 @@
           'sourceType': 'Google Drive',
           'sourceVerbose': 'Example Drive 1 but verbose',
           'suggestedCanonicalCard': None,
-          'suggestedFilterTagNames': None,
+          'suggestedFilterTagNames': list([
+          ]),
           'tagVoteStatuses': dict({
           }),
           'tags': list([
@@ -1742,7 +1745,8 @@
           'sourceType': 'Google Drive',
           'sourceVerbose': 'Example Drive 1 but verbose',
           'suggestedCanonicalCard': None,
-          'suggestedFilterTagNames': None,
+          'suggestedFilterTagNames': list([
+          ]),
           'tagVoteStatuses': dict({
           }),
           'tags': list([
@@ -1774,7 +1778,8 @@
           'sourceType': 'Google Drive',
           'sourceVerbose': 'Example Drive 1 but verbose',
           'suggestedCanonicalCard': None,
-          'suggestedFilterTagNames': None,
+          'suggestedFilterTagNames': list([
+          ]),
           'tagVoteStatuses': dict({
           }),
           'tags': list([
@@ -1806,7 +1811,8 @@
           'sourceType': 'Google Drive',
           'sourceVerbose': 'Example Drive 1 but verbose',
           'suggestedCanonicalCard': None,
-          'suggestedFilterTagNames': None,
+          'suggestedFilterTagNames': list([
+          ]),
           'tagVoteStatuses': dict({
           }),
           'tags': list([
@@ -1857,7 +1863,8 @@
           'sourceType': 'Google Drive',
           'sourceVerbose': 'Example Drive 1 but verbose',
           'suggestedCanonicalCard': None,
-          'suggestedFilterTagNames': None,
+          'suggestedFilterTagNames': list([
+          ]),
           'tagVoteStatuses': dict({
           }),
           'tags': list([
