@@ -280,6 +280,7 @@ printings, artists, tags, and moderation from one screen.
   artifact (linked from PR #47's body) for the full findings/mocks this
   implements. `QuestionFeed.tsx`'s candidate branch now runs three stages
   instead of one grid screen:
+
   - **Level 1** — `confirm_suggestion` items with a `suggestedPrinting`
     land here: the suggested printing alone, YES / NOT SURE / NO / SKIP,
     no grid. YES casts the same vote Level 2's tap does; NOT SURE and NO
@@ -321,19 +322,38 @@ printings, artists, tags, and moderation from one screen.
     art / skip) that always rendered below the grid. `rejectedCandidateIds`
     is per-item state, reset alongside every other per-question field in
     the same fetch effect (see the module's own comment on why that reset
-    can't be a separate dependency-keyed effect). Vote semantics are
-    unchanged by this fix: Level 1's NO never cast a vote before (no
-    schema concept of "reject just this one candidate" — see Level 0's
-    identical constraint above), and still doesn't; `rejectSuggestion`
-    only changes what's _displayed_, the one real negative vote per item
-    still only happens once, at the eventual "None of these"/custom-art/
-    skip tap. Audited as clean for the same re-presentation pattern:
+    can't be a separate dependency-keyed effect).
+
+    **Singleton "No" now casts the terminal vote immediately** (owner-
+    reported "dedup doesn't work" bug, fixed after this bullet originally
+    shipped): the vote-semantics claim this bullet used to make — "Level
+    1's NO never casts a vote, only `rejectSuggestion` changes what's
+    displayed" — was itself the bug for the singleton case. When rejecting
+    the suggestion leaves zero remaining candidates, there is nothing else
+    this "No" could mean, so `rejectSuggestion` now calls the same
+    `selectCandidate(undefined, true)` "None of these" itself calls,
+    casting the `isNoMatch` vote at the moment "No" is tapped rather than
+    waiting for a further explicit tap on the classified-exit screen. Before
+    this fix, a voter who read "No" as final (or tapped the generic "Skip"
+    on that follow-up screen instead of "None of these") never produced a
+    `CardPrintingTag` row at all — `question_feed.py`'s tier-1 exclusion
+    (`.exclude(printing_tags__anonymous_id=...)`) is and always was correct
+    (see `test_tier_1_excludes_cards_this_voter_already_voted_on` /
+    `test_tier_1_excludes_a_confirm_suggestion_card_after_a_no_match_vote`
+    in `test_question_feed.py`), it simply had no vote to exclude on, so
+    the identical `confirm_suggestion` question resurfaced on the voter's
+    next feed fetch. The multi-candidate case is unaffected: rejecting one
+    of several candidates still only changes what's displayed, same as
+    before — the one real negative vote for those items still only happens
+    at the eventual "None of these"/custom-art/skip tap. Audited as clean
+    for the same re-presentation pattern:
     Level 0 below (NO opens the deckbuilder's general grid-selector
     browse UI, a different paradigm from a guided funnel step — showing
     the current image among many search results there is normal browse
     behavior, not a re-ask) and Level 3 (only ever asks about attribute
     groups `getOpenExclusionGroups` finds genuinely open on the _selected_
     candidate — inherently already excludes anything already answered).
+
   - **Level 3** — conditional, not a standard stage. Selecting a candidate
     auto-tags everything derivable from it (see above); Level 3 only
     renders when `getOpenExclusionGroups` finds a genuinely open group,
@@ -343,6 +363,7 @@ printings, artists, tags, and moderation from one screen.
     taxonomy this is a real but infrequent case (an out-of-taxonomy
     `borderColor`/`frame` value), not a hypothetical one — see
     `printingCandidate2`'s test fixture (`borderColor: "borderless"`).
+
 - **Known schema gap surfaced by the badge above, not fixed here**: tier 2
   (contested) and tier 4 (fresh) — `_tier_2_contested`/`_tier_4_fresh` in
   `question_feed.py` — both call `_identify_printing_item`, producing the

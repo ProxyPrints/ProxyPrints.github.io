@@ -672,35 +672,47 @@ prints nothing per-test regardless of pass/fail; download the merged
 **Refs**: `frontend/tests/HomepagePanel.spec.ts`,
 `frontend/playwright.config.ts`'s `retries`/`webServer`.
 
-## `test_valid_url[tappedout*]` fails with `InvalidURLException`, unrelated to your change
+## `test_valid_url[tappedout*]`/`[manastack]` fails with `InvalidURLException`, unrelated to your change
 
-**Symptom**: `cardpicker/tests/test_integrations.py::TestMTGIntegration::test_valid_url[tappedout]`
-or `[tappedout_with_www]` fails with `TappedOut.InvalidURLException` in
-CI on a PR that never touched the import-sites code (hit #209, #213,
-#215).
+**Symptom**: `cardpicker/tests/test_integrations.py::TestMTGIntegration::test_valid_url[tappedout]`,
+`[tappedout_with_www]`, or (as of 2026-07-22, PR #321) `[manastack]`
+fails with an `InvalidURLException` in CI on a PR that never touched the
+import-sites code (tappedout: #209, #213, #215; manastack: PR #321 -
+confirmed via direct `curl` that `manastack.com/api/deck/list` returns a
+genuine live 500, identical across two separate CI runs, not a one-off
+network blip).
 
-**Cause**: that parametrize case made a real HTTP request to the live
-`tappedout.net` — a genuine external-network dependency the test never
-declared. Whenever tappedout.net 503s, redirects, or is otherwise
-unreachable, `ImportSite.request`'s `default_is_response_valid` check
-fails and raises, and the test goes red for a reason with nothing to do
-with the PR's diff.
+**Cause**: that parametrize case makes a real HTTP request to the live
+site named in its `Decks` enum value — a genuine external-network
+dependency the test never declared. Whenever that site 503s, 500s,
+redirects, or is otherwise unreachable, `ImportSite.request`'s
+`default_is_response_valid` check fails and raises, and the test goes
+red for a reason with nothing to do with the PR's diff. Every site in
+this parametrize (archidekt, cubecobra, magic-ville, manastack, scryfall,
+tappedout) is equally exposed to this in principle - tappedout and
+manastack are just the two that have actually been observed breaking so
+far, not the only two capable of it.
 
-**Fix**: `test_valid_url` now wraps the call in
+**Fix**: `test_valid_url` wraps the call in
 `requests_mock.Mocker(real_http=True)` and registers a mock response for
-any `tappedout.net`/`www.tappedout.net` request (matched via
-`TappedOut.get_host_names()`), so those two cases are fully offline and
-deterministic while every other site in the same parametrize
-(archidekt, cubecobra, magic-ville, manastack, scryfall — still real
-network calls) is untouched via the `real_http=True` fallback. Chosen
-over a named `skipif` (the `MOXFIELD_SECRET`-gated pattern just above it
-in the same file) because there's no config flag to gate tappedout on —
-only live reachability — and mocking keeps real parsing coverage instead
-of dropping it.
+each site once it's been observed flaking - `tappedout.net`/
+`www.tappedout.net` (matched via `TappedOut.get_host_names()`) and, as of
+this fix, `manastack.com` (matched via `ManaStack.get_host_names()`,
+mocked with a JSON body shaped to match `ManaStack.retrieve_card_list`'s
+own `response_json["list"]["cards"]` parsing so that code path still gets
+real coverage, not just a bypass) - while every other, not-yet-observed-
+flaking site in the same parametrize stays on the `real_http=True`
+fallback untouched. Chosen over a named `skipif` (the `MOXFIELD_SECRET`-
+gated pattern just above it in the same file) because there's no config
+flag to gate any of these on - only live reachability - and mocking keeps
+real parsing coverage instead of dropping it. If a THIRD site in this
+parametrize starts flaking in CI, the fix is the same pattern again: add
+one more `mock.get(...)` matching that site's `get_host_names()`, not a
+skip.
 
 **Refs**: `MPCAutofill/cardpicker/tests/test_integrations.py`'s
 `test_valid_url`, `MPCAutofill/cardpicker/integrations/game/mtg.py`'s
-`TappedOut`, `MPCAutofill/cardpicker/integrations/game/base.py`'s
+`TappedOut`/`ManaStack`, `MPCAutofill/cardpicker/integrations/game/base.py`'s
 `ImportSite.request`.
 
 ## Every PR's prettier pre-commit check fails on a docs file the PR never touched

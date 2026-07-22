@@ -720,21 +720,44 @@ export function QuestionFeed() {
 
   const skip = () => advance();
 
-  // Level 1's NO. Casts no vote itself (never has - there's no backend concept of "reject just
-  // this one candidate specifically," only a positive vote for a specific printing or a
-  // generic isNoMatch for the whole set - see selectCandidate above) - purely records the
-  // rejection client-side so Level 2's candidate list (below) excludes it, then falls through
-  // to the SAME setStage("level2") transition as before. The actual, single negative vote for
-  // this item still only ever happens once, whenever the user eventually taps "None of these"/
-  // custom-art/skip - unchanged from before this fix, so there is no double-vote risk: this
-  // function only ever changes what's DISPLAYED, never what's SUBMITTED.
+  // Level 1's NO. In the general case this casts no vote itself - there's no backend concept of
+  // "reject just this one candidate specifically," only a positive vote for a specific printing
+  // or a generic isNoMatch for the whole set (see selectCandidate above) - so it purely records
+  // the rejection client-side so Level 2's candidate list (below) excludes it, then falls
+  // through to the SAME setStage("level2") transition as before.
+  //
+  // EXCEPTION - the singleton case (owner-reported dedup bug, docs/features/printing-tags.md's
+  // questionFeed section): when the suggested printing is the card's ONLY candidate, rejecting
+  // it leaves nothing else to ask - "No" IS the terminal answer for this surface, not a detour
+  // to a different question. Before this fix, the singleton screen still required an explicit
+  // extra tap ("None of these") before any vote was written; if that second tap never happened
+  // (the user read "No" as final and moved on, hit the generic "Skip" instead, closed the tab),
+  // no CardPrintingTag row existed for this (card, anonymous_id) pair at all, so
+  // question_feed.py's tier-1 exclusion (`.exclude(printing_tags__anonymous_id=...)`) had
+  // nothing to match against - the exact same question resurfaced on the next feed fetch. This
+  // is the "dedup doesn't work" bug: the fix isn't the exclusion logic (already correct - see
+  // test_tier_1_excludes_cards_this_voter_already_voted_on in test_question_feed.py), it's that
+  // no vote was ever recorded here to exclude on. Detecting the singleton case and immediately
+  // calling the same isNoMatch vote "None of these" casts closes that gap: the vote persists at
+  // the moment "No" is tapped, with or without any further tap. The "Got it - not that one..."
+  // follow-up screen (below) still renders while/after this submits, unchanged.
   const rejectSuggestion = () => {
-    if (item?.suggestedPrinting != null) {
-      setRejectedCandidateIds((previous) =>
-        new Set(previous).add(item.suggestedPrinting!.identifier)
-      );
+    if (item?.suggestedPrinting == null) {
+      setStage("level2");
+      return;
     }
+    const rejectedIdentifier = item.suggestedPrinting.identifier;
+    setRejectedCandidateIds((previous) =>
+      new Set(previous).add(rejectedIdentifier)
+    );
     setStage("level2");
+
+    const remainingCandidates = (item.candidates ?? []).filter(
+      (candidate) => candidate.identifier !== rejectedIdentifier
+    );
+    if (remainingCandidates.length === 0) {
+      selectCandidate(undefined, true);
+    }
   };
 
   if (loading && item == null) {

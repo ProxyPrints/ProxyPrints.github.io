@@ -86,7 +86,15 @@ session's process, unless the user directly confirms it's abandoned — then
 verify the PID's cwd via `readlink -f /proc/<pid>/cwd` before killing.
 Corollary: always kill your own leftover dev server when your task ends —
 it's a landmine for the next concurrent session, not something to leave
-running because it "seems harmless."
+running because it "seems harmless." When it's time to kill your OWN
+server, don't reach for `pkill -f "next dev"` — that pattern matches every
+worktree's `next dev` process indiscriminately, not just yours, and will
+kill a concurrent session's live server the same way leaving one running
+would land as a landmine (confirmed: it killed another active worktree's
+server outright). Kill by the specific PID you started (or that you
+verified via the `readlink -f /proc/<pid>/cwd` check above resolves to
+your own worktree), never by a name/command-line pattern shared across
+worktrees.
 
 ## Absolute paths to the repo root silently target the wrong checkout in a worktree session
 
