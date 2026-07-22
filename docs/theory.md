@@ -209,22 +209,61 @@ turns out to be:
    compute, never auto-votes on its own). This bounds the blast radius
    of a hash-collision-driven error to "one wasted compute," never "one
    silently-wrong vote."
-2. **The human-backed gate** (`vote_consensus.is_human_backed_source`):
-   machine-sourced votes (`VoteSource.OCR`, `VoteSource.DEDUCTION`, machine
-   weight 0.5 by default) can never _alone_ clear the resolution
-   threshold (`PRINTING_TAG_MIN_VOTES=2`) — at least one human vote
-   (weight 1.0) or admin vote (weight 5.0) must be present in the
-   winning tally for a card to actually resolve. Machine evidence
-   narrows and prioritizes what a human is asked to confirm; it never
-   substitutes for that confirmation. This is the property §2c's
-   0/43,426 result is actually verifying — not "43,426 correct
-   decisions," but "43,426 decisions that were structurally incapable of
-   resolving anything on their own."
+2. **The human-backed gate, sharpened by the owner-ratified 2026-07-22
+   vote-weight scenario matrix** (`vote_consensus.resolve_weighted_consensus`,
+   `is_human_backed_source`, implemented in PR #325; the ratification
+   artifact itself is [`reference/vote-weight-matrix.md`](reference/vote-weight-matrix.md)):
+   machine-sourced votes (`VoteSource.OCR`, `VoteSource.DEDUCTION`, weight
+   0.5 by default) can never _alone_ clear the resolution threshold
+   (`PRINTING_TAG_MIN_VOTES=2`) — at least one human vote (weight 1.0) or
+   admin vote (weight 5.0) must be present in the winning tally for a card
+   to actually resolve. The ratification replaces a plain boolean-presence
+   check with a stronger invariant: **machine and implicit weight are
+   excluded from both winner selection and the quorum/share gate whenever
+   any outcome group already holds human-backed weight `>= min_weight`, or
+   a live human-vs-human contest exists** (two or more groups each
+   carrying some human-backed weight) — decisions D1/D4 of the matrix.
+   Concretely: machine/implicit agreement may still _reinforce_ an
+   already-human-backed side (a lone human vote plus agreeing machine
+   weight can still promote a previously-unresolved card — D2, unaffected
+   by D1/D4), but machine or implicit dissent can neither tip a genuine
+   human-vs-human contest (D1) nor drag an already-quorum-valid human
+   winner's share back below `min_share` to silently de-resolve it (D4 —
+   at 28k+ deduction-vote scale, this used to be reachable on any
+   thin-margin 2-human-vote card before the ratification). A new passive
+   evidence class, `VoteSource.IMPLICIT` (weight 0.25, `PRINTING_TAG_IMPLICIT_WEIGHT`,
+   cast when a person picks a candidate card while an `/editor` filter chip
+   is active), is symmetric to machine weight under this gate: never
+   human-backed, and its summed weight per (card, tag) outcome group is
+   additionally hard-capped at `PRINTING_TAG_IMPLICIT_CAP=1.0`, strictly
+   below `min_weight` — a pile of implicit votes cannot form quorum on its
+   own even before the human-backed check applies. Implicit weight is
+   also excluded entirely from the questionFeed's suggestedness/confidence-fill
+   computation (`get_tag_net_polarity`, decision D6) — a passive
+   selection by-product must never color a chip's fill or let a person's
+   own earlier pick "explain itself" back to them, which would otherwise
+   be a self-seeding loop (evidence created by the UI reinforcing the same
+   UI's own suggestion of itself). `VoteSource.FEDERATED` (weight 1.0,
+   `VOTE_FEDERATED_WEIGHT`, pinned by decision DF) sits in the same
+   non-human-backed bucket as machine/implicit weight for gate purposes —
+   despite carrying full USER-equivalent weight toward quorum and share,
+   an imported federated verdict is a **suggestion**, never itself
+   sufficient to clear `g₅`, and is subject to the same D1/D4 exclusion as
+   machine/implicit weight the moment a human-backed contest or
+   already-quorum-valid human winner is in play. Machine evidence narrows
+   and prioritizes what a human is asked to confirm; it never substitutes
+   for that confirmation, and — as of this ratification — never dilutes
+   or overturns one either. This is the property §2c's 0/43,426 result is
+   actually verifying — not "43,426 correct decisions," but "43,426
+   decisions that were structurally incapable of resolving anything on
+   their own."
 
 Together these mean the system's worst-case failure mode, even under a
 badly miscalibrated engine, is a wasted human review cycle (a bad
 suggestion surfaced for confirmation) — never a silent wrong answer
-committed to the catalog.
+committed to the catalog, and, since 2026-07-22, never a silently
+_reverted_ right answer either: passive/machine/federated evidence can
+now neither form nor overturn a human-backed quorum on its own.
 
 ## 5. Honest novelty statement
 
@@ -326,7 +365,11 @@ sources: OCR and deduction; no generative AI is involved) `=0.5` — now
 `PRINTING_TAG_MACHINE_WEIGHT` in settings.py, with the old name kept as a
 backward-compatible env-var fallback so an existing deployment's config
 can't silently break — human `1.0`, admin `5.0`,
-`VOTE_FEDERATED_WEIGHT=1.0`) rather than weights estimated from the data
+`VOTE_FEDERATED_WEIGHT=1.0` — non-human-backed, DF, despite matching a
+human vote's raw weight — and, added by the 2026-07-22 vote-weight
+ratification, implicit `0.25` (`PRINTING_TAG_IMPLICIT_WEIGHT`, summed and
+capped per (card, tag) at `PRINTING_TAG_IMPLICIT_CAP=1.0`, also
+non-human-backed) rather than weights estimated from the data
 itself — a simplification, not an oversight, appropriate while per-source
 volume is still low enough that a hand-set prior is more stable than a
 data-estimated one would be. The Dawid-Skene connection is the basis for
@@ -455,8 +498,18 @@ printing.
   `vote_consensus.resolve_weighted_consensus`, which resolves a card
   **iff** the winning group clears `min_weight`, clears `min_share`,
   **and** contains at least one human-backed vote. A machine vote at
-  0.5 cannot satisfy the third condition alone. `P(card resolved to catalog | machine wrong-match) = 0` **structurally**, independent of
-  `ε₁…ε₄`.
+  0.5 cannot satisfy the third condition alone. Per the 2026-07-22
+  vote-weight ratification (§4 item 2), this is no longer only a
+  form-the-quorum-alone guarantee: machine weight (and the passive
+  `VoteSource.IMPLICIT`/weight-0.25/cap-1.0 class, and non-human-backed
+  `VoteSource.FEDERATED`/weight-1.0) is additionally excluded from the
+  gate's winner-selection and share arithmetic entirely once a
+  human-backed contest or an already-quorum-valid human winner is in
+  play (D1/D4) — so a machine wrong-match can neither win a live
+  human-vs-human disagreement nor de-resolve a human-backed card that
+  already cleared this gate. `P(card resolved to catalog | machine wrong-match) = 0` **structurally**, independent of
+  `ε₁…ε₄`, and — as of the ratification — so is
+  `P(a human-backed-resolved card is de-resolved by machine wrong-match | already resolved)`.
 
 ### 7b. The composed false-accept expression, honestly separated
 

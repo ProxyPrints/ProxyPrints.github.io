@@ -1,0 +1,108 @@
+{
+  "date": "2026-07-22",
+  "schemaVersion": 1,
+  "generatedFor": "docs/data/2026-07-22-pipeline-snapshot.md",
+  "groups": [
+    {
+      "id": "catalog-scale",
+      "title": "Catalog scale",
+      "series": [
+        { "label": "Total cards", "value": 218285 },
+        { "label": "Distinct sources", "value": 248 },
+        { "label": "Cards with a current ImageEvidence row", "value": 218270 },
+        {
+          "label": "Distinct OCR'd artist names (ImageEvidence.artist_ocr_name)",
+          "value": 3550
+        }
+      ]
+    },
+    {
+      "id": "extraction-run-stagec-remainder-0721",
+      "title": "Stage C extraction run: stagec-remainder-0721",
+      "series": [
+        { "label": "Cards processed", "value": 141369 },
+        { "label": "Fetch failures", "value": 492 },
+        {
+          "label": "Short-circuited (no digit-bearing OCR, #294)",
+          "value": 57725
+        }
+      ]
+    },
+    {
+      "id": "image-evidence-by-run",
+      "title": "ImageEvidence rows by run_id (current last-writer count)",
+      "series": [
+        { "label": "stagec-remainder-0721", "value": 197470 },
+        { "label": "stagec-20k-20260721T0227Z", "value": 10696 },
+        { "label": "ntx-0721", "value": 9675 },
+        { "label": "stagec-canary-20260720T1659Z", "value": 223 },
+        { "label": "stagec-canary-decoupled-20260720T235127Z", "value": 206 }
+      ]
+    },
+    {
+      "id": "vote-pool-printing",
+      "title": "CardPrintingTag votes by source",
+      "total": 101105,
+      "series": [
+        { "label": "ocr", "value": 72938 },
+        { "label": "deduction", "value": 28112 },
+        { "label": "user", "value": 55 }
+      ]
+    },
+    {
+      "id": "vote-pool-tag",
+      "title": "CardTagVote votes by source",
+      "total": 61334,
+      "series": [
+        { "label": "ocr", "value": 61294 },
+        { "label": "user", "value": 40 }
+      ]
+    },
+    {
+      "id": "vote-pool-artist",
+      "title": "CardArtistVote votes by source",
+      "total": 7137,
+      "series": [
+        { "label": "ocr", "value": 7131 },
+        { "label": "user", "value": 6 }
+      ]
+    },
+    {
+      "id": "status-printing-tag",
+      "title": "Card.printing_tag_status distribution",
+      "series": [
+        { "label": "unresolved", "value": 218281 },
+        { "label": "resolved", "value": 3 },
+        { "label": "no_match", "value": 1 }
+      ]
+    },
+    {
+      "id": "status-artist-vote",
+      "title": "Card.artist_vote_status distribution",
+      "series": [{ "label": "unresolved", "value": 218285 }]
+    },
+    {
+      "id": "status-tag-vote-persisted",
+      "title": "Card.tag_vote_statuses per-(card,tag) status, currently persisted",
+      "series": [
+        { "label": "unresolved", "value": 12123 },
+        { "label": "resolved_apply", "value": 2 }
+      ]
+    },
+    {
+      "id": "impact-report-dry-run",
+      "title": "consensus_impact_report dry run (ratified resolver vs. persisted state, 2026-07-22)",
+      "series": [
+        { "label": "printing pairs checked", "value": 92368 },
+        { "label": "printing transitions", "value": 0 },
+        { "label": "artist pairs checked", "value": 7130 },
+        { "label": "artist transitions", "value": 0 },
+        { "label": "tag pairs checked", "value": 61328 },
+        {
+          "label": "tag None-to-UNRESOLVED materializations pending recompute",
+          "value": 49207
+        }
+      ]
+    }
+  ]
+}

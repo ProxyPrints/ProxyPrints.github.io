@@ -27,6 +27,11 @@ The methodology and the systems it governs.
   evidence extraction, Stage D join-key calculator, the human-backed vote
   gate) rather than `theory.md`'s formal decoding model. **Reviewed and
   approved by the owner, 2026-07-21.**
+- [`reference/vote-weight-matrix.md`](reference/vote-weight-matrix.md) —
+  the owner-ratified 2026-07-22 vote-weight scenario matrix (raw decision
+  record, implemented in PR #325) that `theory.md`'s §4/§7a and
+  `identification-pipeline.md`'s g5 paragraph narrate; reference only, not
+  re-derived after ratification.
 - [`federation-v1.md`](federation-v1.md) — federation verdict exchange
   format v1 (spec; no implementation yet — instances would share resolved
   consensus verdicts as signed JSON, never raw votes). Companion HOLD
@@ -165,5 +170,12 @@ system" + "Using it" + "Operating it" only).
   UI content-accuracy findings) landed via #56 and its Disposition column
   was filled in after the build pass (#64) shipped 11 of 12 findings (#11
   got a process fix instead — see `CLAUDE.md`'s policy-text-dates rule).
+- **`data/`** — dated JSON pipeline snapshots (one file per date, plus a
+  sibling `.md` with per-field query provenance), for chart/infographic
+  generation — the homepage panel's reserved-not-built catalog-stats chart
+  slot ([`features/homepage-panel.md`](features/homepage-panel.md)) is the
+  intended eventual consumer. See
+  [`data/2026-07-22-pipeline-snapshot.md`](data/2026-07-22-pipeline-snapshot.md)
+  for the first one.
 - [`reports/`](reports/README.md) — the report-relay convention (see that
   directory's own README, which indexes every report currently merged).
