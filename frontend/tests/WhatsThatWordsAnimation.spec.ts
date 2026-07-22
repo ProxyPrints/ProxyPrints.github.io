@@ -211,4 +211,97 @@ test.describe("What's That Card? - sliced-word pop + hero card pulse (issue #305
       "before-skip"
     );
   });
+
+  // Owner blocker (post-#310 live review, "the pulse doesn't sync with the pop") - the whole
+  // sequence (blue-cover fade, word pop, card pulse) must not start until the subject card's
+  // own image has actually loaded, not merely once the surrounding React tree has mounted.
+  // A route interception that deliberately delays the image response is the only way to prove
+  // the gate holds - every other fixture in this file uses an empty mediumThumbnailUrl (no
+  // real network request at all), so this test gives the card a real, interceptable URL
+  // instead, specifically so the delay is real and not just a fast/instant mock resolution.
+  test("the animation sequence does not start until the card image actually loads", async ({
+    page,
+    network,
+  }) => {
+    const DELAYED_IMAGE_URL = `${localBackendURL}/delayed-card-image.png`;
+    network.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "identify_printing",
+              card: {
+                ...cardDocument1,
+                mediumThumbnailUrl: DELAYED_IMAGE_URL,
+              },
+              candidates: [printingCandidate1, printingCandidate2],
+              tagConfidence: {},
+            },
+            remainingEstimate: {
+              total: 3,
+              confirmable: 0,
+              contested: 0,
+              fresh: 3,
+            },
+          },
+          { status: 200 }
+        )
+      ),
+      ...defaultHandlers
+    );
+
+    // Holds the card image's own response until releaseImage() is called below - a real
+    // network delay, not a fake timer, so this proves the gate against actual load timing.
+    let releaseImage: () => void = () => {};
+    const imageGate = new Promise<void>((resolve) => {
+      releaseImage = resolve;
+    });
+    await page.route(DELAYED_IMAGE_URL, async (route) => {
+      await imageGate;
+      await route.fulfill({ path: "public/blank.png" });
+    });
+
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    // Before the image resolves: every one of the three synchronized animations must still be
+    // paused - none may have started counting down (delay included), per the shared
+    // `imageLoaded`-gated `$playing`/`playing` prop (see QuestionFeed.tsx's own comment on
+    // `onCardImageSettled`).
+    for (const { testId } of WORD_TEST_IDS) {
+      const playState = await page
+        .getByTestId(testId)
+        .evaluate((el) => window.getComputedStyle(el).animationPlayState);
+      expect(playState).toBe("paused");
+    }
+    const cardPlayStateBefore = await page
+      .getByTestId("question-feed-card-pulse")
+      .evaluate((el) => window.getComputedStyle(el).animationPlayState);
+    expect(cardPlayStateBefore).toBe("paused");
+    // The cover must still be up - `revealed` can't have flipped true with no load event to
+    // trigger it.
+    await expect(
+      page.getByTestId("question-feed-reveal-overlay")
+    ).toBeVisible();
+
+    // Release the image response - only now should the sequence be allowed to start.
+    releaseImage();
+
+    for (const { testId } of WORD_TEST_IDS) {
+      await expect
+        .poll(() =>
+          page
+            .getByTestId(testId)
+            .evaluate((el) => window.getComputedStyle(el).animationPlayState)
+        )
+        .toBe("running");
+    }
+    await expect
+      .poll(() =>
+        page
+          .getByTestId("question-feed-card-pulse")
+          .evaluate((el) => window.getComputedStyle(el).animationPlayState)
+      )
+      .toBe("running");
+  });
 });

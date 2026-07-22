@@ -35,7 +35,7 @@
  */
 
 import styled from "@emotion/styled";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Badge from "react-bootstrap/Badge";
 import Button from "react-bootstrap/Button";
@@ -180,7 +180,14 @@ const HeroGrid = styled.div`
   grid-template-areas: "words" "card" "questions";
 
   @media (min-width: 768px) {
-    gap: 1.5rem 2.5rem;
+    /* Row-gap trimmed from 1.5rem to 1rem, then to 0.5rem on rebase onto #313's taller
+       three-tier Footer (fix round, owner blocker) - purely spacing between the words/
+       questions rows, not approved content, and every pixel of it also comes straight out of
+       HeroQuestionsArea's own budget the same way the words row's own height does (see the
+       Word component's own comment in WhatsThatWords.tsx for the full arithmetic). Column gap
+       (2.5rem) is untouched - that's the card/questions horizontal gutter HeroQuestionsArea's
+       own bleed math already accounts for. */
+    gap: 0.5rem 2.5rem;
     grid-template-columns: minmax(0, 42%) minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas: "card words" "card questions";
@@ -354,6 +361,34 @@ export function QuestionFeed() {
   const [fetchError, setFetchError] = useState<boolean>(false);
   const [flavorText, setFlavorText] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<boolean>(false);
+  // Fix round (owner blocker, "the pulse doesn't sync with the pop") - the reveal fade, the
+  // WHAT'S/THAT/CARD? pop sequence, and the hero card's own pulse used to all fire the moment
+  // their elements mounted, with no regard for whether the subject card's own <img> had
+  // actually finished loading - on a slow connection this could reveal (or pop/pulse against)
+  // a still-loading or half-painted image. `imageLoaded`/`imageErrored` below, together with
+  // `cardImageRef`'s mount-time `.complete` check (mirrors Card.tsx's own cached-image
+  // workaround - see that component's comment), gate all three animations (via each one's own
+  // `$playing`/`playing` prop - RevealOverlay/CardPulseWrapper in cardPanel.tsx, WhatsThatWords
+  // itself) on one single real load-complete moment instead of three independent mount timers.
+  const [imageLoaded, setImageLoaded] = useState<boolean>(false);
+  // A failed load never gets a legitimate "reveal" moment to sync to - the cover stays up
+  // permanently (below) with no animation at all, rather than fading onto a broken image only
+  // to sit there un-animated forever anyway. See onCardImageSettled below for how `revealed`
+  // still unblocks the rest of the question UI regardless, so a failed image can't strand the
+  // user on an infinite spinner.
+  const [imageErrored, setImageErrored] = useState<boolean>(false);
+  // Bumped unconditionally alongside the reset above, on EVERY fetch resolution - not just
+  // ones that land on a genuinely different card. Two consecutive feed items can legitimately
+  // share the same identifier (the fetch effect's own comment above explains why, and dev-mode
+  // React Strict Mode's double effect-invocation makes a duplicate resolution routine even
+  // outside that case), and a duplicate resolution still unconditionally resets `imageLoaded`
+  // back to false here - a `.complete`/`naturalWidth` catch-up effect keyed on the identifier
+  // alone would silently miss that second reset (no dependency change to re-trigger it on),
+  // permanently stranding the UI on "Loading..." with nothing left to ever flip `revealed`
+  // back to true. Keying that effect on this counter instead guarantees it re-runs every time
+  // this reset block runs, with no dependency on whether the identifier text itself changed.
+  const [imageGeneration, setImageGeneration] = useState<number>(0);
+  const cardImageRef = useRef<HTMLImageElement>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
     null
@@ -421,6 +456,18 @@ export function QuestionFeed() {
         // which incidentally "fixed" it by replacing the stale filter. Resetting here instead
         // makes the reset unconditional on every new item, with no dependency array to miss.
         setRevealed(false);
+        setImageLoaded(false);
+        setImageErrored(false);
+        setImageGeneration((previous) => previous + 1);
+        // A genuinely empty configured URL (this test suite's own fixture convention - real
+        // cards always carry a real CDN URL) has nothing to load at all, so it's settled right
+        // here rather than waiting on any image event - see onCardImageSettled's own comment
+        // for why relying on the img's real onError event alone for this specific case was
+        // flaky under load. Everything else routes through the `imageGeneration`-keyed catch-up
+        // effect below instead (needs the new `<img>` to have actually mounted first).
+        if (newItem != null && newItem.card.mediumThumbnailUrl === "") {
+          onCardImageSettled(false);
+        }
         setChipStates(initialChipStates());
         setFollowUp("none");
         setRejectedCandidateIds(new Set());
@@ -438,6 +485,64 @@ export function QuestionFeed() {
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, fetchToken]);
+
+  // The one moment every animation in the hero (RevealOverlay's fade, WhatsThatWords' pop,
+  // CardPulseWrapper's pulse) is anchored to - see each of their own comments. Two cases skip
+  // the animated queue entirely and jump straight to `revealed`, for different reasons:
+  // reduced motion (nothing should ever visibly pop/fade, so there's no animationend event to
+  // wait for) and a failed load (no legitimate image to reveal - see the cover's own "stays up
+  // forever" behavior below, driven by `imageErrored` rather than this function). Shared by
+  // both the `<img>`'s own onLoad/onError below AND the `.complete` catch-up effect below it -
+  // the reduced-motion shortcut has to apply on EITHER path, or a reduced-motion session that
+  // happens to hit the catch-up path (a cached image, or - only in tests - an empty-string
+  // fixture URL that never fires load/error at all) would never flip `revealed` at all, since
+  // reduced motion also means RevealOverlay's fade never plays and therefore never fires the
+  // `onAnimationEnd` that flips it the normal way. That gap is exactly what the reduced-motion
+  // Playwright spec (WhatsThatWordsAnimation.spec.ts) caught empirically.
+  const onCardImageSettled = (errored: boolean) => {
+    setImageLoaded(true);
+    if (errored) {
+      setImageErrored(true);
+    }
+    const reducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+    if (errored || reducedMotion) {
+      setRevealed(true);
+    }
+  };
+
+  // Catches a genuinely cached REAL image - Next.js/the browser sometimes never fires onLoad
+  // for a cache hit (see Card.tsx's own, older workaround for the identical gotcha). Checks
+  // `naturalWidth > 0`, not just `.complete` - `.complete` alone is `true` for a FAILED load
+  // too, so a plain `.complete` check would risk overwriting a genuine `imageErrored` back to
+  // a false "success" for an already-failed real URL. (The empty-URL fast path lives directly
+  // in the fetch handler above, not here - it needs no DOM access at all.)
+  //
+  // Deliberately keyed on `imageGeneration`, NOT `item?.card.identifier` - two consecutive
+  // feed items can legitimately share the same identifier (see the fetch handler's own
+  // comment on `imageGeneration`), and an identifier-keyed effect would silently skip re-
+  // running on a duplicate resolution, permanently stranding `revealed` at the `false` that
+  // resolution's own reset left behind. `imageGeneration` bumps on every single resolution
+  // unconditionally, so this effect always re-runs in lockstep with the reset that needs it
+  // to. This exact gap - found empirically via a Playwright run that got stuck on
+  // "Loading..." forever, not by inspection - is why the reset's own comment already warns
+  // about this class of bug for `chipStates`; this effect walked into the same trap once
+  // before this fix.
+  //
+  // Routes through onCardImageSettled (not a bare setImageLoaded(true)) so the reduced-motion
+  // shortcut there applies here too. Runs after the new item's own `<img>` has mounted, so
+  // `cardImageRef.current` is always the CURRENT item's image by the time this checks it.
+  useEffect(() => {
+    if (
+      cardImageRef.current != null &&
+      cardImageRef.current.complete &&
+      cardImageRef.current.naturalWidth > 0
+    ) {
+      onCardImageSettled(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageGeneration]);
 
   const advance = () => {
     setFlavorText(randomFlavorText());
@@ -725,13 +830,31 @@ export function QuestionFeed() {
       </BurstSvg>
       <RevealWrapper>
         <img
+          ref={cardImageRef}
           src={item.card.mediumThumbnailUrl}
           alt={item.card.name}
           style={{ width: "100%", aspectRatio: CARD_ASPECT_RATIO }}
+          onLoad={() => onCardImageSettled(false)}
+          // A genuinely empty configured URL (this test suite's own fixture convention - real
+          // cards always carry a real CDN URL) still fires a real browser `error` event -
+          // confirmed empirically: an `<img src="">` resolves the empty relative reference
+          // against the CURRENT PAGE's own URL (per the URL spec's "empty string" case), and
+          // fetching THAT as an image predictably fails to decode. That's a test-fixture
+          // artifact, not a genuine failed load, so it's excluded here rather than triggering
+          // the "keep the cover, no animation" failed-load treatment for every existing test.
+          onError={() =>
+            onCardImageSettled(item.card.mediumThumbnailUrl !== "")
+          }
         />
-        {!revealed && (
+        {/* Fix round (owner blocker) - visible while not yet revealed (unchanged), OR
+            permanently once the load has errored (imageErrored), regardless of `revealed` -
+            `revealed` itself still flips true on error (see onCardImageSettled) so the rest
+            of the question UI (badge/buttons/etc, gated on `revealed` elsewhere in this file)
+            isn't stranded behind a cover that will never legitimately animate away. */}
+        {(!revealed || imageErrored) && (
           <RevealOverlay
             data-testid="question-feed-reveal-overlay"
+            $playing={imageLoaded && !imageErrored}
             onAnimationEnd={() => setRevealed(true)}
           >
             ?
@@ -811,10 +934,28 @@ export function QuestionFeed() {
                     Level 1 was introduced (a regression, not an intentional text-only design;
                     every other stage still shows one per candidate). Restored using the exact
                     same mechanism Level 2's grid already uses correctly: mediumThumbnailUrl
-                    straight into a plain <img>, no new URL construction. */}
+                    straight into a plain <img>, no new URL construction.
+                    Fix round (owner blocker, post-#310) - maxWidth trimmed from 160 to 140.
+                    This is a SEPARATE, smaller lever from the word-stack/row-gap/padding trims
+                    above (WhatsThatWords.tsx's Word component has the full arithmetic) - those
+                    alone left only a single-digit-px safety margin at 1400x900 once Level 1's
+                    own content height is measured directly (not just via the scrollHeight/
+                    clientHeight equality, which reports equal once content fits - by
+                    definition scrollHeight can't read BELOW clientHeight even with room to
+                    spare, so it doesn't surface a shrinking margin on its own). Trimmed again
+                    (140 -> 95) on rebase onto #313's taller three-tier Footer, which ate
+                    further into HeroGrid's own budget than this fix's first pass anticipated.
+                    95px is a genuinely noticeable size cut from Level 2's own per-candidate
+                    grid tiles (~171px at 1400px wide, four columns - roughly 55% of that
+                    width, not merely "modestly smaller") - a real, visible size difference,
+                    traded deliberately for real, measured margin under the hard no-scroll
+                    assertion rather than shipping a fix that only barely clears it by
+                    construction. Still legible (it's a small comparison thumbnail, not the
+                    primary card - the big reveal-card on the left carries that job), but this
+                    is a named tradeoff, not a free one. */}
                 <div
                   className="mx-auto mb-2"
-                  style={{ maxWidth: 160 }}
+                  style={{ maxWidth: 95 }}
                   data-testid="question-feed-level1-reference-image"
                 >
                   <ArtPlaceholder>
@@ -1144,9 +1285,16 @@ export function QuestionFeed() {
     cardNode = (
       <PlainHeroCard>
         <img
+          ref={cardImageRef}
           src={item.card.mediumThumbnailUrl}
           alt={item.card.name}
           style={{ width: "100%" }}
+          onLoad={() => onCardImageSettled(false)}
+          // See cardImage's own identical onError above for why an empty configured URL is
+          // excluded from the "genuine failure" treatment.
+          onError={() =>
+            onCardImageSettled(item.card.mediumThumbnailUrl !== "")
+          }
         />
         <div className="text-center mt-1">{item.card.name}</div>
       </PlainHeroCard>
@@ -1201,16 +1349,23 @@ export function QuestionFeed() {
           {/* Keyed on the card identifier so both the pop-in-sync-with-THAT pulse (below) and
               WhatsThatWords' own ripple (HeroWordsArea) remount - and therefore replay their
               CSS animation from frame zero - on every new card (wtc-redesign-spec.md W9 /
-              owner addendum). */}
+              owner addendum). `$playing` (fix round, owner blocker) additionally gates WHEN
+              that replayed animation actually starts - see cardPanel.tsx's own comment - to
+              the moment `imageLoaded` confirms this card's own image has settled, not just to
+              this remount. */}
           <CardPulseWrapper
             key={item.card.identifier}
+            $playing={imageLoaded && !imageErrored}
             data-testid="question-feed-card-pulse"
           >
             {cardNode}
           </CardPulseWrapper>
         </HeroCardArea>
         <HeroWordsArea>
-          <WhatsThatWords animationKey={item.card.identifier} />
+          <WhatsThatWords
+            animationKey={item.card.identifier}
+            playing={imageLoaded && !imageErrored}
+          />
         </HeroWordsArea>
         <HeroQuestionsArea data-testid="question-feed-questions-area">
           {rateLimited && (

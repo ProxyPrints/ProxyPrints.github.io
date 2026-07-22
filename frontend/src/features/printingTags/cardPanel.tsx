@@ -39,7 +39,20 @@ export const RevealWrapper = styled.div`
 // candidate grid's own "?" placeholders instead of a mismatched black flash. Black text
 // (matching the page-wide font colour) checked against this blue: contrast ratio ~6.2:1,
 // clearly better than the white it replaced (~3.4:1).
-export const RevealOverlay = styled.div`
+//
+// Fix round (owner blocker, "the pulse doesn't sync with the pop") - this used to fade on a
+// fixed 1.8s timer starting the moment it mounted, with no regard for whether the card image
+// underneath had actually finished loading - a slow network could reveal a still-loading (or
+// half-painted) image right as WhatsThatWords/CardPulseWrapper's own pops fired, breaking the
+// "one queued moment" the owner asked for. `$playing` (paused by default, same
+// `animation-play-state` mechanism as Word in WhatsThatWords.tsx) holds this at its own 0%
+// frame - fully opaque, i.e. visually identical to today's pre-fade hold - until
+// QuestionFeed.tsx confirms the image has settled, so the fade (and therefore the
+// `onAnimationEnd`-driven `revealed` flip) can never start before the image is actually there
+// to reveal. QuestionFeed.tsx never sets `$playing` at all for a failed load (see its own
+// comment) - the cover simply stays at this 0% frame indefinitely instead of fading onto a
+// broken image, which is the "failed treatment" the owner asked for.
+export const RevealOverlay = styled.div<{ $playing: boolean }>`
   position: absolute;
   inset: 0;
   background: ${STARBURST_OUTER_COLOR};
@@ -50,6 +63,7 @@ export const RevealOverlay = styled.div`
   font-size: 4rem;
   font-weight: bold;
   animation: ${revealAnimation} 1.8s ease-in forwards;
+  animation-play-state: ${(props) => (props.$playing ? "running" : "paused")};
   pointer-events: none;
 `;
 
@@ -131,18 +145,27 @@ export const BurstSvg = styled.svg<{ $hero?: boolean }>`
 // independent CSS animations on unrelated elements with no runtime coupling). Re-armed the same
 // way as the words - key this wrapper on the current item's card identifier so it remounts,
 // and the animation restarts, on every new card.
+//
+// Fix round (owner blocker, "the pulse doesn't sync with the pop") - `$playing` (same
+// paused-until-told-otherwise `animation-play-state` mechanism as Word in WhatsThatWords.tsx
+// and RevealOverlay above) holds this at its own 0% frame (scale(1) - visually identical to
+// the un-pulsed rest state, so there's no flash) until QuestionFeed.tsx confirms the card
+// image has actually loaded, so this can never fire early against a still-loading card - see
+// QuestionFeed.tsx's own comment on the shared `imageLoaded` state that drives all three of
+// these paused animations at once.
 export const wtcCardPulse = keyframes`
   0% { transform: scale(1); }
   48% { transform: scale(1.1); }
   100% { transform: scale(1); }
 `;
 
-export const CardPulseWrapper = styled.div`
+export const CardPulseWrapper = styled.div<{ $playing: boolean }>`
   transform-origin: center;
   width: 100%;
   max-width: 320px;
   animation: ${wtcCardPulse} 480ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
   animation-delay: 240ms;
+  animation-play-state: ${(props) => (props.$playing ? "running" : "paused")};
 
   @media (prefers-reduced-motion: reduce) {
     animation: none;

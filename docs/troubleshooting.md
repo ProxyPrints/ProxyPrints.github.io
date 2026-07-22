@@ -216,6 +216,37 @@ server. If the isolated run passes, restart the main session's dev server
 trusting further results from the stale one. Don't spend time root-causing
 the exact HMR/cache mechanism unless it recurs after this fix.
 
+**Addendum (2026-07-22, /whatsthat animation-sync fix)**: this exact
+symptom — `revealed` (backing `question-feed`'s loading spinner) stuck
+`false` forever, `<img src="">` never settling — recurred on a
+genuinely fresh, isolated dev server (a brand-new worktree, freshly
+killed and restarted, confirmed via `ps`/`readlink -f /proc/<pid>/cwd`
+that no other session's server was reused), so it was **not** always the
+stale-server artifact described above. The real cause that time: a
+`useEffect` keyed on `item?.card.identifier` doing settle/gate logic
+whose _reset_ lived unconditionally in the fetch handler
+(`setRevealed(false)` etc. on every resolution, not just ones landing on
+a genuinely new identifier). Two consecutive feed items can legitimately
+share an
+identifier (the existing fetch-handler comment already documents this
+for `chipStates`), and dev-mode React Strict Mode's double effect
+invocation makes a duplicate resolution routine even outside that case
+— when it happens, the reset fires again but the identifier-keyed catch-
+up effect has no dependency change to re-trigger it on, permanently
+stranding the reset state. **Fix**: don't key a catch-up/settle effect on
+a value that can legitimately repeat between consecutive items — key it
+on a counter bumped unconditionally in the same reset block instead
+(`imageGeneration` in `QuestionFeed.tsx`), so the effect re-runs every
+time the reset does, with no dependency on whether the identifier text
+itself changed. **Distinguishing the two causes**: the stale-server
+version reproduces identically regardless of source code (swapping
+branches on the _same_ long-running server fails the same way); this
+version reproduces intermittently even on a fresh server and stops
+reproducing (verified via a 15-iteration `--workers=1` loop with zero
+source edits mid-run) once the generation-counter fix lands — a single
+clean pass proves nothing for an intermittent race like this, only a
+multi-iteration loop does.
+
 ## `npx prettier --write` reformats far more of a frontend file than you touched (trailing commas, wrapped ternaries appearing everywhere)
 
 **Symptom**: running `npx prettier --write` on a file you made one small,
@@ -1130,6 +1161,46 @@ same three-line reproduction failed identically, and that removing only
 the flex-column wrapper (testing the single SVG alone) fixed it, which is
 what pointed at the flex cross-axis stretch specifically rather than the
 SVG/viewBox mechanics themselves.
+
+## `/display`'s floating "n/M" sheet-position pill under-reports the last sheet (shows `2/3` instead of `3/3`) after scrolling all the way down
+
+**Symptom**: `DisplayPage.spec.ts`'s D17 test ("the floating sheet-position
+pill updates live while scrolling at phone width") fails with
+`getByTestId('display-sheet-position-indicator')` stuck at `"2/3"` after
+scrolling the last sheet into view via `scrollIntoView({ block: "center" })` at 390px wide — reproduces 100% of the time in isolation, both
+locally and in CI (not the intermittent kind), even though the same test
+was merely marked "flaky" (2 real failures then a lucky pass) in the PR
+that introduced it (#313).
+
+**Cause**: the indicator's `IntersectionObserver` (`DisplayPage.tsx`,
+`visibleSheetIndex`) decides "which sheet is current" purely by a thin
+vertical center band (`rootMargin: "-45% 0px -45% 0px"`) against the
+page viewport. That heuristic structurally can't ever select the FIRST
+or LAST sheet once the scrollable `content-container` (Layout.tsx) is
+already at its true scroll extreme and a boundary sheet is short enough
+that there's no room left below/above it to move its own center through
+that band — confirmed by measuring the container directly:
+`scrollHeight - clientHeight` (the real max scroll) was ~250px, but
+centering the last (short) sheet would have needed roughly 500px+ of
+scroll, a shortfall of 250-280px that no amount of further scrolling can
+close, because the container is already at its true bottom. This isn't
+specific to any one card count or viewport — it's inherent to a fixed
+center-band test whenever a boundary sheet is short relative to the
+viewport, and is unrelated to Footer/Navbar sizing (`/display` doesn't
+even render a `Footer`).
+
+**Fix**: inside the same `IntersectionObserver` callback, read the
+scroll container's own `scrollTop`/`scrollHeight`/`clientHeight`
+(via `entries[0].target.closest('[data-testid="content-container"]')`)
+and check the true scroll extremes FIRST — at `scrollTop <= EPSILON`,
+force index `0`; at `scrollTop + clientHeight >= scrollHeight - EPSILON`,
+force the last index — falling through to the existing center-band
+`Math.min(...intersectingIndices)` logic only when not at an edge. Kept
+as a single writer to `visibleSheetIndex` (not a second `scroll`
+listener racing the observer) since the observer already re-fires on the
+same settling scroll event that changes intersection state. Verified
+5/5 clean repeats of the D17 test plus the full 28-test `DisplayPage.spec.ts`
+suite and CI's own shard-2/4 (76 tests) locally.
 
 ## `run_image_evidence_cohort` (Stage C) parent process's RSS climbs unboundedly and OOMs the whole box on a long run
 

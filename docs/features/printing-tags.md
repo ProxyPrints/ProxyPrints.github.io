@@ -695,6 +695,98 @@ printings, artists, tags, and moderation from one screen.
     mockup's own stage-switcher demo); artist/tag items' plain reference
     `<img>` (no burst/reveal — "reposition, don't redesign") just moved
     into the same shared `card` grid area instead of its own `Col`.
+  - **Fix round (owner live blocker, post-#310): word-stack sizing +
+    animation choreography sync**. Two independent owner-reported bugs
+    found on the live site after #310 landed:
+    - **Question box too small for its content**: the word stack
+      (`Word` in `WhatsThatWords.tsx`) rendered at a fixed `3.75rem`/
+      `4.5rem` per word (~220px total for all three, measured) — about
+      1.4x `wtc-mockup.html`'s own approved proportion (164px, measured
+      directly off that file with its demo-only scale transform
+      removed) — and since #310 bounded the whole hero to one viewport-
+      height row, every extra pixel the words claimed came straight out
+      of `HeroQuestionsArea`'s own budget (`HeroGrid`'s `auto` row sizes
+      to the words' content height, subtracting directly from the
+      `questions` row's `1fr` share). At 1400×900 this left even Level 1
+      (suggested-match card + all four answer controls, no candidate
+      grid to scroll) short by ~140px, forcing an internal scroll that
+      clipped the card mid-view. Fixed by shrinking `Word`'s height to a
+      `clamp()` of the viewport height (not a flat rem guess, so it
+      can't silently regress on a shorter viewport than was checked) —
+      deliberately smaller than even the mockup's own absolute number,
+      since the mockup was never height-constrained the way the pinned
+      hero now is. `HeroGrid`'s row-gap and `StarburstBackground`'s own
+      padding/margin (whatsthat.tsx) were also trimmed at `md`+ (never
+      approved content, pure chrome spacing that was also coming
+      straight out of the same budget), and the Level 1 reference
+      thumbnail's `maxWidth` was cut as a smaller, separately-named
+      lever once the above alone still left only a single-digit-px
+      margin. All of this was re-measured and re-tuned again on rebase
+      onto #313's three-tier `Footer` redesign, which is substantially
+      taller than the single-tier footer this fix's own first pass was
+      built against and ate further into the same budget — see
+      `WhatsThatWords.tsx`'s `Word` component and `QuestionFeed.tsx`'s
+      `HeroGrid`/reference-thumbnail comments for the exact before/after
+      numbers at each pass. New hard regression guard:
+      `QuestionFeedResponsive.spec.ts` asserts at 1400×900 that Level
+      1's `HeroQuestionsArea` never overflows (`scrollHeight <= clientHeight`) and all four answer controls are fully within the
+      viewport, not merely `toBeVisible()` (which only requires a
+      non-zero intersection, not full containment) — confirmed to fail
+      on the pre-fix code with the exact expected numbers before the fix
+      landed.
+    - **Pulse/pop desynced from a still-loading card**: the reveal
+      fade (`RevealOverlay`), the word-pop sequence
+      (`WhatsThatWords`), and the hero card pulse
+      (`CardPulseWrapper`) all used to start counting the moment their
+      own elements mounted, independent of whether the subject card's
+      `<img>` had actually finished loading — on a slow connection this
+      could reveal, pop, or pulse against a still-loading or half-
+      painted image. Owner's redesign of the choreography: the card
+      slot shows the blue cover state and holds it until the image's
+      `load` event fires, then the entire sequence (cover fade off +
+      word pops + card pulse, all still frame-for-frame in sync with
+      each other) runs as one queue anchored to that single moment.
+      Implemented via a shared `imageLoaded` boolean
+      (`QuestionFeed.tsx`) threaded into each of the three animated
+      components' own `$playing`/`playing` prop, which gates each
+      one's CSS `animation-play-state` (`paused` until told otherwise,
+      `running` once `imageLoaded` flips) — the timeline, delay
+      included, doesn't advance at all while paused, so flipping all
+      three at once genuinely starts them in lockstep rather than
+      merely un-pausing three independently-drifted clocks. A failed
+      load (`onError`, non-empty configured URL) keeps the cover up
+      permanently with no animation at all (no legitimate "reveal"
+      moment to sync to), while `revealed` still flips true so the rest
+      of the question UI isn't stranded behind it; reduced motion skips
+      the whole animated queue and jumps straight to `revealed` on
+      load, matching the owner's "swap to the image without pops,
+      immediately on load" instruction. A genuinely empty configured
+      URL (this test suite's own fixture convention — real cards always
+      carry a real CDN URL) is treated as trivially settled rather than
+      a failure, resolved synchronously in the fetch handler rather
+      than waiting on any browser event — an `<img src="">` resolves
+      its empty `src` against the _current page's own URL_ (confirmed
+      empirically, the URL spec's own "empty string" case) and
+      predictably fails to decode that as an image, so relying on the
+      resulting real `onError` event as the _only_ settle signal for
+      this specific case proved flaky under dev-server load.
+      **Real bug found and fixed during this pass, not just the
+      intended one**: the settle logic's own catch-up effect was
+      initially keyed on the card's identifier, which can legitimately
+      repeat between two consecutive feed items (documented already,
+      for different state, in the fetch handler's own comment) — a
+      repeat resolution resets `imageLoaded`/`revealed` unconditionally
+      but doesn't change the identifier, so an identifier-keyed effect
+      silently skips re-running and permanently strands the UI on
+      "Loading...". Fixed by keying that effect on a generation counter
+      bumped unconditionally in the same reset block instead — see
+      `docs/troubleshooting.md`'s dedicated entry for the full
+      symptom/cause/fix writeup. New regression coverage:
+      `WhatsThatWordsAnimation.spec.ts` gained a test that holds a real
+      (route-intercepted) image response and asserts every one of the
+      three animations is genuinely `animation-play-state: paused`
+      before the response resolves and `running` once released —
+      confirmed to fail on the pre-fix code.
   - Regression coverage: `QuestionFeedResponsive.spec.ts`'s desktop-axis
     test now asserts card-left-of-questions (was candidates-left-of-card
     pre-#305); `WhatsThatWordsAnimation.spec.ts` (new) asserts computed
