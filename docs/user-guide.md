@@ -10,7 +10,10 @@ it. See [`documentation-process.md`](documentation-process.md).
 How to search the catalog, read search results, and pick a printing for
 a slot in your decklist.
 
-The **Display** page's search bar is dual-mode: an **Add / Browse**
+The **Editor** page (the redesigned `/display` route - nav+footer redesign,
+2026-07-22, renamed the nav link from "Display (beta)" to plain "Editor";
+the classic `/editor` page is still reachable directly by URL but no longer
+has a nav link of its own) search bar is dual-mode: an **Add / Browse**
 toggle next to the input switches between adding cards to your project
 (the usual decklist-line paste/search box) and browsing the whole
 catalog without touching your project — browsing renders a grid of
@@ -44,7 +47,7 @@ questions scroll underneath it.
 How to arrange your chosen cards into pages, set bleed/DPI/paper size,
 and export a PDF ready to print and cut.
 
-The **Display** page's Page Setup section defaults to Letter landscape,
+The **Editor** page's Page Setup section defaults to Letter landscape,
 3.175mm bleed, and a **Margin profile** picker (Borderless / Bordered /
 Rear-feed) calibrated against an Epson ET-8500/8550 printer — Borderless
 is the default and the only profile that fits full bleed on a 4-across
@@ -59,10 +62,13 @@ strip-cutting while rows keep a gap that suits a die cutter. A
 **Link**/**Linked** toggle next to it locks the two axes to move
 together when you'd rather set one value for both.
 
-Once your sheet is ready, the **Display** page's Finish footer has two
+Once your sheet is ready, the **Editor** page's Finish footer has two
 equal-weight buttons: **Save Deck** (or **Sign in to Save**, if you're
 not signed in) and **Print / Export →**, plus the existing **Export**
-dropdown for lightweight XML/card-image/decklist exports. Your project is
+dropdown for lightweight XML/card-image/decklist exports and a small
+cloud-download counter beside it (nav+footer redesign, 2026-07-22 - this
+used to sit in the top navbar; it now lives next to the exports it counts,
+here and again on the Print page). Your project is
 also quietly backed up to this browser as you work — a small "Draft
 backed up locally" note under the buttons confirms it — and pressing
 **Print / Export →** while signed in with unsaved changes offers to save
@@ -72,14 +78,16 @@ browser's memory and you don't want to lose your work if it struggles.
 ## Saving and re-using a project
 
 Local-folder and Google Drive options for coming back to a project
-later. If you're signed in and have saved decks already, the **Display**
+later. If you're signed in and have saved decks already, the **Editor**
 page's empty-project landing screen lists them directly so you can jump
-back into one without a trip to **My Decks** first.
+back into one without a trip to **My Decks** first (**My Decks** itself
+has no nav-bar link since the 2026-07-22 nav redesign - reach it from this
+landing screen, the homepage's own CTA, or `/myDecks` directly).
 
 ## Saved decks, export, and the standalone decrypt tool
 
-Signed in with Discord? The editor and display page's Save button
-persists your deck to your account, and the **My Decks** page lists
+Signed in with Discord? The classic editor and the Editor page's Save
+button persists your deck to your account, and the **My Decks** page lists
 everything you've saved, decrypted right there in your browser — the
 server only ever stores encrypted, opaque bytes it can't read.
 

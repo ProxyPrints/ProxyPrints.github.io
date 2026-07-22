@@ -37,7 +37,7 @@ test.describe("SelectVersionSection (issue #167)", () => {
   ) => {
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
     // Compressed view (the real, hardcoded default) hides per-card header text - same precedent
     // as DisplayPage.spec.ts's own tests.

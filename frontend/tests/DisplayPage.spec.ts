@@ -154,7 +154,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     await expect(
@@ -176,7 +176,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await page.getByTestId("page-preview-slot").first().click();
 
@@ -205,7 +205,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     const sheetSlot = page.getByTestId("page-preview-slot").first();
     await sheetSlot.click();
@@ -230,7 +230,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
     // Compressed view (the default) hides "Option N" text entirely - see the earlier tests.
     await page.getByText("Compressed").click();
@@ -265,7 +265,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
     await page
@@ -284,7 +284,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // page's own click handler ignores those, since there's nothing there to select) would
     // leave the previous selection in place and falsely pass this test either way.
     await importText(page, "2x my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     const slots = page.getByTestId("page-preview-slot");
     await slots.first().click();
@@ -311,7 +311,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByText("Showing: Fronts")).toBeVisible();
     await page.getByText("Showing: Fronts").click();
@@ -325,7 +325,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     const guidesToggle = page.getByLabel("Guides");
     await expect(guidesToggle).toBeChecked();
@@ -348,7 +348,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
 
@@ -382,7 +382,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     const settingsModal = await openSearchSettingsModal(page);
@@ -435,7 +435,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // fetchCardbacks.fulfilled listener (listenerMiddleware.ts) auto-selects the first cardback
     // in the list once cardbacksTwoResults resolves, so this starts on cardDocument1.
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     await page.getByText("Showing: Fronts").click();
@@ -473,7 +473,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     await page.getByTestId("display-export-menu-toggle").click();
@@ -499,7 +499,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
     await loadPageWithDefaultBackend(page);
     await importText(page, "1 Lightning Bolt (2ED) 162");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
     const badge = page.getByTestId("requested-printing-badge");
@@ -522,7 +522,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
     await loadPageWithDefaultBackend(page);
     await importText(page, "1 my search query (XYZ) 999");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
     const badge = page.getByTestId("requested-printing-badge");
@@ -571,7 +571,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
     await loadPageWithDefaultBackend(page);
     await importText(page, "1 card 8 (xyz) 001");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
     const header = page.getByTestId("display-rail-header");
@@ -609,7 +609,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
     await loadPageWithDefaultBackend(page);
     await importText(page, "1 card 8 (xyz) 001");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
     // Choose Image is open by default - collapse it first so NO's "expand it" effect is
@@ -642,7 +642,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
     await loadPageWithDefaultBackend(page);
     await importText(page, "an unfindable card");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     const sheetSlot = page.getByTestId("page-preview-slot").first();
     await expect(sheetSlot.locator("img")).toHaveCount(0);
@@ -661,7 +661,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // margins + 3.175mm bleed + D18's spacing now lands the spec's own 4x2 (8/sheet) grid. 18
     // slots at 8-per-sheet chunks into 3 sheets: 8, 8, 2.
     await importText(page, "18x my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     const sheetWrappers = page.getByTestId("display-sheet-wrapper");
@@ -728,7 +728,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
     await page
       .getByRole("heading", { name: "Attributes", exact: true })
@@ -755,7 +755,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
     await loadPageWithDefaultBackend(page);
     await importText(page, "1 card 8 (xyz) 001");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
     await page
       .getByRole("heading", { name: "Print Options", exact: true })
@@ -784,7 +784,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
     await loadPageWithDefaultBackend(page);
     await importText(page, "1 card 8 (xyz) 001");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
     await page.getByRole("heading", { name: "Artist", exact: true }).click();
 
@@ -807,7 +807,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // whole page to the empty-state view (a different, already-covered case) rather than
     // leaving the sheet showing one fewer filled slot, which is what this test actually checks.
     await importText(page, "2x my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
     await page
       .getByRole("heading", { name: "Slot Actions", exact: true })
@@ -856,7 +856,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // One slot to start - the project already has cardDocument1 (the first of
     // searchResultsThreeResults' three identifiers) selected for it.
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     await expect(
@@ -936,7 +936,7 @@ test.describe("DisplayPage - wide desktop viewport (issue #287)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     const sheetRegion = page.getByTestId("display-sheet-region");
@@ -974,7 +974,7 @@ test.describe("DisplayPage - phone viewport (issue #266)", () => {
   }) => {
     network.use(...threeCardHandlers);
     // Straight to /display's own inline importer (design doc §4.1's `DeckInputLanding`), not via
-    // the navbar's "Display (beta)" link - at this viewport, Navbar.tsx's own responsive collapse
+    // the navbar's "Editor" link - at this viewport, Navbar.tsx's own responsive collapse
     // hides nav links behind a hamburger toggle, which is that component's own concern, not
     // anything this test is about.
     await loadPageWithDefaultBackend(page, "display");

@@ -8,31 +8,26 @@ import Container from "react-bootstrap/Container";
 import Nav from "react-bootstrap/Nav";
 import Navbar from "react-bootstrap/Navbar";
 
-import {
-  ContentMaxWidth,
-  NavbarHeight,
-  NavbarLogoHeight,
-  UpstreamDesktopTool,
-  UpstreamDesktopToolReleasesURL,
-} from "@/common/constants";
+import { NavbarLogoHeight } from "@/common/constants";
 import { isUnifiedDisplayPageEnabled } from "@/common/featureFlags";
 import DisableSSR from "@/components/DisableSSR";
 import { RightPaddedIcon } from "@/components/icon";
 import { BackendConfig } from "@/features/backend/BackendConfig";
-import {
-  DownloadManager,
-  OpenDownloadManagerButton,
-} from "@/features/download/DownloadManager";
 import { AuthWidget } from "@/features/moderation/AuthWidget";
-import { useGetWhoamiQuery } from "@/store/api";
 import {
   useAnyBackendConfigured,
   useProjectName,
   useRemoteBackendConfigured,
 } from "@/store/slices/backendSlice";
 
-const MaxWidthContainer = styled(Container)`
-  max-width: ${ContentMaxWidth}px;
+// Nav+footer redesign (2026-07-22) - N6: unbinds the navbar from the app-wide
+// `ContentMaxWidth` cap, the same `max-width: none` + `fluid` mechanism Layout.tsx's
+// `ProjectContainer`/`MaxWidthContainer` established for #287/#289 (see that file's own
+// comment). This is a Navbar-local escape hatch rather than routing through
+// `ProjectContainer` - the navbar has always owned its own local `Container` instance, never
+// `ProjectContainer`'s, so unbinding it doesn't touch any content page's own cap.
+const FullWidthContainer = styled(Container)`
+  max-width: none;
 `;
 
 const NoVerticalPaddingNavbar = styled(Navbar)`
@@ -52,21 +47,38 @@ const BrandWordmark = styled.b`
   color: var(--bs-primary);
 `;
 
+// N7 - now that What's New?/Explore/My Decks/Download/Contributions/Guide are all gone (cut
+// to the footer or dropped entirely, see this redesign's spec §1), the left cluster has room
+// to breathe: a generous ~1.75rem gap reads better with only 2-3 links left. Only applied at
+// >= the `lg` breakpoint where the links sit inline - the collapsed mobile panel keeps its
+// normal stacked block spacing.
+const LeftNav = styled(Nav)`
+  @media (min-width: 992px) {
+    gap: 1.75rem;
+  }
+`;
+
+const RightNav = styled(Nav)`
+  gap: 1rem;
+`;
+
+// N3 - "What's That Card?" no longer wraps across multiple lines now that the bar has room;
+// this used to be the label that tipped the old, crowded left row into a wrapping navbar-height
+// overflow (see this file's pre-redesign history).
+const NoWrapNavLink = styled(Nav.Link)`
+  white-space: nowrap;
+`;
+
 export default function ProjectNavbar() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   const anyBackendConfigured = useAnyBackendConfigured();
 
-  const [shownOffcanvas, setShownOffcanvas] = useState<
-    "backendConfig" | "downloadManager" | null
-  >(null);
-  const handleCloseOffcanvas = () => setShownOffcanvas(null);
-  const handleShowBackendConfig = () => setShownOffcanvas("backendConfig");
-  const handleShowDownloadManager = () => setShownOffcanvas("downloadManager");
+  const [showBackendConfig, setShowBackendConfig] = useState(false);
+  const handleCloseBackendConfig = () => setShowBackendConfig(false);
+  const handleShowBackendConfig = () => setShowBackendConfig(true);
 
   const projectName = useProjectName();
   const router = useRouter();
-  const whoami = useGetWhoamiQuery();
-  const isAuthenticated = whoami.data?.authenticated === true;
 
   return (
     <DisableSSR>
@@ -77,7 +89,10 @@ export default function ProjectNavbar() {
         bg="dark"
         collapseOnSelect
       >
-        <MaxWidthContainer className="justify-content-center align-middle">
+        <FullWidthContainer
+          fluid
+          className="justify-content-center align-middle"
+        >
           <Navbar.Brand href="/" as={Link}>
             <Image
               src="/logolowres.png"
@@ -91,17 +106,18 @@ export default function ProjectNavbar() {
           </Navbar.Brand>
           <Navbar.Toggle aria-controls="basic-navbar-nav" />
           <BoldCollapse id="basic-navbar-nav">
-            <Nav className="me-auto">
-              {anyBackendConfigured && (
-                <Nav.Link
-                  as={Link}
-                  href="/editor"
-                  active={router.route === "/editor"}
-                  eventKey="/editor"
-                >
-                  Editor
-                </Nav.Link>
-              )}
+            <LeftNav className="me-auto">
+              {/* N1/N2 - the nav's five-surface reduction: "Editor" now names the unified
+                  /display page (the old /editor stays URL-reachable but leaves the nav
+                  entirely - its own in-page toggle back to the classic editor is a separate
+                  later task). Kept behind the same isUnifiedDisplayPageEnabled() flag the old
+                  "Display (beta)" link carried (in addition to anyBackendConfigured) - the
+                  nav-redesign spec's own table only lists anyBackendConfigured, but dropping
+                  the flag here would leave NO editing surface reachable from the nav at all
+                  while NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED is off (the old classic-editor
+                  Nav.Link this replaces is gone), since /display itself still 404s behind that
+                  same flag (see pages/display.tsx). Flip that flag before/alongside this
+                  shipping for real if it isn't on already. */}
               {anyBackendConfigured && isUnifiedDisplayPageEnabled() && (
                 <Nav.Link
                   as={Link}
@@ -109,119 +125,50 @@ export default function ProjectNavbar() {
                   active={router.route === "/display"}
                   eventKey="/display"
                 >
-                  Display (beta)
+                  Editor
                 </Nav.Link>
               )}
               {remoteBackendConfigured && (
-                <Nav.Link
-                  as={Link}
-                  href="/new"
-                  active={router.route === "/new"}
-                  eventKey="/new"
-                >
-                  What&apos;s New?
-                </Nav.Link>
-              )}
-              {anyBackendConfigured && (
-                <Nav.Link
-                  as={Link}
-                  href="/explore"
-                  active={router.route === "/explore"}
-                  eventKey="/explore"
-                >
-                  Explore
-                </Nav.Link>
-              )}
-              {remoteBackendConfigured && (
-                <Nav.Link
-                  as={Link}
-                  href="/contributions"
-                  active={router.route === "/contributions"}
-                  eventKey="/contributions"
-                >
-                  Contributions
-                </Nav.Link>
-              )}
-              {remoteBackendConfigured && (
-                <Nav.Link
+                <NoWrapNavLink
                   as={Link}
                   href="/whatsthat"
                   active={router.route === "/whatsthat"}
                   eventKey="/whatsthat"
                 >
                   What&apos;s That Card?
-                </Nav.Link>
+                </NoWrapNavLink>
               )}
-              {remoteBackendConfigured && isAuthenticated && (
-                <Nav.Link
-                  as={Link}
-                  href="/myDecks"
-                  active={router.route === "/myDecks"}
-                  eventKey="/myDecks"
-                >
-                  My Decks
-                </Nav.Link>
-              )}
-              <Nav.Link
-                href={UpstreamDesktopToolReleasesURL}
-                target="_blank"
-                title={`${UpstreamDesktopTool} (compatible with ${projectName} project files)`}
-              >
-                Download
-              </Nav.Link>
-            </Nav>
-            <Nav className="ms-auto d-flex align-items-center">
-              {/* Guide lives in this less-crowded right-hand cluster rather than alongside
-                  Editor/Explore/etc. above - the left-hand Nav's flex row is already at its
-                  wrapping budget once every gated link is visible (fully authenticated + every
-                  backend feature enabled): Bootstrap's flex items there shrink rather than
-                  overflow, so a long label ("What's That Card?") wraps internally and the whole
-                  fixed navbar grows taller than the app's hardcoded NavbarHeight offset
-                  (frontend/src/common/constants.ts) - already true on master at this exact
-                  width/state (top slice of the My Decks page's Export/Import buttons was
-                  already grazing the navbar's real bottom edge), confirmed by screenshot diff
-                  against origin/master. Adding one more always-visible link to that same row
-                  was what tipped a marginal, still-clickable overlap into a fully-blocking one
-                  (Playwright's SavedDecks Export/Import specs started failing - the "Editor"
-                  link intercepted every click). Not gated on
-                  anyBackendConfigured/remoteBackendConfigured (unlike Editor/Explore/etc.) -
-                  /guide is build-time-static content sourced from docs/ (see
+              {/* N4 - "Wiki" replaces "Guide" (same on-site /guide target, renamed label only).
+                  Not gated on anyBackendConfigured/remoteBackendConfigured (unlike Editor/What's
+                  That Card? above) - /guide is build-time-static content sourced from docs/ (see
                   docs/proposals/proposal-i-docs-as-site-source.md), with no backend dependency.
-                  router.route can't be matched exactly here since /guide/[[...slug]].tsx is one
-                  catch-all page file serving every /guide/* route - router.pathname is the
-                  literal page-file path ("/guide/[[...slug]]") for all of them, so a
-                  startsWith("/guide") check on it is what actually highlights this link on both
-                  /guide and /guide/using-it. */}
+                  router.pathname (not router.route) is required here since
+                  /guide/[[...slug]].tsx is one catch-all page file serving every /guide/* route -
+                  router.route is that one literal page-file path for all of them, so a
+                  startsWith("/guide") check on router.pathname is what actually highlights this
+                  link on both /guide and /guide/using-it. */}
               <Nav.Link
                 as={Link}
                 href="/guide"
-                className="m-0 py-0"
                 active={router.pathname.startsWith("/guide")}
                 eventKey="/guide"
               >
-                Guide
+                Wiki
               </Nav.Link>
-              {/* Deliberately NOT a Nav.Link (unlike its siblings below) - react-bootstrap's
+            </LeftNav>
+            <RightNav className="ms-auto d-flex align-items-center">
+              {/* Deliberately NOT a Nav.Link (unlike Sources below) - react-bootstrap's
                   Nav.Link-with-eventKey renders its own <a href="#"> around whatever children
-                  it's given, and AuthWidget already supplies a real <a> of its own for both the
-                  signed-in ("Sign out") and signed-out ("Sign in") states. Wrapping a real anchor
-                  in another anchor is invalid, nested-anchor HTML - the outer <a> silently
-                  intercepts every click, so the inner Discord/logout link never actually
-                  navigates (no error, no console warning - see docs/lessons.md's "components
-                  that each correctly render an anchor can compose into invalid nested-anchor
-                  HTML" entry). A plain wrapper carrying the same m-0 py-0 spacing the Nav.Link
-                  used to provide is all this needs - AuthWidget has no use for Nav.Link's
-                  active/eventKey tab machinery anyway. */}
+                  it's given, and AuthWidget already supplies a real interactive element of its
+                  own for every state (the signed-in dropdown menu, the signed-out Discord pill).
+                  Wrapping a real anchor/button in another anchor is invalid, nested-anchor HTML -
+                  see docs/lessons.md's "components that each correctly render an anchor can
+                  compose into invalid nested-anchor HTML" entry. */}
               {remoteBackendConfigured && (
                 <div className="m-0 py-0">
                   <AuthWidget />
                 </div>
               )}
-              <Nav.Link className="m-0 py-0" eventKey="download-manager">
-                <OpenDownloadManagerButton
-                  handleClick={handleShowDownloadManager}
-                />
-              </Nav.Link>
               <Nav.Link className="m-0 py-0" eventKey="configure-backend">
                 <Button
                   className="my-0"
@@ -233,17 +180,13 @@ export default function ProjectNavbar() {
                   Sources
                 </Button>
               </Nav.Link>
-            </Nav>
+            </RightNav>
           </BoldCollapse>
-        </MaxWidthContainer>
+        </FullWidthContainer>
       </NoVerticalPaddingNavbar>
       <BackendConfig
-        show={shownOffcanvas === "backendConfig"}
-        handleClose={handleCloseOffcanvas}
-      />
-      <DownloadManager
-        show={shownOffcanvas === "downloadManager"}
-        handleClose={handleCloseOffcanvas}
+        show={showBackendConfig}
+        handleClose={handleCloseBackendConfig}
       />
     </DisableSSR>
   );

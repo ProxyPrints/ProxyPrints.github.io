@@ -18,10 +18,15 @@ otherwise never discover — the community printing-identification game
 
 The whole panel returns `null` without a remote backend configured
 (`useRemoteBackendConfigured`) — the exact same condition `Navbar.tsx`
-already uses to decide whether to show its own `/whatsthat` and `My Decks` nav links. Promoting a CTA to a route that would 404/no-op for a
-Local-Folder-only visitor is worse than not showing it; this keeps the
-panel's own gating identical to the nav's, rather than inventing a
-second, possibly-drifting rule for the same underlying condition.
+uses to gate its own `/whatsthat` link. Promoting a CTA to a route that
+would 404/no-op for a Local-Folder-only visitor is worse than not showing
+it; this keeps the panel's own gating identical to the nav's, rather than
+inventing a second, possibly-drifting rule for the same underlying
+condition. (Nav+footer redesign, 2026-07-22: `My Decks` no longer has a
+nav-bar link of its own at all - cut from the nav regardless of backend
+state, see `docs/user-guide.md` - so this panel's own `/myDecks` CTA is
+now one of `My Decks`'s only two discovery paths, alongside a direct
+`/myDecks` visit; it no longer merely _duplicates_ a nav link.)
 
 ## The two CTA cards
 

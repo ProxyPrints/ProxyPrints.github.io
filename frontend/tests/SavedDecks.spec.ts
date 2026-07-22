@@ -55,19 +55,13 @@ test.describe("saved decks", () => {
     await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
-  test("My Decks nav entry is hidden for an anonymous session", async ({
-    page,
-    network,
-  }) => {
-    network.use(...defaultHandlers); // defaultHandlers includes whoamiAnonymous
-    await loadPageWithDefaultBackend(page, "editor");
-
-    await expect(
-      page.getByRole("link", { name: "My Decks" })
-    ).not.toBeVisible();
-  });
-
-  test("My Decks nav entry appears once signed in, and the page prompts to unlock", async ({
+  // Nav+footer redesign (2026-07-22, N5) - My Decks was cut from the nav entirely (it now lives
+  // in the homepage panel's own CTA and the editor landing, not a top-bar link), regardless of
+  // auth state - this used to be two auth-gated tests ("hidden for anonymous"/"appears once
+  // signed in"); now it's one test confirming the nav-link is gone unconditionally, with the
+  // substantive "page prompts to unlock" assertion reached by direct navigation instead of a
+  // nav-link click, since there's no nav link left to click.
+  test("My Decks has no nav entry regardless of auth (cut per nav redesign), but the page itself still prompts to unlock once signed in", async ({
     page,
     network,
   }) => {
@@ -78,7 +72,11 @@ test.describe("saved decks", () => {
     );
     await loadPageWithDefaultBackend(page, "editor");
 
-    await page.getByRole("link", { name: "My Decks" }).click();
+    await expect(
+      page.getByRole("link", { name: "My Decks" })
+    ).not.toBeVisible();
+
+    await loadPageWithDefaultBackend(page, "myDecks");
     await expect(
       page.getByText(
         "You haven't saved any decks yet - save your current project from the editor to get started."
@@ -103,7 +101,7 @@ test.describe("saved decks", () => {
     );
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     await expect(
@@ -121,7 +119,7 @@ test.describe("saved decks", () => {
     network.use(...threeCardHandlers); // defaultHandlers includes whoamiAnonymous
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     await expect(
@@ -225,9 +223,9 @@ test.describe("saved decks", () => {
       getSavedDecksHandler([namedDeck]),
       ...defaultHandlers
     );
-    await loadPageWithDefaultBackend(page, "editor");
+    // My Decks has no nav entry since the redesign (N5) - navigate directly by URL.
+    await loadPageWithDefaultBackend(page, "myDecks");
 
-    await page.getByRole("link", { name: "My Decks" }).click();
     await page.getByLabel("unlock-passphrase").fill(PASSPHRASE);
     await page.getByRole("button", { name: "Unlock" }).click();
     await expect(page.getByTestId("named-decks-list")).toContainText(
@@ -320,9 +318,9 @@ test.describe("saved decks", () => {
       }),
       ...defaultHandlers
     );
-    await loadPageWithDefaultBackend(page, "editor");
+    // My Decks has no nav entry since the redesign (N5) - navigate directly by URL.
+    await loadPageWithDefaultBackend(page, "myDecks");
 
-    await page.getByRole("link", { name: "My Decks" }).click();
     await page.getByLabel("unlock-passphrase").fill(PASSPHRASE);
     await page.getByRole("button", { name: "Unlock" }).click();
     await expect(page.getByTestId("open-import-decks")).toBeEnabled();

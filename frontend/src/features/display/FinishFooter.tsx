@@ -25,6 +25,10 @@ import React, { useEffect, useState } from "react";
 import Button from "react-bootstrap/Button";
 
 import { useAppSelector } from "@/common/types";
+import {
+  DownloadManager,
+  OpenDownloadManagerButton,
+} from "@/features/download/DownloadManager";
 import { DisplayExportMenu } from "@/features/export/DisplayExportMenu";
 import { useSaveDeckFlow } from "@/features/savedDecks/useSaveDeckFlow";
 import { useGetWhoamiQuery } from "@/store/api";
@@ -48,6 +52,17 @@ export function FinishFooter({
     useSaveDeckFlow();
   const backendURL = useAppSelector(selectRemoteBackendURL);
   const whoami = useGetWhoamiQuery();
+
+  // Nav+footer redesign (2026-07-22, N10) - the cloud download-queue counter/manager used to
+  // live in the global navbar (OpenDownloadManagerButton + DownloadManager), cut from there
+  // per the redesign since it only ever counted in-browser export downloads (XML/card
+  // images/decklist/PDF), never the abandoned desktop tool. This is one of its two new mounts
+  // (the other is pages/print.tsx, which owns the memory-heavy PDF/desktop-tool downloads this
+  // footer's own DisplayExportMenu deliberately excludes) - both read the same global
+  // fileDownloadsSlice, so either one shows every download regardless of where it started;
+  // mounting in both closes the gap where a download enqueued on the other page wouldn't be
+  // visible without navigating back.
+  const [showDownloadManager, setShowDownloadManager] = useState(false);
 
   // window isn't available during the static export build - resolved client-only, mirroring
   // AuthWidget.tsx's own identical pattern for the exact same `?next=` round-trip.
@@ -97,10 +112,19 @@ export function FinishFooter({
           Print / Export &rarr;
         </Button>
       </div>
-      {/* Issue #241 (design doc §5's export-beyond-PDF row) - XML/Card Images/Decklist, unchanged
-          and unforked; the ONLY export surface this footer still owns directly, per D9's own
-          "memory-heavy operations move OUT" line. */}
-      <DisplayExportMenu />
+      <div className="d-flex gap-2 align-items-center">
+        {/* Issue #241 (design doc §5's export-beyond-PDF row) - XML/Card Images/Decklist,
+            unchanged and unforked; the ONLY export surface this footer still owns directly, per
+            D9's own "memory-heavy operations move OUT" line. */}
+        <DisplayExportMenu />
+        <OpenDownloadManagerButton
+          handleClick={() => setShowDownloadManager(true)}
+        />
+      </div>
+      <DownloadManager
+        show={showDownloadManager}
+        handleClose={() => setShowDownloadManager(false)}
+      />
       {hasBackedUpThisSession && (
         <div
           className="text-muted small text-center"

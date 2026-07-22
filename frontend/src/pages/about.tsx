@@ -99,6 +99,42 @@ export default function About() {
         {ProjectName} is not affiliated with, produced by, or endorsed by any of
         the print shops listed on this site or any other commercial entities.
       </p>
+      <h3 id="terms-of-use">Terms of Use</h3>
+      <b>Last updated: 22nd July, 2026</b>
+      <br />
+      <br />
+      <p>
+        By using {ProjectName}, you agree to use it only for lawful, personal,
+        non-commercial proxy-card projects &mdash; the same scope the Disclaimer
+        above describes. Don&apos;t use {ProjectName} to scrape, rehost, or
+        bulk-redistribute the catalog or the images it indexes; don&apos;t
+        attempt to circumvent rate limits, authentication, or moderation; and
+        don&apos;t upload or submit content you don&apos;t have the rights to
+        use. Accounts (used for saved decks and voting on printing
+        identification) are for a single person&apos;s own use, not shared or
+        automated.
+      </p>
+      <p>
+        {ProjectName} is provided <b>as-is, with no warranty of any kind</b>{" "}
+        &mdash; express or implied, including fitness for a particular purpose
+        or non-infringement. We don&apos;t guarantee the catalog is complete,
+        accurate, or continuously available, and we&apos;re not liable for print
+        orders placed with any third-party print shop based on what you find
+        here.
+      </p>
+      <p>
+        Consistent with this project&apos;s governing premise (see the README):{" "}
+        {ProjectName} <b>indexes card images, it does not store them</b>. The
+        catalog persists knowledge about where an image lives and what printing
+        it depicts &mdash; never the image pixels themselves, beyond a transient
+        display-serving cache. If you&apos;re an image host or artist and want a
+        listing removed, get in touch and we&apos;ll deindex it.
+      </p>
+      <p>
+        These terms may be updated as the project changes; the date above always
+        reflects the most recent revision. Continued use of {ProjectName} after
+        a change means you accept the updated terms.
+      </p>
       <h3 id="privacy-policy">Privacy Policy</h3>
       <b>Last updated: 12th July, 2026</b>
       <br />
