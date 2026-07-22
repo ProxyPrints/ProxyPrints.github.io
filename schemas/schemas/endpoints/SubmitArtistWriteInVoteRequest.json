@@ -1,0 +1,14 @@
+{
+  "title": "Submit Artist Write In Vote Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "identifier": { "type": "string" },
+    "anonymousId": { "type": "string" },
+    "artistId": { "type": ["integer", "null"] },
+    "freeText": { "type": ["string", "null"] },
+    "voteSurface": { "type": ["string", "null"] }
+  },
+  "required": ["identifier", "anonymousId"],
+  "additionalProperties": false
+}

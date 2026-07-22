@@ -1,0 +1,13 @@
+{
+  "title": "Artist Autocomplete Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": { "$ref": "../ArtistAutocompleteResult.json" }
+    }
+  },
+  "required": ["results"],
+  "additionalProperties": false
+}

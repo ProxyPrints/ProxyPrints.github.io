@@ -2,8 +2,9 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, ReviewClusterMember, ReviewClusterSignal, ReviewClusterSignalType, ReviewClusterSummary, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ConfirmReviewClusterRequest, ConfirmReviewClusterResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, ReviewClusterDetailRequest, ReviewClusterDetailResponse, ReviewClusterListRequest, ReviewClusterListResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
+//   import { Convert, ArtistAutocompleteResult, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, ReviewClusterMember, ReviewClusterSignal, ReviewClusterSignalType, ReviewClusterSummary, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistAutocompleteRequest, ArtistAutocompleteResponse, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ConfirmReviewClusterRequest, ConfirmReviewClusterResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, ReviewClusterDetailRequest, ReviewClusterDetailResponse, ReviewClusterListRequest, ReviewClusterListResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitArtistWriteInVoteRequest, SubmitArtistWriteInVoteResponse, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
+//   const artistAutocompleteResult = Convert.toArtistAutocompleteResult(json);
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
 //   const campaign = Convert.toCampaign(json);
 //   const canonicalArtist = Convert.toCanonicalArtist(json);
@@ -43,6 +44,8 @@
 //   const tagVoteTallyEntry = Convert.toTagVoteTallyEntry(json);
 //   const voteQueueItem = Convert.toVoteQueueItem(json);
 //   const voteTallyEntry = Convert.toVoteTallyEntry(json);
+//   const artistAutocompleteRequest = Convert.toArtistAutocompleteRequest(json);
+//   const artistAutocompleteResponse = Convert.toArtistAutocompleteResponse(json);
 //   const artistCandidatesRequest = Convert.toArtistCandidatesRequest(json);
 //   const artistCandidatesResponse = Convert.toArtistCandidatesResponse(json);
 //   const artistConsensusRequest = Convert.toArtistConsensusRequest(json);
@@ -116,6 +119,8 @@
 //   const searchEngineHealthResponse = Convert.toSearchEngineHealthResponse(json);
 //   const sourcesResponse = Convert.toSourcesResponse(json);
 //   const submitArtistVoteRequest = Convert.toSubmitArtistVoteRequest(json);
+//   const submitArtistWriteInVoteRequest = Convert.toSubmitArtistWriteInVoteRequest(json);
+//   const submitArtistWriteInVoteResponse = Convert.toSubmitArtistWriteInVoteResponse(json);
 //   const submitPrintingTagRequest = Convert.toSubmitPrintingTagRequest(json);
 //   const submitTagVoteRequest = Convert.toSubmitTagVoteRequest(json);
 //   const tagConsensusRequest = Convert.toTagConsensusRequest(json);
@@ -308,6 +313,19 @@ export interface QuestionFeedCounts {
   contested: number;
   fresh: number;
   total: number;
+}
+
+export interface ArtistAutocompleteRequest {
+  query: string;
+}
+
+export interface ArtistAutocompleteResponse {
+  results: ArtistAutocompleteResult[];
+}
+
+export interface ArtistAutocompleteResult {
+  id: number;
+  name: string;
 }
 
 export interface ArtistCandidatesRequest {
@@ -977,6 +995,22 @@ export interface SubmitArtistVoteRequest {
   voteSurface?: null | string;
 }
 
+export interface SubmitArtistWriteInVoteRequest {
+  anonymousId: string;
+  artistId?: number | null;
+  freeText?: null | string;
+  identifier: string;
+  voteSurface?: null | string;
+}
+
+export interface SubmitArtistWriteInVoteResponse {
+  castArtist: ArtistAutocompleteResult;
+  createdNewArtist: boolean;
+  isUnknown: boolean;
+  resolvedArtist?: CanonicalArtist | null;
+  voteTally: ArtistVoteTallyEntry[];
+}
+
 export interface SubmitPrintingTagRequest {
   anonymousId: string;
   identifier: string;
@@ -1069,6 +1103,22 @@ export interface WhoamiResponse {
 // Converts JSON strings to/from your types
 // and asserts the results of JSON.parse at runtime
 export class Convert {
+  public static toArtistAutocompleteResult(
+    json: string
+  ): ArtistAutocompleteResult {
+    return cast(JSON.parse(json), r("ArtistAutocompleteResult"));
+  }
+
+  public static artistAutocompleteResultToJson(
+    value: ArtistAutocompleteResult
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ArtistAutocompleteResult")),
+      null,
+      2
+    );
+  }
+
   public static toArtistVoteTallyEntry(json: string): ArtistVoteTallyEntry {
     return cast(JSON.parse(json), r("ArtistVoteTallyEntry"));
   }
@@ -1395,6 +1445,38 @@ export class Convert {
 
   public static voteTallyEntryToJson(value: VoteTallyEntry): string {
     return JSON.stringify(uncast(value, r("VoteTallyEntry")), null, 2);
+  }
+
+  public static toArtistAutocompleteRequest(
+    json: string
+  ): ArtistAutocompleteRequest {
+    return cast(JSON.parse(json), r("ArtistAutocompleteRequest"));
+  }
+
+  public static artistAutocompleteRequestToJson(
+    value: ArtistAutocompleteRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ArtistAutocompleteRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toArtistAutocompleteResponse(
+    json: string
+  ): ArtistAutocompleteResponse {
+    return cast(JSON.parse(json), r("ArtistAutocompleteResponse"));
+  }
+
+  public static artistAutocompleteResponseToJson(
+    value: ArtistAutocompleteResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ArtistAutocompleteResponse")),
+      null,
+      2
+    );
   }
 
   public static toArtistCandidatesRequest(
@@ -2245,6 +2327,38 @@ export class Convert {
     return JSON.stringify(uncast(value, r("SubmitArtistVoteRequest")), null, 2);
   }
 
+  public static toSubmitArtistWriteInVoteRequest(
+    json: string
+  ): SubmitArtistWriteInVoteRequest {
+    return cast(JSON.parse(json), r("SubmitArtistWriteInVoteRequest"));
+  }
+
+  public static submitArtistWriteInVoteRequestToJson(
+    value: SubmitArtistWriteInVoteRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitArtistWriteInVoteRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitArtistWriteInVoteResponse(
+    json: string
+  ): SubmitArtistWriteInVoteResponse {
+    return cast(JSON.parse(json), r("SubmitArtistWriteInVoteResponse"));
+  }
+
+  public static submitArtistWriteInVoteResponseToJson(
+    value: SubmitArtistWriteInVoteResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitArtistWriteInVoteResponse")),
+      null,
+      2
+    );
+  }
+
   public static toSubmitPrintingTagRequest(
     json: string
   ): SubmitPrintingTagRequest {
@@ -2658,6 +2772,21 @@ const typeMap: any = {
       { json: "contested", js: "contested", typ: 0 },
       { json: "fresh", js: "fresh", typ: 0 },
       { json: "total", js: "total", typ: 0 },
+    ],
+    false
+  ),
+  ArtistAutocompleteRequest: o(
+    [{ json: "query", js: "query", typ: "" }],
+    false
+  ),
+  ArtistAutocompleteResponse: o(
+    [{ json: "results", js: "results", typ: a(r("ArtistAutocompleteResult")) }],
+    false
+  ),
+  ArtistAutocompleteResult: o(
+    [
+      { json: "id", js: "id", typ: 0 },
+      { json: "name", js: "name", typ: "" },
     ],
     false
   ),
@@ -3361,6 +3490,38 @@ const typeMap: any = {
         js: "voteSurface",
         typ: u(undefined, u(null, "")),
       },
+    ],
+    false
+  ),
+  SubmitArtistWriteInVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "artistId", js: "artistId", typ: u(undefined, u(0, null)) },
+      { json: "freeText", js: "freeText", typ: u(undefined, u(null, "")) },
+      { json: "identifier", js: "identifier", typ: "" },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
+    ],
+    false
+  ),
+  SubmitArtistWriteInVoteResponse: o(
+    [
+      {
+        json: "castArtist",
+        js: "castArtist",
+        typ: r("ArtistAutocompleteResult"),
+      },
+      { json: "createdNewArtist", js: "createdNewArtist", typ: true },
+      { json: "isUnknown", js: "isUnknown", typ: true },
+      {
+        json: "resolvedArtist",
+        js: "resolvedArtist",
+        typ: u(undefined, u(r("CanonicalArtist"), null)),
+      },
+      { json: "voteTally", js: "voteTally", typ: a(r("ArtistVoteTallyEntry")) },
     ],
     false
   ),

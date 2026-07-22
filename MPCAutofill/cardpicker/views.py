@@ -4,6 +4,7 @@ import itertools
 import json
 import logging
 import mimetypes
+import re
 from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
@@ -40,6 +41,10 @@ from cardpicker.artist_consensus import (
     resolve_artist,
 )
 from cardpicker.constants import (
+    ARTIST_AUTOCOMPLETE_MAX_QUERY_LENGTH,
+    ARTIST_AUTOCOMPLETE_MIN_QUERY_LENGTH,
+    ARTIST_AUTOCOMPLETE_PAGE_SIZE,
+    ARTIST_WRITEIN_NAME_MAX_LENGTH,
     CARDS_PAGE_SIZE,
     DATE_FORMAT,
     DEFAULT_LANGUAGE,
@@ -100,6 +105,9 @@ from cardpicker.review_clusters import (
     invalidate_review_cluster_cache,
 )
 from cardpicker.schema_types import (
+    ArtistAutocompleteRequest,
+    ArtistAutocompleteResponse,
+    ArtistAutocompleteResult,
     ArtistCandidatesRequest,
     ArtistCandidatesResponse,
     ArtistConsensusRequest,
@@ -193,6 +201,8 @@ from cardpicker.schema_types import (
     SortBy,
     SourcesResponse,
     SubmitArtistVoteRequest,
+    SubmitArtistWriteInVoteRequest,
+    SubmitArtistWriteInVoteResponse,
     SubmitPrintingTagRequest,
     SubmitTagVoteRequest,
     TagConsensusEntry,
@@ -206,7 +216,7 @@ from cardpicker.schema_types import (
 from cardpicker.schema_types import VoteQueueRequestKind as VoteQueueKind
 from cardpicker.schema_types import VoteQueueResponse, VoteTallyEntry, WhoamiResponse
 from cardpicker.search.operator_parser import parse_query
-from cardpicker.search.sanitisation import to_searchable
+from cardpicker.search.sanitisation import fix_whitespace, to_searchable
 from cardpicker.search.search_functions import (
     SearchExceptions,
     get_new_cards_paginator,
@@ -1111,6 +1121,234 @@ def post_submit_artist_vote(request: HttpRequest) -> HttpResponse:
         resolved = resolve_and_persist_artist(card)
 
     return JsonResponse(_build_artist_consensus_response(card, resolved).model_dump())
+
+
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _clean_artist_text(raw: str) -> str:
+    """
+    Strip control characters, then collapse internal whitespace and trim (`fix_whitespace`,
+    already used by the printing-name search path) - shared by the autocomplete query and the
+    write-in free-text name below, so both reject the same class of junk input before it
+    reaches the database. Deliberately NOT `to_searchable` (used by post_artist_candidates'
+    own typeahead ranking): that also lowercases, strips punctuation/hyphens/digits and drops
+    bracketed text, which is too aggressive for "the name a human actually typed" - a
+    hyphenated or punctuated artist name should round-trip intact here.
+    """
+    return fix_whitespace(_CONTROL_CHAR_RE.sub("", raw))
+
+
+def _artist_autocomplete_rate_limit_key(group: str, request: HttpRequest) -> str:
+    # unauthenticated, read-only, no anonymousId in the request body (no vote is being cast) -
+    # IP is the only signal available to key on, unlike the vote-submission endpoints below.
+    return request.META.get("REMOTE_ADDR", "unknown")
+
+
+def _artist_autocomplete_rate_limit_rate(group: str, request: HttpRequest) -> str:
+    # a callable (not a plain string) for the same reason as _printing_tag_rate_limit_rate: a
+    # plain string would be bound once at import time, making the rate impossible to override
+    # in tests or via runtime settings changes.
+    rate: str = settings.ARTIST_AUTOCOMPLETE_RATE
+    return rate
+
+
+@csrf_exempt
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_artist_autocomplete_rate_limit_key, rate=_artist_autocomplete_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_artist_autocomplete(request: HttpRequest) -> HttpResponse:
+    """
+    Typeahead search over ALL `CanonicalArtist` names (id + display name), for suggesting an
+    existing artist during the write-in flow (`/whatsthat`'s artist question and `/display`'s
+    Artist sidebar) - the PRIMARY normalization path: a voter picks an existing spelling
+    whenever one exists, so a free-text write-in that duplicates a known artist (see
+    `post_submit_artist_writein_vote` below) should be rare.
+
+    Deliberately a separate endpoint from `post_artist_candidates`, not an extra mode on it:
+    that endpoint is scoped to one card's ranked printing candidates and its typeahead mode
+    returns bare names (no id, ranked by Levenshtein similarity, unbounded query length). This
+    one is unscoped (no card `identifier` - searches the whole catalogue), returns an `id` per
+    result (so the write-in cast endpoint can be called with an unambiguous `artistId` instead
+    of round-tripping a display-name string), and matches prefix-first-then-substring rather
+    than fuzzy similarity, which is the more predictable ordering for a live-typing dropdown.
+
+    Matching is case-insensitive; `query` is control-character-stripped and whitespace-
+    collapsed before matching (`_clean_artist_text`) and rejected outright (400) if, after that
+    cleaning, it's shorter than `ARTIST_AUTOCOMPLETE_MIN_QUERY_LENGTH` - a 1-character query
+    would match a large fraction of the artist table for no useful narrowing. The raw query is
+    also capped at `ARTIST_AUTOCOMPLETE_MAX_QUERY_LENGTH` before cleaning, so a pathologically
+    long string is rejected up front rather than processed. Django's ORM parameterizes
+    `icontains`/`istartswith` and escapes `%`/`_` itself, so `query` never reaches the database
+    as raw SQL or an ILIKE wildcard, regardless of what a caller sends.
+
+    Unauthenticated-OK (`CanonicalArtist` names are already public, read-only catalogue data -
+    no `reject_untrusted_origin`, matching every other read-only endpoint in this file, none of
+    which consume a session), but rate-limited per-IP (`ARTIST_AUTOCOMPLETE_RATE`) since this is
+    expected to fire on every keystroke of a live typeahead field, a much higher natural cadence
+    than a deliberate vote submission - a separate, per-minute budget from
+    `PRINTING_TAG_SUBMISSION_RATE`'s hourly one.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many artist search requests - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    req = ArtistAutocompleteRequest.model_validate(json.loads(request.body))
+    if len(req.query) > ARTIST_AUTOCOMPLETE_MAX_QUERY_LENGTH:
+        raise BadRequestException(f"query must be at most {ARTIST_AUTOCOMPLETE_MAX_QUERY_LENGTH} characters.")
+
+    cleaned = _clean_artist_text(req.query)
+    if len(cleaned) < ARTIST_AUTOCOMPLETE_MIN_QUERY_LENGTH:
+        raise BadRequestException(f"query must be at least {ARTIST_AUTOCOMPLETE_MIN_QUERY_LENGTH} characters.")
+
+    prefix_matches = list(
+        CanonicalArtist.objects.filter(name__istartswith=cleaned).order_by("name")[:ARTIST_AUTOCOMPLETE_PAGE_SIZE]
+    )
+    results = prefix_matches
+    remaining = ARTIST_AUTOCOMPLETE_PAGE_SIZE - len(prefix_matches)
+    if remaining > 0:
+        seen_ids = {artist.pk for artist in prefix_matches}
+        substring_matches = list(
+            CanonicalArtist.objects.filter(name__icontains=cleaned)
+            .exclude(pk__in=seen_ids)
+            .order_by("name")[:remaining]
+        )
+        results = prefix_matches + substring_matches
+
+    return JsonResponse(
+        ArtistAutocompleteResponse(
+            results=[ArtistAutocompleteResult(id=artist.pk, name=artist.name) for artist in results]
+        ).model_dump()
+    )
+
+
+def _resolve_or_create_writein_artist(
+    artist_id: Optional[int], free_text: Optional[str]
+) -> tuple[CanonicalArtist, bool]:
+    """
+    Resolves a write-in artist submission to a `CanonicalArtist` row, returning
+    `(artist, created_new_row)`. Exactly one of `artist_id`/`free_text` is expected to be given -
+    enforced by `post_submit_artist_writein_vote`'s own request validation, not here.
+
+    `artist_id` (the autocomplete-pick path - the PRIMARY normalization path per the owner's
+    write-in spec) is looked up directly, no normalization needed. `free_text` is cleaned
+    (`_clean_artist_text`: control characters stripped, internal whitespace collapsed, trimmed)
+    then matched CASE-INSENSITIVELY against existing `CanonicalArtist.name` values - a
+    normalized exact match (e.g. submitting "rebecca guay") REUSES the existing row (e.g.
+    "Rebecca Guay") rather than creating a twin; only a genuinely new normalized name creates a
+    new row, stored with the submitter's own casing (there is no "correct" casing to infer for a
+    name with zero prior signal in this catalogue).
+
+    KNOWN LIMITATION (see this task's PR description and docs/features/printing-tags.md's
+    write-in bullet): this reuses existing rows case-insensitively, but the Scryfall/MTG catalog
+    sync path (`integrations/game/mtg.py`'s `artists_by_name` dict, built from
+    `CanonicalArtist.objects.all()`) dedupes by EXACT, case-sensitive name match. A write-in
+    stored with unconventional casing (e.g. "rebecca guay") that's later confirmed by an
+    official Scryfall entry with different casing ("Rebecca Guay") will still produce a
+    duplicate `CanonicalArtist` row at the next sync - deferred, not eliminated. Fixing that
+    would mean changing the catalog sync integration itself, out of scope for this vote/
+    consensus-side task; flagged rather than silently accepted or "fixed" with a casing-
+    guessing heuristic that could itself mangle a legitimately-cased name.
+    """
+    if artist_id is not None:
+        try:
+            return CanonicalArtist.objects.get(pk=artist_id), False
+        except CanonicalArtist.DoesNotExist:
+            raise BadRequestException(f"No artist found with id {artist_id!r}.")
+
+    assert free_text is not None
+    cleaned = _clean_artist_text(free_text)
+    if not cleaned:
+        raise BadRequestException("freeText must contain a non-empty artist name.")
+    if len(cleaned) > ARTIST_WRITEIN_NAME_MAX_LENGTH:
+        raise BadRequestException(f"freeText must be at most {ARTIST_WRITEIN_NAME_MAX_LENGTH} characters.")
+
+    existing = CanonicalArtist.objects.filter(name__iexact=cleaned).first()
+    if existing is not None:
+        return existing, False
+    return CanonicalArtist.objects.create(name=cleaned), True
+
+
+@csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_submit_artist_writein_vote(request: HttpRequest) -> HttpResponse:
+    """
+    Submit an artist write-in vote: either an existing-artist pick from
+    `post_artist_autocomplete` (`artistId` - the normal path, per the owner's spec) or free text
+    naming an artist not in any candidate list (`freeText`). Resolves to a `CanonicalArtist` row
+    (reusing an existing one case-insensitively, or creating a new one -
+    `_resolve_or_create_writein_artist`), then casts a normal USER-source `CardArtistVote`
+    through EXACTLY the same machinery as `post_submit_artist_vote` above - same weight, same
+    consensus gates (`resolve_and_persist_artist`, `cardpicker.artist_consensus` - untouched by
+    this feature), same rate budget (reuses `_printing_tag_rate_limit_key`/
+    `_printing_tag_rate_limit_rate`, i.e. `PRINTING_TAG_SUBMISSION_RATE`, not a separate budget).
+    Write-ins get no special treatment in consensus: a single typo can't resolve a card by
+    itself, and junk dies as UNRESOLVED/CONTESTED per the standard gates, same as any other
+    artist vote.
+
+    Deliberately does NOT accept an `isUnknown` flag - that "definitively unlisted/unknown
+    artist" path is still served by `post_submit_artist_vote` alone; this endpoint's whole
+    reason to exist is suggesting an artist *by name*, and folding in a third, unrelated mode
+    would blur that.
+
+    No guard against an already-RESOLVED card's artist - mirrors `post_submit_artist_vote`/
+    `post_submit_printing_tag`, neither of which gate on existing resolution status either; a
+    vote is always accepted and folded into consensus (a resolved outcome can, in principle,
+    flip if enough new votes disagree - the same behaviour as every other vote endpoint here).
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many artist vote submissions - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    req = SubmitArtistWriteInVoteRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+
+    if (req.artistId is None) == (req.freeText is None):
+        raise BadRequestException("Exactly one of artistId or freeText is required.")
+
+    with transaction.atomic():
+        artist, created_new_artist = _resolve_or_create_writein_artist(req.artistId, req.freeText)
+        CardArtistVote.objects.filter(card=card, anonymous_id=req.anonymousId).delete()
+        CardArtistVote.objects.create(
+            card=card,
+            artist=artist,
+            is_unknown=False,
+            anonymous_id=req.anonymousId,
+            source=VoteSource.USER,
+            user=_requesting_user(request),
+            vote_surface=req.voteSurface,
+        )
+        resolved = resolve_and_persist_artist(card)
+
+    consensus = _build_artist_consensus_response(card, resolved)
+    return JsonResponse(
+        SubmitArtistWriteInVoteResponse(
+            isUnknown=consensus.isUnknown,
+            voteTally=consensus.voteTally,
+            resolvedArtist=consensus.resolvedArtist,
+            castArtist=ArtistAutocompleteResult(id=artist.pk, name=artist.name),
+            createdNewArtist=created_new_artist,
+        ).model_dump()
+    )
 
 
 def _build_tag_consensus_entry(card: Card, tag: Tag) -> TagConsensusEntry:

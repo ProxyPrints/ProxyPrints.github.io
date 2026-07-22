@@ -29,6 +29,8 @@ urlpatterns = [
     path("2/artistCandidates/", views.post_artist_candidates),
     path("2/artistConsensus/", views.post_artist_consensus),
     path("2/submitArtistVote/", views.post_submit_artist_vote),
+    path("2/artistAutocomplete/", views.post_artist_autocomplete),
+    path("2/submitArtistWriteInVote/", views.post_submit_artist_writein_vote),
     path("2/tagConsensus/", views.post_tag_consensus),
     path("2/submitTagVote/", views.post_submit_tag_vote),
     path("2/castImplicitVote/", views.post_cast_implicit_vote),
