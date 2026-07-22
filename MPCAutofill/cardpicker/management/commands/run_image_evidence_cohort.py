@@ -48,7 +48,52 @@ fetch from compute into two concurrent stages (docs/features/catalog-completion-
   than the design doc's own decoded-RGB-buffer estimate (~1.8 MiB/image) that already showed wide
   margin (well under 1 GiB even at a generous 10x that estimate) against the host's 24GB ceiling -
   this implementation is strictly cheaper than that arithmetic assumed, so the same "not RAM-bound
-  at any plausible queue depth" conclusion holds a fortiori.
+  at any plausible queue depth" conclusion holds a fortiori - PROVIDED fetch submission is itself
+  windowed. It was not, until the fix documented immediately below - see that note before trusting
+  the arithmetic above against a real multi-day run.
+
+**PARENT-PROCESS MEMORY LEAK - found and fixed 2026-07-22** (two production incidents against the
+197,428-card remainder run: an unwatched run OOM-killed the whole box overnight at ~21GB parent
+RSS; a re-run the following night was caught and stopped cleanly by a watchdog at 17.3GB after
+66,355 cards, ~250-350KB retained per card - the size of one raw fetched image buffer).
+Root-caused by a synthetic repro (a throwaway harness reproducing `_run_cohort`'s own loop shape
+with tracked, weakref-observable payloads instead of real network/DB calls - see this PR's own
+description for the exact numbers, and `test_run_image_evidence_cohort.py`'s
+`TestRunCohortFetchMemoryBound` for the same property turned into a permanent regression guard
+against the real `_run_cohort`), NOT by re-running the real 197k cohort:
+
+1. **Primary cause (~95% of the effect): fetch submission was never windowed.** The pre-fix
+   `_run_cohort` submitted every `cohort_ids` entry to the fetch thread pool UP FRONT
+   (`fetch_futures = {fetch_pool.submit(...): card_id for card_id in cohort_ids}`), then only
+   gated COMPUTE submission behind `queue_depth` (the `pending` dict below). The design doc's own
+   memory-budget arithmetic ("worst-case buffers alive at once ~= fetch threads in flight + queue
+   depth + one per compute worker ~= 31") silently assumed fetch completion was ALSO bounded by
+   that same window - the implementation never enforced that assumption. Since fetch (I/O-bound,
+   paced by `GOOGLE_IMAGE`'s 6-way concurrency limiter) completes cards materially faster than
+   compute (CPU-bound OCR across 7 processes) consumes them, fetch raced arbitrarily far ahead of
+   the point where its results were used - a repro measured 400/400 synthetic cards' worth of
+   raw-image-sized payloads simultaneously alive at peak with the un-windowed submission pattern,
+   vs. 22/400 (bounded by `queue_depth`) once fetch submission was ALSO windowed to match. **Fix**:
+   `cohort_ids` are now drip-fed into the fetch pool via `_submit_more_fetch()`, capped so total
+   outstanding fetch-stage work (in flight + completed-but-not-yet-consumed) never exceeds
+   `queue_depth` - the same knob already documented as "the backpressure knob between the fetch
+   and compute stages," now actually enforced on both sides of that boundary rather than one.
+2. **Secondary cause (~1% of the effect, real but minor - fixed in the same change): the
+   `fetch_futures` dict/set was never pruned as futures were consumed.** Even a `Future` whose
+   `.result()` has already been read remains reachable (and its retained result - here, a
+   `_FetchOutcome` including the full raw image bytes - stays alive) for as long as anything still
+   references the `Future` object itself. The old code built `fetch_futures` once and iterated it
+   via `as_completed()` without ever removing entries, so every consumed future (not just
+   unconsumed ones) stayed resident until the whole cohort finished. **Fix**: entries are discarded
+   from the tracking set the instant their result is read, in every code path (including the
+   fetch-side terminal-outcome `continue` path).
+
+Ruled out as contributors (checked directly, not assumed): `_CohortStats` holds only integer
+counters, never a list/row per card; the live prod container confirmed `DEBUG=False` (so Django's
+`connection.queries` per-query growth, which only fires under `DEBUG=True`, cannot be the cause);
+`--profile`'s JSONL output is written and flushed per-line, never buffered in memory; the
+`already_done_ids` resume-filter set holds bare ints (bytes/card as expected, not the ~250-350KB/
+card the incidents showed).
 
 Two pieces of process-local state the OLD bundled-fetch design needed specifically because fetch
 lived inside N compute PROCESSES no longer apply, and are gone rather than left as dead code:
@@ -133,13 +178,12 @@ from concurrent.futures import (
     Future,
     ProcessPoolExecutor,
     ThreadPoolExecutor,
-    as_completed,
     wait,
 )
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from django.core.management.base import BaseCommand, CommandParser
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db.models import Min
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
@@ -202,6 +246,25 @@ def _init_worker() -> None:
     from django.db import connections
 
     connections.close_all()
+
+
+def _get_rss_mb() -> Optional[float]:
+    """Best-effort PARENT-process resident set size in MB, read from `/proc/self/status`
+    (2026-07-22, added after the two OOM incidents this module docstring's "PARENT-PROCESS MEMORY
+    LEAK" section describes - see that section for the full mechanism). Deliberately never raises:
+    this is a diagnostic/safety add-on, not something a run should fail over just because it's
+    running somewhere `/proc` isn't readable (a non-Linux dev box, a locked-down sandbox) - returns
+    `None` in that case, and every caller treats `None` as "skip the RSS-dependent behaviour this
+    time," never as an error."""
+    try:
+        with open("/proc/self/status") as status_file:
+            for line in status_file:
+                if line.startswith("VmRSS:"):
+                    kb = int(line.split()[1])
+                    return kb / 1024.0
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
 
 
 @dataclass(frozen=True)
@@ -319,12 +382,33 @@ class _CohortStats:
     """Thread-safe accumulator for the same completed/fetch_failures/progress-line bookkeeping
     the old single-loop design did inline - pulled into its own small class since the decoupled
     driver now records outcomes from two different call sites (the fetch stage's own terminal
-    outcomes, and the compute stage's `as_completed`/windowed-wait results) rather than one."""
+    outcomes, and the compute stage's `as_completed`/windowed-wait results) rather than one.
 
-    def __init__(self, total: int, stdout_write: Any) -> None:
+    `stop_event`/`max_rss_mb` (2026-07-22, the parent-process memory-leak fix - see module
+    docstring): every progress line now also logs the parent's own RSS (cheap - one `/proc` read
+    per `PROGRESS_EVERY` cards, see `_get_rss_mb`'s own docstring), so the NEXT time this
+    accumulates unexpectedly the log itself shows it climbing, rather than only surfacing at an
+    OOM or a watchdog kill. `max_rss_mb`, when set (`--max-rss-mb`, default off), makes this a
+    self-limiting safety net rather than a passive log line: crossing the threshold sets
+    `stop_event` (the SAME stop-on-lockout event the fetch stage already checks, so it drains
+    exactly like a lockout does - no new stop mechanism) and records `rss_limit_hit` for
+    `handle()` to turn into a nonzero exit. This is deliberately a clean stop, not a hard kill -
+    the resume filter (module docstring's "Resume/kill-safety" section) already makes a
+    re-invocation after ANY stop safe, so self-limiting before the box's own OOM killer intervenes
+    is strictly better than the two incidents this fix responds to."""
+
+    def __init__(
+        self,
+        total: int,
+        stdout_write: Any,
+        stop_event: Optional[threading.Event] = None,
+        max_rss_mb: Optional[float] = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._total = total
         self._stdout_write = stdout_write
+        self._stop_event = stop_event
+        self._max_rss_mb = max_rss_mb
         self.completed = 0
         self.fetch_failures = 0
         # Recovery-arc lessons item 1 (2026-07-21) - count, don't just enable, the
@@ -332,6 +416,7 @@ class _CohortStats:
         # remainder in particular) produces the plan's own "open verification gap" measurement
         # data rather than only the 20k-cohort's retrospective estimate.
         self.short_circuited = 0
+        self.rss_limit_hit = False
         self._run_start = time.monotonic()
 
     def record(self, outcome: str, short_circuited: bool = False) -> None:
@@ -351,10 +436,27 @@ class _CohortStats:
             elapsed = time.monotonic() - self._run_start
         if completed % PROGRESS_EVERY == 0 or completed == self._total:
             rate = completed / elapsed if elapsed > 0 else 0.0
+            rss_mb = _get_rss_mb()
+            rss_display = f"{rss_mb:.0f}" if rss_mb is not None else "?"
             self._stdout_write(
                 f"[{completed}/{self._total}] elapsed={elapsed:.0f}s rate={rate:.3f}/s "
-                f"fetch_failures={self.fetch_failures} short_circuited={self.short_circuited}"
+                f"fetch_failures={self.fetch_failures} short_circuited={self.short_circuited} "
+                f"rss_mb={rss_display}"
             )
+            if (
+                self._max_rss_mb is not None
+                and rss_mb is not None
+                and rss_mb >= self._max_rss_mb
+                and self._stop_event is not None
+                and not self._stop_event.is_set()
+            ):
+                self.rss_limit_hit = True
+                self._stop_event.set()
+                self._stdout_write(
+                    f"RSS limit exceeded ({rss_mb:.0f}MB >= --max-rss-mb {self._max_rss_mb:.0f}MB) "
+                    "- stopping the run cleanly once in-flight work drains; the resume filter "
+                    "makes a re-invocation pick up exactly where this one stopped"
+                )
 
 
 def _run_cohort(
@@ -368,29 +470,32 @@ def _run_cohort(
     profile: bool = False,
     profile_file: Any = None,
     short_circuit: Optional[bool] = None,
-) -> tuple[int, int, bool, int]:
+    max_rss_mb: Optional[float] = None,
+) -> tuple[int, int, bool, int, bool]:
     """
     The decoupled fetch/compute driver itself. Two concurrent executors:
 
-    - `fetch_pool` (`ThreadPoolExecutor`, I/O-bound) - every `cohort_ids` entry is submitted as
-      its own fetch task up front. This is safe to do unconditionally (unlike compute submission
-      below) because an unstarted `Future` sitting in a `ThreadPoolExecutor`'s internal queue
-      costs a card_id int, not an image buffer - no buffer exists until that thread actually runs
-      `_fetch_one_card`, and actual concurrent execution is already bounded to `fetch_threads` by
-      the executor itself. This mirrors the old design's own already-accepted pattern of
-      submitting an entire cohort's worth of futures to one executor at once.
-    - `compute_pool` (`ProcessPoolExecutor`, CPU-bound) - NOT submitted to unconditionally: a
-      sliding window (`pending`, capped at `queue_depth`) bounds how many fetched-but-not-yet-
-      computed buffers can be outstanding (submitted to the compute pool and not yet complete) at
-      once - this is the design doc's own "a bounded number of outstanding fetched-but-not-yet-
-      computed buffers... enforced however the implementation chooses to gate submission" (its own
-      cited example: "a counting semaphore around handoff to the compute pool" - `wait(...,
-      FIRST_COMPLETED)` below is the equivalent windowing primitive for this shape). Once
-      `len(pending) >= queue_depth`, this loop blocks on `wait()` until at least one compute task
-      finishes before submitting the next fetched buffer - so the fetch stage's OWN
-      `as_completed(fetch_futures)` iteration (and therefore the fetch threads feeding it) can
-      only run as far ahead of compute as `queue_depth` allows, which is exactly the backpressure
-      property the design calls for.
+    - `fetch_pool` (`ThreadPoolExecutor`, I/O-bound) - `cohort_ids` are drip-fed into it via
+      `_submit_more_fetch()`, NOT all submitted up front (2026-07-22 fix - see module docstring's
+      "PARENT-PROCESS MEMORY LEAK" section for the two production incidents this responds to and
+      the repro evidence behind it). Submitting the whole cohort at once was previously reasoned
+      to be safe because "an unstarted `Future` costs a card_id int, not an image buffer" - true,
+      but that reasoning only covers futures that HAVEN'T completed yet; it says nothing about
+      futures that HAVE completed but haven't been consumed by this loop yet, each of which DOES
+      hold a real fetched-image buffer. Since fetch (paced by `GOOGLE_IMAGE`'s 6-way concurrency
+      limiter) completes cards faster than the 7-process CPU-bound compute stage consumes them,
+      unbounded upfront submission let fetch race arbitrarily far ahead, accumulating raw image
+      buffers for the entire remaining cohort. `outstanding_fetch` now bounds TOTAL outstanding
+      fetch-stage work (in flight + completed-but-not-yet-consumed) to `queue_depth` - the same
+      knob already documented as "the backpressure knob between the fetch and compute stages," now
+      actually enforced on the fetch side too, not just the compute side below.
+    - `compute_pool` (`ProcessPoolExecutor`, CPU-bound) - unchanged: a sliding window (`pending`,
+      capped at `queue_depth`) bounds how many fetched-but-not-yet-computed buffers can be
+      outstanding (submitted to the compute pool and not yet complete) at once - the design doc's
+      own "a bounded number of outstanding fetched-but-not-yet-computed buffers... enforced however
+      the implementation chooses to gate submission" (its own cited example: "a counting semaphore
+      around handoff to the compute pool" - `wait(..., FIRST_COMPLETED)` below is the equivalent
+      windowing primitive for this shape).
 
     `profile`/`profile_file` (2026-07-20, docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md):
     when `profile` is True, each completed compute future's own per-card timing dict (see
@@ -403,18 +508,36 @@ def _run_cohort(
     `short_circuit` (2026-07-21, docs/features/catalog-completion-plan.md's "Recovery-arc lessons"
     item 1): forwarded to every `_compute_one_card` submission - see that function's own docstring.
 
-    Returns `(completed, fetch_failures, lockout_hit, short_circuited)` - the same three figures
-    the old single-loop design printed in its final summary line, plus the new short-circuit
-    counter (item 1's own "count it during the real run" ask).
+    `max_rss_mb` (2026-07-22): forwarded to `_CohortStats` - see its own docstring for the
+    checkpoint-and-stop mechanism this drives.
+
+    Returns `(completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit)` - the same
+    three figures the old single-loop design printed in its final summary line, plus the
+    short-circuit counter (item 1's own "count it during the real run" ask) and the new RSS-limit
+    flag.
     """
     stop_event = threading.Event()
-    stats = _CohortStats(total=len(cohort_ids), stdout_write=stdout_write)
+    stats = _CohortStats(total=len(cohort_ids), stdout_write=stdout_write, stop_event=stop_event, max_rss_mb=max_rss_mb)
 
     with ThreadPoolExecutor(max_workers=fetch_threads) as fetch_pool, ProcessPoolExecutor(
         max_workers=workers, initializer=_init_worker
     ) as compute_pool:
-        fetch_futures = {fetch_pool.submit(_fetch_one_card, card_id, stop_event): card_id for card_id in cohort_ids}
+        cohort_iter = iter(cohort_ids)
+        outstanding_fetch: "set[Future[Any]]" = set()
         pending: "dict[Future[Any], int]" = {}
+
+        def _submit_more_fetch() -> None:
+            # Refill outstanding_fetch up to queue_depth from whatever cohort_ids remain - the
+            # actual fix for the primary leak (see this function's own docstring above). Called
+            # both before the loop starts and after each batch of fetch results is drained, so
+            # outstanding_fetch never holds more than queue_depth completed-or-in-flight buffers
+            # at once, regardless of how far ahead fetch could otherwise race.
+            while len(outstanding_fetch) < queue_depth:
+                try:
+                    card_id = next(cohort_iter)
+                except StopIteration:
+                    return
+                outstanding_fetch.add(fetch_pool.submit(_fetch_one_card, card_id, stop_event))
 
         def _drain_one_pending() -> None:
             done, _ = wait(set(pending.keys()), return_when=FIRST_COMPLETED)
@@ -432,32 +555,42 @@ def _run_cohort(
                     profile_file.write(json.dumps({"card_id": card_id, **card_profile}) + "\n")
                     profile_file.flush()
 
-        for fetch_future in as_completed(fetch_futures):
-            fetch_result = fetch_future.result()
-            if fetch_result.outcome is not None:
-                stats.record(fetch_result.outcome)
-                continue
+        _submit_more_fetch()
+        while outstanding_fetch:
+            done, _ = wait(outstanding_fetch, return_when=FIRST_COMPLETED)
+            for fetch_future in done:
+                # Discard as soon as consumed (2026-07-22 fix, the secondary leak - see module
+                # docstring) - a completed Future retains its own result (here, a _FetchOutcome
+                # including the raw image bytes) for as long as anything still references the
+                # Future itself, so this must happen for EVERY outcome, not just the ones that go
+                # on to compute.
+                outstanding_fetch.discard(fetch_future)
+                fetch_result = fetch_future.result()
+                if fetch_result.outcome is not None:
+                    stats.record(fetch_result.outcome)
+                    continue
 
-            if len(pending) >= queue_depth:
-                _drain_one_pending()
+                if len(pending) >= queue_depth:
+                    _drain_one_pending()
 
-            compute_future = compute_pool.submit(
-                _compute_one_card,
-                fetch_result.card_id,
-                fetch_result.content_hash,
-                fetch_result.image_bytes,
-                fetch_result.fetch_latency_ms,
-                dry_run,
-                run_id,
-                profile,
-                short_circuit,
-            )
-            pending[compute_future] = fetch_result.card_id
+                compute_future = compute_pool.submit(
+                    _compute_one_card,
+                    fetch_result.card_id,
+                    fetch_result.content_hash,
+                    fetch_result.image_bytes,
+                    fetch_result.fetch_latency_ms,
+                    dry_run,
+                    run_id,
+                    profile,
+                    short_circuit,
+                )
+                pending[compute_future] = fetch_result.card_id
+            _submit_more_fetch()
 
         while pending:
             _drain_one_pending()
 
-    return stats.completed, stats.fetch_failures, stop_event.is_set(), stats.short_circuited
+    return stats.completed, stats.fetch_failures, stop_event.is_set(), stats.short_circuited, stats.rss_limit_hit
 
 
 class Command(BaseCommand):
@@ -555,6 +688,20 @@ class Command(BaseCommand):
             "env var when passed; when NOT passed, that env var still applies (checked inside "
             "image_evidence.compute_card_evidence itself).",
         )
+        parser.add_argument(
+            "--max-rss-mb",
+            type=float,
+            default=None,
+            help="Self-limiting safety net (2026-07-22, added after two production OOM/near-OOM "
+            "incidents on the 197k-card remainder run - see module docstring's 'PARENT-PROCESS "
+            "MEMORY LEAK' section): when the parent process's own RSS (logged every progress line "
+            "regardless of this flag) reaches or exceeds this many MB, the run stops cleanly once "
+            "in-flight work drains and exits non-zero, instead of running until the OS OOM-killer "
+            "intervenes. Off by default (no ceiling) - the underlying leak this guards against is "
+            "fixed in this same change, so this is defense-in-depth, not the primary fix. Safe to "
+            "set because a re-invocation picks up exactly where a stopped run left off (the "
+            "resume filter - see module docstring's 'Resume/kill-safety' section).",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         limit: int = options["limit"]
@@ -567,6 +714,7 @@ class Command(BaseCommand):
             else int(os.environ.get("STAGE_C_QUEUE_DEPTH", str(workers * DEFAULT_QUEUE_DEPTH_MULTIPLIER))),
         )
         dry_run: bool = options["dry_run"]
+        max_rss_mb: Optional[float] = options["max_rss_mb"]
         run_id: str = options["run_id"] or f"stagec-cohort-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
         profile: bool = options["profile"]
         profile_output: str = options["profile_output"] or f"/tmp/stagec-profile-{run_id}.jsonl"
@@ -579,7 +727,8 @@ class Command(BaseCommand):
         self.stdout.write(
             f"run_id={run_id} limit={limit} workers={workers} fetch_threads={fetch_threads} "
             f"queue_depth={queue_depth} dry_run={dry_run} profile={profile} "
-            f"no_shortcircuit={options['no_shortcircuit']} (decoupled fetch/compute pipeline)"
+            f"no_shortcircuit={options['no_shortcircuit']} max_rss_mb={max_rss_mb} "
+            "(decoupled fetch/compute pipeline)"
         )
         if profile:
             self.stdout.write(f"Profile JSONL: {profile_output}")
@@ -652,7 +801,7 @@ class Command(BaseCommand):
 
         run_start = time.monotonic()
         try:
-            completed, fetch_failures, lockout_hit, short_circuited = _run_cohort(
+            completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit = _run_cohort(
                 cohort_ids=cohort_ids,
                 fetch_threads=fetch_threads,
                 workers=workers,
@@ -663,6 +812,7 @@ class Command(BaseCommand):
                 profile=profile,
                 profile_file=profile_file,
                 short_circuit=short_circuit,
+                max_rss_mb=max_rss_mb,
             )
         finally:
             if profile_file is not None:
@@ -670,8 +820,20 @@ class Command(BaseCommand):
 
         elapsed = time.monotonic() - run_start
         rate = completed / elapsed if elapsed > 0 else 0.0
+        final_rss_mb = _get_rss_mb()
         self.stdout.write(
             f"DONE run_id={run_id} completed={completed}/{len(cohort_ids)} elapsed={elapsed:.0f}s "
             f"rate={rate:.3f}/s fetch_failures={fetch_failures} lockout_hit={lockout_hit} "
-            f"short_circuited={short_circuited}"
+            f"short_circuited={short_circuited} rss_limit_hit={rss_limit_hit} "
+            f"rss_mb={f'{final_rss_mb:.0f}' if final_rss_mb is not None else '?'}"
         )
+        if rss_limit_hit:
+            # Nonzero exit (2026-07-22, item 3's own "cleanly checkpoints+exits nonzero" ask) -
+            # every persist_evidence write up to this point already committed and the resume
+            # filter (module docstring's "Resume/kill-safety" section) makes a re-invocation safe,
+            # so this is a checkpoint, not a failure to recover from.
+            raise CommandError(
+                f"--max-rss-mb={max_rss_mb:.0f} exceeded - run stopped cleanly at "
+                f"completed={completed}/{len(cohort_ids)}; re-invoke the same command to resume "
+                "(the resume filter skips everything already fully processed)."
+            )
