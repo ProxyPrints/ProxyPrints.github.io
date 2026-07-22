@@ -39,6 +39,26 @@ global.matchMedia =
     };
   };
 
+// jsdom has no ResizeObserver - needed at MODULE LOAD time (not just render time) by
+// @dnd-kit/react's own ResizeNotifier (SourceSettings.tsx -> GridSelectorFilters.tsx ->
+// SelectVersionResults.tsx's import graph), so this has to be a real global, set up here
+// (setupFilesAfterEnv runs before any test file's own imports are required), not a per-test
+// mock - a per-test `jest.fn()` stub assigned inside a test/beforeEach runs too late to satisfy
+// an import-time reference. Funnel round (funnel-spec.md), SelectVersionResults.test.tsx.
+if (typeof global.ResizeObserver === "undefined") {
+  global.ResizeObserver = class {
+    observe() {
+      return undefined;
+    }
+    unobserve() {
+      return undefined;
+    }
+    disconnect() {
+      return undefined;
+    }
+  };
+}
+
 const defaultExport = async () => {
   const projectDir = process.cwd();
   loadEnvConfig(projectDir);

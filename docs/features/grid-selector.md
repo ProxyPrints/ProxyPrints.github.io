@@ -120,15 +120,17 @@ still back that modal.
   No fork of the component was needed. Its `onOpenGridSelector` callback
   is a no-op here (there's no separate modal to open — this tile is
   already inside the picker).
-- **Moment (b), art-as-filter**: a plain binary toggle-chip row
-  (`FilterChipBar`, NOT `AttributeChipPanel.tsx`'s tri-state vote-casting
-  ring — a new, thin component per the spec's own component table),
-  built on `attributeChips.ts`'s existing `ALL_ATTRIBUTE_CHIPS`
-  taxonomy/display names. A "More like this" button on any tile with at
-  least one resolved attribute tag seeds the filter from that card's own
-  `tags`.
-- **Moment (c), filtered-selection confirm chip**: after selecting a
-  card while a filter tag is active, a `ConfirmChip` appears if that
+- **Moment (b), art-as-filter** — **sidebar/modal layout only** (see the
+  FUNNEL round below, which replaces this on the `/display` rail): a
+  plain binary toggle-chip row (`FilterChipBar`, NOT
+  `AttributeChipPanel.tsx`'s tri-state vote-casting ring — a new, thin
+  component per the spec's own component table), built on
+  `attributeChips.ts`'s existing `ALL_ATTRIBUTE_CHIPS` taxonomy/display
+  names. A "More like this" button on any tile with at least one
+  resolved attribute tag seeds the filter from that card's own `tags`.
+- **Moment (c), filtered-selection confirm chip** — **sidebar/modal
+  layout only**, retired on the rail by D20 (see below): after selecting
+  a card while a filter tag is active, a `ConfirmChip` appears if that
   specific card's `tagVoteStatuses[tagName]` is `"suggested"` (not yet
   resolved) for the active tag — one tap casts a real `APISubmitTagVote`
   (`voteSurface: "select-version"`, a new value alongside the existing
@@ -147,6 +149,128 @@ still back that modal.
     `SelectVersionResults.tsx` therefore matches on resolved OR
     suggested per active tag — the only reading that makes the spec's
     own (b) and (c) passages internally consistent.
+
+## The art-picker FUNNEL (funnel-spec.md F1-F7, D20-D24 — supersedes moments (b)/(c) on the rail)
+
+The owner-ratified funnel round replaced the flat moment-(b) chip wall
+and the two-tap moment-(c) confirm on the `/display` rail's `Select Version` surface (`layout="stacked"`) with a single top-to-bottom
+column: head (count · active-tag pills · Filters disclosure) → per-axis
+segmented chips → the existing E4 advanced-filters disclosure →
+an implicit-vote awareness line → a count-proportional survivors grid.
+**The `layout="sidebar"` branch (the theoretical /editor modal caller,
+not actually wired anywhere today) is byte-for-byte unchanged** — it
+still renders the flat `FilterChipBar` and the two-tap `ConfirmChip`
+described above.
+
+- **Per-axis segmented chips** (`attributeChips.ts`'s `FUNNEL_AXES`):
+  Border and Frame render as radio-exclusive `ToggleButtonGroup`s (one
+  segment active at a time; re-tapping the active segment clears the
+  axis back to "any" — D23, since a native radio input doesn't fire a
+  change event for a click on an already-checked option, this is
+  handled on the `ToggleButton`'s own `onClick`, ahead of the group's
+  `onChange`); Treatment (Full Art/Borderless/Showcase/Extended/Etched)
+  renders as an independent-checkbox group. Only axes with ≥1
+  surviving candidate render at all (`chipMembershipState`, computed
+  over the OTHER axes' current filter — never the axis's own selection,
+  so picking Black doesn't make White/Silver permanently vanish from
+  their own axis).
+- **Three chip states** (F3): SETTLED (some survivor resolves the tag —
+  `card.tags`), SUGGESTED (every carrying survivor only has it via
+  `card.suggestedFilterTagNames` — see the compliance note below, dashed
+  border + trailing `⌇`, vote-layer-gated), or absent (no surviving
+  candidate carries the attribute at all). **Deviation from the spec's
+  ground-truth text (documented, not silent)**: the spec describes
+  filtering/membership as reading raw Scryfall fields via
+  `chip.matches()`/`filterCandidatesByChipStates`
+  (`attributeChips.ts`), which are built for the distinct
+  `PrintingCandidate` schema (`QuestionFeed.tsx`'s own feed items) — the
+  `CardDocument`s this rail actually has carry no `borderColor`/`frame`/
+  `fullArt`/etc fields at all. Every chip in this taxonomy is already
+  Tag-consensus-backed (this file's own top-of-file comment), so
+  membership/filtering here reads `tags`/`suggestedFilterTagNames`
+  instead — functionally equivalent, and the spec's own "metadata"
+  membership state (F3.3) stays honestly unreachable, exactly as its own
+  carve-out anticipates.
+  - **Compliance fix (owner-ratified condition 6, caught in PR #329
+    review)**: the SUGGESTED read and F4b's implicit-vote support set
+    originally sourced from `card.tagVoteStatuses[tag] === "suggested"`.
+    That field is a source-agnostic collapse — the backend serializer
+    maps BOTH `CONTESTED` and `UNRESOLVED` to the same `"suggested"`
+    string, with no implicit-vote exclusion and no weight floor — so a
+    tag with ONLY implicit votes (or one sub-threshold machine vote, or
+    a REJECT-leaning split) also read `"suggested"` there. Since F4b
+    casts a NEW implicit vote for every SUGGESTED chip a pick satisfies,
+    sourcing membership off `tagVoteStatuses` let an already-implicit
+    signal seed MORE implicit votes for itself — the exact self-seeding
+    loop condition 6 forbids. Fixed: both the SUGGESTED membership read
+    (`attributeChips.ts`'s `chipMembershipState`/
+    `candidateSatisfiesAttributeTag`) and the implicit-support set
+    (`SelectVersionResults.tsx`'s `handleSelect`, via the `voteLayer. suggestedTagNames` seam) now read `card.suggestedFilterTagNames`
+    instead — the backend's own implicit-excluded, floor-gated,
+    already-RESOLVED/CONTESTED/PENDING_APPROVAL/SENSITIVE-excluded
+    computation (`get_suggested_filter_tags_overlay`,
+    docs/features/printing-tags.md). The SETTLED read (`card.tags`) is
+    unaffected — resolved facts carry no such loop risk. `null`/absent
+    `suggestedFilterTagNames` (the backend wiring for this field lands
+    in a parallel PR — until deployed the wire value is `null`)
+    degrades to "no suggested carriers," never a crash — the funnel
+    stays fully functional on settled/metadata chips alone. Pinned as a
+    regression test (`SelectVersionResults.test.tsx`'s "condition 6"
+    case + `tests/SelectVersionSection.spec.ts`'s matching e2e test):
+    a card whose `tagVoteStatuses` says `"suggested"` but whose
+    `suggestedFilterTagNames` excludes the tag renders no suggested
+    chip and casts no implicit vote for it.
+- **Count-proportional disclosure** (F1/D21, named constants
+  `FUNNEL_DENSE_ABOVE = 8` / `FUNNEL_HERO_AT_OR_BELOW = 2`): `>8`
+  survivors → axes shown + advanced filters auto-expanded once + dense
+  ~72px tiles; `3–8` → axes shown + medium ~104px tiles; `≤2` → axes
+  collapse to the head's active-pill summary + expanded (`compressed= false`) hero tiles; `0` → an empty state with a "Clear filters" link.
+- **D20 implicit vote — the pick IS the vote, no second tap.** Picking a
+  candidate while ≥1 chip is active computes `supportTagNames` (active
+  tags the candidate satisfies ONLY via a suggested/unconfirmed vote,
+  never an already-resolved one) and calls the `voteLayer. onImplicitSupport(candidate, supportTagNames)` seam on EVERY pick
+  (even with an empty set, so the caller can retract a PREVIOUS pick's
+  support — see below). When `supportTagNames` is non-empty: the active
+  chips clear and a brief (~2.6s) `aria-live` ack fades in ("Supported
+  {tags} ✓ — filters cleared"); an awareness line (`ⓘ Picking a card here supports {tags} for it. Undo by re-picking.`) discloses this
+  BEFORE the pick, whenever ≥1 chip is active and the vote layer is on.
+  Copy always says "supports," never "confirms." The two-tap
+  `ConfirmChip` is retired on this surface (its logic folds into this
+  automatic mechanic).
+- **Retraction = deselection (F4d)**: `DisplayPage.tsx`'s own
+  `handleImplicitSupport` holds a per-slot (`face`-`slot` keyed)
+  `useRef` of the last-cast `{identifier, tagNames}` — deliberately
+  living ABOVE `<Rail>` (which fully remounts per slot selection), so it
+  survives a slot's own component teardown. On every call: retracts
+  whatever the PREVIOUS pick cast (`APIRetractImplicitVote`, one call
+  per tag), then casts the new `supportTagNames`
+  (`APICastImplicitVote`, one call for the whole set) if any. Both
+  calls are fire-and-forget — a refused/failed implicit vote never
+  surfaces a user-visible error (the pick itself always succeeds).
+- **F5 — votes-off completeness (adoption requirement)**: a single
+  optional `voteLayer?: VoteLayerProps` prop
+  (`onImplicitSupport`/`suggestedTagNames`/`awarenessCopy`) is the
+  funnel's entire vote-layer attach seam. `undefined` (any caller that
+  doesn't supply it) renders a complete, votes-off, metadata-only
+  filter UI: no SUGGESTED chips, no awareness line, no vote on pick, no
+  reset/ack. `DisplayPage.tsx` is the one caller that supplies it today
+  (always, in production); `SelectVersionResults.test.tsx` covers the
+  `voteLayer=undefined` path directly, since there's no live in-app
+  toggle to reach it end-to-end.
+- **Context menu on `/display` slots (F6/D22)**: `PagePreview.tsx`
+  gained additive `onSlotContextMenu?(index, x, y)` — right-click
+  (`preventDefault`ed, scoped to slots only), long-press
+  (`useLongPress`, extracted per-slot into `PagePreviewSlotEl` so the
+  hook can be called once per slot), and a new visible `⋯` cue button
+  (bottom-right of each tile — its own corner, deliberately separated
+  from the top-left/top-right corners a future selection-checkbox/flip
+  button would use) all open the SAME existing `CardSlotContextMenu` +
+  `getCardSlotMenuActions` (Change Query/Duplicate/[Unfilter
+  Printing]/Delete — no new action). `DisplayPage.tsx` mounts one
+  shared menu instance for whichever slot was triggered. Absent
+  `onSlotContextMenu` (every other `PagePreview` caller, e.g.
+  `PDFGenerator`'s fast preview), renders with zero behavior change —
+  no cue, no long-press handlers, the browser's native menu untouched.
 - **Open items, not resolved here (owner call needed)**: (1) group 2's
   sub-order beyond "frame type first" — this build picked
   `altered-frame > custom-art > ai-art`
@@ -213,9 +337,22 @@ still back that modal.
 - `frontend/src/features/gridSelector/GridSelectorResults.tsx`,
   `CardResultSet.tsx` — the flat grid renderer, still backing the modal
   variant above; no longer used by `/display`
-- `frontend/src/features/gridSelector/SelectVersionResults.tsx`,
-  `selectVersionGrouping.ts` (+ `selectVersionGrouping.test.ts`) — the
-  `/display`-only Select Version section (issue #167)
+- `frontend/src/features/gridSelector/SelectVersionResults.tsx`
+  (+ `SelectVersionResults.test.tsx`), `selectVersionGrouping.ts`
+  (+ `selectVersionGrouping.test.ts`) — the `/display`-only Select
+  Version section (issue #167) and its FUNNEL round (F1-F7)
+- `frontend/src/features/attributeChips/attributeChips.ts` —
+  `FUNNEL_AXES`, `chipMembershipState`, `candidateSatisfiesAttributeTag`
+  (funnel round, additive to the existing chip taxonomy)
+- `frontend/src/features/pdf/PagePreview.tsx` — `onSlotContextMenu`,
+  the extracted `PagePreviewSlotEl`, the `⋯` menu cue (funnel round F6)
+- `frontend/src/features/display/DisplayPage.tsx` — the funnel's
+  `voteLayer` wiring (`handleImplicitSupport`, the retract-on-reselect
+  ref) and the center-sheet context-menu mount
+- `frontend/src/common/schema_types.ts`, `frontend/src/store/api.ts` —
+  hand-maintained `CastImplicitVoteRequest`/`RetractImplicitVoteRequest`
+  types + `APICastImplicitVote`/`APIRetractImplicitVote` (the frontend
+  half of PR #325's backend contract)
 - `frontend/src/features/card/Card.tsx` (+ new `Card.test.tsx`),
   `CardSlot.tsx`
 - Tests: `frontend/tests/GridSelectorModalVariants.spec.ts` (keyboard nav
@@ -223,7 +360,12 @@ still back that modal.
     default — merged from the former `GridSelectorModalAccessibility.spec.ts`
     and `GridSelectorModalMobile.spec.ts`), `frontend/tests/CardImageStates.spec.ts`
     (error placeholder + slow-load hint), `frontend/tests/SelectVersionSection.spec.ts`
-    (grouping/ordering, moment (a)/(b)/(c) behavior — issue #167)
+    (grouping/ordering, moment (a)/(b)/(c) behavior on the sidebar layout — issue
+    #167 — plus the funnel's implicit-cast/reset/ack and retract-on-reselect
+    end-to-end flows), `frontend/src/features/gridSelector/SelectVersionResults.test.tsx`
+    (axis exclusivity, membership-driven axis rendering, disclosure tiers,
+    SUGGESTED-chip rendering, F5 votes-off completeness), `frontend/tests/ DisplayPage.spec.ts` (F6: right-click + the `⋯` cue opening the shared
+    context menu on the center sheet)
 
 ## Known gaps
 

@@ -593,6 +593,48 @@ export const cardDocument18: CardDocument = {
     "Full Art": TagVoteDisplayStatus.Resolved,
     "Old Border": TagVoteDisplayStatus.Suggested,
   },
+  // Fix round (owner-ratified condition 6, PR #329 review) - the funnel's SUGGESTED chip
+  // state/implicit-vote-cast eligibility now reads THIS field, not tagVoteStatuses (which is a
+  // source-agnostic collapse with no implicit-vote exclusion or weight floor - see
+  // attributeChips.ts's chipMembershipState comment). "Old Border" appears in BOTH fields on
+  // this fixture deliberately, so existing funnel tests exercising the compliant path keep
+  // passing; see cardDocument19 below for the fixture proving the NON-compliant
+  // (tagVoteStatuses-only) case renders no suggested chip and casts no implicit vote.
+  suggestedFilterTagNames: ["Old Border"],
+};
+
+// Fix round (owner-ratified condition 6, PR #329 review) - the exact non-compliance Tron caught,
+// pinned as a fixture: tagVoteStatuses says "suggested" for "Old Border", but
+// suggestedFilterTagNames does NOT include it (e.g. the leaning is implicit-only, or a single
+// sub-threshold machine vote, or a REJECT-leaning split - none of which clear the compliant
+// source's real, non-implicit APPLY-leaning floor). The funnel must render NO suggested chip and
+// cast NO implicit vote for this tag on this card.
+export const cardDocument19: CardDocument = {
+  identifier: "1mM2nN3oO4pP5qQ6rR7sS8tT9uU0vV",
+  cardType: CardTypeSchema.Card,
+  name: "Card 19 (tagVoteStatuses says suggested, suggestedFilterTagNames does not)",
+  priority: 0,
+  source: sourceDocument1.key,
+  sourceName: sourceDocument1.name,
+  sourceId: sourceDocument1.pk,
+  sourceVerbose: sourceDocument1.name,
+  sourceType: SourceType.GoogleDrive,
+  sourceExternalLink: undefined,
+  dpi: 800,
+  searchq: "card 19",
+  extension: "png",
+  dateCreated: "1st January, 2000",
+  dateModified: "1st January, 2000",
+  size: 10_000_000,
+  smallThumbnailUrl: "",
+  mediumThumbnailUrl: "",
+  language: "EN",
+  tags: [],
+  printingTagStatus: PrintingTagStatus.Unresolved,
+  tagVoteStatuses: {
+    "Old Border": TagVoteDisplayStatus.Suggested,
+  },
+  suggestedFilterTagNames: [],
 };
 
 //# endregion

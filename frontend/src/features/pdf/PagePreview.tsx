@@ -38,6 +38,7 @@ import styled from "@emotion/styled";
 import React, { useMemo } from "react";
 
 import { CardHeightMM, CardWidthMM } from "@/common/constants";
+import { useLongPress } from "@/common/useLongPress";
 import {
   computeLayout,
   LayoutMargins,
@@ -85,6 +86,45 @@ const LoadingSweep = styled.div`
   @media (prefers-reduced-motion: reduce) {
     animation: none;
     width: 60%;
+  }
+`;
+
+// F6/D22 - the visible `⋯` context-menu cue: hover/focus-reveal on desktop (a mouse user already
+// has right-click as the primary trigger), persistent under `(pointer: coarse)` (a touch-primary
+// device has no hover state to reveal it via - E9's original "gesture-invoked, no visible
+// three-dots button" stance is deliberately revised here, see funnel-spec.md D22).
+const SlotMenuCue = styled.button`
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  z-index: 2;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(22, 32, 43, 0.85);
+  border: 1px solid #7f8fa0;
+  color: #ebebeb;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  padding: 0;
+
+  .page-preview-slot:hover &,
+  .page-preview-slot:focus-within & {
+    opacity: 1;
+  }
+
+  @media (pointer: coarse) {
+    opacity: 1;
+  }
+
+  &:hover {
+    background: #df6919;
+    border-color: #df6919;
   }
 `;
 
@@ -196,6 +236,15 @@ export interface PagePreviewProps {
    * by every existing caller (PDFGenerator.tsx's own fast preview), which keeps today's white-
    * page/box-shadow look with zero behavior change. */
   screenPresentation?: boolean;
+  /** Funnel round (funnel-spec.md F6, XF8) - opens a context menu for the slot at `index`,
+   * anchored to the trigger's viewport (x, y). Wired from BOTH a right-click (desktop,
+   * `preventDefault`ed so the browser's native menu never shows on a slot) and a long-press
+   * (touch, `useLongPress`) on every slot, plus the visible `⋯` cue button (D22) - the same
+   * "one action list, several triggers" pattern `CardSlot.tsx`'s own context menu already uses.
+   * `undefined` (every existing caller - PDFGenerator's fast preview, and any /display sheet not
+   * opting in) renders with zero behavior change: no cue, no long-press handlers, right-click
+   * falls through to the browser's default menu exactly as today. */
+  onSlotContextMenu?: (index: number, x: number, y: number) => void;
 }
 
 export function PagePreview({
@@ -210,6 +259,7 @@ export function PagePreview({
   onSlotClick,
   selectedSlotIndex,
   screenPresentation = false,
+  onSlotContextMenu,
 }: PagePreviewProps) {
   const layout = useMemo(
     () =>
@@ -272,193 +322,276 @@ export function PagePreview({
               }),
         }}
       >
-        {layout.slots.map((slot, index) => {
-          const content = slots[index];
-          const isSelected = onSlotClick != null && selectedSlotIndex === index;
-          return (
-            <div
-              key={index}
-              data-testid="page-preview-slot"
-              onClick={
-                onSlotClick != null ? () => onSlotClick(index) : undefined
-              }
-              role={onSlotClick != null ? "button" : undefined}
-              aria-label={onSlotClick != null ? content?.name : undefined}
-              aria-pressed={onSlotClick != null ? isSelected : undefined}
+        {layout.slots.map((slot, index) => (
+          <PagePreviewSlotEl
+            key={index}
+            index={index}
+            content={slots[index]}
+            xMM={slot.xMM}
+            yMM={slot.yMM}
+            slotWidthMM={slotWidthMM}
+            slotHeightMM={slotHeightMM}
+            bleedEdgeMM={bleedEdgeMM}
+            showCutLines={showCutLines}
+            screenPresentation={screenPresentation}
+            isSelected={onSlotClick != null && selectedSlotIndex === index}
+            onSlotClick={onSlotClick}
+            onSlotContextMenu={onSlotContextMenu}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface PagePreviewSlotElProps {
+  index: number;
+  content: PagePreviewSlotContent | undefined;
+  xMM: number;
+  yMM: number;
+  slotWidthMM: number;
+  slotHeightMM: number;
+  bleedEdgeMM: number;
+  showCutLines: boolean;
+  screenPresentation: boolean;
+  isSelected: boolean;
+  onSlotClick?: (index: number) => void;
+  onSlotContextMenu?: (index: number, x: number, y: number) => void;
+}
+
+/**
+ * Funnel round (funnel-spec.md F6, XF7/XF8) - extracted out of PagePreview's own render loop so
+ * this can call `useLongPress` once per slot (a hook can't be called conditionally/in a loop body
+ * directly). Behavior-preserving for every existing caller: `onSlotContextMenu` absent renders
+ * exactly as before this round (no cue, no long-press handlers, no `onContextMenu` at all - the
+ * browser's native menu is untouched).
+ */
+function PagePreviewSlotEl({
+  index,
+  content,
+  xMM,
+  yMM,
+  slotWidthMM,
+  slotHeightMM,
+  bleedEdgeMM,
+  showCutLines,
+  screenPresentation,
+  isSelected,
+  onSlotClick,
+  onSlotContextMenu,
+}: PagePreviewSlotElProps) {
+  const longPressHandlers = useLongPress((x, y) =>
+    onSlotContextMenu?.(index, x, y)
+  );
+
+  return (
+    <div
+      data-testid="page-preview-slot"
+      className="page-preview-slot"
+      onClick={onSlotClick != null ? () => onSlotClick(index) : undefined}
+      onContextMenu={
+        onSlotContextMenu != null
+          ? (event) => {
+              event.preventDefault();
+              onSlotContextMenu(index, event.clientX, event.clientY);
+            }
+          : undefined
+      }
+      {...(onSlotContextMenu != null ? longPressHandlers : {})}
+      role={onSlotClick != null ? "button" : undefined}
+      aria-label={onSlotClick != null ? content?.name : undefined}
+      aria-pressed={onSlotClick != null ? isSelected : undefined}
+      style={{
+        position: "absolute",
+        left: xMM + "mm",
+        top: yMM + "mm",
+        width: slotWidthMM + "mm",
+        height: slotHeightMM + "mm",
+        overflow: "hidden",
+        // E20 - always the dark field color on the screenPresentation variant (never just
+        // for empty/loading/failed slots): this is what's behind the <img> below too, so
+        // there's no white pre-paint flash while a filled slot's own image decodes.
+        background: screenPresentation ? SCREEN_SLOT_BG : "#d9d9d9",
+        border:
+          screenPresentation && content?.loadState != null
+            ? `1px solid ${SCREEN_SLOT_PINLINE}`
+            : undefined,
+        cursor: onSlotClick != null ? "pointer" : undefined,
+        outline: isSelected ? "3px solid #df691a" : undefined,
+        outlineOffset: isSelected ? "-3px" : undefined,
+      }}
+    >
+      {/* Everything below sits within the slot's own box (bottom:2px/right:2px insets for the
+          cue, well within 0..100%), so the removed wrapper's overflow:hidden is safely restored
+          directly on this outer element - no extra DOM node needed just to clip the <img>. */}
+      {content?.imageUrl != null && (
+        <img
+          src={content.imageUrl}
+          alt={content.name}
+          loading="lazy"
+          decoding="async"
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+            pointerEvents: "none",
+            // E20 - the img's own box, pre-paint (impl note from the spec: set it on the
+            // slot container AND the img itself - the flash is the img's own box, not just
+            // its parent's).
+            backgroundColor: screenPresentation ? SCREEN_SLOT_BG : undefined,
+          }}
+        />
+      )}
+      {content != null && content.imageUrl == null && (
+        <div
+          data-testid="page-preview-empty-slot-label"
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "1mm",
+            padding: "2mm",
+            textAlign: "center",
+            color: screenPresentation ? SCREEN_MUTED_TEXT : "#4a4a4a",
+            pointerEvents: "none",
+          }}
+        >
+          <span
+            style={{
+              fontSize: "2.6mm",
+              fontWeight: 600,
+              lineHeight: 1.2,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {content.name}
+          </span>
+          {content.queryText != null && (
+            <span
               style={{
-                position: "absolute",
-                left: slot.xMM + "mm",
-                top: slot.yMM + "mm",
-                width: slotWidthMM + "mm",
-                height: slotHeightMM + "mm",
-                overflow: "hidden",
-                // E20 - always the dark field color on the screenPresentation variant (never just
-                // for empty/loading/failed slots): this is what's behind the <img> below too, so
-                // there's no white pre-paint flash while a filled slot's own image decodes.
-                background: screenPresentation ? SCREEN_SLOT_BG : "#d9d9d9",
-                border:
-                  screenPresentation && content?.loadState != null
-                    ? `1px solid ${SCREEN_SLOT_PINLINE}`
-                    : undefined,
-                cursor: onSlotClick != null ? "pointer" : undefined,
-                outline: isSelected ? "3px solid #df691a" : undefined,
-                outlineOffset: isSelected ? "-3px" : undefined,
+                fontSize: "2.2mm",
+                fontStyle: "italic",
+                lineHeight: 1.2,
+                overflowWrap: "anywhere",
               }}
             >
-              {content?.imageUrl != null && (
-                <img
-                  src={content.imageUrl}
-                  alt={content.name}
-                  loading="lazy"
-                  decoding="async"
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
-                    display: "block",
-                    pointerEvents: "none",
-                    // E20 - the img's own box, pre-paint (impl note from the spec: set it on the
-                    // slot container AND the img itself - the flash is the img's own box, not just
-                    // its parent's).
-                    backgroundColor: screenPresentation
-                      ? SCREEN_SLOT_BG
-                      : undefined,
-                  }}
-                />
-              )}
-              {content != null && content.imageUrl == null && (
-                <div
-                  data-testid="page-preview-empty-slot-label"
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "1mm",
-                    padding: "2mm",
-                    textAlign: "center",
-                    color: screenPresentation ? SCREEN_MUTED_TEXT : "#4a4a4a",
-                    pointerEvents: "none",
-                  }}
-                >
-                  <span
+              {content.queryText}
+            </span>
+          )}
+          {/* E17/E18 - additive to the name/query-text label above (never replacing it):
+                a slim indeterminate loading sweep while candidates/the image are still
+                being fetched, or a muted "no art" mark + directed-help link once that's
+                settled with nothing found. Screen-only, gated on loadState (undefined for
+                every non-/display caller and any /display slot with no active query at
+                all). */}
+          {screenPresentation && content.loadState === "loading" && (
+            <LoadingTrack data-testid="page-preview-slot-loading">
+              <LoadingSweep />
+            </LoadingTrack>
+          )}
+          {screenPresentation && content.loadState === "failed" && (
+            <div
+              data-testid="page-preview-slot-failed"
+              style={{ pointerEvents: "auto" }}
+            >
+              <span style={{ fontSize: "2.4mm" }}>✗ no art</span>
+              {content.findCardUrl != null && (
+                <div>
+                  <a
+                    href={content.findCardUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-testid="page-preview-find-card-link"
                     style={{
-                      fontSize: "2.6mm",
-                      fontWeight: 600,
-                      lineHeight: 1.2,
-                      overflowWrap: "anywhere",
+                      color: "#df6919",
+                      fontSize: "2.2mm",
+                      textDecoration: "underline",
                     }}
                   >
-                    {content.name}
-                  </span>
-                  {content.queryText != null && (
-                    <span
-                      style={{
-                        fontSize: "2.2mm",
-                        fontStyle: "italic",
-                        lineHeight: 1.2,
-                        overflowWrap: "anywhere",
-                      }}
-                    >
-                      {content.queryText}
-                    </span>
-                  )}
-                  {/* E17/E18 - additive to the name/query-text label above (never replacing it):
-                      a slim indeterminate loading sweep while candidates/the image are still
-                      being fetched, or a muted "no art" mark + directed-help link once that's
-                      settled with nothing found. Screen-only, gated on loadState (undefined for
-                      every non-/display caller and any /display slot with no active query at
-                      all). */}
-                  {screenPresentation && content.loadState === "loading" && (
-                    <LoadingTrack data-testid="page-preview-slot-loading">
-                      <LoadingSweep />
-                    </LoadingTrack>
-                  )}
-                  {screenPresentation && content.loadState === "failed" && (
-                    <div
-                      data-testid="page-preview-slot-failed"
-                      style={{ pointerEvents: "auto" }}
-                    >
-                      <span style={{ fontSize: "2.4mm" }}>✗ no art</span>
-                      {content.findCardUrl != null && (
-                        <div>
-                          <a
-                            href={content.findCardUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            data-testid="page-preview-find-card-link"
-                            style={{
-                              color: "#df6919",
-                              fontSize: "2.2mm",
-                              textDecoration: "underline",
-                            }}
-                          >
-                            Find this card ↗
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-              {showCutLines &&
-                (screenPresentation ? (
-                  <div
-                    data-testid="page-preview-cut-line"
-                    style={{
-                      position: "absolute",
-                      left: bleedEdgeMM + "mm",
-                      top: bleedEdgeMM + "mm",
-                      width: CardWidthMM + "mm",
-                      height: CardHeightMM + "mm",
-                      pointerEvents: "none",
-                    }}
-                  >
-                    <CutCornerMark corner="tl" />
-                    <CutCornerMark corner="tr" />
-                    <CutCornerMark corner="bl" />
-                    <CutCornerMark corner="br" />
-                  </div>
-                ) : (
-                  <div
-                    data-testid="page-preview-cut-line"
-                    style={{
-                      position: "absolute",
-                      left: bleedEdgeMM + "mm",
-                      top: bleedEdgeMM + "mm",
-                      width: CardWidthMM + "mm",
-                      height: CardHeightMM + "mm",
-                      outline: "0.25mm dashed rgba(220, 30, 30, 0.75)",
-                      pointerEvents: "none",
-                    }}
-                  />
-                ))}
-              {content?.willGenerateBleed === true && (
-                <div
-                  data-testid="page-preview-bleed-badge"
-                  style={{
-                    position: "absolute",
-                    left: "1mm",
-                    top: "1mm",
-                    padding: "0.5mm 1.5mm",
-                    fontSize: "2.2mm",
-                    lineHeight: 1.2,
-                    color: "white",
-                    background: "rgba(0, 0, 0, 0.65)",
-                    borderRadius: "1mm",
-                    pointerEvents: "none",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  Bleed will be generated
+                    Find this card ↗
+                  </a>
                 </div>
               )}
             </div>
-          );
-        })}
-      </div>
+          )}
+        </div>
+      )}
+      {showCutLines &&
+        (screenPresentation ? (
+          <div
+            data-testid="page-preview-cut-line"
+            style={{
+              position: "absolute",
+              left: bleedEdgeMM + "mm",
+              top: bleedEdgeMM + "mm",
+              width: CardWidthMM + "mm",
+              height: CardHeightMM + "mm",
+              pointerEvents: "none",
+            }}
+          >
+            <CutCornerMark corner="tl" />
+            <CutCornerMark corner="tr" />
+            <CutCornerMark corner="bl" />
+            <CutCornerMark corner="br" />
+          </div>
+        ) : (
+          <div
+            data-testid="page-preview-cut-line"
+            style={{
+              position: "absolute",
+              left: bleedEdgeMM + "mm",
+              top: bleedEdgeMM + "mm",
+              width: CardWidthMM + "mm",
+              height: CardHeightMM + "mm",
+              outline: "0.25mm dashed rgba(220, 30, 30, 0.75)",
+              pointerEvents: "none",
+            }}
+          />
+        ))}
+      {content?.willGenerateBleed === true && (
+        <div
+          data-testid="page-preview-bleed-badge"
+          style={{
+            position: "absolute",
+            left: "1mm",
+            top: "1mm",
+            padding: "0.5mm 1.5mm",
+            fontSize: "2.2mm",
+            lineHeight: 1.2,
+            color: "white",
+            background: "rgba(0, 0, 0, 0.65)",
+            borderRadius: "1mm",
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Bleed will be generated
+        </div>
+      )}
+      {/* F6/D22 - the visible touch-discoverable menu cue, BOTTOM-RIGHT of the slot (its own
+          corner - top-left is the E8 selection checkbox, top-right is the E24 flip button,
+          neither of which exists on /display yet, but the corner is reserved per the ruling).
+          Hover/focus-reveal on desktop (a mouse user has right-click); persistent under
+          `(pointer: coarse)` (a touch-primary device, which has no hover state to reveal it via).
+          Only rendered at all when a context menu is actually wired up. */}
+      {onSlotContextMenu != null && (
+        <SlotMenuCue
+          type="button"
+          aria-label="Open card menu"
+          data-testid="page-preview-slot-menu-cue"
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            onSlotContextMenu(index, rect.left, rect.bottom);
+          }}
+        >
+          ⋯
+        </SlotMenuCue>
+      )}
     </div>
   );
 }
