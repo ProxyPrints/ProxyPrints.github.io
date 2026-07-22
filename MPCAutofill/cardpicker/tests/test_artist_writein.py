@@ -240,6 +240,32 @@ class TestPostSubmitArtistWriteInVote:
         assert votes.count() == 1
         assert votes.get().artist_id == artist_b.id
 
+    def test_conflicting_write_in_votes_land_as_contested_not_resolved(self, client, django_settings):
+        # default PRINTING_TAG_MIN_VOTES=2/MIN_SHARE=0.6: two distinct outcomes at weight 1 each
+        # clear the vote-count floor but neither reaches the 0.6 share needed to win, so this
+        # should land CONTESTED (junk/disagreement doesn't silently resolve) rather than
+        # RESOLVED - same standard gate every other artist vote goes through, unmodified.
+        card = CardFactory()
+        artist = CanonicalArtistFactory(name="Existing Artist")
+
+        client.post(
+            reverse(views.post_submit_artist_writein_vote),
+            {"identifier": card.identifier, "anonymousId": "anon-a", "artistId": artist.pk},
+            content_type="application/json",
+        )
+        response = client.post(
+            reverse(views.post_submit_artist_writein_vote),
+            {"identifier": card.identifier, "anonymousId": "anon-b", "freeText": "A Different Artist"},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["resolvedArtist"] is None
+        card.refresh_from_db()
+        assert card.artist_vote_status == ArtistVoteStatus.CONTESTED
+        assert card.inferred_canonical_artist is None
+
     def test_untrusted_origin_is_rejected(self, client, django_settings):
         card = CardFactory()
         artist = CanonicalArtistFactory()
