@@ -155,6 +155,26 @@ AI_ART_CONFIDENCE_MULTI_FIELD = 0.75
 # override if a bare "Firefly" is genuinely wanted. "Leonardo AI" (not bare "Leonardo", a common
 # human given name) was already disambiguated this same way in the owner's own list - this is the
 # same principle applied consistently to the one remaining ambiguous entry.
+#
+# EXPLICIT EXCLUSIONS (owner decision, 2026-07-22, same false-positive discipline as the Adobe-
+# Firefly/Leonardo-AI disambiguation above) - each of these was considered and deliberately left
+# OUT, recorded here so a future pass doesn't re-derive and re-add them:
+#   - bare "AI" / a trailing "-AI" suffix pattern: a real observed artist credit, 'Ai Desheng', is
+#     an ordinary human name ("Ai" is a Chinese surname) - the exact false positive this module has
+#     to guard hardest against. Every generator name below that happens to end in "AI" (Playground
+#     AI, Leonardo AI, LiblibAI, Wujie AI) is only ever matched via its FULL product name, never a
+#     bare "AI" token on its own.
+#   - bare "Niji" - only 4 normalized characters, too short/collision-prone once the fuzzy matcher
+#     (FUZZY_MIN_MARKER_LENGTH) is in play; covered instead via the longer, safer "Niji Journey".
+#   - bare "ERNIE" - a common human given name; covered instead via "ERNIE-ViLG".
+#   - bare "Flux" - a common English word; covered instead via "Flux.1".
+#   - bare "Sora" - a common human given name/artist pseudonym; omitted entirely for now (no safer
+#     multi-word form was given to disambiguate it, unlike Niji/ERNIE/Flux above).
+#   - "Tiamat" (the Chinese AI-art startup) - a mythological name with real collision potential in
+#     card-adjacent OCR text, where frame-crop bleed routinely puts non-artist text into these
+#     fields (the same failure mode the "mtgenbmidjourney" sample above already demonstrates);
+#     omitted entirely.
+#   - bare "Grok" - a common slang word; covered instead via "Grok Imagine".
 AI_GENERATOR_MARKERS: tuple[str, ...] = (
     "Midjourney",
     "DALL-E",
@@ -168,6 +188,34 @@ AI_GENERATOR_MARKERS: tuple[str, ...] = (
     "Bing Image Creator",
     "AI art",
     "AI generated",
+    # Observed directly in Stage C evidence (ImageEvidence.artist_ocr_name), 2026-07-22.
+    "ChatGPT",
+    "Playground AI",
+    "Niji Journey",
+    # Proactive roster (owner-requested coverage, not yet observed in evidence) - popular
+    # generators including major Chinese-market products. See the EXPLICIT EXCLUSIONS comment
+    # above for the bare/short/common-word forms deliberately left out of this roster.
+    "Doubao",
+    "Jimeng",
+    "Dreamina",
+    "Seedream",
+    "Kling",
+    "Kolors",
+    "Hunyuan",
+    "Tongyi Wanxiang",
+    "Wanxiang",
+    "ERNIE-ViLG",
+    "Wenxin Yige",
+    "Hailuo",
+    "CogView",
+    "LiblibAI",
+    "Meitu",
+    "Wujie AI",
+    "Qwen",
+    "Recraft",
+    "Ideogram",
+    "Grok Imagine",
+    "Flux.1",
 )
 
 
