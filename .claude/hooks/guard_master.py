@@ -13,6 +13,17 @@ Scope (owner decision 2026-07-19):
     checkout's interactive pushes to master stay untouched, per this
     repo's standing convention (see CLAUDE.md, Push policy).
 
+Both `current_branch(...) == "master"` checks above resolve branch state via
+`effective_dir()`, not the raw session cwd -- a session's registered cwd can
+differ from where a `cd <path> &&`-prefixed (or `git -C <path>`-scoped)
+command actually runs git, e.g. `cd /path/to/feature-worktree && git merge
+origin/master` from a session whose cwd is a master checkout. Judging that
+by session cwd alone misjudges the branch and wrongly denies legitimate
+feature-branch work (see the 2026-07-22 incident in
+docs/troubleshooting.md). `effective_dir()` fails closed: any resolution
+failure (no such redirect, or the target path doesn't exist) falls back to
+session cwd exactly as before the fix.
+
 This is a best-effort text/state heuristic, not a security boundary —
 GitHub branch protection is the backstop that survives a bug here.
 
@@ -77,6 +88,60 @@ def current_branch(cwd):
         return None
 
 
+_PATH_TOKEN = r'"[^"]*"|\'[^\']*\'|\S+'
+
+
+def effective_dir(command, session_cwd):
+    """Resolve the directory a git command actually runs in.
+
+    The hook's session cwd is a single value for the whole session, but a
+    command can redirect where git runs via a leading `cd <path> &&` or a
+    `git -C <path>` flag -- e.g. `cd /path/to/feature-worktree && git merge
+    origin/master` run from a session whose registered cwd is a different
+    (e.g. master) checkout. Judging branch state from the session cwd alone
+    misattributes that command to the wrong checkout.
+
+    `git -C <path>` takes precedence when present, since it overrides the
+    directory the git subcommand itself operates in regardless of any
+    preceding `cd`. Falls back to session_cwd whenever no such redirect is
+    found, or the redirect's path isn't a real directory on disk -- this
+    fail-closed default means a resolution failure never produces a result
+    more permissive than today's cwd-only behavior.
+
+    KNOWN GAP (2026-07-22, flagged not fixed -- see PR body): the `git -C`
+    match is an unanchored re.search over the whole command string, so in a
+    compound command with an earlier, unrelated `git -C <other-path> ...`
+    before the `git merge`/`git push` that actually triggered this rule
+    (e.g. `git -C /some/unrelated/repo status && git merge origin/master`),
+    that earlier path wins the resolution even though it has nothing to do
+    with the merge/push being judged. Unlike the `cd` branch below (anchored
+    to the start of the command via re.match, so it can only ever capture a
+    genuinely leading `cd`), this can make effective_dir() return the wrong
+    directory in the more dangerous direction: a real merge-into-master from
+    this session's actual branch could read as non-master and get wrongly
+    ALLOWED, not just wrongly denied. Left as-is because tightening the
+    regex to scope it to the specific triggering git invocation is a bigger
+    change than this fix's "minimal change, no broader process modification"
+    remit covers -- needs an explicit owner decision, not a unilateral fix.
+    """
+    m = re.search(r"git\s+-C\s+(" + _PATH_TOKEN + r")", command)
+    if m:
+        path = m.group(1).strip("'\"")
+        if os.path.isdir(path):
+            return path
+        return session_cwd
+
+    m = re.match(r"\s*cd\s+(" + _PATH_TOKEN + r")\s*&&", command)
+    if m:
+        path = m.group(1).strip("'\"")
+        if not os.path.isabs(path):
+            path = os.path.join(session_cwd, path)
+        if os.path.isdir(path):
+            return path
+
+    return session_cwd
+
+
 def targets_master(command):
     for tok in re.split(r"\s+", command.strip()):
         tok = tok.strip("'\"")
@@ -114,7 +179,7 @@ def main():
         # --ff-only is synchronization, not an authorization-bearing merge
         # decision: git itself refuses to run it unless the result is a pure
         # fast-forward, so there's no new, unreviewed content it can land.
-        if not re.search(r"--ff-only\b", command) and current_branch(cwd) == "master":
+        if not re.search(r"--ff-only\b", command) and current_branch(effective_dir(command, cwd)) == "master":
             log_stub("git-merge-into-master-unconditional", command, cwd)
             deny(
                 "[guard_master] `git merge` into master is owner-only, always. "
@@ -123,7 +188,7 @@ def main():
 
     if in_worker_worktree and re.search(r"(^|[;&|])\s*git\s+push(\s|$)", command):
         pushes_master = targets_master(command)
-        if not pushes_master and current_branch(cwd) == "master":
+        if not pushes_master and current_branch(effective_dir(command, cwd)) == "master":
             # bare `git push` / `git push <remote>` with no explicit ref relies
             # on the current branch's upstream -- being on master is enough.
             if re.search(r"(^|[;&|])\s*git\s+push(\s+\S+)?\s*($|[;&|])", command):

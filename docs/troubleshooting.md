@@ -1248,3 +1248,29 @@ confirmed the bound held after it — see
 `cardpicker/tests/test_run_image_evidence_cohort.py`'s
 `TestRunCohortFetchMemoryBound` for the same property turned into a
 permanent regression guard.
+
+## `guard_master.py` denies a `git merge`/`git push` you ran from inside a feature worktree
+
+**Symptom**: a command like `cd /path/to/feature-worktree && git merge origin/master` (resolving a feature branch's conflicts against master) gets
+denied with `[guard_master] git merge into master is owner-only, always`,
+even though the branch actually being merged into isn't master.
+
+**Cause**: `guard_master.py`'s `git merge`/`git push` rules judged branch
+state via `current_branch(cwd)`, where `cwd` is the session's registered
+working directory — not wherever the command's own `cd <path> &&` prefix
+(or a `git -C <path>` flag) actually pointed git at. A session whose
+registered cwd happens to be a master checkout gets every `cd <other-dir> && git merge ...` it runs judged against master, regardless of
+what's actually checked out at `<other-dir>`. Confirmed in production
+2026-07-22: this wrongly blocked legitimate feature-branch conflict
+resolution.
+
+**Fix** (2026-07-22): added `effective_dir(command, session_cwd)` — resolves
+the directory a `cd <path> &&`-prefixed or `git -C <path>`-scoped command
+actually runs git in, when that path exists on disk; falls back to
+`session_cwd` (today's behavior) otherwise, so a resolution failure never
+becomes more permissive than before. Used in both the `git merge` and `git push` worktree rules' `current_branch(...) == "master"` checks. Unchanged:
+the unconditional `gh pr merge` denial, the `--ff-only` exemption, all deny
+messages, `log_stub`'s behavior, and the push rule's `in_worker_worktree`
+gate (still computed from raw session cwd, since it identifies which
+_session_ is running, not which directory a given command targets). See
+`.claude/hooks/test_guard_master.py` for the regression cases.
