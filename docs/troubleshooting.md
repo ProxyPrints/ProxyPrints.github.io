@@ -1075,3 +1075,46 @@ Verified 2026-07-21 running `cardpicker/tests/test_local_ocr.py`,
 `test_golden_set.py`, `test_local_calculate_verdicts.py`, and
 `test_reparse_collector_evidence.py` together (370 passed) this way
 against the live prod containers with no observed impact.
+
+## A per-instance `viewBox` crop on an inlined SVG shows the _entire_ source art instead of just its own band
+
+**Symptom**: three separate `<svg viewBox="...">` elements, each meant to
+crop a different horizontal band out of the same inlined wordmark path
+data (`WhatsThatWords.tsx`, issue #305), all render the full, uncropped
+wordmark at slightly different sizes instead of their own distinct slice
+— confirmed via `getAttribute("viewBox")` in a live page that each
+element's `viewBox` attribute IS correct, and `overflow: hidden` is
+already set and computes correctly too, yet the bug persists.
+
+**Cause**: two independent CSS behaviors compound here, neither obviously
+connected to "SVG cropping" on its own:
+
+1. A root-level `<svg>` (i.e. one that isn't nested inside another `<svg>`
+   in the DOM) can still be affected by a Flexbox ancestor's default
+   `align-items: stretch` — if the flex container is `flex-direction: column`, `stretch` operates on the CROSS axis, which for a column flex
+   is WIDTH. A replaced element (SVG counts) with CSS `width: auto` is
+   exactly the trigger condition for `stretch` to override its own
+   intrinsic (`height` × viewBox-aspect-ratio-derived) width and force it
+   to the full container width instead.
+2. Once the SVG's rendered box is stretched far wider than its own
+   viewBox's aspect ratio, `preserveAspectRatio`'s default `xMidYMid meet`
+   recomputes its internal scale against that stretched box — and at a
+   large enough width/height mismatch, more of the underlying artwork
+   becomes visible within the (correctly, `overflow: hidden`-clipped) box
+   than the viewBox rectangle alone would suggest, because the box itself
+   grew, not because the crop stopped applying. `overflow: hidden` and a
+   correct `viewBox` attribute are both real and both necessary, but
+   neither one controls the SVG's own rendered box size — that's ordinary
+   CSS layout, upstream of either.
+
+**Fix**: stop the stretch at the source — add `align-items: flex-start`
+(or `center`, matching whatever horizontal alignment is wanted) to the
+flex-column parent, so each SVG child keeps its own intrinsic,
+height-derived width instead of being forced to the container's full
+width. Diagnosed by isolating the exact repro in a minimal throwaway HTML
+page (one flex-column parent, three stacked SVGs, no React/Next in the
+loop at all) rather than debugging inside the full app — confirmed the
+same three-line reproduction failed identically, and that removing only
+the flex-column wrapper (testing the single SVG alone) fixed it, which is
+what pointed at the flex cross-axis stretch specifically rather than the
+SVG/viewBox mechanics themselves.

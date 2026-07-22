@@ -160,10 +160,14 @@ test.describe("question feed - mobile layout", () => {
     expect(cardBox!.y).toBeLessThan(candidateBox!.y);
   });
 
-  test("at desktop width, candidates still render to the left of the card (unaffected by the mobile reorder)", async ({
+  test("at desktop width, the card renders to the left of the candidates (quiz-reveal hero axis flip, issue #305)", async ({
     page,
     network,
   }) => {
+    // wtc-redesign-spec.md's W1 "axis flip" - the subject card + starburst are now the left
+    // hero column and every question surface (including this candidate grid) renders to the
+    // right of it, reversing the pre-#305 candidates-left/card-right layout this test used to
+    // assert.
     network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
     // default chromium project viewport (800x600) is already >= the md breakpoint
     await loadPageWithDefaultBackend(page, "whatsthat");
@@ -179,7 +183,31 @@ test.describe("question feed - mobile layout", () => {
     const candidateBox = await suggestedCandidate.boundingBox();
     expect(cardBox).not.toBeNull();
     expect(candidateBox).not.toBeNull();
-    expect(candidateBox!.x).toBeLessThan(cardBox!.x);
+    expect(cardBox!.x).toBeLessThan(candidateBox!.x);
+  });
+
+  test("at desktop width, the hero card stays fully visible while the questions column scrolls independently (owner pinning addendum)", async ({
+    page,
+    network,
+  }) => {
+    // The card's own grid cell never scrolls (see HeroQuestionsArea/HeroCardArea in
+    // QuestionFeed.tsx) - scrolling the questions column's own scrollbar must not move the
+    // card at all, not even by a few px.
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const cardImage = page.getByAltText(cardDocument1.name);
+    await expect(cardImage).toBeVisible();
+    const boxBeforeScroll = await cardImage.boundingBox();
+    expect(boxBeforeScroll).not.toBeNull();
+
+    await page.getByTestId("question-feed-questions-area").evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+
+    const boxAfterScroll = await cardImage.boundingBox();
+    expect(boxAfterScroll).not.toBeNull();
+    expect(boxAfterScroll).toEqual(boxBeforeScroll);
   });
 });
 

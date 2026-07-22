@@ -24,9 +24,11 @@ test.describe("/whatsthat PWA installability", () => {
       "href",
       "/whatsthat-manifest.json"
     );
+    // #123a6b is HERO_FIELD_BLUE_DEEP (whatsthat.tsx) - the quiz-reveal hero's blue field
+    // (issue #305/W6), which retired the page's old #ff4719 orange full-bleed.
     await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute(
       "content",
-      "#ff4719"
+      "#123a6b"
     );
     await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute(
       "href",

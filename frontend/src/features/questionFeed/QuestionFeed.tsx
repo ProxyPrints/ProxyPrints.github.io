@@ -44,6 +44,7 @@ import Row from "react-bootstrap/Row";
 
 import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getPrintingCandidateDataAttributes } from "@/common/cardDom";
+import { NavbarHeight } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import {
   PrintingCandidate,
@@ -75,13 +76,13 @@ import {
   CandidateButton,
   CARD_ASPECT_RATIO,
   CardPanel,
+  CardPulseWrapper,
   HoverBurst,
   randomFlavorText,
   RevealOverlay,
   RevealWrapper,
   StaticCardPanel,
   useStarburstFrame,
-  useStickyTop,
   ZoomableThumbnail,
 } from "@/features/printingTags/cardPanel";
 import {
@@ -91,6 +92,7 @@ import {
   STARBURST_OUTER_FRAMES,
   STARBURST_VIEWBOX,
 } from "@/features/printingTags/starburstShape";
+import { WhatsThatWords } from "@/features/questionFeed/WhatsThatWords";
 import {
   APIGetQuestionFeed,
   APISubmitPrintingTag,
@@ -138,6 +140,118 @@ const FilterToggleButton = styled(Button)`
 // label, wrapping naturally in the row.
 const ThumbChip = styled(Button)`
   min-height: 44px;
+`;
+
+// ---------------------------------------------------------------------------------------
+// Quiz-reveal hero (issue #305, wtc-redesign-spec.md) - one grid-area map for both
+// breakpoints (spec W2): "card words" / "card questions" at >= md (the card spans both rows
+// on the left; words sit over the questions on the right), collapsing to a single "words" /
+// "card" / "questions" stack top-to-bottom below md. The card is reachable near the top of a
+// a phone screen, not buried below every question surface - the layout bug the design round's
+// own first pass caught and fixed (see wtc-redesign-spec.md §8).
+//
+// Owner addendum to the approved design: the reference card must stay fully visible while
+// the user works through the questions, not scroll away with them. At >= md the whole hero
+// is bounded to one viewport-height row (leaving the page's own outer scroll - see
+// ContentContainer in Layout.tsx - with nothing to do while answering) and only
+// HeroQuestionsArea below scrolls internally; the card's own grid cell never scrolls, so
+// there's no sticky/negative-z-index mechanism left to run (see CardPanel's own comment in
+// cardPanel.tsx for what this replaces). Below md, a bounded-height scroll box reads as an
+// awkward locked cage on a small screen instead - HeroCardArea's own mobile override (below)
+// takes the "keep the card comparable while scrolling" intent in a phone-shaped direction:
+// a condensed sticky bar, not this bounded-box mechanism.
+// ---------------------------------------------------------------------------------------
+
+const HERO_MAX_HEIGHT = `calc(100dvh - ${NavbarHeight}px - 2rem)`;
+
+const HeroGrid = styled.div`
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: 1fr;
+  grid-template-areas: "words" "card" "questions";
+
+  @media (min-width: 768px) {
+    gap: 1.5rem 2.5rem;
+    grid-template-columns: minmax(0, 42%) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "card words" "card questions";
+    max-height: ${HERO_MAX_HEIGHT};
+  }
+`;
+
+const HeroCardArea = styled.div`
+  grid-area: card;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+
+  // Phone interpretation of the pinning intent (owner addendum) - a bounded, internally-
+  // scrolling box like the desktop treatment below reads as a cramped cage at ~390px, so
+  // instead the card's own grid cell becomes a compact sticky bar: it shrinks (via max-width,
+  // not a separate rendering - same cardNode markup as desktop) and pins to the top of the
+  // viewport while the questions area scrolls underneath it, keeping the art comparable
+  // without reserving a fixed chunk of a small screen for it. A solid background (matching
+  // the hero field's own darkest stop) stops whatever scrolls underneath from showing through
+  // the gap around the shrunk card.
+  @media (max-width: 767.98px) {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    max-width: 7.5rem;
+    margin: 0 auto;
+    padding: 0.5rem 0;
+    background: #0f2537;
+  }
+
+  @media (min-width: 768px) {
+    height: 100%;
+    min-height: 0;
+  }
+`;
+
+const HeroWordsArea = styled.div`
+  grid-area: words;
+
+  @media (min-width: 768px) {
+    align-self: end;
+  }
+`;
+
+// Subtle themed scrollbar (owner addendum) - not the browser's default chrome, but not
+// hidden either: a hidden scrollbar on a genuinely-scrollable region is its own usability
+// trap, since "scrolling locks to the box" should still visibly look scrollable.
+const HeroQuestionsArea = styled.div`
+  grid-area: questions;
+  min-width: 0;
+
+  @media (min-width: 768px) {
+    overflow-y: auto;
+    min-height: 0;
+    padding-right: 0.75rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+
+    &::-webkit-scrollbar {
+      width: 8px;
+    }
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    &::-webkit-scrollbar-thumb {
+      background-color: rgba(255, 255, 255, 0.25);
+      border-radius: 4px;
+    }
+  }
+`;
+
+// Artist/tag question types never had a starburst-backed CardPanel (their card is a plain
+// reference image, not the silhouette-reveal "mystery card" the candidate-type items use) -
+// wtc-redesign-spec.md's "reposition, don't redesign" instruction keeps that unchanged, just
+// relocated into the shared hero card slot. This wrapper only supplies the same width/
+// centering contract CardPanel/StaticCardPanel give their own callers.
+const PlainHeroCard = styled.div`
+  width: 100%;
 `;
 
 // Frontend and backend deploy independently (GitHub Pages vs. a separate Django API) - there's
@@ -229,11 +343,6 @@ export function QuestionFeed() {
   const [level3ChipStates, setLevel3ChipStates] = useState<
     Record<string, ChipVoteState>
   >({});
-
-  const { ref: cardPanelRef, top: stickyTop } = useStickyTop([
-    item?.card.identifier,
-    item?.type,
-  ]);
 
   const fetchNext = () => setFetchToken((previous) => previous + 1);
 
@@ -551,10 +660,13 @@ export function QuestionFeed() {
   // sibling. Both size themselves against whichever positioned ancestor contains them -
   // AttributeChipPanel's CardArea when the filter panel is expanded, CardPanel directly
   // otherwise - so the burst centers on and scales with the card's own rendered width
-  // specifically, not a wider ring around it.
+  // specifically, not a wider ring around it. `$hero` (cardPanel.tsx) enlarges the burst to
+  // dominate the hero's left column (wtc-redesign-spec.md §7/owner addendum) - every
+  // candidate-type stage shares this one hero card, so the enlargement is unconditional here
+  // rather than special-cased per level.
   const cardImage = (
     <>
-      <BurstSvg viewBox={STARBURST_VIEWBOX}>
+      <BurstSvg $hero viewBox={STARBURST_VIEWBOX}>
         <polygon
           points={STARBURST_OUTER_FRAMES[starburstFrame]}
           fill={STARBURST_OUTER_COLOR}
@@ -583,27 +695,21 @@ export function QuestionFeed() {
     </>
   );
 
-  // Plain sticky panel, no chip ring - Level 2's default while its filter disclosure is
+  // Plain card panel, no chip ring - Level 2's default while its filter disclosure is
   // collapsed (i.e. the common case). Real device evidence (the funnel proposal's evidence
   // section) found the always-on chip ring wedging the thumbnail between two flanking chip
   // columns and burying the card beneath a full screen of chips before it was even visible -
   // this is what that fix looks like at the call site. Level 1 uses level1CardPanel below
   // instead, not this - see StaticCardPanel's comment in cardPanel.tsx for why.
   const plainCardPanel = (
-    <CardPanel
-      ref={cardPanelRef}
-      style={stickyTop != null ? { top: stickyTop } : undefined}
-      data-testid="question-feed-card-panel"
-    >
-      {cardImage}
-    </CardPanel>
+    <CardPanel data-testid="question-feed-card-panel">{cardImage}</CardPanel>
   );
 
   // Level 1 only - see StaticCardPanel's own comment (cardPanel.tsx) for why this compact
-  // single-card screen deliberately doesn't reuse the sticky plainCardPanel above. Carries its
-  // own test id (distinct from the card <img> itself) so a layout regression test can assert
-  // against the card's full box - art plus name caption - not just the image, since the
-  // real-device bug this guards against overlapped the caption too, not only the artwork.
+  // single-card screen deliberately doesn't reuse plainCardPanel above. Carries its own test
+  // id (distinct from the card <img> itself) so a layout regression test can assert against
+  // the card's full box - art plus name caption - not just the image, since the real-device
+  // bug this guards against overlapped the caption too, not only the artwork.
   const level1CardPanel = (
     <StaticCardPanel data-testid="question-feed-level1-card-panel">
       {cardImage}
@@ -613,11 +719,7 @@ export function QuestionFeed() {
   // The chip-ring version, only mounted when Level 2's "Filter by attribute" disclosure is
   // open - same AttributeChipPanel as before, just no longer unconditional chrome.
   const filterCardPanel = (
-    <CardPanel
-      ref={cardPanelRef}
-      style={stickyTop != null ? { top: stickyTop } : undefined}
-      data-testid="question-feed-card-panel"
-    >
+    <CardPanel data-testid="question-feed-card-panel">
       <AttributeChipPanel
         backendURL={backendURL}
         cardIdentifier={item.card.identifier}
@@ -630,520 +732,493 @@ export function QuestionFeed() {
     </CardPanel>
   );
 
-  return (
-    <div data-testid="question-feed">
-      {counts != null && (
-        <>
-          {/* Headline leads with quick confirmations (tier 1 - an unresolved machine-suggested
-              printing awaiting a one-tap human yes/no) since that's the easiest, fastest-to-
-              clear category - falls back to the overall total once there's nothing quick left,
-              rather than always showing the same undifferentiated "cards remaining" copy. */}
-          <p className="text-primary" data-testid="question-feed-headline">
-            {counts.confirmable > 0
-              ? `${counts.confirmable} quick confirmation${
-                  counts.confirmable !== 1 ? "s" : ""
-                } ready`
-              : `Still need help with: ${counts.total} card${
-                  counts.total !== 1 ? "s" : ""
-                }`}
-          </p>
-          <p className="text-muted small" data-testid="question-feed-subcounts">
-            {counts.total} in catalog &middot; {counts.contested} contested
-          </p>
-        </>
-      )}
-      {flavorText != null && (
-        <p className="text-muted" data-testid="question-feed-flavor-text">
-          {flavorText}
-        </p>
-      )}
-      {rateLimited && (
-        // Persistent (not a self-dismissing toast) and dismissible - a rate-limit pause is an
-        // expected, honest condition in a one-tap funnel, not a failure, so it gets its own
-        // calm inline notice instead of competing with the transient error/success toast
-        // stream. The backend's 429 response doesn't include a retry-after value, so this
-        // deliberately doesn't promise a specific wait time - Skip and browsing the current
-        // item both still work while this is shown; only vote submission is affected.
-        <Alert
-          variant="warning"
-          dismissible
-          onClose={() => setRateLimited(false)}
-          data-testid="question-feed-rate-limited"
-        >
-          You&apos;re on fire &mdash; take a short breather before voting again.
-        </Alert>
-      )}
-      <div data-testid="question-feed-current-item">
-        <Row className="g-4">
-          {isCandidateType ? (
-            stage === "level1" && item.suggestedPrinting != null ? (
-              <Col xs={12} data-testid="question-feed-level1">
-                <div className="mx-auto" style={{ maxWidth: 320 }}>
-                  {level1CardPanel}
-                  {!revealed ? (
-                    <div className="text-center py-4">
-                      <Spinner size={2} />
-                    </div>
-                  ) : (
-                    <>
-                      <div className="text-center">
-                        <Badge
-                          bg="info"
-                          data-testid="question-feed-tier-badge"
-                          className="my-2"
-                        >
-                          Suggested match
-                        </Badge>
-                        {/* The Scryfall reference render for the suggested printing - dropped
-                            when Level 1 was introduced (a regression, not an intentional
-                            text-only design; every other stage still shows one per candidate).
-                            Restored using the exact same mechanism Level 2's grid already uses
-                            correctly: mediumThumbnailUrl straight into a plain <img>, no new URL
-                            construction. */}
-                        <div
-                          className="mx-auto mb-2"
-                          style={{ maxWidth: 160 }}
-                          data-testid="question-feed-level1-reference-image"
-                        >
-                          <ArtPlaceholder>
-                            <ZoomableThumbnail>
-                              <img
-                                src={item.suggestedPrinting.mediumThumbnailUrl}
-                                alt={`${item.suggestedPrinting.expansionCode} ${item.suggestedPrinting.collectorNumber}`}
-                              />
-                            </ZoomableThumbnail>
-                          </ArtPlaceholder>
-                        </div>
-                        <p data-testid="question-feed-suggestion-prompt">
-                          Is it this one?{" "}
-                          <SetIcon
-                            expansionCode={item.suggestedPrinting.expansionCode}
-                          />{" "}
-                          {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                          {item.suggestedPrinting.collectorNumber}
-                        </p>
-                      </div>
-                      <div className="d-flex flex-column gap-2">
-                        <ThumbButton
-                          variant="success"
-                          disabled={submitting}
-                          onClick={() =>
-                            item.suggestedPrinting != null &&
-                            selectCandidate(item.suggestedPrinting, false)
-                          }
-                          data-testid="question-feed-level1-yes"
-                        >
-                          {submitting ? <Spinner size={1} /> : "Yes, that's it"}
-                        </ThumbButton>
-                        <ThumbButton
-                          variant="outline-secondary"
-                          disabled={submitting}
-                          onClick={() => setStage("level2")}
-                          data-testid="question-feed-level1-not-sure"
-                        >
-                          Not sure
-                        </ThumbButton>
-                        <ThumbButton
-                          variant="outline-danger"
-                          disabled={submitting}
-                          onClick={rejectSuggestion}
-                          data-testid="question-feed-level1-no"
-                        >
-                          No
-                        </ThumbButton>
-                        <ThumbButton
-                          variant="link"
-                          disabled={submitting}
-                          onClick={skip}
-                          data-testid="question-feed-level1-skip"
-                        >
-                          Skip
-                        </ThumbButton>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </Col>
-            ) : stage === "level3" ? (
-              <Col
-                xs={12}
-                md={7}
-                className="mx-auto"
-                data-testid="question-feed-level3"
-              >
-                <div className="d-flex align-items-center gap-2 mb-2">
-                  <img
-                    src={item.card.mediumThumbnailUrl}
-                    alt={item.card.name}
-                    style={{ width: 48, aspectRatio: CARD_ASPECT_RATIO }}
-                  />
-                  <div>{item.card.name}</div>
-                </div>
-                <p className="text-muted small">
-                  Anything else you can tell us about this printing?
-                </p>
-                {EXCLUSION_GROUPS.filter((group) =>
-                  group.chips.some((chip) => chip.tagName in level3ChipStates)
-                ).map((group) => (
-                  <div key={group.id} className="mb-3">
-                    <div className="text-muted small mb-1">{group.label}</div>
-                    <div className="d-flex flex-wrap gap-2">
-                      {group.chips.map((chip) => {
-                        const state =
-                          level3ChipStates[chip.tagName] ?? "untouched";
-                        return (
-                          <ThumbChip
-                            key={chip.tagName}
-                            variant={
-                              state === "positive"
-                                ? "primary"
-                                : "outline-secondary"
-                            }
-                            onClick={() => tapLevel3Chip(group, chip.tagName)}
-                            data-testid={`question-feed-level3-chip-${chip.tagName}`}
-                          >
-                            {chip.label}
-                          </ThumbChip>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-                <div className="mt-3 d-flex flex-column flex-sm-row gap-2">
-                  <ThumbButton
-                    variant="primary"
-                    disabled={submitting}
-                    onClick={confirmLevel3}
-                    data-testid="question-feed-level3-confirm"
-                    className="flex-fill"
-                  >
-                    Confirm &amp; continue
-                  </ThumbButton>
-                  <ThumbButton
-                    variant="outline-secondary"
-                    disabled={submitting}
-                    onClick={() => advance()}
-                    data-testid="question-feed-level3-skip"
-                    className="flex-fill"
-                  >
-                    Skip this question
-                  </ThumbButton>
-                </div>
-              </Col>
-            ) : (
-              <>
-                {/* Level 2. order-2/order-md-1 (here) + order-1/order-md-2 (the card panel
-                    column below) put the card being asked about first on mobile, where the
-                    two columns stack - previously the candidate grid rendered above the card
-                    itself, so a mobile voter had to scroll past every answer option before
-                    seeing what they were even answering about. Desktop's side-by-side order
-                    (candidates left, card right) is unaffected. */}
-                <Col xs={12} md={5} className="order-2 order-md-1">
-                  {!revealed ? (
-                    <div className="text-center py-4">
-                      <Spinner size={2} />
-                    </div>
-                  ) : (
-                    <>
-                      <Badge
-                        bg={
-                          item.type === "confirm_suggestion"
-                            ? "info"
-                            : "secondary"
-                        }
-                        data-testid="question-feed-tier-badge"
-                        className="mb-2"
-                      >
-                        {item.type === "confirm_suggestion"
-                          ? "Suggested match"
-                          : "Needs identification"}
-                      </Badge>
-                      {item.type === "confirm_suggestion" &&
-                        item.suggestedPrinting != null &&
-                        (suggestionRejectedWithNoneLeft ? (
-                          <>
-                            {/* Singleton-rejection case (task: eliminate double-asking) - the
-                                suggested printing was the ONLY candidate, so there's nothing
-                                left to pick from a grid. Skips straight to the classified-exit
-                                choice below, with the rejected candidate kept as grayed,
-                                non-interactive context (never a button) rather than vanishing
-                                without explanation. */}
-                            <p data-testid="question-feed-suggestion-prompt">
-                              Got it - not that one. Is it any official printing
-                              at all?
-                            </p>
-                            <div
-                              className="d-flex align-items-center gap-2 mb-3 opacity-50"
-                              data-testid="question-feed-rejected-context"
-                            >
-                              <div style={{ width: 40, flexShrink: 0 }}>
-                                <img
-                                  src={
-                                    item.suggestedPrinting.mediumThumbnailUrl
-                                  }
-                                  alt=""
-                                  style={{ width: "100%" }}
-                                />
-                              </div>
-                              <div className="text-muted small">
-                                You said: not{" "}
-                                <SetIcon
-                                  expansionCode={
-                                    item.suggestedPrinting.expansionCode
-                                  }
-                                />{" "}
-                                {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                                {item.suggestedPrinting.collectorNumber}
-                              </div>
-                            </div>
-                          </>
-                        ) : (
-                          <p data-testid="question-feed-suggestion-prompt">
-                            Which of these is it?{" "}
-                            <SetIcon
-                              expansionCode={
-                                item.suggestedPrinting.expansionCode
-                              }
-                            />{" "}
-                            {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                            {item.suggestedPrinting.collectorNumber} was
-                            suggested
-                          </p>
-                        ))}
-                      {!suggestionRejectedWithNoneLeft && (
-                        <div className="mb-2">
-                          <FilterToggleButton
-                            variant="link"
-                            onClick={() =>
-                              setFilterExpanded((previous) => !previous)
-                            }
-                            data-testid="question-feed-filter-toggle"
-                          >
-                            {filterExpanded
-                              ? "Hide filters"
-                              : "Filter by attribute"}
-                          </FilterToggleButton>
-                        </div>
-                      )}
-                      {hiddenCount > 0 && (
-                        <p
-                          className="text-muted small"
-                          data-testid="question-feed-hidden-count"
-                        >
-                          {hiddenCount} hidden by your tags -{" "}
-                          <a
-                            href="#"
-                            data-testid="question-feed-clear-filters"
-                            onClick={(event) => {
-                              event.preventDefault();
-                              setChipStates(initialChipStates());
-                            }}
-                          >
-                            clear
-                          </a>
-                        </p>
-                      )}
-                      <Row className="g-2" xs={3} md={4}>
-                        {visibleCandidates.map((candidate) => (
-                          <Col key={candidate.identifier}>
-                            <CandidateButton
-                              variant="outline-secondary"
-                              className={`w-100 p-1 border-0${
-                                item.type === "confirm_suggestion" &&
-                                item.suggestedPrinting?.identifier ===
-                                  candidate.identifier
-                                  ? " highlighted"
-                                  : ""
-                              }`}
-                              disabled={submitting}
-                              onClick={() => selectCandidate(candidate, false)}
-                              {...getPrintingCandidateDataAttributes(
-                                item.card.name,
-                                candidate
-                              )}
-                            >
-                              <HoverBurst
-                                className="hover-burst"
-                                viewBox={STARBURST_VIEWBOX}
-                              >
-                                <polygon
-                                  points={
-                                    STARBURST_OUTER_FRAMES[starburstFrame]
-                                  }
-                                  fill={STARBURST_OUTER_COLOR}
-                                />
-                                <polygon
-                                  points={
-                                    STARBURST_INNER_FRAMES[starburstFrame]
-                                  }
-                                  fill={STARBURST_INNER_COLOR}
-                                />
-                              </HoverBurst>
-                              <ArtPlaceholder>
-                                <ZoomableThumbnail>
-                                  <img
-                                    src={candidate.mediumThumbnailUrl}
-                                    alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
-                                  />
-                                </ZoomableThumbnail>
-                                {/* Tied to this specific candidate's identifier, not just
-                                    `submitting` - the old dimmed-all-buttons treatment gave no
-                                    way to tell which of several candidates you actually tapped
-                                    under any real latency. */}
-                                {submitting &&
-                                  selectedCandidateId ===
-                                    candidate.identifier && (
-                                    <div
-                                      data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
-                                    >
-                                      <Spinner
-                                        size={1.5}
-                                        zIndex={2}
-                                        positionAbsolute
-                                      />
-                                    </div>
-                                  )}
-                              </ArtPlaceholder>
-                              <div>
-                                <SetIcon
-                                  expansionCode={candidate.expansionCode}
-                                />{" "}
-                                {candidate.expansionCode.toUpperCase()}{" "}
-                                {candidate.collectorNumber}
-                              </div>
-                              <div className="text-muted small">
-                                {candidate.artist}
-                              </div>
-                            </CandidateButton>
-                          </Col>
-                        ))}
-                      </Row>
-                      {followUp === "no-match-reason" && (
-                        <div className="mt-3">
-                          <hr />
-                          <NoMatchReasonStrip
-                            backendURL={backendURL}
-                            cardIdentifier={item.card.identifier}
-                            onDone={advance}
-                            onRateLimited={() => setRateLimited(true)}
-                          />
-                        </div>
-                      )}
-                      {followUp === "none" && (
-                        <div className="mt-3 d-flex flex-column gap-2">
-                          <ThumbButton
-                            variant="outline-secondary"
-                            disabled={submitting}
-                            onClick={() => selectCandidate(undefined, true)}
-                            data-testid="question-feed-no-match"
-                          >
-                            {submitting &&
-                            selectedCandidateId === "no-match" ? (
-                              <Spinner size={1} />
-                            ) : (
-                              "None of these"
-                            )}
-                          </ThumbButton>
-                          <ThumbButton
-                            variant="outline-secondary"
-                            disabled={submitting}
-                            onClick={classifyAsCustomArt}
-                            data-testid="question-feed-custom-art"
-                          >
-                            {submitting &&
-                            selectedCandidateId === "custom-art" ? (
-                              <Spinner size={1} />
-                            ) : (
-                              "\u{1F3A8} Art matches, not an official printing"
-                            )}
-                          </ThumbButton>
-                          <ThumbButton
-                            variant="outline-secondary"
-                            disabled={submitting}
-                            onClick={skip}
-                            data-testid="question-feed-skip"
-                          >
-                            Skip
-                          </ThumbButton>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </Col>
-                {/* position + a non-auto z-index together give this column its own local
-                    stacking context, containing CardPanel's z-index: -1 (see cardPanel.tsx) so
-                    it can't escape and render the whole panel - chips included - unclickable
-                    behind this sibling column at the hit-testing layer. position: relative
-                    alone does NOT establish a stacking context - see
-                    docs/features/printing-tags.md's Stage 7 section for the full story.
-                    order-1/order-md-2 (see the candidates column above for the full
-                    rationale) - unrelated to the stacking-context fix above, just reusing the
-                    same style prop's neighbouring className. */}
-                <Col
-                  xs={12}
-                  md={7}
-                  className="order-1 order-md-2"
-                  style={{ position: "relative", zIndex: 0 }}
-                >
-                  {filterExpanded ? filterCardPanel : plainCardPanel}
-                </Col>
-              </>
-            )
+  // The hero grid (below) has exactly one card slot and one questions slot per stage/type -
+  // wtc-redesign-spec.md's axis flip (W1) plus the owner's "one persistent hero card, only the
+  // questions swap on the right" reading of the mockup's stage-switcher demo. Each branch below
+  // sets both variables instead of returning its own two-column JSX, so every stage shares the
+  // exact same HeroGrid/HeroCardArea/HeroWordsArea/HeroQuestionsArea composition (rendered once,
+  // after this if-chain) rather than re-implementing the split per stage.
+  let cardNode: React.ReactNode;
+  let questionsNode: React.ReactNode;
+
+  if (isCandidateType) {
+    if (stage === "level1" && item.suggestedPrinting != null) {
+      cardNode = level1CardPanel;
+      questionsNode = (
+        <div data-testid="question-feed-level1">
+          {!revealed ? (
+            <div className="text-center py-4">
+              <Spinner size={2} />
+            </div>
           ) : (
             <>
-              <Col xs={12} md={7}>
-                {item.type === "artist" && (
-                  <>
-                    <h6>Who&apos;s the artist?</h6>
-                    <ArtistVotePicker
-                      backendURL={backendURL}
-                      cardIdentifier={item.card.identifier}
-                      confidentlyKnownArtistName={
-                        item.confidentlyKnownArtistName
-                      }
-                      onRateLimited={() => setRateLimited(true)}
-                      voteSurface="question-feed"
-                      onArtistConfirmed={setConfirmedArtistName}
-                    />
-                    {confirmedArtistName != null && (
-                      <div
-                        className="mt-2 text-muted small"
-                        data-testid="question-feed-artist-support"
-                      >
-                        <ArtistSupportLink artistName={confirmedArtistName}>
-                          Art by {confirmedArtistName} - support them
-                        </ArtistSupportLink>
-                      </div>
-                    )}
-                    <div className="mt-3">
-                      <ThumbButton variant="outline-secondary" onClick={skip}>
-                        Skip
-                      </ThumbButton>
-                    </div>
-                  </>
-                )}
-                {item.type === "tag" && item.tagName != null && (
-                  <QueueTagQuestion
-                    backendURL={backendURL}
-                    cardIdentifier={item.card.identifier}
-                    tagName={item.tagName}
-                    onAnswered={advance}
-                    onRateLimited={() => setRateLimited(true)}
-                  />
-                )}
-              </Col>
-              <Col xs={12} md={5}>
-                <img
-                  src={item.card.mediumThumbnailUrl}
-                  alt={item.card.name}
-                  style={{ width: "100%" }}
-                />
-                <div className="text-center mt-1">{item.card.name}</div>
-              </Col>
+              <div className="text-center">
+                <Badge
+                  bg="info"
+                  data-testid="question-feed-tier-badge"
+                  className="my-2"
+                >
+                  Suggested match
+                </Badge>
+                {/* The Scryfall reference render for the suggested printing - dropped when
+                    Level 1 was introduced (a regression, not an intentional text-only design;
+                    every other stage still shows one per candidate). Restored using the exact
+                    same mechanism Level 2's grid already uses correctly: mediumThumbnailUrl
+                    straight into a plain <img>, no new URL construction. */}
+                <div
+                  className="mx-auto mb-2"
+                  style={{ maxWidth: 160 }}
+                  data-testid="question-feed-level1-reference-image"
+                >
+                  <ArtPlaceholder>
+                    <ZoomableThumbnail>
+                      <img
+                        src={item.suggestedPrinting.mediumThumbnailUrl}
+                        alt={`${item.suggestedPrinting.expansionCode} ${item.suggestedPrinting.collectorNumber}`}
+                      />
+                    </ZoomableThumbnail>
+                  </ArtPlaceholder>
+                </div>
+                <p data-testid="question-feed-suggestion-prompt">
+                  Is it this one?{" "}
+                  <SetIcon
+                    expansionCode={item.suggestedPrinting.expansionCode}
+                  />{" "}
+                  {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                  {item.suggestedPrinting.collectorNumber}
+                </p>
+              </div>
+              <div className="d-flex flex-column gap-2">
+                <ThumbButton
+                  variant="success"
+                  disabled={submitting}
+                  onClick={() =>
+                    item.suggestedPrinting != null &&
+                    selectCandidate(item.suggestedPrinting, false)
+                  }
+                  data-testid="question-feed-level1-yes"
+                >
+                  {submitting ? <Spinner size={1} /> : "Yes, that's it"}
+                </ThumbButton>
+                <ThumbButton
+                  variant="outline-secondary"
+                  disabled={submitting}
+                  onClick={() => setStage("level2")}
+                  data-testid="question-feed-level1-not-sure"
+                >
+                  Not sure
+                </ThumbButton>
+                <ThumbButton
+                  variant="outline-danger"
+                  disabled={submitting}
+                  onClick={rejectSuggestion}
+                  data-testid="question-feed-level1-no"
+                >
+                  No
+                </ThumbButton>
+                <ThumbButton
+                  variant="link"
+                  disabled={submitting}
+                  onClick={skip}
+                  data-testid="question-feed-level1-skip"
+                >
+                  Skip
+                </ThumbButton>
+              </div>
             </>
           )}
-        </Row>
-      </div>
+        </div>
+      );
+    } else if (stage === "level3") {
+      // Reuses the shared hero card (cardNode) instead of Level 3's old inline 48px
+      // thumbnail+name row - the redesign gives every stage one persistent hero card, so a
+      // second, smaller rendering of the same art here would be redundant, not additive.
+      cardNode = plainCardPanel;
+      questionsNode = (
+        <div data-testid="question-feed-level3">
+          <p className="text-muted small">
+            Anything else you can tell us about this printing?
+          </p>
+          {EXCLUSION_GROUPS.filter((group) =>
+            group.chips.some((chip) => chip.tagName in level3ChipStates)
+          ).map((group) => (
+            <div key={group.id} className="mb-3">
+              <div className="text-muted small mb-1">{group.label}</div>
+              <div className="d-flex flex-wrap gap-2">
+                {group.chips.map((chip) => {
+                  const state = level3ChipStates[chip.tagName] ?? "untouched";
+                  return (
+                    <ThumbChip
+                      key={chip.tagName}
+                      variant={
+                        state === "positive" ? "primary" : "outline-secondary"
+                      }
+                      onClick={() => tapLevel3Chip(group, chip.tagName)}
+                      data-testid={`question-feed-level3-chip-${chip.tagName}`}
+                    >
+                      {chip.label}
+                    </ThumbChip>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          <div className="mt-3 d-flex flex-column flex-sm-row gap-2">
+            <ThumbButton
+              variant="primary"
+              disabled={submitting}
+              onClick={confirmLevel3}
+              data-testid="question-feed-level3-confirm"
+              className="flex-fill"
+            >
+              Confirm &amp; continue
+            </ThumbButton>
+            <ThumbButton
+              variant="outline-secondary"
+              disabled={submitting}
+              onClick={() => advance()}
+              data-testid="question-feed-level3-skip"
+              className="flex-fill"
+            >
+              Skip this question
+            </ThumbButton>
+          </div>
+        </div>
+      );
+    } else {
+      // Level 2.
+      cardNode = filterExpanded ? filterCardPanel : plainCardPanel;
+      questionsNode = !revealed ? (
+        <div className="text-center py-4">
+          <Spinner size={2} />
+        </div>
+      ) : (
+        <>
+          <Badge
+            bg={item.type === "confirm_suggestion" ? "info" : "secondary"}
+            data-testid="question-feed-tier-badge"
+            className="mb-2"
+          >
+            {item.type === "confirm_suggestion"
+              ? "Suggested match"
+              : "Needs identification"}
+          </Badge>
+          {item.type === "confirm_suggestion" &&
+            item.suggestedPrinting != null &&
+            (suggestionRejectedWithNoneLeft ? (
+              <>
+                {/* Singleton-rejection case (task: eliminate double-asking) - the suggested
+                    printing was the ONLY candidate, so there's nothing left to pick from a
+                    grid. Skips straight to the classified-exit choice below, with the rejected
+                    candidate kept as grayed, non-interactive context (never a button) rather
+                    than vanishing without explanation. */}
+                <p data-testid="question-feed-suggestion-prompt">
+                  Got it - not that one. Is it any official printing at all?
+                </p>
+                <div
+                  className="d-flex align-items-center gap-2 mb-3 opacity-50"
+                  data-testid="question-feed-rejected-context"
+                >
+                  <div style={{ width: 40, flexShrink: 0 }}>
+                    <img
+                      src={item.suggestedPrinting.mediumThumbnailUrl}
+                      alt=""
+                      style={{ width: "100%" }}
+                    />
+                  </div>
+                  <div className="text-muted small">
+                    You said: not{" "}
+                    <SetIcon
+                      expansionCode={item.suggestedPrinting.expansionCode}
+                    />{" "}
+                    {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                    {item.suggestedPrinting.collectorNumber}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p data-testid="question-feed-suggestion-prompt">
+                Which of these is it?{" "}
+                <SetIcon expansionCode={item.suggestedPrinting.expansionCode} />{" "}
+                {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                {item.suggestedPrinting.collectorNumber} was suggested
+              </p>
+            ))}
+          {!suggestionRejectedWithNoneLeft && (
+            <div className="mb-2">
+              <FilterToggleButton
+                variant="link"
+                onClick={() => setFilterExpanded((previous) => !previous)}
+                data-testid="question-feed-filter-toggle"
+              >
+                {filterExpanded ? "Hide filters" : "Filter by attribute"}
+              </FilterToggleButton>
+            </div>
+          )}
+          {hiddenCount > 0 && (
+            <p
+              className="text-muted small"
+              data-testid="question-feed-hidden-count"
+            >
+              {hiddenCount} hidden by your tags -{" "}
+              <a
+                href="#"
+                data-testid="question-feed-clear-filters"
+                onClick={(event) => {
+                  event.preventDefault();
+                  setChipStates(initialChipStates());
+                }}
+              >
+                clear
+              </a>
+            </p>
+          )}
+          <Row className="g-2" xs={3} md={4}>
+            {visibleCandidates.map((candidate) => (
+              <Col key={candidate.identifier}>
+                <CandidateButton
+                  variant="outline-secondary"
+                  className={`w-100 p-1 border-0${
+                    item.type === "confirm_suggestion" &&
+                    item.suggestedPrinting?.identifier === candidate.identifier
+                      ? " highlighted"
+                      : ""
+                  }`}
+                  disabled={submitting}
+                  onClick={() => selectCandidate(candidate, false)}
+                  {...getPrintingCandidateDataAttributes(
+                    item.card.name,
+                    candidate
+                  )}
+                >
+                  <HoverBurst
+                    className="hover-burst"
+                    viewBox={STARBURST_VIEWBOX}
+                  >
+                    <polygon
+                      points={STARBURST_OUTER_FRAMES[starburstFrame]}
+                      fill={STARBURST_OUTER_COLOR}
+                    />
+                    <polygon
+                      points={STARBURST_INNER_FRAMES[starburstFrame]}
+                      fill={STARBURST_INNER_COLOR}
+                    />
+                  </HoverBurst>
+                  <ArtPlaceholder>
+                    <ZoomableThumbnail>
+                      <img
+                        src={candidate.mediumThumbnailUrl}
+                        alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                      />
+                    </ZoomableThumbnail>
+                    {/* Tied to this specific candidate's identifier, not just `submitting` -
+                        the old dimmed-all-buttons treatment gave no way to tell which of
+                        several candidates you actually tapped under any real latency. */}
+                    {submitting &&
+                      selectedCandidateId === candidate.identifier && (
+                        <div
+                          data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
+                        >
+                          <Spinner size={1.5} zIndex={2} positionAbsolute />
+                        </div>
+                      )}
+                  </ArtPlaceholder>
+                  <div>
+                    <SetIcon expansionCode={candidate.expansionCode} />{" "}
+                    {candidate.expansionCode.toUpperCase()}{" "}
+                    {candidate.collectorNumber}
+                  </div>
+                  <div className="text-muted small">{candidate.artist}</div>
+                </CandidateButton>
+              </Col>
+            ))}
+          </Row>
+          {followUp === "no-match-reason" && (
+            <div className="mt-3">
+              <hr />
+              <NoMatchReasonStrip
+                backendURL={backendURL}
+                cardIdentifier={item.card.identifier}
+                onDone={advance}
+                onRateLimited={() => setRateLimited(true)}
+              />
+            </div>
+          )}
+          {followUp === "none" && (
+            <div className="mt-3 d-flex flex-column gap-2">
+              <ThumbButton
+                variant="outline-secondary"
+                disabled={submitting}
+                onClick={() => selectCandidate(undefined, true)}
+                data-testid="question-feed-no-match"
+              >
+                {submitting && selectedCandidateId === "no-match" ? (
+                  <Spinner size={1} />
+                ) : (
+                  "None of these"
+                )}
+              </ThumbButton>
+              <ThumbButton
+                variant="outline-secondary"
+                disabled={submitting}
+                onClick={classifyAsCustomArt}
+                data-testid="question-feed-custom-art"
+              >
+                {submitting && selectedCandidateId === "custom-art" ? (
+                  <Spinner size={1} />
+                ) : (
+                  "\u{1F3A8} Art matches, not an official printing"
+                )}
+              </ThumbButton>
+              <ThumbButton
+                variant="outline-secondary"
+                disabled={submitting}
+                onClick={skip}
+                data-testid="question-feed-skip"
+              >
+                Skip
+              </ThumbButton>
+            </div>
+          )}
+        </>
+      );
+    }
+  } else {
+    // Artist / tag question types - "reposition, not redesign" (wtc-redesign-spec.md's own
+    // instruction): the plain reference image these have always used moves into the shared
+    // hero card slot as-is, with no burst/reveal treatment added (those question units, and
+    // this simple image alongside them, are unforked from before this redesign).
+    cardNode = (
+      <PlainHeroCard>
+        <img
+          src={item.card.mediumThumbnailUrl}
+          alt={item.card.name}
+          style={{ width: "100%" }}
+        />
+        <div className="text-center mt-1">{item.card.name}</div>
+      </PlainHeroCard>
+    );
+    questionsNode = (
+      <>
+        {item.type === "artist" && (
+          <>
+            <h6>Who&apos;s the artist?</h6>
+            <ArtistVotePicker
+              backendURL={backendURL}
+              cardIdentifier={item.card.identifier}
+              confidentlyKnownArtistName={item.confidentlyKnownArtistName}
+              onRateLimited={() => setRateLimited(true)}
+              voteSurface="question-feed"
+              onArtistConfirmed={setConfirmedArtistName}
+            />
+            {confirmedArtistName != null && (
+              <div
+                className="mt-2 text-muted small"
+                data-testid="question-feed-artist-support"
+              >
+                <ArtistSupportLink artistName={confirmedArtistName}>
+                  Art by {confirmedArtistName} - support them
+                </ArtistSupportLink>
+              </div>
+            )}
+            <div className="mt-3">
+              <ThumbButton variant="outline-secondary" onClick={skip}>
+                Skip
+              </ThumbButton>
+            </div>
+          </>
+        )}
+        {item.type === "tag" && item.tagName != null && (
+          <QueueTagQuestion
+            backendURL={backendURL}
+            cardIdentifier={item.card.identifier}
+            tagName={item.tagName}
+            onAnswered={advance}
+            onRateLimited={() => setRateLimited(true)}
+          />
+        )}
+      </>
+    );
+  }
+
+  return (
+    <div data-testid="question-feed">
+      <HeroGrid data-testid="question-feed-current-item">
+        <HeroCardArea data-testid="question-feed-hero-card-area">
+          {/* Keyed on the card identifier so both the pop-in-sync-with-THAT pulse (below) and
+              WhatsThatWords' own ripple (HeroWordsArea) remount - and therefore replay their
+              CSS animation from frame zero - on every new card (wtc-redesign-spec.md W9 /
+              owner addendum). */}
+          <CardPulseWrapper
+            key={item.card.identifier}
+            data-testid="question-feed-card-pulse"
+          >
+            {cardNode}
+          </CardPulseWrapper>
+        </HeroCardArea>
+        <HeroWordsArea>
+          <WhatsThatWords animationKey={item.card.identifier} />
+        </HeroWordsArea>
+        <HeroQuestionsArea data-testid="question-feed-questions-area">
+          <p
+            className="text-muted small mb-3"
+            data-testid="question-feed-intro"
+          >
+            Test your Magic: the Gathering knowledge! One card at a time, help
+            identify which real-world printing, artist, or descriptor tag each
+            card image depicts - contested and machine-suggested cards come
+            first, since they need your eyes the most.
+          </p>
+          {counts != null && (
+            <>
+              {/* Headline leads with quick confirmations (tier 1 - an unresolved machine-
+                  suggested printing awaiting a one-tap human yes/no) since that's the easiest,
+                  fastest-to-clear category - falls back to the overall total once there's
+                  nothing quick left, rather than always showing the same undifferentiated
+                  "cards remaining" copy. */}
+              <p className="text-primary" data-testid="question-feed-headline">
+                {counts.confirmable > 0
+                  ? `${counts.confirmable} quick confirmation${
+                      counts.confirmable !== 1 ? "s" : ""
+                    } ready`
+                  : `Still need help with: ${counts.total} card${
+                      counts.total !== 1 ? "s" : ""
+                    }`}
+              </p>
+              <p
+                className="text-muted small"
+                data-testid="question-feed-subcounts"
+              >
+                {counts.total} in catalog &middot; {counts.contested} contested
+              </p>
+            </>
+          )}
+          {flavorText != null && (
+            <p className="text-muted" data-testid="question-feed-flavor-text">
+              {flavorText}
+            </p>
+          )}
+          {rateLimited && (
+            // Persistent (not a self-dismissing toast) and dismissible - a rate-limit pause is
+            // an expected, honest condition in a one-tap funnel, not a failure, so it gets its
+            // own calm inline notice instead of competing with the transient error/success
+            // toast stream. The backend's 429 response doesn't include a retry-after value, so
+            // this deliberately doesn't promise a specific wait time - Skip and browsing the
+            // current item both still work while this is shown; only vote submission is
+            // affected.
+            <Alert
+              variant="warning"
+              dismissible
+              onClose={() => setRateLimited(false)}
+              data-testid="question-feed-rate-limited"
+            >
+              You&apos;re on fire &mdash; take a short breather before voting
+              again.
+            </Alert>
+          )}
+          {questionsNode}
+        </HeroQuestionsArea>
+      </HeroGrid>
     </div>
   );
 }
