@@ -1,10 +1,14 @@
 import Head from "next/head";
 import Link from "next/link";
-import React from "react";
+import React, { useState } from "react";
 
 import { ProjectName } from "@/common/constants";
 import { useAppSelector } from "@/common/types";
 import { NoBackendDefault } from "@/components/NoBackendDefault";
+import {
+  DownloadManager,
+  OpenDownloadManagerButton,
+} from "@/features/download/DownloadManager";
 import { FinishedMyProject } from "@/features/export/FinishedMyProject";
 import Footer from "@/features/ui/Footer";
 import { ProjectContainer } from "@/features/ui/Layout";
@@ -58,6 +62,15 @@ function PrintPageOrDefault() {
 
 export default function Print() {
   const projectName = useProjectName();
+  // Nav+footer redesign (2026-07-22, N10) - the cloud download-queue counter/manager (image/
+  // XML/decklist/PDF export downloads) used to live in the global navbar, cut from there per
+  // the redesign. This page is the other of its two new mounts (the first is FinishFooter.tsx
+  // on /display, which owns the lightweight XML/Card Images/Decklist exports) - this one covers
+  // the memory-heavy PDF (and desktop-tool XML) downloads FinishedMyProject's own PDFGenerator/
+  // ProjectDownload trigger, which its own DisplayExportMenu deliberately excludes. Both mounts
+  // read the same global fileDownloadsSlice, so either always shows every download regardless
+  // of which page started it.
+  const [showDownloadManager, setShowDownloadManager] = useState(false);
   return (
     <ProjectContainer gutter={0}>
       <Head>
@@ -67,6 +80,15 @@ export default function Print() {
           content={`Finish and export your ${ProjectName} project.`}
         />
       </Head>
+      <div className="d-flex justify-content-end px-2 pt-1">
+        <OpenDownloadManagerButton
+          handleClick={() => setShowDownloadManager(true)}
+        />
+      </div>
+      <DownloadManager
+        show={showDownloadManager}
+        handleClose={() => setShowDownloadManager(false)}
+      />
       <PrintPageOrDefault />
       <Footer />
     </ProjectContainer>

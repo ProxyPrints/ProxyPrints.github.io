@@ -63,6 +63,11 @@ test.describe("Navbar - Discord auth links", () => {
     );
     await loadPageWithDefaultBackend(page, "editor");
 
+    // Nav+footer redesign (2026-07-22, N9) - signed-in is now a compact user-menu Dropdown
+    // (avatar + username), not a bare "Sign out" anchor sitting directly in the navbar - the
+    // menu (and its real <a> Sign out item, see AuthWidget.tsx's own comment on why that's
+    // still a real anchor, not a Dropdown.Item button) only mounts once the toggle is opened.
+    await page.getByTestId("auth-widget-toggle").click();
     const logoutLink = page.getByTestId("auth-widget-logout");
     await expect(logoutLink).toBeVisible();
 

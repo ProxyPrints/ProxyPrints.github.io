@@ -40,7 +40,7 @@ const oneCardHandlers = [
 const goToDisplay = async (page: Page) => {
   await loadPageWithDefaultBackend(page);
   await importText(page, "my search query");
-  await page.getByRole("link", { name: "Display (beta)" }).click();
+  await page.getByRole("link", { name: "Editor" }).click();
   await expect(page.getByTestId("display-page")).toBeVisible();
 };
 
@@ -205,5 +205,25 @@ test.describe("/display local draft auto-backup + restore nudge (issue #275)", (
     await expect(
       page.getByTestId("page-preview-slot").locator("img")
     ).toHaveCount(1);
+  });
+
+  // Nav+footer redesign (2026-07-22, N10) - the cloud download-queue counter/manager used to
+  // live in the global navbar; cut from there and re-mounted here, beside the existing Export
+  // dropdown, since this is where the lightweight XML/Card Images/Decklist downloads it counts
+  // actually originate on this page (print.tsx's own mount covers the PDF/desktop-tool side).
+  test("the relocated download-manager toggle opens its offcanvas from the Finish footer", async ({
+    page,
+    network,
+  }) => {
+    network.use(whoamiAnonymous, ...oneCardHandlers);
+    await goToDisplay(page);
+
+    const footer = page.getByTestId("display-finish-footer");
+    const toggle = footer.getByTestId("download-manager-toggle");
+    await expect(toggle).toBeVisible();
+
+    await expect(page.getByTestId("download-manager-offcanvas")).toHaveCount(0);
+    await toggle.click();
+    await expect(page.getByTestId("download-manager-offcanvas")).toBeVisible();
   });
 });

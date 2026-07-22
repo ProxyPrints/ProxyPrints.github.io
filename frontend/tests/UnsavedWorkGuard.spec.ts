@@ -43,7 +43,7 @@ test.describe("Unsaved-work guard (priority bug fix)", () => {
       void dialog.dismiss();
     });
 
-    await page.getByRole("link", { name: "Display (beta)" }).click();
+    await page.getByRole("link", { name: "Editor" }).click();
 
     // A real navigation, not just a same-page state change - waitForURL fails outright if the
     // click never actually left /editor, which is exactly the failure mode a regression here

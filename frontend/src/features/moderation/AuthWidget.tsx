@@ -17,10 +17,21 @@
  * The links round-trip: they point at the backend's allauth routes with
  * `?next=<current frontend URL>`, which the backend's account adapter validates against the
  * same origin allowlist CORS uses (see accounts/adapter.py).
+ *
+ * Nav+footer redesign (2026-07-22, N9) - the signed-in branch used to render a plain
+ * "Signed in as X (moderator)" / "Sign out" text pair (StatusRow), which wrapped across two
+ * lines once the navbar was crowded. It's now a compact react-bootstrap `Dropdown` user menu:
+ * a monogram avatar (whoami carries no avatar image) + username toggle that opens "Sign out"
+ * (and, for moderators, a "Moderator" entry pointing at the existing moderation surface -
+ * /whatsthat's own Moderation tab, ModerationTab.tsx - since that's presentation-only tab
+ * state with no deep-linkable query param yet, not a dedicated route). Additive to this file;
+ * the signed-out branch and every `?next=` round-trip below are unchanged.
  */
 
 import styled from "@emotion/styled";
+import Link from "next/link";
 import React, { useEffect, useState } from "react";
+import Dropdown from "react-bootstrap/Dropdown";
 
 import { useAppSelector } from "@/common/types";
 import { useGetWhoamiQuery } from "@/store/api";
@@ -44,6 +55,7 @@ const DiscordButton = styled.a`
   padding: 0.5rem 0.9rem;
   border-radius: 0.3rem;
   text-decoration: none;
+  white-space: nowrap;
   &:hover,
   &:focus {
     background-color: ${DISCORD_BLURPLE_HOVER};
@@ -69,10 +81,50 @@ function DiscordIcon() {
   );
 }
 
-const StatusRow = styled.p`
-  display: flex;
+// variant="link" (rather than the Button default of variant="primary") keeps the underlying
+// react-bootstrap Button this renders from picking up the theme's solid orange btn-primary
+// chrome - this toggle is meant to read as a plain nav-bar control (avatar + username + the
+// standard .dropdown-toggle caret), not a button. The &&& bumps this rule's specificity above
+// .btn-link's own defaults (underline, link-color) without needing !important.
+const UserMenuToggle = styled(Dropdown.Toggle)`
+  &&& {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: transparent;
+    border: 0;
+    padding: 0.25rem 0.5rem;
+    color: rgba(255, 255, 255, 0.75);
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+    &:hover,
+    &:focus,
+    &:active {
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      text-decoration: none;
+      box-shadow: none;
+    }
+  }
+`;
+
+const Avatar = styled.span`
+  display: inline-flex;
   align-items: center;
-  gap: 0.6rem;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background-color: var(--bs-primary);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+  flex: 0 0 auto;
+`;
+
+const UserMenuMenu = styled(Dropdown.Menu)`
+  background-color: #4e5d6c;
 `;
 
 export function AuthWidget() {
@@ -97,18 +149,39 @@ export function AuthWidget() {
 
   const next = `?next=${encodeURIComponent(currentHref)}`;
   return whoami.data.authenticated ? (
-    <StatusRow className="small m-0" data-testid="auth-widget">
-      <span>
-        Signed in as <b>{whoami.data.username}</b>
-        {whoami.data.moderator && " (moderator)"}
-      </span>
-      <a
-        href={`${backendURL}${whoami.data.logoutUrl}${next}`}
-        data-testid="auth-widget-logout"
+    <Dropdown data-testid="auth-widget">
+      <UserMenuToggle
+        variant="link"
+        id="auth-widget-toggle"
+        data-testid="auth-widget-toggle"
       >
-        Sign out
-      </a>
-    </StatusRow>
+        <Avatar aria-hidden="true">
+          {whoami.data.username?.[0]?.toUpperCase() ?? "?"}
+        </Avatar>
+        <span>{whoami.data.username}</span>
+      </UserMenuToggle>
+      <UserMenuMenu align="end">
+        {whoami.data.moderator && (
+          <>
+            <Dropdown.Item
+              as={Link}
+              href="/whatsthat"
+              data-testid="auth-widget-moderator"
+              title="Open the Moderation tab on What's That Card?"
+            >
+              Moderator
+            </Dropdown.Item>
+            <Dropdown.Divider />
+          </>
+        )}
+        <Dropdown.Item
+          href={`${backendURL}${whoami.data.logoutUrl}${next}`}
+          data-testid="auth-widget-logout"
+        >
+          Sign out
+        </Dropdown.Item>
+      </UserMenuMenu>
+    </Dropdown>
   ) : (
     <DiscordButton
       href={`${backendURL}${whoami.data.loginUrl}${next}`}

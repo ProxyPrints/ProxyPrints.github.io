@@ -150,6 +150,7 @@ export function OpenDownloadManagerButton({
       onClick={handleClick}
       id="dropdown-basic"
       className="m-0 p-0"
+      data-testid="download-manager-toggle"
     >
       <DownloadIcon />
       <span

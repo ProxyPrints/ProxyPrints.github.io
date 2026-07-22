@@ -46,6 +46,9 @@ test.describe("auth links", () => {
     network.use(whoamiSignedInNotModerator, ...defaultHandlers);
     await loadPageWithDefaultBackend(page, "editor");
 
+    // Nav+footer redesign (2026-07-22, N9) - "Sign out" now lives inside the compact user-menu
+    // Dropdown (avatar + username toggle), not a bare anchor sitting directly in the navbar.
+    await page.getByTestId("auth-widget-toggle").click();
     await expect(page.getByTestId("auth-widget-logout")).toBeVisible();
   });
 });

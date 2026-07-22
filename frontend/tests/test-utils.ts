@@ -29,13 +29,19 @@ export const loadPageWithDefaultBackend = async (
   }
 };
 
+// Nav+footer redesign (2026-07-22) - the classic /editor page left the nav entirely (its
+// "Editor" label now names the unified /display route instead, see Navbar.tsx's own comment),
+// so it's no longer reachable via a nav-link click; this navigates there directly by URL, which
+// is still valid since /editor itself wasn't removed, just delisted from the nav.
 export const navigateToEditor = async (page: Page) => {
-  await page.getByRole("link", { name: "Editor" }).click();
+  await page.goto("/editor?server=http://127.0.0.1:8000");
   await page.getByText("Choose Art").click();
 };
 
+// "What's New?" was cut from the nav entirely (N5) - /new itself still exists, just
+// nav-unreachable, so this goes there directly by URL instead of clicking a now-gone nav link.
 export const navigateToNew = async (page: Page) =>
-  await page.getByRole("link", { name: "What's New?" }).click();
+  await page.goto("/new?server=http://127.0.0.1:8000");
 
 export const getAddCardsMenu = (page: Page) => {
   return page

@@ -58,7 +58,7 @@ test(`Item 3 benchmark: ${CARD_COUNT}-card deck scroll fps/heap/jank under ${CPU
   network.use(...threeCardHandlers);
   await loadPageWithDefaultBackend(page);
   await importText(page, `${CARD_COUNT}x my search query`);
-  await page.getByRole("link", { name: "Display (beta)" }).click();
+  await page.getByRole("link", { name: "Editor" }).click();
   await expect(page.getByTestId("display-page")).toBeVisible();
 
   const sheetWrappers = page.getByTestId("display-sheet-wrapper");
