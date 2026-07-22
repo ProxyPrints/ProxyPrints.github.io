@@ -29,7 +29,7 @@ import {
 // the real image-load event below: back when this fired at mount time regardless of whether
 // the image had actually arrived, that hold bought the network a moment to catch up). Now that
 // `$playing` already stays paused at this 0% frame until QuestionFeed.tsx confirms the image
-// has genuinely loaded (see RevealOverlay's own `$playing` prop and QuestionFeed.tsx's
+// has genuinely loaded (see MysteryCardFace's own `$playing` prop below and QuestionFeed.tsx's
 // `onCardImageSettled`), the hold is pure redundant lag layered ON TOP of the real wait - by
 // the time this is ever allowed to run, the image is already there, so holding at opacity 1 for
 // another ~1s just reads as "nothing happened yet". Collapsed to a plain two-stop fade (no hold
@@ -42,6 +42,16 @@ import {
 // 0.48s duration - ends 0.72s) now land ACROSS this fade's own 0-0.8s run rather than only
 // starting after it had long finished (old: hold 0-0.99s, fade 0.99s-1.8s), so the pops
 // visibly overlap the fade's tail (its last ~40%, 0.48s-0.8s) as intended.
+//
+// Owner review round 3 ("slow all 3 stages down a bit") - WhatsThatWords.tsx's own pop
+// duration/stagger and CardPulseWrapper's pulse both scaled by 4/3 since the paragraph above was
+// written (0/0.24s/0.48s delay -> 0/0.32s/0.64s; 0.48s duration -> 0.64s each) - this fade itself
+// is untouched (still 0.8s, unrelated to the "wordmark pop-in animation" the owner's round 3 ask
+// was scoped to). THAT's own pop and the card's own pulse still start well inside this fade's
+// 0-0.8s run (0.32s, comfortably before 0.8s) so the two are still visibly overlapping, just with
+// CARD?'s own pop (0.64s delay, ending 1.28s) now finishing further past the fade's own end than
+// before (was 0.96s, now 1.28s) - purely a side effect of the whole sequence running longer, not
+// a deliberate re-tuning of this fade's own relationship to the words.
 export const revealAnimation = keyframes`
   from { opacity: 1; }
   to { opacity: 0; }
@@ -52,40 +62,90 @@ export const RevealWrapper = styled.div`
   overflow: hidden;
 `;
 
-// Same blue as ArtPlaceholder below (and the starburst itself) rather than a plain black
-// box, so the "mystery card" reveal reads as one consistent visual language with the
-// candidate grid's own "?" placeholders instead of a mismatched black flash. Black text
-// (matching the page-wide font colour) checked against this blue: contrast ratio ~6.2:1,
-// clearly better than the white it replaced (~3.4:1).
+// Owner review round 3 ("one blue card, used everywhere") - `RevealOverlay` (the hero reveal
+// cover) and `ArtPlaceholder`'s own CSS `::before` (below) used to be two independent
+// implementations of the same idea (a blue "mystery card" backdrop with a "?" on it), sharing
+// only their background colour constant. The owner read the large hero card and the small
+// candidate cards as visibly different shades of blue - measured via computed
+// `background-color` on both, they were already byte-identical (`rgb(77, 141, 223)`,
+// `STARBURST_OUTER_COLOR`, both places) - the perceived difference was a context/contrast
+// effect from the hero's own starburst bleed behind the large card, not a real colour
+// mismatch (see this PR's own report). Consolidating both surfaces onto one shared component
+// removes even the possibility of future drift between them, which is the actual ask ("so
+// future changes are one place") independent of whether today's colours already matched.
 //
-// Fix round (owner blocker, "the pulse doesn't sync with the pop") - this used to fade on a
-// fixed 1.8s timer starting the moment it mounted, with no regard for whether the card image
-// underneath had actually finished loading - a slow network could reveal a still-loading (or
-// half-painted) image right as WhatsThatWords/CardPulseWrapper's own pops fired, breaking the
-// "one queued moment" the owner asked for. `$playing` (paused by default, same
-// `animation-play-state` mechanism as Word in WhatsThatWords.tsx) holds this at its own 0%
-// frame - fully opaque, i.e. the same solid cover the user has been looking at since mount -
-// until QuestionFeed.tsx confirms the image has settled, so the fade (and therefore the
-// `onAnimationEnd`-driven `revealed` flip) can never start before the image is actually there
-// to reveal. QuestionFeed.tsx never sets `$playing` at all for a failed load (see its own
-// comment) - the cover simply stays at this 0% frame indefinitely instead of fading onto a
-// broken image, which is the "failed treatment" the owner asked for.
-export const RevealOverlay = styled.div<{ $playing: boolean }>`
+// `MysteryCardFace` is that shared component: a `position: absolute; inset: 0` blue backdrop
+// (fills whatever correctly-sized, `position: relative` box it's dropped into - `RevealWrapper`
+// for the hero slot, `ArtPlaceholder` for the candidate-grid/no-match slots below) plus a
+// centred "?" glyph. `$playing` is optional and defaults to the SAME "paused at the 0% frame"
+// behaviour every other gated animation on this page uses (Word in WhatsThatWords.tsx,
+// CardPulseWrapper below) - when a caller never passes it at all (every candidate-grid/no-match
+// slot), `animation-play-state` falls back to `"paused"` forever, which is exactly the
+// permanently-static backdrop `ArtPlaceholder`'s old `::before` was (just now a real element
+// instead of generated content, so it can host the glyph `<img>` below rather than a CSS
+// `content` string). Only the hero reveal slot (QuestionFeed.tsx) ever passes `$playing`/
+// `onAnimationEnd`, fading away in lockstep with the blue exactly as `RevealOverlay` did.
+export const MysteryCardFace = styled.div<{ $playing?: boolean }>`
   position: absolute;
   inset: 0;
   background: ${STARBURST_OUTER_COLOR};
-  color: black;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 4rem;
-  font-weight: bold;
+  pointer-events: none;
   /* 0.8s ease-out, no hold - see revealAnimation's own comment above for the full before/after
-     timing rationale (was 1.8s ease-in with a 55% hold). */
+     timing rationale (was 1.8s ease-in with a 55% hold, on the old RevealOverlay this replaces). */
   animation: ${revealAnimation} 0.8s ease-out forwards;
   animation-play-state: ${(props) => (props.$playing ? "running" : "paused")};
-  pointer-events: none;
 `;
+
+// The "?" glyph itself - `whatsthat-mark.svg`'s own gold-gradient mascot (the same asset the
+// wordmark's own "?" and round 2's homepage panel already use), not a plain text character -
+// matches the "yellow question mark" the owner asked for, and its own navy stroke/outline keeps
+// it legible against the blue regardless of exact shade. Sized via `height: 66.6667%` (2/3 of
+// `MysteryCardFace`'s own height, which - `position: absolute; inset: 0` on a definite-height
+// containing block - IS a definite height itself, so a percentage-height child resolves
+// normally) rather than a fixed rem/px value, so it scales correctly with every card size on
+// the page (the large hero card and the small candidate tiles are very different pixel heights)
+// without a separate size constant per surface. `width: auto` preserves the asset's own aspect
+// ratio (`whatsthat-mark.svg`'s viewBox is already question-mark-shaped, not square) rather than
+// stretching it to fill a square box.
+function MysteryCardQuestionMark() {
+  return (
+    <img
+      src="/whatsthat-mark.svg"
+      alt=""
+      aria-hidden="true"
+      style={{ height: "66.6667%", width: "auto" }}
+    />
+  );
+}
+
+interface MysteryCardProps {
+  // Hero-reveal-only (own comment on MysteryCardFace above) - every other call site omits both
+  // and gets the permanently-static backdrop.
+  playing?: boolean;
+  onAnimationEnd?: () => void;
+  "data-testid"?: string;
+}
+
+// The one composition every blue "mystery card" slot on the page renders - see MysteryCardFace's
+// own comment for the full "one blue card, used everywhere" rationale.
+export function MysteryCard({
+  playing,
+  onAnimationEnd,
+  "data-testid": dataTestId,
+}: MysteryCardProps) {
+  return (
+    <MysteryCardFace
+      $playing={playing}
+      onAnimationEnd={onAnimationEnd}
+      data-testid={dataTestId}
+    >
+      <MysteryCardQuestionMark />
+    </MysteryCardFace>
+  );
+}
 
 // SUPERSEDED (quiz-reveal hero redesign, issue #305): this used to be `position: sticky` at
 // >= md, tracking the outer page scroll via useStickyTop below so the card stayed in view
@@ -118,7 +178,7 @@ export const CardPanel = styled.div`
   // box below - the img inside (RevealWrapper) still sizes itself via width: 100% plus
   // aspect-ratio: 63/88, completely unchanged, so capping the WIDTH here to whatever value
   // yields the target height achieves the same visual result without fighting that existing
-  // mechanism or breaking RevealOverlay's inset: 0 tracking (which follows THIS box's width,
+  // mechanism or breaking MysteryCardFace's inset: 0 tracking (which follows THIS box's width,
   // not the image's intrinsic size).
   //
   // 32vh, not the first pass's 38vh - a real Playwright measurement (Pixel 7, this task's own
@@ -136,7 +196,7 @@ export const CardPanel = styled.div`
 // Level 1's compact single-card confirmation screen (QuestionFeed.tsx) has no long scrollable
 // candidate list to keep the card pinned against while scrolling past, at any viewport width -
 // unlike Level 2's two-column layout. Same as CardPanel above now - `position: relative;
-// z-index: 0;` gives BurstSvg/RevealOverlay the positioned containing block they anchor
+// z-index: 0;` gives BurstSvg/MysteryCard the positioned containing block they anchor
 // themselves to, and its own local stacking context for BurstSvg's negative z-index, with
 // nothing sticky or detached from normal document flow at any width.
 export const StaticCardPanel = styled.div`
@@ -229,7 +289,7 @@ export const BurstSvg = styled.svg<{ $hero?: boolean }>`
 //
 // Fix round (owner blocker, "the pulse doesn't sync with the pop") - `$playing` (same
 // paused-until-told-otherwise `animation-play-state` mechanism as Word in WhatsThatWords.tsx
-// and RevealOverlay above) holds this at its own 0% frame (scale(1) - visually identical to
+// and MysteryCardFace above) holds this at its own 0% frame (scale(1) - visually identical to
 // the un-pulsed rest state, so there's no flash) until QuestionFeed.tsx confirms the card
 // image has actually loaded, so this can never fire early against a still-loading card - see
 // QuestionFeed.tsx's own comment on the shared `imageLoaded` state that drives all three of
@@ -240,12 +300,16 @@ export const wtcCardPulse = keyframes`
   100% { transform: scale(1); }
 `;
 
+// Round 3 (owner review, "slow all 3 stages down a bit") - 640ms/320ms delay, scaled by the
+// same 4/3 factor as WhatsThatWords.tsx's own Word component (own comment there) - this MUST
+// move in lockstep with THAT's own delay/duration (not an independent value that happens to
+// match), per this component's own header comment above.
 export const CardPulseWrapper = styled.div<{ $playing: boolean }>`
   transform-origin: center;
   width: 100%;
   max-width: 320px;
-  animation: ${wtcCardPulse} 480ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
-  animation-delay: 240ms;
+  animation: ${wtcCardPulse} 640ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+  animation-delay: 320ms;
   animation-play-state: ${(props) => (props.$playing ? "running" : "paused")};
 
   @media (prefers-reduced-motion: reduce) {
@@ -324,18 +388,22 @@ export function randomFlavorText(): string {
 // reflow here would visibly resize the burst along with it).
 export const CARD_ASPECT_RATIO = "63 / 88";
 
-// Shared "mystery card" backdrop for every Scryfall art box in the candidate grid - reuses
-// the starburst's own blue so it reads as one consistent visual language against the orange
-// background rather than a mismatched placeholder colour. Candidates render their real
-// artwork on top of this (so a slow-loading image transitions from a blue "?" card into the
-// real art instead of a blank flash), and it's also the entire visual for the "No match"
-// option, which has no real artwork to show at all - replacing the old black
-// "Card Not Found :(" placeholder image.
+// Sized box for every Scryfall art box in the candidate grid - `<MysteryCard />` (own comment
+// above) is always rendered as this box's first child at each call site (QuestionFeed.tsx),
+// providing the blue "mystery card" backdrop + "?" glyph real artwork renders on top of (so a
+// slow-loading image transitions from a blue "?" card into the real art instead of a blank
+// flash) - and it's also the entire visual for the "No match" option, which has no real
+// artwork to show at all - replacing the old black "Card Not Found :(" placeholder image.
+//
+// Round 3 (owner review, "one blue card, used everywhere") - the backdrop/glyph used to be this
+// component's own `background` + a `::before { content: "?" }` pseudo-element, a second,
+// independent implementation of the same idea `RevealOverlay` (cardPanel.tsx, now
+// `MysteryCard`) already had for the hero card. Both are now `<MysteryCard />` - see that
+// component's own comment for the full rationale.
 export const ArtPlaceholder = styled.div`
   position: relative;
   width: 100%;
   aspect-ratio: ${CARD_ASPECT_RATIO};
-  background: ${STARBURST_OUTER_COLOR};
   /* Deliberately no overflow: hidden here - object-fit: cover below already keeps the image
      contained within this box on its own (it crops the underlying image content to fit,
      it doesn't make the <img> element itself overflow), and clipping at this level was
@@ -344,18 +412,6 @@ export const ArtPlaceholder = styled.div`
      since ArtPlaceholder wraps ZoomableThumbnail, its own overflow: hidden clipped the zoom
      right back down to this box's edge, reading as a hard rectangular cut through the
      enlarged artwork. */
-
-  &::before {
-    content: "?";
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: rgba(0, 0, 0, 0.5);
-    font-size: 3rem;
-    font-weight: bold;
-  }
 
   img {
     position: relative;
@@ -371,7 +427,7 @@ export const ArtPlaceholder = styled.div`
 // visibly grows past it, breaking the effect - so it's dropped entirely (`border-0`,
 // applied at each call site below) and this component only needs to own the "highlighted"
 // look. Bootstrap's green `success` variant clashed with the page's blue "mystery" motif
-// established elsewhere (ArtPlaceholder, RevealOverlay, the starburst itself), so "this is
+// established elsewhere (ArtPlaceholder/MysteryCard, the starburst itself), so "this is
 // the resolved consensus pick" is now a solid fill in that same blue instead - there's no
 // built-in Bootstrap variant in this exact shade, hence the custom class rather than
 // swapping to `variant="primary"`. Black text (matching the page-wide font colour) checked

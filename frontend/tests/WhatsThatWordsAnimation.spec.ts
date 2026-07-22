@@ -26,10 +26,12 @@ function buildRoute(route: string) {
   return `${localBackendURL}/${route}`;
 }
 
+// Round 3 (owner review, "slow all 3 stages down a bit") - 0/0.32s/0.64s, was 0/0.24s/0.48s -
+// see WhatsThatWords.tsx's own Word component comment for the 4/3 scaling rationale.
 const WORD_TEST_IDS = [
   { testId: "whatsthat-word-WHATS", delay: "0s" },
-  { testId: "whatsthat-word-THAT", delay: "0.24s" },
-  { testId: "whatsthat-word-CARD", delay: "0.48s" },
+  { testId: "whatsthat-word-THAT", delay: "0.32s" },
+  { testId: "whatsthat-word-CARD", delay: "0.64s" },
 ];
 
 async function animationProperties(
@@ -83,21 +85,22 @@ test.describe("What's That Card? - sliced-word pop + hero card pulse (issue #305
     for (const { testId, delay } of WORD_TEST_IDS) {
       const props = await animationProperties(page, testId);
       expect(props.name).not.toBe("none");
-      expect(props.duration).toBe("0.48s");
+      expect(props.duration).toBe("0.64s");
       expect(props.delay).toBe(delay);
       expect(props.timingFunction).toBe("cubic-bezier(0.34, 1.45, 0.64, 1)");
     }
 
-    // The hero card (CardPulseWrapper) - same curve/duration, THAT's own 0.24s delay, smaller
-    // amplitude (asserted structurally here via the shared timing, not the peak scale itself,
-    // which computed style can't report independent of a live animation frame).
+    // The hero card (CardPulseWrapper) - same curve/duration, THAT's own 0.32s delay (round 3:
+    // was 0.24s, see WORD_TEST_IDS' own comment), smaller amplitude (asserted structurally here
+    // via the shared timing, not the peak scale itself, which computed style can't report
+    // independent of a live animation frame).
     const cardProps = await animationProperties(
       page,
       "question-feed-card-pulse"
     );
     expect(cardProps.name).not.toBe("none");
-    expect(cardProps.duration).toBe("0.48s");
-    expect(cardProps.delay).toBe("0.24s");
+    expect(cardProps.duration).toBe("0.64s");
+    expect(cardProps.delay).toBe("0.32s");
     expect(cardProps.timingFunction).toBe("cubic-bezier(0.34, 1.45, 0.64, 1)");
   });
 
@@ -338,15 +341,22 @@ test.describe("What's That Card? - sliced-word pop + hero card pulse (issue #305
 // Fix round (owner live-review, "portrait static top block") - at narrow widths, the sliced
 // WHAT'S/THAT/CARD? teaser (this file's own subject above) stacks into a three-line column that
 // alone burns real vertical budget the redesign's static top block/scrollable candidate row
-// needs back. `whatsthat-composite.svg` (the mark+wordmark lockup - the ORIGINAL one-line
-// horizontal wordmark this page shipped with before issue #305's sliced/stacked treatment, still
-// on disk since #114's "branding integration" PR) replaces it below md - wide/desktop keeps the
+// needs back. A one-line horizontal wordmark replaces it below md - wide/desktop keeps the
 // sliced, animated version, completely unchanged. Both markups stay mounted at every width (a
 // CSS `display` toggle only, QuestionFeed.tsx's `NarrowWordmark`/`WideWordmark`) rather than
 // conditionally rendering one or the other, so this asserts VISIBILITY (which one actually
 // paints), not presence in the DOM.
+//
+// Round 3 (owner ruling, "remove the standalone '?' on mobile") - the narrow-width asset is now
+// `whatsthat-wordmark.svg` (was `whatsthat-composite.svg`, the mark+wordmark lockup this
+// describe block's own name refers to) - the same text with no separate "?" mascot baked in, a
+// pre-existing pre-cropped asset (WhatsThatWords.tsx above already slices this exact file into
+// its three animated words, so no new art was needed - see QuestionFeed.tsx's own
+// NarrowWordmark comment). The visibility assertions below are unchanged (still the same
+// display-toggle mechanism); the `src` assertion is new, confirming the mascot-free swap
+// specifically rather than just "some image is visible".
 test.describe("What's That Card? - narrow-width wordmark swap (owner live-review)", () => {
-  test("below md, the one-line composite lockup renders and the sliced word stack is hidden", async ({
+  test("below md, the mascot-free one-line wordmark renders and the sliced word stack is hidden", async ({
     page,
     network,
   }) => {
@@ -375,7 +385,12 @@ test.describe("What's That Card? - narrow-width wordmark swap (owner live-review
     await page.setViewportSize({ width: 412, height: 839 });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await expect(page.getByTestId("whatsthat-narrow-wordmark")).toBeVisible();
+    const narrowWordmark = page.getByTestId("whatsthat-narrow-wordmark");
+    await expect(narrowWordmark).toBeVisible();
+    await expect(narrowWordmark).toHaveAttribute(
+      "src",
+      "/whatsthat-wordmark.svg"
+    );
     await expect(page.getByTestId("whatsthat-words")).not.toBeVisible();
   });
 

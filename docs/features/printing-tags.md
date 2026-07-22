@@ -1001,6 +1001,96 @@ printings, artists, tags, and moderation from one screen.
         coverage (same describe block as above): computed `color` on the
         filter toggle and "None of these"; computed `color`/
         `background-color` on a selected vs. unselected Level 3 chip.
+    - **Owner review round 3 (ruling on round 2's open items)**: three
+      further asks — remove the narrow-width standalone "?" mascot;
+      slow the wordmark's 3-stage pop animation down "a bit"; and build
+      ONE shared blue-card-with-"?" composition used in every blue-card
+      slot on the page, replacing round 2's two independent
+      implementations.
+      - **Narrow-width "?" removal**: `whatsthat-composite.svg` (the
+        narrow wordmark asset, own bullet above) bakes its "?" mascot
+        into the same flattened image as the "WHAT'S THAT CARD?" text —
+        confirmed by inspecting both that file and `whatsthat-mark.svg`
+        (the standalone mascot) directly, their path data for the "?" is
+        an identical shape, just scaled/repositioned. `whatsthat- wordmark.svg` — the SAME text with no separate mascot at all,
+        already on disk (`WhatsThatWords.tsx` already slices this exact
+        file into its three animated words) — is exactly the pre-
+        cropped, text-only asset the owner asked to check for, so
+        `NarrowWordmark`'s `<img src>` was simply swapped to it; no new
+        art or manual SVG surgery was needed. `WideWordmark`
+        (`WhatsThatWords`) was never affected either way — it has always
+        rendered from this same `whatsthat-wordmark.svg` source, never
+        the composite. Regression coverage:
+        `WhatsThatWordsAnimation.spec.ts`'s existing narrow/wide
+        visibility test now also asserts the narrow `<img>`'s own `src`.
+      - **Pop animation slowdown**: `WhatsThatWords.tsx`'s `Word`
+        component (duration 480ms → 640ms) and its `WORDS` array's own
+        delay stagger (0/240/480ms → 0/320/640ms) both scaled by the same
+        4/3 (33.3%) factor — within the owner's own "25-40% longer per
+        stage" target, and a clean fraction that preserves the EXISTING
+        duration:stagger ratio exactly (240ms was already precisely half
+        of 480ms; 320ms is precisely half of 640ms) — "keep the stage
+        ordering/feel identical" means the ripple's own overlap shape has
+        to scale in lockstep with the duration, not just the duration
+        alone. `CardPulseWrapper` (`cardPanel.tsx`) moves in lockstep by
+        the same factor (640ms/320ms delay) since it must stay frame-for-
+        frame synced to THAT's own timing (its own long-standing
+        comment). The hero reveal fade itself (0.8s) is untouched — out
+        of scope, the owner's ask was specifically the wordmark's pop-in.
+        Regression coverage: `WhatsThatWordsAnimation.spec.ts`'s computed-
+        style assertions updated to the new duration/delay values (see
+        [[../lessons.md]]'s cyclic-animation-sampling entry — these
+        assert declarative CSS animation properties directly, not a
+        single sampled frame, so they're not subject to that lesson's own
+        failure mode, but the same "don't trust one point-in-time read"
+        discipline applies to any human eyeballing the new timing live).
+      - **One shared blue mystery card**: `RevealOverlay` (the hero
+        reveal cover, plain `?` text) and `ArtPlaceholder`'s own CSS
+        `::before { content: "?" }` (the candidate-grid/no-match
+        placeholders) — round 2's own two independent implementations of
+        the same idea, sharing only their `STARBURST_OUTER_COLOR`
+        constant — are now ONE component, `MysteryCard`/`MysteryCardFace`
+        (`cardPanel.tsx`). The owner read the large hero card and the
+        small candidate cards as visibly different shades of blue;
+        measured via computed `background-color` on both, they were
+        already byte-identical (`rgb(77, 141, 223)`) — the perceived
+        difference was a context/contrast effect from the hero's own
+        starburst bleed behind the large card, not a real colour
+        mismatch. Consolidating onto one shared component makes any
+        future drift between the two structurally impossible regardless
+        of whether today's colours already matched, which is the actual
+        "so future changes are one place" ask. The "?" itself is now
+        `whatsthat-mark.svg`'s own gold-gradient mascot (not plain text),
+        sized via `height: 66.6667%` on the glyph `<img>` (2/3 of
+        `MysteryCardFace`'s own height — a `position: absolute; inset: 0`
+        box over a definite-height containing block IS itself a definite
+        height, so a percentage-height child resolves normally) rather
+        than a fixed rem value, so the same component reads correctly at
+        both the large hero card and the much smaller candidate tiles.
+        `$playing`/`onAnimationEnd` are optional on `MysteryCard` — only
+        the hero reveal slot passes them (fading away in lockstep with
+        the blue, exactly as `RevealOverlay` did); every candidate-grid/
+        no-match slot omits them and gets the SAME component, just
+        permanently static (falls back to `animation-play-state: paused`
+        forever) — the exact behaviour `ArtPlaceholder`'s old `::before`
+        had, just as a real element instead of generated content.
+        Existing regression tests rewritten against the new structure:
+        the reveal-overlay "?" assertions (jest's `revealCard()` helper,
+        Playwright's "question-mark motif" describe block) now check the
+        glyph `<img>`'s own `src` instead of text content/pseudo-element
+        `content`; two pre-existing Playwright tests that queried a
+        candidate tile's own `<img>` generically (Level 1's reference-
+        image test, the hover-zoom edge-clipping test) had to be narrowed
+        (`getByRole("img")`/`img:not([alt=""])`) since `MysteryCard`'s own
+        `alt=""` glyph is now a SECOND `<img>` in the same container,
+        ahead of the real thumbnail in DOM order — a bare `.locator("img" ).first()` silently resolved to the non-interactive glyph instead
+        after this change, which would have quietly broken those tests'
+        own intent (measuring the wrong element) without failing outright.
+        New regression coverage: the glyph's own height-to-card-height
+        ratio (both the hero card and a candidate tile, asserting it's
+        relative sizing rather than a fixed value that happens to work
+        for both); every blue card on the page rendering the identical
+        `whatsthat-mark.svg` glyph asset.
     - **Fix round (PR #305/#308 owner review)**: the original
       `HeroGrid { max-height: calc(100dvh - NavbarHeight - 2rem) }`
       passed CI but let the whole page scroll live — the flat `2rem`

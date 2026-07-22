@@ -431,12 +431,18 @@ test.describe("question feed - hover-zoom/hover-burst edge clipping (owner live 
       .boundingBox();
     expect(containerBox).not.toBeNull();
 
-    await leftmostCandidate.locator("img").first().hover();
+    // `img:not([alt=""])` - round 3's shared `<MysteryCard />` (cardPanel.tsx) renders its own
+    // "?" glyph `<img alt="">` INSIDE this same candidate tile, ahead of the real thumbnail in
+    // DOM order, so a bare `.locator("img").first()` now resolves to the (non-interactive,
+    // `pointer-events: none`) glyph instead of the real, hover-zoomable thumbnail - this excludes
+    // it explicitly rather than relying on `.first()`'s DOM-order coincidence.
+    const realThumbnail = leftmostCandidate.locator('img:not([alt=""])');
+    await realThumbnail.hover();
     // matches ZoomableThumbnail's own 0.15s transition and HoverBurst's 0.18s transition
     // (cardPanel.tsx) - long enough for both to settle at their hovered size.
     await page.waitForTimeout(250);
 
-    const imgBox = await leftmostCandidate.locator("img").first().boundingBox();
+    const imgBox = await realThumbnail.boundingBox();
     const burstBox = await leftmostCandidate
       .locator(".hover-burst")
       .boundingBox();
@@ -711,15 +717,17 @@ test.describe("question feed - portrait static top block (owner live-review)", (
 // site's neutral background, not this page's own deep-blue starburst field, and measured out at
 // ~2.4:1 contrast for the worst offender - see cardPanel.tsx/QuestionFeed.tsx's own comments.
 //
-// Only (1) and (3) get new assertions here - (1) turned out to already be implemented (the
-// hero reveal overlay already rendered "?" as its own child, fading via the shared parent
-// opacity animation - see RevealOverlay's own comment in cardPanel.tsx), so these are a
-// regression guard, not new functionality. (2) has no code change: the narrow-width wordmark
-// (`whatsthat-composite.svg`) bakes its own "?" mascot glyph directly into the same flattened
-// image as the "WHAT'S THAT CARD?" text - there is no separate, distinct "?" DOM element at
-// narrow widths to remove without altering the wordmark itself (see this PR's own body for the
-// full ambiguity writeup) - so it's deliberately left untouched here, matching
-// WhatsThatWordsAnimation.spec.ts's existing narrow/wide wordmark visibility coverage.
+// Round 3 (owner ruling on round 2's open items) - (1) the hero reveal overlay's own "?" and
+// ArtPlaceholder's CSS `::before` "?" (round 2's two independent implementations, confirmed via
+// computed style to already share the same background colour) are now ONE shared composition,
+// `MysteryCard`/`MysteryCardFace` (cardPanel.tsx) - a yellow `whatsthat-mark.svg` glyph (not
+// plain text) scaled to 2/3 of the card's own height, used in every blue-card slot on the page.
+// The tests below were rewritten against that shared structure rather than the two old,
+// independent ones. (2) the narrow-width wordmark now uses `whatsthat-wordmark.svg` (a
+// pre-existing, pre-cropped text-only asset - no code needed to drop the standalone "?" mascot,
+// see QuestionFeed.tsx's own NarrowWordmark comment) - covered by
+// WhatsThatWordsAnimation.spec.ts's existing narrow/wide wordmark visibility tests, which don't
+// need new assertions since they only ever checked which container is visible, not its content.
 test.describe("question feed - question-mark motif + golden action buttons (owner review round 2)", () => {
   // rgb() equivalents of QuestionFeed.tsx's QUIZ_BUTTON_GOLD/QUIZ_BUTTON_NAVY constants -
   // getComputedStyle always resolves to this form regardless of how the source CSS wrote the
@@ -785,7 +793,7 @@ test.describe("question feed - question-mark motif + golden action buttons (owne
     ["mobile", PIXEL_7_VIEWPORT],
     ["desktop", { width: 1280, height: 900 }],
   ] as const) {
-    test(`the hero reveal overlay renders a '?' motif (not a bare blue box) before the card reveals - ${label}`, async ({
+    test(`the hero reveal overlay renders the shared '?' motif (not a bare blue box) before the card reveals - ${label}`, async ({
       page,
       network,
     }) => {
@@ -793,11 +801,17 @@ test.describe("question feed - question-mark motif + golden action buttons (owne
       await loadWithDelayedImage(page, network);
       const overlay = page.getByTestId("question-feed-reveal-overlay");
       await expect(overlay).toBeVisible();
-      await expect(overlay).toHaveText("?");
+      // Round 3 ("one blue card, used everywhere") - the "?" is now MysteryCard's own
+      // `whatsthat-mark.svg` glyph, an `<img>`, not plain text - assert its `src` directly
+      // rather than the overlay's text content.
+      await expect(overlay.locator("img")).toHaveAttribute(
+        "src",
+        "/whatsthat-mark.svg"
+      );
     });
   }
 
-  test("the candidate grid's 'mystery card' placeholders also carry the '?' motif", async ({
+  test("the candidate grid's 'mystery card' placeholders carry the SAME shared '?' motif component as the hero card", async ({
     page,
     network,
   }) => {
@@ -805,20 +819,27 @@ test.describe("question feed - question-mark motif + golden action buttons (owne
     await page.setViewportSize({ width: 1280, height: 900 });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    // ArtPlaceholder's "?" is a CSS ::before pseudo-element, not real DOM text - not directly
-    // queryable via getByText/toHaveText, so this reads the pseudo-element's own computed
-    // `content` value instead (the standard way to assert generated content in Playwright).
-    // ArtPlaceholder is CandidateButton's own immediate child div (JSX: <CandidateButton><
-    // ArtPlaceholder>...) - `data-card-identifier` lives on CandidateButton itself (a <button>),
-    // so its first `div` descendant is always ArtPlaceholder.
-    const placeholderDiv = page
+    // Round 3 - ArtPlaceholder no longer has its own `::before` "?" (round 2's independent
+    // implementation); it renders `<MysteryCard />` as a real child instead, the exact same
+    // component the hero reveal overlay above uses. `data-card-identifier` lives on
+    // CandidateButton itself (a <button>), so its own `img[src="/whatsthat-mark.svg"]`
+    // descendant is unambiguously MysteryCard's glyph, not the candidate's own art thumbnail
+    // (that `<img>` has a real `src`, never this literal path).
+    const glyph = page
       .locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
-      .locator("div")
-      .first();
-    const pseudoContent = await placeholderDiv.evaluate(
-      (el) => window.getComputedStyle(el, "::before").content
+      .locator('img[src="/whatsthat-mark.svg"]');
+    await expect(glyph).toBeVisible();
+
+    // Same background colour as the hero card (both are the same MysteryCardFace instance
+    // type) - explicit regression guard for the owner's own "unify to the small cards' blue"
+    // ask, even though the two were already byte-identical before this consolidation (see this
+    // PR's own report). Reads the glyph <img>'s own parentElement (MysteryCardFace) rather than
+    // a Playwright locator chain, since Playwright's own locator API has no CSS "parent" combinator.
+    const candidateBlue = await glyph.evaluate(
+      (el) =>
+        window.getComputedStyle(el.parentElement as HTMLElement).backgroundColor
     );
-    expect(pseudoContent).toBe('"?"');
+    expect(candidateBlue).toBe("rgb(77, 141, 223)");
   });
 
   test("every quiz action button (Filter toggle / None of these / Art matches / Skip) uses the shared gold treatment, not Bootstrap's default variant colours", async ({
@@ -874,5 +895,141 @@ test.describe("question feed - question-mark motif + golden action buttons (owne
       (el) => window.getComputedStyle(el).color
     );
     expect(unselectedColor).toBe(QUIZ_BUTTON_GOLD_RGB);
+  });
+});
+
+// Owner review round 3 ("one blue card, used everywhere") - the hero reveal overlay and the
+// candidate-grid/no-match placeholders now render the exact same `<MysteryCard />` component
+// (cardPanel.tsx) instead of two independent implementations (round 2's own finding - see that
+// describe block's own header comment). This describe block asserts the two NEW, round-3-
+// specific properties that component adds: the "?" glyph is sized relative to its own card (not
+// a fixed rem value, so it scales correctly across very different card sizes on this page), and
+// every blue card - large and small alike - renders from the identical `MysteryCardFace` shape.
+test.describe("question feed - shared blue mystery card composition (owner review round 3)", () => {
+  // A real (non-empty-src) card image resolves near-instantly against this suite's local mock
+  // server - the hero card is routinely already `revealed: true` (MysteryCard unmounted) by the
+  // time an assertion runs unless something holds the pre-reveal moment open (same root cause,
+  // same fix, as the "owner review round 2" describe block's own `loadWithDelayedImage` above -
+  // duplicated here rather than shared across describe blocks, matching this file's own existing
+  // per-describe-block convention).
+  async function loadWithDelayedImage(
+    page: import("@playwright/test").Page,
+    network: NetworkFixture
+  ) {
+    const testCard = {
+      ...cardDocument1,
+      mediumThumbnailUrl: "non-empty-sentinel-see-comment-above",
+      smallThumbnailUrl: "non-empty-sentinel-see-comment-above",
+    };
+    process.env.NEXT_PUBLIC_IMAGE_WORKER_URL = "https://cdn.proxyprints.ca";
+    const cdnImageURL = getWorkerImageURL(testCard, "small")!;
+    const cdnImagePattern = new RegExp(
+      `^${cdnImageURL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
+    );
+    await page.route(cdnImagePattern, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await route.fulfill({ path: "public/whatsthat-icon-192.png" });
+    });
+
+    network.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "identify_printing",
+              card: testCard,
+              candidates: [printingCandidate1, printingCandidate2],
+              tagConfidence: {},
+            },
+            remainingEstimate: {
+              total: 3,
+              confirmable: 0,
+              contested: 0,
+              fresh: 3,
+            },
+          },
+          { status: 200 }
+        )
+      ),
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+    await expect(page.getByAltText(testCard.name)).toBeVisible();
+  }
+
+  test("the '?' glyph is sized to roughly 2/3 of its own card's height, on both the large hero card and a small candidate tile", async ({
+    page,
+    network,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await loadWithDelayedImage(page, network);
+
+    // Hero card - the overlay itself IS the card's own box (position: absolute; inset: 0 over
+    // RevealWrapper, which sizes itself to the <img> it wraps), so its own boundingBox is the
+    // reference height to compare the glyph against.
+    const heroOverlay = page.getByTestId("question-feed-reveal-overlay");
+    const heroOverlayBox = await heroOverlay.boundingBox();
+    const heroGlyphBox = await heroOverlay.locator("img").boundingBox();
+    expect(heroOverlayBox).not.toBeNull();
+    expect(heroGlyphBox).not.toBeNull();
+    const heroRatio = heroGlyphBox!.height / heroOverlayBox!.height;
+    // A generous tolerance band around 2/3 (not an exact-to-the-pixel match) - the glyph's own
+    // asset has a small amount of internal padding/stroke, and boundingBox includes any
+    // sub-pixel rendering rounding.
+    expect(heroRatio).toBeGreaterThan(0.55);
+    expect(heroRatio).toBeLessThan(0.78);
+
+    // Small candidate tile - same ratio, a very differently-sized box.
+    const candidateTile = page.locator(
+      `[data-card-identifier="${printingCandidate1.identifier}"]`
+    );
+    const candidateGlyph = candidateTile.locator(
+      'img[src="/whatsthat-mark.svg"]'
+    );
+    const candidateGlyphBox = await candidateGlyph.boundingBox();
+    // Reads the glyph <img>'s own parentElement (MysteryCardFace, which fills the whole card
+    // via `position: absolute; inset: 0`) rather than a Playwright locator chain, since
+    // Playwright's own CSS locator API has no "parent" combinator.
+    const candidateCardHeight = await candidateGlyph.evaluate(
+      (el) => (el.parentElement as HTMLElement).getBoundingClientRect().height
+    );
+    expect(candidateGlyphBox).not.toBeNull();
+    const candidateRatio = candidateGlyphBox!.height / candidateCardHeight;
+    expect(candidateRatio).toBeGreaterThan(0.55);
+    expect(candidateRatio).toBeLessThan(0.78);
+
+    // The two cards are genuinely different sizes (otherwise this test wouldn't actually prove
+    // the sizing is RELATIVE rather than a lucky fixed value coincidentally matching both).
+    expect(heroOverlayBox!.height).toBeGreaterThan(candidateCardHeight * 1.5);
+  });
+
+  test("every blue mystery card on the page - the hero card and every candidate tile - renders the identical MysteryCard glyph asset", async ({
+    page,
+    network,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await loadWithDelayedImage(page, network);
+
+    // Hero card FIRST - checked immediately after load, before anything else spends wall-clock
+    // time (see the candidate loop below) - the hero's own reveal is gated on THIS test's
+    // artificially-delayed route mock settling, so any assertion that polls/retries for several
+    // seconds before reaching this one risks racing past that window and finding it already
+    // unmounted. Same "read the frozen pre-reveal moment once, right after load" pattern the
+    // sibling test above already relies on.
+    await expect(
+      page.getByTestId("question-feed-reveal-overlay").locator("img")
+    ).toHaveAttribute("src", "/whatsthat-mark.svg");
+
+    // Candidate tiles - unconditional/permanent (no reveal-then-unmount lifecycle the way the
+    // hero card has - see ArtPlaceholder's own comment, cardPanel.tsx), so this count is stable
+    // regardless of real network timing for the two candidates' OWN (unmocked) thumbnail URLs,
+    // and safe to check after the time-sensitive hero assertion above.
+    for (const candidate of [printingCandidate1, printingCandidate2]) {
+      await expect(
+        page
+          .locator(`[data-card-identifier="${candidate.identifier}"]`)
+          .locator('img[src="/whatsthat-mark.svg"]')
+      ).toHaveCount(1);
+    }
   });
 });

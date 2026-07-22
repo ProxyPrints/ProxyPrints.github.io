@@ -237,9 +237,14 @@ test.describe("question feed - confirm_suggestion question type", () => {
 
     // Regression check (#49 dropped this): Level 1 still needs its own reference render of the
     // suggested printing to compare against - "Is it this one?" is unanswerable from text alone.
+    // `getByRole("img")` (not a plain `img` locator) - round 3's shared `<MysteryCard />` (own
+    // comment, cardPanel.tsx) renders a SECOND `<img>` in this same container (its own "?" glyph,
+    // `alt=""`), which a bare `locator("img")` now matches too, causing a Playwright strict-mode
+    // violation. `alt=""` strips an <img> from the accessibility tree entirely, so `getByRole`
+    // (unlike a tag-selector) unambiguously resolves to just the real reference thumbnail below.
     const referenceImage = page
       .getByTestId("question-feed-level1-reference-image")
-      .locator("img");
+      .getByRole("img");
     await expect(referenceImage).toBeVisible();
     await expect(referenceImage).toHaveAttribute(
       "src",

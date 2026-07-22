@@ -32,17 +32,24 @@ function renderFeed() {
 }
 
 // jsdom never actually runs the CSS reveal animation (see cardPanel.tsx's revealAnimation),
-// so RevealOverlay's onAnimationEnd handler - the only thing that flips `revealed` to true -
+// so MysteryCard's onAnimationEnd handler - the only thing that flips `revealed` to true -
 // never fires on its own the way it would in a real browser (Playwright covers that path).
 // Manually dispatching the native event it listens for unblocks the candidate grid/chips for
 // every test below, same as a real animation completing.
 async function revealCard() {
   const overlay = await screen.findByTestId("question-feed-reveal-overlay");
-  // Owner review round 2 ("?" motif on every blue unrevealed card) - a regression guard for the
-  // overlay's own "?" child (cardPanel.tsx's RevealOverlay), asserted here rather than only in
-  // Playwright since every caller of this helper already exercises the overlay's pre-reveal
-  // moment; this fires before the fade (fireEvent.animationEnd below) removes it from the DOM.
-  expect(overlay).toHaveTextContent("?");
+  // Owner review round 3 ("one blue card, used everywhere") - a regression guard for the
+  // overlay's own "?" glyph (cardPanel.tsx's shared `MysteryCard`, rendered as an `<img>` of
+  // `whatsthat-mark.svg` rather than plain text since round 3 - see that component's own
+  // comment), asserted here rather than only in Playwright since every caller of this helper
+  // already exercises the overlay's pre-reveal moment; this fires before the fade
+  // (fireEvent.animationEnd below) removes it from the DOM.
+  // `alt=""` (deliberately decorative - see MysteryCardQuestionMark's own comment) strips the
+  // "img" ARIA role, so a plain tag-selector query is more reliable here than getByRole.
+  expect(overlay.querySelector("img")).toHaveAttribute(
+    "src",
+    "/whatsthat-mark.svg"
+  );
   fireEvent.animationEnd(overlay);
   await waitFor(() =>
     expect(

@@ -78,8 +78,8 @@ import {
   CardPanel,
   CardPulseWrapper,
   HoverBurst,
+  MysteryCard,
   randomFlavorText,
-  RevealOverlay,
   RevealWrapper,
   StaticCardPanel,
   useStarburstFrame,
@@ -521,6 +521,20 @@ const HeroWordsArea = styled.div`
 // per-card pop animation for a fixed one-line wordmark, in exchange for a single ~48px row
 // instead of three ~60px+ stacked lines.
 //
+// Owner review round 3 ("remove the standalone '?' on mobile") - `whatsthat-composite.svg` (the
+// asset above) bakes a large standalone "?" mascot into the same flattened image as the
+// "WHAT'S THAT CARD?" text (round 2's own report on this - see this PR's body for the full
+// investigation), which the owner's live device review read as a wasted, distracting element at
+// narrow widths now that every blue card ALSO carries its own "?" (round 3's own "one blue card"
+// ask). `whatsthat-wordmark.svg` - the SAME text, with no separate mascot at all (it's the
+// un-cropped source WhatsThatWords.tsx already slices into its three animated words below - see
+// that file's own header comment) - already existed as exactly the pre-cropped, text-only asset
+// the owner asked to check for, so no new art/manual SVG surgery was needed. Swapping
+// `NarrowWordmark`'s image source to it is the only change here; `WideWordmark`
+// (`WhatsThatWords`) was never affected either way - it has always rendered from this same
+// `whatsthat-wordmark.svg` source (sliced into three words), never the composite, so desktop's
+// own wordmark is unchanged by this swap.
+//
 // Both `NarrowWordmark`/`WideWordmark` below and their content stay mounted at every width
 // (CSS `display` toggle only, same pattern as MobileButtonRow/etc above) rather than
 // conditionally rendering `WhatsThatWords` only at >= md - avoids any hydration-mismatch risk
@@ -818,7 +832,7 @@ export function QuestionFeed() {
   // a still-loading or half-painted image. `imageLoaded`/`imageErrored` below, together with
   // `cardImageRef`'s mount-time `.complete` check (mirrors Card.tsx's own cached-image
   // workaround - see that component's comment), gate all three animations (via each one's own
-  // `$playing`/`playing` prop - RevealOverlay/CardPulseWrapper in cardPanel.tsx, WhatsThatWords
+  // `$playing`/`playing` prop - MysteryCardFace/CardPulseWrapper in cardPanel.tsx, WhatsThatWords
   // itself) on one single real load-complete moment instead of three independent mount timers.
   const [imageLoaded, setImageLoaded] = useState<boolean>(false);
   // A failed load never gets a legitimate "reveal" moment to sync to - the cover stays up
@@ -936,7 +950,7 @@ export function QuestionFeed() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, fetchToken]);
 
-  // The one moment every animation in the hero (RevealOverlay's fade, WhatsThatWords' pop,
+  // The one moment every animation in the hero (MysteryCard's fade, WhatsThatWords' pop,
   // CardPulseWrapper's pulse) is anchored to - see each of their own comments. Two cases skip
   // the animated queue entirely and jump straight to `revealed`, for different reasons:
   // reduced motion (nothing should ever visibly pop/fade, so there's no animationend event to
@@ -946,7 +960,7 @@ export function QuestionFeed() {
   // the reduced-motion shortcut has to apply on EITHER path, or a reduced-motion session that
   // happens to hit the catch-up path (a cached image, or - only in tests - an empty-string
   // fixture URL that never fires load/error at all) would never flip `revealed` at all, since
-  // reduced motion also means RevealOverlay's fade never plays and therefore never fires the
+  // reduced motion also means MysteryCard's fade never plays and therefore never fires the
   // `onAnimationEnd` that flips it the normal way. That gap is exactly what the reduced-motion
   // Playwright spec (WhatsThatWordsAnimation.spec.ts) caught empirically.
   const onCardImageSettled = (errored: boolean) => {
@@ -1355,13 +1369,11 @@ export function QuestionFeed() {
             of the question UI (badge/buttons/etc, gated on `revealed` elsewhere in this file)
             isn't stranded behind a cover that will never legitimately animate away. */}
         {(!revealed || imageErrored) && (
-          <RevealOverlay
+          <MysteryCard
             data-testid="question-feed-reveal-overlay"
-            $playing={imageLoaded && !imageErrored}
+            playing={imageLoaded && !imageErrored}
             onAnimationEnd={() => setRevealed(true)}
-          >
-            ?
-          </RevealOverlay>
+          />
         )}
       </RevealWrapper>
       <div className="text-center mt-1">{item.card.name}</div>
@@ -1462,6 +1474,7 @@ export function QuestionFeed() {
                   data-testid="question-feed-level1-reference-image"
                 >
                   <ArtPlaceholder>
+                    <MysteryCard />
                     <ZoomableThumbnail>
                       <img
                         src={item.suggestedPrinting.mediumThumbnailUrl}
@@ -1716,6 +1729,7 @@ export function QuestionFeed() {
                         />
                       </HoverBurst>
                       <ArtPlaceholder>
+                        <MysteryCard />
                         <ZoomableThumbnail>
                           <img
                             src={candidate.mediumThumbnailUrl}
@@ -1896,12 +1910,12 @@ export function QuestionFeed() {
           </CardPulseWrapper>
         </HeroCardArea>
         <HeroWordsArea>
-          {/* Narrow widths: the original one-line mark+wordmark lockup (see NarrowWordmark's
-              own comment) - swapped for the sliced/animated version via CSS `display` only,
-              both always mounted. */}
+          {/* Narrow widths: the original one-line wordmark, text only - no standalone "?"
+              mascot (round 3, see NarrowWordmark's own comment) - swapped for the sliced/
+              animated version via CSS `display` only, both always mounted. */}
           <NarrowWordmark>
             <img
-              src="/whatsthat-composite.svg"
+              src="/whatsthat-wordmark.svg"
               alt="What's That Card?"
               data-testid="whatsthat-narrow-wordmark"
             />

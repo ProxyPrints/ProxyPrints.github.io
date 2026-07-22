@@ -215,6 +215,16 @@ const WordsColumn = styled.div`
 // pop against a still-loading (or half-painted) card. Reduced-motion is unaffected by this prop
 // - the `@media (prefers-reduced-motion: reduce)` override below still wins regardless of
 // `$playing`'s value, exactly as before this fix round.
+// Owner review round 3 ("slow all 3 stages down a bit") - each word's own pop duration, and the
+// stagger between one word starting and the next, are both scaled by the same 4/3 (33.3%)
+// factor - within the owner's own "25-40% longer per stage" target, and a clean fraction that
+// preserves the EXISTING duration:stagger ratio exactly (240ms was already precisely half of
+// 480ms, i.e. each word started at the previous word's own 50%-scale peak; 320ms is precisely
+// half of the new 640ms) - "keep the stage ordering/feel identical" means the ripple's own
+// overlap shape has to scale in lockstep with the duration, not just the duration alone.
+// CardPulseWrapper (cardPanel.tsx) moves in lockstep with THAT's own delay/duration by the same
+// factor - see that component's own comment for why it has to stay frame-for-frame synced here
+// rather than being an independent, coincidentally-matching value.
 const Word = styled.svg<{ $delayMs: number; $playing: boolean }>`
   display: block;
   height: clamp(1.5rem, 3.2dvh, 2rem);
@@ -226,7 +236,7 @@ const Word = styled.svg<{ $delayMs: number; $playing: boolean }>`
   overflow: hidden;
   transform-origin: center;
   transform: rotate(var(--wtc-word-rotate, 0deg));
-  animation: ${wtcWordPop} 480ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+  animation: ${wtcWordPop} 640ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
   animation-delay: ${(props) => props.$delayMs}ms;
   animation-play-state: ${(props) => (props.$playing ? "running" : "paused")};
 
@@ -251,11 +261,13 @@ interface WordSlice {
 
 // viewBox bands measured directly off whatsthat-wordmark.svg's own letter-start x-coordinates
 // (wtc-redesign-spec.md W5's table) - the wide gaps between words (789->1042, 1486->1732)
-// are what make a clean three-way crop possible with no new art.
+// are what make a clean three-way crop possible with no new art. Delays 0/320/640ms (round 3,
+// see the Word component's own comment) - was 0/240/480ms, scaled by the same 4/3 factor as
+// each word's own pop duration.
 const WORDS: ReadonlyArray<WordSlice> = [
   { label: "WHAT'S", viewBox: "-40 150 1030 340", delayMs: 0, rotateDeg: -2 },
-  { label: "THAT", viewBox: "990 150 695 340", delayMs: 240, rotateDeg: 1.5 },
-  { label: "CARD?", viewBox: "1685 150 905 340", delayMs: 480, rotateDeg: -1 },
+  { label: "THAT", viewBox: "990 150 695 340", delayMs: 320, rotateDeg: 1.5 },
+  { label: "CARD?", viewBox: "1685 150 905 340", delayMs: 640, rotateDeg: -1 },
 ];
 
 interface WhatsThatWordsProps {
