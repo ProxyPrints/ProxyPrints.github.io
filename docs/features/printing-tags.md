@@ -86,7 +86,99 @@ printings, artists, tags, and moderation from one screen.
   `PRINTING_TAG_MIN_SHARE` (default 0.6) of total weight **and** at least
   one non-machine vote — `vote_consensus.is_human_backed_source()` is the one
   place that knows which `VoteSource` values are machine-derived, so no
-  volume of machine-only votes can resolve a card alone.
+  volume of machine-only votes can resolve a card alone. The shared core
+  (`vote_consensus.resolve_weighted_consensus`, used by printing/artist/tag
+  alike) additionally implements two owner-ratified mechanisms (2026-07-22
+  vote-weight scenario matrix — see that function's own docstring for the
+  exact arithmetic):
+  - **D1** — if two or more outcome groups each carry SOME human-backed
+    weight (a genuine human-vs-human disagreement), every group's
+    non-human-backed weight (machine/implicit alike) is dropped entirely
+    for both winner-selection and the gate checks — machine/implicit
+    weight can pool an already-agreeing human side's total, but can never
+    be the deciding weight in an actual human-vs-human contest it isn't
+    part of.
+  - **D4** — if D1 didn't trigger and the winner's own human-backed weight
+    alone already clears `PRINTING_TAG_MIN_VOTES`, the share computation
+    is recomputed from human-backed weight only across every group — so a
+    pile of machine/implicit dissent elsewhere can't drag an
+    already-quorum-valid human winner's share below `PRINTING_TAG_MIN_SHARE`
+    and silently de-resolve it (the single highest-impact fact the
+    matrix's Stage D arithmetic table flagged: at 28k+ deduction-vote
+    scale, 3+ machine dissent votes against a 2-user RESOLVED printing
+    used to flip it back to UNRESOLVED with no CONTESTED status to signal
+    it — this is fixed, not merely documented). Promotion (a lone human
+    vote plus agreeing machine weight resolving a previously-UNRESOLVED
+    pair) is unaffected by either mechanism — that's Stage D's own purpose
+    and neither D1 nor D4's trigger condition is met in that shape.
+  - **Tag-path-only**: dissent whose only weight is machine/implicit-
+    derived no longer classifies a `CardTagVote` pair's persisted status
+    as `contested` (`tag_consensus.py::resolve_and_persist_tag_votes`) —
+    `contested` now requires more than one polarity backed by an actual
+    human-backed vote. Such a pair still stays in `get_tag_review_queue_pairs`'s
+    candidate set (it still needs a human tiebreak), just filed
+    `unresolved` rather than `contested` — de-escalated, not removed, so a
+    real 23k+-scale deduction-dissent pile doesn't flood the review queue
+    with false "genuinely contested" signals. Printing/artist paths are
+    unchanged here (no persisted `CONTESTED` status exists for printing;
+    artist's own CONTESTED-vs-UNRESOLVED split is a separate, untouched
+    raw-outcome-count heuristic).
+- **Implicit votes** (`VoteSource.IMPLICIT`, owner-ratified 2026-07-22
+  vote-weight scenario matrix): a passive, low-weight signal cast when a
+  person picks a candidate card on `/editor` while one or more filter
+  chips are active — the pick implicitly endorses those tags for that
+  card, at `PRINTING_TAG_IMPLICIT_WEIGHT` (default 0.25) per vote, well
+  below a real `USER` vote. Never human-backed, never privileged, and the
+  SUM of implicit weight per (card, tag, polarity) outcome group is hard-
+  capped at `PRINTING_TAG_IMPLICIT_CAP` (default 1.0, strictly below
+  `PRINTING_TAG_MIN_VOTES`) — a pile of implicit votes can never form
+  quorum alone, decide a live human-vs-human contest (D1 above), or veto
+  an already-quorum-valid human win (D4 above). Lifecycle: one implicit
+  vote per (anonymous identity, card, tag) — `views.py::_cast_implicit_vote_and_resolve`
+  supersedes (via `update_or_create`) a stale implicit vote from the same
+  identity, and refuses (silent no-op) to touch a row that's already a
+  REAL vote from that identity — the `(card, tag, anonymous_id)`
+  uniqueness constraint (`models.py`'s `cardtagvote_unique_vote`) is
+  shared across every source, so an implicit cast may only ever create a
+  fresh row or update a row that's already implicit, never silently
+  downgrade a deliberate vote. `views.py::_retract_implicit_vote_and_resolve`
+  is the deselect path (only ever deletes a row whose `source == IMPLICIT`).
+  Write-side guards: refused entirely for `SENSITIVE`-class tags and for
+  any (card, tag) pair already `RESOLVED_APPLY`/`RESOLVED_REJECT`/
+  `PENDING_APPROVAL`; every implicit vote is stamped `vote_surface= "display-editor-filter"` (`views.IMPLICIT_VOTE_SURFACE`). Rate-limited
+  separately from real tag votes via `PRINTING_TAG_IMPLICIT_SUBMISSION_RATE`
+  (default 60/h — tighter than `PRINTING_TAG_SUBMISSION_RATE`'s 300/h,
+  since browsing candidates under active filters generates implicit votes
+  at a much higher natural cadence than deliberate tapping). Endpoints:
+  `POST 2/castImplicitVote/` (`{identifier, tagNames, anonymousId}` — one
+  call per candidate pick, casting/superseding an implicit vote for every
+  named tag; unknown/guarded tag names are silently skipped, never an
+  error) and `POST 2/retractImplicitVote/` (`{identifier, tagName, anonymousId}` — the deselect path). `cardpicker.vote_consensus.VoteTuple.is_implicit`
+  is the flag the shared resolver core keys its cap/D1/D4 treatment off of
+  — set by `tag_consensus.py`'s wrappers, never inferred from `source`
+  inside the resolver itself (same "caller decides" convention
+  `is_human_backed` already used).
+- **Suggested filter tags / suggestedness excludes implicit** (decision
+  D6): `tag_consensus.py::get_tag_net_polarity` (the questionFeed
+  confidence-fill scalar) EXCLUDES `VoteSource.IMPLICIT` weight entirely —
+  an implicit vote is a passive selection by-product, not independent
+  evidence, so it must never color a chip's confidence fill or let a
+  person's own earlier pick "explain itself" back to them. Separately,
+  `tag_consensus.py::get_suggested_filter_tags_overlay(card_ids)` (batched,
+  mirrors `get_resolved_tag_overlay`'s shape) computes which tags qualify
+  as a suggested `/editor` filter chip for a card: the APPLY side's
+  non-implicit weight is >= 1.0 and not exceeded by the NOT_APPLICABLE
+  side's own non-implicit weight, the pair's persisted status isn't
+  already `RESOLVED_APPLY`/`RESOLVED_REJECT`/`CONTESTED`/`PENDING_APPROVAL`,
+  and the tag isn't `SENSITIVE`. Exposed as `Card.serialise`'s
+  `include_suggested_filter_tags` kwarg → `SerialisedCard.suggestedFilterTagNames`
+  (`schemas/schemas/Card.json`), same opt-in-per-endpoint,
+  zero-cost-when-unused pattern as `suggestedCanonicalCard`/
+  `include_suggested_printing` above — defaults `False` everywhere; no
+  bulk endpoint enables it yet (a future one should call
+  `get_suggested_filter_tags_overlay` directly and attach the result up
+  front, the way `bulk_sync_objects` already does for `get_resolved_tag_overlay`,
+  rather than invoke `serialise()` per card in a loop).
 - **Search consumption**: `printing_consensus.py::get_resolved_printings(identifiers)`
   is the single shared gate (`printing_tag_status == RESOLVED` only) that
   both the search re-rank (`search_functions.py::retrieve_card_identifiers`,

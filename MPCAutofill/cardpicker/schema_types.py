@@ -303,6 +303,15 @@ class Card(BaseModel):
     cardpicker/models.py Card.serialise's include_suggested_printing kwarg - opt-in per
     endpoint to keep this a zero-cost no-op everywhere it isn't needed).
     """
+    suggestedFilterTagNames: Optional[List[str]] = None
+    """Tag names leaning APPLY for this card strongly enough to preselect as a /editor filter
+    chip, per the implicit-vote consensus ruling (docs/features/printing-tags.md's
+    implicit-vote section): the leaning side's non-implicit weight is >= 1.0, the pair isn't
+    already RESOLVED_APPLY/RESOLVED_REJECT/PENDING_APPROVAL or genuinely CONTESTED, and the
+    tag isn't SENSITIVE. null when the serializing endpoint didn't request this field (see
+    Card.serialise's include_suggested_filter_tags kwarg - opt-in per endpoint, same
+    zero-cost-when-unused pattern as suggestedCanonicalCard/include_suggested_printing above).
+    """
     tagVoteStatuses: Optional[Dict[str, TagVoteDisplayStatus]] = None
     """Suggested-vs-resolved status for every tag with at least one cast vote against this card
     (Card.tag_vote_statuses collapsed from its 5-way DB status to the 2-way distinction the
@@ -344,6 +353,9 @@ class Card(BaseModel):
         suggestedCanonicalCard = from_union(
             [from_none, CanonicalCardClass.from_dict], obj.get("suggestedCanonicalCard")
         )
+        suggestedFilterTagNames = from_union(
+            [from_none, lambda x: from_list(from_str, x)], obj.get("suggestedFilterTagNames")
+        )
         tagVoteStatuses = from_union(
             [lambda x: from_dict(TagVoteDisplayStatus, x), from_none], obj.get("tagVoteStatuses")
         )
@@ -374,6 +386,7 @@ class Card(BaseModel):
             sourceExternalLink,
             sourceType,
             suggestedCanonicalCard,
+            suggestedFilterTagNames,
             tagVoteStatuses,
         )
 
@@ -419,6 +432,10 @@ class Card(BaseModel):
         if self.suggestedCanonicalCard is not None:
             result["suggestedCanonicalCard"] = from_union(
                 [from_none, lambda x: to_class(CanonicalCardClass, x)], self.suggestedCanonicalCard
+            )
+        if self.suggestedFilterTagNames is not None:
+            result["suggestedFilterTagNames"] = from_union(
+                [from_none, lambda x: from_list(from_str, x)], self.suggestedFilterTagNames
             )
         if self.tagVoteStatuses is not None:
             result["tagVoteStatuses"] = from_union(
@@ -2617,6 +2634,56 @@ class TagConsensusRequest(BaseModel):
         return result
 
 
+class CastImplicitVoteRequest(BaseModel):
+    """
+    2/castImplicitVote/ - the active /editor filter chip tag list at the moment a candidate card
+    was picked (docs/features/printing-tags.md's implicit-vote section). `tagNames` may be
+    empty (a pick with no filters active casts no implicit votes and is a harmless no-op).
+    """
+
+    anonymousId: str
+    identifier: str
+    tagNames: List[str]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CastImplicitVoteRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        tagNames = from_list(from_str, obj.get("tagNames"))
+        return CastImplicitVoteRequest(anonymousId, identifier, tagNames)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["tagNames"] = from_list(from_str, self.tagNames)
+        return result
+
+
+class RetractImplicitVoteRequest(BaseModel):
+    """2/retractImplicitVote/ - a single filter chip deselected for a previously-picked card."""
+
+    anonymousId: str
+    identifier: str
+    tagName: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "RetractImplicitVoteRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        tagName = from_str(obj.get("tagName"))
+        return RetractImplicitVoteRequest(anonymousId, identifier, tagName)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["tagName"] = from_str(self.tagName)
+        return result
+
+
 class TagVoteTallyEntry(BaseModel):
     count: int
     polarity: int
@@ -2688,7 +2755,7 @@ class ChildElement(BaseModel):
         assert isinstance(obj, dict)
         children = from_list(ChildElement.from_dict, obj.get("children"))
         name = from_str(obj.get("name"))
-        aliases = from_union([lambda x: from_list(from_str, x), from_none], obj.get("aliases"))
+        aliases = from_union([from_none, lambda x: from_list(from_str, x)], obj.get("aliases"))
         displayName = from_union([from_none, from_str], obj.get("displayName"))
         isEnabledByDefault = from_union([from_bool, from_none], obj.get("isEnabledByDefault"))
         parent = from_union([from_none, from_str], obj.get("parent"))
@@ -2699,7 +2766,7 @@ class ChildElement(BaseModel):
         result["children"] = from_list(lambda x: to_class(ChildElement, x), self.children)
         result["name"] = from_str(self.name)
         if self.aliases is not None:
-            result["aliases"] = from_union([lambda x: from_list(from_str, x), from_none], self.aliases)
+            result["aliases"] = from_union([from_none, lambda x: from_list(from_str, x)], self.aliases)
         if self.displayName is not None:
             result["displayName"] = from_union([from_none, from_str], self.displayName)
         if self.isEnabledByDefault is not None:
@@ -2721,7 +2788,7 @@ class Tag(BaseModel):
         assert isinstance(obj, dict)
         children = from_list(ChildElement.from_dict, obj.get("children"))
         name = from_str(obj.get("name"))
-        aliases = from_union([lambda x: from_list(from_str, x), from_none], obj.get("aliases"))
+        aliases = from_union([from_none, lambda x: from_list(from_str, x)], obj.get("aliases"))
         displayName = from_union([from_none, from_str], obj.get("displayName"))
         isEnabledByDefault = from_union([from_bool, from_none], obj.get("isEnabledByDefault"))
         parent = from_union([from_none, from_str], obj.get("parent"))
@@ -2732,7 +2799,7 @@ class Tag(BaseModel):
         result["children"] = from_list(lambda x: to_class(ChildElement, x), self.children)
         result["name"] = from_str(self.name)
         if self.aliases is not None:
-            result["aliases"] = from_union([lambda x: from_list(from_str, x), from_none], self.aliases)
+            result["aliases"] = from_union([from_none, lambda x: from_list(from_str, x)], self.aliases)
         if self.displayName is not None:
             result["displayName"] = from_union([from_none, from_str], self.displayName)
         if self.isEnabledByDefault is not None:

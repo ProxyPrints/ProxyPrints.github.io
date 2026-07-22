@@ -96,6 +96,13 @@
       "additionalProperties": {
         "$ref": "./TagVoteDisplayStatus.json"
       }
+    },
+    "suggestedFilterTagNames": {
+      "description": "Tag names leaning APPLY for this card strongly enough to preselect as a /editor filter chip, per the implicit-vote consensus ruling (docs/features/printing-tags.md's implicit-vote section): the leaning side's non-implicit weight is >= 1.0, the pair isn't already RESOLVED_APPLY/RESOLVED_REJECT/PENDING_APPROVAL or genuinely CONTESTED, and the tag isn't SENSITIVE. null when the serializing endpoint didn't request this field (see Card.serialise's include_suggested_filter_tags kwarg - opt-in per endpoint, same zero-cost-when-unused pattern as suggestedCanonicalCard/include_suggested_printing above).",
+      "type": ["array", "null"],
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [

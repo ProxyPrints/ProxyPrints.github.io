@@ -497,6 +497,25 @@ class Card(models.Model):
             return None
         return votes[0].printing.serialise()
 
+    def _suggested_filter_tag_names(self) -> list[str]:
+        """
+        Tag names leaning APPLY for this card strongly enough to preselect as a /editor filter
+        chip (owner-ratified 2026-07-22 vote-weight scenario matrix, decision D6) - see
+        `cardpicker.tag_consensus.get_suggested_filter_tags_overlay`'s own docstring for the
+        exact qualifying condition. Deliberately a plain per-card query, not prefetch-gated the
+        way `_suggested_canonical_card` is: this field has no bulk consumer yet (see
+        `serialise`'s `include_suggested_filter_tags` kwarg - opt-in, defaults off everywhere).
+        A future bulk endpoint enabling this across many candidates at once should call
+        `get_suggested_filter_tags_overlay` directly and attach the result up front, the same
+        way `bulk_sync_objects` already does for `get_resolved_tag_overlay` - NOT invoke
+        `serialise(include_suggested_filter_tags=True)` per card in a loop.
+        """
+        from cardpicker.tag_consensus import (
+            get_suggested_filter_tags_overlay,  # local import - avoids a models<->tag_consensus cycle
+        )
+
+        return get_suggested_filter_tags_overlay([self.pk]).get(self.pk, [])
+
     def _serialise_tag_vote_statuses(self) -> dict[str, SerialisedTagVoteDisplayStatus]:
         """
         Collapses `tag_vote_statuses` (5-way DB status) to the 2-way suggested/resolved
@@ -510,7 +529,9 @@ class Card(models.Model):
             if status in _TAG_VOTE_DISPLAY_STATUS_BY_DB_STATUS
         }
 
-    def serialise(self, *, include_suggested_printing: bool = False) -> SerialisedCard:
+    def serialise(
+        self, *, include_suggested_printing: bool = False, include_suggested_filter_tags: bool = False
+    ) -> SerialisedCard:
         # Explicit if/elif chain (rather than a nested-ternary fallback) so the rung that
         # actually supplied the artist is captured as it's found, not re-derived afterwards by
         # checking which other fields are empty - that "all others empty" style of check would
@@ -563,6 +584,7 @@ class Card(models.Model):
             canonicalArtistSource=artist_source,
             printingTagStatus=SerialisedPrintingTagStatus(self.printing_tag_status),
             suggestedCanonicalCard=(self._suggested_canonical_card() if include_suggested_printing else None),
+            suggestedFilterTagNames=(self._suggested_filter_tag_names() if include_suggested_filter_tags else None),
             tagVoteStatuses=self._serialise_tag_vote_statuses(),
         )
 
@@ -645,6 +667,14 @@ class VoteSource(models.TextChoices):
     DEDUCTION = "deduction", gettext_lazy("Deduction")
     OCR = "ocr", gettext_lazy("OCR")
     FEDERATED = "federated", gettext_lazy("Federated")
+    # A passive by-product of a card *selection* under active /editor filter chips (2026-07-22
+    # vote-weight scenario matrix, owner-ratified): never a deliberate "yes this tag applies"
+    # tap. Tiny per-vote weight, capped per (card, tag, polarity) group, never human-backed, never
+    # privileged - see vote_consensus.py's _SOURCE_WEIGHTS/_MACHINE_DERIVED_SOURCES and
+    # docs/features/printing-tags.md's implicit-vote section. Written only via
+    # views.post_cast_implicit_vote/post_retract_implicit_vote, distinguished from every other
+    # source's vote_surface values by always carrying "display-editor-filter" there.
+    IMPLICIT = "implicit", gettext_lazy("Implicit")
 
 
 class AbstractWeightedVote(models.Model):

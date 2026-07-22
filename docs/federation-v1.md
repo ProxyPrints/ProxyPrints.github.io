@@ -137,6 +137,44 @@ explicitly if a peer's own review process has already made a federated
 verdict genuinely human-backed. The per-peer-promotable design below
 remains the eventual real mechanism and is still not built.
 
+## Implicit-vote weight semantics (pinned 2026-07-22, not yet exported)
+
+`VoteSource.IMPLICIT` (docs/features/printing-tags.md's implicit-vote
+section, owner-ratified 2026-07-22 vote-weight scenario matrix) is a new
+exported semantic that a future federation peer must know about before any
+importer consuming it exists — pinned here now per the matrix's own
+federation note, rather than left to be re-derived the day an importer
+first encounters an implicit-sourced verdict:
+
+- **Form shipped: low-weight + per-outcome-group cap**, not the
+  "share-only" alternative form the matrix's own drafting also considered
+  and explicitly rejected (that form let implicit weight either break a
+  genuine human tie or veto an otherwise quorum-valid human win, depending
+  on the scenario — never shipped).
+- Per-vote weight `PRINTING_TAG_IMPLICIT_WEIGHT` (default 0.25) counts
+  toward BOTH quorum and share, but the SUM of implicit weight within a
+  single (card, tag, polarity) outcome group is hard-capped at
+  `PRINTING_TAG_IMPLICIT_CAP` (default 1.0, strictly below
+  `PRINTING_TAG_MIN_VOTES`) — so no volume of implicit votes on one side
+  can ever supply that side's quorum weight alone.
+- `is_human_backed=False` always, same treatment as `DEDUCTION`/`OCR` —
+  an importer must not treat an imported implicit-sourced contribution as
+  human-backed, mirroring this doc's existing FEDERATED guidance above.
+- `resolve_weighted_consensus`'s D1/D4 mechanisms (see that function's own
+  docstring, and docs/features/printing-tags.md's "Consensus" bullet)
+  additionally guarantee implicit weight can never decide a live
+  human-vs-human contest nor de-resolve an already-quorum-valid human
+  winner — the same guarantee DEDUCTION/OCR/FEDERATED weight now gets.
+- **Not yet exported**: no federation verdict currently carries an
+  implicit-sourced contribution (implicit votes are a purely local
+  `/editor` filter-chip signal today, cast via `POST 2/castImplicitVote/`).
+  If/when a verdict export ever aggregates implicit weight into a
+  `vote_weight`/`human_votes` figure, the exported verdict must carry
+  enough information for an importer to reconstruct (or at minimum
+  respect) the cap above under the peer's own thresholds — exporting a
+  raw, uncapped implicit sum would let cross-peer share arithmetic diverge
+  from what this instance itself would have resolved.
+
 ## Future work: contributor nodes (design note, 2026-07-19 — NOT built)
 
 The pieces already landing for local, non-federated reasons compose

@@ -4,10 +4,17 @@ from django.core.cache import cache
 from django.urls import reverse
 
 from cardpicker import views
-from cardpicker.models import CardTagVote, TagVoteStatus, VotePolarity, VoteSource
+from cardpicker.models import (
+    CardTagVote,
+    TagModerationClass,
+    TagVoteStatus,
+    VotePolarity,
+    VoteSource,
+)
 from cardpicker.tag_consensus import (
     get_contested_tag_pairs,
     get_resolved_tag_overlay,
+    get_suggested_filter_tags_overlay,
     get_tag_net_polarity,
     get_tag_review_queue_pairs,
     get_tag_vote_tally,
@@ -152,6 +159,34 @@ class TestResolveAndPersistTagVotes:
         card.refresh_from_db()
         assert card.tag_vote_statuses == {"Borderless": TagVoteStatus.CONTESTED}
 
+    def test_machine_only_dissent_against_a_lone_human_stays_unresolved_not_contested(self, db):
+        # owner-ratified 2026-07-22 vote-weight scenario matrix, decision D3 (matrix cell B3):
+        # dissent whose only weight is machine-derived must not be classified CONTESTED - that
+        # word is reserved for a genuine human-vs-human disagreement, so a queue built off
+        # `tag_vote_statuses` doesn't get flooded by 23k+ scale deduction dissent.
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="Borderless")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        for _ in range(3):
+            CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, source=VoteSource.DEDUCTION)
+
+        resolve_and_persist_tag_votes(card)
+
+        card.refresh_from_db()
+        assert card.tag_vote_statuses == {"Borderless": TagVoteStatus.UNRESOLVED}
+
+    def test_implicit_only_dissent_against_a_lone_human_also_stays_unresolved(self, db):
+        # IMPLICIT is non-human-backed too - same D3 treatment as machine-derived dissent.
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="Borderless")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, source=VoteSource.IMPLICIT)
+
+        resolve_and_persist_tag_votes(card)
+
+        card.refresh_from_db()
+        assert card.tag_vote_statuses == {"Borderless": TagVoteStatus.UNRESOLVED}
+
     def test_persists_unresolved_for_a_single_vote_below_threshold(self, db):
         card = CardFactory(tags=[])
         tag = TagFactory(name="Borderless")
@@ -215,6 +250,123 @@ class TestGetResolvedTagOverlay:
         assert overlay == {}
 
 
+class TestGetSuggestedFilterTagsOverlay:
+    """
+    Owner-ratified 2026-07-22 vote-weight scenario matrix, decision D6's second half: which
+    tags qualify as a "suggested" /editor filter chip for a card.
+    """
+
+    def test_a_single_real_vote_at_the_weight_threshold_qualifies(self, db):
+        card = CardFactory()
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+
+        assert get_suggested_filter_tags_overlay([card.pk]) == {card.pk: ["Foil"]}
+
+    def test_below_the_weight_threshold_does_not_qualify(self, db):
+        card = CardFactory()
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.DEDUCTION)
+
+        assert get_suggested_filter_tags_overlay([card.pk]) == {}
+
+    def test_implicit_weight_alone_never_qualifies(self, db):
+        # implicit weight is excluded entirely (same D6 exclusion as get_tag_net_polarity) -
+        # even many implicit votes, well past what would clear the weight threshold if counted,
+        # must not bootstrap their own filter-chip suggestion.
+        card = CardFactory()
+        tag = TagFactory(name="Foil")
+        for i in range(10):
+            CardTagVoteFactory(
+                card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.IMPLICIT, anonymous_id=f"impl-{i}"
+            )
+
+        assert get_suggested_filter_tags_overlay([card.pk]) == {}
+
+    def test_leaning_reject_does_not_qualify_as_a_suggested_apply_chip(self, db):
+        card = CardFactory()
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, source=VoteSource.USER)
+
+        assert get_suggested_filter_tags_overlay([card.pk]) == {}
+
+    def test_already_resolved_apply_is_excluded(self, db):
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.ADMIN)
+        resolve_and_persist_tag_votes(card)
+        card.refresh_from_db()
+
+        assert get_suggested_filter_tags_overlay([card.pk]) == {}
+
+    def test_stale_resolved_reject_status_excludes_even_a_now_apply_leaning_weight(self, db):
+        # exercises the STATUS guard specifically (not just the weight/leaning check): a
+        # persisted RESOLVED_REJECT status from an earlier consensus run must still exclude the
+        # pair even if the underlying votes have since changed to lean APPLY - the overlay must
+        # never race ahead of `resolve_and_persist_tag_votes` re-running.
+        card = CardFactory(tags=["Foil"])
+        tag = TagFactory(name="Foil")
+        admin_vote = CardTagVoteFactory(
+            card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, source=VoteSource.ADMIN
+        )
+        resolve_and_persist_tag_votes(card)
+        card.refresh_from_db()
+        assert card.tag_vote_statuses["Foil"] == TagVoteStatus.RESOLVED_REJECT
+
+        admin_vote.delete()
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+
+        assert get_suggested_filter_tags_overlay([card.pk]) == {}
+
+    def test_genuinely_contested_status_is_excluded(self, db):
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, source=VoteSource.USER)
+        resolve_and_persist_tag_votes(card)
+        card.refresh_from_db()
+
+        assert get_suggested_filter_tags_overlay([card.pk]) == {}
+
+    def test_pending_approval_status_is_excluded(self, db):
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="NSFW", moderation_class=TagModerationClass.SENSITIVE)
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        resolve_and_persist_tag_votes(card)
+        card.refresh_from_db()
+
+        assert get_suggested_filter_tags_overlay([card.pk]) == {}
+
+    def test_sensitive_tag_is_always_excluded_regardless_of_status(self, db):
+        card = CardFactory()
+        tag = TagFactory(name="NSFW", moderation_class=TagModerationClass.SENSITIVE)
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+
+        assert get_suggested_filter_tags_overlay([card.pk]) == {}
+
+    def test_batches_across_multiple_cards(self, db):
+        card_a = CardFactory()
+        card_b = CardFactory()
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card_a, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        CardTagVoteFactory(card=card_b, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+
+        overlay = get_suggested_filter_tags_overlay([card_a.pk, card_b.pk])
+
+        assert overlay == {card_a.pk: ["Foil"], card_b.pk: ["Foil"]}
+
+    def test_absent_from_the_provided_card_ids_is_never_returned(self, db):
+        card = CardFactory()
+        other_card = CardFactory()
+        tag = TagFactory(name="Foil")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+
+        overlay = get_suggested_filter_tags_overlay([other_card.pk])
+
+        assert overlay == {}
+
+
 class TestGetContestedTagPairs:
     def test_both_polarities_present_is_contested(self, db):
         card = CardFactory()
@@ -256,6 +408,20 @@ class TestGetTagReviewQueuePairs:
         resolve_and_persist_tag_votes(card)
 
         assert get_tag_review_queue_pairs() == []
+
+    def test_machine_only_dissent_stays_in_the_queue_despite_losing_contested_status(self, db):
+        # decision D3's own scope note: de-escalating out of CONTESTED does NOT mean removed
+        # from the review queue - a pair with a real human vote on one side and only machine
+        # dissent on the other still genuinely needs a human tiebreak, so it must remain a
+        # candidate (now filed as UNRESOLVED rather than CONTESTED).
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="Machine Dissent")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        for _ in range(3):
+            CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, source=VoteSource.DEDUCTION)
+        resolve_and_persist_tag_votes(card)
+
+        assert (card.pk, "Machine Dissent") in get_tag_review_queue_pairs()
 
     def test_contested_before_lopsided(self, db):
         contested_card = CardFactory(tags=[])
@@ -365,6 +531,25 @@ class TestGetTagNetPolarity:
         tag_b = TagFactory()
         CardTagVoteFactory(card=card, tag=tag_a, polarity=VotePolarity.APPLY, source=VoteSource.USER)
         assert get_tag_net_polarity(card, tag_b) == 0.0
+
+    @pytest.mark.parametrize("implicit_vote_count", [0, 1, 5, 50])
+    def test_net_polarity_is_invariant_to_any_number_of_implicit_votes(self, db, implicit_vote_count):
+        # owner-ratified 2026-07-22 vote-weight scenario matrix, decision D6: IMPLICIT weight
+        # must be excluded entirely from this confidence-fill scalar - piling on any number of
+        # implicit votes (agreeing OR dissenting) must never move the value away from the real,
+        # non-implicit vote's own net polarity.
+        card = CardFactory()
+        tag = TagFactory()
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.USER)
+        for i in range(implicit_vote_count):
+            CardTagVoteFactory(
+                card=card,
+                tag=tag,
+                polarity=VotePolarity.NOT_APPLICABLE if i % 2 == 0 else VotePolarity.APPLY,
+                source=VoteSource.IMPLICIT,
+                anonymous_id=f"implicit-{i}",
+            )
+        assert get_tag_net_polarity(card, tag) == 1.0
 
 
 class TestPostSubmitTagVote:
