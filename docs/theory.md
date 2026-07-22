@@ -7,7 +7,13 @@ doubles as the technical annex for a future federation pitch (see
 `docs/federation-v1.md`), so it avoids repo-internal jargon where a
 general term exists. For a plain-language walkthrough of the same
 pipeline without the formal decoding model, see
-[`identification-pipeline.md`](identification-pipeline.md).
+[`identification-pipeline.md`](identification-pipeline.md). For the
+pipeline-fidelity gate (GitHub issue #154, internally task #151) that
+governs whether §7's Stage D chain is cleared to fire at full-catalog
+scale, see the canonical status page,
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) — this file
+keeps the formal method and the pilot's own measured numbers, the gate's
+status/decisions live only on that page.
 
 ## 1. The model: decoding over a closed codebook
 
@@ -125,13 +131,20 @@ different-printing pairs (zero within the clustering threshold, minimum
 observed distance 6) and §2c's structural gate below.
 
 **c. The full-catalog run's own gate**, at the scale that matters most:
-**every one of the 43,426 machine votes cast (165,980 candidates
+**every one of the 43,425 machine votes cast (165,980 candidates
 processed, 26.2% invocation hit rate) was verified, after the fact,
-against `verify_zero_resolutions` — 0/43,426 affected cards were ever
-resolved by machine evidence alone.** This is not a sampled estimate; it
-is the literal count. It's a soundness property, not an accuracy one
-(see §4) — but it means that even in the counterfactual worst case where
-every one of those 43,426 votes were wrong, **not one of them was ever
+against `verify_zero_resolutions` — 0/43,425 affected cards were ever
+resolved by machine evidence alone.** (Corrected 2026-07-22 from a
+previously-stated 43,426 — an off-by-one against the live
+`CardPrintingTag` count for this `run_id`, unreconciled to any
+documented retraction; see
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) for the full
+candidates-scanned/votes-cast/distinct-cards-voted breakdown, which are
+three different numbers, not one flattened figure.) This is not a
+sampled estimate; it is the literal count. It's a soundness property,
+not an accuracy one (see §4) — but it means that even in the
+counterfactual worst case where every one of those 43,425 votes were
+wrong, **not one of them was ever
 capable of independently producing an incorrect resolution**, by
 construction, at this observed scale.
 
@@ -253,8 +266,8 @@ turns out to be:
    already-quorum-valid human winner is in play. Machine evidence narrows
    and prioritizes what a human is asked to confirm; it never substitutes
    for that confirmation, and — as of this ratification — never dilutes
-   or overturns one either. This is the property §2c's 0/43,426 result is
-   actually verifying — not "43,426 correct decisions," but "43,426
+   or overturns one either. This is the property §2c's 0/43,425 result is
+   actually verifying — not "43,425 correct decisions," but "43,425
    decisions that were structurally incapable of resolving anything on
    their own."
 
@@ -547,7 +560,7 @@ on this exact chain**: the 2026-07-21 write run verified **0 / 8,925**
 touched cards resolved on machine evidence alone (independently
 re-derived via `resolve_printing`, and cross-checked against the
 `printing_tag_status` cache — `docs/reports/2026-07-21-staged-write.md`),
-matching the older live pilot's **0 / 43,426** (§2c). The two runs
+matching the older live pilot's **0 / 43,425** (§2c). The two runs
 measure the same structural guarantee on two different pipelines; both
 read 0, by construction, at the scales observed.
 
@@ -701,8 +714,10 @@ otherwise.
 (the §2b false-accept/abstention-verification reframe and arithmetic
 correction, and §3's XOR-framing correction) applied above. Calibrated
 against the full-catalog run completed 2026-07-16/17
-(`run_id=20260716T193408-6613a1a6`, 165,980 candidates, 43,426 votes,
-26.2% invocation hit rate, 0/43,426 gate verification) and the
+(`run_id=20260716T193408-6613a1a6`, 165,980 candidates scanned, 43,425
+votes cast across 41,586 distinct cards, 26.2% invocation hit rate,
+0/43,425 gate verification — corrected 2026-07-22, see
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md)) and the
 pre-existing 300+300 validation and no-match autopsy numbers in
 `docs/features/printing-tags.md`. The §2a pair-count shortfall (both
 harvested-pair categories have an unexplained ~10-20% gap between
@@ -722,5 +737,5 @@ divergence plainly rather than retrofitting §1). Anchored on the
 2026-07-21 `staged-write-20260721T0434Z` run (8,925 join-key votes,
 0/8,925 gate verification, 2/20,677 ambiguous rate;
 `docs/reports/2026-07-21-staged-write.md`) alongside §2's existing
-0/43,426 and 269-pair numbers. The commission is owner-approved; the
+0/43,425 and 269-pair numbers. The commission is owner-approved; the
 §§7–9 **text** is pending the same owner review §§1–6 received.

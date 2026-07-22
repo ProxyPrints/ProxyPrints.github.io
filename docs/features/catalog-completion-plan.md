@@ -666,8 +666,9 @@ every write pass, the human-backed gate untouched, no new tags
 (altered-frame/custom-art only, matching every other part in this
 doc). HOLD for owner GO before any full-catalog fire, gated on
 real numbers, not projections — see each stage below and the
-pipeline-fidelity gate (task #151, blocks Stage D's HOLD) for what
-"real" means here. **Deploy-freeze protocol** (task #156): while any
+pipeline-fidelity gate (GitHub issue #154, internally task #151, blocks
+Stage D's HOLD — see [[../pipeline-fidelity-gate.md]] for its current
+status) for what "real" means here. **Deploy-freeze protocol** (task #156): while any
 run in this pipeline is active (its soak test or a full-catalog fire),
 the deploy/CI/push surface is frozen — see
 [[../infrastructure.md]]'s "Deploy-freeze protocol" section for what's
@@ -2053,21 +2054,15 @@ empirically-derived constant/threshold/override/skip-reason mapped to
 its home in the new pipeline, or flagged missing) must be clean. Both
 gate task #148 (the owner HOLD deliverable) and any full-catalog fire.
 
-**Gate artifact 2 (knowledge-inventory sweep) status, 2026-07-22**: run —
-`docs/reports/2026-07-22-knowledge-inventory.md`. NOT clean as originally
-worded above: 3 confirmed MISSING items (`RESOLUTION_FLOOR_DPI=200` has no
-Stage C/D analogue at all; `EXCLUDED_RESOLVED_TAGS` custom-art/non-english
-exclusion and the deductive-backfill-covered exclusion are both absent from
-Stage D's `_eligible_cards_queryset`) plus 3 open items (the pilot's
-per-batch checkpoint-flush cadence vs. Stage D's single end-of-run flush;
-`NAME_FREQUENCY_ANONYMOUS_ID`'s structural-elimination engine has no Stage D
-port; printing-vote d≤2 cluster propagation has no confirmed Stage D
-equivalent). None of the three MISSING items are soundness violations (the
-human-backed consensus gate still applies to every vote Stage D casts), but
-the gate's own "must be clean" bar is not met as stated — owner review
-needed on whether these three are must-fix-before-fire or accepted gaps.
-Artifact 1 (the stratified-sample parity replay) is separately queued
-behind the extraction and not addressed by this pass.
+**Gate status — canonical page, not restated here**: current artifact
+status (artifact 2 done and NOT clean, artifact 1 pending), the two open
+owner decisions (the three MISSING constants, and the corrected
+parity-replay methodology), and the pilot/`ImageEvidence`-migration
+timing mismatch all live at
+[`../pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md) — that
+page is the single source of truth for this gate's status; this section
+keeps only the precondition definition above and the Stage D build
+detail below.
 
 **Stage C: fetch/compute decoupling design (2026-07-20, addresses the canary's
 63.1% parallel-efficiency gap)** — the process-pool fix above (PR #224) was a
@@ -2757,8 +2752,10 @@ permits your users to be the compute."
 - Part 6: **merged** — `docs/theory.md`, reviewed and approved by the
   owner 2026-07-17 (3 edits: §2b's false-accept/abstention-verification
   reframe + arithmetic fix, §3's XOR-framing correction). Calibrated
-  against the full-catalog run's real numbers (43,426 votes, 26.2%
-  invocation hit rate, 0/43,426 gate). Sequencing after backfill
+  against the full-catalog run's real numbers (43,425 votes, 26.2%
+  invocation hit rate, 0/43,425 gate — corrected 2026-07-22 from a
+  previously-stated 43,426, see
+  [`pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md)). Sequencing after backfill
   completes: Part 3's volume check against real `content_phash` + the
   6,379 scan-logged frame-mismatches, then Part 4 HOLD #B, then Part 5
   HOLD #C.
