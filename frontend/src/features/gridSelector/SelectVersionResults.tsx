@@ -24,11 +24,20 @@
  * vote data." In this component's actual data (`CardDocument`, not `PrintingCandidate`), there is
  * no `borderColor`/`frame`/`fullArt`/etc field at all - see attributeChips.ts's own
  * `chipMembershipState` comment for the full explanation. Every axis chip here is therefore
- * SETTLED/SUGGESTED purely from `card.tags`/`card.tagVoteStatuses` (Tag-consensus data), which is
- * still a `votesOn`-gated read (the "suggested" half is only ever consulted when a `voteLayer` is
- * supplied) - so F5's votes-off guarantee (no SUGGESTED chip, no vote-derived filtering) holds
- * exactly as specified, just implemented against the real available data rather than a
- * `PrintingCandidate`-shaped one.
+ * SETTLED from `card.tags` and SUGGESTED from `card.suggestedFilterTagNames` (Tag-consensus
+ * data), which is still a `votesOn`-gated read (the "suggested" half is only ever consulted
+ * when a `voteLayer` is supplied) - so F5's votes-off guarantee (no SUGGESTED chip, no
+ * vote-derived filtering) holds exactly as specified, just implemented against the real
+ * available data rather than a `PrintingCandidate`-shaped one.
+ *
+ * FIX ROUND (owner-ratified condition 6, Tron's PR #329 review): the SUGGESTED read specifically
+ * moved from `card.tagVoteStatuses` to `card.suggestedFilterTagNames` - `tagVoteStatuses` is a
+ * source-agnostic collapse (both CONTESTED and UNRESOLVED read `"suggested"`, no implicit
+ * exclusion, no weight floor), which let an implicit-only signal seed MORE implicit votes for
+ * itself via F4b's cast-on-pick. `suggestedFilterTagNames` is the compliant, implicit-excluded,
+ * floor-gated source - see attributeChips.ts's `chipMembershipState` comment for the full
+ * reasoning. The SETTLED read (`card.tags`) is unaffected - resolved facts carry no such loop
+ * risk.
  */
 import styled from "@emotion/styled";
 import React, { Ref, useEffect, useMemo, useRef, useState } from "react";
@@ -802,19 +811,31 @@ export function SelectVersionResults({
   // fading ack - all gated on there being an actual support set to cast (an ordinary pick under
   // chips that are all already-resolved facts for this candidate casts no vote and does not
   // reset - see this file's own report for this edge case's reasoning).
+  //
+  // FIX ROUND (owner-ratified condition 6, Tron's PR #329 review): the support set now comes
+  // from `voteLayer.suggestedTagNames(card)` (the same seam `showSuggestedBadge` above already
+  // uses), NOT a raw `card.tagVoteStatuses` read - see attributeChips.ts's `chipMembershipState`
+  // comment for the full "tagVoteStatuses is source-agnostic and self-seeds implicit votes"
+  // reasoning. `voteLayer.suggestedTagNames` is itself sourced from `suggestedFilterTagNames`
+  // (DisplayPage.tsx), which is implicit-vote-excluded and floor-gated server-side - casting
+  // support only for tags that clear that bar closes the loop condition 6 forbids. The
+  // `!card.tags.includes(tagName)` check is retained as a defensive belt-and-suspenders gate
+  // (suggestedFilterTagNames is already documented to exclude resolved pairs server-side, but
+  // this costs nothing and matches D20's own literal wording).
   const handleSelect = (identifier: string) => {
     onSelectImage(identifier);
     if (layout !== "stacked" || voteLayer == null) {
       return;
     }
     const card = cardDocumentsByIdentifier[identifier];
+    const suggestedForCard =
+      card == null ? [] : voteLayer.suggestedTagNames(card);
     const supportTagNames =
       card == null
         ? []
         : Array.from(activeAttributeTags).filter(
             (tagName) =>
-              card.tagVoteStatuses?.[tagName] === "suggested" &&
-              !card.tags.includes(tagName)
+              suggestedForCard.includes(tagName) && !card.tags.includes(tagName)
           );
     // F4d - always call through, even with an empty support set, so the caller can retract
     // whatever it cast for this slot's PREVIOUS pick.

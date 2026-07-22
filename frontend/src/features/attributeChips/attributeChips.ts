@@ -231,15 +231,36 @@ export const FUNNEL_AXES: FunnelAxis[] = [
 /**
  * A chip's membership state over a set of surviving candidates (funnel-spec.md F3): "settled"
  * when at least one candidate resolves the tag (`card.tags`, a consensus-resolved fact), or
- * "suggested" when every candidate that carries the tag only does so via an unconfirmed,
- * machine-suggested vote (`tagVoteStatuses === "suggested"`). `undefined` means no surviving
- * candidate carries this attribute at all - the funnel doesn't render the chip (F3's
- * "aggregation over candidates" rule).
+ * "suggested" when every candidate that carries the tag only does so via
+ * `suggestedFilterTagNames` - the backend's own APPLY-leaning-only, implicit-excluded,
+ * >=1.0-non-implicit-weight-floor computation (`get_suggested_filter_tags_overlay`,
+ * docs/features/printing-tags.md). `undefined` means no surviving candidate carries this
+ * attribute at all - the funnel doesn't render the chip (F3's "aggregation over candidates"
+ * rule).
  *
- * `votesOn` gates the "suggested" read entirely (F5's votes-off seam): when false, a candidate
- * that only carries the tag via a suggested vote is treated as not carrying it at all, so the
- * chip either shows as settled (if some OTHER candidate resolves it) or doesn't render - never
- * "suggested" - matching F5's "every chip renders SETTLED/plain" base-funnel guarantee.
+ * FIX ROUND (owner-ratified condition 6, Tron's PR #329 review): this used to read
+ * `tagVoteStatuses[tagName] === "suggested"` for the suggested state. That field is a
+ * source-agnostic collapse - the backend serializer maps BOTH `CONTESTED` and `UNRESOLVED` to
+ * the same `"suggested"` string, with no floor and no implicit-vote exclusion - so a tag with
+ * ONLY implicit votes (or a single sub-threshold machine vote, or a REJECT-leaning split) also
+ * reads `"suggested"` there. Since F4b casts a NEW implicit vote for every "suggested" chip a
+ * pick satisfies, sourcing membership from `tagVoteStatuses` let an already-implicit-only signal
+ * seed MORE implicit votes for itself - exactly the self-seeding loop condition 6 forbids.
+ * `suggestedFilterTagNames` is the compliant source: computed server-side with implicit weight
+ * excluded entirely and a real non-implicit APPLY-leaning floor
+ * (`PRINTING_TAG_SUGGESTED_FILTER_MIN_WEIGHT` equivalent, see that function's own docstring),
+ * and already excludes RESOLVED/CONTESTED/PENDING_APPROVAL/SENSITIVE pairs. `tagVoteStatuses`
+ * stays the source for the "settled" (resolved) read above - resolved facts have no such loop
+ * risk, D20 explicitly gates "restricted to tags the candidate does NOT already resolve" off the
+ * same `tags` array this reads.
+ *
+ * `votesOn` still gates the whole "suggested" read (F5's votes-off seam): when false, a
+ * candidate's `suggestedFilterTagNames` is never consulted at all, so the chip either shows as
+ * settled (if some OTHER candidate resolves it) or doesn't render - never "suggested" - matching
+ * F5's "every chip renders SETTLED/plain" base-funnel guarantee. `suggestedFilterTagNames` being
+ * `null`/absent (the backend wiring for this field lands in a parallel PR; until deployed the
+ * wire value is `null`) degrades identically to "no suggested carriers" - no throw, no crash,
+ * the funnel stays fully functional on settled/metadata chips alone.
  *
  * DEVIATION (documented, not silent - see this task's own report): the spec's ground-truth
  * section describes chip membership as readable from raw Scryfall fields via
@@ -248,15 +269,15 @@ export const FUNNEL_AXES: FunnelAxis[] = [
  * has NO `borderColor`/`frame`/`fullArt`/etc fields at all - those exist only on the distinct
  * `PrintingCandidate` schema QuestionFeed.tsx's own feed items carry. Since every chip in this
  * taxonomy is already backed by a seeded Tag row (this file's own top-of-file comment), the only
- * signal actually available here is `tags`/`tagVoteStatuses` - exactly what this function reads.
- * The "metadata" membership state (F3.3) therefore stays honestly unreachable via this helper,
- * same as the spec's own carve-out for "a future metadata-only chip."
+ * signal actually available here is `tags`/`suggestedFilterTagNames` - exactly what this function
+ * reads. The "metadata" membership state (F3.3) therefore stays honestly unreachable via this
+ * helper, same as the spec's own carve-out for "a future metadata-only chip."
  */
 export type ChipMembershipState = "settled" | "suggested" | "metadata";
 
 export interface ChipMembershipCandidate {
   tags: CardDocument["tags"];
-  tagVoteStatuses?: CardDocument["tagVoteStatuses"];
+  suggestedFilterTagNames?: CardDocument["suggestedFilterTagNames"];
 }
 
 export function chipMembershipState(
@@ -271,7 +292,7 @@ export function chipMembershipState(
       anyResolved = true;
     } else if (
       votesOn &&
-      candidate.tagVoteStatuses?.[tagName] === "suggested"
+      (candidate.suggestedFilterTagNames?.includes(tagName) ?? false)
     ) {
       anySuggested = true;
     }
@@ -283,11 +304,12 @@ export function chipMembershipState(
 
 /**
  * Whether a single candidate satisfies an active filter tag - resolved (`tags`) OR, only when
- * `votesOn`, suggested-but-unconfirmed (`tagVoteStatuses`). The funnel's own per-axis
- * survivor-narrowing filter (F1/F2) applies this per active chip, ANDed across chips (same
- * semantics `filterCandidatesByChipStates` already uses for the QuestionFeed's tri-state chips,
- * just sourced from Tag-consensus data rather than `chip.matches` - see `chipMembershipState`'s
- * own comment for why).
+ * `votesOn`, suggested via the backend's own compliant `suggestedFilterTagNames` computation
+ * (condition 6 - see `chipMembershipState`'s own comment for the full "why not tagVoteStatuses"
+ * reasoning). The funnel's own per-axis survivor-narrowing filter (F1/F2) applies this per
+ * active chip, ANDed across chips (same semantics `filterCandidatesByChipStates` already uses
+ * for the QuestionFeed's tri-state chips, just sourced from Tag-consensus data rather than
+ * `chip.matches`).
  */
 export function candidateSatisfiesAttributeTag(
   candidate: ChipMembershipCandidate,
@@ -296,7 +318,7 @@ export function candidateSatisfiesAttributeTag(
 ): boolean {
   return (
     candidate.tags.includes(tagName) ||
-    (votesOn && candidate.tagVoteStatuses?.[tagName] === "suggested")
+    (votesOn && (candidate.suggestedFilterTagNames?.includes(tagName) ?? false))
   );
 }
 

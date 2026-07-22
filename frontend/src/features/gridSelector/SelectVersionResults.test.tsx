@@ -39,7 +39,10 @@ const stubClientSearchContext = {
 function makeCard(
   identifier: string,
   tags: string[],
-  tagVoteStatuses?: Record<string, TagVoteDisplayStatus>
+  options: {
+    tagVoteStatuses?: Record<string, TagVoteDisplayStatus>;
+    suggestedFilterTagNames?: string[];
+  } = {}
 ): CardDocument {
   return {
     identifier,
@@ -60,8 +63,28 @@ function makeCard(
     mediumThumbnailUrl: "",
     language: "EN",
     tags,
-    tagVoteStatuses,
+    tagVoteStatuses: options.tagVoteStatuses,
+    suggestedFilterTagNames: options.suggestedFilterTagNames,
     printingTagStatus: "no_match" as CardDocument["printingTagStatus"],
+  };
+}
+
+// Fix round (owner-ratified condition 6, Tron's PR #329 review) - the funnel's own compliant
+// voteLayer.suggestedTagNames implementation, mirroring DisplayPage.tsx's real one exactly:
+// sourced from `suggestedFilterTagNames` (implicit-excluded, floor-gated server-side), NEVER
+// `tagVoteStatuses` (a source-agnostic collapse with no such guarantee - see
+// attributeChips.ts's chipMembershipState comment for the full reasoning).
+function buildVoteLayer(
+  overrides: Partial<VoteLayerProps> = {}
+): VoteLayerProps {
+  return {
+    onImplicitSupport: jest.fn(),
+    suggestedTagNames: (card) =>
+      (card.suggestedFilterTagNames ?? []).filter(
+        (tagName) => !card.tags.includes(tagName)
+      ),
+    awarenessCopy: (tags) => `supports ${tags.join(", ")}`,
+    ...overrides,
   };
 }
 
@@ -205,26 +228,53 @@ describe("SelectVersionResults funnel (funnel-spec.md F1-F7)", () => {
 
   // 3 candidates (not <=2) throughout this test so the tier stays "medium" and axes stay
   // visible (D21's hero-tier collapse would otherwise hide the chip regardless of membership,
-  // confounding what this test is actually asserting).
+  // confounding what this test is actually asserting). Fix round (condition 6) - the "suggested"
+  // signal is `suggestedFilterTagNames`, the compliant source, NOT `tagVoteStatuses`.
   const suggestedOldBorderFixture = () => [
-    makeCard("s-1", [], { "Old Border": TagVoteDisplayStatus.Suggested }),
+    makeCard("s-1", [], { suggestedFilterTagNames: ["Old Border"] }),
     makeCard("s-2", []),
     makeCard("s-3", []),
   ];
 
   it("F3 - a chip whose only surviving carrier is suggested (not resolved) renders dashed/unconfirmed, ONLY when a vote layer is supplied", () => {
-    const voteLayer: VoteLayerProps = {
-      onImplicitSupport: jest.fn(),
-      suggestedTagNames: (card) =>
-        Object.keys(card.tagVoteStatuses ?? {}).filter(
-          (t) =>
-            card.tagVoteStatuses?.[t] === "suggested" && !card.tags.includes(t)
-        ),
-      awarenessCopy: (tags) => `supports ${tags.join(", ")}`,
-    };
-    renderFunnel(suggestedOldBorderFixture(), voteLayer);
+    renderFunnel(suggestedOldBorderFixture(), buildVoteLayer());
     const chip = screen.getByTestId("funnel-chip-Old Border");
     expect(chip).toHaveAttribute("data-chip-membership", "suggested");
+  });
+
+  // Fix round (owner-ratified condition 6, Tron's PR #329 review) - the exact non-compliance
+  // caught in review, pinned at the unit level: a card whose `tagVoteStatuses` calls a tag
+  // "suggested" (the source-agnostic collapse - CONTESTED/UNRESOLVED/an implicit-only lean all
+  // read this way) but whose `suggestedFilterTagNames` does NOT include it (the compliant,
+  // implicit-excluded, floor-gated source says this tag doesn't qualify) must render NO suggested
+  // chip and must never appear in `onImplicitSupport`'s cast set on pick.
+  it("F3/condition 6 - a tag tagVoteStatuses calls 'suggested' but suggestedFilterTagNames excludes renders no suggested chip and casts no implicit vote for it", async () => {
+    const user = userEvent.setup();
+    const onImplicitSupport = jest.fn();
+    const cards = [
+      makeCard("noncompliant-1", [], {
+        tagVoteStatuses: { "Old Border": TagVoteDisplayStatus.Suggested },
+        suggestedFilterTagNames: [],
+      }),
+      makeCard("filler-1", ["Full Art"]),
+      makeCard("filler-2", []),
+    ];
+    renderFunnel(cards, buildVoteLayer({ onImplicitSupport }));
+
+    // No "Old Border" chip anywhere - the only carrier's tagVoteStatuses lean is not
+    // corroborated by the compliant suggestedFilterTagNames source.
+    expect(screen.queryByTestId("funnel-chip-Old Border")).toBeNull();
+
+    // Activate the Full Art chip (a genuinely SETTLED, unrelated axis) and pick the
+    // non-compliant candidate - it must cast no support for "Old Border" (it was never eligible),
+    // and since it doesn't resolve/suggest Full Art either, it won't even survive that filter -
+    // pick it directly with no filter active instead, to isolate the assertion.
+    await user.click(
+      screen
+        .getByTestId("select-version-tile-noncompliant-1")
+        .querySelector(".mpccard") as HTMLElement
+    );
+    expect(onImplicitSupport).toHaveBeenCalledWith("noncompliant-1", []);
   });
 
   it("F5 - votes-off completeness: no voteLayer means a suggested-only chip never renders (nothing to honestly filter by), and no awareness line even with active chips", () => {

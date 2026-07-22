@@ -175,8 +175,8 @@ described above.
   so picking Black doesn't make White/Silver permanently vanish from
   their own axis).
 - **Three chip states** (F3): SETTLED (some survivor resolves the tag —
-  `card.tags`), SUGGESTED (every carrying survivor only has it via an
-  unconfirmed vote — `card.tagVoteStatuses[tag] === "suggested"`, dashed
+  `card.tags`), SUGGESTED (every carrying survivor only has it via
+  `card.suggestedFilterTagNames` — see the compliance note below, dashed
   border + trailing `⌇`, vote-layer-gated), or absent (no surviving
   candidate carries the attribute at all). **Deviation from the spec's
   ground-truth text (documented, not silent)**: the spec describes
@@ -187,10 +187,39 @@ described above.
   `CardDocument`s this rail actually has carry no `borderColor`/`frame`/
   `fullArt`/etc fields at all. Every chip in this taxonomy is already
   Tag-consensus-backed (this file's own top-of-file comment), so
-  membership/filtering here reads `tags`/`tagVoteStatuses` instead —
-  functionally equivalent, and the spec's own "metadata" membership
-  state (F3.3) stays honestly unreachable, exactly as its own carve-out
-  anticipates.
+  membership/filtering here reads `tags`/`suggestedFilterTagNames`
+  instead — functionally equivalent, and the spec's own "metadata"
+  membership state (F3.3) stays honestly unreachable, exactly as its own
+  carve-out anticipates.
+  - **Compliance fix (owner-ratified condition 6, caught in PR #329
+    review)**: the SUGGESTED read and F4b's implicit-vote support set
+    originally sourced from `card.tagVoteStatuses[tag] === "suggested"`.
+    That field is a source-agnostic collapse — the backend serializer
+    maps BOTH `CONTESTED` and `UNRESOLVED` to the same `"suggested"`
+    string, with no implicit-vote exclusion and no weight floor — so a
+    tag with ONLY implicit votes (or one sub-threshold machine vote, or
+    a REJECT-leaning split) also read `"suggested"` there. Since F4b
+    casts a NEW implicit vote for every SUGGESTED chip a pick satisfies,
+    sourcing membership off `tagVoteStatuses` let an already-implicit
+    signal seed MORE implicit votes for itself — the exact self-seeding
+    loop condition 6 forbids. Fixed: both the SUGGESTED membership read
+    (`attributeChips.ts`'s `chipMembershipState`/
+    `candidateSatisfiesAttributeTag`) and the implicit-support set
+    (`SelectVersionResults.tsx`'s `handleSelect`, via the `voteLayer. suggestedTagNames` seam) now read `card.suggestedFilterTagNames`
+    instead — the backend's own implicit-excluded, floor-gated,
+    already-RESOLVED/CONTESTED/PENDING_APPROVAL/SENSITIVE-excluded
+    computation (`get_suggested_filter_tags_overlay`,
+    docs/features/printing-tags.md). The SETTLED read (`card.tags`) is
+    unaffected — resolved facts carry no such loop risk. `null`/absent
+    `suggestedFilterTagNames` (the backend wiring for this field lands
+    in a parallel PR — until deployed the wire value is `null`)
+    degrades to "no suggested carriers," never a crash — the funnel
+    stays fully functional on settled/metadata chips alone. Pinned as a
+    regression test (`SelectVersionResults.test.tsx`'s "condition 6"
+    case + `tests/SelectVersionSection.spec.ts`'s matching e2e test):
+    a card whose `tagVoteStatuses` says `"suggested"` but whose
+    `suggestedFilterTagNames` excludes the tag renders no suggested
+    chip and casts no implicit vote for it.
 - **Count-proportional disclosure** (F1/D21, named constants
   `FUNNEL_DENSE_ABOVE = 8` / `FUNNEL_HERO_AT_OR_BELOW = 2`): `>8`
   survivors → axes shown + advanced filters auto-expanded once + dense

@@ -540,15 +540,29 @@ const SelectVersionSection = ({
   // consults. `suggestedTagNames`/`awarenessCopy` are pure reads over data already on the
   // CardDocument/active-tag-name list this component already has in scope; `onImplicitSupport`
   // is the caller-bound cast/retract half (see this component's own prop comment).
+  //
+  // FIX ROUND (owner-ratified condition 6, Tron's PR #329 review): `suggestedTagNames` now
+  // reads `card.suggestedFilterTagNames`, NOT `card.tagVoteStatuses`. `tagVoteStatuses` is a
+  // source-agnostic collapse - the backend serializer maps BOTH CONTESTED and UNRESOLVED to the
+  // same `"suggested"` string, with no implicit-vote exclusion and no weight floor - so a tag
+  // with ONLY implicit votes (or one sub-threshold machine vote, or a REJECT-leaning split) also
+  // reads `"suggested"` there. Since a "suggested" chip drives BOTH the dashed-chip UI AND F4b's
+  // implicit-vote cast on pick, sourcing either off `tagVoteStatuses` let an already-implicit-only
+  // signal seed MORE implicit votes for itself - the self-seeding loop condition 6 forbids.
+  // `suggestedFilterTagNames` is the compliant source (`get_suggested_filter_tags_overlay`,
+  // docs/features/printing-tags.md): implicit weight excluded entirely, a real non-implicit
+  // APPLY-leaning floor, and RESOLVED/CONTESTED/PENDING_APPROVAL/SENSITIVE pairs already
+  // excluded server-side. `null`/absent (the backend wiring for this field lands in a parallel
+  // PR - until deployed the wire value is `null`) degrades to `[]` here via `?? []`, so the
+  // funnel stays fully functional on settled/metadata chips with zero suggested chips, never a
+  // crash.
   const voteLayer: VoteLayerProps | undefined =
     onImplicitSupport != null
       ? {
           onImplicitSupport,
           suggestedTagNames: (card) =>
-            Object.keys(card.tagVoteStatuses ?? {}).filter(
-              (tagName) =>
-                card.tagVoteStatuses?.[tagName] === "suggested" &&
-                !card.tags.includes(tagName)
+            (card.suggestedFilterTagNames ?? []).filter(
+              (tagName) => !card.tags.includes(tagName)
             ),
           awarenessCopy: (activeTagNames) =>
             `Picking a card here supports ${activeTagNames

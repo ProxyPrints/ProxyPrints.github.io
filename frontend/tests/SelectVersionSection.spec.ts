@@ -1,7 +1,14 @@
 import { expect } from "@playwright/test";
 import { http, HttpResponse } from "msw";
 
-import { localBackendURL } from "@/common/test-constants";
+import { computeSearchQueryHashKey } from "@/common/processing";
+import { CardType } from "@/common/schema_types";
+import {
+  cardDocument13,
+  cardDocument15,
+  cardDocument19,
+  localBackendURL,
+} from "@/common/test-constants";
 import {
   cardDocumentsSelectVersionMixedResults,
   castImplicitVoteSuccess,
@@ -267,5 +274,93 @@ test.describe("SelectVersionSection (issue #167)", () => {
       .toEqual([
         { identifier: "1lL2mM3nN4oO5pP6qQ7rR8sS9tT0uU", tagName: "Old Border" },
       ]);
+  });
+
+  // Fix round (owner-ratified condition 6, Tron's PR #329 review) - the exact non-compliance
+  // caught in review, pinned as a regression test: cardDocument19 carries
+  // `tagVoteStatuses: {"Old Border": "suggested"}` (the source-agnostic collapse - could be an
+  // implicit-only lean, a sub-threshold machine vote, or a REJECT-leaning split) but an EMPTY
+  // `suggestedFilterTagNames` (the compliant, implicit-excluded, floor-gated source says this tag
+  // does NOT qualify). The funnel must render NO suggested chip for "Old Border" on this
+  // candidate set, and picking cardDocument19 while a DIFFERENT active chip is on must cast NO
+  // implicit vote for "Old Border" specifically (nothing to cast - it was never in the support
+  // set in the first place).
+  test("a tag that tagVoteStatuses calls 'suggested' but suggestedFilterTagNames excludes renders no suggested chip and casts no implicit vote for it (condition 6)", async ({
+    page,
+    network,
+  }) => {
+    const castCalls: Array<{ identifier: string; tagNames: string[] }> = [];
+    network.use(
+      http.post(buildRoute("2/cards/"), () =>
+        HttpResponse.json(
+          {
+            results: {
+              [cardDocument19.identifier]: cardDocument19,
+              [cardDocument13.identifier]: cardDocument13,
+              [cardDocument15.identifier]: cardDocument15,
+            },
+          },
+          { status: 200 }
+        )
+      ),
+      http.post(buildRoute("3/editorSearch/"), () =>
+        HttpResponse.json(
+          {
+            results: {
+              [computeSearchQueryHashKey({
+                query: "my search query",
+                cardType: CardType.Card,
+              })]: [
+                cardDocument19.identifier,
+                cardDocument13.identifier,
+                cardDocument15.identifier,
+              ],
+            },
+          },
+          { status: 200 }
+        )
+      ),
+      http.post(buildRoute("2/castImplicitVote/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          identifier: string;
+          tagNames: string[];
+        };
+        castCalls.push({
+          identifier: body.identifier,
+          tagNames: body.tagNames,
+        });
+        return HttpResponse.json({ tags: [] }, { status: 200 });
+      }),
+      sourceDocumentsOneResult,
+      tagConsensusTwoUnresolvedTags,
+      submitTagVoteResolvesToApply,
+      retractImplicitVoteSuccess,
+      ...defaultHandlers
+    );
+    await openSelectVersionSection(page);
+
+    // No suggested chip for "Old Border" at all - the only candidate that carries it
+    // (cardDocument19) does so via tagVoteStatuses only, which the funnel no longer consults for
+    // the suggested read.
+    await expect(page.getByTestId("funnel-chip-Old Border")).toHaveCount(0);
+
+    // Activate a DIFFERENT axis (Treatment has no membership here since none of these three carry
+    // a Treatment tag at all) isn't available, so instead: pick cardDocument19 directly with NO
+    // filters active - an ordinary pick, no vote, no ack, no awareness line.
+    await page
+      .getByTestId(`select-version-tile-${cardDocument19.identifier}`)
+      .locator(".mpccard")
+      .click();
+    await expect(page.getByTestId("funnel-support-ack")).toHaveCount(0);
+    await expect(page.getByTestId("funnel-awareness-line")).toHaveCount(0);
+
+    // Belt-and-suspenders: even if some OTHER mechanism tried to cast for this card, "Old
+    // Border" must never appear in any cast call's tagNames for cardDocument19.
+    const castsForCard19 = castCalls.filter(
+      (call) => call.identifier === cardDocument19.identifier
+    );
+    expect(
+      castsForCard19.some((call) => call.tagNames.includes("Old Border"))
+    ).toBe(false);
   });
 });

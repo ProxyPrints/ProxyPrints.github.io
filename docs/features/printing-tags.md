@@ -134,13 +134,21 @@ printings, artists, tags, and moderation from one screen.
   `APICastImplicitVote`/`APIRetractImplicitVote`
   (`frontend/src/store/api.ts`) were added as part of that round — PR
   #325 (below) shipped the backend contract with the frontend half
-  explicitly deferred. **`SerialisedCard.suggestedFilterTagNames` is
-  still NOT consumed anywhere** — the funnel's SUGGESTED chip state
-  reads `card.tags`/`card.tagVoteStatuses` directly instead (see
-  grid-selector.md's own deviation note for why), a deliberate,
-  documented choice, not an oversight; `suggestedFilterTagNames` remains
-  available for a future caller that wants the backend's own
-  APPLY-leaning-only computation instead.
+  explicitly deferred. **`SerialisedCard.suggestedFilterTagNames` IS now
+  the funnel's SUGGESTED-chip data source** (fixed during PR #329
+  review, owner-ratified condition 6): an earlier draft of the funnel
+  read `card.tagVoteStatuses` instead, which is a source-agnostic
+  collapse (CONTESTED and UNRESOLVED both read `"suggested"`, no
+  implicit-vote exclusion, no weight floor) — since a SUGGESTED chip
+  also drives F4b's implicit-vote cast-on-pick, that let an
+  already-implicit-only signal seed MORE implicit votes for itself, the
+  self-seeding loop condition 6 forbids. `suggestedFilterTagNames`'s own
+  implicit-exclusion and non-implicit-weight floor (below) close that
+  loop — see grid-selector.md's own "Compliance fix" note for the full
+  before/after. The endpoint payload for the field being `null`/absent
+  (the backend serializer wiring that actually POPULATES this field for
+  the `/display` rail's card-fetch endpoint is a parallel, not-yet-landed
+  PR) degrades to "no suggested chips" on the frontend, never a crash.
 - **Implicit votes** (`VoteSource.IMPLICIT`, owner-ratified 2026-07-22
   vote-weight scenario matrix): a passive, low-weight signal cast when a
   person picks a candidate card on the `/display` funnel (see above)
