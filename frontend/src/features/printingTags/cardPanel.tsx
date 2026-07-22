@@ -20,13 +20,31 @@ import {
 } from "@/features/printingTags/starburstShape";
 
 // Silhouette-reveal: the card starts as a black silhouette with a "?" in
-// the middle, holds for a beat, then fades to reveal the real art. The Scryfall candidate
+// the middle, then fades to reveal the real art. The Scryfall candidate
 // list is deliberately not rendered until this finishes (see `revealed` state below) - the
 // whole point is to test recognition before handing over the answer options.
+//
+// Fix round (owner live-review, "the blue should fade sooner") - this used to hold at full
+// opacity for the first 55% of its 1.8s run (a leftover from BEFORE #317 gated `$playing` on
+// the real image-load event below: back when this fired at mount time regardless of whether
+// the image had actually arrived, that hold bought the network a moment to catch up). Now that
+// `$playing` already stays paused at this 0% frame until QuestionFeed.tsx confirms the image
+// has genuinely loaded (see RevealOverlay's own `$playing` prop and QuestionFeed.tsx's
+// `onCardImageSettled`), the hold is pure redundant lag layered ON TOP of the real wait - by
+// the time this is ever allowed to run, the image is already there, so holding at opacity 1 for
+// another ~1s just reads as "nothing happened yet". Collapsed to a plain two-stop fade (no hold
+// checkpoint at all) so the drop starts the instant playback resumes, and shortened 1.8s ->
+// 0.8s + switched ease-in -> ease-out so the fade is visibly moving immediately rather than
+// creeping through its own first chunk before accelerating (ease-in's shape does that same
+// "slow start" thing a hold does, just continuously instead of as a flat plateau). Timings
+// (see cardPanel.tsx/whatsthat PR body): WhatsThatWords' pop sequence (0/0.24s/0.48s delay,
+// 0.48s duration each - ends at 0.48s/0.72s/0.96s) and CardPulseWrapper's pulse (0.24s delay,
+// 0.48s duration - ends 0.72s) now land ACROSS this fade's own 0-0.8s run rather than only
+// starting after it had long finished (old: hold 0-0.99s, fade 0.99s-1.8s), so the pops
+// visibly overlap the fade's tail (its last ~40%, 0.48s-0.8s) as intended.
 export const revealAnimation = keyframes`
-  0% { opacity: 1; }
-  55% { opacity: 1; }
-  100% { opacity: 0; }
+  from { opacity: 1; }
+  to { opacity: 0; }
 `;
 
 export const RevealWrapper = styled.div`
@@ -46,8 +64,8 @@ export const RevealWrapper = styled.div`
 // half-painted) image right as WhatsThatWords/CardPulseWrapper's own pops fired, breaking the
 // "one queued moment" the owner asked for. `$playing` (paused by default, same
 // `animation-play-state` mechanism as Word in WhatsThatWords.tsx) holds this at its own 0%
-// frame - fully opaque, i.e. visually identical to today's pre-fade hold - until
-// QuestionFeed.tsx confirms the image has settled, so the fade (and therefore the
+// frame - fully opaque, i.e. the same solid cover the user has been looking at since mount -
+// until QuestionFeed.tsx confirms the image has settled, so the fade (and therefore the
 // `onAnimationEnd`-driven `revealed` flip) can never start before the image is actually there
 // to reveal. QuestionFeed.tsx never sets `$playing` at all for a failed load (see its own
 // comment) - the cover simply stays at this 0% frame indefinitely instead of fading onto a
@@ -62,7 +80,9 @@ export const RevealOverlay = styled.div<{ $playing: boolean }>`
   justify-content: center;
   font-size: 4rem;
   font-weight: bold;
-  animation: ${revealAnimation} 1.8s ease-in forwards;
+  /* 0.8s ease-out, no hold - see revealAnimation's own comment above for the full before/after
+     timing rationale (was 1.8s ease-in with a 55% hold). */
+  animation: ${revealAnimation} 0.8s ease-out forwards;
   animation-play-state: ${(props) => (props.$playing ? "running" : "paused")};
   pointer-events: none;
 `;
@@ -114,17 +134,31 @@ export const StaticCardPanel = styled.div`
 // above) keeps it from ever painting over the neighbouring columns' own text at >= md, since
 // those render later in DOM order and are never negatively stacked themselves there.
 //
-// Below md the picture is different: HeroCardArea (QuestionFeed.tsx) becomes a small
-// `position: sticky` bar sitting ABOVE the scrolling questions in z-index terms (by design -
-// that's the whole point of the condensed pinning treatment), so an oversized burst bleeding
-// out of that bar would obscure genuinely scrolled-under content, not just harmlessly bleed
-// into empty hero field - a real legibility problem, unlike the desktop case. The hero
-// enlargement backs off to a modest size on phone for exactly that reason.
+// Below md, HeroCardArea (QuestionFeed.tsx) is a compact card column sitting beside a
+// horizontally-scrollable answer column, not overlaid on top of it (see that component's own
+// "mobile row" comment) - a burst bleeding past the card's own edges there lands in the row's
+// own gap/blue field, the same "on-aesthetic bleed" the >= md case already accepts, not on top
+// of scrolled-under text the way the card's old `position: sticky` bar (superseded) would have
+// made a big bleed risky.
+//
+// Fix round (owner live-review, "no starburst visible on mobile") - the previous mobile value
+// here, `90%`, was SMALLER than the card's own box (100% of the same CardPanel/StaticCardPanel
+// this centers on), and `aspect-ratio: 1` makes it a perfect square besides - centered on a
+// panel whose real box is a full-width, taller-than-wide portrait card, a burst narrower AND
+// shallower than that box is entirely eclipsed by the (opaque) card art in every direction, by
+// construction, regardless of the jagged/spiky silhouette's own shape (confirmed via a real
+// Pixel 7 portrait screenshot + getBoundingClientRect() diff in this task's own report - the
+// burst rendered at `opacity` 1/`width` ~108px sat fully inside the card image's own ~120px
+// box). No value <= 100% can ever be visible here; `90%` reads as a scale-DOWN-from-desktop
+// intent (the code comment historically called this "backing off to a modest size") rather
+// than a literal CSS-width-of-container instruction - `200%` below is that same "back off from
+// the >= md value" intent (230% * ~0.9, rounded), just actually large enough to bleed past the
+// card's own edges the way every other breakpoint here already does.
 export const BurstSvg = styled.svg<{ $hero?: boolean }>`
   position: absolute;
   top: 50%;
   left: 50%;
-  width: ${(props) => (props.$hero ? "90%" : "55%")};
+  width: ${(props) => (props.$hero ? "200%" : "55%")};
   aspect-ratio: 1;
   transform: translate(-50%, -50%);
   z-index: -1;

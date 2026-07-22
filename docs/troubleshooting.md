@@ -1340,3 +1340,77 @@ CI at a rate that matters, the real fix is loosening the test's own
 `waitForFunction`/poll on the indicator text before asserting, instead of
 relying on `expect(...).toContainText`'s own retry window alone), not
 touching the sheet-content pipeline it happens to render.
+
+## A styled-component CSS template literal throws confusing `TS1005`/`TS1351`/`TS1443` parse errors a few lines below a comment that "looks fine"
+
+**Symptom**: adding an explanatory `//` comment INSIDE an
+emotion/styled-components CSS template literal (between the opening
+`` styled.div` `` and its own closing backtick) produces a cascade of
+unrelated-looking TypeScript parse errors - `TS1005: ',' expected`,
+`TS1351: An identifier or keyword cannot immediately follow a numeric literal`, `TS1443: Module declaration names may only use ' or " quoted strings` - pointing at code several lines AFTER the comment, not at the
+comment itself.
+
+**Cause**: the comment contains a literal backtick character (e.g.
+writing `` `minmax(0, 7.5rem)` `` or `` `position: sticky` `` inline to
+mark it as code). A JS/TS template literal has no concept of a "CSS
+comment" - stylis (the CSS preprocessor emotion/styled-components run
+template-literal content through) treats `//...` as a comment, but that
+processing happens AFTER the JS parser has already tokenized the
+template literal as a plain string. The JS parser itself doesn't know or
+care that stylis will later treat some of this text as a comment - it
+just scans for the next unescaped backtick to close the string, or `${`
+to start an interpolation. A literal backtick anywhere inside - even
+inside what stylis would consider a `//` comment - closes the JS
+template literal early, and everything after that point (until the NEXT
+stray backtick, which reopens ANOTHER unintended template literal) gets
+parsed as ordinary TypeScript code instead of CSS-in-JS string content,
+producing parse errors that land wherever that reopened/misparsed region
+happens to contain something syntactically invalid.
+
+**Fix**: never use a literal backtick inside a comment that lives
+between a styled-component's own opening/closing backticks - drop the
+backticks around the quoted CSS/prop name entirely (plain text reads
+fine: `minmax(0, 7.5rem) track` instead of `` `minmax(0, 7.5rem)` ``
+track), or move the comment to sit OUTSIDE the template literal (a
+regular `//` comment directly above the `const X = styled.div` line
+declaration has no such restriction - backticks there are just ordinary
+text in a real JS single-line comment, not inside a string at all).
+`npx tsc --noEmit` catches this immediately and precisely once you know to look
+for a stray backtick upstream of the reported line - the error location
+itself is not where the actual mistake is.
+
+## `getWorkerImageURL`/other `NEXT_PUBLIC_*`-reading helpers return `undefined` when called directly from Playwright TEST code (not the app)
+
+**Symptom**: a Playwright spec imports a shared helper that reads a
+`NEXT_PUBLIC_*` env var (e.g. `common/image.ts`'s `getWorkerImageURL`,
+used to compute an expected URL for `page.route()` interception) and
+calls it directly in the test body - it returns `undefined` even though
+`playwright.config.ts`'s `webServer.env` clearly sets that exact
+variable, and the app's own BROWSER-rendered `<img src>` resolves to a
+real, correct URL built from the same helper.
+
+**Cause**: `NEXT_PUBLIC_*` variables are inlined into the BROWSER bundle
+by Next.js's webpack build step at the point the dev server starts
+(`playwright.config.ts`'s `webServer.command: "npm run dev"` spawns that
+process with `env` scoped to just that child process) - they are not,
+and were never meant to be, environment variables available to arbitrary
+Node code. The Playwright TEST RUNNER itself (`npx playwright test`) is
+a completely separate Node process with no bundling step of its own, so
+`process.env.NEXT_PUBLIC_IMAGE_WORKER_URL` (or any other
+`NEXT_PUBLIC_*` var) is simply unset there regardless of what
+`webServer.env` configures for the spawned dev server.
+
+**Fix**: if a test genuinely needs to compute the same URL production
+code would build (e.g. to `page.route()`-intercept it, rather than
+guessing/hardcoding a pattern that can drift out of sync with the real
+implementation), set `process.env.<THE_VAR>` explicitly at the top of
+that test body to mirror `playwright.config.ts`'s own `webServer.env`
+value, immediately before calling the helper - this only affects the
+Node-side computation in the test, not the already-running browser
+(which resolved its own copy independently, at its own build time), so
+it's safe and has no effect beyond that one calculation. Also watch for
+`page.route()`'s string argument being a GLOB pattern, not a literal
+string - a computed CDN URL with a `?jpgQuality=100`-style query suffix
+needs its `?` escaped (or the whole pattern passed as a `RegExp`
+instead), since glob `?` means "exactly one arbitrary character," not
+literal query-string syntax.

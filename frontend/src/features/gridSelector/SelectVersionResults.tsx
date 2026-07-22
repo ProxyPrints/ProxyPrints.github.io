@@ -301,7 +301,24 @@ function SelectVersionTile({
   return (
     <div
       className="p-1"
-      style={{ width: compressed ? "auto" : undefined }}
+      // Fix round (owner live-review, "Select Version has oversized dropdowns") - `width:
+      // "auto"` here was a no-op: a plain block-level `<div>` in normal flow with
+      // `width: auto` fills its containing block exactly the same as one with no width
+      // declared at all (only flex/grid items, floats, or absolutely-positioned boxes actually
+      // shrink-to-fit on `auto` - a static block never does). Since this tile's own caller
+      // (renderPrintingGroup/renderReasonTagGroup/the unknown-group map, below) never wrapped
+      // multiple tiles in a shared row before this fix, every tile rendered at the FULL width
+      // of its rail column - confirmed live via a real screenshot + getBoundingClientRect(): a
+      // single candidate tile spanning ~300px of a ~380px rail, each on its own full-width row.
+      // A real fixed width (72px - the mockup's own `.version-grid .card63` value, not a
+      // guessed number) fixes the tile itself regardless of what row/flex context wraps it;
+      // `flex: 0 0 auto` keeps it from being stretched or shrunk if a flex-row parent (see
+      // below) ever tries to redistribute space among its siblings.
+      style={
+        compressed
+          ? { width: "4.5rem", flex: "0 0 auto" }
+          : { width: undefined }
+      }
       data-testid={`select-version-tile-${identifier}`}
     >
       <MemoizedEditorCard
@@ -497,13 +514,26 @@ export function SelectVersionResults({
         data-status={group.status}
         data-requested={group.isRequestedPrinting}
       >
-        <SelectVersionTile
-          {...tileProps(
-            group.representative,
-            label,
-            group.status === "suggested"
-          )}
-        />
+        {/* Fix round (owner live-review, "oversized dropdowns") - tiles wrap into a row
+            instead of each stacking on its own full-width line, now that SelectVersionTile
+            itself carries a real fixed width (see that component's own comment) rather than a
+            no-op `width: auto`. */}
+        <div className="d-flex flex-wrap gap-2">
+          <SelectVersionTile
+            {...tileProps(
+              group.representative,
+              label,
+              group.status === "suggested"
+            )}
+          />
+          {expanded &&
+            group.rest.map((identifier) => (
+              <SelectVersionTile
+                key={identifier}
+                {...tileProps(identifier, label, false)}
+              />
+            ))}
+        </div>
         {group.rest.length > 0 && (
           <div className="text-center">
             <Button
@@ -519,13 +549,6 @@ export function SelectVersionResults({
             </Button>
           </div>
         )}
-        {expanded &&
-          group.rest.map((identifier) => (
-            <SelectVersionTile
-              key={identifier}
-              {...tileProps(identifier, label, false)}
-            />
-          ))}
       </div>
     );
   };
@@ -539,7 +562,18 @@ export function SelectVersionResults({
         className="mb-2"
         data-testid={`select-version-reason-group-${group.tagName}`}
       >
-        <SelectVersionTile {...tileProps(group.representative, label, false)} />
+        <div className="d-flex flex-wrap gap-2">
+          <SelectVersionTile
+            {...tileProps(group.representative, label, false)}
+          />
+          {expanded &&
+            group.rest.map((identifier) => (
+              <SelectVersionTile
+                key={identifier}
+                {...tileProps(identifier, label, false)}
+              />
+            ))}
+        </div>
         {group.rest.length > 0 && (
           <div className="text-center">
             <Button
@@ -553,13 +587,6 @@ export function SelectVersionResults({
             </Button>
           </div>
         )}
-        {expanded &&
-          group.rest.map((identifier) => (
-            <SelectVersionTile
-              key={identifier}
-              {...tileProps(identifier, label, false)}
-            />
-          ))}
       </div>
     );
   };
@@ -613,7 +640,10 @@ export function SelectVersionResults({
         </div>
       )}
       {groups.unknown.length > 0 && (
-        <div data-testid="select-version-group-unknown">
+        <div
+          className="d-flex flex-wrap gap-2"
+          data-testid="select-version-group-unknown"
+        >
           {groups.unknown.map((identifier) => {
             // No printing/reason-tag identity to label this tile with (the "honest residue" -
             // see selectVersionGrouping.ts) - falls back to the same "Option N" numbering the

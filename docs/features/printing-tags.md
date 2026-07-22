@@ -626,11 +626,30 @@ printings, artists, tags, and moderation from one screen.
     box (bleeding into the hero field or partway behind the words/
     questions columns is on-aesthetic; `CardPanel`'s own `z-index: 0`
     stacking context, see above, keeps it from ever painting over the
-    neighbouring columns' actual text). **Backs off to `90%` below `md`**
-    — the mobile pinning treatment below turns the card into a small,
-    high-`z-index` sticky bar, where an oversized bleeding burst would
-    obscure scrolled-under content rather than just bleeding into empty
-    field, a real legibility problem the desktop case doesn't have.
+    neighbouring columns' actual text).
+    - **Fix round (owner live-review, "no starburst visible on mobile
+      portrait")**: the mobile value below `md` used to be `90%` — a
+      literal CSS width SMALLER than the card's own box (100% of the
+      same `CardPanel`), which `aspect-ratio: 1` makes a perfect square
+      besides. Centered on a full-width, taller-than-wide portrait card,
+      a burst narrower AND shallower than that box is fully eclipsed by
+      the (opaque) card art in every direction, by construction — no
+      value `<= 100%` can ever be visible here, confirmed live via a
+      real Pixel 7 portrait screenshot + `getBoundingClientRect()` diff
+      (the burst rendered at `opacity: 1`/`width` ~108px, sitting
+      entirely inside the card's own ~120px box). `90%` read as a
+      scale-DOWN-from-desktop INTENT ("back off to a modest size on
+      phone") rather than a literal container-width instruction that was
+      ever checked against actually being bigger than the card — raised
+      to `200%` (`230% * ~0.9`, rounded — the same "back off a bit from
+      desktop" ratio, just applied to a value that's actually large
+      enough to bleed past the card's own edges like every other
+      breakpoint here already does). Below `md` the card now sits in its
+      own compact grid column beside the questions (see the pinning
+      bullet below), not overlaid on top of them, so a bigger bleed
+      lands in the row's own gap/blue field rather than on scrolled-
+      under text — the exact risk the old `90%` was guarding against no
+      longer applies the way it used to.
   - **Reference-card pinning** (owner addendum): the card must stay fully
     visible while the user works through the questions. At `md`+, the
     whole `HeroGrid` is bounded to one viewport-height row and only
@@ -639,17 +658,60 @@ printings, artists, tags, and moderation from one screen.
     not default browser chrome) — the card's own grid cell never scrolls,
     so the old sticky-plus-negative-z-index mechanism (see the superseded
     `cardPanel.tsx` bullet above) has nothing left to do and was removed.
-    Below `md` (where a bounded-height scroll box would read as a cramped
-    cage on a small screen), `HeroCardArea` instead becomes a
-    `position: sticky` compact bar (shrunk via `max-width`, same
-    `cardNode` markup, not a separate rendering) that pins to the
-    viewport top while the questions scroll beneath it — the phone-shaped
-    interpretation of the same "keep the reference comparable" intent,
-    not a literal port of the desktop mechanism. Verified via
-    `QuestionFeedResponsive.spec.ts`'s scroll-then-reread-`boundingBox()`
-    assertion (full equality, not just visibility) on desktop; the phone
-    interpretation was visually verified via real Playwright screenshots
-    (scrolled state), not covered by its own dedicated assertion.
+    Below `md`, `HeroCardArea` sits beside `HeroQuestionsArea` in its own
+    compact grid COLUMN (`HeroGrid`'s `grid-template-areas: "words words" "card questions"`, `minmax(0, 7.5rem) minmax(0, 1fr)` columns) rather
+    than stacking above/below it — see the fix round immediately below
+    for why this replaced the original mobile stack-plus-sticky-bar
+    design. Verified via `QuestionFeedResponsive.spec.ts`'s scroll-then-
+    reread-`boundingBox()` assertion (full equality, not just visibility)
+    on desktop.
+    - **SUPERSEDED mobile design (owner live-review, "the card covers the
+      questions on scroll")**: below `md` originally collapsed to a
+      SINGLE column (`"words" "card" "questions"` stacked top-to-bottom),
+      with `HeroCardArea` becoming a `position: sticky; z-index: 5`
+      compact bar (shrunk via `max-width: 7.5rem`) riding on top of
+      `HeroQuestionsArea` as the page scrolled — the phone-shaped
+      interpretation of "keep the reference comparable" the original
+      redesign shipped with. This shared the same horizontal space as
+      the questions by construction, so the sticky card was always going
+      to end up geometrically nested inside the questions box's own
+      bounds once scrolled — confirmed live via a real Pixel 7 portrait
+      screenshot + `getBoundingClientRect()` diff (post-scroll, the
+      card's box `[146, 50, w120, h236]` sat fully inside the questions
+      box's own `[24, -366, w364, h1376]`), not a rare edge case. Replaced
+      with the disjoint-grid-column layout described above (owner's own
+      live-review layout proposal) — the card and questions structurally
+      cannot overlap regardless of scroll position or either one's own
+      height, mirroring the invariant `md`+ already had via its bounded
+      one-row hero. New regression guard:
+      `QuestionFeedResponsive.spec.ts`'s "mobile card/questions never
+      overlap" test does a real `page.mouse.wheel()` scroll (a dozen
+      synthetic candidates, forcing genuine overflow) then asserts an
+      axis-aligned bounding-box NON-intersection between `HeroCardArea`
+      and `HeroQuestionsArea`, both before and after scrolling.
+    - **Answer options go horizontal below `md`** (owner's live-review
+      layout proposal, same fix round): squeezing Level 1's full-width
+      stacked buttons / Level 2's candidate grid / Level 3's exclusion-
+      group chips into whatever's left beside a ~7.5rem card column would
+      be unreadably narrow, so each instead renders in a single
+      horizontally-scrollable row beside the card (`MobileButtonRow`/
+      `MobileCandidateScroller`/`MobileChipRow`, `QuestionFeed.tsx`) —
+      each control keeps a comfortable minimum width and the row scrolls
+      sideways for overflow, rather than wrapping into many rows or
+      shrinking controls below a usable size. Unchanged at `md`+ (each
+      wrapper is a no-op there — same flex-column button stack/Bootstrap
+      `Row`/`Col` grid/wrapped chip row as before). Deliberately NOT
+      applied to the artist/tag question types (`ArtistVotePicker`/
+      `QueueTagQuestion`) — those are search/autocomplete-shaped UI, not
+      a set of discrete "pick one" options; forcing them into a
+      horizontal filmstrip would make them harder to use, not easier, so
+      they keep their normal vertical stacking at every width. The
+      original fixed-vertical-stacking design (this "SUPERSEDED" bullet
+      above) remains the documented fallback if the new layout doesn't
+      hold up under further review — nothing about the disjoint-grid-
+      column mechanism depends on the horizontal-row treatment
+      specifically; a future revert could keep the column split and put
+      answer options back in a plain vertical stack instead.
     - **Fix round (PR #305/#308 owner review)**: the original
       `HeroGrid { max-height: calc(100dvh - NavbarHeight - 2rem) }`
       passed CI but let the whole page scroll live — the flat `2rem`
@@ -808,6 +870,60 @@ printings, artists, tags, and moderation from one screen.
       three animations is genuinely `animation-play-state: paused`
       before the response resolves and `running` once released —
       confirmed to fail on the pre-fix code.
+  - **Fix round (owner live-review, mobile /whatsthat pass)**: two more
+    owner-reported issues, found once the `imageLoaded` gate above was
+    confirmed genuinely deployed and working.
+    - **Fade felt delayed even though the gate was working**:
+      `revealAnimation` (`cardPanel.tsx`) held at full opacity for the
+      first 55% of its 1.8s run before this fix round — a leftover from
+      BEFORE the `imageLoaded` gate existed, when the hold bought the
+      network a moment to catch up before the cover started fading at
+      mount time regardless of load state. Once gated on the real load
+      event, that hold became pure redundant lag layered on top of the
+      real wait: by the time `$playing` is ever allowed to flip to
+      `running`, the image is already there, so holding at opacity 1 for
+      another ~1s just reads as "nothing happened yet". Collapsed to a
+      plain two-stop fade (`from`/`to`, no hold checkpoint) and shortened
+      1.8s ease-in → 0.8s ease-out, so the drop starts the instant
+      playback resumes and is visibly moving immediately rather than
+      creeping through ease-in's own "slow start" for its first chunk.
+      Timings: `WhatsThatWords`' pop sequence (0/0.24s/0.48s delay, 0.48s
+      duration each — ends 0.48s/0.72s/0.96s) and `CardPulseWrapper`'s
+      pulse (0.24s delay, 0.48s duration — ends 0.72s) now land across
+      the fade's own 0-0.8s run instead of only starting after it had
+      long finished, so the pops visibly overlap the fade's tail as
+      intended.
+    - **Subject card bypassed the image CDN entirely**: the hero `<img>`
+      rendered `item.card.mediumThumbnailUrl` directly — a raw backend
+      field that (`cardpicker/sources/source_types.py`'s
+      `GoogleDrive.get_medium_thumbnail_url`) resolves straight to
+      `drive.google.com/thumbnail?...`, bypassing `cdn.proxyprints.ca`
+      (the R2-cached image-CDN Worker every other card surface — `Card.tsx`, `SharedDeckViewer.tsx`, `downloadImages.ts` — already
+      prefers) entirely. Confirmed live via a real Network-tab capture:
+      the hero request landed on `drive.google.com`, not
+      `cdn.proxyprints.ca`. Now resolves through `getWorkerImageURL`
+      (`common/image.ts`) first, at the `"small"` (400px) tier — this
+      hero caps at 320px CSS width even on desktop, and far less in the
+      mobile compact column, so `"small"` comfortably covers a >2x-
+      retina render at that size — falling back to the raw
+      `smallThumbnailUrl` field only when the worker genuinely isn't
+      configured for this source type (the same fallback chain
+      `Card.tsx`'s own `useImageSrc` uses). Guarded on the raw
+      `mediumThumbnailUrl` field being non-empty (not on whether
+      `getWorkerImageURL` returned something) so the test suite's
+      "empty `mediumThumbnailUrl` means nothing to load, skip to the
+      settled fast-path" fixture convention keeps working —
+      `getWorkerImageURL` would otherwise happily build a real-looking
+      (but bogus) CDN URL for any `GoogleDrive`-sourceType fixture
+      regardless of whether either thumbnail field is genuinely
+      configured. `WhatsThatWordsAnimation.spec.ts`'s route-intercepted-
+      image test was updated to intercept the actual CDN worker URL
+      (computed via the same `getWorkerImageURL` helper, not hand-
+      constructed) instead of an arbitrary same-origin path — it
+      silently kept "passing" against the CDN swap by racing a real,
+      unmocked outbound network call to `cdn.proxyprints.ca` before this
+      fix, which is exactly the kind of drift this task's own report
+      flagged rather than left in place.
   - Regression coverage: `QuestionFeedResponsive.spec.ts`'s desktop-axis
     test now asserts card-left-of-questions (was candidates-left-of-card
     pre-#305); `WhatsThatWordsAnimation.spec.ts` (new) asserts computed

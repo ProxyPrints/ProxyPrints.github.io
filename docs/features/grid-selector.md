@@ -176,6 +176,34 @@ still back that modal.
   these is additive/optional and defaults to today's modal behavior -
   `GridSelectorModal.tsx`'s own caller passes none of them and is
   unaffected.
+  - **CORRECTION (owner live-review, "Select Version has oversized
+    dropdowns")**: the "the 380px rail already forces compact tiles"
+    claim just above was wrong - confirmed live via a real screenshot
+    combined with a `getBoundingClientRect()` diff, one candidate tile
+    rendered at ~300px wide (nearly the full rail width), not compact
+    at all. Root
+    cause: `SelectVersionTile`'s own wrapper (`SelectVersionResults.tsx`)
+    set `width: compressed ? "auto" : undefined` - a no-op, not a real
+    constraint. A plain block-level `<div>` in normal flow with
+    `width: auto` fills its containing block exactly the same as one
+    with no width declared at all (only flex/grid items, floats, or
+    absolutely-positioned boxes actually shrink-to-fit on `auto` - a
+    static block never does), and every printing-group/reason-tag-group
+    wrapper was a plain block div, one per line, with no shared row to
+    even shrink within. `compressed` genuinely does something on
+    `MemoizedEditorCard` itself (hides the header/footer text - see
+    `Card.tsx`), just nothing that constrains overall tile WIDTH; that
+    always came from whatever grid/row wrapped a tile (e.g.
+    `CardResultSet.tsx`'s `CardRow` `variant="embedded"`, built for
+    exactly this narrow-rail scenario but never wired into
+    `SelectVersionResults.tsx`). Fixed directly: `SelectVersionTile`'s
+    wrapper now gets a real fixed `4.5rem` (72px - the owner-approved
+    editor-completion mockup's own `.version-grid .card63` value, not a
+    guessed number) width when `compressed`, and each group's tiles
+    (representative + expanded "+N more", and the flat "unknown" group)
+    render inside a `d-flex flex-wrap gap-2` row instead of stacking one
+    per line, so multiple compact tiles now sit side by side per the
+    mockup's own density.
 
 ## Key files
 

@@ -45,6 +45,7 @@ import Row from "react-bootstrap/Row";
 import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getPrintingCandidateDataAttributes } from "@/common/cardDom";
 import { getOrCreateAnonymousId } from "@/common/cookies";
+import { getWorkerImageURL } from "@/common/image";
 import {
   PrintingCandidate,
   QuestionFeedCounts,
@@ -142,12 +143,12 @@ const ThumbChip = styled(Button)`
 `;
 
 // ---------------------------------------------------------------------------------------
-// Quiz-reveal hero (issue #305, wtc-redesign-spec.md) - one grid-area map for both
-// breakpoints (spec W2): "card words" / "card questions" at >= md (the card spans both rows
-// on the left; words sit over the questions on the right), collapsing to a single "words" /
-// "card" / "questions" stack top-to-bottom below md. The card is reachable near the top of a
-// a phone screen, not buried below every question surface - the layout bug the design round's
-// own first pass caught and fixed (see wtc-redesign-spec.md §8).
+// Quiz-reveal hero (issue #305, wtc-redesign-spec.md) - one grid-area map per breakpoint:
+// "card words" / "card questions" at >= md (the card spans both rows on the left; words sit
+// over the questions on the right); "words words" / "card questions" below md (words stays
+// full-width up top, unchanged from before this fix round, but the card now sits in its own
+// compact LEFT column beside the questions instead of stacking above/below them - see the
+// mobile-row fix round below for why).
 //
 // Owner addendum to the approved design: the reference card must stay fully visible while
 // the user works through the questions, not scroll away with them. At >= md the whole hero
@@ -155,10 +156,7 @@ const ThumbChip = styled(Button)`
 // ContentContainer in Layout.tsx - with nothing to do while answering) and only
 // HeroQuestionsArea below scrolls internally; the card's own grid cell never scrolls, so
 // there's no sticky/negative-z-index mechanism left to run (see CardPanel's own comment in
-// cardPanel.tsx for what this replaces). Below md, a bounded-height scroll box reads as an
-// awkward locked cage on a small screen instead - HeroCardArea's own mobile override (below)
-// takes the "keep the card comparable while scrolling" intent in a phone-shaped direction:
-// a condensed sticky bar, not this bounded-box mechanism.
+// cardPanel.tsx for what this replaces).
 //
 // Fix round (PR #305/#308 owner review): this used to bound itself via its own
 // `max-height: calc(100dvh - NavbarHeight - 2rem)` - wrong on two independent counts. (1) the
@@ -171,13 +169,28 @@ const ThumbChip = styled(Button)`
 // box never exercised that outer container). Replaced with `flex: 1; min-height: 0` below -
 // FeedRoot/StarburstContent (whatsthat.tsx) now do this arithmetic structurally instead of via
 // a hand-maintained calc, so this can't drift out of sync with either figure again.
+//
+// Fix round (owner live-review, "the card covers the questions on scroll") - below md, this
+// used to collapse to a single column ("words" "card" "questions" stacked top-to-bottom) with
+// HeroCardArea's own `position: sticky` bar riding ON TOP of HeroQuestionsArea (z-index: 5) as
+// the page scrolled - the two areas shared the same horizontal space by design, so the sticky
+// card was ALWAYS going to paint over whatever text had scrolled up underneath it (confirmed
+// live: a real wheel-scroll + getBoundingClientRect() diff in this task's own report showed
+// the card's box fully nested inside the questions box's own bounds post-scroll - not a fluke,
+// the geometry guaranteed it). Below md now mirrors >= md's own "card beside, not above/below,
+// the questions" shape instead - a real, disjoint grid COLUMN for the card (see
+// grid-template-columns below), so the two areas structurally cannot overlap regardless of
+// scroll position or either one's own height, the same invariant >= md already had. See
+// HeroCardArea's own comment for the compact column width and MobileButtonRow/MobileChipRow/
+// MobileCandidateScroller (below) for how the answer options fill the narrower remaining
+// width without wrapping into an unreadable number of rows.
 // ---------------------------------------------------------------------------------------
 
 const HeroGrid = styled.div`
   display: grid;
-  gap: 1.25rem;
-  grid-template-columns: 1fr;
-  grid-template-areas: "words" "card" "questions";
+  gap: 0.75rem 0.5rem;
+  grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr);
+  grid-template-areas: "words words" "card questions";
 
   @media (min-width: 768px) {
     /* Row-gap trimmed from 1.5rem to 1rem, then to 0.5rem on rebase onto #313's taller
@@ -221,27 +234,136 @@ const HeroCardArea = styled.div`
   justify-content: center;
   min-width: 0;
 
-  // Phone interpretation of the pinning intent (owner addendum) - a bounded, internally-
-  // scrolling box like the desktop treatment below reads as a cramped cage at ~390px, so
-  // instead the card's own grid cell becomes a compact sticky bar: it shrinks (via max-width,
-  // not a separate rendering - same cardNode markup as desktop) and pins to the top of the
-  // viewport while the questions area scrolls underneath it, keeping the art comparable
-  // without reserving a fixed chunk of a small screen for it. A solid background (matching
-  // the hero field's own darkest stop) stops whatever scrolls underneath from showing through
-  // the gap around the shrunk card.
+  // Phone interpretation of the pinning intent (owner addendum, mobile-row fix round) - the
+  // card's own grid COLUMN (HeroGrid's minmax(0, 7.5rem) track, above) is what keeps it
+  // compact now, not a max-width override here; this area simply fills that track. Still
+  // position: sticky; top: 0 so the card stays in view if the questions column ever grows
+  // tall enough to need page scroll (PageColumn/StarburstContent still let the whole page
+  // scroll below md - unchanged) - safe to keep unconditionally now, unlike the SUPERSEDED
+  // sticky bar this replaces: that one shared its horizontal space with HeroQuestionsArea (a
+  // single stacked column) and needed z-index: 5 specifically to paint over it, which is
+  // exactly what let it obscure scrolled-under text. This one lives in its own disjoint grid
+  // column beside HeroQuestionsArea (see HeroGrid's grid-template-areas above) - sticky here
+  // only ever competes for space with the empty column gap, never with the questions column's
+  // own content, so no elevated z-index/opaque backdrop is needed to protect anything.
   @media (max-width: 767.98px) {
     position: sticky;
     top: 0;
-    z-index: 5;
-    max-width: 7.5rem;
-    margin: 0 auto;
-    padding: 0.5rem 0;
-    background: #0f2537;
+    align-self: start;
   }
 
   @media (min-width: 768px) {
     height: 100%;
     min-height: 0;
+  }
+`;
+
+// Below md, the "answer options" for whichever stage is active (Level 1's four stacked
+// buttons, Level 2's candidate grid, Level 3's exclusion-group chips) render in a single
+// horizontally-scrollable row beside the compact card instead of stacking/wrapping to fit the
+// narrower remaining width (owner's live-review layout proposal) - the direct fix for the
+// "the card covers the questions" bug: rather than trying to squeeze full-width stacked
+// controls into whatever's left beside a ~7.5rem card column (unreadably narrow, or forcing
+// the card back into shared/overlapping space to get room back), the controls keep a
+// comfortable minimum width each and the row scrolls sideways for any overflow. `-webkit-
+// overflow-scrolling: touch` + a visible (not hidden - see HeroQuestionsArea's own comment on
+// why a scrollable region should still look scrollable) thin themed scrollbar match the
+// desktop candidate column's existing scrollbar treatment for visual consistency. Reverts to
+// normal (no horizontal scroll, no forced row) at >= md - untouched, each call site's own
+// pre-existing desktop layout (flex-column button stack, Bootstrap Row/Col grid, wrapped chip
+// row) is unaffected there.
+//
+// Deliberately NOT applied to the artist/tag question types (ArtistVotePicker/
+// QueueTagQuestion) - those are search/autocomplete-shaped UI, not a set of discrete "pick
+// one" options, and forcing them into a horizontal filmstrip would make them harder to use,
+// not easier; they keep their existing normal vertical stacking at every width. See this
+// task's own PR body for the explicit per-stage mapping this scopes to.
+// Shared scrollbar treatment (visible, not hidden - see HeroQuestionsArea's own comment on why
+// a scrollable region should still look scrollable) for all three mobile-row variants below -
+// factored out as a plain string rather than a fourth wrapper component, since each variant's
+// own base (column-stack vs. already-a-row vs. Bootstrap grid) differs too much to share a
+// single styled-component base beyond this.
+const mobileScrollbarCSS = `
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+
+  &::-webkit-scrollbar {
+    height: 8px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.25);
+    border-radius: 4px;
+  }
+`;
+
+// Level 1's YES/NOT SURE/NO/SKIP - a plain vertical button stack at every width today (matches
+// Bootstrap's own `d-flex flex-column gap-2` exactly at >= md, so desktop is byte-for-byte
+// unaffected), switching to a horizontal nowrap row below md instead of stacking full-width
+// beside the now-narrow card column.
+const MobileButtonRow = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  @media (max-width: 767.98px) {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+    ${mobileScrollbarCSS}
+
+    > * {
+      flex: 0 0 auto;
+      min-width: 8.75rem;
+    }
+  }
+`;
+
+// Level 3's exclusion-group chip picker - already a wrapping row at every width
+// (`d-flex flex-wrap gap-2`); below md this only needs `flex-wrap` swapped for
+// `nowrap`/`overflow-x: auto` rather than a direction change.
+const MobileChipRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+
+  @media (max-width: 767.98px) {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+    ${mobileScrollbarCSS}
+
+    > * {
+      flex: 0 0 auto;
+    }
+  }
+`;
+
+// Level 2's candidate grid - the one case still built on Bootstrap's `Row`/`Col` (`xs={3}
+// md={4}`, unchanged for >= md) rather than a plain flex row, so this targets the SAME
+// classes (`.row`/`.col`) via nested selectors instead of restyling this wrapper's own box:
+// `.row`'s own `flex-wrap: wrap` is overridden to `nowrap`, and each Bootstrap `.col`'s
+// percentage flex-basis (from `xs={3}`) is overridden to a fixed width, so the row's overflow
+// becomes horizontal scroll on THIS wrapper instead of Bootstrap's own multi-row wrap.
+const MobileCandidateScroller = styled.div`
+  @media (max-width: 767.98px) {
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+    ${mobileScrollbarCSS}
+
+    .row {
+      flex-wrap: nowrap;
+      width: max-content;
+    }
+    .row > [class*="col"] {
+      flex: 0 0 6.5rem;
+      width: 6.5rem;
+      max-width: 6.5rem;
+    }
   }
 `;
 
@@ -829,6 +951,36 @@ export function QuestionFeed() {
     rejectedCandidateIds.has(item.suggestedPrinting.identifier) &&
     nonRejectedCandidates.length === 0;
 
+  // Fix round (owner live-review, "the subject card renders the full-size source image") -
+  // this used to put `item.card.mediumThumbnailUrl` straight into the hero `<img>` - a raw
+  // backend field that (per cardpicker/sources/source_types.py's GoogleDrive.
+  // get_medium_thumbnail_url) resolves DIRECTLY to `drive.google.com/thumbnail?...`, entirely
+  // bypassing our own image-CDN Worker (cdn.proxyprints.ca, R2-cached) every other real
+  // surface in the app prefers - confirmed live via a real Network-tab capture in this task's
+  // own report (the hero request landed on drive.google.com, not cdn.proxyprints.ca). Every
+  // other card-image call site (Card.tsx's useImageSrc, SharedDeckViewer.tsx,
+  // downloadImages.ts) resolves through `getWorkerImageURL` first and only falls back to the
+  // raw field when the worker genuinely isn't configured for this source type - this hero image
+  // now does the same, via the exact same helper, instead of being the one remaining surface
+  // that talks to Google Drive directly. "small" (400px, common/image.ts's ImageSize enum) is
+  // the right tier here, not "large" (800px) - CardPulseWrapper caps this hero at 320px CSS
+  // width even on desktop (and far less on the mobile compact column), so "small" already
+  // comfortably covers a >2x-retina render at that size with less than half the bytes "large"
+  // would cost for no visible gain.
+  //
+  // Guarded on the RAW field being non-empty (not just "did getWorkerImageURL return
+  // something") so this test suite's own "empty mediumThumbnailUrl means nothing to load, skip
+  // straight to the settled fast-path" fixture convention (see the fetch effect's own
+  // `newItem.card.mediumThumbnailUrl === ""` check above, and onError below) keeps working
+  // unchanged - getWorkerImageURL would otherwise happily build a real-looking (but bogus) CDN
+  // URL for a GoogleDrive-sourceType fixture even when neither thumbnail field is genuinely
+  // configured, since it only checks sourceType/env config, not whether the underlying
+  // identifier is real.
+  const heroImageSrc =
+    item.card.mediumThumbnailUrl === ""
+      ? ""
+      : getWorkerImageURL(item.card, "small") ?? item.card.smallThumbnailUrl;
+
   // BurstSvg renders alongside (not inside) RevealWrapper deliberately - RevealWrapper has
   // overflow: hidden (it clips the silhouette-reveal animation to the card's own box), which
   // would also clip the burst's intentional bleed if it were a descendant instead of a
@@ -854,7 +1006,7 @@ export function QuestionFeed() {
       <RevealWrapper>
         <img
           ref={cardImageRef}
-          src={item.card.mediumThumbnailUrl}
+          src={heroImageSrc}
           alt={item.card.name}
           style={{ width: "100%", aspectRatio: CARD_ASPECT_RATIO }}
           onLoad={() => onCardImageSettled(false)}
@@ -999,7 +1151,7 @@ export function QuestionFeed() {
                   {item.suggestedPrinting.collectorNumber}
                 </p>
               </div>
-              <div className="d-flex flex-column gap-2">
+              <MobileButtonRow>
                 <ThumbButton
                   variant="success"
                   disabled={submitting}
@@ -1035,7 +1187,7 @@ export function QuestionFeed() {
                 >
                   Skip
                 </ThumbButton>
-              </div>
+              </MobileButtonRow>
             </>
           )}
         </div>
@@ -1055,7 +1207,7 @@ export function QuestionFeed() {
           ).map((group) => (
             <div key={group.id} className="mb-3">
               <div className="text-muted small mb-1">{group.label}</div>
-              <div className="d-flex flex-wrap gap-2">
+              <MobileChipRow>
                 {group.chips.map((chip) => {
                   const state = level3ChipStates[chip.tagName] ?? "untouched";
                   return (
@@ -1071,7 +1223,7 @@ export function QuestionFeed() {
                     </ThumbChip>
                   );
                 })}
-              </div>
+              </MobileChipRow>
             </div>
           ))}
           <div className="mt-3 d-flex flex-column flex-sm-row gap-2">
@@ -1184,72 +1336,79 @@ export function QuestionFeed() {
               </a>
             </p>
           )}
-          <Row className="g-2" xs={3} md={4}>
-            {/* Row is 4-wide at >= md (the only breakpoint HeroQuestionsArea's overflow-y: auto,
-                and therefore its hover-clip risk, applies at - see that component's own
-                comment) - every 1st/4th candidate in a row sits flush against the scroll box's
-                own left/right edge, where even the added bleed room isn't enough for
-                HoverBurst's full-size bloom (see that component's own $edge comment). */}
-            {visibleCandidates.map((candidate, index) => (
-              <Col key={candidate.identifier}>
-                <CandidateButton
-                  variant="outline-secondary"
-                  className={`w-100 p-1 border-0${
-                    item.type === "confirm_suggestion" &&
-                    item.suggestedPrinting?.identifier === candidate.identifier
-                      ? " highlighted"
-                      : ""
-                  }`}
-                  disabled={submitting}
-                  onClick={() => selectCandidate(candidate, false)}
-                  {...getPrintingCandidateDataAttributes(
-                    item.card.name,
-                    candidate
-                  )}
-                >
-                  <HoverBurst
-                    className="hover-burst"
-                    viewBox={STARBURST_VIEWBOX}
-                    $edge={index % 4 === 0 || index % 4 === 3}
+          <MobileCandidateScroller>
+            <Row className="g-2" xs={3} md={4}>
+              {/* Row is 4-wide at >= md (the only breakpoint HeroQuestionsArea's overflow-y:
+                  auto, and therefore its hover-clip risk, applies at - see that component's own
+                  comment) - every 1st/4th candidate in a row sits flush against the scroll box's
+                  own left/right edge, where even the added bleed room isn't enough for
+                  HoverBurst's full-size bloom (see that component's own $edge comment). Below
+                  md, MobileCandidateScroller overrides this Row to a single non-wrapping,
+                  horizontally-scrollable line instead (owner's live-review layout proposal) -
+                  xs={3} is inert there (never gets a chance to actually wrap), kept only so >=
+                  md's md={4} value has a real xs fallback per react-bootstrap's own Row API. */}
+              {visibleCandidates.map((candidate, index) => (
+                <Col key={candidate.identifier}>
+                  <CandidateButton
+                    variant="outline-secondary"
+                    className={`w-100 p-1 border-0${
+                      item.type === "confirm_suggestion" &&
+                      item.suggestedPrinting?.identifier ===
+                        candidate.identifier
+                        ? " highlighted"
+                        : ""
+                    }`}
+                    disabled={submitting}
+                    onClick={() => selectCandidate(candidate, false)}
+                    {...getPrintingCandidateDataAttributes(
+                      item.card.name,
+                      candidate
+                    )}
                   >
-                    <polygon
-                      points={STARBURST_OUTER_FRAMES[starburstFrame]}
-                      fill={STARBURST_OUTER_COLOR}
-                    />
-                    <polygon
-                      points={STARBURST_INNER_FRAMES[starburstFrame]}
-                      fill={STARBURST_INNER_COLOR}
-                    />
-                  </HoverBurst>
-                  <ArtPlaceholder>
-                    <ZoomableThumbnail>
-                      <img
-                        src={candidate.mediumThumbnailUrl}
-                        alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                    <HoverBurst
+                      className="hover-burst"
+                      viewBox={STARBURST_VIEWBOX}
+                      $edge={index % 4 === 0 || index % 4 === 3}
+                    >
+                      <polygon
+                        points={STARBURST_OUTER_FRAMES[starburstFrame]}
+                        fill={STARBURST_OUTER_COLOR}
                       />
-                    </ZoomableThumbnail>
-                    {/* Tied to this specific candidate's identifier, not just `submitting` -
+                      <polygon
+                        points={STARBURST_INNER_FRAMES[starburstFrame]}
+                        fill={STARBURST_INNER_COLOR}
+                      />
+                    </HoverBurst>
+                    <ArtPlaceholder>
+                      <ZoomableThumbnail>
+                        <img
+                          src={candidate.mediumThumbnailUrl}
+                          alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                        />
+                      </ZoomableThumbnail>
+                      {/* Tied to this specific candidate's identifier, not just `submitting` -
                         the old dimmed-all-buttons treatment gave no way to tell which of
                         several candidates you actually tapped under any real latency. */}
-                    {submitting &&
-                      selectedCandidateId === candidate.identifier && (
-                        <div
-                          data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
-                        >
-                          <Spinner size={1.5} zIndex={2} positionAbsolute />
-                        </div>
-                      )}
-                  </ArtPlaceholder>
-                  <div>
-                    <SetIcon expansionCode={candidate.expansionCode} />{" "}
-                    {candidate.expansionCode.toUpperCase()}{" "}
-                    {candidate.collectorNumber}
-                  </div>
-                  <div className="text-muted small">{candidate.artist}</div>
-                </CandidateButton>
-              </Col>
-            ))}
-          </Row>
+                      {submitting &&
+                        selectedCandidateId === candidate.identifier && (
+                          <div
+                            data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
+                          >
+                            <Spinner size={1.5} zIndex={2} positionAbsolute />
+                          </div>
+                        )}
+                    </ArtPlaceholder>
+                    <div>
+                      <SetIcon expansionCode={candidate.expansionCode} />{" "}
+                      {candidate.expansionCode.toUpperCase()}{" "}
+                      {candidate.collectorNumber}
+                    </div>
+                    <div className="text-muted small">{candidate.artist}</div>
+                  </CandidateButton>
+                </Col>
+              ))}
+            </Row>
+          </MobileCandidateScroller>
           {followUp === "no-match-reason" && (
             <div className="mt-3">
               <hr />
@@ -1309,7 +1468,7 @@ export function QuestionFeed() {
       <PlainHeroCard>
         <img
           ref={cardImageRef}
-          src={item.card.mediumThumbnailUrl}
+          src={heroImageSrc}
           alt={item.card.name}
           style={{ width: "100%" }}
           onLoad={() => onCardImageSettled(false)}
