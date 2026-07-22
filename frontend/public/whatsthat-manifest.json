@@ -5,8 +5,8 @@
   "start_url": "/whatsthat",
   "scope": "/whatsthat",
   "display": "standalone",
-  "background_color": "#ff4719",
-  "theme_color": "#ff4719",
+  "background_color": "#123a6b",
+  "theme_color": "#123a6b",
   "icons": [
     {
       "src": "/whatsthat-icon-192.png",

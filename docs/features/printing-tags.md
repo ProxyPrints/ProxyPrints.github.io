@@ -192,27 +192,21 @@ printings, artists, tags, and moderation from one screen.
 - `starburstShape.ts` — seeded PRNG (mulberry32) generates the animated
   starburst background, 5 precomputed frames per layer; skipped under
   `prefers-reduced-motion` (checked once via `matchMedia`).
-- `cardPanel.tsx` — `position: sticky` **at `md` (768px) and up only**
-  (via `useStickyTop`, not a hardcoded navbar constant), full-bleeds to the
-  viewport; `position: static` below `md`. Needs its own local stacking
-  context (`position: relative` **and** an explicit non-`auto` `z-index`,
-  together) on its wrapping `Col` — `position: relative` alone does not
-  establish one, and the card's own `z-index: -1` otherwise escapes all
-  the way to the page root and makes its interactive content unclickable
-  at the hit-testing layer (this containment only matters at `md`+, where
-  sticky is still active). `StaticCardPanel` (same file) is the
-  unconditionally-non-sticky variant used by Level 1 — `position: relative`, no `z-index`, plain document flow at every width.
-  Real-device evidence (not reproducible in this sandbox's Chromium)
-  found `CardPanel`'s sticky-plus-negative-z-index mechanism compositing
-  incorrectly on a real phone below `md` — first diagnosed and fixed for
-  Level 1 alone, but the same mechanism was still active, unchanged, on
-  Level 2 (the funnel's dominant, default screen), so the real-device
-  overlap/blank-gap symptom persisted after that fix shipped. `CardPanel`
-  itself is now responsive — sticky only survives at `md`+, where desktop's
-  side-by-side two-column layout genuinely benefits from it and never
-  exhibited the bug; below `md`, mobile's stacked single-column layout
-  gets nothing from sticky (no side-by-side content to stay pinned
-  beside) and now renders in plain document flow like Level 1 always did.
+- `cardPanel.tsx` — **SUPERSEDED (quiz-reveal hero redesign, issue #305,
+  see the dedicated bullet below): `CardPanel`/`StaticCardPanel` are now
+  both a plain `position: relative; z-index: 0;` at every width** — the
+  `position: sticky`-at-`md`-and-up-only mechanism this bullet used to
+  describe (via a `useStickyTop` hook, since removed as dead code) is
+  gone. The redesign's `HeroGrid` bounds the whole hero to one viewport-
+  height row at `md`+ instead, so the card's own grid cell never scrolls
+  in the first place and sticky has nothing left to do; below `md`,
+  `HeroCardArea` (`QuestionFeed.tsx`) applies its own compact
+  `position: sticky` bar directly, not `CardPanel`. The `z-index: 0` (not
+  left at `auto`) still matters unchanged from before — it's what gives
+  `CardPanel`/`StaticCardPanel` their own local stacking context, so
+  `BurstSvg`'s `z-index: -1` stays contained to just this panel instead of
+  escaping to the nearest ancestor stacking context and painting behind
+  unrelated page content.
 - Chip-ring era layout reconciliation: `AttributeChipPanel.tsx`'s
   `ChipRing` (the PR #21-era 3-column ring — chips flanking the card left/
   right, reachable via Level 2's opt-in "Filter by attribute" disclosure)
@@ -254,12 +248,18 @@ printings, artists, tags, and moderation from one screen.
     exactly like "you've finished," so a user could walk away thinking
     there was nothing left to do.
   - The candidate-type layout (`confirm_suggestion`/`identify_printing`)
-    now puts the card being asked about first in DOM order via Bootstrap's
-    `order`/`order-md-*` utilities — at `md` and up this is a no-op (same
+    put the card being asked about first in DOM order via Bootstrap's
+    `order`/`order-md-*` utilities — at `md` and up this was a no-op (same
     candidates-left/card-right arrangement as before), but at mobile
-    widths, where the two columns stack, the mystery card used to render
+    widths, where the two columns stacked, the mystery card used to render
     _after_ every answer option, so a voter had to scroll past all the
     candidates before seeing what they were even being asked about.
+    **SUPERSEDED by the quiz-reveal hero redesign (issue #305, below)**:
+    the `order`/`order-md-*` utilities and the two-`Col` layout they
+    applied to are gone, replaced by `HeroGrid`'s grid-area map — the
+    card-before-questions guarantee on mobile is now a property of the
+    grid areas themselves ("words" / "card" / "questions" top-to-bottom),
+    not a Bootstrap order utility.
   - Tapping a candidate now shows a small spinner on that specific
     candidate's own art box while the vote submits, instead of uniformly
     dimming every button — previously there was no way to tell, under any
@@ -442,30 +442,28 @@ printings, artists, tags, and moderation from one screen.
   see `docs/features/grid-selector.md`) for the confirm chip a user can
   tap while browsing/filtering that section's candidate grid — see that
   doc's own entry for the exact gating logic.
-- **Branding integration** (frontend-polish package): the plain text
-  `<h1>What's That Card?</h1>` heading is now the mark+wordmark lockup
-  SVG (`frontend/public/whatsthat-composite.svg`) instead. Source assets
-  (`question-mark.svg`/mark, `wordmark.svg`/word, `composite.svg`/lockup
-  — gradient ids `wtc-grad-mark`/`wtc-grad-word`/`wtc-grad-comp`
-  pre-namespaced so more than one could coexist on a page without id
-  collision, though only the composite is used here) came from the
-  `assets/whatsthat-branding` branch, copied into `frontend/public/` as
-  `whatsthat-{mark,wordmark,composite}.svg` (renamed from the generic
-  source names to avoid colliding with this repo's existing flat
-  `public/*.svg` namespace — see `flags.tsx`'s identical `<img src="/...">`
-  pattern, followed here rather than inlining the SVG as a React
-  component). Still wrapped in a real `<h1>` (not a bare `<img>`) so the
-  page's semantic heading and its accessible name (the `alt` text)
-  survive the swap unchanged. Visually verified via real Playwright
-  screenshots at 1280px desktop and 390px mobile against the page's own
-  ratified palette (the `#ff4719` orange background + navy `#12262c`
-  accent from the visual-diagnosis pass above) — the gold gradient +
-  navy outline reads cleanly at both widths with no collision with the
-  candidate grid/stats text below it. `whatsthat-mark.svg` and
-  `whatsthat-wordmark.svg` are copied in too but not yet used on this
-  page — reserved for the queued PWA/manifest-icons pass (mark) and any
-  future compact-lockup surface (wordmark), not invented placements
-  here.
+- **Branding integration** (frontend-polish package). **PARTIALLY
+  SUPERSEDED by the quiz-reveal hero redesign (issue #305, below)**: the
+  visible page title is no longer the `whatsthat-composite.svg` mark+
+  wordmark lockup image — it's `WhatsThatWords`, three cropped `<svg>`
+  slices of `whatsthat-wordmark.svg` alone (see the redesign bullet for
+  why). `whatsthat-composite.svg` itself is unused now but still checked
+  in (not deleted — no cleanup pass has touched it); a real, visually-
+  hidden `<h1>What's That Card?</h1>` (`whatsthat.tsx`'s
+  `VisuallyHiddenHeading`) replaces it for the page's semantic heading/
+  accessible name, the same guarantee the old wrapped-`<h1>` lockup gave.
+  Source assets (`question-mark.svg`/mark, `wordmark.svg`/word,
+  `composite.svg`/lockup — gradient ids `wtc-grad-mark`/`wtc-grad-word`/
+  `wtc-grad-comp` pre-namespaced so more than one could coexist on a page
+  without id collision) came from the `assets/whatsthat-branding` branch,
+  copied into `frontend/public/` as `whatsthat-{mark,wordmark,composite}.svg`
+  (renamed from the generic source names to avoid colliding with this
+  repo's existing flat `public/*.svg` namespace — see `flags.tsx`'s
+  identical `<img src="/...">` pattern). `whatsthat-mark.svg` is used by
+  the PWA icons bullet below; `whatsthat-wordmark.svg` is now inlined
+  (not `<img src>`'d) by `WhatsThatWords.tsx` specifically so each of its
+  three instances can set its own `viewBox` crop — an externally-loaded
+  SVG document's viewBox can't be retargeted from the referencing `<img>`.
 - **Mobile funnel pass: thumb-native tap targets** (frontend-polish
   package). Audited via real Playwright screenshots + `boundingBox()`
   measurements at 390px, not assumption: Bootstrap's own default `.btn`
@@ -504,21 +502,137 @@ printings, artists, tags, and moderation from one screen.
   both `"/whatsthat"` in `frontend/public/whatsthat-manifest.json` — not
   a site-wide manifest on `_document.tsx`: the game is the installable
   "app" here, not the whole catalog/editor. Linked from `whatsthat.tsx`'s
-  own `next/head` `<Head>` (`<link rel="manifest">`, a `theme-color` meta
-  matching the page's own `#ff4719`, and an `apple-touch-icon`) — under
-  `output: "export"`'s per-page static HTML, that `<Head>` content lands
-  only in `whatsthat.html`'s own generated markup, confirmed via
-  `tests/WhatsThatPWA.spec.ts`'s negative assertion on a different page.
-  Icons (`whatsthat-icon-192.png`/`-512.png`, Chrome's own minimum
-  installability sizes) rasterized from `whatsthat-mark.svg` (the
-  branding integration's source asset) centered on the page's own
-  orange background via a one-off Playwright screenshot script - not a
-  new build-time asset pipeline, the PNGs are checked in directly like
-  the SVGs themselves. No service worker/offline caching added -
-  explicitly out of scope per the owner's brief ("no offline scope
-  beyond the default"); Chrome's own install-prompt heuristics may want
-  one for the full native "Add to Home Screen" banner in the strictest
-  case, a gap noted here rather than silently built around.
+  own `next/head` `<Head>` (`<link rel="manifest">`, a `theme-color` meta,
+  and an `apple-touch-icon`) — under `output: "export"`'s per-page static
+  HTML, that `<Head>` content lands only in `whatsthat.html`'s own
+  generated markup, confirmed via `tests/WhatsThatPWA.spec.ts`'s negative
+  assertion on a different page. Icons (`whatsthat-icon-192.png`/`-512.png`,
+  Chrome's own minimum installability sizes) rasterized from
+  `whatsthat-mark.svg` (the branding integration's source asset) centered
+  on the page's own background color via a one-off Playwright screenshot
+  script - not a new build-time asset pipeline, the PNGs are checked in
+  directly like the SVGs themselves. No service worker/offline caching
+  added - explicitly out of scope per the owner's brief ("no offline
+  scope beyond the default"); Chrome's own install-prompt heuristics may
+  want one for the full native "Add to Home Screen" banner in the
+  strictest case, a gap noted here rather than silently built around.
+  **Retinted (issue #305/W6)**: `theme-color`/`whatsthat-manifest.json`'s
+  `background_color`/`theme_color` and both icon PNGs moved from the
+  retired `#ff4719` orange to `#123a6b` (`HERO_FIELD_BLUE_DEEP`,
+  `whatsthat.tsx`) — the mark itself (the "?" glyph) is unchanged, only
+  its background swapped, rasterized the same way as the original pass
+  (a one-off, not-committed Playwright screenshot script).
+- **Quiz-reveal hero redesign** (issue #305, 2026-07-21, designer round
+  `wtc-redesign-spec.md` + `wtc-mockup.html`, owner-approved before
+  implementation). Flips the page's axis: the subject card + a large
+  blue/white starburst are now the **left hero column**; every question
+  surface (L1 confirm, L2 grid, L3 attributes, artist, tags, rate-limit
+  banner, moderator switch) renders to the **right** — reversing the
+  pre-#305 candidates-left/card-right arrangement (see the two
+  "SUPERSEDED" notes above). Every question-render unit itself is
+  reused unforked, just repositioned.
+  - **Layout**: `QuestionFeed.tsx`'s `HeroGrid` is a single CSS
+    `grid-template-areas` map (not nested `Row`/`Col`) with three named
+    areas — `card` (spans two rows on the left at `md`+), `words`, and
+    `questions` — collapsing to a `words` / `card` / `questions` top-to-
+    bottom stack below `md`. One markup tree drives both breakpoints, so
+    the card is reachable near the top of a phone screen without a
+    separate re-nested layout (the first design pass's own caught-and-
+    fixed bug: nesting words+questions in one column with the card as the
+    other buried the card _below_ every question on phone).
+  - **Sliced words**: `WhatsThatWords.tsx` inlines
+    `whatsthat-wordmark.svg`'s path data (not `<img src>`, so each
+    instance can set its own `viewBox`) and renders three crops — WHAT'S
+    (`-40 150 1030 340`), THAT (`990 150 695 340`), CARD? (`1685 150 905 340`) — measured off the wordmark's own letter-start x-coordinates.
+    Each word pops (scale 1 → 1.34 → 1, 480ms
+    `cubic-bezier(0.34,1.45,0.64,1)`, `both` fill) staggered 0/240/480ms
+    for a continuous left-to-right ripple, re-armed by keying the whole
+    words container on the current item's card identifier (a React
+    remount, not a class toggle) so every new card replays the sequence
+    from WHAT'S. `prefers-reduced-motion: reduce` disables the pop
+    entirely (words render statically at rest size/tilt) via the same
+    CSS custom-property-driven rest transform the animation itself uses,
+    so there's no flash-of-unanimated-content either way. **Real
+    pitfall hit and fixed**: a root-level `<svg>` (unlike one nested
+    inside another `<svg>`) defaults to `overflow: visible` per spec,
+    and a `flex-direction: column` parent's default `align-items: stretch` overrides a replaced element's own intrinsic
+    (aspect-ratio-derived) width — either alone silently broke the
+    `viewBox` crop, each word rendering the _entire_ wordmark instead of
+    its own band. Fixed with an explicit `overflow: hidden` on the `Word`
+    styled-component plus `align-items: flex-start` on its flex parent
+    (verified via isolated Playwright reproductions before landing, not
+    just visual inspection).
+  - **Hero card pulse** (owner addendum, not in the original spec): the
+    reference card itself pulses in lockstep with the THAT word — same
+    easing/duration/240ms delay as `wtcWordPop`, but a separate, much
+    smaller-amplitude keyframe (`wtcCardPulse`, scale 1 → 1.1 → 1 vs. the
+    word's 1.34 peak — a full-size card "breathing" at the word's peak
+    would read as violent, not playful) on `CardPulseWrapper`
+    (`cardPanel.tsx`), wrapping whichever card node is active for every
+    item type uniformly (not stage-special-cased) and re-armed the same
+    way as the words (keyed on the card identifier). Also disabled under
+    `prefers-reduced-motion`.
+  - **Palette** (W6/W7): the page's old `#ff4719` orange full-bleed field
+    — kept as "the page's deliberate identity" by a 2026-07-18 decision
+    — is **superseded**: `StarburstBackground` (`whatsthat.tsx`) is now a
+    deep-blue radial vignette (`#1a4f8a` → `#123a6b` → body `#0f2537`),
+    reconciling with issue #302's sitewide orange retheme instead of
+    clashing with it (two similar oranges were _less_ distinguishable
+    than the old blue-on-orange pairing this page shipped with
+    originally). The page-scoped `ACCENT_NAVY` override (buttons/links/
+    pills recolored so they'd clear AA against the orange field) is
+    removed entirely — off that field and onto the standard dark body,
+    the sitewide accent `#df6919` already clears AA (4.61:1) with no
+    override needed. The starburst's own two identity colors (outer blue
+    `#4d8ddf`, inner white `#ffffff`, `starburstShape.ts`) are unchanged —
+    only the field _behind_ it moved.
+  - **Enlarged hero starburst**: `BurstSvg` (`cardPanel.tsx`) gained an
+    additive, default-off `$hero` prop (`width: 230%` of the card box vs.
+    the existing `55%`, at `md`+) so it dominates the hero's left column
+    per the reference aesthetic — deliberately sized past the card's own
+    box (bleeding into the hero field or partway behind the words/
+    questions columns is on-aesthetic; `CardPanel`'s own `z-index: 0`
+    stacking context, see above, keeps it from ever painting over the
+    neighbouring columns' actual text). **Backs off to `90%` below `md`**
+    — the mobile pinning treatment below turns the card into a small,
+    high-`z-index` sticky bar, where an oversized bleeding burst would
+    obscure scrolled-under content rather than just bleeding into empty
+    field, a real legibility problem the desktop case doesn't have.
+  - **Reference-card pinning** (owner addendum): the card must stay fully
+    visible while the user works through the questions. At `md`+, the
+    whole `HeroGrid` is bounded to one viewport-height row
+    (`calc(100dvh - NavbarHeight - 2rem)`) and only `HeroQuestionsArea`
+    scrolls internally (`overflow-y: auto`, a subtle themed scrollbar via
+    `scrollbar-color`/`::-webkit-scrollbar-thumb`, not default browser
+    chrome) — the card's own grid cell never scrolls, so the old sticky-
+    plus-negative-z-index mechanism (see the superseded `cardPanel.tsx`
+    bullet above) has nothing left to do and was removed. Below `md`
+    (where a bounded-height scroll box would read as a cramped cage on a
+    small screen), `HeroCardArea` instead becomes a `position: sticky`
+    compact bar (shrunk via `max-width`, same `cardNode` markup, not a
+    separate rendering) that pins to the viewport top while the questions
+    scroll beneath it — the phone-shaped interpretation of the same
+    "keep the reference comparable" intent, not a literal port of the
+    desktop mechanism. Verified via `QuestionFeedResponsive.spec.ts`'s
+    scroll-then-reread-`boundingBox()` assertion (full equality, not just
+    visibility) on desktop; the phone interpretation was visually
+    verified via real Playwright screenshots (scrolled state), not
+    covered by its own dedicated assertion.
+  - **One hero card slot per item type, not per stage**: Level 3 dropped
+    its old inline 48px thumbnail+name row (the shared hero card already
+    shows the same art, one persistent slot across every stage per the
+    mockup's own stage-switcher demo); artist/tag items' plain reference
+    `<img>` (no burst/reveal — "reposition, don't redesign") just moved
+    into the same shared `card` grid area instead of its own `Col`.
+  - Regression coverage: `QuestionFeedResponsive.spec.ts`'s desktop-axis
+    test now asserts card-left-of-questions (was candidates-left-of-card
+    pre-#305); `WhatsThatWordsAnimation.spec.ts` (new) asserts computed
+    CSS animation properties (`animation-name`/`-duration`/`-delay`/
+    `-timing-function`), not mid-frame screenshots (the D17 flake lesson,
+    `docs/troubleshooting.md`) — Playwright's project-wide
+    `reducedMotion: "reduce"` default means every _other_ existing spec
+    never has to account for this animation at all; this file explicitly
+    overrides it per-test where it needs the animation actually running.
 
 ## Key files (Stages 1–7; Stage 8+ files are in [[catalog-completion-plan.md]])
 
@@ -535,6 +649,8 @@ printings, artists, tags, and moderation from one screen.
   `seed_attribute_tags` management command.
 - Frontend: `frontend/src/features/printingTags/`
   (`PrintingTagPicker.tsx`, `starburstShape.ts`, `cardPanel.tsx`),
+  `frontend/src/features/questionFeed/WhatsThatWords.tsx` (quiz-reveal
+  hero's sliced-word teaser, issue #305),
   `frontend/src/features/filters/ResolvedAttributeFilter.tsx`,
   `frontend/src/common/processing.ts::getPrintingMatchLabel`,
   `frontend/src/features/attributeVoting/` (`ChipCard.tsx`,

@@ -11,7 +11,7 @@
 
 import { keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Button from "react-bootstrap/Button";
 
 import {
@@ -53,117 +53,100 @@ export const RevealOverlay = styled.div`
   pointer-events: none;
 `;
 
-// The card, and the starburst behind it, stay glued to the viewport as the page scrolls
-// (position: sticky) rather than scrolling away with the rest of the page - **desktop only,
-// see the mobile override below**. "top" is set via inline style (see useStickyTop below) to
-// wherever the panel naturally rendered when it first mounted, rather than a fixed offset -
-// so it pins at its own original location on the page and never visibly jumps to a different
-// spot once scrolling starts, it just stops moving exactly where it already was.
+// SUPERSEDED (quiz-reveal hero redesign, issue #305): this used to be `position: sticky` at
+// >= md, tracking the outer page scroll via useStickyTop below so the card stayed in view
+// beside a taller candidate column. The redesign's hero grid (see QuestionFeed.tsx's
+// HeroGrid/HeroCardArea) bounds the whole hero to one viewport-height row at >= md and gives
+// only the questions column its own internal scrollbar instead - the card's grid cell never
+// scrolls in the first place, so there's nothing left for position: sticky to do. useStickyTop
+// is removed alongside it (dead code with no other caller). Below `md`, HeroCardArea itself
+// applies a compact `position: sticky` bar (see that component's own comment) - this styled
+// component stays deliberately position-agnostic so that outer wrapper is the only thing
+// controlling stickiness.
 //
-// z-index: -1 here (not just on BurstSvg) is deliberate and easy to get backwards: a sticky
-// element always establishes its own stacking context, and *any* positioned descendant -
-// even at the default z-index: auto - paints in front of plain, non-positioned in-flow
-// siblings (the CSS spec's stacking order puts positioned content ahead of ordinary flow
-// content, independent of DOM order or z-index value). Left at the default, that meant the
-// whole panel - including the burst bleeding out of it - painted on top of the "What's That
-// Card?" heading and the candidate grid's plain text/borders, hiding them. Pushing
-// CardPanel itself to a negative stack level is what actually fixes that (giving BurstSvg
-// alone a negative z-index only reorders it against its own siblings *inside* CardPanel,
-// it can't reach past the sticky boundary).
-//
-// MOBILE OVERRIDE (layout reconciliation pass): real-device evidence (a phone, not this
-// sandbox's Chromium, which never reproduces this) showed sticky-plus-negative-z-index
-// compositing incorrectly below the `md` breakpoint - the sticky card's reserved layout-flow
-// box and its actual pinned visual position diverge once the page scrolls, leaving a blank
-// gap where the card "should" be and letting the candidates/answer controls below it in the
-// DOM paint underneath/inside the card's own box instead of cleanly below it. This is the
-// same mechanism Level 1's StaticCardPanel (below) was built to avoid entirely - Level 2 kept
-// sticky because desktop's side-by-side two-column layout genuinely benefits from it and
-// never showed the bug, but mobile's stacked single-column layout gets nothing from sticky
-// (there's no side-by-side candidate list to stay pinned beside) and inherits the same
-// cross-engine compositing risk Level 1 had. `position: static` below `md` removes the
-// sticky/negative-stacking mechanism entirely on the widths where it broke, while `md` and up
-// keeps the original desktop behavior unchanged. The `768px` threshold matches Bootstrap's own
-// `md` breakpoint, the same one this page's `Col md={...}` two-column layout switches on.
+// `position: relative; z-index: 0;` together establish CardPanel's own local stacking context,
+// containing BurstSvg's `z-index: -1` (see below) to just this panel - without a stacking
+// context here, that negative z-index would search *up* the tree for the nearest positioned
+// ancestor instead, risking the burst painting behind unrelated ancestor content rather than
+// just behind this panel's own card art. `position: relative` alone (no z-index) does NOT
+// establish a stacking context per the CSS spec, hence z-index: 0 (not left at auto) here.
 export const CardPanel = styled.div`
-  position: static;
-  z-index: auto;
-
-  @media (min-width: 768px) {
-    position: sticky;
-    top: 0;
-    z-index: -1;
-  }
+  position: relative;
+  z-index: 0;
+  width: 100%;
 `;
 
 // Level 1's compact single-card confirmation screen (QuestionFeed.tsx) has no long scrollable
 // candidate list to keep the card pinned against while scrolling past, at any viewport width -
-// unlike Level 2's two-column layout, which is what CardPanel's desktop-only sticky-plus-
-// negative-z-index mechanism above exists for. `position: relative` still gives
-// BurstSvg/RevealOverlay the positioned containing block they anchor themselves to (identical
-// visual result to CardPanel for that part), but with no sticky and no negative z-index at any
-// width, there's nothing to detach from its own reserved space or to invert paint order
-// against its siblings - the whole thing just stays one ordinary block in normal document flow,
-// unconditionally.
+// unlike Level 2's two-column layout. Same as CardPanel above now - `position: relative;
+// z-index: 0;` gives BurstSvg/RevealOverlay the positioned containing block they anchor
+// themselves to, and its own local stacking context for BurstSvg's negative z-index, with
+// nothing sticky or detached from normal document flow at any width.
 export const StaticCardPanel = styled.div`
   position: relative;
+  z-index: 0;
+  width: 100%;
 `;
-
-// Measures how far the panel naturally sits below the top of its scrolling ancestor (see
-// ContentContainer in Layout.tsx - the app's content area is a fixed-position, internally
-// scrolling box, not the normal document body) right after it mounts, and uses that as the
-// sticky "top" offset. Re-measures whenever the subject card changes (a new card can nudge
-// the layout by a few px - e.g. flavor text length), so each card pins at wherever it
-// actually rendered rather than an offset carried over from a previous card. Runs in a
-// plain useEffect, not useLayoutEffect - the measured value only matters once the user
-// scrolls far enough for sticky to engage, so there's nothing to flash before it settles,
-// and useLayoutEffect warns during Next's static export (no DOM on the server).
-export function useStickyTop(deps: React.DependencyList): {
-  ref: React.RefObject<HTMLDivElement>;
-  top: number | null;
-} {
-  const ref = React.useRef<HTMLDivElement | null>(null);
-  const [top, setTop] = useState<number | null>(null);
-
-  useEffect(() => {
-    const panel = ref.current;
-    if (panel == null) {
-      return;
-    }
-    let scrollParent: HTMLElement | null = panel.parentElement;
-    while (
-      scrollParent != null &&
-      !["scroll", "auto"].includes(
-        window.getComputedStyle(scrollParent).overflowY
-      )
-    ) {
-      scrollParent = scrollParent.parentElement;
-    }
-    if (scrollParent == null) {
-      return;
-    }
-    const panelRect = panel.getBoundingClientRect();
-    const scrollRect = scrollParent.getBoundingClientRect();
-    setTop(panelRect.top - scrollRect.top + scrollParent.scrollTop);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-
-  return { ref, top };
-}
 
 // Sized and centred purely with CSS (percentage width + aspect-ratio, both relative to
 // CardPanel's own box) rather than a JS measurement - it scales naturally with the card's
-// own responsive width at every breakpoint, and travels with CardPanel automatically under
-// sticky scrolling with no extra code.
-export const BurstSvg = styled.svg`
+// own responsive width at every breakpoint.
+//
+// `$hero` (additive, default off - wtc-redesign-spec.md §7) enlarges the burst for the quiz-
+// reveal hero's left column, where it's meant to dominate the hero zone behind the card rather
+// than stay tucked closely around it. Deliberately sized past the card's own box - the burst
+// bleeding past CardPanel's edges (even into the hero's blue field or partway behind the
+// words/questions columns) is on-aesthetic; CardPanel's own z-index: 0 stacking context (see
+// above) keeps it from ever painting over the neighbouring columns' own text at >= md, since
+// those render later in DOM order and are never negatively stacked themselves there.
+//
+// Below md the picture is different: HeroCardArea (QuestionFeed.tsx) becomes a small
+// `position: sticky` bar sitting ABOVE the scrolling questions in z-index terms (by design -
+// that's the whole point of the condensed pinning treatment), so an oversized burst bleeding
+// out of that bar would obscure genuinely scrolled-under content, not just harmlessly bleed
+// into empty hero field - a real legibility problem, unlike the desktop case. The hero
+// enlargement backs off to a modest size on phone for exactly that reason.
+export const BurstSvg = styled.svg<{ $hero?: boolean }>`
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 55%;
+  width: ${(props) => (props.$hero ? "90%" : "55%")};
   aspect-ratio: 1;
   transform: translate(-50%, -50%);
   z-index: -1;
   pointer-events: none;
+
+  @media (min-width: 768px) {
+    width: ${(props) => (props.$hero ? "230%" : "55%")};
+  }
+`;
+
+// The reference card itself pulses in lockstep with the "THAT" word (wtc-redesign-spec.md's
+// owner addendum) - same easing/duration/delay as wtcWordPop in WhatsThatWords.tsx, but a much
+// smaller amplitude (a full-size card visibly "breathing" at the word's 1.34x peak would read
+// as violent, not playful) and disabled under reduced motion the same way. Deliberately a
+// separate keyframe (not the words' shared one) since the two need different peak scales but
+// must stay frame-for-frame in sync - keeping both timings as literal, matching values here and
+// in WhatsThatWords.tsx is what actually keeps them in sync, not a shared constant (they're two
+// independent CSS animations on unrelated elements with no runtime coupling). Re-armed the same
+// way as the words - key this wrapper on the current item's card identifier so it remounts,
+// and the animation restarts, on every new card.
+export const wtcCardPulse = keyframes`
+  0% { transform: scale(1); }
+  48% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+`;
+
+export const CardPulseWrapper = styled.div`
+  transform-origin: center;
+  width: 100%;
+  max-width: 320px;
+  animation: ${wtcCardPulse} 480ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+  animation-delay: 240ms;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
 `;
 
 const STARBURST_FRAME_INTERVAL_MS = 150;
