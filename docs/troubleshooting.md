@@ -1161,3 +1161,43 @@ same three-line reproduction failed identically, and that removing only
 the flex-column wrapper (testing the single SVG alone) fixed it, which is
 what pointed at the flex cross-axis stretch specifically rather than the
 SVG/viewBox mechanics themselves.
+
+## `/display`'s floating "n/M" sheet-position pill under-reports the last sheet (shows `2/3` instead of `3/3`) after scrolling all the way down
+
+**Symptom**: `DisplayPage.spec.ts`'s D17 test ("the floating sheet-position
+pill updates live while scrolling at phone width") fails with
+`getByTestId('display-sheet-position-indicator')` stuck at `"2/3"` after
+scrolling the last sheet into view via `scrollIntoView({ block: "center" })` at 390px wide — reproduces 100% of the time in isolation, both
+locally and in CI (not the intermittent kind), even though the same test
+was merely marked "flaky" (2 real failures then a lucky pass) in the PR
+that introduced it (#313).
+
+**Cause**: the indicator's `IntersectionObserver` (`DisplayPage.tsx`,
+`visibleSheetIndex`) decides "which sheet is current" purely by a thin
+vertical center band (`rootMargin: "-45% 0px -45% 0px"`) against the
+page viewport. That heuristic structurally can't ever select the FIRST
+or LAST sheet once the scrollable `content-container` (Layout.tsx) is
+already at its true scroll extreme and a boundary sheet is short enough
+that there's no room left below/above it to move its own center through
+that band — confirmed by measuring the container directly:
+`scrollHeight - clientHeight` (the real max scroll) was ~250px, but
+centering the last (short) sheet would have needed roughly 500px+ of
+scroll, a shortfall of 250-280px that no amount of further scrolling can
+close, because the container is already at its true bottom. This isn't
+specific to any one card count or viewport — it's inherent to a fixed
+center-band test whenever a boundary sheet is short relative to the
+viewport, and is unrelated to Footer/Navbar sizing (`/display` doesn't
+even render a `Footer`).
+
+**Fix**: inside the same `IntersectionObserver` callback, read the
+scroll container's own `scrollTop`/`scrollHeight`/`clientHeight`
+(via `entries[0].target.closest('[data-testid="content-container"]')`)
+and check the true scroll extremes FIRST — at `scrollTop <= EPSILON`,
+force index `0`; at `scrollTop + clientHeight >= scrollHeight - EPSILON`,
+force the last index — falling through to the existing center-band
+`Math.min(...intersectingIndices)` logic only when not at an edge. Kept
+as a single writer to `visibleSheetIndex` (not a second `scroll`
+listener racing the observer) since the observer already re-fires on the
+same settling scroll event that changes intersection state. Verified
+5/5 clean repeats of the D17 test plus the full 28-test `DisplayPage.spec.ts`
+suite and CI's own shard-2/4 (76 tests) locally.

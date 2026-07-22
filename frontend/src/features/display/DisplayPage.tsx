@@ -1192,8 +1192,34 @@ export function DisplayPage() {
     if (indexByElement.size === 0) {
       return;
     }
+    const lastIndex = sheets.length - 1;
+    // D17 follow-up (docs/troubleshooting.md "sheet-position pill under-reports the last
+    // sheet") - the centre-band check below can structurally never see the FIRST or LAST
+    // sheet as "current": once the container is scrolled to its true extreme, there's no
+    // room left to move a short boundary sheet any further through the centre band (measured
+    // directly - at phone width with a short trailing sheet, the container's own maxScroll
+    // can be hundreds of px short of what centring that sheet would require). This isn't tied
+    // to any one card count or viewport; it's inherent to a fixed centre-band test on a
+    // boundary item. So check the real scroll position FIRST, ahead of the centre-band
+    // result, on every firing of this same observer - at either true edge of the scrollable
+    // container, the boundary sheet IS the one on-screen, full stop.
     const observer = new IntersectionObserver(
       (entries) => {
+        const scrollContainer = entries[0]?.target.closest<HTMLElement>(
+          '[data-testid="content-container"]'
+        );
+        if (scrollContainer != null) {
+          const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+          const EPSILON = 2;
+          if (scrollTop <= EPSILON) {
+            setVisibleSheetIndex(0);
+            return;
+          }
+          if (scrollTop + clientHeight >= scrollHeight - EPSILON) {
+            setVisibleSheetIndex(lastIndex);
+            return;
+          }
+        }
         const intersectingIndices = entries
           .filter((entry) => entry.isIntersecting)
           .map((entry) => indexByElement.get(entry.target))
