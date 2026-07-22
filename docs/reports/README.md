@@ -73,6 +73,11 @@ a `detail` object read only when the summary signals it's needed.
   `stage-d-join-key-v1` totals reconciled to 11,905, gate re-derived at
   0/12,684 across both the printing- and tag-consensus engines this arc
   touched.
+- `2026-07-22-knowledge-inventory.md` — pipeline-fidelity gate artifact 2
+  (knowledge-inventory sweep): a constant-by-constant table of every
+  pilot-era value's current home, 3 confirmed MISSING items, 3 open
+  items. Cited by [`../pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md),
+  the gate's canonical status page.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc

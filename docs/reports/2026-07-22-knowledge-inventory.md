@@ -5,6 +5,12 @@ Scope: issue #154 (task #151's pipeline-fidelity gate). This is **artifact 2**
 parity replay against run `20260716T193408-6613a1a6`) is a separate,
 queued-behind-extraction piece of work, not covered here.
 
+**Canonical status page**: this report is a source document, not the
+status page — current gate status and the open owner decisions live at
+[`../pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md); this
+report is that page's cited evidence for artifact 2 and stays as the
+detailed constant-by-constant record.
+
 Read-only analysis. No live DB/ES access used or needed — every claim below is
 either a `git show`/`diff` against a specific commit, a `grep` across the
 current tree, or a cross-reference to an already-committed doc.

@@ -96,6 +96,15 @@ any query below). Model names are `cardpicker.models.*`.
   exactly — nothing would change if recompute ran on those two paths
   today.
 
+## Relationship to the pipeline-fidelity gate
+
+This snapshot is the Part A verification source for the pipeline-fidelity
+gate's data (GitHub issue #154) — the `impact-report-dry-run`,
+`image-evidence-by-run`, and `vote-pool-*` groups above are cited
+directly by [`../pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md),
+which is the gate's canonical status page. This file stays the raw,
+dated data record; the hub owns the gate's status and open decisions.
+
 ## Relationship to the ratification this snapshot follows
 
 This file is a data checkpoint taken the same day the vote-weight

@@ -8,7 +8,11 @@ walkthrough rather than the formal composition. See
 for the stage-by-stage error-term treatment of the same chain, and
 [`features/printing-tags.md`](features/printing-tags.md) /
 [`features/catalog-completion-plan.md`](features/catalog-completion-plan.md)
-for the backend and frontend this pipeline feeds into.
+for the backend and frontend this pipeline feeds into. The Stage D chain
+this file walks through is currently gated on the pipeline-fidelity gate
+(GitHub issue #154) before it's cleared to fire at full-catalog scale —
+see [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) for that
+gate's current status; this file describes the mechanics, not the gate.
 
 **Reviewed and approved by the owner, 2026-07-21.** Written for the
 pre-197k review.
