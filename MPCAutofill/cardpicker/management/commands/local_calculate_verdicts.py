@@ -5,6 +5,8 @@ from django.utils import timezone
 
 from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_ANONYMOUS_ID,
+    STAGE_D_FALLBACK_ANONYMOUS_ID,
+    run_fallback_calculator,
     run_join_key_calculator,
     run_slow_path_calculator,
 )
@@ -20,13 +22,16 @@ class Command(BaseCommand):
     help = (
         "Stage D (docs/features/catalog-completion-plan.md, public issue #152): the join-key "
         "calculator - the fast-path deduction step over Stage C's ImageEvidence rows (collector-"
-        "line OCR + set-symbol phash tie-break, plus a copyright-year era cross-check) - plus the "
-        "slow-path routing calculator (owner decision, issue #220) that sends every card the "
-        "join-key calculator couldn't confidently resolve to the human review queue, carrying its "
-        "raw extracted signals. Casts CardPrintingTag votes via the existing, unmodified "
-        "vote-consensus machinery; never resolves a card by itself - the slow-path half casts no "
-        "votes at all. Defaults to dry-run and requires an explicit --write to actually write, "
-        "matching local_residual_classify's own convention."
+        "line OCR + set-symbol phash tie-break, plus a copyright-year era cross-check) - then the "
+        "fallback channel calculator (Stage D's own port of local_fallback.py's pilot 'Pass 2' "
+        "border/artist/symbol evidence-combination model, run only over cards the join-key "
+        "calculator found no confident hit for) - then the slow-path routing calculator (owner "
+        "decision, issue #220) that sends every card NEITHER of the two calculators above could "
+        "confidently resolve to the human review queue, carrying its raw extracted signals. Casts "
+        "CardPrintingTag votes via the existing, unmodified vote-consensus machinery; never "
+        "resolves a card by itself - the slow-path half casts no votes at all. Defaults to dry-run "
+        "and requires an explicit --write to actually write, matching local_residual_classify's "
+        "own convention."
     )
 
     def add_arguments(self, parser: Any) -> None:
@@ -98,11 +103,52 @@ class Command(BaseCommand):
                     )
                 print(f"Gate check passed: 0/{len(touched_card_ids)} touched cards resolved machine-only.")
 
-            # Slow-path routing (owner decision, issue #220): runs AFTER the join-key pass above
-            # in the SAME invocation/run_id - it only ever consumes that pass's own no-hit output
-            # (see run_slow_path_calculator's own docstring), so sequencing here matters even
-            # though both ship in this one command/PR. Casts no CardPrintingTag at all (it has no
-            # printing to vote for), so there is no analogous gate check to run for it.
+            # Fallback channel calculator (PIECE 1 of this PR's pre-fire prep bundle): runs AFTER
+            # the join-key pass above in the SAME invocation/run_id - it only ever consumes cards
+            # the join-key calculator found no confident hit for (see
+            # _fallback_eligible_cards_queryset's own docstring), so sequencing here matters.
+            # Ordered BEFORE slow-path routing below deliberately: a card this calculator resolves
+            # must not also get routed to human review in the same invocation (see
+            # _slow_path_eligible_cards_queryset's own new exclusion for the wiring this depends on).
+            fallback_result = run_fallback_calculator(run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"])
+            votes_written += fallback_result.votes_written
+            would_cast += fallback_result.votes_would_cast
+            print(
+                f"[fallback] considered={fallback_result.cards_considered} "
+                f"votes={'written=' + str(fallback_result.votes_written) if not dry_run else 'would_cast=' + str(fallback_result.votes_would_cast)} "
+                f"skip_counts={dict(fallback_result.skip_counts)}"
+            )
+            for entry in fallback_result.audit[:10]:
+                print(f"  sample: {entry}")
+
+            if not dry_run:
+                # same rationale as the join-key gate check above - re-derived from this run's own
+                # freshly-written votes (scoped by run_id + anonymous_id) rather than the capped
+                # audit sample.
+                fallback_touched_card_ids = list(
+                    CardPrintingTag.objects.filter(
+                        run_id=run_id, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID
+                    ).values_list("card_id", flat=True)
+                )
+                fallback_violations = verify_zero_resolutions(fallback_touched_card_ids)
+                if fallback_violations:
+                    raise CommandError(
+                        f"GATE VIOLATION: {len(fallback_violations)} card(s) resolved to a printing "
+                        f"from this single-anonymous_id machine pass alone, which should be "
+                        f"structurally impossible per resolve_weighted_consensus's own human-"
+                        f"backed gate - STOP and investigate. Affected card pks: "
+                        f"{fallback_violations[:50]}" + (" (truncated)" if len(fallback_violations) > 50 else "")
+                    )
+                print(
+                    f"Gate check passed: 0/{len(fallback_touched_card_ids)} fallback-touched cards "
+                    "resolved machine-only."
+                )
+
+            # Slow-path routing (owner decision, issue #220): runs AFTER both calculators above in
+            # the SAME invocation/run_id - it only ever consumes their own no-hit output (see
+            # run_slow_path_calculator's own docstring), so sequencing here matters even though all
+            # three ship in this one command. Casts no CardPrintingTag at all (it has no printing
+            # to vote for), so there is no analogous gate check to run for it.
             slow_path_result = run_slow_path_calculator(run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"])
             print(
                 f"[slow-path] considered={slow_path_result.cards_considered} "

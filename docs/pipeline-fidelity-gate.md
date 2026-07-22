@@ -69,11 +69,17 @@ The knowledge-inventory sweep confirmed three pilot-era constants have
    live: all 28,112 carry `run_id=None`, `anonymous_id="deductive-backfill-v1"`,
    `created_at` between 2026-07-14T18:21:49Z and 2026-07-14T18:22:05Z.
    See `journal/2026-07-14-deductive-printing-tag-backfill.md` (gitignored,
-   machine-local) for that run's own narrative.
+   machine-local) for that run's own narrative. **ADDRESSED IN CODE
+   (2026-07-22, pre-fire prep PR)**: `local_calculate_verdicts._eligible_cards_queryset`
+   now excludes `source=VoteSource.DEDUCTION` (generalized past the
+   literal `anonymous_id`, so a future second deduction engine is covered
+   too), applied to both the join-key AND new fallback calculators — code
+   only, not yet fired against production.
 
 None of these three are soundness violations — the human-backed
 consensus gate still applies to every vote Stage D casts regardless.
-**Owner ruling needed**: are these three must-fix-before-fire, or an
+**Owner ruling still needed on #1/#2** (item #3 above is now addressed in
+code, pending the fire): are the remaining two must-fix-before-fire, or an
 accepted gap the gate can clear without them? Full detail, plus 3 lower
 grade "open items" that are separate from these 3 MISSING findings:
 [`reports/2026-07-22-knowledge-inventory.md`](reports/2026-07-22-knowledge-inventory.md).
