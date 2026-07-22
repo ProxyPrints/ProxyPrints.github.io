@@ -1248,3 +1248,34 @@ confirmed the bound held after it — see
 `cardpicker/tests/test_run_image_evidence_cohort.py`'s
 `TestRunCohortFetchMemoryBound` for the same property turned into a
 permanent regression guard.
+
+## `DisplayPage.spec.ts`'s "floating sheet-position pill updates live while scrolling at phone width (D17)" fails intermittently with "2/3" instead of "3/3"
+
+**Symptom**: `tests/DisplayPage.spec.ts`'s D17 sheet-position-pill test
+(phone viewport, 18 cards / 3 sheets) intermittently reports the
+`display-sheet-position-indicator` still reading `2/3` after
+`scrollIntoView({block:"center"})` on the last sheet, where `3/3` is
+expected - reproduces even running that ONE test alone,
+`--repeat-each=5`+, on both a freshly-modified branch and on plain
+`origin/master` with zero changes.
+
+**Cause**: a genuine, pre-existing flake in this test's own
+IntersectionObserver-based timing (its `rootMargin: "-45% 0px -45% 0px"`
+thin center-band check races the browser's `scrollIntoView` completing),
+not a regression from any particular change - confirmed by reproducing
+the same ~1-in-6 failure rate on unmodified `origin/master` in this same
+sandboxed VM. A change that happens to add or remove incidental
+rendering cost nearby (e.g. widening a `useMemo`'s dependency array on
+the sheet-content builder) can shift the failure rate up or down without
+being the actual cause - don't chase a "regression" here without first
+checking the identical test against a clean `origin/master` checkout in
+the same environment, `--repeat-each=5` or more (a single passing/failing
+run either way is not enough evidence).
+
+**Fix/mitigation**: none applied - this is a test-timing flake to
+tolerate (retry) rather than a product bug to fix; if it starts failing
+CI at a rate that matters, the real fix is loosening the test's own
+`scrollIntoView`-then-assert race (e.g. an explicit
+`waitForFunction`/poll on the indicator text before asserting, instead of
+relying on `expect(...).toContainText`'s own retry window alone), not
+touching the sheet-content pipeline it happens to render.
