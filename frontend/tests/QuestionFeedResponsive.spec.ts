@@ -209,6 +209,99 @@ test.describe("question feed - mobile layout", () => {
     expect(boxAfterScroll).not.toBeNull();
     expect(boxAfterScroll).toEqual(boxBeforeScroll);
   });
+
+  // Fix round (PR #305/#308 owner review) - the test above only ever scrolled
+  // HeroQuestionsArea's OWN scrollbar directly via `el.scrollTop`, which is exactly the gap
+  // that let this invariant pass in CI while failing live: on the live site, the outer
+  // "document" (in practice Layout.tsx's fixed-position, overflow-y: scroll
+  // ContentContainer - see that component's own comment) had genuine leftover overflow of its
+  // own (StarburstBackground's real padding/margin plus Footer's whole height were never
+  // subtracted from the hero's old max-height calc), so a completely ordinary mouse-wheel
+  // scroll anywhere on the page - not just inside the questions box - moved the WHOLE page,
+  // hero card included. A real `page.mouse.wheel()` (not a targeted `el.scrollTop` write)
+  // reproduces exactly what a live user's scroll gesture does, and checking
+  // ContentContainer's own `scrollTop` alongside the card's position pins down which
+  // container actually (didn't) move.
+  test("a real mouse-wheel scroll over the page does not move the hero card or scroll the outer content container", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const cardImage = page.getByAltText(cardDocument1.name);
+    await expect(cardImage).toBeVisible();
+    const boxBeforeScroll = await cardImage.boundingBox();
+    expect(boxBeforeScroll).not.toBeNull();
+
+    // Wheel over the hero card area itself (not inside the questions column's own scrollbox) -
+    // this is what a real user's mouse would do if they scrolled while looking at the card.
+    const cardBox = boxBeforeScroll!;
+    await page.mouse.move(
+      cardBox.x + cardBox.width / 2,
+      cardBox.y + cardBox.height / 2
+    );
+    await page.mouse.wheel(0, 2000);
+    await page.waitForTimeout(200);
+
+    const boxAfterScroll = await cardImage.boundingBox();
+    expect(boxAfterScroll).toEqual(boxBeforeScroll);
+
+    const contentContainerScrollTop = await page
+      .getByTestId("content-container")
+      .evaluate((el) => el.scrollTop);
+    expect(contentContainerScrollTop).toBe(0);
+  });
+});
+
+// Fix round (PR #305/#308 owner review) - HeroQuestionsArea's overflow-y: auto (needed for the
+// pinning fix above) forces overflow-x: auto too (CSS's own "visible computes to auto once the
+// other axis isn't visible" rule), which silently re-clips the candidate grid's hover-zoom/
+// hover-burst (both deliberately built with no overflow: hidden of their own - see
+// cardPanel.tsx) right at this box's edges - worst on the left, where the first column in
+// every row sits flush against it with no buffer at all.
+test.describe("question feed - hover-zoom/hover-burst edge clipping (owner live report)", () => {
+  test("hovering the leftmost candidate in a row does not get clipped by the scroll container's edge", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const leftmostCandidate = page.locator(
+      `[data-card-identifier="${printingCandidate1.identifier}"]`
+    );
+    const containerBox = await page
+      .getByTestId("question-feed-questions-area")
+      .boundingBox();
+    expect(containerBox).not.toBeNull();
+
+    await leftmostCandidate.locator("img").first().hover();
+    // matches ZoomableThumbnail's own 0.15s transition and HoverBurst's 0.18s transition
+    // (cardPanel.tsx) - long enough for both to settle at their hovered size.
+    await page.waitForTimeout(250);
+
+    const imgBox = await leftmostCandidate.locator("img").first().boundingBox();
+    const burstBox = await leftmostCandidate
+      .locator(".hover-burst")
+      .boundingBox();
+    expect(imgBox).not.toBeNull();
+    expect(burstBox).not.toBeNull();
+
+    // Horizontal-only containment - vertical clipping at the top/bottom of this box is its
+    // intended scrolling behaviour; only left/right clipping (this box never scrolls
+    // sideways) is the reported "sheared" bug. A tolerance of 1px absorbs subpixel rounding
+    // from the transform-scaled hover state.
+    const tolerance = 1;
+    expect(imgBox!.x).toBeGreaterThanOrEqual(containerBox!.x - tolerance);
+    expect(imgBox!.x + imgBox!.width).toBeLessThanOrEqual(
+      containerBox!.x + containerBox!.width + tolerance
+    );
+    expect(burstBox!.x).toBeGreaterThanOrEqual(containerBox!.x - tolerance);
+    expect(burstBox!.x + burstBox!.width).toBeLessThanOrEqual(
+      containerBox!.x + containerBox!.width + tolerance
+    );
+  });
 });
 
 // Mobile funnel pass - thumb-native tap targets. WCAG 2.5.5 (Target Size, AA) and Apple's HIG

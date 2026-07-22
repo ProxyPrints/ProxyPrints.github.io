@@ -882,11 +882,23 @@ new always-visible link is needed — put it in the right-hand
 icon button + the Sources button, with real spare width). This keeps the
 navbar's real rendered height identical to `origin/master`'s (confirmed
 via the same `boundingBox()` check) rather than papering over the
-symptom with a longer Playwright timeout or a spec edit. The deeper fix
-— replacing the hardcoded `NavbarHeight` constant with a real
-`ResizeObserver`-driven measurement — is a legitimate follow-up (this
-whole class of bug recurs the next time a link is added to that row) but
-is out of scope for a single-link addition.
+symptom with a longer Playwright timeout or a spec edit.
+
+**Partial deeper fix landed** (fix round on PR #305/#308's `/whatsthat`
+quiz-reveal hero, owner review) —
+`frontend/src/common/useNavbarHeight.ts` replaces the constant with a
+real `ResizeObserver`-measured value, but only for the two consumers a
+live report actually confirmed broken: `Layout.tsx`'s `ContentContainer`
+(sitewide — every page's own top-of-content offset) and
+`/whatsthat`'s own `PageColumn` height calc. Every other consumer
+(`Explore.tsx`, `ProjectEditor.tsx`, `FinishedMyProject.tsx`) still uses
+the static constant directly — this issue stays open for that broader
+swap. The hook also only measures the navbar's _current_ height; it
+doesn't change anything about the underlying wrapping behaviour above
+(a crowded, every-link-visible state can still jump from 64px to 88px
+when one more link tips it to a second line) — the hook picks that jump
+up correctly via its own `ResizeObserver`, but the wrapping itself is
+still exactly the layout fragility this entry describes.
 
 ## A `reparse_collector_evidence`/Stage D retraction pass silently never routes its own newly-touched cards to slow-path review
 

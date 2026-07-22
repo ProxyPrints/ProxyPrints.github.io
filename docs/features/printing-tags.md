@@ -165,9 +165,13 @@ printings, artists, tags, and moderation from one screen.
   defaults to `UNRESOLVED` on both `printing_tag_status` and
   `artist_vote_status` simultaneously, which is why a flat sum of the
   three category counts (the pre-fix implementation) over-counted every
-  such card 2-3x. `QuestionFeed.tsx`'s headline leads with `confirmable`
-  ("N quick confirmations ready") when non-zero, falling back to `total`
-  once nothing quick remains.
+  such card 2-3x. `QuestionFeed.tsx` surfaces all three via a single small,
+  muted stats line ("N ready · N in catalog · N contested",
+  `question-feed-stats`) tucked at the bottom of the question column - a
+  fix round on the quiz-reveal hero (PR #305/#308's owner review) retired
+  the old standalone headline/subcounts text that used to sit above the
+  question and eat into the vertical space needed to keep the answer
+  buttons above the fold.
 
 ## Frontend architecture
 
@@ -578,17 +582,22 @@ printings, artists, tags, and moderation from one screen.
   - **Palette** (W6/W7): the page's old `#ff4719` orange full-bleed field
     — kept as "the page's deliberate identity" by a 2026-07-18 decision
     — is **superseded**: `StarburstBackground` (`whatsthat.tsx`) is now a
-    deep-blue radial vignette (`#1a4f8a` → `#123a6b` → body `#0f2537`),
-    reconciling with issue #302's sitewide orange retheme instead of
-    clashing with it (two similar oranges were _less_ distinguishable
-    than the old blue-on-orange pairing this page shipped with
-    originally). The page-scoped `ACCENT_NAVY` override (buttons/links/
-    pills recolored so they'd clear AA against the orange field) is
+    deep-blue field, reconciling with issue #302's sitewide orange retheme
+    instead of clashing with it (two similar oranges were _less_
+    distinguishable than the old blue-on-orange pairing this page shipped
+    with originally). The page-scoped `ACCENT_NAVY` override (buttons/
+    links/pills recolored so they'd clear AA against the orange field) is
     removed entirely — off that field and onto the standard dark body,
     the sitewide accent `#df6919` already clears AA (4.61:1) with no
     override needed. The starburst's own two identity colors (outer blue
     `#4d8ddf`, inner white `#ffffff`, `starburstShape.ts`) are unchanged —
-    only the field _behind_ it moved.
+    only the field _behind_ it moved. A fix round on the owner's live
+    review (PR #305/#308) flattened the original three-stop radial
+    (`#1a4f8a` → `#123a6b` → body `#0f2537`, a pronounced vignette that
+    "felt unnatural") to a two-stop `#1d4d82` → `#123a6b` gradient with no
+    third, darker stop at all — a small highlight around the starburst
+    that settles into a flat deep blue well before the edges, instead of
+    fading further toward near-black.
   - **Enlarged hero starburst**: `BurstSvg` (`cardPanel.tsx`) gained an
     additive, default-off `$hero` prop (`width: 230%` of the card box vs.
     the existing `55%`, at `md`+) so it dominates the hero's left column
@@ -603,24 +612,83 @@ printings, artists, tags, and moderation from one screen.
     field, a real legibility problem the desktop case doesn't have.
   - **Reference-card pinning** (owner addendum): the card must stay fully
     visible while the user works through the questions. At `md`+, the
-    whole `HeroGrid` is bounded to one viewport-height row
-    (`calc(100dvh - NavbarHeight - 2rem)`) and only `HeroQuestionsArea`
-    scrolls internally (`overflow-y: auto`, a subtle themed scrollbar via
-    `scrollbar-color`/`::-webkit-scrollbar-thumb`, not default browser
-    chrome) — the card's own grid cell never scrolls, so the old sticky-
-    plus-negative-z-index mechanism (see the superseded `cardPanel.tsx`
-    bullet above) has nothing left to do and was removed. Below `md`
-    (where a bounded-height scroll box would read as a cramped cage on a
-    small screen), `HeroCardArea` instead becomes a `position: sticky`
-    compact bar (shrunk via `max-width`, same `cardNode` markup, not a
-    separate rendering) that pins to the viewport top while the questions
-    scroll beneath it — the phone-shaped interpretation of the same
-    "keep the reference comparable" intent, not a literal port of the
-    desktop mechanism. Verified via `QuestionFeedResponsive.spec.ts`'s
-    scroll-then-reread-`boundingBox()` assertion (full equality, not just
-    visibility) on desktop; the phone interpretation was visually
-    verified via real Playwright screenshots (scrolled state), not
-    covered by its own dedicated assertion.
+    whole `HeroGrid` is bounded to one viewport-height row and only
+    `HeroQuestionsArea` scrolls internally (`overflow-y: auto`, a subtle
+    themed scrollbar via `scrollbar-color`/`::-webkit-scrollbar-thumb`,
+    not default browser chrome) — the card's own grid cell never scrolls,
+    so the old sticky-plus-negative-z-index mechanism (see the superseded
+    `cardPanel.tsx` bullet above) has nothing left to do and was removed.
+    Below `md` (where a bounded-height scroll box would read as a cramped
+    cage on a small screen), `HeroCardArea` instead becomes a
+    `position: sticky` compact bar (shrunk via `max-width`, same
+    `cardNode` markup, not a separate rendering) that pins to the
+    viewport top while the questions scroll beneath it — the phone-shaped
+    interpretation of the same "keep the reference comparable" intent,
+    not a literal port of the desktop mechanism. Verified via
+    `QuestionFeedResponsive.spec.ts`'s scroll-then-reread-`boundingBox()`
+    assertion (full equality, not just visibility) on desktop; the phone
+    interpretation was visually verified via real Playwright screenshots
+    (scrolled state), not covered by its own dedicated assertion.
+    - **Fix round (PR #305/#308 owner review)**: the original
+      `HeroGrid { max-height: calc(100dvh - NavbarHeight - 2rem) }`
+      passed CI but let the whole page scroll live — the flat `2rem`
+      guess never accounted for `StarburstBackground`'s real
+      padding/margin (4.5rem, not 2rem) or `Footer`'s entire height below
+      it, so total page content routinely exceeded
+      `Layout.tsx`'s `ContentContainer` and forced its own outer
+      scrollbar to activate, moving the "pinned" card along with
+      everything else. Replaced with pure flex sizing instead of a
+      hand-maintained calc: `whatsthat.tsx`'s `PageColumn` (flex column,
+      height locked to `calc(100dvh - navbarHeight)` at `md`+ via the new
+      `useNavbarHeight()` hook — see below) wraps `StarburstBackground` +
+      `Footer`, `StarburstBackground` takes `flex: 1 1 auto; min-height: 0` (whatever's left after `Footer`'s natural size), and
+      that flex chain propagates down through `StarburstContent` →
+      `QuestionFeed.tsx`'s own `FeedRoot` → `HeroGrid` (now
+      `flex: 1; min-height: 0` instead of its old `max-height` calc) — it
+      structurally can't drift out of sync with `Footer`'s real height
+      again. Deliberately NOT extended through the moderator
+      `Tab.Container`/`Tab.Content`/`Tab.Pane` switcher (a small,
+      privileged audience) — that branch keeps its previous natural/auto
+      height, unchanged, rather than wiring three more react-bootstrap
+      wrappers into the flex chain. `useNavbarHeight()`
+      (`frontend/src/common/useNavbarHeight.ts`) replaces the hardcoded
+      `NavbarHeight` constant (issue #250 — confirmed 64-88px real vs the
+      constant's 50px in some auth/nav-link states, see
+      `docs/troubleshooting.md`) with a `ResizeObserver`-measured value,
+      for `Layout.tsx`'s `ContentContainer` (sitewide — this is what was
+      hiding the first several px of top-of-page content, including this
+      page's hero title and `/display`'s own toolbar, behind the real
+      navbar in a taller-navbar state) and this page's `PageColumn`.
+      Scoped, not a blanket swap — every other `NavbarHeight` consumer
+      (`Explore.tsx`, `ProjectEditor.tsx`, `FinishedMyProject.tsx`) is
+      unchanged, and #250 stays open for that broader decision (the hook
+      also doesn't yet handle the navbar's own crowded-state wrapping to
+      a second, taller row — only the single-row height mismatch).
+      Strengthened `QuestionFeedResponsive.spec.ts`'s own pinning
+      assertion with a real `page.mouse.wheel()` scroll (not just
+      `el.scrollTop` on the inner questions box) plus a
+      `content-container` testid check — that gap (never exercising the
+      outer container) is exactly what let the original bug pass CI.
+  - **Hover-zoom/hover-burst edge clipping** (fix round, PR #305/#308
+    owner review): `ZoomableThumbnail`'s hover-zoom and `HoverBurst`'s
+    glow (`cardPanel.tsx`) were both deliberately built with no
+    `overflow: hidden` of their own so the enlarged art/glow could pop out
+    uncropped — the pinning fix above's `overflow-y: auto` on
+    `HeroQuestionsArea` forces `overflow-x: auto` too (CSS's own "visible
+    computes to auto once the other axis isn't visible" rule), silently
+    re-clipping both right at that box's left/right edges, worst on the
+    left where the first column in every row sits flush against it with
+    no buffer. Two-part fix: `HeroQuestionsArea` itself gets `margin: 0 -2.5rem` + matching `padding` (bleeds its own clip boundary 2.5rem
+    into the real empty space already there — the grid's own column gap
+    on the left, the page's outer margin on the right — with zero visible
+    resting-layout shift, verified via `boundingBox()` diff); `HoverBurst`
+    gained an additive `$edge` prop that shrinks its 331.2% bloom to 150%
+    for the first/last column specifically (`index % 4 === 0 || index % 4 === 3`, the two columns still short on room even with the added
+    bleed) — interior columns keep the full-size, unmodified glow.
+    Regression coverage: `QuestionFeedResponsive.spec.ts`'s new
+    horizontal-only containment check (vertical clipping at the top/
+    bottom of this box is its intended scroll behaviour; only left/right
+    clipping is the bug).
   - **One hero card slot per item type, not per stage**: Level 3 dropped
     its old inline 48px thumbnail+name row (the shared hero card already
     shows the same art, one persistent slot across every stage per the

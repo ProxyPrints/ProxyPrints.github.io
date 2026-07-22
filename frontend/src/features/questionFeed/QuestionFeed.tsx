@@ -44,7 +44,6 @@ import Row from "react-bootstrap/Row";
 
 import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getPrintingCandidateDataAttributes } from "@/common/cardDom";
-import { NavbarHeight } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import {
   PrintingCandidate,
@@ -160,9 +159,19 @@ const ThumbChip = styled(Button)`
 // awkward locked cage on a small screen instead - HeroCardArea's own mobile override (below)
 // takes the "keep the card comparable while scrolling" intent in a phone-shaped direction:
 // a condensed sticky bar, not this bounded-box mechanism.
+//
+// Fix round (PR #305/#308 owner review): this used to bound itself via its own
+// `max-height: calc(100dvh - NavbarHeight - 2rem)` - wrong on two independent counts. (1) the
+// static NavbarHeight constant regularly undercounts the navbar's real rendered height (issue
+// #250), and (2) even with an accurate navbar height, the flat "2rem" guess ignored
+// StarburstBackground's own real padding/margin (4.5rem, not 2rem) AND Footer's entire height
+// below it - so the true total page content routinely exceeded the space actually available,
+// forcing Layout.tsx's ContentContainer to scroll as a whole and breaking the "hero stays
+// pinned" invariant live despite passing CI (a scrollTop-only assertion on the inner questions
+// box never exercised that outer container). Replaced with `flex: 1; min-height: 0` below -
+// FeedRoot/StarburstContent (whatsthat.tsx) now do this arithmetic structurally instead of via
+// a hand-maintained calc, so this can't drift out of sync with either figure again.
 // ---------------------------------------------------------------------------------------
-
-const HERO_MAX_HEIGHT = `calc(100dvh - ${NavbarHeight}px - 2rem)`;
 
 const HeroGrid = styled.div`
   display: grid;
@@ -175,7 +184,26 @@ const HeroGrid = styled.div`
     grid-template-columns: minmax(0, 42%) minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas: "card words" "card questions";
-    max-height: ${HERO_MAX_HEIGHT};
+    flex: 1;
+    min-height: 0;
+  }
+`;
+
+// QuestionFeed's own root - `flex: 1; min-height: 0` at >= md opts into StarburstContent's
+// `display: flex; flex-direction: column; height: 100%` (whatsthat.tsx) so HeroGrid's own
+// `flex: 1` above has a real, resolvable height to consume. Only meaningful when this is a
+// direct flex child of a flex parent with a definite height - true for the common,
+// non-moderator render path (StarburstContent renders this directly), but NOT for the
+// moderator Tab.Container/Tab.Content/Tab.Pane switcher (whatsthat.tsx), which isn't part of
+// that flex chain - this deliberately falls back to auto/natural height there instead
+// (unchanged from before this fix round), rather than extending the flex chain through three
+// more react-bootstrap wrapper components for a small, privileged audience.
+const FeedRoot = styled.div`
+  @media (min-width: 768px) {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
   }
 `;
 
@@ -221,6 +249,28 @@ const HeroWordsArea = styled.div`
 // Subtle themed scrollbar (owner addendum) - not the browser's default chrome, but not
 // hidden either: a hidden scrollbar on a genuinely-scrollable region is its own usability
 // trap, since "scrolling locks to the box" should still visibly look scrollable.
+// Owner review (fix round, PR #305/#308): the candidate grid's hover-zoom (ZoomableThumbnail)
+// and hover-burst (HoverBurst, cardPanel.tsx) were both deliberately built with no
+// `overflow: hidden` of their own, specifically so the enlarged art/glow could pop out
+// uncropped (see cardPanel.tsx's own comments on both, and docs/lessons.md's "a new wrapper
+// placed around an existing effect can silently fight that effect's own CSS" entry for the
+// exact prior incident this repeats) - this box's overflow-y: auto (needed for the pinning fix
+// above) forces overflow-x: auto too per the CSS spec's own "visible computes to auto once the
+// other axis isn't visible" rule (confirmed via getComputedStyle in this task's own debug
+// pass), re-clipping both hover effects right at this box's left/right edges - worst on the
+// left, where the first column sits flush with zero buffer at all.
+//
+// `margin: 0 -2.5rem` + matching `padding` bleeds this box's own clip boundary (its border/
+// padding edge - where overflow: auto actually clips, not wherever its children happen to be
+// positioned) 2.5rem past its grid-assigned track on each side, into the real empty space
+// already there (the grid's own 2.5rem column gap on the left; the page's own outer margin -
+// StarburstContent's max-width cap plus the full-bleed background beyond it - on the right,
+// measured at >= 130px in this task's own debug pass, comfortably more than needed). The
+// padding exactly cancels the bleed for layout purposes (content still starts/ends at the
+// exact same x-position as before - verified via boundingBox() diff), so this is purely
+// additional clip headroom, not a visible resting-layout change. HoverBurst's own edge-column
+// variant (cardPanel.tsx's $edge prop) targets the remaining gap this alone doesn't cover -
+// its 331.2%-wide glow needs more room than 2.5rem gives on either side.
 const HeroQuestionsArea = styled.div`
   grid-area: questions;
   min-width: 0;
@@ -228,7 +278,8 @@ const HeroQuestionsArea = styled.div`
   @media (min-width: 768px) {
     overflow-y: auto;
     min-height: 0;
-    padding-right: 0.75rem;
+    margin: 0 -2.5rem;
+    padding: 0 calc(2.5rem + 0.75rem) 0 2.5rem;
     scrollbar-width: thin;
     scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
 
@@ -268,15 +319,15 @@ function normalizeQuestionFeedCounts(
   }
   if (typeof raw === "number") {
     // legacy shape - no tier breakdown available, so confirmable/contested fall back to 0
-    // (never show a false "quick confirmations ready" headline) and fresh mirrors total.
+    // (never show a false "N ready" count in the stats line below) and fresh mirrors total.
     return { total: raw, confirmable: 0, contested: 0, fresh: raw };
   }
   // `total === fresh` is expected for the legacy number shape above (fresh is forced to mirror
   // total there), but for a genuine object-shaped response it would mean every card in the
   // catalog is still "fresh" - vanishingly unlikely in practice, and far more likely a sign that
   // this build is talking to a backend that hasn't finished rolling out the fresh/total split.
-  // Never shown to the user (the subcounts line dropped `fresh` entirely - see the audit note
-  // above the render) - this is purely a version-skew signal for whoever reads the console.
+  // Never shown to the user (the stats line below never renders `fresh` at all) - this is
+  // purely a version-skew signal for whoever reads the console.
   if (raw.total === raw.fresh) {
     console.warn(
       "QuestionFeed: counts.total === counts.fresh on a non-legacy response - possible backend/frontend version skew."
@@ -480,8 +531,7 @@ export function QuestionFeed() {
 
   // The pre-classified exit for "this is real art, just not an official printing" - one tap
   // instead of "None of these" -> the reason strip, since the tap already told us why (see
-  // reason_tags.py's existing seeded "custom-art" tag - no new endpoint). Shares the funnel's
-  // usual flavor-text slot for a brief, specific confirmation instead of the generic copy.
+  // reason_tags.py's existing seeded "custom-art" tag - no new endpoint).
   const classifyAsCustomArt = () => {
     if (backendURL == null || item == null) {
       return;
@@ -507,9 +557,6 @@ export function QuestionFeed() {
           "same-origin",
           "question-feed"
         ).catch(() => undefined);
-        setFlavorText(
-          "Logged as custom / alternate art - thanks! Moving on..."
-        );
         fetchNext();
       })
       .catch(reportVoteFailed)
@@ -974,7 +1021,12 @@ export function QuestionFeed() {
             </p>
           )}
           <Row className="g-2" xs={3} md={4}>
-            {visibleCandidates.map((candidate) => (
+            {/* Row is 4-wide at >= md (the only breakpoint HeroQuestionsArea's overflow-y: auto,
+                and therefore its hover-clip risk, applies at - see that component's own
+                comment) - every 1st/4th candidate in a row sits flush against the scroll box's
+                own left/right edge, where even the added bleed room isn't enough for
+                HoverBurst's full-size bloom (see that component's own $edge comment). */}
+            {visibleCandidates.map((candidate, index) => (
               <Col key={candidate.identifier}>
                 <CandidateButton
                   variant="outline-secondary"
@@ -994,6 +1046,7 @@ export function QuestionFeed() {
                   <HoverBurst
                     className="hover-burst"
                     viewBox={STARBURST_VIEWBOX}
+                    $edge={index % 4 === 0 || index % 4 === 3}
                   >
                     <polygon
                       points={STARBURST_OUTER_FRAMES[starburstFrame]}
@@ -1142,7 +1195,7 @@ export function QuestionFeed() {
   }
 
   return (
-    <div data-testid="question-feed">
+    <FeedRoot data-testid="question-feed">
       <HeroGrid data-testid="question-feed-current-item">
         <HeroCardArea data-testid="question-feed-hero-card-area">
           {/* Keyed on the card identifier so both the pop-in-sync-with-THAT pulse (below) and
@@ -1160,44 +1213,6 @@ export function QuestionFeed() {
           <WhatsThatWords animationKey={item.card.identifier} />
         </HeroWordsArea>
         <HeroQuestionsArea data-testid="question-feed-questions-area">
-          <p
-            className="text-muted small mb-3"
-            data-testid="question-feed-intro"
-          >
-            Test your Magic: the Gathering knowledge! One card at a time, help
-            identify which real-world printing, artist, or descriptor tag each
-            card image depicts - contested and machine-suggested cards come
-            first, since they need your eyes the most.
-          </p>
-          {counts != null && (
-            <>
-              {/* Headline leads with quick confirmations (tier 1 - an unresolved machine-
-                  suggested printing awaiting a one-tap human yes/no) since that's the easiest,
-                  fastest-to-clear category - falls back to the overall total once there's
-                  nothing quick left, rather than always showing the same undifferentiated
-                  "cards remaining" copy. */}
-              <p className="text-primary" data-testid="question-feed-headline">
-                {counts.confirmable > 0
-                  ? `${counts.confirmable} quick confirmation${
-                      counts.confirmable !== 1 ? "s" : ""
-                    } ready`
-                  : `Still need help with: ${counts.total} card${
-                      counts.total !== 1 ? "s" : ""
-                    }`}
-              </p>
-              <p
-                className="text-muted small"
-                data-testid="question-feed-subcounts"
-              >
-                {counts.total} in catalog &middot; {counts.contested} contested
-              </p>
-            </>
-          )}
-          {flavorText != null && (
-            <p className="text-muted" data-testid="question-feed-flavor-text">
-              {flavorText}
-            </p>
-          )}
           {rateLimited && (
             // Persistent (not a self-dismissing toast) and dismissible - a rate-limit pause is
             // an expected, honest condition in a one-tap funnel, not a failure, so it gets its
@@ -1217,8 +1232,27 @@ export function QuestionFeed() {
             </Alert>
           )}
           {questionsNode}
+          {/* Fix round (PR #305/#308 owner review, "Maybe the old text should go?") - the
+              intro paragraph, "N quick confirmations ready" headline, and "N in catalog · N
+              contested" subcounts line used to sit ABOVE the question, eating into the vertical
+              budget that pulls the suggested-match card + answer buttons up beside the
+              reference card at eye level (the L1 case must fit entirely above the fold at
+              1400x900 - see this task's own screenshots). The underlying counts are still
+              useful, just not at the cost of that space - a single small, muted line tucked
+              at the bottom of this column (after the question itself, never part of the
+              scroll budget a user has to clear before answering) keeps the information without
+              the vertical cost. */}
+          {counts != null && (
+            <p
+              className="text-muted small mt-3 mb-0"
+              data-testid="question-feed-stats"
+            >
+              {counts.confirmable} ready &middot; {counts.total} in catalog
+              &middot; {counts.contested} contested
+            </p>
+          )}
         </HeroQuestionsArea>
       </HeroGrid>
-    </div>
+    </FeedRoot>
   );
 }

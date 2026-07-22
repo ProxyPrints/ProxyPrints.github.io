@@ -121,9 +121,6 @@ test.describe("question feed - Level 2 (candidate grid)", () => {
     expect(submittedPrinting.printingIdentifier).toBeUndefined();
     await expect.poll(() => submittedTag.tagName).toBe("custom-art");
     expect(submittedTag.polarity).toBe(1);
-    await expect(page.getByTestId("question-feed-flavor-text")).toContainText(
-      "custom / alternate art"
-    );
   });
 });
 
