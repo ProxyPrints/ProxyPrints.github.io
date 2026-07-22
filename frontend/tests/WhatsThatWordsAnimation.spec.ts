@@ -394,7 +394,7 @@ test.describe("What's That Card? - narrow-width wordmark swap (owner live-review
     await expect(page.getByTestId("whatsthat-words")).not.toBeVisible();
   });
 
-  test("at >= md, the sliced word stack renders and the composite lockup is hidden", async ({
+  test("at >= md, the sliced word stack renders and the narrow-width wordmark is hidden", async ({
     page,
     network,
   }) => {
