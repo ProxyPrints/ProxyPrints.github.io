@@ -37,11 +37,13 @@ not described here so it doesn't get re-derived.)
   "known baseline" tolerance rule is retired, see
   [[docs/lessons.md]]): tesseract is installed in CI, and the
   Moxfield/Google-Drive-credential tests carry real named skips instead
-  of failing. The tappedout.net live-fetch cases in
-  `test_integrations.py::test_valid_url` are mocked (not skipped) as of
-  2026-07-20, since there's no config flag to gate a skip on, only live
-  site reachability — see [[docs/troubleshooting.md]]'s
-  `test_valid_url[tappedout*]` entry. A red Backend-tests check on a PR
+  of failing. The tappedout.net (2026-07-20) and manastack.com (2026-07-22)
+  live-fetch cases in `test_integrations.py::test_valid_url` are mocked
+  (not skipped) once observed flaking in CI, since there's no config flag
+  to gate a skip on, only live site reachability — see
+  [[docs/troubleshooting.md]]'s `test_valid_url[tappedout*]`/`[manastack]`
+  entry (same fix applies to any other site in that parametrize the next
+  time it flakes). A red Backend-tests check on a PR
   now means something real — investigate it, don't wave it through as
   expected noise.
 - **Docs convention**: task-end doc updates EDIT the relevant reference

@@ -21,6 +21,7 @@ from PIL import Image
 from django.conf import settings as conf_settings
 
 from cardpicker.integrations.game.mtg import (
+    ManaStack,
     Moxfield,
     MTGIntegration,
     TappedOut,
@@ -170,10 +171,31 @@ class TestMTGIntegration:
         # coverage of TappedOut.retrieve_card_list's parsing instead of losing it. Every
         # other site in this parametrize is untouched: real_http=True lets any non-tappedout
         # request fall through to the real network exactly as before.
+        #
+        # CI baseline cleanup, 2026-07-22 (PR #321 investigation): MANASTACK hit the exact same
+        # failure mode - manastack.com's `api/deck/list` endpoint now returns a genuine, live,
+        # reproducible 500 (confirmed via direct curl, not a one-off flake: identical failure on
+        # two separate CI runs, `1381 passed`/manastack-only-failed both times), so it gets the
+        # same mock-not-skip treatment as tappedout above rather than a `real_http=True`
+        # passthrough. The JSON shape below matches `ManaStack.retrieve_card_list`'s own parsing
+        # (`response_json["list"]["cards"]`, each item `{"count", "card": {"name"}}`) closely
+        # enough to keep exercising that parsing path, not just bypass it.
         with requests_mock.Mocker(real_http=True) as mock:
             mock.get(
                 re.compile(r"^https://(?:{})/".format("|".join(re.escape(h) for h in TappedOut.get_host_names()))),
                 text="Sideboard:\r\n4 Brainstorm\r\n3 Past in Flames\r\n1 Delver of Secrets\r\n",
+            )
+            mock.get(
+                re.compile(r"^https://(?:{})/".format("|".join(re.escape(h) for h in ManaStack.get_host_names()))),
+                json={
+                    "list": {
+                        "cards": [
+                            {"count": 4, "card": {"name": "Brainstorm"}},
+                            {"count": 3, "card": {"name": "Past in Flames"}},
+                            {"count": 1, "card": {"name": "Delver of Secrets"}},
+                        ]
+                    }
+                },
             )
             decklist = MTGIntegration.query_import_site(url)
         assert decklist
