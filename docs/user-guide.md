@@ -33,14 +33,17 @@ results.
 
 The vote queue at **What's That Card?** presents each question as a
 quiz-reveal hero: the card image in question sits in its own column on
-a deep-blue hero field (with an animated starburst behind it) alongside
-a title that pops into place word by word every time a new card is
-shown, while the actual question — the candidate printings or attribute
-chips to pick from — sits in a scrolling panel beside it. On a wide
-screen that question panel scrolls on its own while the card stays put,
-so you never lose sight of what you're being asked about; on a narrow
-screen the card instead pins near the top of the screen while the
-questions scroll underneath it.
+a deep-blue hero field (with an animated starburst behind it, visible
+at every screen size) alongside a title that pops into place word by
+word every time a new card is shown, while the actual question — the
+candidate printings or attribute chips to pick from — sits in a
+scrolling panel beside it. On a wide screen that question panel scrolls
+on its own while the card stays put, so you never lose sight of what
+you're being asked about; on a narrow screen the card instead sits in
+its own compact column on the left, with the answer options (buttons,
+candidate tiles, or chips, depending on the question) in a single row
+beside it that you scroll sideways rather than up and down — the card
+and the options can never end up overlapping, at any scroll position.
 
 ## Exporting a print-ready PDF
 
