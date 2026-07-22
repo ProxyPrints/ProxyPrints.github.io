@@ -207,6 +207,22 @@ directly.
   `-R`) defaults the base repo to the **upstream parent**, not this fork —
   always pass `-R ProxyPrints/ProxyPrints.github.io` to `gh pr create`, or
   check the base-repo dropdown, when the PR is meant to land on this repo.
+- The frontend test jobs (`test-frontend.yml`'s `test` job, `web-ci.yml`'s
+  `test-frontend` job — both via the shared
+  `.github/actions/test-frontend` composite action) run inside
+  `mcr.microsoft.com/playwright:v<X.Y.Z>-noble` (`options: --user 1001`,
+  Playwright's own documented recipe for this exact setup), where `<X.Y.Z>`
+  must track `frontend/package-lock.json`'s pinned `@playwright/test`
+  version exactly. That image pre-bakes Chromium/Firefox/WebKit's OS-level
+  deps, so the composite action never runs `playwright install`/
+  `install-deps` — apt drift on that step had produced a confirmed ~39-minute
+  outlier job (installing WebKit's full GStreamer/multimedia tree from
+  scratch) against a typical ~20-60s cost; the container removes that
+  variance entirely rather than just shrinking the typical case. `setup-node`
+  still pins Node 22.15 explicitly inside the container, since the image's
+  own Node (v24.11.1 as of `v1.57.0`) isn't the version this repo's other CI
+  jobs use. Bumping the pinned Playwright version means bumping this image
+  tag in lockstep in both workflow files.
 
 ## Push policy
 

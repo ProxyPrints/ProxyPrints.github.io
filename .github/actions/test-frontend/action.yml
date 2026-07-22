@@ -1,5 +1,10 @@
 name: Frontend tests
-description: Test the MPC Autofill static frontend
+description: >-
+  Test the MPC Autofill static frontend. Assumes the calling job runs inside
+  the mcr.microsoft.com/playwright container image matching
+  frontend/package-lock.json's @playwright/test version - Playwright's
+  browsers and OS deps are pre-baked there, so this action never installs
+  them itself.
 inputs:
   shard_index:
     description: Shard index (1-based)
@@ -30,21 +35,6 @@ runs:
       if: ${{ inputs.shard_index == '1' }}
       working-directory: frontend
       run: npm run build
-      shell: bash
-    - name: Cache Playwright browsers
-      id: playwright-cache
-      uses: actions/cache@v5
-      with:
-        path: ~/.cache/ms-playwright
-        key: playwright-${{ hashFiles('frontend/package-lock.json') }}
-    - name: Install Playwright Browsers
-      run: |
-        if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
-          npx playwright install-deps
-        else
-          npx playwright install --with-deps
-        fi
-      working-directory: frontend
       shell: bash
     - name: Run Jest tests
       if: ${{ inputs.shard_index == '1' }}
