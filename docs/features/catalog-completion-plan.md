@@ -1858,6 +1858,23 @@ a real short-circuit-rate measurement as a side effect of running — this still
 own rate and the 99.7% figure above would be an early warning worth investigating before trusting
 the projection in item 5 below at full scale.
 
+**Gate tightened, 2026-07-22 (pipeline-fidelity parity replay #154's "unexplained" divergence
+autopsy)**: the "open verification gap" above turned out to be a real, already-visible split in
+this section's own numbers — "6,625 (99.7%) ... (1,778 blank, 4,847 non-blank-but-digit-free)" —
+that the original short-circuit's `_contains_digit` condition never distinguished. The replay
+found 155 of 373 conservative-abstention divergences between the current pipeline and the July-16
+pilot were exactly this: a card whose tier-1 attempts came back completely BLANK (a tesseract read
+FAILURE, not a confident "no collector number here" finding) short-circuited anyway, silently
+skipping the deeper tiers that would have recovered the real collector line. `image_evidence.py`'s
+`_confidently_digit_free` (superseding the bare `_contains_digit` check in the short-circuit gate)
+now additionally requires both tier-1 texts to be non-blank — a blank/failed tier-1 read always
+escalates to tiers 2–3, exactly like a digit-bearing unparseable read already did; only a
+genuinely content-bearing, genuinely digit-free tier-1 read still short-circuits. This is a
+strict NARROWING (a subset of what used to qualify still does), so the worst-case cost bound
+above is unaffected. Realizing the recovery on the 1,778-card blank-tier-1 subset (and any newer
+cards matching the same shape) still requires a targeted Stage C re-extraction of the affected
+cohort — a prod write, gated and owner-authorized separately, not part of the code fix itself.
+
 **2. Atomic cast-and-route — corrected finding, not the premise as originally stated.** Read
 `local_calculate_verdicts.py`'s `Command.handle()` directly: `run_join_key_calculator` and
 `run_slow_path_calculator` already run in ONE invocation/`run_id`, unconditionally, every time

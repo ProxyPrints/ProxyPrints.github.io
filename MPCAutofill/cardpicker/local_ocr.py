@@ -97,6 +97,32 @@ _COLLECTOR_NUMBER_RE = re.compile(r"★?(\d{1,4}[A-Za-z]?)\b")
 # letter" shape-only skip would risk discarding a genuine code elsewhere in the line.
 _DENOMINATOR_RARITY_TOKEN_RE = re.compile(r"^\d{1,4}[A-Za-z]?$")
 
+# language-marker character glued onto the tail of a set code (2026-07-22, pipeline-fidelity
+# parity replay #154's "unexplained" divergence autopsy, canonical case card_id 41559, "Verazol,
+# the Split Current": raw "239/280 R\nZNRe EN b> DAARKEN" parses set_code="znre" - the real set
+# is "znr" (confirmed against CandidateNameIndex), with a stray lowercase "e" glued onto its tail,
+# immediately followed by a real language marker ("EN") that reads out cleanly on its own right
+# after it. Same family of OCR-glued noise `_DENOMINATOR_RARITY_TOKEN_RE` above already documents
+# (an adjacent, correctly-read token's own leading edge bleeding onto the PRECEDING token, not a
+# genuine extra character printed on the card) - extends that guard's own POSITION-based
+# detection (not shape alone) to a different adjacency: this time to whatever immediately follows
+# the candidate token, not what precedes it.
+#
+# Deliberately narrow / no candidate lookup: `parse_collector_line` has no access to a card's real
+# candidate set list (module docstring - "no candidate matching happens here, that's Stage D's
+# job"), so this can only ever fire on a POSITIONAL/SHAPE signal, exactly like the denominator
+# guard - never on "does the de-glued form match something real". The signal used: the
+# candidate's OWN trailing character, case-INsensitively, equals the first letter of an
+# immediately-following (whitespace-only gap) recognized language-marker token. This is
+# deliberately strict enough to fire on the confirmed 41559/165637 case only, not on other
+# glued-extra-character cases sampled from the same "is_no_match" bucket that don't share this
+# exact adjacency (e.g. card_id 9934's "A25S" -> real "a25", glued to a rarity SYMBOL, not a
+# language marker; card_id 181116's "WWkK" -> real "wwk", also glued ahead of a symbol, not
+# directly before the marker) - those remain unfixed by this guard, a deliberate scope boundary,
+# not an oversight (see docs/reports for this task's own per-ID breakdown).
+_LANGUAGE_MARKER_CODES = frozenset({"EN", "DE", "FR", "IT", "ES", "PT", "JA", "KO", "RU", "ZHS", "ZHT"})
+_LANGUAGE_MARKER_ADJACENCY_RE = re.compile(r"\s*([A-Za-z]{2,3})\b")
+
 # legal/copyright line (Stage C issue #151/task #159): same y-band DEFAULT_CROP_BOX was tuned
 # against (bottom 90-96.5% height - see that constant's own comment for the tuning history),
 # widened to the FULL card width rather than DEFAULT_CROP_BOX's narrow left-hand 6-35% window -
@@ -396,6 +422,21 @@ def parse_collector_line(raw_text: str) -> OcrParseResult:
                 preceding = segment[: match.start()].rstrip()
                 if preceding.endswith("/") and _DENOMINATOR_RARITY_TOKEN_RE.match(candidate):
                     continue
+                # language-marker character glued onto this token's own tail (see
+                # _LANGUAGE_MARKER_ADJACENCY_RE's own comment) - only de-glued (not skipped
+                # entirely, unlike the denominator case above) when the token's OWN last
+                # character, case-insensitively, matches the first letter of a real language
+                # marker immediately following it (whitespace-only gap) - never on shape alone,
+                # and never wider than stripping that single trailing character.
+                following = segment[match.end() :]
+                marker_match = _LANGUAGE_MARKER_ADJACENCY_RE.match(following)
+                if (
+                    len(candidate) >= 4
+                    and marker_match is not None
+                    and marker_match.group(1).upper() in _LANGUAGE_MARKER_CODES
+                    and candidate[-1].lower() == marker_match.group(1)[0].lower()
+                ):
+                    candidate = candidate[:-1]
                 return candidate.lower()
             return None
 
