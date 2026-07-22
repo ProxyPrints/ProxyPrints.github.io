@@ -1201,3 +1201,50 @@ listener racing the observer) since the observer already re-fires on the
 same settling scroll event that changes intersection state. Verified
 5/5 clean repeats of the D17 test plus the full 28-test `DisplayPage.spec.ts`
 suite and CI's own shard-2/4 (76 tests) locally.
+
+## `run_image_evidence_cohort` (Stage C) parent process's RSS climbs unboundedly and OOMs the whole box on a long run
+
+**Symptom**: a long (tens-of-thousands-of-cards) `run_image_evidence_cohort`
+invocation shows parent-process RSS climbing steadily over the run's
+lifetime — not a leveling-off/plateau — reaching tens of GB and either
+OOM-killing the whole box or (if a watchdog is in place) getting stopped
+partway through. Arithmetic: retained bytes ÷ cards processed lands around
+250-350KB/card, which is the size of one raw fetched card image buffer, not
+anything decoded or persisted.
+
+**Cause**: the decoupled fetch/compute driver (`_run_cohort`, added by the
+Stage C fetch/compute decoupling — #228/#235,
+`docs/features/catalog-completion-plan.md`'s "Stage C: fetch/compute
+decoupling" section) submitted every card in the cohort to the fetch thread
+pool UP FRONT, and only gated COMPUTE submission behind `--queue-depth`. The
+design doc's own memory-budget arithmetic for that section silently assumed
+fetch completion was ALSO bounded by that window — the implementation never
+enforced it. Fetch (I/O-bound, paced by a 6-way concurrency limiter)
+completes cards faster than the CPU-bound compute stage consumes them, so
+fetch raced arbitrarily far ahead of consumption over a multi-hour run,
+accumulating raw image buffers for the entire fetched-but-not-yet-consumed
+backlog — in the worst case, most of the remaining cohort. A secondary,
+much smaller (~1% of the effect) contributor: the `fetch_futures` collection
+tracking submitted futures was never pruned as futures were consumed, so
+even already-handled results stayed referenced (and their retained image
+bytes stayed resident) for the rest of the run.
+
+**Fix** (2026-07-22): fetch submission is now drip-fed
+(`_submit_more_fetch`), bounded by the same `--queue-depth` knob already
+used to gate compute submission, so total outstanding fetch-stage work (in
+flight + completed-but-not-yet-consumed) never exceeds that window regardless
+of cohort size. The `fetch_futures` tracking set now discards each future the
+instant its result is consumed. The command also logs the parent's own RSS
+(from `/proc/self/status`) on every progress line — so the next time this (or
+anything like it) accumulates unexpectedly, the log itself shows it climbing
+— and a new `--max-rss-mb` flag (off by default) turns crossing a threshold
+into a clean, resumable stop instead of relying on the OS OOM-killer; the
+command's own resume filter (skip cards whose `ImageEvidence` row already
+carries every manifest extractor's version key) makes a re-invocation after
+any stop safe. Diagnosed via a synthetic repro (tracked, weakref-observable
+payload objects standing in for real fetched bytes, no live prod run) that
+reproduced the exact growth-with-cohort-size pattern before the fix and
+confirmed the bound held after it — see
+`cardpicker/tests/test_run_image_evidence_cohort.py`'s
+`TestRunCohortFetchMemoryBound` for the same property turned into a
+permanent regression guard.
