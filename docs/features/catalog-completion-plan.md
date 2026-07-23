@@ -650,6 +650,30 @@ confirmed post-stop) - that cache is permanent and independent of this
 run's own vote/residue loss, and is exactly the pre-warm the
 harvest-calculate pipeline's lands chunk inherits.
 
+**Evidence-first data source (issue #359, 2026-07-23):** now that the
+harvest-calculate pipeline below has fired end to end, `run_lands_identify`
+was patched to read a card's own already-persisted, CURRENT `ImageEvidence`
+row first (same currency test every Stage D calculator uses - `content_hash`
+matching the card's live `content_phash`, plus both the `collector_line_ocr`
+and `artist_ocr` extractor-version keys) rather than always paying its own
+fresh fetch + OCR. This is a pure data-source swap - steps 2-3
+(`identify_land_printing`) are untouched, and step 1's outcome is reproduced
+by feeding an `OcrParseResult` reconstructed from stored fields through the
+same, unmodified `local_ocr.validate_against_candidates` call
+`local_calculate_verdicts.calculate_join_key_verdict` already established
+this technique for. A card lacking current evidence still falls back to the
+original live fetch + OCR + artist-detection path unchanged. Read-only sizing
+against the live pool (how many of the currently-unresolved basics carry
+current evidence today) is deferred to the next `--fetch-budget 0` dry-run of
+the deployed command - this PR's own test suite proves the branching and
+parity (`identify_land_printing` untouched, both data sources produce
+identical verdicts on identical inputs) against synthetic fixtures only, no
+production DB access. The command also picked up the forced-dry-run guard/
+counters-before-output/
+ledger-counters rails (`cardpicker.pilot_run_lifecycle`, issues #345/#373's
+convention) in the same change, since a cheap evidence-backed dry-run now
+makes that guard's cheap-preview rationale hold here for the first time.
+
 ---
 
 ## Harvest-calculate pipeline (Stages A–F, supersedes Part 4's remaining write run)
@@ -1425,6 +1449,26 @@ nothing newly broken); `makemigrations --check` clean.
 (see the geometry-group paragraph above) — settled afterward, see the
 "back-face flag" paragraph following the legal-line extractor below.
 
+`artist_ocr_name`'s "Illus. <artist>"-only anchor (above) left the
+overwhelming majority of `artist_ocr_raw_text` unparsed — 215,049 rows
+carried raw text but only 13,588 had a parsed name, since modern
+(post-2003) frames print a bare name beside a brush-glyph icon, a
+completely different shape the old-border anchor was never built to
+catch. Closed by issue #368 (2026-07-23), entirely OUTSIDE `local_fallback.py`
+(PROTECTED CORE, never touched): `cardpicker.modern_artist_credit`, a
+from-scratch recognizer that re-parses the SAME already-stored raw text
+via fuzzy-matching name candidates against the `CanonicalArtist` lexicon
+(tolerant of OCR garble — e.g. "Kalk Kopinski" for the real "Karl
+Kopinski" — via a ratio-plus-margin threshold pair, conservative by
+design per that module's own docstring), plus the
+`backfill_modern_artist_names` management command (dry-run by default,
+`--write` to persist, never overwrites a non-blank name) that fills the
+gap. No new wiring needed downstream: `local_calculate_verdicts`'s
+existing "ARTIST-OCR corroboration" step (few paragraphs below) already
+consumes `artist_ocr_name` in production, so every name this backfill
+fills flows into printing identification on that calculator's next
+pass.
+
 **symbol_region — fourth manifest extractor, built** (public issue #160,
 "Part 4b: symbol harness", 2026-07-20): adds `symbol_crop_px` and
 `symbol_phash` to `ImageEvidence` (migration `0073`, additive-only
@@ -2075,6 +2119,19 @@ BrokenPipeError/IOError on a severed stdout can never flip an already-completed 
 (the exact failure mode a 2026-07-23 production incident hit — a client-side timeout severed
 stdout after every write had already committed, and the terminal-phase exception it caused
 overwrote the ledger row's true COMPLETED status with FAILED and no counters).
+
+**Detection-rule fix (2026-07-23, JestaProxy ticket)**: `_PROXY_MARKER_RE` (`local_ocr.py`)
+widened to an unbounded "proxy"/"proxies"/"proxied" substring match (a maker brand gluing the
+word directly onto its own prefix with no space, e.g. "JestaProxy"/"ValarProxy", previously never
+matched a `\b`-anchored regex) plus a bounded "original design" maker-attribution heuristic - see
+that regex's own comment for the full false-positive analysis. This directly shrinks item 4's own
+False population above but does NOT itself build the still-unbuilt compliance scan - it's a
+detection-accuracy fix one layer below it. `reparse_legal_line_proxy_marker` (new management
+command, dry-run default, `--write` to persist) re-derives `legal_line_proxy_marker_detected`
+for every stored `ImageEvidence` row from its already-stored `legal_line_raw_text` - parse-only,
+zero fetches, additive-only (never flips True back to False). A live prod dry-run (2026-07-23,
+218k `ImageEvidence` rows) found 2,508 rows whose stored `False` flips to `True` under the new
+parser - see this PR's own description for the sampled examples.
 
 Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,

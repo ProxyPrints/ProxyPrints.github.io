@@ -130,9 +130,18 @@ The knowledge-inventory sweep confirmed three pilot-era constants have
    source votes are NAME-based (the 2026-07-14 backfill, not phash/OCR-
    based), stay on the record as votes, and are invisible to Stage D's
    own calculation post-#341** — Stage D neither reads nor is blocked by
-   them. Their **consensus-layer weighting is a separate, still-OPEN
-   owner decision, parked here** (not restated elsewhere in this doc) —
-   this section states the parking, not a resolution.
+   them. Their consensus-layer weighting was a separate question,
+   parked here as still-OPEN as of this section's earlier revisions —
+   **now RESOLVED (owner ruling, 2026-07-23)**: these votes carry ZERO
+   consensus weight in every resolution computation, permanently, while
+   the rows themselves stay on the record forever (raw tallies/display
+   paths unaffected — see `vote_consensus.DEDUCTIVE_BACKFILL_ANONYMOUS_ID`'s
+   own docstring for the exact mechanism and the live-audit numbers
+   behind the ruling, and [`theory.md`](theory.md)'s soundness section,
+   §4, for the write-up). This is a distinct decision from the
+   Stage-D-exclusion question this whole numbered item is about (whether
+   Stage D re-votes a card the backfill already touched, resolved NOT-
+   RESTORED above) — that ruling is unchanged by this one.
 
 None of these three are soundness violations — the human-backed
 consensus gate still applies to every vote Stage D casts regardless.

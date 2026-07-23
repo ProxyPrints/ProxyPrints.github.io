@@ -143,6 +143,36 @@ const MatchIndicatorIcon = styled(Icon)`
   -webkit-text-stroke: 2px black;
 `;
 
+// Foreign-order resilience Phase 1 (issue #324) - "visually distinct treatment" for an orphan
+// (a card addressed only by a Drive file ID this catalog has never indexed). Top corner, clear
+// of the existing bottom-corner favorite-heart/printing-match icons. Text comes straight from
+// the synthesized CardDocument's own sourceName ("Your file" on this - the author/editor -
+// surface; a later phase's shared-deck recipient view can synthesize "Shared file" instead
+// without this component needing to know the difference).
+const OrphanBadge = styled.span`
+  // Bootstrap's .ratio > * rule (the aspect-ratio wrapper every card image sits inside)
+  // stretches EVERY direct child to width:100%/height:100%/top:0/left:0 by default - width/
+  // height must be overridden back to auto here (same defensive pattern CardIcon/
+  // MatchIndicatorIcon below already use), or this badge silently stretches to cover the whole
+  // card instead of sitting in its corner (caught only by a real browser render - Jest/jsdom
+  // doesn't compute layout, so this class of bug is invisible to unit tests).
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: auto;
+  height: auto;
+  z-index: 2;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(13, 110, 253, 0.85);
+  color: #fff;
+  pointer-events: none;
+`;
+
 type ImageState =
   | "loading-from-bucket"
   | "loading-from-fallback"
@@ -220,14 +250,36 @@ export const useImageSrc = (
       setImageState("loaded-from-local-file");
     }
   };
+
+  // attempt to load directly from bucket first
+  const thumbnailBucketURL = getBucketImageURL(
+    cardDocument,
+    small ? "small" : "large"
+  );
+  const imageBucketURLValid = thumbnailBucketURL !== undefined;
+  const loadFromBucket =
+    imageBucketURLValid &&
+    (imageState === "loading-from-bucket" ||
+      imageState === "loaded-from-bucket");
+
   const onError: React.ReactEventHandler<HTMLImageElement> = (img) => {
     img.preventDefault();
     img.currentTarget.onerror = null;
-    setImageState((value) =>
-      value === "loading-from-bucket" || value === "loaded-from-bucket"
-        ? "loading-from-fallback"
-        : "errored"
-    );
+    setImageState((value) => {
+      // The "bucket" tier only really exists as a distinct retry step when there's an actual
+      // second URL to fall back to (imageBucketURLValid) - a card with no bucket configured
+      // (orphans always; also AWS S3/dev-without-bucket-configured cards) is ALREADY loading
+      // its one and only "fallback" URL from the very first render, just still labelled
+      // "loading-from-bucket" because that's this hook's fixed initial state. Without this
+      // check, a failure here would relabel to "loading-from-fallback" and re-render with the
+      // exact same src string, which browsers don't re-fetch - the image would stay broken
+      // forever with the spinner never resolving to the "Image unavailable" placeholder. See
+      // docs/features/foreign-order-resilience.md for the orphan case this was written for.
+      if (value === "loading-from-bucket" || value === "loaded-from-bucket") {
+        return imageBucketURLValid ? "loading-from-fallback" : "errored";
+      }
+      return "errored";
+    });
   };
 
   if (localFileImageSrc !== undefined) {
@@ -240,17 +292,6 @@ export const useImageSrc = (
       imageState,
     };
   }
-
-  // attempt to load directly from bucket first
-  const thumbnailBucketURL = getBucketImageURL(
-    cardDocument,
-    small ? "small" : "large"
-  );
-  const imageBucketURLValid = thumbnailBucketURL !== undefined;
-  const loadFromBucket =
-    imageBucketURLValid &&
-    (imageState === "loading-from-bucket" ||
-      imageState === "loaded-from-bucket");
 
   // if image is unavailable in bucket, fall back on loading from worker if possible
   const imageWorkerURL = getWorkerImageURL(
@@ -305,8 +346,12 @@ function CardImage({
   priority = false,
 }: CardImageProps) {
   const dispatch = useAppDispatch();
+  // Foreign-order resilience Phase 1 (issue #324): orphans get no version picker, tags, or
+  // consensus surfaces - the detailed-view modal exposes exactly those (printing tags,
+  // reporting), so clicking an orphan's image is a no-op rather than opening it.
+  const canShowDetailedView = showDetailedViewOnClick && !cardDocument.isOrphan;
   const handleShowDetailedView = () => {
-    if (showDetailedViewOnClick) {
+    if (canShowDetailedView) {
       dispatch(showCardDetailedViewModal({ card: cardDocument }));
     }
   };
@@ -371,6 +416,11 @@ function CardImage({
             onErrorCapture={onError}
             alt={imageAlt}
             fill={true}
+            // Orphan images are fetched direct from Google, never our own CDN - owner ruling
+            // (2026-07-22 security review) accepts the fetch itself remaining a signal to the
+            // file's owner on author-only surfaces, but still asks for no-referrer so we're not
+            // additionally leaking this site's own URL to Google on every request.
+            referrerPolicy={cardDocument.isOrphan ? "no-referrer" : undefined}
           />
         ) : (
           <>
@@ -381,6 +431,11 @@ function CardImage({
               </ErrorPlaceholder>
             ) : (
               <>
+                {cardDocument.isOrphan && (
+                  <OrphanBadge data-testid="orphan-badge">
+                    {cardDocument.sourceName}
+                  </OrphanBadge>
+                )}
                 {isFavorite && small && (
                   <CardIcon bootstrapIconName="heart-fill" />
                 )}
@@ -405,13 +460,16 @@ function CardImage({
                   loading={priority ? undefined : "lazy"}
                   priority={priority}
                   imageIsLoading={imageIsLoading}
-                  showDetailedViewOnClick={showDetailedViewOnClick}
+                  showDetailedViewOnClick={canShowDetailedView}
                   src={imageSrc}
                   onLoad={onLoad}
                   onErrorCapture={onError}
                   onClick={handleShowDetailedView}
                   alt={imageAlt}
                   fill={true}
+                  referrerPolicy={
+                    cardDocument.isOrphan ? "no-referrer" : undefined
+                  }
                 />
               </>
             )}
@@ -609,7 +667,12 @@ export function Card({
             <div className="mpccard-spacing">
               <BSCard.Text className="mpccard-source">
                 {maybeCardDocument != null &&
-                  `${maybeCardDocument.sourceName} [${maybeCardDocument.dpi} DPI]`}
+                  // An orphan's dpi/sourceName are placeholders (issue #324's synthesized
+                  // CardDocument, never fetched from anywhere) - showing "[0 DPI]" would read as
+                  // real catalog data we don't actually have.
+                  (maybeCardDocument.isOrphan
+                    ? maybeCardDocument.sourceName
+                    : `${maybeCardDocument.sourceName} [${maybeCardDocument.dpi} DPI]`)}
                 {maybeCardDocument == null &&
                   searchQuery != undefined &&
                   "Your search query"}

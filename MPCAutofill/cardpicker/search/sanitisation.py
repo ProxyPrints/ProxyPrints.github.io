@@ -17,6 +17,14 @@ def fix_whitespace(input_str: str) -> str:
     return re.sub(r"\s+", " ", input_str).strip()
 
 
+def strip_bracketed_groups(input_str: str) -> str:
+    # Remove text inside brackets (e.g. a "(1)"/"(Modern Tomas Giorello)" filename-disambiguation
+    # suffix). Factored out of to_searchable so callers that need this specific step in isolation
+    # - case preserved, no further normalisation - don't have to duplicate the regex (see
+    # local_identify_printing_tags.CandidateNameIndex's de-concatenation fallback).
+    return re.sub(r"[\(\[].*?[\)\]]", "", input_str)
+
+
 def to_searchable(input_str: str) -> str:
     if not input_str:
         return ""
@@ -26,7 +34,7 @@ def to_searchable(input_str: str) -> str:
     input_str = input_str.lower()
 
     # Remove text inside brackets
-    input_str = re.sub(r"[\(\[].*?[\)\]]", "", input_str)
+    input_str = strip_bracketed_groups(input_str)
 
     # Remove hyphens and substitute right apostrophes (’) for single quotes (')
     input_str = input_str.replace("-", " ").replace("’", "'")
@@ -43,4 +51,4 @@ def to_searchable(input_str: str) -> str:
     return input_str
 
 
-__all__ = ["text_to_list", "fix_whitespace", "to_searchable"]
+__all__ = ["text_to_list", "fix_whitespace", "strip_bracketed_groups", "to_searchable"]

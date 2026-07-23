@@ -1,4 +1,5 @@
 import { getBucketImageURL, getWorkerImageURL } from "@/common/image";
+import { getOrphanFullResolutionImageURL } from "@/common/orphanCard";
 import { SourceType } from "@/common/schema_types";
 import { Semaphore } from "@/common/semaphore";
 import { CardDocument } from "@/common/types";
@@ -171,6 +172,52 @@ const getThumbnailURL = async (
 };
 
 /**
+ * Foreign-order resilience Phase 1 (issue #324): an orphan's PDF-export path, always direct
+ * from Google - never through our image-CDN Worker (see common/orphanCard.ts's module doc).
+ * Thumbnail tiers reuse the small/large URLs already computed at synthesis time (the same
+ * 400px/800px height params the Worker itself uses); "full-resolution" fetches the original,
+ * unresized file, paced by the same semaphore/retry logic as the catalog full-resolution path
+ * (owner ruling: "PDF export: original-resolution fetch... an exported PDF containing an
+ * orphan embeds the high-res image; the editor grid never requests it" - satisfied by this
+ * function only ever running when a PDF is actually being generated).
+ */
+const getOrphanPDFImageURL = async (
+  cardDocument: CardDocument,
+  imageQuality: PDFImageQuality
+): Promise<string> => {
+  switch (imageQuality) {
+    case "small-thumbnail":
+    case "large-thumbnail": {
+      const thumbnailURL =
+        imageQuality === "small-thumbnail"
+          ? cardDocument.smallThumbnailUrl
+          : cardDocument.mediumThumbnailUrl;
+      if (thumbnailURL === undefined) {
+        throw new Error(
+          `no orphan image source configured for card ${cardDocument.identifier}`
+        );
+      }
+      return URL.createObjectURL(await fetchAsBlob(thumbnailURL));
+    }
+    case "full-resolution": {
+      const fullResolutionURL = getOrphanFullResolutionImageURL(
+        cardDocument.identifier
+      );
+      if (fullResolutionURL === undefined) {
+        throw new Error(
+          `no orphan image source configured for card ${cardDocument.identifier}`
+        );
+      }
+      return URL.createObjectURL(
+        await fetchFullResolutionImageAsBlob(fullResolutionURL)
+      );
+    }
+    default:
+      throw new Error(`invalid imageQuality ${imageQuality}`);
+  }
+};
+
+/**
  * Resolve the image source for a card in a PDF, honouring the requested quality
  * tier and the card's source (Google Drive image worker, or a local file).
  * Shared by the standard PDF render path and the SCM render path. Rejects
@@ -185,6 +232,9 @@ export const getPDFImageURL = async (
   jpgQuality: number,
   fileHandles: { [identifier: string]: FileSystemFileHandle }
 ): Promise<string> => {
+  if (cardDocument.isOrphan) {
+    return getOrphanPDFImageURL(cardDocument, imageQuality);
+  }
   switch (cardDocument.sourceType) {
     case SourceType.GoogleDrive:
       switch (imageQuality) {
@@ -243,6 +293,19 @@ export const getPDFImageBlob = async (
   jpgQuality: number,
   fileHandles: { [identifier: string]: FileSystemFileHandle }
 ): Promise<Blob> => {
+  if (cardDocument.isOrphan) {
+    // Foreign-order resilience Phase 1 (issue #324) - see getOrphanPDFImageURL's own comment
+    // above for why this is always direct-from-Google, full resolution, never our Worker.
+    const fullResolutionURL = getOrphanFullResolutionImageURL(
+      cardDocument.identifier
+    );
+    if (fullResolutionURL === undefined) {
+      throw new Error(
+        `no orphan image source configured for card ${cardDocument.identifier}`
+      );
+    }
+    return fetchFullResolutionImageAsBlob(fullResolutionURL);
+  }
   switch (cardDocument.sourceType) {
     case SourceType.GoogleDrive: {
       const workerURL = getWorkerImageURL(

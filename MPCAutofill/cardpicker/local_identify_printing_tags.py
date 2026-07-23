@@ -13,12 +13,24 @@ directly, or the expansion_hint-narrows-to-one case) - visual disambiguation (a 
 collector line, or a matching art crop) is exactly the signal that's missing there. Selection
 also revisits single-candidate names deductive backfill's own Scryfall printings_count
 cross-check rejected, since those are still unresolved despite one local match.
+
+FILENAME-STYLE DUPLICATE-UPLOAD SUFFIX NORMALIZATION (2026-07-23, `CandidateNameIndex.
+candidates_for` - live-proven defect, card_id 7173 "Plaguecrafter (1)"): a source folder's own
+auto-dedup naming (two files sharing a name - Google Drive/local-filesystem convention) or the
+OS's own duplicate-file convention appends a suffix to `Card.name` that was never part of the
+real card name, and `candidates_for` is an EXACT-STRING lookup on `to_searchable(name)` (no
+fuzzy/substring matching, unlike `printing_candidates.find_candidates_by_name`'s own
+`icontains`-per-word search), so any surviving suffix character produces zero candidates. See
+`_strip_filename_duplicate_suffix`'s own docstring immediately below `CandidateNameIndex` for
+the exact patterns handled, why (a live catalog survey, not a guess), and what's deliberately
+left unhandled.
 """
 
 import collections
 import functools
 import logging
 import os
+import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -53,7 +65,7 @@ from cardpicker.models import (
     PrintingTagStatus,
     VoteSource,
 )
-from cardpicker.search.sanitisation import to_searchable
+from cardpicker.search.sanitisation import strip_bracketed_groups, to_searchable
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +151,101 @@ class CandidatePrinting:
     edhrec_rank: Optional[int] = None
 
 
+# FILENAME-STYLE DUPLICATE-UPLOAD SUFFIX (module docstring) - stripped from the RAW name BEFORE
+# to_searchable normalisation, so an upload carrying this suffix still resolves to the same
+# candidate set as the un-suffixed name. Two patterns, both confirmed against a live catalog
+# survey (2026-07-23), not guessed:
+#   - `\(\d+\)` ("Plaguecrafter (1)", "Mountain (4)" - a source folder's own auto-dedup naming
+#     when two uploads share a name): already incidentally covered by `to_searchable`'s own
+#     general-purpose bracket-stripping (`re.sub(r"[\(\[].*?[\)\]]", "", ...)` - confirmed live,
+#     card_id 7173 "Plaguecrafter (1)" already resolves 8 real candidates under the UNCHANGED
+#     `to_searchable` alone) - included here anyway so this index's own matching behavior is
+#     explicit and self-contained, not silently dependent on a shared, general-purpose search
+#     primitive's own unrelated bracket-stripping (which strips ANY bracketed content for a
+#     different reason - general search noise removal - and could change independently of this
+#     concern). Zero new collision risk: `to_searchable` already strips ALL bracket content on
+#     the STORED (`CanonicalCard.name`) side too, so a real catalog name that happens to end in
+#     "(<digits>)" (e.g. "Tom van de Logt Bio (2000)") already collapses to the identical
+#     normalised key with or without this pattern - confirmed against the live catalog's 71
+#     parenthesis-carrying `CanonicalCard` rows, none of which this pattern changes the outcome
+#     for.
+#   - `-\s*copy` ("Polluted Delta - Copy" - the OS's own duplicate-file naming convention): a
+#     REAL, previously-unhandled gap - `to_searchable` converts the hyphen to a space (its own
+#     existing behaviour for compound names) and has no reason to then strip the literal
+#     surviving word "Copy". Requires the hyphen specifically (not a bare trailing "copy"): the
+#     live catalog carries real `CanonicalCard` rows literally named "Copy" and "Pirated Copy"
+#     (40 rows total ending in "copy", live-checked, none hyphen-preceded), so a bare trailing
+#     "copy" strip would corrupt an upload of either real card; requiring the hyphen is a safe,
+#     non-colliding signal.
+# Applied repeatedly, not just once (`_strip_filename_duplicate_suffix` below) - the two patterns
+# can stack on a real upload (a duplicate re-downloaded a second time: "Name (1) - Copy").
+#
+# SURVEYED BUT DELIBERATELY NOT HANDLED (same live survey, 2026-07-23) - both are pre-existing
+# `to_searchable` tokenisation/exact-match limitations with a much larger blast radius than a
+# suffix strip, out of scope here:
+#   - underscore/no-separator duplicate-number suffixes ("Yen_02", "Spirit_Token_3-2") -
+#     `to_searchable` treats "_" as punctuation to DELETE, not a separator to convert to a space
+#     (unlike "-", which it does convert) - "Spirit_Token_3-2" normalises to "spirittoken", not
+#     "spirit token", so it can never match the real candidate "Spirit Token" regardless of any
+#     trailing-suffix fix. Changing "_" handling is a change to `to_searchable` itself (shared,
+#     general-purpose search infra used far beyond this index), not a targeted suffix strip.
+#   - short/partial-name uploads ("Lazav_1" for the real "Lazav, Dimir Mastermind", "Ciri_01"/
+#     "Yen_02"/"TreacheryGame_*" for custom Witcher-crossover/game-prop uploads with no real
+#     `CanonicalCard` match at all) - `candidates_for` is an EXACT-normalised-string lookup, not
+#     fuzzy/substring matching (that's `printing_candidates.find_candidates_by_name`'s own
+#     `icontains`-per-word job, a different consumer); recovering these would mean building a
+#     fuzzy/nickname matcher here, not stripping a suffix - most of this specific sample turned
+#     out to be genuinely custom, non-Magic filenames anyway (zero real candidates IS correct for
+#     them), not evidence of a normalisation bug.
+_FILENAME_DUPLICATE_SUFFIX_RE = re.compile(r"\s*(?:\(\d+\)|-\s*copy)\s*$", re.IGNORECASE)
+
+
+def _strip_filename_duplicate_suffix(name: str) -> str:
+    """Strips a trailing filename-style duplicate-upload suffix (see `_FILENAME_DUPLICATE_SUFFIX_
+    RE`'s own comment for the exact patterns/rationale) - repeatedly, since more than one such
+    suffix can stack on a real upload (e.g. a duplicate re-downloaded a second time: "Name (1) -
+    Copy"). A name carrying no such suffix is returned byte-identical (`re.sub` is a no-op on a
+    non-match), so this is always safe to call unconditionally."""
+    previous = None
+    stripped = name
+    while stripped != previous:
+        previous = stripped
+        stripped = _FILENAME_DUPLICATE_SUFFIX_RE.sub("", stripped)
+    return stripped
+
+
+def _has_interior_capital(name: str) -> bool:
+    """
+    issue #372: True if `name` (after stripping any bracketed filename-disambiguation suffix,
+    e.g. " (1)"/" (Modern Tomas Giorello)", case preserved otherwise) consists ENTIRELY of
+    letters and carries an uppercase one somewhere after its first character - the camelCase
+    signature a title-cased multi-word name leaves behind when every space is stripped out of
+    it at upload time (e.g. "VazaltheCompleat" for "Vazal, the Compleat": lowercase "the"
+    wasn't re-capitalised the way major words were, but the word boundary before "Compleat"
+    still shows up as an interior capital "C").
+
+    Used as a conservative trigger gate for CandidateNameIndex's de-concatenation fallback
+    below, alongside "the direct lookup already failed" and "the normalised name has no
+    spaces": an ordinary single-word name that just doesn't exist in the catalog (rather than
+    being a space-stripped multi-word one) essentially never carries an interior capital, so
+    gating on this keeps the fallback from being attempted - and potentially guessing wrong -
+    against names that were never glued together in the first place.
+
+    The "entirely letters" requirement (not just "has an interior capital somewhere") matters
+    for composing correctly with `_strip_filename_duplicate_suffix`'s own, deliberately
+    out-of-scope underscore case ("Spirit_Token_3" for "Spirit Token", pinned unmatched by
+    `test_underscore_duplicate_suffix_is_deliberately_left_unhandled`): `to_searchable` strips
+    "_" as punctuation, so an underscore-separated, title-cased name would otherwise ALSO look
+    like camelCase evidence by capitalisation alone - a genuinely glued name like
+    "VazaltheCompleat" has NO separator characters of any kind left once its bracketed suffix
+    is gone, which is what actually distinguishes it. Confirmed live this doesn't lose any of
+    issue #372's own real recoveries - every one of them carries its digit suffix INSIDE a
+    "(N)"-style bracket, already gone before this check runs.
+    """
+    stripped = strip_bracketed_groups(name).strip()
+    return stripped.isalpha() and any(char.isupper() for char in stripped[1:])
+
+
 class CandidateNameIndex:
     """
     Like cardpicker.deductive_backfill.CanonicalNameIndex, but keyed on the same to_searchable
@@ -146,6 +253,10 @@ class CandidateNameIndex:
     instead of just a printings_count - both engines here need to check a parsed/matched value
     against a candidate's actual identity, not just count how many candidates exist. Built once,
     reused across the whole scan (one query over CanonicalCard's 113k+ rows, not one per card).
+
+    issue #372: also carries a secondary "de-concatenated" index (`_by_concat`) used only as a
+    fallback by `candidates_for` when the direct to_searchable lookup misses - see
+    `_deconcatenated_candidates`'s docstring for the full matching rule.
     """
 
     def __init__(self) -> None:
@@ -164,8 +275,84 @@ class CandidateNameIndex:
             )
         self._by_name = dict(by_name)
 
+        # issue #372: group the same normalised names a second time by their fully
+        # space-stripped form, so a query that's already had ITS spaces stripped (by whatever
+        # tool produced the source filename, not by us) can still be looked up - but only ever
+        # returned by candidates_for when exactly one distinct real name collapses to that
+        # form (see _deconcatenated_candidates), so an accidental collision between two
+        # genuinely different multi-word names never produces a silent wrong-name match.
+        by_concat: dict[str, list[str]] = collections.defaultdict(list)
+        for normalised_name in self._by_name:
+            by_concat[normalised_name.replace(" ", "")].append(normalised_name)
+        self._by_concat = dict(by_concat)
+
     def candidates_for(self, name: str) -> list[CandidatePrinting]:
-        return self._by_name.get(to_searchable(name), [])
+        """Three tiers, cheapest to costliest, each attempted only after the previous one comes
+        up empty:
+          1. direct - the common, unsuffixed case (`to_searchable(name)` against `_by_name`);
+          2. filename-style duplicate-upload suffix strip (`_strip_filename_duplicate_suffix` -
+             "Plaguecrafter (1)"/"Polluted Delta - Copy") - a cheap, safe, idempotent regex
+             strip, retried as a second direct lookup - most names carry no such suffix, so
+             this keeps the extra regex work scoped to the cohort that actually needs it, the
+             same "only pay for what you use" shape `_resolve_candidates_for_card`'s own
+             DFC-back-face fallback in `local_calculate_verdicts.py` already established;
+          3. de-concatenation (`_deconcatenated_candidates` - "VazaltheCompleat") - the most
+             speculative of the three (matches against a name with EVERY space removed, gated
+             on an interior-capital camelCase signal and unambiguous-collision-only acceptance
+             - see that method's own docstring), so it always runs last, and against whichever
+             of `name`/the suffix-stripped form is more normalised - a name carrying BOTH a
+             glued multi-word body and a duplicate-upload suffix (e.g. "VazaltheCompleat (2) -
+             Copy") still reaches the concat lookup suffix-free, not just space-stripped.
+        A card unmatched by all three stays unmatched - never partially or ambiguously guessed
+        at by falling through to a weaker tier."""
+        normalised = to_searchable(name)
+        direct = self._by_name.get(normalised, [])
+        if direct:
+            return direct
+
+        stripped = _strip_filename_duplicate_suffix(name)
+        if stripped != name:
+            suffix_stripped = self._by_name.get(to_searchable(stripped), [])
+            if suffix_stripped:
+                return suffix_stripped
+
+        effective_name = stripped if stripped != name else name
+        return self._deconcatenated_candidates(effective_name, to_searchable(effective_name))
+
+    def _deconcatenated_candidates(self, raw_name: str, normalised: str) -> list[CandidatePrinting]:
+        """
+        issue #372: recovers cards like "VazaltheCompleat (2)" (real card: "Vazal, the
+        Compleat") whose source filename had every space stripped out of the card name before
+        upload - `to_searchable` has no mechanism to reinsert word boundaries into an
+        already-glued string, so the direct by-name lookup in `candidates_for` always misses
+        these regardless of the bracketed "(2)"-style suffix (which IS already handled, by
+        `to_searchable`'s own bracket-stripping - this fallback is for the separate,
+        glued-name problem underneath it).
+
+        Deliberately conservative, per the task's own "wrong-name matches are worse than none":
+        only attempted when ALL of the following hold, and returns [] (stays unmatched) the
+        moment any of them doesn't -
+          - the direct lookup above already missed;
+          - `normalised` (the bracket-stripped, punctuation/digit-stripped, lowercased name)
+            contains no whitespace at all - a name that DOES still have a space either matched
+            directly above already, or is a genuine no-match unrelated to space-stripping, and
+            forcing it through a fully-concatenated lookup would risk matching totally
+            unrelated words that merely happen to run together;
+          - the original name carries an interior capital letter (`_has_interior_capital`) -
+            the camelCase evidence that this specific name really was glued together from a
+            title-cased multi-word original, not just a single word that doesn't exist;
+          - the fully space-stripped form matches EXACTLY ONE distinct real card name in
+            `_by_concat` - if it collides with more than one (e.g. two differently-worded real
+            names that happen to concatenate to the same string), this returns [] rather than
+            guessing between them, exactly like an ambiguous direct multi-candidate match
+            would be left for a human to disambiguate elsewhere in this pipeline.
+        """
+        if " " in normalised or not _has_interior_capital(raw_name):
+            return []
+        matches = self._by_concat.get(normalised, [])
+        if len(matches) != 1:
+            return []
+        return self._by_name[matches[0]]
 
 
 @dataclass(frozen=True)
@@ -483,10 +670,36 @@ def run_ocr_for_card(
     image: Optional["Image.Image"],
     crop_box: tuple[float, float, float, float] = local_ocr.DEFAULT_CROP_BOX,
     bleed_class: Optional[str] = None,
+    known_set_codes: Optional[frozenset[str]] = None,
 ) -> OcrCardResult:
     """`bleed_class` (from local_fallback.classify_bleed_edge, run once per card ahead of
     everything else - see run_pilot) remaps `crop_box` via local_fallback.normalize_crop_box for
-    a trimmed image; a no-op otherwise."""
+    a trimmed image; a no-op otherwise.
+
+    `known_set_codes` (2026-07-23, issue #370's own recorded follow-up - the deferred item
+    `local_calculate_verdicts.py`'s own module docstring flagged: "known_set_codes() below is
+    written so that engine's own selection loop could reuse it directly in a focused follow-up"):
+    the SET-CODE LEXICON GATE `local_calculate_verdicts.known_set_codes()` produces, threaded
+    straight through from `run_pilot` (built once per invocation there - one DB query, not one
+    per card - via a deferred/local import, since a module-level import here would be circular:
+    `local_calculate_verdicts.py` already imports FROM this module). Gates which "no candidate
+    matched" outcome this loop reports, not whether the loop tries every variant - it already
+    does (no early exit on a non-match, only on a real match). A `parsed-but-no-match` variant
+    (`validate_against_candidates` found 0 candidates - `local_ocr.py`'s own outcome) only keeps
+    that label, which `run_pilot`'s own write loop casts a real, confident `is_no_match=True` vote
+    from, when at least one tried variant's `set_code` is either `None` (the pre-M15 collector-
+    number-only case, deliberately UNAFFECTED by this gate - the same carve-out
+    `calculate_join_key_verdict`'s own SET-CODE LEXICON GATE uses) or a real `known_set_codes`
+    member. If EVERY variant's `parsed-but-no-match` outcome carried an out-of-lexicon `set_code`
+    (un-parsed noise shaped like a set code - `local_calculate_verdicts.py`'s own module docstring
+    documents a live audit finding this is 85.5% of that outcome's real-world population), the
+    outcome demotes to `unknown-set-code` instead: a named, non-rescannable ABSTENTION (no vote
+    cast, the same treatment `no-text` already gets), never a confident negative the parse can't
+    actually back up. `None` (the default - an older/direct caller that doesn't thread this
+    through, e.g. a pre-2026-07-23 test) disables the gate entirely, reproducing the exact
+    pre-2026-07-23 behavior (every `parsed-but-no-match` outcome casts a vote, regardless of
+    `set_code` validity) - so this is purely additive: a card whose winning variant is a genuine
+    candidate match, or whose collector line is genuinely illegible, sees zero behavior change."""
     if image is None:
         return OcrCardResult(skip_reason="unfetchable-image")
 
@@ -504,6 +717,13 @@ def run_ocr_for_card(
     # something (more than one something), which is real evidence the parse was plausible, not
     # the same as every variant failing to match anything at all.
     saw_ambiguous = False
+    # SET-CODE LEXICON GATE (2026-07-23, issue #370's own recorded follow-up - see this
+    # function's own `known_set_codes` docstring paragraph above for the full mechanism): True
+    # once ANY tried variant's "parsed-but-no-match" outcome carries trustworthy signal (a real/
+    # lexicon set code, or a genuine pre-M15 collector-number-only parse) rather than un-parsed
+    # noise shaped like a set code - decides below whether the final outcome keeps the real
+    # "parsed-but-no-match" label (casts a vote) or demotes to "unknown-set-code" (abstains).
+    saw_lexicon_valid_no_match = False
     for variant in variants:
         raw_text = local_ocr.run_tesseract(variant)
         result.raw_texts.append(raw_text)
@@ -519,10 +739,19 @@ def run_ocr_for_card(
             return result
         if reason == "ambiguous":
             saw_ambiguous = True
+        elif reason == "parsed-but-no-match" and (
+            parsed.set_code is None or known_set_codes is None or parsed.set_code in known_set_codes
+        ):
+            saw_lexicon_valid_no_match = True
     if saw_ambiguous:
         result.skip_reason = "ambiguous"
-    elif result.parsed_a_collector_number:
+    elif saw_lexicon_valid_no_match:
         result.skip_reason = "parsed-but-no-match"
+    elif result.parsed_a_collector_number:
+        # every "parsed-but-no-match" outcome this loop saw carried an out-of-lexicon set_code -
+        # a distinct, non-rescannable ABSTENTION (see this function's own known_set_codes
+        # docstring paragraph), not the confident "parsed-but-no-match" negative.
+        result.skip_reason = "unknown-set-code"
     else:
         result.skip_reason = "no-text"
     return result
@@ -668,6 +897,7 @@ def _compute_card(
     phash_margin: int,
     phash_max_candidates: int,
     fetch_dpi: Optional[int],
+    known_set_codes: Optional[frozenset[str]] = None,
 ) -> CardComputeResult:
     """The parallelizable half of a card's work (pre-scale program item 3d): fetch + every
     read-only heuristic reading (OCR, phash, border/frame/bleed classification, pass-2
@@ -682,6 +912,10 @@ def _compute_card(
     2026-07-15) - it's the one reading every other fixed-fraction crop box in this function
     needs (via local_fallback.normalize_crop_box) to know whether to correct itself for a
     trimmed image, so it has to be available before OCR/phash/illus-anchor/border/symbol crop.
+
+    `known_set_codes` (2026-07-23, issue #370's own recorded follow-up): built once by
+    `run_pilot` and forwarded straight through to `run_ocr_for_card` - see that function's own
+    docstring for the SET-CODE LEXICON GATE this controls.
     """
     card_id = selected.card.pk
     outcome = CardOutcome(card_id=card_id)
@@ -700,7 +934,7 @@ def _compute_card(
     outcome.bleed_class = bleed_class
 
     if card_id in ocr_selected_ids:
-        ocr_result = run_ocr_for_card(selected, image, ocr_crop_box, bleed_class)
+        ocr_result = run_ocr_for_card(selected, image, ocr_crop_box, bleed_class, known_set_codes)
         outcome.ocr_vote, outcome.ocr_skip_reason = ocr_result.vote, ocr_result.skip_reason
         ocr_raw_texts = ocr_result.raw_texts
     if card_id in phash_selected_ids:
@@ -715,8 +949,16 @@ def _compute_card(
     if image is not None:
         outcome.border_color = local_fallback.classify_border_color(image, bleed_class)
         illus_anchor_fired, _artist_name = local_fallback.detect_illus_anchor(image, ocr_raw_texts, bleed_class)
+        # "unknown-set-code" (2026-07-23, the SET-CODE LEXICON GATE - see run_ocr_for_card's own
+        # known_set_codes docstring paragraph) is included alongside "parsed-but-no-match" here
+        # for the same reason OcrCardResult.parsed_a_collector_number's own docstring already
+        # gives: a legible collector-line FORMAT is evidence of a post-2003 frame independent of
+        # whether the specific number matched a real candidate OR whether its set_code happened
+        # to be a real lexicon member - this signal is orthogonal to lexicon validity by design.
         parsed_a_collector_number = card_id in ocr_selected_ids and bool(
-            outcome.ocr_vote is not None or outcome.ocr_skip_reason == "parsed-but-no-match"
+            outcome.ocr_vote is not None
+            or outcome.ocr_skip_reason == "parsed-but-no-match"
+            or outcome.ocr_skip_reason == "unknown-set-code"
         )
         outcome.frame_reading_attempted = True
         outcome.frame_class = local_fallback.classify_frame_style(parsed_a_collector_number, illus_anchor_fired)
@@ -842,6 +1084,17 @@ def run_pilot(
     run_start_time = time.time()
 
     index = CandidateNameIndex()
+    # Set-code lexicon (2026-07-23, issue #370's own recorded follow-up - see run_ocr_for_card's
+    # own known_set_codes docstring paragraph for the full mechanism this feeds): a DEFERRED
+    # import, not a module-level one - local_calculate_verdicts.py already imports FROM this
+    # module (CandidateNameIndex/generate_run_id/etc above), so a module-level import back here
+    # would be circular. Built ONCE per invocation (one DB query, the same "call-once-reuse-
+    # across-the-batch" convention CandidateNameIndex() above already follows), then threaded
+    # through _compute_card/run_ocr_for_card via the functools.partial below rather than queried
+    # per card.
+    from cardpicker.local_calculate_verdicts import known_set_codes as _known_set_codes
+
+    ocr_known_set_codes = _known_set_codes()
     engines_to_run: list[Engine] = ["ocr", "phash"] if engine == "both" else [engine]
     results: dict[str, PilotResult] = {e: PilotResult(engine=e, dry_run=dry_run, run_id=run_id) for e in engines_to_run}
     results["fallback"] = PilotResult(engine="fallback", dry_run=dry_run, run_id=run_id)
@@ -1078,6 +1331,7 @@ def run_pilot(
         phash_margin=phash_margin,
         phash_max_candidates=phash_max_candidates,
         fetch_dpi=fetch_dpi,
+        known_set_codes=ocr_known_set_codes,
     )
 
     chunk_start = 0

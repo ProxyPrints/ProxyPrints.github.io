@@ -18,6 +18,7 @@ import {
   SelectedImageSeparator,
   Token,
 } from "@/common/constants";
+import { isLikelyDriveFileId } from "@/common/orphanCard";
 import {
   CardDocument,
   CSVRow,
@@ -141,6 +142,41 @@ const extractQuantity = (line: string): [number, string] => {
   return [quantity, results[2]];
 };
 
+// Foreign-order resilience Phase 1 (issue #324) - a bracketed `[mpc:<id>]` token, e.g.
+// `1x Kharn [mpc:1FItgPw7VK_Tbv6dMiqdy5zd-jAoEC9mn]`, is an ADDITIONAL way to pin a line's
+// selected image alongside the existing `query@id` (SelectedImageSeparator) syntax above - not
+// a replacement for it. Distinct from `@id` in one deliberate way: `@id` has always been read as
+// "this identifier IS a catalog image" (the search-results-driven listener in
+// listenerMiddleware.ts clears it if the catalog doesn't back it up), whereas `[mpc:id]` is the
+// explicit "this identifier is a Drive file ID, indexed or not" declaration - useful for pasting
+// a decklist that names cards by their exact Drive file, from an order built against another
+// mpc-autofill instance. Once extracted, both forms flow into the exact same
+// `ProjectMember.selectedImage` field, so every downstream orphan-rendering fix (the
+// cardDocumentsSlice synthesis + listenerMiddleware invalidation-skip) applies identically
+// regardless of which syntax supplied it.
+const DriveIdBracketTokenRegex = /\[mpc:([^\]]+)\]/i;
+
+/**
+ * Strip a `[mpc:<id>]` token from `text` if present and its captured ID passes
+ * `isLikelyDriveFileId` - returns the token-stripped text plus the extracted ID (or the
+ * original text unchanged and `undefined` if there's no token, or its contents don't look like
+ * a real Drive file ID - in that case it's left in place as ordinary query text rather than
+ * silently eaten).
+ */
+export const extractDriveIdBracketToken = (
+  text: string
+): [string, string | undefined] => {
+  const match = text.match(DriveIdBracketTokenRegex);
+  if (match == null) {
+    return [text, undefined];
+  }
+  const candidateId = match[1].trim();
+  if (!isLikelyDriveFileId(candidateId)) {
+    return [text, undefined];
+  }
+  return [text.replace(match[0], "").trim(), candidateId];
+};
+
 /**
  * Unpack `line` into its constituents.
  *
@@ -150,14 +186,21 @@ const extractQuantity = (line: string): [number, string] => {
  *
  * If quantity is not specified, we assume a quantity of 1.
  * Specifying a back query is optional.
- * Specifying an image ID (for each face) is optional.
+ * Specifying an image ID (for each face) is optional. A `[mpc:<id>]` token anywhere in either
+ * face's text (see `extractDriveIdBracketToken`) is another way to specify the image ID, and
+ * takes precedence over a trailing `@id` for that same face if somehow both are present.
  */
 function unpackLine(
   line: string
 ): [number, [string, string | null] | null, [string, string | null] | null] {
   const [quantity, trimmedLine] = extractQuantity(line);
 
-  const [frontLine, backLine] = trimmedLine.split(FaceSeparator);
+  const [rawFrontLine, rawBackLine] = trimmedLine.split(FaceSeparator);
+  const [frontLine, frontBracketId] = extractDriveIdBracketToken(rawFrontLine);
+  const [backLine, backBracketId] =
+    rawBackLine !== undefined
+      ? extractDriveIdBracketToken(rawBackLine)
+      : [undefined, undefined];
 
   const faceLineRegex = new RegExp(
     `^(.+?)(?:${SelectedImageSeparator}(${getPhrasesNotAllowedInIdentifiersNegativeLookahead()}))?$`,
@@ -172,9 +215,15 @@ function unpackLine(
   }
   return [
     quantity,
-    [frontLineResults[1]?.trim(), frontLineResults[2]?.trim()],
+    [
+      frontLineResults[1]?.trim(),
+      frontBracketId ?? frontLineResults[2]?.trim(),
+    ],
     backLineResults !== null
-      ? [backLineResults[1]?.trim(), backLineResults[2]?.trim()]
+      ? [
+          backLineResults[1]?.trim(),
+          backBracketId ?? backLineResults[2]?.trim(),
+        ]
       : null,
   ];
 }
