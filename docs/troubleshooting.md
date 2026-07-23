@@ -1414,3 +1414,40 @@ string - a computed CDN URL with a `?jpgQuality=100`-style query suffix
 needs its `?` escaped (or the whole pattern passed as a `RegExp`
 instead), since glob `?` means "exactly one arbitrary character," not
 literal query-string syntax.
+
+## `docker exec mpcautofill_django ps` → "executable file not found"
+
+**Symptom**: `sudo docker exec mpcautofill_django ps aux` (or any other
+`ps` invocation inside the running Django container) fails immediately
+with something like `OCI runtime exec failed: exec: "ps": executable file not found in $PATH`.
+
+**Cause**: the container's base image doesn't ship a `ps` binary at
+all — this isn't a `$PATH` misconfiguration, `ps` genuinely isn't
+installed.
+
+**Fix**: use the compose CLI's own process view instead of shelling in —
+`sudo docker compose -f docker-compose.prod.yml top <service>` (e.g.
+`top django`) reads process info from the host's own view of the
+container, no in-container binary required. `docker compose` v2 with
+the space, per this repo's own tooling convention — never the
+hyphenated `docker-compose` v1 binary.
+
+## Logged out of admin/moderation after a backend deploy
+
+**Symptom**: an owner/moderator session that was logged in via Discord
+OAuth (or Django admin) stops being authenticated right after a backend
+deploy that recreates the `mpcautofill_django` container — same
+browser, same cookies present, just no longer treated as logged in.
+
+**Cause**: **unconfirmed as of this writing** — a container recreate
+does invalidate the session, but which layer actually breaks it (an
+in-memory/process-local session store losing state on restart, vs. an
+OAuth token the recreate somehow invalidates) has not been isolated.
+Don't assert a specific mechanism until it has actually been traced
+through a recreate.
+
+**Fix**: log back in; no workaround needed beyond that. **Next
+occurrence**: before writing this off as "expected," reproduce
+deliberately (recreate the container, watch whether the session
+survives) and confirm which layer is actually responsible, then replace
+this entry's cause with the confirmed one.

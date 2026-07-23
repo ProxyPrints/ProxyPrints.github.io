@@ -10,8 +10,11 @@ here disagrees with its linked source, this page is wrong and should be
 fixed, not the source.
 
 **Data as of 2026-07-22T18:01Z**, re-verified live against production
-Postgres for this page (`sudo docker exec mpcautofill_django python manage.py shell`, read-only queries only). See "Chain" below for where
-each number's provenance sits.
+Postgres for this page (`sudo docker exec mpcautofill_django python manage.py shell`, read-only queries only). §10/§11 carry a later, narrower
+live re-verification (2026-07-23T00:16–00:24Z) for the #340 footprint
+sizing and the Stage C run-identity note specifically — dated inline in
+those sections rather than bumping this whole-page timestamp. See
+"Chain" below for where each number's provenance sits.
 
 ## 1. Gate definition
 
@@ -35,17 +38,21 @@ precondition wording and the Stage D build it gates:
 | **Artifact 1 — stratified-sample parity replay** | **DONE** (2026-07-22), outcome **owner-accepted**. 83.2% OCR-channel agreement (28,456-card reproducible-channel subset); 373/41,586 (0.9%) unexplained divergences, 0/373 a wrong-printing vote — all conservative abstentions. Not literally "zero unexplained divergence," but ruled to satisfy the gate's soundness intent. Full outcome, methodology, and the owner-acceptance ruling: see §4 below. |
 
 **Gate verdict: NOT YET clean.** Every owner decision this gate needed
-is now made (§3, §4), but full-catalog fire stays blocked on
-implementation still in flight: §3 items 1–2 (`RESOLUTION_FLOOR_DPI`,
+is now made (§3, §4), but full-catalog fire stays blocked on a still
+undeployed sequence: §3 items 1–2 (`RESOLUTION_FLOOR_DPI`,
 `EXCLUDED_RESOLVED_TAGS`, both ruled MUST-FIX 2026-07-22T23:47Z) have
-their fix in a separate PR landing before the deploy; item 3
-(deductive-backfill exclusion) was separately ruled NOT restored,
-already merged (§3). Artifact 1 (§4) is DONE and owner-accepted
-2026-07-22 as satisfying the gate's soundness intent, even though the
-literal "zero unexplained divergence" bar wasn't hit (373 remained, all
-conservative abstentions; both root causes since fixed in code by
-merged PR #340 — a gated re-extraction of the affected live cohort is
-still queued, see §4).
+their fix **merged** to master (PR #343) — awaiting deploy, not
+implementation, as of this writing; item 3 (deductive-backfill
+exclusion) was separately ruled NOT restored, already merged (§3).
+Artifact 1 (§4) is DONE and owner-accepted 2026-07-22 as satisfying the
+gate's soundness intent, even though the literal "zero unexplained
+divergence" bar wasn't hit (373 remained, all conservative abstentions;
+both root causes since fixed in code by merged PR #340 — a gated
+re-extraction of the affected live cohort is still queued, see §4, §10).
+Artifact 1 itself is now **closed history**, not a baseline to keep
+re-measuring against — see §8 for the new-data basis ratified
+2026-07-23, and §9 for the full gated fire sequence this gate is
+blocked on, in order.
 
 ## 3. Decision (a), resolved — the three MISSING constants
 
@@ -104,9 +111,10 @@ of the 179,766-card eligible pool), 47 carry `custom-art` / 0
 `non-english` (0.026%), zero overlap between the two, union 75
 (0.042%) — zero live OCR votes rest on a sub-floor image. Fix: two
 one-line queryset excludes in `_eligible_cards_queryset`
-(`dpi__lt=200`, the custom-art/non-english tag exclusions), in flight
-in a separate PR, landing before the deploy. All three items above are
-now decided — none remain open.
+(`dpi__lt=200`, the custom-art/non-english tag exclusions) — **merged**
+to master in [PR #343](https://github.com/ProxyPrints/ProxyPrints.github.io/pull/343),
+awaiting the deploy step (§9(a)). All three items above are now
+decided — none remain open.
 
 Full detail, plus 3 lower grade "open items" that are separate from
 these 3 MISSING findings:
@@ -216,7 +224,11 @@ PR #340's fixes are **code-only**. Realizing the benefit on the live
 373-card cohort (or any other newly-affected cards) requires a
 **targeted Stage C re-extraction** of the affected `card_id`s — a
 gated prod write, queued behind the post-freeze deploy, and explicitly
-out of scope for / not run by PR #340.
+out of scope for / not run by PR #340. The 373-card cohort is bounded
+to the pilot-vote replay's own 41,586-card comparison set, not the
+full catalog — §10 sizes both root causes' actual catalog-wide
+footprint (17,531 cards / 284 rows respectively), which is the scope
+the re-extraction in §9(b) actually runs against.
 
 Full source: [issue #154](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/154)'s
 2026-07-22 comments (the replay result and the owner-acceptance
@@ -303,7 +315,9 @@ extraction pass, then `stagec-remainder-0721` (Jul 21–22, 197,470-row
 main leg) extracted the bulk of the remaining catalog. See
 [`reports/2026-07-20-decoupled-canary-confirm.md`](reports/2026-07-20-decoupled-canary-confirm.md)
 and [`reports/2026-07-21-stagec-20k-extraction.md`](reports/2026-07-21-stagec-20k-extraction.md)
-for the canary/20k narrative detail.
+for the canary/20k narrative detail. None of these Stage C runs have a
+`PilotRunLedger` row of their own — see §11 for what that does and
+doesn't affect.
 
 **`ntx-0721` is NOT a pilot** — stated explicitly because this number
 has been misremembered before: `ntx-0721` is a **Stage C extraction
@@ -361,3 +375,121 @@ fact below is the linked source, not duplicated here.
   373-card cohort still needs the gated re-extraction described there.
 - [PR #341](https://github.com/ProxyPrints/ProxyPrints.github.io/pull/341)
   (merged) — §3 item 3's non-restoration rationale and code removal.
+- [PR #343](https://github.com/ProxyPrints/ProxyPrints.github.io/pull/343)
+  (merged) — §3 items 1–2's `RESOLUTION_FLOOR_DPI`/`EXCLUDED_RESOLVED_TAGS`
+  queryset-exclude fix, merged to master, awaiting the §9(a) deploy step.
+- [`MPCAutofill/cardpicker/management/commands/consensus_recompute.py`](../MPCAutofill/cardpicker/management/commands/consensus_recompute.py)
+  (PR #336, merged) — the `--apply` command §9(d)'s materialization step
+  runs.
+
+## 8. New-data basis (owner-ratified 2026-07-23)
+
+The 2026-07-22 full-catalog Stage C sweep (§6's `stagec-remainder-0721`
+main leg, plus its two preceding canary/20k runs) is the epistemic
+foundation for everything this gate measures **going forward**. Two
+consequences, both ratified in-session 2026-07-23:
+
+1. **Artifact 1 (§4)'s legacy-pilot comparison is CLOSED HISTORY.** Pilot
+   run `20260716T193408-6613a1a6` served its purpose as a cross-method
+   corroboration point (§4, §5, `theory.md` §7c) and stays on the record
+   as that, permanently — but it does not get re-run or re-compared
+   against as new data lands. It is not the baseline going forward.
+2. **The new system's own pilot is DERIVED from the new data, not
+   inherited from the old one.** The upcoming full-pool Stage D dry-run
+   (§9 step (c)) IS the pilot / measurement of record from this point
+   on — its own statistics (match/no-match/abstain counts, per-channel
+   join-key-vs-fallback breakdown) become the cited figures for any
+   future soundness argument about this pipeline, not a diff back
+   against the legacy engine.
+
+**Scope note**: this is a basis change, not a retraction. Every legacy
+(`source=ocr`, pilot-era) and deduction (`source=deduction`,
+`deductive_backfill`) vote already in the DB stays exactly as-is — no
+retraction, no source filter applied to either, in this ruling or any
+prior one. They continue to count as live, valid votes toward
+consensus; they simply stop being cited as the validation baseline for
+new soundness claims.
+
+## 9. Fire sequence (owner-ratified 2026-07-23)
+
+The full gated sequence this gate's verdict (§2) is blocked on, in
+order:
+
+**(a) Deploy master.** Puts PR #343's §3 items 1–2 fix (and PR #341's
+item 3 non-restoration) live in prod; nothing below can start against
+a pre-#343 deploy.
+
+**(b) Scoped re-extraction**, sized in §10:
+
+- **Bug-B whole-DB reparse** — the fixed parser applied offline across
+  all 197,938 stored raw texts, pre-sized to touch exactly 284 guard
+  rows plus 1 unrelated improvement (card 62354). Full re-parse, not a
+  sample — the blast radius is already fully known.
+- **Bug-A forced-escalation SAMPLE** — a few hundred cards drawn from
+  the 17,531-card blank-tier-1 pool (§10), run first specifically to
+  size any wider re-scan before committing to one, not a full re-scan
+  of the pool at this stage.
+
+**(c) Stage D dry-run over the full eligible pool = THE PILOT** (§8).
+Full statistics captured: match/no-match/abstain counts, and the
+per-channel join-key-vs-fallback breakdown — the fallback channel
+(`calculate_fallback_verdict`/`stage-d-fallback-v1`, built per
+[`features/catalog-completion-plan.md`](features/catalog-completion-plan.md)'s
+"Pre-fire prep" note) has never executed against production data before
+this run. Followed by an owner **SAMPLE AUDIT** (100–200 uniformly
+sampled verdicts), then `--write`.
+
+**(d) `consensus_recompute --apply`** — materializes the 49,207 pending
+`None→UNRESOLVED` tag transitions already sized in §6's
+`consensus_impact_report` dry-run, via the command in
+[`consensus_recompute.py`](../MPCAutofill/cardpicker/management/commands/consensus_recompute.py)
+(PR #336).
+
+Every run in this sequence gets its own report plus resource metrics
+(RSS/IO/CPU, per-card cost) committed under `docs/data/`, keyed by that
+run's `run_id`, and added as a new row to §6's Stage C/Stage D run
+history tables (not a separate table).
+
+## 10. #340 root-cause footprint sizing (measured 2026-07-23T00:16–00:24Z, live, read-only)
+
+Both root causes fixed by merged PR #340 (§4) were sized against the
+**full catalog**, not just the 373-card replay cohort (§4's cohort is
+bounded to the pilot-vote comparison set, 41,586 cards; this sizing
+covers the whole 218,285-card catalog).
+
+**Bug A (OCR short-circuit over-skip).** 17,531 cards catalog-wide
+carry the blank-tier-1 signature — a necessary-condition proxy for the
+bug (matches the pattern the fix targets; not a guarantee every one
+flips to a match), excluding `ntx-0721`'s cohort (already
+force-escalated by that run, §6). 15,948 of the 17,531 (91%) are
+Stage-D-eligible. Expected genuine-match conversion is **LOW**:
+`ntx-0721`'s own base rate for this same signature is ~0.2% — the
+reason §9(b) samples first rather than committing to a full re-scan.
+
+**Bug B (glued language-marker set-code).** 284 rows carry the
+signature, systemic across ≥7 distinct set codes (not one bad batch).
+212 of the 284 are Stage-D-eligible; 33 already carry staged-run votes,
+and **every one of those 33 is `is_no_match=True` with 0 wrong-printing
+votes** — direct empirical confirmation, at this wider scale, of the
+same conservative-abstention direction §4/`theory.md` §7c already
+established at the 373-card replay scale. The whole-DB reparse (§9(b))
+is pre-sized, not estimated: offline re-parsing all 197,938 stored raw
+texts with the fixed parser diffs **exactly** 284 guard rows plus 1
+unrelated improvement (card 62354).
+
+## 11. Stage C run-identity note (verified 2026-07-23)
+
+Stage C runs are **not** tracked in `PilotRunLedger` — verified
+directly: zero rows for `run_image_evidence_cohort`. Completion-log
+counters like `stagec-remainder-0721`'s (141,369 processed / 57,725
+short-circuited / 492 fetch failures, §6) are log-only and not
+DB-re-derivable after the fact, the same caveat §6 already states for
+the older pilot's own 165,980-candidate counter. This does not affect
+the evidence itself: `ImageEvidence` rows are fully persisted
+regardless of ledger tracking — 197,469 current rows verified at this
+check, window 2026-07-21T19:29:24Z–2026-07-22T16:45:43Z (one row's
+drift against §6's 197,470 count for the same run is two snapshots
+taken at different times, not a data-integrity concern — re-query
+before trusting either number to the exact row). A ledger fix (Stage C
+runs writing their own `PilotRunLedger` rows, closing this gap) is in
+flight as a separate code PR, not yet merged as of this note.
