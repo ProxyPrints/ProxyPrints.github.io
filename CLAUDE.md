@@ -269,8 +269,11 @@ external reader's orientation to the whole fork, see
   artifact 2 (knowledge-inventory sweep) status — all 3 MISSING
   constants decided, items 1–2's fix merged (PR #343) and deployed
   2026-07-23T01:33Z — plus the #347-amended fire sequence (Bug-B
-  whole-DB reparse dry-run DONE, write pass onward not yet run) and
-  #340 root-cause footprint sizing. Single source of truth for this
+  whole-DB reparse dry-run, B(i) write, B(ii)+B(iii) retraction, and
+  the Bug-A forced-escalation sample all DONE 2026-07-23; the 4c pilot
+  dry-run IN PROGRESS, sample audit/write/`consensus_recompute --apply`
+  not yet run) and #340 root-cause footprint sizing. Single source of
+  truth for this
   gate's status — don't restate gate status/decisions elsewhere, link
   here.
 - [`docs/documentation-process.md`](docs/documentation-process.md) — docs/
