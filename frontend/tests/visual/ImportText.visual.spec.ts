@@ -1,5 +1,7 @@
 import { expect } from "@playwright/test";
 
+import { SelectedImageSeparator } from "@/common/constants";
+import { cardDocument1 } from "@/common/test-constants";
 import {
   cardDocumentsThreeResults,
   defaultHandlers,
@@ -8,24 +10,20 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../../playwright.setup";
-import { loadPageWithDefaultBackend, openImportTextModal } from "../test-utils";
+import {
+  importTextOnEditorLanding,
+  loadPageWithDefaultBackend,
+  openDisplayToolbarAddCardsDropdown,
+} from "../test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page.
+// `ImportTextButton` (the classic dropdown-triggered Modal this test's aria snapshot targets,
+// `data-testid="import-text"`) is unforked and only reachable once a project already has a
+// member - DisplayPage's own empty-project landing mounts the bare `ImportText` form directly
+// instead (no Modal chrome at all - see ImportText.spec.ts's own port). Seeding one card first via
+// importTextOnEditorLanding gets to the populated toolbar, whose "Add Cards" dropdown
+// (openDisplayToolbarAddCardsDropdown, test-utils.ts) opens the exact same, byte-for-byte
+// unmodified modal this snapshot was always asserting against.
 
 test.describe("ImportText visual tests", () => {
   test("import text modal structure", async ({ page, network }) => {
@@ -35,10 +33,15 @@ test.describe("ImportText visual tests", () => {
       searchResultsThreeResults,
       ...defaultHandlers
     );
-    page.addInitScript({ content: "Math.random = () => 1;" });
+    await page.addInitScript({ content: "Math.random = () => 1;" });
     await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(
+      page,
+      `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
+    );
 
-    await openImportTextModal(page);
+    await openDisplayToolbarAddCardsDropdown(page);
+    await page.getByRole("button", { name: " Text" }).click();
 
     await expect(page.getByTestId("import-text")).toMatchAriaSnapshot(`
       - text: Add Cards — Text
