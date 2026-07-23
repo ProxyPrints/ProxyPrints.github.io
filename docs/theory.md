@@ -300,7 +300,14 @@ already redundant with an agreeing image-derived (OCR/phash/fallback)
 vote on the same card, 17% were opposed by an explicit human no-match
 vote, 66 were directly contradicted by a later human vote for a
 different printing, and only 459 were unopposed yet unverifiable
-against any independent evidence. Given that mix, the owner ruled these
+against any independent evidence. The deduction premise itself also
+decays with time, independent of any per-vote error: 56 of the 66
+contradicted votes are explained by the printing registry having grown
+since the 2026-07-14 backfill — a name that matched exactly one
+`CanonicalCard` then can match several now, so a vote sound at cast
+time can become wrong later purely because the catalog around it
+changed, not because the original inference was flawed. Given that
+mix, the owner ruled these
 votes now carry zero weight in every consensus computation — winner
 selection, the quorum/share gate math above, and every downstream
 suggestion or prioritization scalar built on vote weight — permanently,
@@ -918,3 +925,12 @@ resolved exactly one additional card. Corroborating data, not a new
 calibrated number; full figures live in
 [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §14, not
 duplicated here.
+
+**§4 amended 2026-07-23**: the owner-ratified deductive-backfill
+zero-weighting (28,112 `CardPrintingTag` votes,
+`anonymous_id="deductive-backfill-v1"`, permanently zero consensus
+weight) folded in as a further, narrower soundness tightening, with
+the live-audit basis numbers and the "image-derived + human evidence
+only" framing. Full mechanism:
+`cardpicker.vote_consensus.resolve_vote_weight`; full ruling:
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §3 item 3.
