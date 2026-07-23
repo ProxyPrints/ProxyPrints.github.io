@@ -10,6 +10,7 @@ import {
   setLocalStorageFavorites,
   setLocalStorageManualOverrides,
 } from "@/common/cookies";
+import { isLikelyDriveFileId } from "@/common/orphanCard";
 import { computeSearchQueryHashKey } from "@/common/processing";
 import { Faces } from "@/common/types";
 import { api } from "@/store/api";
@@ -23,7 +24,11 @@ import {
   fetchCardbacksAndReportError,
   selectCardbacks,
 } from "@/store/slices/cardbackSlice";
-import { fetchCardDocumentsAndReportError } from "@/store/slices/cardDocumentsSlice";
+import {
+  fetchCardDocuments,
+  fetchCardDocumentsAndReportError,
+  selectCardDocumentByIdentifier,
+} from "@/store/slices/cardDocumentsSlice";
 import {
   clearFavoriteRenders,
   removeFavoriteRender,
@@ -271,7 +276,17 @@ startAppListening({
 });
 
 startAppListening({
-  matcher: isAnyOf(fetchSearchResults.fulfilled, fetchCardbacks.fulfilled),
+  // Foreign-order resilience Phase 1 (issue #324) added fetchCardDocuments.fulfilled to this
+  // matcher: this listener needs to know whether an unmatched selectedImage is a genuinely
+  // invalid identifier or an orphan (a Drive file ID the catalog's search doesn't back up but
+  // hasn't necessarily failed either), and that isn't settled until
+  // cardDocuments.cardDocuments actually reflects it - see the isOrphanCandidate comment below
+  // for the full ordering rationale. The original two triggers are unchanged.
+  matcher: isAnyOf(
+    fetchSearchResults.fulfilled,
+    fetchCardbacks.fulfilled,
+    fetchCardDocuments.fulfilled
+  ),
   /**
    * Whenever search results change, this listener will inspect each card slot
    * and ensure that their selected images are valid.
@@ -297,22 +312,44 @@ startAppListening({
           if (searchResultsForQueryOrDefault != null) {
             let mutatedSelectedImage = projectMember.selectedImage;
 
-            // If an image is selected and it's not in the search results, deselect the image and let the user know about it
+            // If an image is selected and it's not in the search results, deselect the image and let the user know about it -
+            // UNLESS it's a foreign-order-resilience orphan (issue #324), which is neither invalid nor cleared.
             if (
               mutatedSelectedImage != null &&
               !searchResultsForQueryOrDefault.includes(mutatedSelectedImage)
             ) {
-              if (searchResultsForQueryOrDefault.length > 0) {
-                dispatch(
-                  recordInvalidIdentifier({
-                    slot,
-                    face,
-                    searchQuery,
-                    identifier: mutatedSelectedImage,
-                  })
-                );
+              const knownCardDocument = selectCardDocumentByIdentifier(
+                state,
+                mutatedSelectedImage
+              );
+              // An identifier the search doesn't back up isn't automatically invalid: if it's
+              // already resolved to a synthesized orphan CardDocument, or hasn't been resolved
+              // either way yet but still looks like a real Drive file ID, treat it as an
+              // orphan candidate and leave it selected. `knownCardDocument == null` covers the
+              // early passes of this listener (fired by fetchSearchResults.fulfilled/
+              // fetchCardbacks.fulfilled, both of which can run before cardDocuments knows
+              // anything) - erring towards NOT clearing yet is safe, because this same listener
+              // re-runs once fetchCardDocuments.fulfilled settles cardDocuments definitively,
+              // at which point a genuinely-known-but-filtered/removed catalog card (
+              // knownCardDocument defined, isOrphan false/undefined) still falls through to the
+              // existing Invalid Cards flow below exactly as before.
+              const isOrphanCandidate =
+                knownCardDocument?.isOrphan === true ||
+                (knownCardDocument == null &&
+                  isLikelyDriveFileId(mutatedSelectedImage));
+              if (!isOrphanCandidate) {
+                if (searchResultsForQueryOrDefault.length > 0) {
+                  dispatch(
+                    recordInvalidIdentifier({
+                      slot,
+                      face,
+                      searchQuery,
+                      identifier: mutatedSelectedImage,
+                    })
+                  );
+                }
+                mutatedSelectedImage = undefined;
               }
-              mutatedSelectedImage = undefined;
             }
 
             // If no image is selected and there are search results, select the first favorited image or the first image

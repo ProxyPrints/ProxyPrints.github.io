@@ -186,6 +186,14 @@ export function ImportText({
                 .
               </li>
               <li>
+                Alternatively, pin an exact Google Drive image by putting{" "}
+                <code>[mpc:image ID]</code> anywhere after your search query —
+                for example, <code>your card name [mpc:image ID]</code>. This
+                works even if we haven&apos;t indexed that image yet (e.g. an
+                order built against another {ProjectName}-style site) —
+                it&apos;ll render using the image ID directly.
+              </li>
+              <li>
                 You may specify queries for both the front and the back by
                 separating them with <code>{FaceSeparator}</code> — for example,{" "}
                 <code>

@@ -218,6 +218,12 @@ external reader's orientation to the whole fork, see
   reusable, permission-triggered contextual consent toast (`useConsentToast`
   - `ConsentToast.tsx`), issue #204. No dependency on any consumer feature
     yet; issue #203 (client-side phash contribution) is the first planned one.
+- [`docs/features/foreign-order-resilience.md`](docs/features/foreign-order-resilience.md)
+  — issue #324 Phase 1 (shipped 2026-07-23): rendering "orphan" cards
+  (Drive file IDs the catalog has never indexed) from text (`[mpc:<id>]`
+  token) and XML import, direct-from-Google image fetch (never our own
+  CDN), the invalidation-listener root-cause fix, round-trip export, and
+  what's deferred to Phase 2.
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
   Upstreaming workflow in `docs/infrastructure.md`); accurate through

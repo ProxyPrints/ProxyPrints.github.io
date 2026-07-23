@@ -1,3 +1,4 @@
+import { synthesizeOrphanCardDocument } from "@/common/orphanCard";
 import { CardType } from "@/common/schema_types";
 import { cardDocument1, cardDocument12 } from "@/common/test-constants";
 import { SlotProjectMembers } from "@/common/types";
@@ -93,5 +94,28 @@ describe("generateXML", () => {
       `${cardDocument12.name}.${cardDocument12.extension}`
     );
     expect(card?.querySelector("query")).not.toBeNull();
+  });
+
+  // Foreign-order resilience Phase 1 (issue #324) - the round-trip requirement: an orphan
+  // (a synthesized CardDocument for a Drive file ID the catalog never indexed) must still
+  // export with its raw <id> preserved, since createCardElement previously returned null
+  // entirely for any identifier missing from cardDocuments.
+  it("re-exports an orphan's raw <id>, unchanged", () => {
+    const orphanId = "1FItgPw7VK_Tbv6dMiqdy5zd-jAoEC9mn";
+    const orphanCard = synthesizeOrphanCardDocument(orphanId, {
+      name: "Kharn",
+      cardType: CardType.Card,
+    });
+    const xml = generateXML(
+      [buildSlot("slot-1", orphanId)],
+      { [orphanId]: orphanCard },
+      null,
+      1,
+      finishSettings
+    );
+    const doc = new DOMParser().parseFromString(xml, "text/xml");
+    const card = doc.querySelector("fronts > card");
+    expect(card?.querySelector("id")?.textContent).toBe(orphanId);
+    expect(card?.querySelector("query")?.textContent).toBe("Kharn");
   });
 });
