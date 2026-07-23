@@ -289,6 +289,40 @@ committed to the catalog, and, since 2026-07-22, never a silently
 _reverted_ right answer either: passive/machine/federated evidence can
 now neither form nor overturn a human-backed quorum on its own.
 
+A further, narrower tightening landed 2026-07-23 and only concerns one
+specific historical cohort: the 28,112 `CardPrintingTag` votes cast by
+the 2026-07-14 deductive-name-backfill run (`source="deduction"`,
+`anonymous_id="deductive-backfill-v1"` — pure logical inference from
+already-trusted catalog metadata, zero image inspection; see
+`cardpicker.deductive_backfill`'s own module docstring). A live audit
+of that cohort at ratification time found 60% of the 28,112 were
+already redundant with an agreeing image-derived (OCR/phash/fallback)
+vote on the same card, 17% were opposed by an explicit human no-match
+vote, 66 were directly contradicted by a later human vote for a
+different printing, and only 459 were unopposed yet unverifiable
+against any independent evidence. Given that mix, the owner ruled these
+votes now carry zero weight in every consensus computation — winner
+selection, the quorum/share gate math above, and every downstream
+suggestion or prioritization scalar built on vote weight — permanently,
+regardless of how any future recompute or code change might otherwise
+treat `VoteSource.DEDUCTION`. The rows themselves are never deleted or
+hidden: they remain visible in raw vote tallies and every display
+surface (e.g. the `/whatsthat` per-outcome tally, the questionFeed
+tier-1 "confirm suggestion" surface, and `Card.suggestedCanonicalCard`)
+exactly as before — only their contribution to the resolution math is
+removed. This is a strictly tightening change to the pipeline's
+soundness posture, not a new mechanism: resolution now rests on
+image-derived machine evidence (OCR/phash/fallback) plus human votes
+only, with the one cohort of purely name-derived machine votes reduced
+to a historical record that a human reviewer can still see and act on,
+but that can no longer itself move, reinforce, or protect a resolved
+outcome. See `cardpicker.vote_consensus.DEDUCTIVE_BACKFILL_ANONYMOUS_ID`
+and `resolve_vote_weight`'s own docstrings for the exact mechanism, and
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md)'s §3 item 3 for
+how this relates to (and is distinct from) the separate, already-settled
+question of whether Stage D re-votes a card this same backfill cohort
+already touched.
+
 ## 5. Honest novelty statement
 
 Nothing in this pipeline is individually new: OCR, perceptual hashing,

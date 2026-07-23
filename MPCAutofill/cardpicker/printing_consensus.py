@@ -5,10 +5,10 @@ from django.conf import settings
 
 from cardpicker.models import CanonicalCard, Card, CardPrintingTag, PrintingTagStatus
 from cardpicker.vote_consensus import (
-    _SOURCE_WEIGHTS,
     VoteTuple,
     contested_queryset,
     is_human_backed_source,
+    resolve_vote_weight,
     resolve_weighted_consensus,
 )
 
@@ -65,6 +65,13 @@ def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
     weighting/threshold rules (votes weighted by `source`, `PRINTING_TAG_MIN_VOTES`/
     `MIN_SHARE` gates, non-AI gate) - this is a thin wrapper translating `CardPrintingTag`
     rows into `VoteTuple`s and the winning outcome key back into a `CanonicalCard`.
+
+    Per-vote weight is resolved via `vote_consensus.resolve_vote_weight` (not a bare
+    `_SOURCE_WEIGHTS[vote.source]` lookup) so the 2026-07-23 owner ruling zeroing the
+    deductive-backfill cohort's weight (see that function's own docstring) is honoured here -
+    the one call site every printing consensus computation (winner selection, the gate checks
+    and share math inside `resolve_weighted_consensus`, and every caller of this function,
+    including `consensus_impact_report`/`consensus_recompute`) ultimately funnels through.
     """
     votes = list(card.printing_tags.all())
     if not votes:
@@ -85,7 +92,7 @@ def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
         vote_tuples.append(
             VoteTuple(
                 outcome_key=key,
-                weight=_SOURCE_WEIGHTS[vote.source],
+                weight=resolve_vote_weight(vote.source, vote.anonymous_id),
                 is_human_backed=is_human_backed_source(vote.source),
             )
         )
