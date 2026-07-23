@@ -581,6 +581,16 @@ resolution-level 0 is measured only at write-run scale (0/8,925,
 third, larger, cross-pipeline data point, and speaks to `g₁`/`g₄`
 specifically rather than just re-confirming `g₅`.
 
+**Baseline vs. method.** The "older live pilot" below is the
+**legacy multi-channel engine** (OCR plus the `local-phash-v1`/
+`local-fallback-v1` phash channels voting concurrently), not this
+chain run twice — this chain (§7's composition) is **OCR-only by
+design**. So the replay is a **cross-method** verdict diff: the new
+OCR-only chain, computed against current `ImageEvidence`, against the
+older multi-channel engine's recorded votes, not the new method
+validated against itself. The 83.2% below is OCR-channel agreement
+specifically.
+
 **What ran.** A read-only, full-cohort (not sampled) diff of this
 chain's own verdict function (`calculate_join_key_verdict`) against the
 older live pilot's recorded votes, on every card the pilot voted

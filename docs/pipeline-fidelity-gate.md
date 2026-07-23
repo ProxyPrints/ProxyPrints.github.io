@@ -3,7 +3,8 @@
 **GitHub issue #154** (internally referenced elsewhere as "task #151" —
 a pre-board internal task-ledger number, not a second GitHub issue; issue
 #154's own title cross-references both). This is the **single page**
-for this gate's status and its open owner decisions. Every
+for this gate's status, its (now-decided) owner decisions, and any
+in-flight implementation gating the fire. Every
 underlying fact below is linked to its source, not copied — if a number
 here disagrees with its linked source, this page is wrong and should be
 fixed, not the source.
@@ -30,21 +31,23 @@ precondition wording and the Stage D build it gates:
 
 | artifact                                         | status                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Artifact 2 — knowledge-inventory sweep**       | **DONE** (2026-07-22), but **NOT clean** as originally worded — see §3 below. Full constant-by-constant table: [`reports/2026-07-22-knowledge-inventory.md`](reports/2026-07-22-knowledge-inventory.md).                                                                                                                                                                                                  |
+| **Artifact 2 — knowledge-inventory sweep**       | **DONE** (2026-07-22); all 3 MISSING-constant decisions now made — see §3 below. Full constant-by-constant table: [`reports/2026-07-22-knowledge-inventory.md`](reports/2026-07-22-knowledge-inventory.md).                                                                                                                                                                                               |
 | **Artifact 1 — stratified-sample parity replay** | **DONE** (2026-07-22), outcome **owner-accepted**. 83.2% OCR-channel agreement (28,456-card reproducible-channel subset); 373/41,586 (0.9%) unexplained divergences, 0/373 a wrong-printing vote — all conservative abstentions. Not literally "zero unexplained divergence," but ruled to satisfy the gate's soundness intent. Full outcome, methodology, and the owner-acceptance ruling: see §4 below. |
 
-**Gate verdict: NOT YET clean.** Full-catalog fire stays blocked on
-Open decision (a)'s items 1–2 (`RESOLUTION_FLOOR_DPI`,
-`EXCLUDED_RESOLVED_TAGS`) — item 3 (deductive-backfill exclusion) was
-separately resolved 2026-07-22, ruled NOT restored (§3). Artifact 1
-(§4) is now DONE and its outcome was owner-accepted 2026-07-22 as
-satisfying the gate's soundness intent, even though the literal "zero
-unexplained divergence" bar wasn't hit (373 remained, all conservative
-abstentions; both root causes since fixed in code by merged PR #340 —
-a gated re-extraction of the affected live cohort is still queued, see
-§4).
+**Gate verdict: NOT YET clean.** Every owner decision this gate needed
+is now made (§3, §4), but full-catalog fire stays blocked on
+implementation still in flight: §3 items 1–2 (`RESOLUTION_FLOOR_DPI`,
+`EXCLUDED_RESOLVED_TAGS`, both ruled MUST-FIX 2026-07-22T23:47Z) have
+their fix in a separate PR landing before the deploy; item 3
+(deductive-backfill exclusion) was separately ruled NOT restored,
+already merged (§3). Artifact 1 (§4) is DONE and owner-accepted
+2026-07-22 as satisfying the gate's soundness intent, even though the
+literal "zero unexplained divergence" bar wasn't hit (373 remained, all
+conservative abstentions; both root causes since fixed in code by
+merged PR #340 — a gated re-extraction of the affected live cohort is
+still queued, see §4).
 
-## 3. Open decision (a) — the three MISSING constants
+## 3. Decision (a), resolved — the three MISSING constants
 
 The knowledge-inventory sweep confirmed three pilot-era constants have
 **no current home** in Stage C/D, by direct `grep`/read, not inference:
@@ -94,11 +97,19 @@ The knowledge-inventory sweep confirmed three pilot-era constants have
 
 None of these three are soundness violations — the human-backed
 consensus gate still applies to every vote Stage D casts regardless.
-**Owner ruling still needed on #1/#2** (item #3 above is now resolved —
-deliberately not restored, per the ruling above): are the remaining two
-must-fix-before-fire, or an accepted gap the gate can clear without them?
-Full detail, plus 3 lower grade "open items" that are separate from these
-3 MISSING findings:
+
+**Owner ruling (2026-07-22T23:47Z): #1 and #2 are MUST-FIX.** Sized
+against live data: 28 eligible cards fall below the dpi floor (0.016%
+of the 179,766-card eligible pool), 47 carry `custom-art` / 0
+`non-english` (0.026%), zero overlap between the two, union 75
+(0.042%) — zero live OCR votes rest on a sub-floor image. Fix: two
+one-line queryset excludes in `_eligible_cards_queryset`
+(`dpi__lt=200`, the custom-art/non-english tag exclusions), in flight
+in a separate PR, landing before the deploy. All three items above are
+now decided — none remain open.
+
+Full detail, plus 3 lower grade "open items" that are separate from
+these 3 MISSING findings:
 [`reports/2026-07-22-knowledge-inventory.md`](reports/2026-07-22-knowledge-inventory.md).
 
 ## 4. Artifact 1 — parity-replay methodology and outcome (resolved 2026-07-22)
@@ -126,10 +137,24 @@ owner ruling in this section exists.
 
 ### Result
 
+**Baseline vs. method, stated explicitly.** Pilot run
+`20260716T193408-6613a1a6` is the **legacy multi-channel engine** — OCR
+plus the `local-phash-v1`/`local-fallback-v1` phash channels voting
+concurrently (why its 43,425 votes span only 41,586 distinct cards:
+some cards received votes from more than one channel). Stage D is
+**OCR-only by design**. This replay is therefore a **cross-method**
+verdict diff — the new OCR-only Stage D, computed against current
+`ImageEvidence` from the new Stage C extractions, diffed against the
+legacy multi-channel engine's recorded votes — not the new method
+validated against itself. The 83.2% figure below is OCR-channel
+agreement specifically; bucket d below (13,026) is exactly the
+phash/fallback channels Stage D doesn't run — an explained
+architectural difference, not a gap.
+
 The replay ran 2026-07-22 as a read-only, **full-cohort** (not sampled)
-comparison against pilot run `20260716T193408-6613a1a6` (43,425 votes /
-41,586 distinct cards, source=ocr): each card's pilot vote was compared
-against what the current Stage D join-key calculator
+comparison against that pilot run's 43,425 votes / 41,586 distinct
+cards (source=ocr): each card's pilot vote was compared against what
+the current Stage D join-key calculator
 (`calculate_join_key_verdict`/`_resolve_candidates_for_card`, called
 directly) computes from its now-persisted `ImageEvidence`, bypassing
 `_eligible_cards_queryset` entirely. No writes.
@@ -153,7 +178,9 @@ Buckets a/b/c reading exactly 0 is a property of this
 backward-looking cohort (the pilot's own eligibility filter already
 excluded any card that would trip them), not evidence the §3 constants
 don't matter going forward — that is the separate, forward-looking
-question §3 answers (item 3 resolved 2026-07-22; items 1–2 still open).
+question §3 answers (all three items resolved 2026-07-22, per that
+section — items 1–2 MUST-FIX with a fix in flight, item 3 not
+restored).
 
 ### Owner gate ruling (2026-07-22): soundness bar ACCEPTED
 
@@ -299,8 +326,8 @@ answer already matches every currently-persisted status exactly.
 
 ## 7. Chain — where each underlying fact actually lives
 
-This page owns the gate's **status** and its **open decisions** above;
-every fact below is the linked source, not duplicated here.
+This page owns the gate's **status** and its **decisions** above; every
+fact below is the linked source, not duplicated here.
 
 - [`theory.md`](theory.md) — the formal decoding model, the false-accept
   bound, and §7's stage-by-stage Stage D composition with error terms.
@@ -333,4 +360,4 @@ every fact below is the linked source, not duplicated here.
   (merged) — the code fix for both of §4's root causes; the live
   373-card cohort still needs the gated re-extraction described there.
 - [PR #341](https://github.com/ProxyPrints/ProxyPrints.github.io/pull/341)
-  (open) — §3 item 3's non-restoration rationale and code removal.
+  (merged) — §3 item 3's non-restoration rationale and code removal.
