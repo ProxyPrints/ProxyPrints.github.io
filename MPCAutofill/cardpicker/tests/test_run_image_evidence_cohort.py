@@ -116,6 +116,7 @@ def _stub_compute_ok(
     run_id: str,
     profile: bool = False,
     short_circuit: Optional[bool] = None,
+    known_set_codes: Optional[frozenset[str]] = None,
 ) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Replaces the real compute-stage step - no PIL decode, no extractors, no persist_evidence
     call, just the (card_id, outcome, profile, short_circuited) tuple `_run_cohort` consumes.
@@ -333,6 +334,7 @@ class TestPilotRunLedger:
             run_id: str,
             profile: bool = False,
             short_circuit: Optional[bool] = None,
+            known_set_codes: Optional[frozenset[str]] = None,
         ) -> tuple[int, str, Optional[dict[str, float]], bool]:
             return card_id, "ok", None, True
 
@@ -541,6 +543,7 @@ class TestComputeOneCard:
             fetch_latency_ms: float,
             profile: Optional[dict[str, float]] = None,
             short_circuit: Optional[bool] = None,
+            known_set_codes: Optional[frozenset[str]] = None,
         ) -> Any:
             captured["card_id"] = card_id
             captured["content_hash"] = content_hash
@@ -582,6 +585,7 @@ class TestComputeOneCard:
             fetch_latency_ms: float,
             profile: Optional[dict[str, float]] = None,
             short_circuit: Optional[bool] = None,
+            known_set_codes: Optional[frozenset[str]] = None,
         ) -> Any:
             captured["image"] = image
 
@@ -643,6 +647,7 @@ class TestComputeOneCard:
             fetch_latency_ms: float,
             profile: Optional[dict[str, float]] = None,
             short_circuit: Optional[bool] = None,
+            known_set_codes: Optional[frozenset[str]] = None,
         ) -> Any:
             if profile is not None:
                 profile["fetch_ms"] = fetch_latency_ms
@@ -749,6 +754,7 @@ class TestRunCohortProfileOutput:
             run_id: str,
             profile: bool = False,
             short_circuit: Optional[bool] = None,
+            known_set_codes: Optional[frozenset[str]] = None,
         ) -> tuple[int, str, Optional[dict[str, float]], bool]:
             profile_dict = {"fetch_ms": fetch_latency_ms, "wall_ms": 1.0} if profile else None
             return card_id, "ok", profile_dict, False

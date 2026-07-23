@@ -370,6 +370,20 @@ def _contains_digit(text: str) -> bool:
     return any(character.isdigit() for character in text)
 
 
+def _parse_is_lexicon_valid(parsed: Any, known_set_codes: Optional[frozenset[str]]) -> bool:
+    """SET-CODE LEXICON GATE (2026-07-23, issue #370's recorded follow-up - see
+    `compute_card_evidence`'s own `known_set_codes` docstring paragraph for the full autopsy):
+    gates the escalation loop's ACCEPTANCE criterion, not whether escalation starts. True iff a
+    `collector_number`-bearing `parsed` result (an `OcrParseResult`) is eligible to terminate the
+    loop below - either it never found a set-code-shaped token at all (`set_code is None`, the
+    pre-M15 collector-number-only case - deliberately UNAFFECTED by this gate, the same carve-out
+    `calculate_join_key_verdict`'s own SET-CODE LEXICON GATE uses, per that function's own
+    docstring: "the gate only ever applies when a set-code-shaped token was actually found"), or
+    the gate is disabled (`known_set_codes is None` - no lexicon threaded, e.g. an older direct
+    caller/test), or the parsed `set_code` is a real `CanonicalExpansion.code` member."""
+    return parsed.set_code is None or known_set_codes is None or parsed.set_code in known_set_codes
+
+
 def _confidently_digit_free(tier1_raw_texts: list[str]) -> bool:
     """Gate for the pre-classification short-circuit (2026-07-22, pipeline-fidelity parity
     replay #154 "unexplained" divergence autopsy - 155 of 373 conservative-abstention
@@ -393,6 +407,7 @@ def extract_card_evidence(
     dpi: Optional[int] = DEFAULT_FETCH_DPI,
     profile: Optional[dict[str, float]] = None,
     short_circuit: Optional[bool] = None,
+    known_set_codes: Optional[frozenset[str]] = None,
 ) -> ExtractionResult:
     """
     The per-card callable work unit - fetch, then compute. `card.content_phash` (not recomputed
@@ -423,6 +438,9 @@ def extract_card_evidence(
 
     `short_circuit`, if given, is forwarded straight through to `compute_card_evidence` below - see
     that function's own docstring for the pre-classification short-circuit this controls.
+
+    `known_set_codes`, if given, is forwarded straight through to `compute_card_evidence` below -
+    see that function's own docstring for the escalation-loop lexicon gate this controls.
     """
 
     fetch_started_at = time.monotonic()
@@ -436,7 +454,13 @@ def extract_card_evidence(
     fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
 
     return compute_card_evidence(
-        card.pk, card.content_phash, image, fetch_latency_ms, profile=profile, short_circuit=short_circuit
+        card.pk,
+        card.content_phash,
+        image,
+        fetch_latency_ms,
+        profile=profile,
+        short_circuit=short_circuit,
+        known_set_codes=known_set_codes,
     )
 
 
@@ -447,6 +471,7 @@ def compute_card_evidence(
     fetch_latency_ms: float,
     profile: Optional[dict[str, float]] = None,
     short_circuit: Optional[bool] = None,
+    known_set_codes: Optional[frozenset[str]] = None,
 ) -> ExtractionResult:
     """
     Compute-only continuation of `extract_card_evidence` above - everything that function does
@@ -498,6 +523,37 @@ def compute_card_evidence(
     (a strict subset of what used to qualify still does), so its own worst-case-cost bound above
     is unaffected; the perf win is simply now scoped to genuinely-content-bearing, genuinely
     digit-free reads rather than also swallowing outright read failures.
+
+    `known_set_codes` (2026-07-23, issue #370's own recorded follow-up - see this module's
+    `_collector_line_ocr_attempts` docstring and the escalation loop below for the mechanism):
+    the SET-CODE LEXICON GATE `local_calculate_verdicts.known_set_codes()` produces, threaded
+    straight through from the caller rather than queried here - this function never issues its
+    own DB query, matching that helper's own "built once per batch, passed through explicitly"
+    convention (`local_calculate_verdicts.run_join_key_calculator`'s identical pattern). Changes
+    the escalation loop's OWN acceptance criterion, not whether escalation starts (the
+    `short_circuit` gate above is unaffected and unchanged): a tier's parse used to terminate
+    escalation the instant ANY `collector_number` was found, regardless of whether the paired
+    `set_code` was real - a live structural finding (docs/reports/2026-07-23-ocr-preprocessing-
+    probe-2.md) traced 94% of a lexicon-invalid-no-match sample to exactly this, tier 1's very
+    first attempt accepting OCR noise that happened to regex-parse into a collector-number-shaped
+    token, before tiers 2-3 (built for exactly this recovery) ever got a chance to run. Now: a
+    parse only terminates escalation when its `set_code` is `None` (the pre-M15 collector-number-
+    only case, unaffected by this gate - same "only applies when a set-code-shaped token was
+    actually found" carve-out `calculate_join_key_verdict`'s own gate uses) OR is a real
+    `known_set_codes` member; a `collector_number`-bearing parse whose `set_code` is lexicon-
+    invalid no longer stops the loop - it's remembered as the running "best invalid candidate"
+    (the first such parse, by tier order) and escalation continues. If no attempt across all 8
+    ever yields a lexicon-valid parse, the best invalid candidate (if any) becomes the stored
+    outcome - IDENTICAL to what today's pre-gate code already stored for that card (the first
+    `collector_number`-bearing parse it found, since old code never distinguished valid from
+    invalid), so `collector_line_set_code`/`collector_line_collector_number`/
+    `collector_line_raw_text`/`collector_line_word_boxes` and the `"no-text"` skip-reason
+    threshold are BYTE-IDENTICAL to before for every card that ends up in this bucket - only the
+    PATH there changed (now via genuine escalation through every tier, not an early accept), never
+    the stored result. `None` (the default, e.g. a caller/test that doesn't pass this) disables
+    the gate entirely - every parse is accepted exactly as before, the pre-2026-07-23 behavior -
+    so this is purely additive: a card whose first parse is already lexicon-valid (the overwhelming
+    majority) sees zero behavior or compute change either way.
     """
     if short_circuit is None:
         short_circuit = _short_circuit_enabled_by_env()
@@ -609,22 +665,43 @@ def compute_card_evidence(
         # docstring) - and so does a BLANK tier-1 read (2026-07-22: blank is a read FAILURE, not a
         # confident "nothing here" signal, so it no longer qualifies either). This can only ever
         # short-circuit a STRICT SUBSET of cards that would have ended in "no-text" anyway, never
-        # a card that could have parsed at tier 1.
+        # a card that could have parsed at tier 1. This gate governs whether escalation STARTS
+        # (i.e. whether tiers 2-3 run at all) - entirely independent of the lexicon-validity
+        # acceptance criterion immediately below, which governs whether a tier's parse is allowed
+        # to STOP escalation once it's already running.
+        #
+        # SET-CODE LEXICON GATE (2026-07-23, issue #370's own recorded follow-up - see
+        # `compute_card_evidence`'s own `known_set_codes` docstring paragraph for the full
+        # autopsy/structural finding this responds to): a tier's parse used to terminate
+        # escalation the instant ANY `collector_number` was found, regardless of whether the
+        # paired `set_code` was a real one - `_parse_is_lexicon_valid` now gates that acceptance
+        # instead. A `collector_number`-bearing parse that fails the gate is remembered as the
+        # running "best invalid candidate" (`best_invalid_index`/`best_invalid_parse` - the FIRST
+        # such parse, by tier order) rather than accepted, and the loop keeps escalating; if no
+        # attempt across every tier ever produces a lexicon-valid parse, the best invalid
+        # candidate becomes the stored outcome below - identical to what pre-gate code already
+        # stored for this bucket (see that paragraph for why the two are provably the same).
         collector_texts_and_words: list[tuple[str, list[dict[str, Any]]]] = []
         selected_index = 0
         parsed = parse_collector_line("")
         matched = False
         short_circuited = False
         tier1_raw_texts: list[str] = []
+        best_invalid_index: Optional[int] = None
+        best_invalid_parse: Any = None
         for i, (variant, config, tier) in enumerate(_collector_line_ocr_attempts(collector_crop)):
             raw_text, word_boxes = run_tesseract_text_and_words(variant, config=config)
             collector_texts_and_words.append((raw_text, word_boxes))
             candidate_parse = parse_collector_line(raw_text)
             if candidate_parse.collector_number is not None:
-                parsed = candidate_parse
-                selected_index = i
-                matched = True
-                break
+                if _parse_is_lexicon_valid(candidate_parse, known_set_codes):
+                    parsed = candidate_parse
+                    selected_index = i
+                    matched = True
+                    break
+                if best_invalid_index is None:
+                    best_invalid_index = i
+                    best_invalid_parse = candidate_parse
             if tier == 1:
                 tier1_raw_texts.append(raw_text)
                 if (
@@ -634,15 +711,24 @@ def compute_card_evidence(
                 ):
                     short_circuited = True
                     break
-        if not matched and collector_texts_and_words:
-            # every attempt actually tried (every tier, OR a short-circuit exit after tier 1)
-            # found no parse - keep the first attempt's (empty-ish) parse as the deterministic
-            # stored artifact, matching the pre-existing fallback precedence. Safe to reuse
-            # unconditionally on a short-circuit exit too: `_contains_digit` false for both tier-1
-            # texts means `_COLLECTOR_NUMBER_RE` (a strict subset check - see `_contains_digit`'s
-            # own docstring) cannot have matched either, so re-parsing text[0] here can only ever
-            # reproduce the same collector_number=None outcome already implied.
-            parsed = parse_collector_line(collector_texts_and_words[0][0])
+        if not matched:
+            if best_invalid_index is not None:
+                # every attempt either found nothing or a lexicon-invalid parse - keep the BEST
+                # invalid candidate (the first collector_number-bearing parse by tier order,
+                # matching exactly what pre-2026-07-23 code already stored for this bucket, since
+                # old code never distinguished valid from invalid - see this loop's own comment
+                # above and compute_card_evidence's own known_set_codes docstring paragraph).
+                parsed = best_invalid_parse
+                selected_index = best_invalid_index
+            elif collector_texts_and_words:
+                # no attempt ever produced ANY collector_number at all (the true "no-text" case) -
+                # keep the first attempt's (empty-ish) parse as the deterministic stored artifact,
+                # matching the pre-existing fallback precedence. Safe to reuse unconditionally on
+                # a short-circuit exit too: `_contains_digit` false for both tier-1 texts means
+                # `_COLLECTOR_NUMBER_RE` (a strict subset check - see `_contains_digit`'s own
+                # docstring) cannot have matched either, so re-parsing text[0] here can only ever
+                # reproduce the same collector_number=None outcome already implied.
+                parsed = parse_collector_line(collector_texts_and_words[0][0])
         card_short_circuited = short_circuited
 
         collector_raw_texts = [text for text, _words in collector_texts_and_words]

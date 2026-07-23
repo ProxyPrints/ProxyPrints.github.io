@@ -1006,6 +1006,155 @@ class TestExtractCardEvidenceCollectorLineOcr:
         assert evidence.collector_line_collector_number == "158"
 
 
+class TestExtractCardEvidenceCollectorLineOcrSetCodeLexiconGate:
+    """2026-07-23, issue #370's own recorded follow-up: the escalation loop's acceptance
+    criterion changes from "any parse" to "lexicon-valid parse, else keep escalating, else keep
+    the best invalid candidate" (see `compute_card_evidence`'s own `known_set_codes` docstring
+    paragraph for the full mechanism/autopsy). Uses a monkeypatched `run_tesseract_text_and_words`
+    (not real tesseract) throughout for exact, controlled per-attempt text, mirroring
+    `TestExtractCardEvidenceCollectorLineOcr`'s own style for controlled-text escalation tests
+    above (`test_digit_bearing_tier_one_failure_still_escalates_by_default` etc.)."""
+
+    def test_lexicon_invalid_parse_keeps_escalating_until_a_valid_one_is_found(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        # attempts 1-3 (tier 1's two + tier 2's first): a genuine collector-number-shaped read
+        # whose set code ("fak") isn't real. Attempt 4 (still tier 2): a lexicon-valid parse -
+        # escalation must stop there, never reaching attempts 5-8.
+        texts = iter(["158/287 R FAK EN", "158/287 R FAK EN", "158/287 R FAK EN", "158/287 R MOM EN"])
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return next(texts), []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(card, known_set_codes=frozenset({"mom"}))
+
+        assert result.fields["collector_line_set_code"] == "mom"
+        assert result.fields["collector_line_collector_number"] == "158"
+        assert "collector_line_ocr" not in result.skip_reasons
+        assert len(calls) == 4  # stopped the instant a lexicon-valid parse was found
+
+    def test_all_invalid_parses_keep_the_best_invalid_candidate(self, db, monkeypatch):
+        """No attempt across every tier ever produces a lexicon-valid parse - the stored outcome
+        keeps the FIRST collector_number-bearing parse (by tier order), matching exactly what
+        pre-2026-07-23 code already stored for this bucket (old code never distinguished valid
+        from invalid) - byte-identical stored fields, only the path there (genuine escalation
+        through every tier) changed."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return "158/287 R FAK EN", []  # always the same out-of-lexicon parse
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(card, known_set_codes=frozenset({"mom"}), short_circuit=False)
+
+        assert result.fields["collector_line_set_code"] == "fak"
+        assert result.fields["collector_line_collector_number"] == "158"
+        assert "collector_line_ocr" not in result.skip_reasons  # a collector_number WAS found
+        assert len(calls) == 8  # every tier tried - no attempt ever validated
+
+    def test_pre_gate_stored_outcome_is_reproduced_exactly_when_gate_disabled(self, db, monkeypatch):
+        """Same all-invalid scenario as above, but with known_set_codes=None (the gate disabled,
+        e.g. an older/direct caller) - must accept the FIRST parse immediately (no escalation at
+        all), reproducing the exact pre-2026-07-23 "any parse" behavior and stored fields."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return "158/287 R FAK EN", []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(card)  # known_set_codes not passed - defaults to None
+
+        assert result.fields["collector_line_set_code"] == "fak"
+        assert result.fields["collector_line_collector_number"] == "158"
+        assert "collector_line_ocr" not in result.skip_reasons
+        assert len(calls) == 1  # accepted immediately - gate disabled, no escalation triggered
+
+    def test_lexicon_valid_first_parse_short_circuits_exactly_as_before(self, db, monkeypatch):
+        """A card whose first parse is already lexicon-valid (the overwhelming majority) sees
+        IDENTICAL behavior and compute whether or not known_set_codes is threaded through -
+        companion to test_happy_path_never_computes_fallback_preprocessing above, asserting the
+        exact attempt count with the gate actively enabled this time."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "158/287 R MOM EN")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        def _boom(cropped):
+            raise AssertionError("preprocess_fallback_variants must never be called on the happy path")
+
+        monkeypatch.setattr(module, "preprocess_fallback_variants", _boom)
+
+        result = extract_card_evidence(card, known_set_codes=frozenset({"mom"}))
+
+        assert result.fields["collector_line_set_code"] == "mom"
+        assert result.fields["collector_line_collector_number"] == "158"
+        assert "collector_line_ocr" not in result.skip_reasons
+
+    def test_collector_number_only_parse_unaffected_by_gate(self, db, monkeypatch):
+        """The pre-M15 collector-number-only case (no set-code-shaped token found at all) is
+        deliberately UNAFFECTED by the lexicon gate, same as `calculate_join_key_verdict`'s own
+        carve-out - accepted immediately even though known_set_codes doesn't contain anything."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return "158", []  # a bare collector number, no set-code-shaped token at all
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(card, known_set_codes=frozenset())  # empty lexicon
+
+        assert result.fields["collector_line_set_code"] == ""
+        assert result.fields["collector_line_collector_number"] == "158"
+        assert "collector_line_ocr" not in result.skip_reasons
+        assert len(calls) == 1  # accepted immediately - set_code is None, gate doesn't apply
+
+    def test_short_circuit_interplay_unaffected_by_lexicon_gate(self, db, monkeypatch):
+        """The digit-free short-circuit (#340) governs whether escalation STARTS; the lexicon
+        gate governs acceptance once it's already running - the two are independent. A confidently
+        digit-free tier-1 read still short-circuits exactly as before, regardless of
+        known_set_codes being threaded through (there's no collector_number at all here for the
+        lexicon gate to ever evaluate)."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return "no digits anywhere in this line", []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(card, known_set_codes=frozenset({"mom"}))
+
+        assert result.skip_reasons["collector_line_ocr"] == "no-text"
+        assert len(calls) == 2  # tier 1 only - short-circuit fires exactly as without the gate
+        assert result.short_circuited is True
+
+
 class TestCollectorLineOcrAttempts:
     """Direct tests of `_collector_line_ocr_attempts` (issue #259) - the lazy, ordered
     (image, tesseract_config, tier) generator `collector_line_ocr`'s own loop consumes. The `tier`
