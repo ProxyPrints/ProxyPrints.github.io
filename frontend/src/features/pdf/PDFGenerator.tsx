@@ -1402,6 +1402,9 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
         imageUrl: doc?.smallThumbnailUrl,
         name: doc?.name ?? "",
         willGenerateBleed,
+        // Foreign-order resilience Phase 1 follow-up (issue #324) - same badge PagePreview's own
+        // /display caller wires up; free here since `doc` is already the resolved CardDocument.
+        orphanLabel: doc?.isOrphan ? doc.sourceName : undefined,
       };
     });
 
