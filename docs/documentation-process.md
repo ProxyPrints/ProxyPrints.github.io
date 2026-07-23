@@ -154,7 +154,8 @@ result — no different from hand-editing any other tracked file.
 
 [`docs-lint.yml`](../.github/workflows/docs-lint.yml) runs
 [`docs_lint.py`](../.github/scripts/docs_lint.py) on every PR touching
-`docs/**` and weekly regardless. It checks two things, mechanically:
+`docs/**` and weekly regardless. Its original, always-hard checks are two,
+mechanical (the interconnection rules below are newer and soft by default):
 
 1. Every `[[wiki-link]]` and markdown `[text](path)` link resolves to a
    real file.
@@ -173,6 +174,59 @@ something now shipped, a "current stage" claim a later section already
 contradicts, a date stamp that's drifted) from a true one — resolving that
 requires reading the doc's actual content and cross-checking it against
 reality, which is exactly what the next section is for.
+
+## Interconnection lint
+
+The 2026-07-23 owner ruling abolished the letter/number decision-labeling
+convention outright ("kill the lettering convention all together ... each
+subject should have one document or they should at least reference each
+other"). There is no central decisions register and no label grammar:
+**a decision lives written out in prose in its own subject doc**, and the
+subject doc is the source of truth. `docs_lint.py` enforces that model with
+four soft rules on top of the mechanical link/path checks:
+
+1. **No new D-number decision labels.** The abolished convention wrote a
+   decision as a bold `D`-number marker or a "decision D-number" phrase (the
+   sibling vote-weight decision stream used the same `D`-ledger plus
+   `VW`-style refs). The lint flags any such definition-style label
+   reintroduced in a living doc — write the decision out in prose instead.
+   **Structural enumerations the sweep deliberately kept are NOT decision
+   labels and are not flagged**: funnel steps (`F`), requirements (`R`),
+   test scenarios (`T`), mappings (`M`/`C`/`S`/`I`/`L`), editor-spec items
+   (`E`), file-change rows (`XF`), and license/PR tokens (`GPL-3.0`,
+   `PR-5`). A historical aside in the `(formerly '...')` form is allowed;
+   the archive buckets below are exempt; and a verbatim, self-declared
+   decision-record doc that keeps its labels intentionally is allowlisted
+   (today: [`reference/funnel-spec.md`](reference/funnel-spec.md) — the
+   living, de-lettered authority for that surface is
+   [`features/grid-selector.md`](features/grid-selector.md)).
+2. **Orphan check.** Every `docs/*.md` must be reachable from
+   [`README.md`](README.md) or [`MANIFEST.md`](MANIFEST.md), transitively,
+   via markdown/wiki links or backtick-path references. The record/archive
+   buckets index themselves by their own dated-listing convention and are
+   excluded: `reports/`, `data/`, `audits/`, `proposals/mockups/`.
+3. **Supersession pointer.** A line carrying a `SUPERSEDED`/`SUPERSEDES`
+   marker must name what supersedes it (a link, a backtick path, a
+   `§`section, a `#`ref, or a self-describing `SUPERSEDED-BY-X` status)
+   somewhere in its own paragraph or the next one — so a multi-line
+   "HISTORICAL — SUPERSEDED" banner that names its superseder a few lines
+   away still passes.
+4. **Same-subject cross-reference.** Two `proposals/proposal-<letter>-*.md`
+   docs covering the same subject must reference each other — at least one
+   direction, so a reader can navigate between them. This is the
+   anti-fragmentation guarantee the "one doc per subject, or they reference
+   each other" ruling asks for, replacing the old shared-label heuristic.
+
+**Soft by default.** These four rules print as `::warning::` and do **not**
+add to the exit code; the original link/path/tether checks are unchanged —
+still hard, still counted. The de-lettering sweep (PR #357) has merged and
+the whole corpus is now clean under these rules (`--strict` exits 0), so
+the lint is **ready to flip to hard-fail at the owner's discretion**: add
+`--strict` to [`docs-lint.yml`](../.github/workflows/docs-lint.yml)'s `Run docs lint` step (`python3 .github/scripts/docs_lint.py --strict`) or set
+`DOCS_LINT_STRICT=1` in that job's env. In strict mode the same findings
+become `::error::` and count toward the exit code. Left soft here so the
+supersession/cross-reference heuristics stay warn-only until a maintainer
+decides to promote them.
 
 ## The judgment coherence pass (quarterly)
 
