@@ -140,6 +140,10 @@ export function SourcesAccordion() {
         pad={2}
         expanded={open}
         onClick={() => setOpen((previous) => !previous)}
+        // CSS-fidelity source-map pass (SPEC-display-left-rail.md §2/§4) - see
+        // DisplayPage.tsx's RailSection's own identical `headerPadding` comment; this shell is
+        // the other AutofillCollapse mount in the rail ("shell = AutofillCollapse", §4).
+        headerPadding="7px 10px"
         title={
           <div className="d-flex flex-column flex-grow-1">
             <div className="d-flex align-items-center gap-2">
