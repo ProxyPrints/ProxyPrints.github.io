@@ -234,6 +234,16 @@ described above.
   from Bootstrap's `gap-2` (8px) to `gap-1` (4px) so more tiles fit per
   row at the rail's ~380px width. `dense`'s 72px is untouched - it
   already matched the reference.
+  **Same PR, follow-up owner round ("keep the ordering, but drop the
+  separator please")**: the DOM ordering (canonical → non-canonical →
+  unknown, still `selectVersionGrouping.ts`'s own ordering, untouched)
+  used to read as visually separate blocks because each per-group
+  wrapper div (`renderPrintingGroup`/`renderReasonTagGroup`) carried its
+  own `mb-2` bottom margin. That margin is dropped - no other DOM
+  change - so the rail now reads as one continuous grid with no visible
+  gap/seam at a group boundary. Those wrapper divs never carried any
+  `role="group"`/`aria-label` grouping semantics to begin with, so
+  nothing accessibility-bearing needed preserving.
 - **D20 implicit vote — the pick IS the vote, no second tap.** Picking a
   candidate while ≥1 chip is active computes `supportTagNames` (active
   tags the candidate satisfies ONLY via a suggested/unconfirmed vote,

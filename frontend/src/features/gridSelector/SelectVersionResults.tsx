@@ -9,6 +9,15 @@
  * Structure follows the spec's three ordered groups (canonical grouped-by-printing, non-canonical
  * grouped-by-reason-tag, unknown) via selectVersionGrouping.ts's pure grouping function.
  *
+ * Owner fix round (2026-07-23, "keep the ordering, but drop the separator please"): the DOM
+ * ordering canonical -> non-canonical -> unknown is UNCHANGED (still selectVersionGrouping.ts's
+ * own ordering, untouched) - only the `mb-2` bottom margin each per-group wrapper div
+ * (`renderPrintingGroup`/`renderReasonTagGroup`, below) used to carry between one group and the
+ * next was dropped, so the rail reads as one continuous grid with no visible gap/seam at a group
+ * boundary. No aria/role grouping semantics existed on these wrapper divs to begin with (checked
+ * directly - they carry only `data-testid`/`data-status`/`data-requested`, no `role="group"` or
+ * `aria-label`), so there was nothing accessibility-bearing to preserve in an invisible form.
+ *
  * FUNNEL round (funnel-spec.md F1-F7, D20-D24) - the `layout="stacked"` branch is now the
  * left-rail art-picker FUNNEL: one vertical column of head (F1) -> per-axis segmented chips
  * (F2/F3) -> advanced filters (E4, unchanged) -> implicit-vote awareness line (F4a) -> the
@@ -905,7 +914,6 @@ export function SelectVersionResults({
     return (
       <div
         key={group.key}
-        className="mb-2"
         data-testid={`select-version-printing-group-${group.key}`}
         data-status={group.status}
         data-requested={group.isRequestedPrinting}
@@ -913,7 +921,9 @@ export function SelectVersionResults({
         {/* Fix round (owner live-review, "oversized dropdowns") - tiles wrap into a row
             instead of each stacking on its own full-width line, now that SelectVersionTile
             itself carries a real fixed width (see that component's own comment) rather than a
-            no-op `width: auto`. */}
+            no-op `width: auto`. Owner fix round (2026-07-23, "keep the ordering, but drop the
+            separator please") dropped this wrapper's own `mb-2` - see the module-level note
+            near `resultsElement` for why. */}
         <div className="d-flex flex-wrap gap-1">
           <SelectVersionTile
             {...tileProps(
@@ -955,7 +965,6 @@ export function SelectVersionResults({
     return (
       <div
         key={group.tagName}
-        className="mb-2"
         data-testid={`select-version-reason-group-${group.tagName}`}
       >
         <div className="d-flex flex-wrap gap-1">
