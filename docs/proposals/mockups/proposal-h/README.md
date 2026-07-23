@@ -2,6 +2,9 @@
 
 Static HTML/CSS mockups for
 [`docs/proposals/proposal-h-unified-display-page.md`](../../proposal-h-unified-display-page.md)
+(historical doc — see its own banner; the living spec is
+[`proposal-h-display-layout-spec.md`](../../proposal-h-display-layout-spec.md),
+whose own companion mockup is linked below)
 — the unified print-sheet-preview + card-details-rail page. These are
 design artifacts, not application code: plain HTML with hand-written CSS
 (`shared.css`), no build step, no framework. Card art is a gray 63:88
@@ -16,8 +19,10 @@ width — see the file's own comments) for
 [`../../proposal-h-display-layout-spec.md`](../../proposal-h-display-layout-spec.md),
 which is now the authority for the tablet-drawer/mobile-bottom-sheet
 behaviour the five files below only sketch (their per-breakpoint rail
-side/width and instrument set predate the spec's D2 "two rails, split
-roles" decision). Kept for historical context on the earlier round, not
+side/width and instrument set predate the spec's [three-region
+layout](../../proposal-h-display-layout-spec.md#three-region-layout)
+decision — "rail on left, sheet in the center, settings rail on the
+right"). Kept for historical context on the earlier round, not
 deleted — issue #266 (mobile responsive shell) shipped against the
 newer spec, not this directory's original five-file set.
 

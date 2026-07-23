@@ -41,7 +41,11 @@ and, since issue #275, standalone at `pages/print.tsx`), `PDFGeneratorModal.tsx`
 `/display` page's OWN separate inline export pipeline and its own mount of
 this same prompt — PDF generation now lives solely here, reached from
 `/display`'s Finish footer via a pre-print save gate; see
-`docs/proposals/proposal-h-display-layout-spec.md`'s ADDENDUM D9/D10.) See
+`docs/proposals/proposal-h-display-layout-spec.md`'s [Finish
+Footer](../proposals/proposal-h-display-layout-spec.md#finish-footer-save-before-print)
+and [Print-Page
+Funnel](../proposals/proposal-h-display-layout-spec.md#print-page-funnel-destination)
+decisions.) See
 `docs/features/printing-tags.md`'s own entry for the full detail (session-
 scoped `sessionStorage` flag, success-detection mechanism, why it's a
 funnel entry point rather than a parallel one) and
@@ -53,7 +57,9 @@ of the wiring.
 - `frontend/src/features/export/FinishedMyProject.tsx`
 - `frontend/src/components/flags.tsx`
 - `frontend/public/*.svg` (vendored flag icons)
-- `frontend/src/pages/print.tsx` (issue #275, D10/F5) — thin standalone route
+- `frontend/src/pages/print.tsx` (issue #275, the [Print-Page Funnel
+  decision](../proposals/proposal-h-display-layout-spec.md#print-page-funnel-destination)'s
+  F5 row) — thin standalone route
   wrapper mounting `FinishedMyProject` unchanged, mirroring `pages/myDecks.tsx`;
   the funnel destination `/display`'s Finish footer navigates to
 

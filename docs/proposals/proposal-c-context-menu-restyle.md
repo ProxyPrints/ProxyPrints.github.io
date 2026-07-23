@@ -1,5 +1,5 @@
 As of: 2026-07-18
-What this is: Proposal C — (a) a right-click/long-press context menu on editor card slots, (b) a solid-color utilitarian restyle direction. Part (a) is APPROVED (4 decisions below) and built this pass. Part (b) is **SUPERSEDED by Proposal H** (`docs/proposals/proposal-h-unified-display-page.md`) — the unified display page absorbs the restyle direction; see Part (b)'s own section below for detail. Part (b) never left HOLD before being superseded.
+What this is: Proposal C — (a) a right-click/long-press context menu on editor card slots, (b) a solid-color utilitarian restyle direction. Part (a) is APPROVED (4 decisions below) and built this pass. Part (b) is **SUPERSEDED by Proposal H** (`docs/proposals/proposal-h-display-layout-spec.md`, the living spec — its original draft, `proposal-h-unified-display-page.md`, is now historical) — the unified display page absorbs the restyle direction; see Part (b)'s own section below for detail. Part (b) never left HOLD before being superseded.
 
 ## Part (a) — context menu
 
@@ -37,7 +37,7 @@ Same five items as the table above, in the same order the existing dropdown alre
 
 ## Part (b) — solid-color utilitarian restyle direction
 
-**SUPERSEDED by Proposal H** (`docs/proposals/proposal-h-unified-display-page.md`) — the unified display page absorbs this restyle direction; the section below is kept as a historical record of the direction as it stood before Proposal H, not an active plan. Do not build against it.
+**SUPERSEDED by Proposal H** (`docs/proposals/proposal-h-display-layout-spec.md`, the living spec — its original draft, `proposal-h-unified-display-page.md`, is now historical) — the unified display page absorbs this restyle direction; the section below is kept as a historical record of the direction as it stood before Proposal H, not an active plan. Do not build against it.
 
 ### Current baseline
 

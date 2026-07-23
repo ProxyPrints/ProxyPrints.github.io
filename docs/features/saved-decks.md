@@ -26,7 +26,8 @@ from the other without any extra plumbing:
   integration" — Proposal H's own milestone, landed after the pane
   migration, #164) — see
   [`../proposals/proposal-h-unified-display-page.md`](../proposals/proposal-h-unified-display-page.md)'s
-  §5 mapping table for this row. `SavedDeckPanel` takes an optional
+  (historical doc — see its own banner) §5 mapping table for this row.
+  `SavedDeckPanel` takes an optional
   `className` prop so the two callers can each supply their own spacing
   (`ProjectEditor`'s vertical stack vs. `DisplayPage`'s horizontal
   flex-wrap toolbar row) without forking the component.

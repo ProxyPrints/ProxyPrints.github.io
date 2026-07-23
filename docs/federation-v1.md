@@ -160,7 +160,9 @@ first encounters an implicit-sourced verdict:
 - `is_human_backed=False` always, same treatment as `DEDUCTION`/`OCR` —
   an importer must not treat an imported implicit-sourced contribution as
   human-backed, mirroring this doc's existing FEDERATED guidance above.
-- `resolve_weighted_consensus`'s D1/D4 mechanisms (see that function's own
+- `resolve_weighted_consensus`'s [no-machine-tipping and
+  machine-dissent-never-de-resolves mechanisms](features/printing-tags.md#human-contest-machine-weight-drop)
+  (see that function's own
   docstring, and docs/features/printing-tags.md's "Consensus" bullet)
   additionally guarantee implicit weight can never decide a live
   human-vs-human contest nor de-resolve an already-quorum-valid human

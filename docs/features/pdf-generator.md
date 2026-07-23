@@ -168,7 +168,11 @@ This used to also be mounted from `DisplayPage.tsx`'s own inline export
 (Proposal H, item 2) — issue #275 retired that pipeline entirely (the
 memory-heavy Generate PDF/Save-to-Drive operations now live solely here,
 reached from `/display`'s Finish footer via a pre-print save gate; see
-`docs/proposals/proposal-h-display-layout-spec.md`'s ADDENDUM D9/D10), so
+`docs/proposals/proposal-h-display-layout-spec.md`'s [Finish
+Footer](../proposals/proposal-h-display-layout-spec.md#finish-footer-save-before-print)
+and [Print-Page
+Funnel](../proposals/proposal-h-display-layout-spec.md#print-page-funnel-destination)
+decisions), so
 this component's mounts are now: this tab, `PDFGeneratorModal.tsx`, and
 `ProjectEditor.tsx` — one implementation, not a forked second copy. See
 `docs/features/printing-tags.md`'s own entry for the full detail (why
