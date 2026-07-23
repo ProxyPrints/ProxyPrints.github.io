@@ -34,12 +34,12 @@ The methodology and the systems it governs.
   re-derived after ratification.
 - [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) — canonical
   status page for the pipeline-fidelity gate (GitHub issue #154): gate
-  definition, artifact 1/2 status, the two open owner decisions (the
-  three MISSING constants, the corrected parity-replay methodology), and
-  a verified 2026-07-22 data snapshot. Single source of truth for this
-  gate's status — `theory.md`, `identification-pipeline.md`,
-  `features/catalog-completion-plan.md`, and the knowledge-inventory
-  report link here rather than restating it.
+  definition, artifact 1 (parity replay — DONE, owner-accepted
+  2026-07-22) and artifact 2 status, the still-open owner decision on
+  two of the three MISSING constants, and a verified 2026-07-22 data
+  snapshot. Single source of truth for this gate's status — `theory.md`,
+  `identification-pipeline.md`, `features/catalog-completion-plan.md`,
+  and the knowledge-inventory report link here rather than restating it.
 - [`federation-v1.md`](federation-v1.md) — federation verdict exchange
   format v1 (spec; no implementation yet — instances would share resolved
   consensus verdicts as signed JSON, never raw votes). Companion HOLD

@@ -570,6 +570,73 @@ _suggestion_ false-accept rate is a product of independent reductions
 over a closed set, **bounded but not calibrated** — the individual
 `εᵢ` are not yet measured, and §9 says what measuring them would take.
 
+### 7c. Empirical parity-replay check (2026-07-22)
+
+§7b's bound is honest about what's calibrated versus what isn't: the
+suggestion-level product is unmeasured per-term, and the
+resolution-level 0 is measured only at write-run scale (0/8,925,
+0/43,425). The pipeline-fidelity gate's artifact-1 parity replay
+(GitHub issue #154; full numbers and the owner ruling:
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §4) adds a
+third, larger, cross-pipeline data point, and speaks to `g₁`/`g₄`
+specifically rather than just re-confirming `g₅`.
+
+**Baseline vs. method.** The "older live pilot" below is the
+**legacy multi-channel engine** (OCR plus the `local-phash-v1`/
+`local-fallback-v1` phash channels voting concurrently), not this
+chain run twice — this chain (§7's composition) is **OCR-only by
+design**. So the replay is a **cross-method** verdict diff: the new
+OCR-only chain, computed against current `ImageEvidence`, against the
+older multi-channel engine's recorded votes, not the new method
+validated against itself. The 83.2% below is OCR-channel agreement
+specifically.
+
+**What ran.** A read-only, full-cohort (not sampled) diff of this
+chain's own verdict function (`calculate_join_key_verdict`) against the
+older live pilot's recorded votes, on every card the pilot voted
+(41,586 cards). Restricted to the 28,456 cards whose pilot vote used
+the OCR channel this chain can reproduce, the two pipelines agree on
+**83.2%** of verdicts outright.
+
+**What the disagreements say about the OCR channel (`g₁`).** Of 17,793
+total disagreements, the overwhelming majority are architecture, not
+error: 13,026 are cards the pilot matched via engines this chain
+doesn't run at all (full-image phash / border-artist-symbol fallback,
+out of scope per the note above), and 4,394 are cards this chain's
+`g₄` veto layer correctly withholds that the pilot's looser model
+accepted. Only **373 (0.9% of the full cohort)** were genuinely
+unexplained at replay time, and both were subsequently root-caused to
+specific, narrow `g₁` parser defects — a short-circuit gate that
+treated a blank OCR read as equivalent to a confident digit-free read,
+and a single-character glued-token misparse of a set code — not
+diffuse, unbounded noise across the token space. That is weak but real
+evidence that `ε₁` (§7a: "unmeasured as a rate; structurally bounded"
+by the parser's own shape constraints) is, at least at this scale,
+dominated by a small number of identifiable failure modes rather than
+a long unstructured tail — a claim about the _shape_ of `ε₁`'s error
+distribution, not a calibrated value for it.
+
+**What the disagreements say about conservative abstention
+(`g₄`/`g₅`).** Zero of the 373 unexplained cases — and zero of the
+full 17,793 — was a case where this chain committed to a _wrong_
+printing that the pilot's own recorded vote contradicts. Every
+unexplained divergence was this chain declining to match (an
+abstention) where the pilot had matched, never the reverse. This is
+exactly the asymmetry §7b's resolution-level bound predicts (`g₅`
+structurally excludes wrong-printing resolution), extended for the
+first time past write-run vote counts to a full-cohort, cross-pipeline
+verdict comparison: at 41,586 cards, the chain never silently swapped
+in a wrong answer, only ever withheld one where the older, looser
+pipeline had guessed.
+
+The owner accepted this outcome (2026-07-22) against the gate's
+_intent_ — no confidently-wrong verdicts at scale — rather than its
+literal zero-divergence wording; both root causes are fixed in code
+(merged PR #340), with the live 373-card cohort's benefit pending a
+separately gated Stage C re-extraction. This is a corroborating
+empirical check, not a new calibrated `εᵢ` — §9's calibration program
+is unaffected by it.
+
 ## 8. Confidence semantics for downstream consumers
 
 The federation program (`docs/federation-v1.md`,
@@ -739,3 +806,13 @@ divergence plainly rather than retrofitting §1). Anchored on the
 `docs/reports/2026-07-21-staged-write.md`) alongside §2's existing
 0/43,425 and 269-pair numbers. The commission is owner-approved; the
 §§7–9 **text** is pending the same owner review §§1–6 received.
+
+**§7c added 2026-07-22**: the pipeline-fidelity gate's artifact-1
+parity-replay result (GitHub issue #154), folded in as a third,
+full-cohort empirical data point for the `g₁`/`g₄` discussion in
+§7a/§7b — corroborating the existing bound's shape, not calibrating a
+new number. The owner accepted the underlying replay outcome
+2026-07-22 against the gate's soundness intent (373/41,586 unexplained
+divergences, 0/373 a wrong-printing vote); full numbers and the ruling
+live in [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §4,
+not duplicated here.
