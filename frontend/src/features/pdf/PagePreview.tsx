@@ -199,6 +199,16 @@ export interface PagePreviewSlotContent {
    * (scryfallReference.ts), shown only alongside `loadState === "failed"`. `undefined` renders no
    * link (there was nothing in the query to build one from). */
   findCardUrl?: string;
+  /** Foreign-order resilience Phase 1 follow-up (issue #324) - porting Card.tsx's own
+   * `OrphanBadge` corner label to this, the /display sheet's own renderer, which previously had
+   * no orphan visual treatment at all (a recorded gap in
+   * docs/features/foreign-order-resilience.md). Set to the synthesized CardDocument's own
+   * `sourceName` ("Your file" on this - the author/editor - surface, same text Card.tsx already
+   * shows) whenever `cardDocument.isOrphan` is true; `undefined` (every non-orphan slot, and any
+   * slot with no resolved image yet) renders no badge. Only shown alongside a resolved
+   * `imageUrl` - same gating Card.tsx's own badge uses (never drawn over the empty/loading/failed
+   * placeholder states above, which already carry their own distinct visual language). */
+  orphanLabel?: string;
 }
 
 export interface PagePreviewProps {
@@ -442,6 +452,39 @@ function PagePreviewSlotEl({
             backgroundColor: screenPresentation ? SCREEN_SLOT_BG : undefined,
           }}
         />
+      )}
+      {content?.imageUrl != null && content.orphanLabel != null && (
+        // Foreign-order resilience Phase 1 follow-up (issue #324) - same visual treatment as
+        // Card.tsx's own `OrphanBadge` (blue pill, white uppercase text), ported to this
+        // component's own mm-unit idiom (matching the bleed badge just below rather than
+        // Card.tsx's px-based styled-component) so it stays legible at any `maxWidthPx`
+        // letterboxing after the outer `transform: scale()` - see this file's own module comment
+        // on why every overlay here is sized in mm, not px. Top-right, deliberately not the
+        // bleed badge's top-left corner: the two are mutually exclusive in practice (an orphan
+        // has no sourceType, so PDF.tsx's bleed-normalization eligibility check never fires for
+        // one - see the docs' "Bleed normalization for orphans" deferred note), but keeping them
+        // visually separable costs nothing.
+        <div
+          data-testid="orphan-badge"
+          style={{
+            position: "absolute",
+            right: "1mm",
+            top: "1mm",
+            padding: "0.5mm 1.5mm",
+            fontSize: "2.2mm",
+            fontWeight: 700,
+            lineHeight: 1.2,
+            textTransform: "uppercase",
+            letterSpacing: "0.03em",
+            color: "white",
+            background: "rgba(13, 110, 253, 0.85)",
+            borderRadius: "1mm",
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {content.orphanLabel}
+        </div>
       )}
       {content != null && content.imageUrl == null && (
         <div

@@ -126,22 +126,48 @@ regression-guarded addition, not a loosening of that existing behaviour
 - **Acceptance surface**: the classic `/editor` page is a legacy route held
   behind the route-swap PR #389 — owner ruling, this review round: the
   UNIFIED `/display` page (nav "Editor") is the only acceptance surface for
-  frontend rendering work. `OrphanRendering.spec.ts`'s two Playwright cases
+  frontend rendering work. `OrphanRendering.spec.ts`'s Playwright cases
   (originally verified against `/editor`) were moved to run against
   `/display` instead, screenshotting `test-results/orphan-text-import-desktop.png`/
-  `orphan-xml-import-desktop.png`/`orphan-xml-import-backs-desktop.png`.
-- **The `/display` sheet needed no code change**: `PagePreview.tsx` (the
-  unified page's own sheet-cell renderer, a DIFFERENT component from
-  `Card.tsx`) reads `cardDocument.mediumThumbnailUrl`/`isOrphan` straight off
-  the same shared `cardDocuments` store slice — since `synthesizeOrphanCardDocument`
-  already sets both, an orphan's image renders correctly there for free, for
-  both fronts (text import) and backs (the XML `b:null` case, once the page's
-  own Fronts/Backs toggle is switched — the "cardback corner" from the
-  owner's report; see the next bullet for the surface that PagePreview.tsx
-  is NOT). One gap this surfaces: `PagePreview.tsx` has no `OrphanBadge`
-  equivalent (`Card.tsx`'s corner label) — a pre-existing, page-scoped visual
-  gap the sheet already had for every other card attribute it doesn't badge,
-  not a regression from this pass.
+  `orphan-xml-import-desktop.png`/`orphan-xml-import-backs-desktop.png`/
+  `orphan-text-import-narrow-390.png`.
+- **The `/display` sheet needed no code change to render the image itself**:
+  `PagePreview.tsx` (the unified page's own sheet-cell renderer, a DIFFERENT
+  component from `Card.tsx`) reads `cardDocument.mediumThumbnailUrl`/
+  `isOrphan` straight off the same shared `cardDocuments` store slice — since
+  `synthesizeOrphanCardDocument` already sets both, an orphan's image renders
+  correctly there for free, for both fronts (text import) and backs (the XML
+  `b:null` case, once the page's own Fronts/Backs toggle is switched — the
+  "cardback corner" from the owner's report; see the next bullet for the
+  surface that PagePreview.tsx is NOT).
+- **Badge gap CLOSED (2026-07-23 follow-up)**: `PagePreview.tsx` previously
+  had no `OrphanBadge` equivalent (`Card.tsx`'s corner label) — a
+  page-scoped visual gap that also left a parity Playwright test
+  (`ImportXML.spec.ts`'s orphan-cardback case, `parity-wave1` branch) red
+  with nothing to assert against. Closed by adding a `orphanLabel?: string`
+  prop to `PagePreviewSlotContent` (`PagePreview.tsx`) — `undefined` renders
+  no badge (every non-orphan slot, and any slot with no resolved `imageUrl`
+  yet); set, it renders a `data-testid="orphan-badge"` pill in the slot's
+  top-right corner (same background/text-transform/weight as Card.tsx's
+  `OrphanBadge`, reimplemented in this component's own mm-unit idiom rather
+  than px, since every other PagePreview overlay is sized in mm so it stays
+  legible after the outer `transform: scale()` — a raw px badge would nearly
+  vanish on a heavily letterboxed phone sheet, the same reasoning already
+  written up for this component's screen-only border/radius above). Top-right
+  rather than Card.tsx's top-left, clear of the existing bleed badge's
+  top-left corner (the two never co-occur in practice — an orphan has no
+  `sourceType`, so PDF.tsx's bleed-normalization eligibility check never
+  fires for one — but kept visually separable regardless). Wired from both
+  callers that already resolve a `CardDocument`: `DisplayPage.tsx` (the
+  `/display` sheet, `cardDocument.sourceName` when `cardDocument.isOrphan`)
+  and `PDFGenerator.tsx`'s fast preview (`doc.sourceName` when
+  `doc.isOrphan`, free since `doc` was already resolved for the bleed
+  badge). Same testid as Card.tsx's own badge, by design, so a spec can
+  target either surface uniformly. Coverage: `PagePreview.test.tsx`'s new
+  "orphan badge" describe block (label shown/omitted/gated on a resolved
+  `imageUrl`), and `OrphanRendering.spec.ts`'s badge assertions on both the
+  text-import and XML-import (front + "cardback corner" back) cases, plus a
+  dedicated 390px-narrow-viewport case.
 - **REAL BUG, fixed**: the classic editor's "Common Cardback" panel
   (`CommonCardback.tsx`'s right-panel mount, `/editor` only — `/display` has
   no equivalent persistent tile, only the `CardbackToolbarButton` picker)
@@ -269,6 +295,14 @@ already offered exactly as it always was for any slot.
   consensus-surface gate.
 - `frontend/src/features/pdf/pdfImage.ts` — `getOrphanPDFImageURL`, the
   full-resolution PDF-export path.
+- `frontend/src/features/pdf/PagePreview.tsx` — (2026-07-23 follow-up)
+  `PagePreviewSlotContent`'s `orphanLabel` prop and its `orphan-badge`
+  render, the `/display` sheet's own port of Card.tsx's `OrphanBadge`.
+- `frontend/src/features/display/DisplayPage.tsx` — wires `orphanLabel`
+  from `cardDocument.isOrphan`/`sourceName` into each sheet slot's content.
+- `frontend/src/features/pdf/PDFGenerator.tsx` — wires the same `orphanLabel`
+  into its fast-preview slots (`fastPreviewSlots`), alongside the existing
+  bleed badge.
 - `frontend/src/common/types.ts` — the `isOrphan?: boolean` marker on the
   frontend's own `Card`/`CardDocument` type (never present in the
   quicktype-generated `schema_types.ts`).
@@ -282,6 +316,9 @@ already offered exactly as it always was for any slot.
   back-face case, plus the new `cardback` field cases), `downloadXML.test.ts`
   (round-trip), `Card.test.tsx` (badge/click-suppression/error-degrade),
   `ImportXML.spec.ts`'s "brand new project" Playwright case (the Common
-  Cardback fix), and the Playwright `tests/OrphanRendering.spec.ts` (both
-  reported symptoms, end to end, on the unified `/display` page as of the
-  2026-07-23 acceptance-surface correction, with screenshots).
+  Cardback fix), `PagePreview.test.tsx`'s "orphan badge" describe block
+  (2026-07-23 follow-up), and the Playwright `tests/OrphanRendering.spec.ts`
+  (both reported symptoms, end to end, on the unified `/display` page as of
+  the 2026-07-23 acceptance-surface correction, with screenshots, plus the
+  sheet's own `orphan-badge` assertions and a dedicated narrow-viewport case
+  added in the same follow-up).

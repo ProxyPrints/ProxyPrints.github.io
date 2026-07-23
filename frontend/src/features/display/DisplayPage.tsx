@@ -1581,6 +1581,12 @@ export function DisplayPage() {
               loadState === "failed"
                 ? buildScryfallReferenceUrl(query)
                 : undefined,
+            // Foreign-order resilience Phase 1 follow-up (issue #324) - PagePreview's own
+            // OrphanBadge equivalent, same "sourceName" text Card.tsx already shows for this
+            // identifier on the classic editor surface.
+            orphanLabel: cardDocument?.isOrphan
+              ? cardDocument.sourceName
+              : undefined,
           };
           return content;
         }),
