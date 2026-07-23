@@ -534,6 +534,17 @@ test.describe("ImportXML", () => {
   // initialised from the import when nothing was selected before it) and its own gate against
   // regressing the "should not have changed" tests above (an EXISTING project cardback is never
   // touched by a later import).
+  //
+  // The assertion below was rewritten (2026-07-23, following PR #398's PagePreview orphan-badge
+  // parity fix) to check the /editor sheet's own per-slot corner badge instead of the classic
+  // "Common Cardback" panel - DisplayPage has no equivalent persistent tile (only the
+  // CardbackToolbarButton picker, per this file's own header comment), so the fix's underlying
+  // behaviour (a BRAND NEW project's cardback initialises from the import, orphan or not) is now
+  // observed the same way OrphanRendering.spec.ts's own "b:null" case observes it: the sheet's
+  // `page-preview-slot`, toggled to its back face, showing both the resolved orphan image and the
+  // `orphan-badge` corner treatment (PagePreview.tsx's `orphanLabel`, same testid/text as
+  // Card.tsx's classic-editor badge). Same testid convention, same "Your file" text, kept
+  // consistent with OrphanRendering.spec.ts so the two files don't drift.
   test("importing an XML into a brand new project with no cardback yet initialises the Common Cardback panel from the file's own <cardback> - even an orphan", async ({
     page,
     network,
@@ -565,8 +576,24 @@ test.describe("ImportXML", () => {
       </order>`
     );
 
-    const commonCardback = page.getByTestId("common-cardback");
-    await expect(commonCardback.getByTestId("orphan-badge")).toBeVisible();
-    await expect(commonCardback).not.toContainText("Card Not Found");
+    const slot = page.getByTestId("page-preview-slot").first();
+    const frontImage = slot.locator("img");
+    await expect(frontImage).toHaveCount(1, { timeout: 45_000 });
+    await expect(frontImage).toHaveAttribute(
+      "src",
+      `https://lh4.googleusercontent.com/d/${orphanFrontId}=h800`
+    );
+
+    // The imported <cardback> (an orphan here) is this test's own point - toggle to the back
+    // face and confirm the project's cardback initialised from it, including the sheet's own
+    // orphan corner badge (see the comment above).
+    await page.getByRole("button", { name: /Showing: Fronts/ }).click();
+    const backImage = slot.locator("img");
+    await expect(backImage).toHaveCount(1, { timeout: 45_000 });
+    await expect(backImage).toHaveAttribute(
+      "src",
+      `https://lh4.googleusercontent.com/d/${orphanBackId}=h800`
+    );
+    await expect(slot.getByTestId("orphan-badge")).toHaveText("Your file");
   });
 });
