@@ -2,14 +2,13 @@ name: Docs lint
 
 # Mechanical checks over docs/: internal link resolution (both [[wiki-link]]
 # and markdown [text](path) styles) and backtick-quoted repo-path
-# existence. Plus, SOFT (warn-only, never fails master) interconnection
+# existence. Plus, HARD-FAIL (flipped 2026-07-23 via --strict, see
+# docs/documentation-process.md's 'Interconnection lint' section) interconnection
 # rules for the post-2026-07-23 model (decisions live in prose in their
 # subject doc; the D-number decision-label convention is abolished): no new
 # D-number decision labels, every doc reachable from the index chain, every
 # SUPERSEDED marker carries a pointer, same-subject proposals cross-
-# reference. The de-lettering sweep (PR #357) has merged and the corpus is
-# clean (--strict exits 0); flip to hard-fail at the owner's discretion (see
-# docs/documentation-process.md's 'Interconnection lint' section). Annotates failures inline (::error file=...,line=...::) —
+# reference. Annotates failures inline (::error file=...,line=...::) —
 # NEVER auto-fixes anything, and never touches doc content.
 #
 # KNOWN LIMITATION, stated plainly rather than buried: this can only catch
@@ -53,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Run docs lint
-        run: python3 .github/scripts/docs_lint.py
+        run: python3 .github/scripts/docs_lint.py --strict
 
   docs-lint-rules:
     name: docs_lint.py rule unit tests (decisions-register + interconnection)
