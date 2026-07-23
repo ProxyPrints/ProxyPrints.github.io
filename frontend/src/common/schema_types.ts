@@ -229,6 +229,18 @@ export interface Card {
    */
   suggestedCanonicalCard?: CanonicalCard | null;
   /**
+   * SEAM, not yet populated server-side (owner decision, D14 numeric-confidence round,
+   * 2026-07-23 - see docs/features/display-left-rail.md's "D14 numeric confidence" section for
+   * the full flag-to-backend note). Expected shape once a calibrated score lands: an integer
+   * 0-100 percentage, present only alongside a non-null `suggestedCanonicalCard` (never sent
+   * for an already-`resolved` card, same opt-in-per-endpoint pattern as
+   * `suggestedCanonicalCard`/`suggestedFilterTagNames` above). Until the backend sends this
+   * field, every real API response omits it and it reads as `undefined` - `ConfidenceElement.tsx`
+   * degrades to its existing qualitative "Suggested" pill in that case, never a crash or a
+   * fabricated number.
+   */
+  suggestedCanonicalCardConfidence?: number | null;
+  /**
    * Tag names leaning APPLY for this card strongly enough to preselect as a /editor filter
    * chip, per the implicit-vote consensus ruling (docs/features/printing-tags.md's
    * implicit-vote section): the leaning side's non-implicit weight is >= 1.0, the pair isn't

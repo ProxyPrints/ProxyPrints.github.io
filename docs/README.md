@@ -106,6 +106,11 @@ The methodology and the systems it governs.
   Google Drive picker, Local Folder, and Save-PDF-to-Drive.
 - [`features/grid-selector.md`](features/grid-selector.md) — the
   card-version-picker modal + `Card.tsx`'s image loading/error states.
+- [`features/display-left-rail.md`](features/display-left-rail.md) — the
+  `/display` left rail (card surface): D14 confidence element, the
+  Sources accordion + pinned-favourite sources, the Select Version
+  continuous grid, the artist support button, and the buttons-look-like-
+  buttons audit.
 - [`features/image-cdn.md`](features/image-cdn.md) — the Worker + R2
   bucket image CDN.
 - [`features/local-file-source.md`](features/local-file-source.md) —

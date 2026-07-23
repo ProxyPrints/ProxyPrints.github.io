@@ -5,7 +5,10 @@ import { computeSearchQueryHashKey } from "@/common/processing";
 import { CardType } from "@/common/schema_types";
 import {
   cardDocument13,
+  cardDocument14,
   cardDocument15,
+  cardDocument16,
+  cardDocument18,
   cardDocument19,
   localBackendURL,
 } from "@/common/test-constants";
@@ -60,7 +63,13 @@ test.describe("SelectVersionSection (issue #167)", () => {
     // toggle is gone entirely, hard-pinned true) - no "Compressed" click needed any more.
   };
 
-  test("groups candidates into canonical (by printing), non-canonical (by reason tag), and unknown sections", async ({
+  // Addendum item 2 (SPEC-display-left-rail.md §7, owner verbatim: "the 5 cards should be in 1
+  // section") - the old per-group wrapper divs (`select-version-group-*`,
+  // `select-version-printing-group-*`, `select-version-reason-group-*`) are GONE entirely. Group
+  // membership is now a tile-corner annotation over ONE continuous, role="list" grid; ordering
+  // (canonical -> non-canonical -> unknown, resolved-before-suggested within canonical) is
+  // preserved as a pure sort key, not a sectioning key.
+  test("packs every candidate into one continuous grid with no between-group separator, annotating group membership via tile corner tags instead of separate sections", async ({
     page,
     network,
   }) => {
@@ -68,115 +77,145 @@ test.describe("SelectVersionSection (issue #167)", () => {
     await openSelectVersionSection(page);
 
     await expect(page.getByTestId("select-version-section")).toBeVisible();
+    const grid = page.getByTestId("select-version-continuous-grid");
+    await expect(grid).toBeVisible();
+    await expect(grid).toHaveAttribute("role", "list");
+    // No group-wrapper testids of any kind survive the continuous-grid rewrite.
     await expect(
-      page.getByTestId("select-version-group-canonical")
-    ).toBeVisible();
-    await expect(
-      page.getByTestId("select-version-group-non-canonical")
-    ).toBeVisible();
-    await expect(
-      page.getByTestId("select-version-group-unknown")
-    ).toBeVisible();
+      page.locator(
+        '[data-testid^="select-version-group-"], [data-testid^="select-version-printing-group-"], [data-testid^="select-version-reason-group-"]'
+      )
+    ).toHaveCount(0);
 
-    // Two distinct printings in this result set (sv-001 suggested, sv-002 resolved) -> two
-    // canonical printing groups.
+    // Resolved printing (sv-002, cardDocument15) gets a ✓ corner tag.
     await expect(
-      page.locator('[data-testid^="select-version-printing-group-"]')
-    ).toHaveCount(2);
-    // One reason-tag group (custom-art).
+      page.getByTestId(
+        `select-version-tile-corner-${cardDocument15.identifier}`
+      )
+    ).toHaveText("✓");
+    // Non-canonical (custom-art, cardDocument16) gets an Alt corner tag.
     await expect(
-      page.getByTestId("select-version-reason-group-custom-art")
+      page.getByTestId(
+        `select-version-tile-corner-${cardDocument16.identifier}`
+      )
+    ).toHaveText("Alt");
+    // An unknown-bucket card (cardDocument18) gets a ? corner tag.
+    await expect(
+      page.getByTestId(
+        `select-version-tile-corner-${cardDocument18.identifier}`
+      )
+    ).toHaveText("?");
+    // The suggested printing's representative (cardDocument14, the higher-DPI copy) carries the
+    // confirm ribbon INSTEAD of a corner tag - not yet a confirmed printing.
+    await expect(
+      page.getByTestId(
+        `select-version-confirm-ribbon-${cardDocument14.identifier}`
+      )
     ).toBeVisible();
+    await expect(
+      page.getByTestId(
+        `select-version-tile-corner-${cardDocument14.identifier}`
+      )
+    ).toHaveCount(0);
   });
 
-  test("shows resolved printings before suggested printings, each with a representative and a '+N more of this printing' expander", async ({
+  test("shows resolved printings before suggested printings, and expands a printing's extra copies in place via an inline ghost tile (not a full-width text row)", async ({
     page,
     network,
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
 
-    const printingGroups = page.locator(
-      '[data-testid^="select-version-printing-group-"]'
-    );
-    // sv-002 (resolved, single copy) sorts before sv-001 (suggested, two copies) - resolved
-    // printings sort ahead of suggested ones per the spec.
-    await expect(printingGroups.nth(0)).toHaveAttribute(
-      "data-status",
-      "resolved"
-    );
-    await expect(printingGroups.nth(1)).toHaveAttribute(
-      "data-status",
-      "suggested"
-    );
-
-    // The suggested printing (sv-001) has two copies (cardDocument13/14) - one representative
-    // (the higher-DPI copy, cardDocument14) plus a "+1 more" expander for the other.
-    const suggestedGroup = printingGroups.nth(1);
+    const grid = page.getByTestId("select-version-continuous-grid");
+    // sv-002 (resolved, cardDocument15) and sv-001's representative (suggested, cardDocument14)
+    // are both visible from the start - DOM order (not a visual separator) is what encodes
+    // resolved-before-suggested now.
     await expect(
-      suggestedGroup.getByText("+1 more of this printing")
+      grid.getByTestId(`select-version-tile-${cardDocument15.identifier}`)
     ).toBeVisible();
-    await suggestedGroup.getByText("+1 more of this printing").click();
-    await expect(suggestedGroup.getByText("Show fewer")).toBeVisible();
+    await expect(
+      grid.getByTestId(`select-version-tile-${cardDocument14.identifier}`)
+    ).toBeVisible();
+
+    // sv-001 (cardDocument13/14) has one extra copy (cardDocument13, the lower-DPI one) - an
+    // inline ghost tile ("+1"), same footprint as a real tile, sits right after the
+    // representative and expands it IN PLACE rather than via a full-width text link.
+    const ghost = page.getByTestId("select-version-ghost-sv-001-expand");
+    await expect(ghost).toBeVisible();
+    await expect(ghost).toHaveText("+1");
+    await ghost.click();
+
+    await expect(
+      grid.getByTestId(`select-version-tile-${cardDocument13.identifier}`)
+    ).toBeVisible();
+    // The ghost tile itself swaps to a "Show fewer"-equivalent collapse control, still tile-
+    // shaped (a real button, not a text row).
+    await expect(
+      page.getByTestId("select-version-ghost-sv-001-collapse")
+    ).toBeVisible();
   });
 
-  test("a suggested-printing representative carries the Confirm affordance; a resolved printing does not", async ({
+  test("a suggested-printing representative carries the confirm ribbon (the real, unmodified DeckbuilderConfirmAffordance, scaled into a tile-corner overlay); a resolved printing does not", async ({
     page,
     network,
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
 
-    const printingGroups = page.locator(
-      '[data-testid^="select-version-printing-group-"]'
+    const suggestedRibbon = page.getByTestId(
+      `select-version-confirm-ribbon-${cardDocument14.identifier}`
     );
-    const resolvedGroup = printingGroups.nth(0);
-    const suggestedGroup = printingGroups.nth(1);
-
-    // Exact testid, not a prefix match - DeckbuilderConfirmAffordance's own internal badge/yes/no
-    // controls all also start with "deckbuilder-confirm-" (see its own component), so a prefix
-    // regex here would over-match those too.
+    await expect(suggestedRibbon).toBeVisible();
+    // The ribbon wraps the exact same DeckbuilderConfirmAffordance component (same internal
+    // testid convention) other mounts of it use - only its position/scale is new.
     await expect(
-      suggestedGroup.getByTestId(
-        "deckbuilder-confirm-1hH2iI3jJ4kK5lL6mM7nN8oO9pP0qQ"
+      suggestedRibbon.getByTestId(
+        `deckbuilder-confirm-${cardDocument14.identifier}`
       )
     ).toHaveCount(1);
     await expect(
-      resolvedGroup.getByTestId(/^deckbuilder-confirm-/)
+      page.getByTestId(
+        `select-version-confirm-ribbon-${cardDocument15.identifier}`
+      )
     ).toHaveCount(0);
   });
 
   // Funnel round (funnel-spec.md F2/F3, XF1/XF2) - the flat FilterChipBar is retired from this
-  // (stacked/rail) surface, replaced by the per-axis segmented `funnel-chip-*` controls; "More
-  // like this" still seeds `activeAttributeTags` from a card's own resolved tags, just rendered
-  // through the new axis chips instead of the old flat bar.
-  test("the per-axis funnel chips filter the whole section, and 'More like this' seeds them from a card's own resolved tags", async ({
+  // (stacked/rail) surface, replaced by the per-axis segmented `funnel-chip-*` controls (Border/
+  // Frame) and the tri-state `funnel-treatment-chip-*` controls (Treatment) sharing one unified
+  // block (SPEC-display-left-rail.md §6). "More like this" (the old per-tile "seed the filter
+  // from this card's own tags" affordance) was DROPPED entirely when the between-group rows were
+  // removed (§7's own affordance table doesn't allocate it a tile-corner slot) - filtering now
+  // goes directly through the unified block's own chips.
+  test("the unified Frame+Treatment block's tri-state chips filter the whole grid", async ({
     page,
     network,
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
 
-    // cardDocument18 (in the unknown group) has a resolved "Full Art" tag - its "More like this"
-    // button should activate the Full Art funnel chip (Treatment axis). It's the only candidate
-    // with that tag in this fixture set, so filtering narrows to a single survivor - D21's "hero"
-    // tier - which collapses the axis rows to the head's active-pill summary (F1); the pill is
-    // therefore the correct place to assert the chip actually activated, not the (now-hidden)
-    // segmented chip button itself.
-    const unknownGroup = page.getByTestId("select-version-group-unknown");
-    await unknownGroup
-      .getByTestId(/^select-version-more-like-this-/)
-      .first()
-      .click();
+    // cardDocument18 (unknown bucket) has a resolved "Full Art" tag and is the ONLY candidate
+    // with it in this fixture set - one click cycles the Treatment chip untouched -> include.
+    await page.getByTestId("funnel-treatment-chip-Full Art").click();
 
     await expect(page.getByTestId("funnel-active-pill-Full Art")).toBeVisible();
+    // Filtering down to Full Art narrows the survivor count to 1, which collapses the axis rows
+    // to the head's active-pill summary (D21's "hero" tier) - the pill is the correct place to
+    // assert the chip activated, not the (now-hidden) segmented chip button itself.
     await expect(page.getByTestId("funnel-count")).toContainText("1 version");
-    // Filtering down to Full Art should still show cardDocument18 (it has the tag) and hide the
-    // custom-art-only / unknown cards that don't.
     await expect(
-      page.getByTestId("select-version-group-non-canonical")
-    ).toHaveCount(0);
+      page.getByTestId(`select-version-tile-${cardDocument18.identifier}`)
+    ).toBeVisible();
   });
+
+  // §6 - Treatment's own tri-state EXCLUDE half is covered at the component level
+  // (SelectVersionResults.test.tsx's "§6 unified Frame+Treatment" describe block) rather than
+  // here: with this fixture's own card set, including "Full Art" (the only carrier is
+  // cardDocument18) immediately narrows to 1 survivor - D21's "hero" tier - which collapses the
+  // axis/chip row entirely (nothing left worth narrowing further), so the SAME chip a real user
+  // would need to tap a second time (to cycle include -> exclude) is no longer in the DOM by
+  // then. The Jest suite builds a fixture that stays above the hero threshold through the whole
+  // cycle instead.
 
   // D20/F4 - the two-tap ConfirmChip is retired on this surface: picking a candidate while a
   // suggested-only tag is active automatically casts support, resets the chips, and shows a

@@ -22,7 +22,27 @@ deleted — issue #266 (mobile responsive shell) shipped against the
 newer spec, not this directory's original five-file set.
 
 **HOLD — nothing here is a build target yet** beyond what #266 already
-shipped. See the design doc for scope, sequencing, and open decisions.
+shipped, EXCEPT [`display-left-rail-mockup.html`](display-left-rail-mockup.html)
+below, which WAS built (owner-approved 2026-07-23, shipped into PR #352
+— see [`docs/features/display-left-rail.md`](../../../features/display-left-rail.md)
+for the implementation writeup). See the design doc for scope,
+sequencing, and open decisions on everything else here.
+
+## `display-left-rail-mockup.html` (2026-07-23, BUILT)
+
+[`display-left-rail-mockup.html`](display-left-rail-mockup.html) +
+its companion spec
+[`SPEC-display-left-rail.md`](SPEC-display-left-rail.md) — the D14
+confidence element, Sources accordion, Select Version continuous grid,
+unified Frame+Treatment filter, artist support button, and
+buttons-look-like-buttons audit round. Self-contained (forced
+Desktop/Tablet/Phone frames, no external assets) with state toggles for
+D14 Suggested/Confirmed, Sources inline/overlay, and Select Version
+Before/After. **Supersedes the Palette section below for its own
+scope** — its own §0 extracts the REAL live `#302` theme tokens from
+`bootswatch/superhero/_variables.scss` + `styles.scss` directly, since
+the palette below (hand-copied pre-#302) was confirmed stale for this
+round.
 
 ## How to view
 

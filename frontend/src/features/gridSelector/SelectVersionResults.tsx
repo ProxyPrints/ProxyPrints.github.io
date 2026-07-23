@@ -66,8 +66,10 @@ import {
   candidateSatisfiesAttributeTag,
   ChipMembershipState,
   chipMembershipState,
+  ChipVoteState,
   FUNNEL_AXES,
   FunnelAxis,
+  nextChipState,
 } from "@/features/attributeChips/attributeChips";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
@@ -133,6 +135,34 @@ function filterByChipsVotesGated(
       return false;
     }
     return Array.from(activeTagNames).every((tagName) =>
+      candidateSatisfiesAttributeTag(card, tagName, votesOn)
+    );
+  });
+}
+
+/**
+ * Unified Frame + Treatment filter (SPEC-display-left-rail.md §6, addendum item 1) - the
+ * Treatment axis's tri-state EXCLUDE half. Border/Frame stay purely positive/exclusive (a radio
+ * segment can only ever mean "must be this one"), so `activeAttributeTags`'s existing semantics
+ * are untouched by this function entirely - this only ever narrows further by DROPPING any
+ * candidate that satisfies an excluded tag, additive to whatever the positive filter already
+ * kept. Stacked (funnel) layout only, same `votesOn` gating as the positive filter.
+ */
+function filterOutExcludedChipsVotesGated(
+  identifiers: Array<string>,
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
+  excludedTagNames: Set<string>,
+  votesOn: boolean
+): Array<string> {
+  if (excludedTagNames.size === 0) {
+    return identifiers;
+  }
+  return identifiers.filter((identifier) => {
+    const card = cardDocumentsByIdentifier[identifier];
+    if (card == null) {
+      return true;
+    }
+    return !Array.from(excludedTagNames).some((tagName) =>
       candidateSatisfiesAttributeTag(card, tagName, votesOn)
     );
   });
@@ -435,6 +465,132 @@ const CompactLinkButton = styled(Button)`
   ${touchExpandTapArea}
 `;
 
+/** Unified Frame + Treatment filter (§6) - a tri-state chip (untouched/include/exclude, cycled
+ * via `nextChipState` - same cycle `useTagVoting.ts` already uses elsewhere, reused here for the
+ * cycle order only, not the vote-submission side of that hook, since this is a pure client-side
+ * FILTER, not a vote - see this file's own `TreatmentChipRow` comment). Real `<button>`, not a
+ * link (§8's buttons-look-like-buttons rule - this performs an action, filtering). */
+const TreatmentChip = styled.button<{ $state: ChipVoteState }>`
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid #6b7d8e;
+  background: transparent;
+  color: #ebebeb;
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  ${touchExpandTapArea}
+  ${(props) =>
+    props.$state === "positive"
+      ? "border-color:#5cb85c;background:rgba(92,184,92,.22);color:#bfe6ad;"
+      : props.$state === "negative"
+      ? "border-color:#d9534f;background:rgba(217,83,79,.22);color:#f0b3b1;text-decoration:line-through;"
+      : ""}
+`;
+
+/** A thin vertical rule separating Frame's segmented control from Treatment's chip row within
+ * the one shared `.ufilter` block (§6's ASCII diagram). */
+const UnifiedFilterDivider = styled.span`
+  align-self: stretch;
+  width: 1px;
+  background: rgba(0, 0, 0, 0.22);
+  margin: 0 2px;
+`;
+
+//# endregion
+
+//# region continuous grid (addendum item 2) - tile-corner annotations
+
+/** Wraps `MemoizedEditorCard` so the annotation badges below can position themselves relative to
+ * the card's own image box, not the tile's outer `p-1`-padded wrapper. Stacked layout only. */
+const TileImageWrap = styled.div`
+  position: relative;
+`;
+
+const CORNER_TAG_COLORS: Record<"canon" | "alt" | "unk", string> = {
+  canon: "rgba(92,184,92,.9)",
+  alt: "rgba(91,192,222,.9)",
+  unk: "rgba(120,135,150,.9)",
+};
+
+/** Group-membership corner tag (canonical ✓ / non-canonical Alt / unknown ?) - replaces the old
+ * between-group header row entirely (owner: "read as ONE grid," zero visual partitioning). */
+const CornerTag = styled.span<{ $variant: "canon" | "alt" | "unk" }>`
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  font-size: 0.5rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  padding: 0 3px;
+  color: #fff;
+  text-transform: uppercase;
+  background: ${(props) => CORNER_TAG_COLORS[props.$variant]};
+`;
+
+/** The slot's own requested printing - sorts first (selectVersionGrouping.ts); a distinct corner
+ * from `CornerTag` (top-right, not top-left) so the two can coexist on the same tile without
+ * colliding when the requested printing also happens to still be a suggested (unconfirmed) one. */
+const ReqBadge = styled.span`
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  background: #df6919;
+  color: #fff;
+  font-size: 0.5rem;
+  font-weight: 800;
+  padding: 0 3px;
+`;
+
+/** F3's "survived only via a suggested/unconfirmed tag" signal - used to be a standalone
+ * "⌇ suggested" text row under the tile; folded into a small corner marker instead (bottom-left,
+ * the one corner `CornerTag`/`ReqBadge`/the confirm ribbon below don't already use). */
+const SuggestedMarker = styled.span`
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  font-size: 0.55rem;
+  color: #df6919;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 0 3px;
+`;
+
+/** Suggested-printing confirm affordance (moment a), scaled into a bottom-right tile-corner
+ * overlay instead of a full-width `Confirm?`/Y·N block below the tile. Wraps the REAL, completely
+ * unmodified `DeckbuilderConfirmAffordance` (no internals touched, per this task's own file-list
+ * scope) - `transform: scale()` is a pure visual shrink, its hover/click/vote behavior is
+ * identical to every other mount of that component. */
+const ConfirmRibbonWrap = styled.div`
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  z-index: 2;
+  transform: scale(0.72);
+  transform-origin: bottom right;
+`;
+
+/** Inline ghost tile - "+N more of this printing" (collapsed) / "Show fewer" (expanded), same
+ * footprint as a real candidate tile so it flows in the SAME flex-wrap grid rather than a
+ * full-width row breaking it (§7's hard requirement). A real `button`, per §8. */
+const GhostTile = styled.button<{ $widthRem: number }>`
+  width: ${(props) => props.$widthRem}rem;
+  aspect-ratio: 63 / 88;
+  flex: 0 0 auto;
+  background: transparent;
+  outline: 1px dashed #abb6c2;
+  border: none;
+  color: #abb6c2;
+  font-size: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  ${touchExpandTapArea}
+`;
+
 //# endregion
 
 //# region F2/F3 - per-axis segmented chips
@@ -534,6 +690,96 @@ function FunnelAxisRow({
   );
 }
 
+/**
+ * Unified Frame + Treatment filter (§6, addendum item 1) - Treatment's own tri-state row, kept
+ * as its own component (not folded into `FunnelAxisRow`) since it needs a THIRD state
+ * (exclude) that axis's radio/checkbox `ToggleButtonGroup` has no notion of - a `checkbox`
+ * group is binary (active or not), never tri-state. Cycle order (untouched -> include -> exclude
+ * -> untouched) is `attributeChips.ts`'s own `nextChipState` - the taxonomy's single source of
+ * truth for it, reused here for the cycle only (this is a pure client-side FILTER, not a vote).
+ */
+interface TreatmentChipRowProps {
+  axis: FunnelAxis;
+  activeTagNames: Set<string>;
+  excludedTagNames: Set<string>;
+  membershipByTagName: Record<string, ChipMembershipState>;
+  onCycle: (tagName: string) => void;
+  getTagDisplayName: (tagName: string) => string;
+}
+
+function TreatmentChipRow({
+  axis,
+  activeTagNames,
+  excludedTagNames,
+  membershipByTagName,
+  onCycle,
+  getTagDisplayName,
+}: TreatmentChipRowProps) {
+  const visibleChips = axis.chips.filter(
+    (chip) => membershipByTagName[chip.tagName] != null
+  );
+  if (visibleChips.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      className="d-flex align-items-center flex-wrap gap-2"
+      data-testid={`funnel-axis-${axis.id}`}
+    >
+      <span
+        className="text-muted text-uppercase"
+        style={{ fontSize: "0.7rem", letterSpacing: "0.03em" }}
+      >
+        {axis.label}
+      </span>
+      {visibleChips.map((chip) => {
+        const membership = membershipByTagName[chip.tagName];
+        const suggested = membership === "suggested";
+        const chipState: ChipVoteState = activeTagNames.has(chip.tagName)
+          ? "positive"
+          : excludedTagNames.has(chip.tagName)
+          ? "negative"
+          : "untouched";
+        const glyph =
+          chipState === "positive" ? "+" : chipState === "negative" ? "−" : "·";
+        const stateLabel =
+          chipState === "positive"
+            ? "included"
+            : chipState === "negative"
+            ? "excluded"
+            : "not filtered";
+        return (
+          <TreatmentChip
+            key={chip.tagName}
+            type="button"
+            $state={chipState}
+            data-testid={`funnel-treatment-chip-${chip.tagName}`}
+            data-chip-membership={membership}
+            data-state={chipState}
+            aria-pressed={chipState === "positive"}
+            aria-label={`${getTagDisplayName(chip.tagName)}: ${stateLabel}`}
+            title={
+              suggested
+                ? "Our catalog leans this way but hasn't confirmed it - picking supports it"
+                : undefined
+            }
+            onClick={() => onCycle(chip.tagName)}
+          >
+            <span aria-hidden="true">{glyph}</span>
+            {getTagDisplayName(chip.tagName)}
+            {suggested && (
+              <span className="ms-1" aria-hidden="true">
+                ⌇
+              </span>
+            )}
+          </TreatmentChip>
+        );
+      })}
+    </div>
+  );
+}
+
 //# endregion
 
 //# region shared tile
@@ -554,6 +800,13 @@ interface SelectVersionTileProps {
   onMoreLikeThis: (identifier: string) => void;
   backendURL: string;
   showSuggestedBadge: boolean;
+  /** Addendum item 2 (continuous grid) - everything below is stacked-layout-only annotation
+   * data; the sidebar/modal layout never sets any of it and renders exactly as before (see each
+   * prop's own render-site comment for the byte-for-byte-preserved branch). */
+  layout: "sidebar" | "stacked";
+  cornerTag?: { label: string; variant: "canon" | "alt" | "unk" };
+  requested?: boolean;
+  ariaLabel?: string;
 }
 
 function SelectVersionTile({
@@ -572,10 +825,15 @@ function SelectVersionTile({
   onMoreLikeThis,
   backendURL,
   showSuggestedBadge,
+  layout,
+  cornerTag,
+  requested,
+  ariaLabel,
 }: SelectVersionTileProps) {
   const hasFilterableTags =
     card != null &&
     card.tags.some((tagName) => ATTRIBUTE_TAG_NAMES.has(tagName));
+  const stacked = layout === "stacked";
 
   // moment (c): sidebar/modal layout only (showTwoTapConfirm) - only for the just-selected card,
   // only for active filter tags this specific card hasn't already resolved (a resolved match
@@ -591,6 +849,18 @@ function SelectVersionTile({
             !dismissedConfirmChipKeys.has(`${identifier}:${tagName}`)
         )
       : [];
+
+  const hasConfirmAffordance = showConfirmAffordance && card != null;
+  const confirmAffordanceElement = hasConfirmAffordance && card != null && (
+    <DeckbuilderConfirmAffordance
+      cardIdentifier={identifier}
+      searchQuery={synthesizeSuggestedPrintingQuery(card)}
+      // No separate grid/modal to open from here - this tile IS already inside the picker
+      // (see the module comment). NO still marks the affordance resolved-for-this-session
+      // via the component's own unchanged logic; there is simply nothing further to open.
+      onOpenGridSelector={() => undefined}
+    />
+  );
 
   return (
     <div
@@ -613,20 +883,58 @@ function SelectVersionTile({
           ? { width: `${tileWidthRem ?? 4.5}rem`, flex: "0 0 auto" }
           : { width: undefined }
       }
+      // Addendum item 2 A11y - the continuous grid is `role="list"` (see the stacked render
+      // below); each tile is a `listitem` carrying an aria-label that spells out the group +
+      // requested/suggested status the corner tags convey visually, so that semantics survives
+      // for a screen reader even though the between-group separator rows are gone.
+      role={stacked ? "listitem" : undefined}
+      aria-label={stacked ? ariaLabel : undefined}
       data-testid={`select-version-tile-${identifier}`}
     >
-      <MemoizedEditorCard
-        imageIdentifier={identifier}
-        cardHeaderTitle={headerLabel}
-        cardOnClick={() => onSelect(identifier)}
-        noResultsFound={false}
-        highlight={identifier === selectedImage}
-        compressed={compressed}
-      />
-      {/* F3 - a survivor tile whose ONLY reason for surviving the active chips is a suggested
-          (unconfirmed) tag gets the same dashed/"unconfirmed" treatment as its chip - mirrors
-          funnel-mockup.html's `.sug-badge`. */}
-      {showSuggestedBadge && (
+      <TileImageWrap>
+        <MemoizedEditorCard
+          imageIdentifier={identifier}
+          cardHeaderTitle={headerLabel}
+          cardOnClick={() => onSelect(identifier)}
+          noResultsFound={false}
+          highlight={identifier === selectedImage}
+          compressed={compressed}
+        />
+        {/* Addendum item 2 - group membership / requested / suggested-survivor are tile-corner
+            annotations here (stacked layout only), not the separate rows the sidebar/modal
+            layout below still renders. */}
+        {stacked && cornerTag != null && (
+          <CornerTag
+            $variant={cornerTag.variant}
+            data-testid={`select-version-tile-corner-${identifier}`}
+          >
+            {cornerTag.label}
+          </CornerTag>
+        )}
+        {stacked && requested && (
+          <ReqBadge data-testid={`select-version-tile-req-${identifier}`}>
+            REQ
+          </ReqBadge>
+        )}
+        {stacked && showSuggestedBadge && (
+          <SuggestedMarker
+            aria-hidden="true"
+            data-testid={`select-version-suggested-badge-${identifier}`}
+          >
+            ⌇
+          </SuggestedMarker>
+        )}
+        {stacked && hasConfirmAffordance && (
+          <ConfirmRibbonWrap
+            data-testid={`select-version-confirm-ribbon-${identifier}`}
+          >
+            {confirmAffordanceElement}
+          </ConfirmRibbonWrap>
+        )}
+      </TileImageWrap>
+      {/* Sidebar/modal layout only below - byte-for-byte the original rendering (full-width rows
+          under the tile), since GridSelectorModal.tsx's own caller must stay unchanged. */}
+      {!stacked && showSuggestedBadge && (
         <div
           className="text-center small"
           style={{ color: "#df6919" }}
@@ -635,17 +943,8 @@ function SelectVersionTile({
           ⌇ suggested
         </div>
       )}
-      {showConfirmAffordance && card != null && (
-        <DeckbuilderConfirmAffordance
-          cardIdentifier={identifier}
-          searchQuery={synthesizeSuggestedPrintingQuery(card)}
-          // No separate grid/modal to open from here - this tile IS already inside the picker
-          // (see the module comment). NO still marks the affordance resolved-for-this-session
-          // via the component's own unchanged logic; there is simply nothing further to open.
-          onOpenGridSelector={() => undefined}
-        />
-      )}
-      {hasFilterableTags && (
+      {!stacked && confirmAffordanceElement}
+      {!stacked && hasFilterableTags && (
         <div className="text-center">
           <CompactLinkButton
             size="sm"
@@ -719,6 +1018,14 @@ export function SelectVersionResults({
   const [activeAttributeTags, setActiveAttributeTags] = useState<Set<string>>(
     new Set()
   );
+  // Unified Frame + Treatment filter (§6, addendum item 1) - Treatment's own EXCLUDE half.
+  // Border/Frame stay purely positive/exclusive via `activeAttributeTags`/`handleAxisChange`
+  // (untouched); this is a wholly separate, additive filter dimension so the implicit-vote/
+  // awareness-line logic below (which only ever reads `activeAttributeTags`) needs no changes -
+  // excluding a tag is a pure negative filter action, never something a pick "supports."
+  const [excludedAttributeTags, setExcludedAttributeTags] = useState<
+    Set<string>
+  >(new Set());
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(
     new Set()
   );
@@ -767,6 +1074,36 @@ export function SelectVersionResults({
       return next;
     });
 
+  // §6 - Treatment's tri-state cycle (untouched/·  -> include/+ -> exclude/− -> untouched),
+  // reusing `attributeChips.ts`'s own `nextChipState` for the cycle order (the taxonomy's single
+  // source of truth for it - `TreatmentChipRow`'s own comment has the full rationale).
+  const toggleTreatmentChip = (tagName: string) => {
+    const current: ChipVoteState = activeAttributeTags.has(tagName)
+      ? "positive"
+      : excludedAttributeTags.has(tagName)
+      ? "negative"
+      : "untouched";
+    const next = nextChipState(current);
+    setActiveAttributeTags((previous) => {
+      const nextSet = new Set(previous);
+      if (next === "positive") {
+        nextSet.add(tagName);
+      } else {
+        nextSet.delete(tagName);
+      }
+      return nextSet;
+    });
+    setExcludedAttributeTags((previous) => {
+      const nextSet = new Set(previous);
+      if (next === "negative") {
+        nextSet.add(tagName);
+      } else {
+        nextSet.delete(tagName);
+      }
+      return nextSet;
+    });
+  };
+
   const applyMoreLikeThis = (identifier: string) => {
     const card = cardDocumentsByIdentifier[identifier];
     if (card == null) {
@@ -775,6 +1112,10 @@ export function SelectVersionResults({
     setActiveAttributeTags(
       new Set(card.tags.filter((tagName) => ATTRIBUTE_TAG_NAMES.has(tagName)))
     );
+    // A fresh "tags like this card" set replaces whatever exclusions were active too - the old
+    // active set was also fully replaced, not merged, so this keeps the same "clean slate"
+    // semantics rather than leaving a stale exclusion the new active set might contradict.
+    setExcludedAttributeTags(new Set());
   };
 
   const toggleGroupExpanded = (key: string) =>
@@ -793,28 +1134,35 @@ export function SelectVersionResults({
 
   const votesOn = layout === "stacked" && voteLayer != null;
 
-  const filteredIdentifiers = useMemo(
-    () =>
-      layout === "stacked"
-        ? filterByChipsVotesGated(
-            search.sortedFilteredIdentifiers,
-            cardDocumentsByIdentifier,
-            activeAttributeTags,
-            votesOn
-          )
-        : filterByActiveAttributeTags(
-            search.sortedFilteredIdentifiers,
-            cardDocumentsByIdentifier,
-            activeAttributeTags
-          ),
-    [
-      layout,
+  const filteredIdentifiers = useMemo(() => {
+    if (layout !== "stacked") {
+      return filterByActiveAttributeTags(
+        search.sortedFilteredIdentifiers,
+        cardDocumentsByIdentifier,
+        activeAttributeTags
+      );
+    }
+    const positiveSurvivors = filterByChipsVotesGated(
       search.sortedFilteredIdentifiers,
       cardDocumentsByIdentifier,
       activeAttributeTags,
-      votesOn,
-    ]
-  );
+      votesOn
+    );
+    // §6 - Treatment's exclude half narrows further, additive to the positive filter above.
+    return filterOutExcludedChipsVotesGated(
+      positiveSurvivors,
+      cardDocumentsByIdentifier,
+      excludedAttributeTags,
+      votesOn
+    );
+  }, [
+    layout,
+    search.sortedFilteredIdentifiers,
+    cardDocumentsByIdentifier,
+    activeAttributeTags,
+    excludedAttributeTags,
+    votesOn,
+  ]);
 
   // F1/D21 - the count-proportional disclosure tier, derived from the same survivor count the
   // funnel already computes above - no new state.
@@ -847,10 +1195,22 @@ export function SelectVersionResults({
           (tagName) => !axisTagNames.has(tagName)
         )
       );
-      const survivorsExcludingAxis = filterByChipsVotesGated(
-        search.sortedFilteredIdentifiers,
+      // §6 - same "exclude own axis" pattern as the positive filter above, so a Treatment chip's
+      // own exclude-state never prevents ITSELF (or its axis siblings) from continuing to render.
+      const excludedFromOtherAxes = new Set(
+        Array.from(excludedAttributeTags).filter(
+          (tagName) => !axisTagNames.has(tagName)
+        )
+      );
+      const survivorsExcludingAxis = filterOutExcludedChipsVotesGated(
+        filterByChipsVotesGated(
+          search.sortedFilteredIdentifiers,
+          cardDocumentsByIdentifier,
+          tagsFromOtherAxes,
+          votesOn
+        ),
         cardDocumentsByIdentifier,
-        tagsFromOtherAxes,
+        excludedFromOtherAxes,
         votesOn
       )
         .map((identifier) => cardDocumentsByIdentifier[identifier])
@@ -870,6 +1230,7 @@ export function SelectVersionResults({
   }, [
     layout,
     activeAttributeTags,
+    excludedAttributeTags,
     search.sortedFilteredIdentifiers,
     cardDocumentsByIdentifier,
     votesOn,
@@ -968,8 +1329,164 @@ export function SelectVersionResults({
       onMoreLikeThis: applyMoreLikeThis,
       backendURL,
       showSuggestedBadge,
+      layout,
     };
   };
+
+  // Addendum item 2 (continuous grid, "the 5 cards should be in 1 section" - owner verbatim,
+  // 8f5b65ce): the group-based render below (`renderPrintingGroup`/`renderReasonTagGroup`/
+  // `resultsElement`) stays completely UNCHANGED and is still what the sidebar/modal layout
+  // renders - this is a SEPARATE, stacked-layout-only flattening of the exact same `groups`
+  // (selectVersionGrouping.ts's own ordering is untouched, now consumed as a sort key rather
+  // than a sectioning key) into ONE flat list of tiles/ghost-tiles, so the funnel can render them
+  // all inside a single `d-flex flex-wrap` grid with zero between-group rows.
+  type ContinuousGridEntry =
+    | {
+        kind: "tile";
+        key: string;
+        props: ReturnType<typeof tileProps>;
+        cornerTag?: { label: string; variant: "canon" | "alt" | "unk" };
+        requested?: boolean;
+        ariaLabel: string;
+      }
+    | {
+        kind: "ghost";
+        key: string;
+        label: string;
+        ariaLabel: string;
+        onClick: () => void;
+      };
+
+  const continuousGridEntries: ContinuousGridEntry[] = [];
+  if (layout === "stacked") {
+    groups.canonical.forEach((group) => {
+      const label = `${group.expansionCode.toUpperCase()} ${
+        group.collectorNumber
+      }`;
+      const expanded = expandedGroupKeys.has(group.key);
+      const isSuggested = group.status === "suggested";
+      const reqSuffix = group.isRequestedPrinting ? ", requested printing" : "";
+      continuousGridEntries.push({
+        kind: "tile",
+        key: group.representative,
+        props: tileProps(group.representative, label, isSuggested),
+        cornerTag: isSuggested ? undefined : { label: "✓", variant: "canon" },
+        requested: group.isRequestedPrinting,
+        ariaLabel: `${label}${reqSuffix}, canonical printing, ${group.status}`,
+      });
+      if (expanded) {
+        group.rest.forEach((identifier) => {
+          continuousGridEntries.push({
+            kind: "tile",
+            key: identifier,
+            props: tileProps(identifier, label, false),
+            cornerTag: isSuggested
+              ? undefined
+              : { label: "✓", variant: "canon" },
+            ariaLabel: `${label}, canonical printing, additional copy`,
+          });
+        });
+        continuousGridEntries.push({
+          kind: "ghost",
+          key: `${group.key}-collapse`,
+          label: "−",
+          ariaLabel: `Show fewer copies of ${label}`,
+          onClick: () => toggleGroupExpanded(group.key),
+        });
+      } else if (group.rest.length > 0) {
+        continuousGridEntries.push({
+          kind: "ghost",
+          key: `${group.key}-expand`,
+          label: `+${group.rest.length}`,
+          ariaLabel: `Show ${group.rest.length} more copies of ${label}`,
+          onClick: () => toggleGroupExpanded(group.key),
+        });
+      }
+    });
+
+    groups.nonCanonical.forEach((group) => {
+      const label = getTagDisplayName(group.tagName);
+      const expanded = expandedGroupKeys.has(group.tagName);
+      continuousGridEntries.push({
+        kind: "tile",
+        key: group.representative,
+        props: tileProps(group.representative, label, false),
+        cornerTag: { label: "Alt", variant: "alt" },
+        ariaLabel: `${label}, alternate or custom printing`,
+      });
+      if (expanded) {
+        group.rest.forEach((identifier) => {
+          continuousGridEntries.push({
+            kind: "tile",
+            key: identifier,
+            props: tileProps(identifier, label, false),
+            cornerTag: { label: "Alt", variant: "alt" },
+            ariaLabel: `${label}, alternate or custom printing, additional copy`,
+          });
+        });
+        continuousGridEntries.push({
+          kind: "ghost",
+          key: `${group.tagName}-collapse`,
+          label: "−",
+          ariaLabel: `Show fewer ${label} copies`,
+          onClick: () => toggleGroupExpanded(group.tagName),
+        });
+      } else if (group.rest.length > 0) {
+        continuousGridEntries.push({
+          kind: "ghost",
+          key: `${group.tagName}-expand`,
+          label: `+${group.rest.length}`,
+          ariaLabel: `Show ${group.rest.length} more ${label} copies`,
+          onClick: () => toggleGroupExpanded(group.tagName),
+        });
+      }
+    });
+
+    groups.unknown.forEach((identifier) => {
+      const originalIndex = search.originalIndexMap.get(identifier);
+      const label =
+        originalIndex != null ? `Option ${originalIndex + 1}` : "Unknown";
+      continuousGridEntries.push({
+        kind: "tile",
+        key: identifier,
+        props: tileProps(identifier, label, false),
+        cornerTag: { label: "?", variant: "unk" },
+        ariaLabel: `${label}, unknown printing`,
+      });
+    });
+  }
+
+  const continuousGridElement = (
+    <div
+      className="d-flex flex-wrap gap-1"
+      role="list"
+      aria-label="Candidate printings"
+      data-testid="select-version-continuous-grid"
+    >
+      {continuousGridEntries.map((entry) =>
+        entry.kind === "tile" ? (
+          <SelectVersionTile
+            key={entry.key}
+            {...entry.props}
+            cornerTag={entry.cornerTag}
+            requested={entry.requested}
+            ariaLabel={entry.ariaLabel}
+          />
+        ) : (
+          <GhostTile
+            key={entry.key}
+            type="button"
+            $widthRem={tileWidthRem ?? 4.5}
+            aria-label={entry.ariaLabel}
+            onClick={entry.onClick}
+            data-testid={`select-version-ghost-${entry.key}`}
+          >
+            {entry.label}
+          </GhostTile>
+        )
+      )}
+    </div>
+  );
 
   const renderPrintingGroup = (group: SelectVersionPrintingGroup) => {
     const label = `${group.expansionCode.toUpperCase()} ${
@@ -1175,16 +1692,17 @@ export function SelectVersionResults({
               ))}
             </div>
           )}
-          {/* Owner fix round (2026-07-23) - the reference mockup renders this control as plain
-              underlined text next to the result count ("14 results · Filters"), not a bordered
-              button (`responsive-layout-2026-07-21.html` line 435) - `variant="link"` drops the
-              outline-primary box to match that shape; `text-decoration-underline` keeps the
-              mockup's own `<u>` affordance since a plain Bootstrap link button isn't underlined
-              by default. */}
+          {/* Owner fix round (2026-07-23, SPEC-display-left-rail.md §8 "buttons-look-like-
+              buttons" audit) - the RULE WINS over the reference mockup's own underlined-text
+              treatment: this performs an action (expands/collapses the filter disclosure), so it
+              reads as a real button (`outline-light` - `outline-secondary`'s near-invisible on
+              this dark surface), not a link. This also AGREES with upstream, which already
+              renders GridSelectorFilters' own settings toggle as a Button - see the spec's own
+              upstream-divergence note for the "does NOT diverge" record. */}
           <CompactButton
-            variant="link"
+            variant="outline-light"
             size="sm"
-            className="ms-auto p-0 text-decoration-underline"
+            className="ms-auto"
             onClick={() => search.setSettingsVisible((v) => !v)}
             data-testid="funnel-filters-toggle"
           >
@@ -1197,20 +1715,55 @@ export function SelectVersionResults({
           </CompactButton>
         </div>
 
-        {/* B. per-axis segmented chips (F2/F3). */}
+        {/* B. Border (own exclusive row) + unified Frame+Treatment block (§6, addendum item 1 -
+            "i want the filters list unified, treatment and frame type can sit in one spot to
+            save space"). Border keeps its own row (owner named only Frame+Treatment to merge);
+            Frame (still an exclusive `FunnelAxisRow`) and Treatment (new tri-state chips) share
+            ONE bordered fieldset. Only axes with >=1 surviving candidate render at all (F3,
+            unchanged); D21 - axes stay visible at dense/medium tiers, collapse to the head's
+            active-pill summary at hero/none. */}
         {showAxes && (
-          <div className="mb-1" data-testid="funnel-axes">
-            {FUNNEL_AXES.map((axis) => (
+          <fieldset
+            className="ufilter mb-1"
+            style={{
+              border: "1px solid rgba(0,0,0,.22)",
+              background: "#22303f",
+              padding: "6px 8px",
+            }}
+            data-testid="funnel-unified-filter"
+          >
+            <legend className="visually-hidden">
+              Frame and treatment filters
+            </legend>
+            <FunnelAxisRow
+              axis={FUNNEL_AXES[0]}
+              activeTagNames={activeAttributeTags}
+              membershipByTagName={membershipByTagName}
+              onAxisChange={handleAxisChange}
+              getTagDisplayName={getTagDisplayName}
+            />
+            <div
+              className="d-flex align-items-center flex-wrap gap-2"
+              data-testid="funnel-frame-treatment-row"
+            >
               <FunnelAxisRow
-                key={axis.id}
-                axis={axis}
+                axis={FUNNEL_AXES[1]}
                 activeTagNames={activeAttributeTags}
                 membershipByTagName={membershipByTagName}
                 onAxisChange={handleAxisChange}
                 getTagDisplayName={getTagDisplayName}
               />
-            ))}
-          </div>
+              <UnifiedFilterDivider aria-hidden="true" />
+              <TreatmentChipRow
+                axis={FUNNEL_AXES[2]}
+                activeTagNames={activeAttributeTags}
+                excludedTagNames={excludedAttributeTags}
+                membershipByTagName={membershipByTagName}
+                onCycle={toggleTreatmentChip}
+                getTagDisplayName={getTagDisplayName}
+              />
+            </div>
+          </fieldset>
         )}
 
         {/* B'. advanced filters (E4, unchanged) - full-width, stacked, in the rail's own scroll
@@ -1251,13 +1804,17 @@ export function SelectVersionResults({
             data-testid="funnel-empty-state"
           >
             No versions match your filters.
-            {activeAttributeTags.size > 0 && (
+            {(activeAttributeTags.size > 0 ||
+              excludedAttributeTags.size > 0) && (
               <div className="mt-1">
                 <CompactLinkButton
                   size="sm"
                   variant="link"
                   className="p-0"
-                  onClick={() => setActiveAttributeTags(new Set())}
+                  onClick={() => {
+                    setActiveAttributeTags(new Set());
+                    setExcludedAttributeTags(new Set());
+                  }}
                   data-testid="funnel-clear-filters"
                 >
                   Clear filters
@@ -1266,7 +1823,7 @@ export function SelectVersionResults({
             )}
           </div>
         ) : (
-          resultsElement
+          continuousGridElement
         )}
       </div>
     );

@@ -297,7 +297,11 @@ describe("SelectVersionResults funnel (funnel-spec.md F1-F7)", () => {
     ];
     renderFunnel(fullArtCards, undefined, onSelectImage);
 
-    const chip = screen.getByTestId("funnel-chip-Full Art");
+    // "Full Art" is a Treatment chip (SPEC-display-left-rail.md §6 - unified Frame+Treatment
+    // block) - a tri-state `funnel-treatment-chip-*`, not the exclusive-axis `funnel-chip-*`
+    // Border/Frame use. One click cycles it untouched -> positive/include, exactly this test's
+    // "activate it" intent.
+    const chip = screen.getByTestId("funnel-treatment-chip-Full Art");
     expect(chip).toHaveAttribute("data-chip-membership", "settled");
     await user.click(chip);
     // Filtering down to Full Art narrows the survivor count to 1 (only fa-1 carries it), which
@@ -317,5 +321,72 @@ describe("SelectVersionResults funnel (funnel-spec.md F1-F7)", () => {
     // an ack or awareness line - a plain metadata filter, per F5.
     expect(screen.queryByTestId("funnel-support-ack")).toBeNull();
     expect(screen.queryByTestId("funnel-awareness-line")).toBeNull();
+  });
+});
+
+describe("SelectVersionResults §6 unified Frame+Treatment (SPEC-display-left-rail.md, addendum item 1)", () => {
+  it("Treatment's tri-state chip cycles untouched -> include -> exclude -> untouched, filtering the grid at every step", async () => {
+    const user = userEvent.setup();
+    // 4 Full Art + 4 plain - stays at "medium" tier (never collapses to hero) whichever way the
+    // chip is filtering, so it's never detached mid-test the way a narrower fixture would be
+    // (same technique the Border-axis exclusivity test above already uses).
+    renderFunnel([
+      ...Array.from({ length: 4 }, (_, i) => makeCard(`fa-${i}`, ["Full Art"])),
+      ...Array.from({ length: 4 }, (_, i) => makeCard(`plain-${i}`, [])),
+    ]);
+
+    const chip = screen.getByTestId("funnel-treatment-chip-Full Art");
+    expect(chip).toHaveAttribute("data-state", "untouched");
+    await waitFor(() =>
+      expect(screen.getByTestId("funnel-count")).toHaveTextContent("8 versions")
+    );
+
+    // untouched -> include: only the 4 Full Art cards survive.
+    await user.click(chip);
+    expect(chip).toHaveAttribute("data-state", "positive");
+    await waitFor(() =>
+      expect(screen.getByTestId("funnel-count")).toHaveTextContent("4 versions")
+    );
+    expect(screen.getByTestId("select-version-tile-fa-0")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("select-version-tile-plain-0")
+    ).not.toBeInTheDocument();
+
+    // include -> exclude: only the 4 plain cards survive now (dropping the Full Art carriers,
+    // not requiring them) - the new capability this round adds over the old binary checkbox.
+    await user.click(chip);
+    expect(chip).toHaveAttribute("data-state", "negative");
+    await waitFor(() =>
+      expect(screen.getByTestId("funnel-count")).toHaveTextContent("4 versions")
+    );
+    expect(
+      screen.getByTestId("select-version-tile-plain-0")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("select-version-tile-fa-0")
+    ).not.toBeInTheDocument();
+
+    // exclude -> untouched: back to all 8.
+    await user.click(chip);
+    expect(chip).toHaveAttribute("data-state", "untouched");
+    await waitFor(() =>
+      expect(screen.getByTestId("funnel-count")).toHaveTextContent("8 versions")
+    );
+  });
+
+  it("Border and Frame stay purely positive/exclusive - only Treatment gets the tri-state exclude behavior", () => {
+    renderFunnel([
+      ...Array.from({ length: 4 }, (_, i) =>
+        makeCard(`black-${i}`, ["Black Border"])
+      ),
+      ...Array.from({ length: 4 }, (_, i) =>
+        makeCard(`white-${i}`, ["White Border"])
+      ),
+    ]);
+
+    // Border's own chips are still the exclusive-axis `funnel-chip-*` convention, not the
+    // tri-state `funnel-treatment-chip-*` one - no `data-state` attribute at all.
+    const borderChip = screen.getByTestId("funnel-chip-Black Border");
+    expect(borderChip).not.toHaveAttribute("data-state");
   });
 });

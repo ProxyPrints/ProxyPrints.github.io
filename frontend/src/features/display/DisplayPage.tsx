@@ -238,7 +238,6 @@ import { RenderIfVisible } from "@/components/RenderIfVisible";
 import { CardSlotContextMenu } from "@/features/card/CardSlotContextMenu";
 import { getCardSlotMenuActions } from "@/features/card/CardSlotMenuActions";
 import { CardbackToolbarButton } from "@/features/card/CommonCardback";
-import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
 import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
 import {
   CardDownloadFavorite,
@@ -263,6 +262,7 @@ import {
 } from "@/features/display/SavedDecksLandingPanel";
 import { buildScryfallReferenceUrl } from "@/features/display/scryfallReference";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
+import { SourcesAccordion } from "@/features/display/SourcesAccordion";
 import {
   ProjectDraftSummary,
   useProjectDraftBackup,
@@ -416,19 +416,23 @@ interface RailHeaderProps {
   face: Faces;
   slot: number;
   cardName: string | undefined;
-  cardIdentifier: string | undefined;
   searchQuery: SearchQuery | undefined;
 }
 
-const RailHeader = ({
-  face,
-  slot,
-  cardName,
-  cardIdentifier,
-  searchQuery,
-}: RailHeaderProps) => (
+// D14 fix round (SPEC-display-left-rail.md §3, owner-approved 2026-07-23): the
+// `DeckbuilderConfirmAffordance` mount that used to co-render here (badge + hover ComparePin +
+// Y/N buttons) is REMOVED - `ConfidenceElement.tsx` (mounted in `PromotedZone` just below,
+// directly under this header) supersedes it entirely with a fuller, always-informative form
+// (set-icon confidence anchor, Scryfall reference popover, a real "✗ not this printing" vote).
+// `DeckbuilderConfirmAffordance` itself is untouched - still mounted in CardSlot.tsx's editor
+// grid and inside `SelectVersionResults.tsx`'s suggested-printing confirm ribbon, both out of
+// this round's scope. Density (§2): `p-2` (8px all sides) -> explicit `8px 10px` (horizontal
+// tightened, matching the mockup's live value), no separate `mt-1` gap before the badge (the
+// badge's own margin is enough).
+const RailHeader = ({ face, slot, cardName, searchQuery }: RailHeaderProps) => (
   <div
-    className="p-2 border-bottom rail-head"
+    className="border-bottom rail-head"
+    style={{ padding: "8px 10px" }}
     data-testid="display-rail-header"
   >
     <div className="fw-bold">
@@ -446,18 +450,6 @@ const RailHeader = ({
     <div className="mt-1">
       <RequestedPrintingBadge query={searchQuery} />
     </div>
-    {/* Adapts CardSlot.tsx's own mount of this component (same props, same gating logic inside
-        DeckbuilderConfirmAffordance itself - not forked) for the rail's status header. The
-        editor-completion package's E2/L4 promotes Select Version to an always-open surface (no
-        collapse chrome), so N no longer needs to "expand" anything - onOpenGridSelector is a
-        no-op here now; the surface is already visible below. */}
-    {cardIdentifier != null && (
-      <DeckbuilderConfirmAffordance
-        cardIdentifier={cardIdentifier}
-        searchQuery={searchQuery}
-        onOpenGridSelector={() => undefined}
-      />
-    )}
   </div>
 );
 
@@ -475,15 +467,24 @@ const RailHeader = ({
 
 interface PromotedZoneProps {
   cardDocument: CardDocument | undefined;
+  backendURL: string;
 }
 
-const PromotedZone = ({ cardDocument }: PromotedZoneProps) => (
+// Fix round (SPEC-display-left-rail.md §3): ConfidenceElement now renders FIRST - it's identity
+// (directly under the header's name/RequestedPrintingBadge), not demoted metadata, per the
+// spec's explicit placement call. ArtistSection follows, still promoted/always-visible (D3),
+// just no longer ahead of D14. ConfidenceElement owns its own full-width band styling
+// (`.d14` - background/border-bottom/padding all live in its own markup now, RailRoot's CSS
+// below), so it no longer needs an outer padded wrapper here; ArtistSection still does
+// (`.artist-line`) - density (§2): `px-2 py-1` (8/4) -> explicit `8px 10px`.
+const PromotedZone = ({ cardDocument, backendURL }: PromotedZoneProps) => (
   <>
-    <div className="artist-line px-2 py-1 border-bottom small">
+    <ConfidenceElement cardDocument={cardDocument} backendURL={backendURL} />
+    <div
+      className="artist-line border-bottom small"
+      style={{ padding: "8px 10px" }}
+    >
       <ArtistSection cardDocument={cardDocument} />
-    </div>
-    <div className="px-2">
-      <ConfidenceElement cardDocument={cardDocument} />
     </div>
   </>
 );
@@ -936,6 +937,15 @@ const ActionBarSearchGroup = styled.div`
 // above) - nothing here overrides AutofillCollapse's own chrome for the demoted accordion
 // sections below (the owner's grant covers dropping that look "where fidelity requires"; the
 // promoted zone is where it's required, the demoted accordions keep today's proven pattern).
+// Fix round (SPEC-display-left-rail.md §0/§2/§3, owner-approved 2026-07-23): the mockup's rail
+// stylesheet, lifted verbatim per the owner's existing grant (spec §5 of the earlier
+// editor-completion round: "the left rail MAY lift the mockup's CSS verbatim rather than
+// re-approximate through react-bootstrap idioms") - re-extracted against the REAL #302 theme
+// tokens this round's spec documents in its own §0 table (the previous round's values were
+// close approximations, not the actual bootswatch/superhero + styles.scss values). `.d14`/
+// `.seticon`/`.idtext`/`.statepill`/`.notthis` replace the old `.confidence`/`.set-symbol`/
+// `.conf-badge`/`.conf-x` set (ConfidenceElement.tsx's own markup was rewritten to match - see
+// that file's own module comment).
 const RailRoot = styled.div`
   .rail-head {
     background: #22303f;
@@ -948,50 +958,95 @@ const RailRoot = styled.div`
     padding: 8px 0 4px;
     font-weight: 600;
   }
-  .confidence {
+  /* D14 confidence band - full-width, no floating chip inset margin (density §2: "kills the
+     floating-chip inset margin"). */
+  .d14 {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-    margin: 6px 0;
-    padding: 6px 8px;
+    margin: 0;
+    padding: 8px 10px;
     background: #2b3e50;
-    border: 1px solid #16202b;
-    border-radius: 6px;
+    border-bottom: 1px solid #16202b;
     font-size: 12px;
   }
-  .set-symbol {
+  /* Deliberate radius exception (spec §0) - kept, not invented: the set icon's own circular
+     shape and the status pills' pill radius are the two rounded exceptions Superhero's flat
+     (border-radius:0) rule doesn't otherwise allow. */
+  .seticon {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
     background: #4e5d6c;
     border: 1px solid #7f8fa0;
-    font-weight: 700;
-    font-size: 11px;
+    border-radius: 50%;
+    cursor: pointer;
   }
-  .conf-badge {
-    padding: 1px 6px;
+  .seticon .ss {
+    font-size: 15px;
+    color: #ebebeb;
+  }
+  .seticon .check {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    width: 15px;
+    height: 15px;
+    background: #5cb85c;
+    color: #fff;
+    border: 2px solid #2b3e50;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 900;
+  }
+  .seticon .score {
+    position: absolute;
+    right: -7px;
+    bottom: -7px;
+    background: #df6919;
+    color: #fff;
+    border: 2px solid #2b3e50;
+    border-radius: 10px;
+    font-size: 9px;
+    font-weight: 800;
+    padding: 1px 4px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .d14 .idtext {
+    font-size: 12px;
+    font-family: monospace;
+  }
+  .d14 .statepill {
+    padding: 1px 8px;
     border: 1px solid #4e5d6c;
     border-radius: 10px;
+    font-size: 11px;
+    font-weight: 700;
   }
-  .conf-badge.confirmed {
+  .d14 .statepill.confirmed {
     border-color: #3f7a2f;
     color: #a7e08a;
   }
-  .conf-badge.suggested {
+  .d14 .statepill.suggested {
     border-color: #df6919;
     color: #ffb27d;
   }
-  .conf-x {
+  .d14 .notthis {
     margin-left: auto;
-    padding: 2px 8px;
-    font-size: 11px;
-    background: transparent;
-    border: 1px solid #7f8fa0;
-    color: #ffb27d;
+  }
+  /* Owner answer #2 (2026-07-23): the ✗ vote stays available on an already-confirmed printing
+     too (dispute is always possible, D1 semantics) - de-emphasised via opacity, not hidden. */
+  .d14 .notthis[data-confirmed="true"] {
+    opacity: 0.6;
   }
 `;
 
@@ -1066,15 +1121,27 @@ const Rail = ({
         face={selectedSlotRef.face}
         slot={selectedSlotRef.slot}
         cardName={cardName}
-        cardIdentifier={selectedImage}
         searchQuery={query}
       />
-      {/* E2 (#2/#3) - the promoted, always-visible zone: artist support line + confidence
-          element, both retired as/never-were collapsible accordion sections (D3). */}
-      <PromotedZone cardDocument={selectedCardDocument} />
+      {/* E2 (#2/#3) - the promoted, always-visible zone: D14 confidence element + artist support
+          line, both retired as/never-were collapsible accordion sections (D3). Fix round
+          (SPEC-display-left-rail.md §3): ConfidenceElement now renders BEFORE ArtistSection - it
+          is identity (directly under name + RequestedPrintingBadge), not demoted metadata; see
+          PromotedZone's own comment for the full ordering rationale. */}
+      <PromotedZone
+        cardDocument={selectedCardDocument}
+        backendURL={backendURL}
+      />
+      {/* Fix round (SPEC-display-left-rail.md §4): the Sources accordion - sources gate art
+          availability, so the owner brief puts it in the LEFT rail (a deviation from
+          proposal-h-display-layout-spec.md §4.2's right-rail placement - see
+          SourcesAccordion.tsx's own module comment for the full note). Sits between the promoted
+          identity zone and Select Version, matching the mockup's own left-rail order. */}
+      <SourcesAccordion />
       {/* E2/E3/L4 - Select Version, promoted + always open (renamed from "Choose Image", no
-          collapse chrome at all - the primary art surface, not one accordion among several). */}
-      <div className="px-2 pt-2">
+          collapse chrome at all - the primary art surface, not one accordion among several).
+          Density (§2): `px-2 pt-2` (8/8-top) -> explicit `8px 10px`. */}
+      <div style={{ padding: "8px 10px" }}>
         <h6 className="select-version-heading">Select Version</h6>
         <SelectVersionSection
           face={selectedSlotRef.face}

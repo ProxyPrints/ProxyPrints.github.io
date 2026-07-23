@@ -120,6 +120,15 @@ still back that modal.
   No fork of the component was needed. Its `onOpenGridSelector` callback
   is a no-op here (there's no separate modal to open — this tile is
   already inside the picker).
+  **On the `/display` rail's stacked (funnel) layout specifically**
+  (2026-07-23 continuous-grid round): this same, still-completely-
+  unmodified mount is now visually a small `transform: scale(0.72)`
+  "confirm ribbon" overlay in the tile's corner instead of a full block
+  rendered below the tile — see
+  [`display-left-rail.md`](display-left-rail.md)'s "Select Version —
+  continuous grid" section for the full affordance-by-affordance
+  mapping; the sidebar/modal layout keeps the original full-size mount
+  described above, unchanged.
 - **Moment (b), art-as-filter** — **sidebar/modal layout only** (see the
   FUNNEL round below, which replaces this on the `/display` rail): a
   plain binary toggle-chip row (`FilterChipBar`, NOT
@@ -168,12 +177,19 @@ described above.
   axis back to "any" — D23, since a native radio input doesn't fire a
   change event for a click on an already-checked option, this is
   handled on the `ToggleButton`'s own `onClick`, ahead of the group's
-  `onChange`); Treatment (Full Art/Borderless/Showcase/Extended/Etched)
-  renders as an independent-checkbox group. Only axes with ≥1
-  surviving candidate render at all (`chipMembershipState`, computed
-  over the OTHER axes' current filter — never the axis's own selection,
-  so picking Black doesn't make White/Silver permanently vanish from
-  their own axis).
+  `onChange`). Only axes with ≥1 surviving candidate render at all
+  (`chipMembershipState`, computed over the OTHER axes' current filter —
+  never the axis's own selection, so picking Black doesn't make White/
+  Silver permanently vanish from their own axis).
+  **Treatment (2026-07-23 round)**: no longer an independent-checkbox
+  group rendered through the same generic axis component - it's a real
+  tri-state cycle (untouched -> include -> exclude -> untouched,
+  `TreatmentChipRow`/`nextChipState`) sharing one unified block with
+  Frame instead of its own stacked row - see
+  [`display-left-rail.md`](display-left-rail.md)'s "Unified Frame +
+  Treatment filter" section for the full implementation writeup
+  (`excludedAttributeTags`, `filterOutExcludedChipsVotesGated`); Border/
+  Frame's own exclusive-radio behavior described above is unchanged.
 - **Three chip states** (F3): SETTLED (some survivor resolves the tag —
   `card.tags`), SUGGESTED (every carrying survivor only has it via
   `card.suggestedFilterTagNames` — see the compliance note below, dashed
