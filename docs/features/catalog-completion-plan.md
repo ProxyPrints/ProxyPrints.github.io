@@ -2954,3 +2954,29 @@ permits your users to be the compute."
     feature and the "degradation badge" work: card ids 35226, 6074,
     1631, 6342, 4614, 36867, 36927, 57997, 62298, 74102, 58652, 64896,
     57583, 114225, 117403.
+  - **Pre-pilot machine-vote zeroing patch PR** (2026-07-23, issue #347
+    — Tron design review, owner-confirmed "surgical mandate"): two code
+    changes, ahead of the 4c full-pool Stage D dry-run that's the
+    pilot/measurement of record. (1) `reparse_collector_evidence` now
+    persists a corrected `ImageEvidence.collector_line_set_code`/
+    `collector_line_collector_number` **unconditionally** whenever a
+    fresh re-parse objectively differs from what's stored — previously
+    this `.save()` only fired inside the verdict-CHANGED branch, so a
+    card whose join-key CONCLUSION happened to be unchanged (or had no
+    prior recorded state at all) kept a stale parse forever even though
+    the raw text reparses differently; the retraction/verdict logic
+    itself is untouched, and the new `ReparseResult.fields_fixed`
+    counter tracks this independently of `changed`/`retracted`. (2) new
+    single-purpose command `retract_stage_d_by_run_id` — deletes
+    `stage-d-join-key-v1` `CardPrintingTag` votes and non-rescannable
+    `CardScanLog` skips scoped to one or more `--run-id` value(s), with
+    the same per-card `resolve_printing()` safety gate
+    `reparse_collector_evidence` already uses (never retracts a card
+    under a RESOLVED or `NO_MATCH` consensus) and
+    `resolve_and_persist_printing()` as the post-delete consensus-
+    demotion/reindex step (verified to cast no votes of its own — the
+    Tron review's correction to an earlier draft). Dry-run default,
+    `PilotRunLedger` row, idempotent per card (safe to re-run after a
+    mid-run failure). Issue #347 itself owns the full zeroing plan's
+    poll-gated execution order and the specific `run_id`s/counts this
+    command targets in production — not restated here.

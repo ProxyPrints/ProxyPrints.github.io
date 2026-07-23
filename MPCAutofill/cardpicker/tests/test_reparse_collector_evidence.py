@@ -169,7 +169,8 @@ class TestReparseAndRetract:
         assert result.considered == 1
         assert result.changed == 1
         assert result.retracted == 0
-        # nothing actually written
+        assert result.fields_fixed == 1  # counted...
+        # ...but nothing actually written
         evidence = card.image_evidence.get()
         assert evidence.collector_line_set_code == "361r"
         assert CardScanLog.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
@@ -192,6 +193,7 @@ class TestReparseAndRetract:
 
         assert result.changed == 1
         assert result.retracted == 1
+        assert result.fields_fixed == 1
         assert result.gate_refused_card_ids == []
 
         evidence = card.image_evidence.get()
@@ -382,7 +384,73 @@ class TestReparseAndRetract:
         assert result.unchanged == 1
         assert result.changed == 0
         assert result.retracted == 0
+        assert result.fields_fixed == 0  # stored fields already matched the fresh re-parse here
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
+
+    def test_unchanged_branch_still_gets_its_stale_fields_persisted_under_write(self, db):
+        """The bug this PR fixes: a card whose join-key CONCLUSION is unchanged (the recorded
+        vote's own printing matches what a fresh re-parse would also match) used to keep a
+        STALE collector_line_set_code/collector_line_collector_number forever, because the old
+        code only ever called evidence.save() inside the verdict-CHANGED branch. The recorded
+        vote here is constructed directly (independent of ImageEvidence's own stored fields, per
+        _recorded_join_key_state's own contract) so the verdict genuinely lands in the
+        `unchanged` branch even though the stored fields are objectively stale."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="cmr", collector_number="158")
+        _evidence(
+            card,
+            collector_line_raw_text="158/361R\nCMR EN",  # reparses to set_code="cmr", number="158"
+            collector_line_set_code="xxx",  # deliberately stale/wrong - differs from the fresh parse
+            collector_line_collector_number="000",
+        )
+        # the recorded vote already agrees with what the FRESH parse will conclude (same printing,
+        # not a no-match) - so the verdict comparison itself lands in `unchanged`, independent of
+        # what ImageEvidence's own (stale) fields say.
+        CardPrintingTagFactory(
+            card=card,
+            printing=printing,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            is_no_match=False,
+        )
+
+        result = reparse_and_retract([card.pk], run_id="reparse-unchanged-write", dry_run=False)
+
+        assert result.unchanged == 1
+        assert result.changed == 0
+        assert result.retracted == 0
+        assert result.fields_fixed == 1
+        evidence = card.image_evidence.get()
+        assert evidence.collector_line_set_code == "cmr"
+        assert evidence.collector_line_collector_number == "158"
+        # the vote itself is completely untouched - this is a field-persistence fix only.
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+
+    def test_unchanged_branch_dry_run_only_counts_the_field_fix_without_writing(self, db):
+        card = CardFactory(name="Some Card", content_phash=42)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="cmr", collector_number="158")
+        _evidence(
+            card,
+            collector_line_raw_text="158/361R\nCMR EN",
+            collector_line_set_code="xxx",
+            collector_line_collector_number="000",
+        )
+        CardPrintingTagFactory(
+            card=card,
+            printing=printing,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            is_no_match=False,
+        )
+
+        result = reparse_and_retract([card.pk], run_id="reparse-unchanged-dry", dry_run=True)
+
+        assert result.unchanged == 1
+        assert result.fields_fixed == 1
+        evidence = card.image_evidence.get()
+        assert evidence.collector_line_set_code == "xxx"  # nothing actually written
+        assert evidence.collector_line_collector_number == "000"
 
     def test_card_with_no_prior_join_key_state_is_not_touched(self, db):
         card = CardFactory(name="Untouched Card", content_phash=9)
@@ -400,6 +468,30 @@ class TestReparseAndRetract:
         assert result.no_prior_join_key_state == 1
         assert result.changed == 0
         assert result.retracted == 0
+        assert result.fields_fixed == 0  # stored fields already matched the fresh re-parse here
+
+    def test_no_prior_join_key_state_branch_still_gets_stale_fields_persisted_under_write(self, db):
+        """Same fix, the OTHER previously-unreached branch (module docstring): a card with no
+        recorded join-key vote/scan-log row at all also used to keep a stale stored parse
+        forever - only a genuine verdict CHANGE ever triggered the save before this fix."""
+        card = CardFactory(name="No Prior State Card", content_phash=42)
+        CanonicalCardFactory(name="No Prior State Card", expansion__code="cmr", collector_number="158")
+        _evidence(
+            card,
+            collector_line_raw_text="158/361R\nCMR EN",
+            collector_line_set_code="xxx",
+            collector_line_collector_number="000",
+        )
+
+        result = reparse_and_retract([card.pk], run_id="reparse-no-prior-write", dry_run=False)
+
+        assert result.no_prior_join_key_state == 1
+        assert result.changed == 0
+        assert result.retracted == 0
+        assert result.fields_fixed == 1
+        evidence = card.image_evidence.get()
+        assert evidence.collector_line_set_code == "cmr"
+        assert evidence.collector_line_collector_number == "158"
 
     def test_card_without_current_evidence_is_counted_and_skipped(self, db):
         card = CardFactory(name="No Evidence Card", content_phash=None)
