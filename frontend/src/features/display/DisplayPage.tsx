@@ -403,6 +403,12 @@ const RailSection = ({
     expanded={expandedSections[sectionKey]}
     onClick={() => onToggle(sectionKey)}
     pad={2}
+    // CSS-fidelity source-map pass (SPEC-display-left-rail.md §2) - "AutofillCollapse header in
+    // rail: Superhero's stock .card-header 0.5rem 1rem (8/16) -> rail-scoped padding:7px 10px",
+    // now travelling with THIS call site (component-scoped) instead of RailRoot's own
+    // now-removed `.card-header` descendant-selector override - see AutofillCollapse.tsx's own
+    // `headerPadding` prop comment for the full rationale.
+    headerPadding="7px 10px"
   >
     {children}
   </AutofillCollapse>
@@ -948,18 +954,18 @@ const ActionBarSearchGroup = styled.div`
 // rail-scoped `padding:7px 10px`) - this was in the spec from the start but never actually
 // landed as CSS (the comment this replaced claimed the demoted accordions deliberately "keep
 // today's proven pattern," which was true for the CARD look/chrome but wrong for padding - the
-// spec never carved padding out of scope). Scoped here (not a global AutofillCollapse.tsx
-// change) via a plain `.card-header` descendant selector, which - at two class selectors deep
-// under Emotion's own scoped RailRoot class - already outranks Bootstrap's bare `.card-header`
-// rule without `!important`. Covers every rail-mounted AutofillCollapse: the five demoted
-// RailSections below AND SourcesAccordion (§4 - "shell = AutofillCollapse"), both descendants of
-// this same RailRoot node.
+// spec never carved padding out of scope). Originally fixed here via a plain `.card-header`
+// descendant selector (clobbering Bootstrap's bare global `.card-header` rule by selector
+// specificity, not by scope - the exact "pinned in a higher location than expected" pattern
+// SPEC-display-left-rail.md's "Source map addendum" flags as this fork's CSS-regression
+// recurrence signature). CSS-fidelity source-map pass (follow-up): retired in favour of
+// AutofillCollapse's own additive `headerPadding` prop, passed directly at each rail call site
+// (RailSection/SourcesAccordion) - the value now travels WITH the component invocation instead
+// of being injected from this ancestor wrapper two files away. See that prop's own comment in
+// AutofillCollapse.tsx for the full before/after.
 const RailRoot = styled.div`
   .rail-head {
     background: #22303f;
-  }
-  .card-header {
-    padding: 7px 10px;
   }
   .artist-line {
     background: #22303f;
