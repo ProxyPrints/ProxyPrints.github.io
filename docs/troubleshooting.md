@@ -1557,15 +1557,18 @@ this entry's cause with the confirmed one.
 
 ## `chunkErrorRecovery.spec.ts`'s `expect.poll(() => reloadRequests).toBe(1)` fails with "Received: 0" in CI, passes locally
 
-**Symptom**: one of the first three `chunkErrorRecovery.spec.ts` tests
-(the ones that dispatch a synthetic `ChunkLoadError` and expect exactly
-one intercepted reload request) times out at 0 reload requests on a CI
-shard, including on a clean re-run, while passing reliably on a local
-machine. No error is thrown anywhere in the test itself (`page.route()`
-registers fine, `page.evaluate()` dispatching the synthetic error
-completes fine) — the reload request simply never arrives.
+**Symptom**: one of the `chunkErrorRecovery.spec.ts` tests (the ones
+that dispatch a synthetic `ChunkLoadError` and expect exactly one
+intercepted reload request) times out at 0 reload requests on a CI
+shard - specifically shard 1/4, which is where this spec lands (verify
+with `npx playwright test --list --shard=1/4`) - including on a clean
+re-run, while passing reliably on a local machine run in isolation. No
+error is thrown anywhere in the test itself (`page.route()` registers
+fine, `page.evaluate()` dispatching the synthetic error completes
+fine) - the reload request simply never arrives. Two independent root
+causes were found across two rounds of this; both had to be fixed.
 
-**Cause**: `useChunkErrorRecovery`'s guard
+**Cause #1** (PR #397): `useChunkErrorRecovery`'s guard
 (`chunkErrorRecovery.ts`'s `CHUNK_RELOAD_GUARD_KEY`, a real 10s
 sessionStorage-backed "only one reload per window" debounce, working
 exactly as designed) gets consumed by a **real** chunk hiccup before
@@ -1582,16 +1585,57 @@ test body reaches its own dispatch, and any real transient chunk error
 during that churn legitimately consumes the guard first. This is a
 dev-server/test-harness artifact only — the deployed static export has
 no on-demand compilation or HMR at all, so it can't happen in
-production.
+production. Fixed by clearing the guard immediately before each test's
+own dispatch - but this alone wasn't sufficient (see cause #2).
 
-**Fix**: the test now imports `CHUNK_RELOAD_GUARD_KEY` from
-`chunkErrorRecovery.ts` and calls
-`page.evaluate((key) => window.sessionStorage.removeItem(key), CHUNK_RELOAD_GUARD_KEY)`
-immediately before each test's own synthetic dispatch, establishing a
-clean precondition regardless of whatever real dev-server chunk noise
-happened during page load. The one test that specifically exercises the
-guard-suppression behaviour (two dispatches in one test) only clears it
-once, before the first dispatch, so the guard is still genuinely
-exercised for real on the second one. See `chunkErrorRecovery.spec.ts`'s
-own comment above `clearReloadGuard` for the full trace-based diagnosis
-(root-caused against CI run 30039392833, shard 1/4).
+**Cause #2** (found after #397 merged, PR #395's CI run 30043836352):
+same symptom recurred on shard 1/4, all 3 attempts including retries.
+Two independent gaps remained: (a) #397 cleared the guard and
+dispatched the synthetic error as two _separate_ `page.evaluate()`
+round-trips, leaving a real (if narrow) window between them for the
+same class of dev-server chunk noise cause #1 already identified to
+land in; (b) `loadPageWithDefaultBackend()`'s own "Choose Art" click is
+a raw DOM click - Chromium dispatches it whether or not React has
+actually hydrated and `useChunkErrorRecovery`'s `useEffect` has run
+yet, so a successful click is not proof the recovery listener is live.
+Reproduced locally: this spec failed intermittently at
+`--workers=4` (parallel Playwright workers contending for CPU with the
+dev server's own on-demand compilation, closely matching CI's shard-1
+composition after PR #395 un-skipped 58 ported parity tests into the
+same 4 shards - see `git log` on `playwright.config.ts`, whose
+`fullyParallel`/`workers: undefined` settings predate this spec and
+were never the trigger) but passed reliably at `--workers=1`. A native
+DOM event dispatched before a listener is attached is simply lost, so
+this can't be fixed by polling for longer.
+
+**Fix**: (a) folds the guard-clear and the synthetic dispatch into ONE
+`page.evaluate()` call per test (`clearGuardAndDispatchChunkError(Error)`
+`AsRejection`) so nothing on the page's event loop can interleave
+between them. (b) adds `awaitHydrated()`, which retries clicking
+"Choose Art" (mirroring `test-utils.ts`'s own established
+`openAddCardsDropdown()` pattern for the identical symptom) until
+`ProjectEditor.tsx`'s "editor" tab content - specifically
+`CardGrid.tsx`'s "Your project is empty at the moment." empty-state
+text - actually becomes _visible_, which can only happen once
+`Tab.Container`'s `onSelect` handler has bound and fired, i.e. once the
+same hydration/effect-flush pass that mounts
+`useChunkErrorRecovery`'s own listeners has completed. This needed no
+extra network dispatch or navigation - two earlier attempts that DID
+add one (a page.route()-intercepted warm-up reload, and a real
+uncontrolled warm-up reload followed by re-navigating) were each
+independently found to destabilise the page even further under this
+same `--workers=4` stress (a `SecurityError: ... Access is denied for this document` on the aborted-navigation path, and a `Navigation ... is interrupted by another navigation` on the real-reload path - the
+self-referential "Editor" nav-link prefetch from cause #1 is a
+genuinely recurring background navigation under load, not a one-off,
+and collides with any _additional_ top-level navigation this file
+issues). The one test that specifically exercises the guard-suppression
+behaviour (two dispatches in one test) only clears the guard once,
+before the first dispatch, so the guard is still genuinely exercised
+for real on the second one. See `chunkErrorRecovery.spec.ts`'s own
+comments for the full trace-based diagnosis of all three rounds
+(root-caused against CI runs 30039392833 and 30043836352, both shard
+1/4, plus local repro at `--workers=4`/cold `.next` cache/CI=true).
+Verify any future fix here the same way: `--shard=1/4` (not the file in
+isolation) against a cold `.next` cache, since shard composition (not
+just raw worker count) drives how much dev-server contention this spec
+actually sees.
