@@ -372,6 +372,71 @@ const AwarenessLine = styled.div`
 
 //# endregion
 
+//# region owner fix round (2026-07-23, "the buttons are too big") - compact controls
+//
+// Every plain react-bootstrap `Button`/`ToggleButton` in the stacked (funnel) layout inherited
+// Bootstrap `size="sm"`'s own padding/line-height (measured live: ~31px tall, ~21px line-height
+// alone), which reads oversized next to the #302 fix round's now-compact ~72-112px tiles and the
+// #302-approved reference mockup's own flat, low-chrome `.btn` controls (the mockup's "Filters"
+// disclosure isn't even a bordered button - it's plain underlined text: `14 results · <u>
+// Filters</u>`, `responsive-layout-2026-07-21.html` line 435). These three thin `styled()` wraps
+// tighten padding/font-size/line-height to match, scoped to ONLY the specific call sites below
+// (the sidebar/modal layout `GridSelectorModal.tsx` owns - a byte-for-byte-unchanged, entirely
+// separate return path per this file's own top comment - never renders through these).
+//
+// Touch target (WCAG 2.5.5-style): shrinking a button's PAINTED box below ~40px on a touch
+// breakpoint would shrink its real tap target too - instead of that, `position: relative` +
+// an invisible `::after` (`inset: -12px`, no fill/border/content) pads the ACTUAL clickable box
+// out to >=40px on touch breakpoints only (`max-width: 767.98px`, this file's/DisplayPage's own
+// existing phone-breakpoint convention) while the visual size stays reference-sized at every
+// breakpoint. Verified live (Playwright `getBoundingClientRect`/`getComputedStyle(el, "::after")`
+// at a 390px viewport): the smallest painted control here (the "+N more" expand link, ~15px
+// tall) reaches a ~39-40px effective tap box with this inset. The `::after` is generated content
+// INSIDE the button's own box (not a sibling wrapper), so it inherits the button's click handling
+// for free - no extra JS needed.
+const touchExpandTapArea = `
+  position: relative;
+
+  @media (max-width: 767.98px) {
+    &::after {
+      content: "";
+      position: absolute;
+      inset: -12px;
+    }
+  }
+`;
+
+/** Filters disclosure toggle + "Clear filters" - bordered/outline buttons in the reference's own
+ * shape family, just tightened to its padding/font-size. */
+const CompactButton = styled(Button)`
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  ${touchExpandTapArea}
+`;
+
+/** Per-axis segmented chips (FunnelAxisRow) - same treatment, kept as its own styled component
+ * (rather than reusing CompactButton) since `ToggleButtonGroup` requires `ToggleButton` specifically,
+ * not a plain `Button`. */
+const CompactToggleButton = styled(ToggleButton)`
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  ${touchExpandTapArea}
+`;
+
+/** "+N more of this printing" / "Show fewer" / "More like this" - already the reference's
+ * borderless/no-background link shape (`variant="link"` + Bootstrap's `p-0` utility already
+ * zeroes their padding); only the font-size needed tightening to match the reference's smaller
+ * auxiliary-control scale and to stop "More like this" wrapping to two lines in a narrow tile. */
+const CompactLinkButton = styled(Button)`
+  font-size: 0.7rem;
+  line-height: 1.2;
+  ${touchExpandTapArea}
+`;
+
+//# endregion
+
 //# region F2/F3 - per-axis segmented chips
 
 interface FunnelAxisRowProps {
@@ -430,7 +495,7 @@ function FunnelAxisRow({
           const suggested = membership === "suggested";
           const active = activeTagNames.has(chip.tagName);
           return (
-            <ToggleButton
+            <CompactToggleButton
               key={chip.tagName}
               id={`funnel-chip-${chip.tagName}`}
               value={chip.tagName}
@@ -461,7 +526,7 @@ function FunnelAxisRow({
                   ⌇
                 </span>
               )}
-            </ToggleButton>
+            </CompactToggleButton>
           );
         })}
       </ToggleButtonGroup>
@@ -582,15 +647,15 @@ function SelectVersionTile({
       )}
       {hasFilterableTags && (
         <div className="text-center">
-          <Button
+          <CompactLinkButton
             size="sm"
             variant="link"
-            className="p-0 small"
+            className="p-0"
             onClick={() => onMoreLikeThis(identifier)}
             data-testid={`select-version-more-like-this-${identifier}`}
           >
             More like this
-          </Button>
+          </CompactLinkButton>
         </div>
       )}
       {suggestedActiveTagNames.map((tagName) => (
@@ -942,17 +1007,17 @@ export function SelectVersionResults({
         </div>
         {group.rest.length > 0 && (
           <div className="text-center">
-            <Button
+            <CompactLinkButton
               size="sm"
               variant="link"
-              className="p-0 small"
+              className="p-0"
               onClick={() => toggleGroupExpanded(group.key)}
               data-testid={`select-version-expand-${group.key}`}
             >
               {expanded
                 ? "Show fewer"
                 : `+${group.rest.length} more of this printing`}
-            </Button>
+            </CompactLinkButton>
           </div>
         )}
       </div>
@@ -981,15 +1046,15 @@ export function SelectVersionResults({
         </div>
         {group.rest.length > 0 && (
           <div className="text-center">
-            <Button
+            <CompactLinkButton
               size="sm"
               variant="link"
-              className="p-0 small"
+              className="p-0"
               onClick={() => toggleGroupExpanded(group.tagName)}
               data-testid={`select-version-expand-${group.tagName}`}
             >
               {expanded ? "Show fewer" : `+${group.rest.length} more`}
-            </Button>
+            </CompactLinkButton>
           </div>
         )}
       </div>
@@ -1110,10 +1175,16 @@ export function SelectVersionResults({
               ))}
             </div>
           )}
-          <Button
-            variant="outline-primary"
+          {/* Owner fix round (2026-07-23) - the reference mockup renders this control as plain
+              underlined text next to the result count ("14 results · Filters"), not a bordered
+              button (`responsive-layout-2026-07-21.html` line 435) - `variant="link"` drops the
+              outline-primary box to match that shape; `text-decoration-underline` keeps the
+              mockup's own `<u>` affordance since a plain Bootstrap link button isn't underlined
+              by default. */}
+          <CompactButton
+            variant="link"
             size="sm"
-            className="ms-auto"
+            className="ms-auto p-0 text-decoration-underline"
             onClick={() => search.setSettingsVisible((v) => !v)}
             data-testid="funnel-filters-toggle"
           >
@@ -1123,7 +1194,7 @@ export function SelectVersionResults({
               }`}
             />{" "}
             Filters
-          </Button>
+          </CompactButton>
         </div>
 
         {/* B. per-axis segmented chips (F2/F3). */}
@@ -1182,15 +1253,15 @@ export function SelectVersionResults({
             No versions match your filters.
             {activeAttributeTags.size > 0 && (
               <div className="mt-1">
-                <Button
+                <CompactLinkButton
                   size="sm"
                   variant="link"
-                  className="p-0 small"
+                  className="p-0"
                   onClick={() => setActiveAttributeTags(new Set())}
                   data-testid="funnel-clear-filters"
                 >
                   Clear filters
-                </Button>
+                </CompactLinkButton>
               </div>
             )}
           </div>

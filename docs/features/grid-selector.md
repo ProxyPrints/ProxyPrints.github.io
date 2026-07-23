@@ -244,6 +244,31 @@ described above.
   gap/seam at a group boundary. Those wrapper divs never carried any
   `role="group"`/`aria-label` grouping semantics to begin with, so
   nothing accessibility-bearing needed preserving.
+  **Same PR, second follow-up owner round ("it's the buttons that are
+  the largest, they're too big")**: every plain react-bootstrap
+  `Button`/`ToggleButton` in the funnel (`size="sm"` alone measured
+  ~31px tall, ~21px line-height) read as oversized next to the
+  now-compact tiles and the reference mockup's own flat, low-chrome
+  controls - the mockup's Filters disclosure isn't even a bordered
+  button, it's plain underlined text next to the result count
+  (`responsive-layout-2026-07-21.html` line 435: `14 results · <u> Filters</u>`). Three scoped `styled()` wraps
+  (`CompactButton`/`CompactToggleButton`/`CompactLinkButton`,
+  `SelectVersionResults.tsx`) tighten padding/font-size/line-height to
+  match, applied ONLY at this file's own funnel-specific call sites
+  (Filters toggle - also switched from `outline-primary` to `link`
+  variant to match the reference's unbordered text shape - the per-axis
+  segmented chips, and the already-link-styled "+N more"/"Show
+  fewer"/"More like this"/"Clear filters" controls); measured live,
+  "More like this" no longer wraps to two lines in a narrow tile as a
+  side effect of the smaller font. `GridSelectorModal.tsx`'s own
+  sidebar/modal layout is a completely separate return path in this
+  same file (per this file's own top comment) and never renders through
+  these wraps, so it's unaffected. Touch target: rather than shrinking
+  the real hit area below ~40px on a touch breakpoint, each wrap adds
+  an invisible `::after` (`inset: -12px`, `max-width: 767.98px` only)
+  that pads the actual clickable box out to >=40px while the visual
+  size stays reference-sized at every breakpoint - verified live via
+  `getComputedStyle(el, "::after")` at a 390px viewport.
 - **D20 implicit vote — the pick IS the vote, no second tap.** Picking a
   candidate while ≥1 chip is active computes `supportTagNames` (active
   tags the candidate satisfies ONLY via a suggested/unconfirmed vote,
