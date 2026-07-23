@@ -72,9 +72,13 @@ resolution" reading - chosen deliberately: a stale machine vote sitting inside a
 already-settled community decision is safer left for a human to look at than silently retracted,
 even when retracting it is provably harmless to the resolution itself. Gated cards are listed
 for human review, never silently skipped or force-retracted. The `ImageEvidence` PARSED-FIELD
-update (`collector_line_set_code`/`collector_line_collector_number`) still happens for a gated
-card - it is not vote/consensus state, so refreshing it is harmless even when the vote/scan-log
-retraction itself is withheld.
+update (`collector_line_set_code`/`collector_line_collector_number`) is UNCONDITIONAL - it
+happens for every card whose fresh re-parse objectively differs from what's stored, regardless
+of which verdict-comparison branch (no-prior-state/unchanged/changed/gated) the card falls into
+- it is not vote/consensus state, so refreshing it is always harmless, even when the vote/
+scan-log retraction itself never happens at all (no-prior-state, unchanged) or is withheld
+(the gate above). `ReparseResult.fields_fixed` counts this independently of `changed`/
+`retracted`.
 
 Dry-run by default; `--write` required to persist anything (matches `local_calculate_verdicts`/
 `purge_machine_votes`'s own convention).
@@ -128,6 +132,13 @@ class ReparseResult:
     unchanged: int = 0
     changed: int = 0
     retracted: int = 0
+    # Counted the moment a fresh re-parse of collector_line_raw_text objectively differs from
+    # what's CURRENTLY stored on ImageEvidence - regardless of which branch below
+    # (no_prior_join_key_state/unchanged/changed) the card falls into (pre-pilot-zeroing fix,
+    # see reparse_and_retract's own comment at the .save() call site: this field-persistence
+    # decision is now independent of the verdict-comparison branch it used to live inside).
+    # Always counted; only PERSISTED (evidence.save()) when dry_run is False.
+    fields_fixed: int = 0
     gate_refused_card_ids: list[int] = field(default_factory=list)
     # capped audit sample, matching JoinKeyCalculatorResult/PurgeResult's own "up to N, for the
     # report" convention elsewhere in this codebase.
@@ -256,9 +267,22 @@ def reparse_and_retract(
         )
         # Refresh the IN-MEMORY evidence object regardless of dry_run - calculate_join_key_verdict
         # below must see the FRESH parse either way (a dry-run's whole point is computing what
-        # WOULD happen); only the .save() a few lines down is gated on --write.
+        # WOULD happen); only the .save() immediately below is gated on --write.
         evidence.collector_line_set_code = fresh_set_code
         evidence.collector_line_collector_number = fresh_collector_number
+
+        # PRE-PILOT ZEROING FIX (unconditional field persistence): this used to live ONLY inside
+        # the verdict-CHANGED branch below, which meant a card whose join-key CONCLUSION happens
+        # to be unchanged (or has no prior recorded state at all) kept a stale
+        # collector_line_set_code/collector_line_collector_number on ImageEvidence forever, even
+        # though the raw text objectively reparses differently under the current parser - a
+        # silent correctness gap distinct from (and strictly narrower than) the vote/scan-log
+        # retraction logic below, which is otherwise completely untouched by this fix. Counted
+        # for every card considered, regardless of branch; persisted only under --write.
+        if fields_changed:
+            result.fields_fixed += 1
+            if not dry_run:
+                evidence.save(update_fields=["collector_line_set_code", "collector_line_collector_number"])
 
         recorded_state = _recorded_join_key_state(card)
         if recorded_state is None:
@@ -279,9 +303,6 @@ def reparse_and_retract(
 
         if dry_run:
             continue
-
-        if fields_changed:
-            evidence.save(update_fields=["collector_line_set_code", "collector_line_collector_number"])
 
         # SAFETY GATE (module docstring) - card-level, re-checked LIVE (resolve_printing, not the
         # cached printing_tag_status field) - covers BOTH a resolved printing and a resolved
@@ -404,8 +425,10 @@ class Command(BaseCommand):
                 f"unchanged={result.unchanged} changed={result.changed}"
             )
             if dry_run:
+                self.stdout.write(f"(dry-run) would_fix_fields={result.fields_fixed}")
                 self.stdout.write(f"(dry-run) would_retract={result.changed - len(result.gate_refused_card_ids)}")
             else:
+                self.stdout.write(f"fields_fixed={result.fields_fixed}")
                 self.stdout.write(f"retracted={result.retracted} gate_refused={len(result.gate_refused_card_ids)}")
             if result.gate_refused_card_ids:
                 self.stdout.write(
