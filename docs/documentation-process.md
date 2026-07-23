@@ -155,7 +155,8 @@ result — no different from hand-editing any other tracked file.
 [`docs-lint.yml`](../.github/workflows/docs-lint.yml) runs
 [`docs_lint.py`](../.github/scripts/docs_lint.py) on every PR touching
 `docs/**` and weekly regardless. Its original, always-hard checks are two,
-mechanical (the interconnection rules below are newer and soft by default):
+mechanical (the interconnection rules below are newer, and hard-fail as of
+2026-07-23 — see that section below):
 
 1. Every `[[wiki-link]]` and markdown `[text](path)` link resolves to a
    real file.
@@ -183,7 +184,8 @@ subject should have one document or they should at least reference each
 other"). There is no central decisions register and no label grammar:
 **a decision lives written out in prose in its own subject doc**, and the
 subject doc is the source of truth. `docs_lint.py` enforces that model with
-four soft rules on top of the mechanical link/path checks:
+four rules (hard-fail as of 2026-07-23) on top of the mechanical link/path
+checks:
 
 1. **No new D-number decision labels.** The abolished convention wrote a
    decision as a bold `D`-number marker or a "decision D-number" phrase (the
@@ -217,16 +219,16 @@ four soft rules on top of the mechanical link/path checks:
    anti-fragmentation guarantee the "one doc per subject, or they reference
    each other" ruling asks for, replacing the old shared-label heuristic.
 
-**Soft by default.** These four rules print as `::warning::` and do **not**
-add to the exit code; the original link/path/tether checks are unchanged —
-still hard, still counted. The de-lettering sweep (PR #357) has merged and
-the whole corpus is now clean under these rules (`--strict` exits 0), so
-the lint is **ready to flip to hard-fail at the owner's discretion**: add
-`--strict` to [`docs-lint.yml`](../.github/workflows/docs-lint.yml)'s `Run docs lint` step (`python3 .github/scripts/docs_lint.py --strict`) or set
-`DOCS_LINT_STRICT=1` in that job's env. In strict mode the same findings
-become `::error::` and count toward the exit code. Left soft here so the
-supersession/cross-reference heuristics stay warn-only until a maintainer
-decides to promote them.
+**Hard-fail (flipped 2026-07-23).** These four rules now print as
+`::error::` and count toward the exit code, same as the original
+link/path/tether checks — [`docs-lint.yml`](../.github/workflows/docs-lint.yml)'s
+`Run docs lint` step runs `python3 .github/scripts/docs_lint.py --strict`.
+The de-lettering sweep (PR #357) had already left the whole corpus clean
+under `--strict` (exit 0) before this flip, so promoting the four rules from
+warn-only to blocking changed no doc content — only what CI enforces going
+forward. `DOCS_LINT_STRICT=1` in the job's env is the equivalent alternate
+trigger, documented here in case a future workflow edit prefers the env-var
+form over the CLI flag.
 
 ## The judgment coherence pass (quarterly)
 
