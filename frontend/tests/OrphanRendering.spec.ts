@@ -11,12 +11,13 @@
  * listenerMiddleware.ts) are unaffected by which page mounts them - orphan rendering on /display
  * needed NO code change (it already reads `cardDocument.mediumThumbnailUrl`/`isOrphan` off the
  * same shared `cardDocuments` store slice PagePreview.tsx's own sheet-cell renderer uses), so
- * this file is proof, not a fix. Note this is a DIFFERENT rendering path from Card.tsx (the
- * classic editor's own card component, which additionally shows an "orphan-badge" corner label -
- * see Card.test.tsx for that unit-level coverage): PagePreview.tsx (the /display sheet's own
- * renderer) has no badge equivalent today, so no badge assertion appears below - that's a
- * pre-existing, page-scoped gap in the sheet's own visual language, not a regression this file
- * introduces or hides.
+ * this file is proof, not a fix. This is a DIFFERENT rendering path from Card.tsx (the classic
+ * editor's own card component, which also shows an "orphan-badge" corner label - see
+ * Card.test.tsx for that unit-level coverage): PagePreview.tsx (the /display sheet's own
+ * renderer) previously had no badge equivalent - a recorded, page-scoped gap in
+ * docs/features/foreign-order-resilience.md - now closed by porting the same `orphan-badge`
+ * testid/treatment onto PagePreview's own slot renderer (PagePreview.tsx's `orphanLabel` prop,
+ * wired from DisplayPage.tsx), asserted below on both faces.
  *
  * The classic editor's own "Common Cardback" panel (CommonCardback.tsx, /editor only - /display
  * has no equivalent persistent tile, only the CardbackToolbarButton picker) is covered
@@ -77,6 +78,9 @@ test.describe("orphan rendering (issue #324) - unified /display page", () => {
       "src",
       `https://lh4.googleusercontent.com/d/${orphanId}=h800`
     );
+    // The sheet's own corner badge (PagePreview.tsx's `orphanLabel`, ported from Card.tsx's
+    // `OrphanBadge` - same testid, same "sourceName" text, on the /display sheet surface).
+    await expect(slot.getByTestId("orphan-badge")).toHaveText("Your file");
 
     await page.waitForTimeout(500);
     await page.screenshot({
@@ -133,6 +137,7 @@ test.describe("orphan rendering (issue #324) - unified /display page", () => {
       "src",
       `https://lh4.googleusercontent.com/d/${orphanId}=h800`
     );
+    await expect(slot.getByTestId("orphan-badge")).toHaveText("Your file");
 
     await page.waitForTimeout(500);
     await page.screenshot({
@@ -152,10 +157,44 @@ test.describe("orphan rendering (issue #324) - unified /display page", () => {
       "src",
       `https://lh4.googleusercontent.com/d/${orphanBackId}=h800`
     );
+    await expect(slot.getByTestId("orphan-badge")).toHaveText("Your file");
 
     await page.waitForTimeout(500);
     await page.screenshot({
       path: "test-results/orphan-xml-import-backs-desktop.png",
+    });
+  });
+
+  test("the sheet's orphan badge renders at a narrow phone viewport too", async ({
+    page,
+    network,
+  }) => {
+    network.use(...defaultHandlers);
+    // Same 390x844 phone viewport DisplayPage.spec.ts's own "phone viewport (issue #266)" block
+    // uses - set before navigation so the /display route's own responsive layout (left-rail
+    // drawer, sheet scaled to fit) is already in its narrow-viewport shape from first paint.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loadPageWithDefaultBackend(page, "display");
+    await expect(page.getByTestId("display-empty-state")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await page
+      .getByRole("textbox", { name: "import-text" })
+      .fill(`1x Kharn [mpc:${orphanId}]`);
+    await page.getByRole("button", { name: "import-text-submit" }).click();
+
+    await expect(page.getByTestId("display-page")).toBeVisible();
+    await expect(page.getByText("Review Invalid Cards")).not.toBeVisible();
+
+    const slot = page.getByTestId("page-preview-slot").first();
+    const image = slot.locator("img");
+    await expect(image).toHaveCount(1, { timeout: 45_000 });
+    await expect(slot.getByTestId("orphan-badge")).toHaveText("Your file");
+
+    await page.waitForTimeout(500);
+    await page.screenshot({
+      path: "test-results/orphan-text-import-narrow-390.png",
     });
   });
 });
