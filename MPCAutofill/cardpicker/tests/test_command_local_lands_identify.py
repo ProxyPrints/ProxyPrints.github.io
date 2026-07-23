@@ -13,7 +13,33 @@ import pytest
 from django.core.management import CommandError, call_command
 
 from cardpicker.models import CardPrintingTag, PilotRunLedger
-from cardpicker.tests.factories import CanonicalCardFactory, CardFactory
+from cardpicker.tests.factories import (
+    CanonicalArtistFactory,
+    CanonicalCardFactory,
+    CanonicalExpansionFactory,
+    CardFactory,
+    SourceFactory,
+)
+
+# See test_local_lands_identify.py's identical fixture for the full rationale -
+# factory.Sequence counters are process-global across the whole pytest run.
+_SHARED_FACTORIES = [
+    CardFactory,
+    SourceFactory,
+    CanonicalArtistFactory,
+    CanonicalExpansionFactory,
+    CanonicalCardFactory,
+]
+
+
+@pytest.fixture(autouse=True)
+def _preserve_shared_factory_sequences():
+    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
+    for f, n in before.items():
+        f.reset_sequence(n, force=True)
+    yield
+    for f, n in before.items():
+        f.reset_sequence(n, force=True)
 
 
 class TestLocalLandsIdentifyCommand:
