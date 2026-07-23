@@ -173,9 +173,14 @@ test.describe("saved decks", () => {
     await loadPageWithDefaultBackend(page, "display");
     await expect(page.getByTestId("display-empty-state")).toBeVisible();
 
-    // The panel mounts the moment it has something to show (a saved deck exists), which
-    // auto-prompts the passphrase unlock exactly as /myDecks does - see
-    // SavedDecksLandingPanel.tsx's own module comment for why that's deliberate here.
+    // Trigger-timing fix: the panel mounting (a saved deck exists) must NOT auto-prompt the
+    // passphrase unlock on its own - the page's own paste-a-decklist/import inputs need to stay
+    // usable immediately, unblocked by an unrequested modal. Unlock only fires once the user
+    // deliberately engages the saved-decks affordance below - see useLoadSavedDeck.ts's own
+    // `autoPromptOnLock` module comment for the full rationale (MyDecksPage keeps the auto-prompt
+    // since arriving at /myDecks is itself the deliberate engagement; this landing panel doesn't).
+    await expect(page.getByLabel("unlock-passphrase")).not.toBeVisible();
+    await page.getByRole("button", { name: "Unlock my saved decks" }).click();
     await page.getByLabel("unlock-passphrase").fill(PASSPHRASE);
     await page.getByRole("button", { name: "Unlock" }).click();
 
@@ -190,6 +195,60 @@ test.describe("saved decks", () => {
     // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + Borderless
     // margins + 3.175mm bleed + D18's spacing lands the spec's own 4x2 (8) grid.
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
+  });
+
+  // Regression coverage for the trigger-timing bugfix (owner-reported: the unlock modal was
+  // auto-popping on plain /display entry, gating the whole page - including the unrelated
+  // paste-a-decklist/import inputs - behind a Cancel click). Documentary screenshots of both
+  // states live in the PR body.
+  test("display landing entry never gates the page behind the unlock modal; the modal only opens once the user deliberately engages saved decks", async ({
+    page,
+    network,
+  }) => {
+    const profile = await createCryptoProfile(PASSPHRASE, TEST_ITERATIONS);
+    const namedDeck = await buildMockSavedDeckSummary(
+      "deck-landing-2",
+      "deck",
+      {
+        version: 2,
+        name: "Mono Green Ramp",
+        members: [],
+        cardback: null,
+        manualOverrides: {},
+        finishSettings: { cardstock: "(S30) Standard Smooth", foil: false },
+        revision: 1,
+        modifiedAt: "2026-01-01T00:00:00.000Z",
+      },
+      profile.masterKey,
+      { createdAt: "2026-01-01", updatedAt: "2026-01-02" }
+    );
+    network.use(
+      whoamiSignedInNotModerator,
+      existingProfileHandler(profile),
+      getSavedDecksHandler([namedDeck]),
+      ...threeCardHandlers
+    );
+    await loadPageWithDefaultBackend(page, "display");
+    await expect(page.getByTestId("display-empty-state")).toBeVisible();
+
+    // Page entry: no modal, and the ordinary import surfaces are immediately usable.
+    await expect(page.getByTestId("unlock-modal")).toHaveCount(0);
+    const listImport = page.getByRole("textbox", { name: "import-text" });
+    await expect(listImport).toBeVisible();
+    await expect(listImport).toBeEditable();
+    await page.screenshot({
+      path: path.join(os.tmpdir(), "saved-decks-page-entry-no-modal.png"),
+    });
+
+    // Deliberate engagement: the panel's own "Unlock my saved decks" affordance.
+    await page.getByRole("button", { name: "Unlock my saved decks" }).click();
+    await expect(page.getByTestId("unlock-modal")).toBeVisible();
+    await page.screenshot({
+      path: path.join(
+        os.tmpdir(),
+        "saved-decks-unlock-modal-on-engagement.png"
+      ),
+    });
   });
 
   // PR-6, post-v1 "deck portability" (docs/proposals/proposal-g-user-accounts-saved-decks.md) -

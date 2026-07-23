@@ -302,9 +302,9 @@ are untouched.
 
 ## Open items (owner-decidable, not blocking)
 
-1. **D14 numeric-score field name** — flagged above; confirm
-   `suggestedCanonicalCardConfidence` is the name the backend PR should
-   actually use once the calibrated score work lands.
+1. **Confidence element's numeric-score field name** — flagged above;
+   confirm `suggestedCanonicalCardConfidence` is the name the backend PR
+   should actually use once the calibrated score work lands.
 2. **Group corner-tag copy** (`✓`/`Alt`/`?`) — the spec's own open item
    6: whether a canonical/custom/unknown label should surface anywhere
    for sighted users beyond the corner tag. Current build ships the
