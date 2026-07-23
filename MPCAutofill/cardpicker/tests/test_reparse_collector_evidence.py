@@ -11,6 +11,8 @@ so the resolved-consensus safety-gate test's arithmetic matches what a real card
 do in production.
 """
 
+from typing import Any
+
 import pytest
 
 from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
@@ -25,6 +27,7 @@ from cardpicker.management.commands.reparse_collector_evidence import (
 from cardpicker.models import (
     CardPrintingTag,
     CardScanLog,
+    PilotRunLedger,
     PrintingTagStatus,
     VoteSource,
 )
@@ -767,8 +770,107 @@ class TestReparseCollectorEvidenceCommand:
         ids_file = tmp_path / "ids.txt"
         ids_file.write_text(f"{card.pk}\n")
 
-        call_command("reparse_collector_evidence", card_ids_file=str(ids_file), write=True, run_id=generate_run_id())
+        # --skip-dryrun-check: this test exercises the write path in isolation, not the
+        # forced-dry-run guard (issue #362) - that guard has its own dedicated test class below.
+        call_command(
+            "reparse_collector_evidence",
+            card_ids_file=str(ids_file),
+            write=True,
+            run_id=generate_run_id(),
+            skip_dryrun_check=True,
+        )
 
         assert not CardScanLog.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
         evidence = card.image_evidence.get()
         assert evidence.collector_line_set_code == "cmr"
+
+
+def _card_and_ids_file(tmp_path, filename="ids.txt", name="Some Card", expansion_code="cmr"):
+    card = CardFactory(name=name, content_phash=42)
+    CanonicalCardFactory(name=name, expansion__code=expansion_code, collector_number="158")
+    _evidence(
+        card,
+        collector_line_raw_text=f"158/361R\n{expansion_code.upper()} EN",
+        collector_line_set_code="361r",
+        collector_line_collector_number="158",
+    )
+    ids_file = tmp_path / filename
+    ids_file.write_text(f"{card.pk}\n")
+    return card, ids_file
+
+
+class TestReparseCollectorEvidenceDryRunGuard:
+    """Phase 0 rails (issues #362/#153's milestone): the forced-dry-run guard (issue #362) and
+    the counters-before-output hardening (production incident 2026-07-23), both wired into
+    reparse_collector_evidence's own Command.handle()."""
+
+    def test_write_refused_without_a_prior_matching_dry_run(self, db, tmp_path):
+        from django.core.management import CommandError, call_command
+
+        _card, ids_file = _card_and_ids_file(tmp_path)
+
+        with pytest.raises(CommandError, match="FORCED DRY-RUN GUARD"):
+            call_command("reparse_collector_evidence", card_ids_file=str(ids_file), write=True)
+
+    def test_write_succeeds_after_a_matching_dry_run(self, db, tmp_path):
+        from django.core.management import call_command
+
+        _card, ids_file = _card_and_ids_file(tmp_path)
+
+        call_command("reparse_collector_evidence", card_ids_file=str(ids_file))  # dry-run (default)
+        call_command("reparse_collector_evidence", card_ids_file=str(ids_file), write=True)
+
+        ledgers = list(PilotRunLedger.objects.filter(command="reparse_collector_evidence").order_by("started_at"))
+        assert len(ledgers) == 2
+        assert ledgers[0].dry_run is True and ledgers[0].status == PilotRunLedger.Status.COMPLETED
+        assert ledgers[1].dry_run is False and ledgers[1].status == PilotRunLedger.Status.COMPLETED
+
+    def test_write_refused_when_scope_differs_from_the_dry_run(self, db, tmp_path):
+        """A dry-run of one --card-ids-file must never authorize --write for a DIFFERENT one -
+        matching docs/features/catalog-completion-plan.md's own "the EXACT same invocation"
+        wording."""
+        from django.core.management import CommandError, call_command
+
+        _card_a, ids_file_a = _card_and_ids_file(tmp_path, filename="a.txt", name="Card A", expansion_code="aaa")
+        _card_b, ids_file_b = _card_and_ids_file(tmp_path, filename="b.txt", name="Card B", expansion_code="bbb")
+
+        call_command("reparse_collector_evidence", card_ids_file=str(ids_file_a))  # dry-run of A only
+
+        with pytest.raises(CommandError, match="FORCED DRY-RUN GUARD"):
+            call_command("reparse_collector_evidence", card_ids_file=str(ids_file_b), write=True)
+
+    def test_skip_dryrun_check_bypasses_the_guard_and_is_recorded(self, db, tmp_path, capsys):
+        from django.core.management import call_command
+
+        _card, ids_file = _card_and_ids_file(tmp_path)
+
+        call_command("reparse_collector_evidence", card_ids_file=str(ids_file), write=True, skip_dryrun_check=True)
+
+        printed = capsys.readouterr().out
+        assert "SKIP-DRYRUN-CHECK" in printed
+        ledger = PilotRunLedger.objects.get(command="reparse_collector_evidence")
+        assert ledger.counters["skip_dryrun_check_used"] is True
+
+    def test_broken_pipe_during_terminal_summary_does_not_flip_completed_to_failed(self, db, tmp_path, monkeypatch):
+        """Production incident 2026-07-23: a client-side timeout severed stdout AFTER every write
+        had already committed and the ledger row had already been saved COMPLETED - the terminal
+        summary prints (self.stdout.write) must never be able to flip that back to FAILED."""
+        from django.core.management import call_command
+        from django.core.management.base import OutputWrapper
+
+        _card, ids_file = _card_and_ids_file(tmp_path)
+
+        real_write = OutputWrapper.write
+
+        def raising_write(self: OutputWrapper, msg: str = "", *args: Any, **kwargs: Any) -> None:
+            if isinstance(msg, str) and msg.startswith("considered="):
+                raise BrokenPipeError("stdout severed")
+            return real_write(self, msg, *args, **kwargs)
+
+        monkeypatch.setattr(OutputWrapper, "write", raising_write, raising=False)
+
+        call_command("reparse_collector_evidence", card_ids_file=str(ids_file), write=True, skip_dryrun_check=True)
+
+        ledger = PilotRunLedger.objects.get(command="reparse_collector_evidence")
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.finished_at is not None

@@ -549,3 +549,29 @@ mechanics this amendment also ships are in the new companion doc,
 this file since it's forward-looking policy + a point-in-time sweep
 result, not chunk-decomposition data, matching how `conventions.md`
 already sits alongside this doc for a related-but-distinct concern.
+
+## 10. Styling/presentation divergences from upstream (`/display` left rail, 2026-07-23)
+
+No prior section here tracked _presentation-only_ divergences (same
+feature/behavior, different look) separately from the feature-level
+own-work/upstream-GPL3 provenance columns above — this section starts
+that ledger, seeded by the `/display` left-rail redesign round
+(`SPEC-display-left-rail.md`, owner-approved 2026-07-23, built into PR
+#352). Each row's own `// diverges from upstream:` / `diverges from upstream:` comment lives at the actual change site (grep that exact
+phrase in `frontend/src/` to find them) — this table is the index, not
+a duplicate of the reasoning.
+
+| Fork surface                              | File                                             | Diverges from upstream? | Note                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------- | ------------------------------------------------ | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Artist support link                       | `features/display/ArtistSection.tsx`             | Yes                     | `ArtistSupportLink` itself is fork-only (upstream has no artist-support surface at all); the `btn-outline-primary` button styling is a fork choice with no upstream analogue to diverge from.                                                                                                                                                       |
+| Slot Actions as a button stack            | `features/display/SlotActionsSection.tsx`        | Yes                     | Upstream renders `CardSlotMenuActions` only as `Dropdown.Item`s / a context menu (`CardSlotContextMenu.tsx`); this rail renders the SAME action list as stacked outline buttons. Behavior/actions identical, presentation diverges.                                                                                                                 |
+| D14 confidence element                    | `features/display/ConfidenceElement.tsx`         | Yes                     | Fork-only confidence element (#271); no upstream counterpart at all.                                                                                                                                                                                                                                                                                |
+| Sources accordion (Invert / filter / pin) | `features/display/SourcesAccordion.tsx`          | Yes                     | Upstream's `SourceSettings` exposes only a single "Enable/Disable all" button and drag reorder; the type-to-filter input, Invert, and per-source pin star are fork additions.                                                                                                                                                                       |
+| Select Version Filters toggle as a button | `features/gridSelector/SelectVersionResults.tsx` | **No**                  | Upstream's `GridSelectorFilters` already renders its own settings/Filters toggle as a `Button` (`settingsToggleRef`) — conforming to the SPEC's "actions read as buttons" rule keeps this ALIGNED with upstream; it only corrects a reference-mockup text-link drift that had crept in. Recorded so the ledger shows this was checked, not assumed. |
+
+Sources placement (left rail vs. the `proposal-h-display-layout-spec.md`
+§4.2 right-rail call) and the D14 numeric-confidence seam
+(`suggestedCanonicalCardConfidence`) are fork-internal design deviations
+from this repo's OWN prior spec, not upstream divergences — tracked in
+[`docs/features/display-left-rail.md`](../features/display-left-rail.md)
+instead, not duplicated here.

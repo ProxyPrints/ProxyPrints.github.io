@@ -19,12 +19,16 @@
  *      one encrypted row exists, whether or not this session has unlocked it yet - unlocking is not
  *      a precondition for "there is something to show here".
  *   2. `SavedDecksLandingPanel` itself only mounts once (1) is true, and handles the locked/
- *      unlocked split the exact same way MyDecksPage does: `useLoadSavedDeck`'s bundled UnlockModal
- *      auto-shows the moment this panel mounts against a locked session (same as visiting
- *      /myDecks) - deliberately NOT suppressed, since a user arriving at /display with saved decks
- *      should actually see them (the issue's own ask), not a silent no-op landing that never
- *      surfaces the passphrase prompt on a fresh session. A user who dismisses the modal without
- *      unlocking gets the same "Unlock my saved decks" button MyDecksPage shows in that state.
+ *      unlocked split the same way MyDecksPage does, MINUS the auto-popping modal (PR #366): this
+ *      panel omits `useLoadSavedDeck`'s `autoPromptOnLock` option, so it gets that hook's own
+ *      `false` default - the bundled UnlockModal no longer pops unprompted the instant this panel
+ *      mounts against a locked session. It used to auto-show here too, but that gated an unrelated
+ *      page (a user landing on /display to type a decklist or import a file) behind an unrequested
+ *      passphrase prompt; MyDecksPage is the one caller that still opts in
+ *      (`autoPromptOnLock: true`), since arriving at /myDecks already IS the user's deliberate
+ *      "open my saved decks" action, unlike this ambient landing panel. A user here instead always
+ *      gets the "Unlock my saved decks" button MyDecksPage shows in the locked state - a
+ *      user-initiated affordance, not an ambient popup.
  *
  * Snapshots are intentionally excluded from the rendered list (mirrors the mockup, which only ever
  * shows plain saved decks) - MyDecksPage remains the one place snapshots are browsable/restorable.

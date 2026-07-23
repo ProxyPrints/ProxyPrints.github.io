@@ -121,6 +121,15 @@ still back that modal.
   No fork of the component was needed. Its `onOpenGridSelector` callback
   is a no-op here (there's no separate modal to open — this tile is
   already inside the picker).
+  **On the `/display` rail's stacked (funnel) layout specifically**
+  (2026-07-23 continuous-grid round): this same, still-completely-
+  unmodified mount is now visually a small `transform: scale(0.72)`
+  "confirm ribbon" overlay in the tile's corner instead of a full block
+  rendered below the tile — see
+  [`display-left-rail.md`](display-left-rail.md)'s "Select Version —
+  continuous grid" section for the full affordance-by-affordance
+  mapping; the sidebar/modal layout keeps the original full-size mount
+  described above, unchanged.
 - **Moment (b), art-as-filter** — **sidebar/modal layout only** (see the
   FUNNEL round below, which replaces this on the `/display` rail): a
   plain binary toggle-chip row (`FilterChipBar`, NOT
@@ -175,26 +184,40 @@ still renders the flat `FilterChipBar` and the two-tap `ConfirmChip`
 described above.
 
 - <a id="funnel-chips-positive-or-off"></a>**Per-axis segmented chips are
-  positive-or-off (two-state), not the QuestionFeed's tri-state** (locked
-  2026-07-22, PR #329; formerly labeled _D23_ in this document;
-  full ratification text: `docs/reference/funnel-spec.md`'s §4). The
-  QuestionFeed's chips cycle untouched→positive→negative→untouched (a
-  describe-what-you-see vote); the funnel filter instead wants "narrow to
-  this / don't" — a segmented radio for the exclusive axes (Border,
-  Frame) or a checkbox for the independent axis (Treatment), with no
-  negative-filter state exposed on this surface (the implicit vote on
-  pick, below, is separate and always positive/support). Mechanically
-  (`attributeChips.ts`'s `FUNNEL_AXES`): Border and Frame render as
-  radio-exclusive `ToggleButtonGroup`s (one segment active at a time;
-  re-tapping the active segment clears the axis back to "any" — since a
-  native radio input doesn't fire a change event for a click on an
-  already-checked option, this is handled on the `ToggleButton`'s own
-  `onClick`, ahead of the group's `onChange`); Treatment (Full
-  Art/Borderless/Showcase/Extended/Etched) renders as an
-  independent-checkbox group. Only axes with ≥1 surviving candidate
-  render at all (`chipMembershipState`, computed over the OTHER axes'
-  current filter — never the axis's own selection, so picking Black
-  doesn't make White/Silver permanently vanish from their own axis).
+  positive-or-off (two-state) for Border/Frame, not the QuestionFeed's
+  tri-state** (locked 2026-07-22, PR #329; formerly labeled _D23_ in this
+  document; full ratification text: `docs/reference/funnel-spec.md`'s
+  §4). The QuestionFeed's chips cycle untouched→positive→negative→untouched
+  (a describe-what-you-see vote); the funnel filter instead wants "narrow
+  to this / don't" — a segmented radio for the exclusive axes (Border,
+  Frame), with no negative-filter state exposed for either (the implicit
+  vote on pick, below, is separate and always positive/support).
+  Mechanically (`attributeChips.ts`'s `FUNNEL_AXES`): Border and Frame
+  render as radio-exclusive `ToggleButtonGroup`s (one segment active at a
+  time; re-tapping the active segment clears the axis back to "any" —
+  since a native radio input doesn't fire a change event for a click on
+  an already-checked option, this is handled on the `ToggleButton`'s own
+  `onClick`, ahead of the group's `onChange`). Only axes with ≥1
+  surviving candidate render at all (`chipMembershipState`, computed over
+  the OTHER axes' current filter — never the axis's own selection, so
+  picking Black doesn't make White/Silver permanently vanish from their
+  own axis).
+  **Treatment is the one exception, added 2026-07-23** (addendum item 1
+  of `SPEC-display-left-rail.md`, owner-approved): it's no longer an
+  independent-checkbox group rendered through the same generic axis
+  component described above — it's a real tri-state cycle (untouched ->
+  include -> exclude -> untouched, `TreatmentChipRow`/`nextChipState`)
+  sharing one unified block with Frame instead of its own stacked row,
+  specifically because the owner asked for a genuine include/exclude
+  filter on Treatment (Full Art/Borderless/Showcase/Extended/Etched) —
+  see [`display-left-rail.md`](display-left-rail.md)'s "Unified Frame +
+  Treatment filter" section for the full implementation writeup
+  (`excludedAttributeTags`, `filterOutExcludedChipsVotesGated`). Border/
+  Frame's own two-state, positive-or-off behavior above is unchanged;
+  this is a scoped, additive exception for Treatment only, not a reversal
+  of the 2026-07-22 ratification (whose own "narrow to this / don't"
+  reasoning was about the funnel-vs-QuestionFeed distinction generally,
+  not a hard ban on ever adding an exclude state anywhere in the funnel).
 - <a id="sensitive-tags-excluded-from-funnel"></a>**Three chip states**
   (F3): SETTLED (some survivor resolves the tag — `card.tags`), SUGGESTED
   (every carrying survivor only has it via `card.suggestedFilterTagNames`
@@ -259,8 +282,64 @@ described above.
   package's hard `compressed=true`: `FUNNEL_DENSE_ABOVE = 8` / `FUNNEL_HERO_AT_OR_BELOW = 2` so post-launch tuning is a one-line
   change, not inline magic numbers in the tier picker. `>8`
   survivors → axes shown + advanced filters auto-expanded once + dense
-  ~72px tiles; `3–8` → axes shown + medium ~104px tiles; `≤2` → axes
-  collapse to the head's active-pill summary + expanded (`compressed= false`) hero tiles; `0` → an empty state with a "Clear filters" link.
+  ~72px tiles; `3–8` → axes shown + medium ~88px tiles; `≤2` → axes
+  collapse to the head's active-pill summary + expanded (`compressed= false`) ~112px hero tiles; `0` → an empty state with a "Clear filters" link.
+  **Owner fix round (2026-07-23, "the elements of the cardpicker are
+  too large still")**: `medium`/`hero` had no design-doc grounding
+  (invented during the funnel round itself, unlike `dense`'s
+  mockup-sourced 72px) and had drifted to 104px/150px - tightened to
+  88px/112px (`FUNNEL_TIER_TILE_WIDTH_REM`,
+  `SelectVersionResults.tsx`), and the tile-wrapping rows' gap dropped
+  from Bootstrap's `gap-2` (8px) to `gap-1` (4px) so more tiles fit per
+  row at the rail's ~380px width. `dense`'s 72px is untouched - it
+  already matched the reference.
+  **Same PR, follow-up owner round ("keep the ordering, but drop the
+  separator please")**: the DOM ordering (canonical → non-canonical →
+  unknown, still `selectVersionGrouping.ts`'s own ordering, untouched)
+  used to read as visually separate blocks because each per-group
+  wrapper div (`renderPrintingGroup`/`renderReasonTagGroup`) carried its
+  own `mb-2` bottom margin. That margin is dropped - no other DOM
+  change - so the rail now reads as one continuous grid with no visible
+  gap/seam at a group boundary. Those wrapper divs never carried any
+  `role="group"`/`aria-label` grouping semantics to begin with, so
+  nothing accessibility-bearing needed preserving.
+  **Same PR, second follow-up owner round ("it's the buttons that are
+  the largest, they're too big")**: every plain react-bootstrap
+  `Button`/`ToggleButton` in the funnel (`size="sm"` alone measured
+  ~31px tall, ~21px line-height) read as oversized next to the
+  now-compact tiles and the reference mockup's own flat, low-chrome
+  controls - the mockup's Filters disclosure isn't even a bordered
+  button, it's plain underlined text next to the result count
+  (`responsive-layout-2026-07-21.html` line 435: `14 results · <u> Filters</u>`). Three scoped `styled()` wraps
+  (`CompactButton`/`CompactToggleButton`/`CompactLinkButton`,
+  `SelectVersionResults.tsx`) tighten padding/font-size/line-height to
+  match, applied ONLY at this file's own funnel-specific call sites
+  (Filters toggle - also switched from `outline-primary` to `link`
+  variant to match the reference's unbordered text shape - the per-axis
+  segmented chips, and the already-link-styled "+N more"/"Show
+  fewer"/"More like this"/"Clear filters" controls); measured live,
+  "More like this" no longer wraps to two lines in a narrow tile as a
+  side effect of the smaller font. `GridSelectorModal.tsx`'s own
+  sidebar/modal layout is a completely separate return path in this
+  same file (per this file's own top comment) and never renders through
+  these wraps, so it's unaffected. Touch target: rather than shrinking
+  the real hit area below ~40px on a touch breakpoint, each wrap adds
+  an invisible `::after` (`inset: -12px`, `max-width: 767.98px` only)
+  that pads the actual clickable box out to >=40px while the visual
+  size stays reference-sized at every breakpoint - verified live via
+  `getComputedStyle(el, "::after")` at a 390px viewport.
+  **Same PR, third follow-up owner round (SPEC-display-left-rail.md §8's
+  buttons-look-like-buttons audit, 2026-07-23)**: the Filters toggle's
+  `link`/underlined-text shape from the round immediately above was
+  itself superseded one round later - the audit's own rule ("anything
+  clickable that performs an ACTION reads as a button") wins over the
+  reference mockup's text-link treatment, so it's back to a real
+  `outline-light` `Button` (`CompactButton`, unchanged padding/font-size
+  from that round, just the variant/border/background restored) with a
+  chevron - this ALSO happens to agree with upstream's own
+  `GridSelectorFilters`, which already renders its settings toggle as a
+  `Button`. See [`display-left-rail.md`](display-left-rail.md)'s
+  "Buttons-look-like-buttons audit" section for the full round writeup.
 - <a id="implicit-vote-is-the-vote"></a>**Implicit vote — the pick IS the
   vote, no second tap** (locked 2026-07-21/22, PR #329; formerly labeled
   _D20_ in this document). Picking a

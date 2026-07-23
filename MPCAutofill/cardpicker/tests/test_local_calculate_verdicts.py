@@ -68,6 +68,7 @@ from cardpicker.models import (
     Card,
     CardPrintingTag,
     CardScanLog,
+    PilotRunLedger,
     PrintingTagStatus,
     VoteSource,
 )
@@ -1611,3 +1612,64 @@ class TestFallbackSlowPathInteraction:
 
         assert result.cards_considered == 1
         assert CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID, card=card).count() == 1
+
+
+class TestCommandLedgerHardeningAndDryRunGuard:
+    """Phase 0 rails (issues #362/#153's milestone): the Command.handle() lifecycle itself, on an
+    empty (zero-eligible-card) DB - the calculator behaviour above is already exhaustively covered
+    by the pure-function tests in this file; these exercise the ledger/guard WIRING around it."""
+
+    def test_write_refused_without_a_prior_matching_dry_run(self, db):
+        from django.core.management import CommandError, call_command
+
+        with pytest.raises(CommandError, match="FORCED DRY-RUN GUARD"):
+            call_command("local_calculate_verdicts", "--write")
+        assert not PilotRunLedger.objects.filter(command="local_calculate_verdicts").exists()
+
+    def test_write_succeeds_after_a_matching_dry_run(self, db):
+        from django.core.management import call_command
+
+        call_command("local_calculate_verdicts")  # dry-run (default)
+        call_command("local_calculate_verdicts", "--write")
+
+        ledgers = list(PilotRunLedger.objects.filter(command="local_calculate_verdicts").order_by("started_at"))
+        assert len(ledgers) == 2
+        assert ledgers[0].dry_run is True
+        assert ledgers[1].dry_run is False
+        assert ledgers[1].status == PilotRunLedger.Status.COMPLETED
+
+    def test_skip_dryrun_check_bypasses_the_guard_and_is_recorded(self, db, capsys):
+        from django.core.management import call_command
+
+        call_command("local_calculate_verdicts", "--write", "--skip-dryrun-check")
+
+        printed = capsys.readouterr().out
+        assert "SKIP-DRYRUN-CHECK" in printed
+        ledger = PilotRunLedger.objects.get(command="local_calculate_verdicts")
+        assert ledger.counters["skip_dryrun_check_used"] is True
+
+    def test_broken_pipe_during_terminal_summary_does_not_flip_completed_to_failed(self, db, monkeypatch):
+        """Production incident 2026-07-23: a client-side timeout severed stdout AFTER every write
+        had already committed and the ledger row had already been saved COMPLETED - the terminal
+        summary print must never be able to flip that back to FAILED."""
+        from django.core.management import call_command
+
+        import cardpicker.management.commands.local_calculate_verdicts as cmd_module
+
+        real_print = print
+
+        def raising_print(*args: Any, **kwargs: Any) -> None:
+            msg = args[0] if args else ""
+            if isinstance(msg, str) and msg.startswith("[") and "done. run_id=" in msg:
+                raise BrokenPipeError("stdout severed")
+            real_print(*args, **kwargs)
+
+        monkeypatch.setattr(cmd_module, "print", raising_print, raising=False)
+
+        # No exception escapes call_command - resilient_terminal_output swallows the simulated
+        # BrokenPipeError from the terminal summary print.
+        call_command("local_calculate_verdicts", "--write", "--skip-dryrun-check")
+
+        ledger = PilotRunLedger.objects.get(command="local_calculate_verdicts")
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.finished_at is not None

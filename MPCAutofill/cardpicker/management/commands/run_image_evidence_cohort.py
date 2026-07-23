@@ -189,6 +189,14 @@ from django.utils import timezone
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.models import CanonicalCard, Card, ImageEvidence, PilotRunLedger
+from cardpicker.pilot_run_lifecycle import (
+    add_dry_run_guard_arguments,
+    enforce_dry_run_precondition,
+    initial_counters,
+    merge_counters,
+    resilient_terminal_output,
+    scope_hash,
+)
 from cardpicker.utils import get_baked_git_sha, read_card_ids_file
 
 logger = logging.getLogger(__name__)
@@ -599,7 +607,13 @@ class Command(BaseCommand):
         "Bounded dataset run (2026-07-20): drives compute_card_evidence + persist_evidence over "
         "a prioritized (edhrec_rank-ordered) cohort of cards via a decoupled fetch-thread-pool + "
         "compute-process-pool pipeline (Stage C fetch/compute decoupling design, #228). NOT the "
-        "full-catalog harvest - see this command's own module docstring."
+        "full-catalog harvest - see this command's own module docstring. Write mode is the "
+        "DEFAULT (pass --dry-run to preview). The forced-dry-run guard (issue #362) applies ONLY "
+        "to the targeted --card-ids-file path - it requires a matching COMPLETED dry-run of the "
+        "SAME --card-ids-file within --dry-run-window-hours (see --skip-dryrun-check to override). "
+        "The routine --limit bulk-harvest path is intentionally UNGATED: unlike the targeted path, "
+        "its own dry-run preview pays the same full fetch/OCR/extraction compute cost as a real "
+        "run, so the guard's cheap-preview rationale doesn't hold there (owner decision, PR #373)."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -704,6 +718,10 @@ class Command(BaseCommand):
             "set because a re-invocation picks up exactly where a stopped run left off (the "
             "resume filter - see module docstring's 'Resume/kill-safety' section).",
         )
+        # Forced-dry-run guard (issue #362, Phase 0 rails, narrowed per owner decision on PR #373's
+        # review - see the guard's own call site in handle() for the full reasoning): applies ONLY
+        # to a --card-ids-file write, never to the routine --limit bulk-harvest path.
+        add_dry_run_guard_arguments(parser, write_flag="a --card-ids-file write")
 
     def handle(self, *args: Any, **options: Any) -> None:
         limit: int = options["limit"]
@@ -735,6 +753,32 @@ class Command(BaseCommand):
         if profile:
             self.stdout.write(f"Profile JSONL: {profile_output}")
 
+        # Forced-dry-run guard scope (issue #362, narrowed per owner decision on PR #373's review):
+        # the guard applies ONLY to the targeted --card-ids-file path - the closest analogue to the
+        # other four commands' own retroactive-fix cohorts, and cheap to preview (a small explicit
+        # id list). The routine --limit bulk-harvest path is intentionally UNGATED: write_mode below
+        # is forced False whenever no --card-ids-file is given, regardless of --dry-run, so
+        # enforce_dry_run_precondition is a guaranteed no-op (no CommandError, no ledger-row
+        # precondition) for that path - a --limit run's own "dry-run" still pays full fetch/OCR/
+        # extraction compute cost (there is no cheap bulk preview), so the guard's cheap-preview
+        # rationale doesn't hold there, and gating it would force every routine harvest invocation
+        # to either find a matching recent dry-run of the same --limit or pass --skip-dryrun-check
+        # every time. `scope` itself is still computed/recorded for BOTH paths (cheap, and useful
+        # audit-trail context even when the guard doesn't consult it for --limit).
+        card_ids_file_for_scope: Optional[str] = options["card_ids_file"]
+        scope = (
+            scope_hash("card_ids_file", card_ids_file_for_scope)
+            if card_ids_file_for_scope
+            else scope_hash("cohort_limit", limit)
+        )
+        skip_used = enforce_dry_run_precondition(
+            command="run_image_evidence_cohort",
+            write_mode=(not dry_run) and bool(card_ids_file_for_scope),
+            skip_check=options["skip_dryrun_check"],
+            window_hours=options["dry_run_window_hours"],
+            scope=scope,
+        )
+
         # Self-recording (2026-07-23): one PilotRunLedger row per invocation, written RUNNING here
         # and updated to COMPLETED/FAILED once the run's aggregate counters are known - the same
         # start/complete lifecycle local_calculate_verdicts already follows, so this command's own
@@ -746,6 +790,7 @@ class Command(BaseCommand):
             dry_run=dry_run,
             status=PilotRunLedger.Status.RUNNING,
             git_sha=get_baked_git_sha(),
+            counters=initial_counters(scope=scope, skip_dryrun_check_used=skip_used),
         )
 
         try:
@@ -805,18 +850,22 @@ class Command(BaseCommand):
                 self.stdout.write(f"Cohort: {len(cohort_ids)} cards (prioritized by edhrec_rank, cold tail last)")
 
             if not cohort_ids:
-                self.stdout.write("Nothing to do.")
                 ledger.status = PilotRunLedger.Status.COMPLETED
                 ledger.finished_at = timezone.now()
-                ledger.counters = {
-                    "cohort_size": 0,
-                    "completed": 0,
-                    "fetch_failures": 0,
-                    "short_circuited": 0,
-                    "lockout_hit": False,
-                    "rss_limit_hit": False,
-                }
+                ledger.counters = merge_counters(
+                    ledger.counters,
+                    {
+                        "cohort_size": 0,
+                        "completed": 0,
+                        "fetch_failures": 0,
+                        "short_circuited": 0,
+                        "lockout_hit": False,
+                        "rss_limit_hit": False,
+                    },
+                )
                 ledger.save(update_fields=["status", "finished_at", "counters"])
+                with resilient_terminal_output():
+                    self.stdout.write("Nothing to do.")
                 return
 
             # Close the parent's own DB connection(s) before forking the compute pool - belt-and-
@@ -850,29 +899,38 @@ class Command(BaseCommand):
             elapsed = time.monotonic() - run_start
             rate = completed / elapsed if elapsed > 0 else 0.0
             final_rss_mb = _get_rss_mb()
-            self.stdout.write(
-                f"DONE run_id={run_id} completed={completed}/{len(cohort_ids)} elapsed={elapsed:.0f}s "
-                f"rate={rate:.3f}/s fetch_failures={fetch_failures} lockout_hit={lockout_hit} "
-                f"short_circuited={short_circuited} rss_limit_hit={rss_limit_hit} "
-                f"rss_mb={f'{final_rss_mb:.0f}' if final_rss_mb is not None else '?'}"
-            )
 
+            # Counters-before-output (production incident 2026-07-23, see
+            # cardpicker.pilot_run_lifecycle's own module docstring point 1): the ledger row is
+            # saved COMPLETED here, BEFORE the DONE summary print below - a BrokenPipeError on a
+            # severed stdout while printing that summary must never look like this run failed.
             # Written COMPLETED (not FAILED) even when --max-rss-mb is about to force a nonzero
             # exit below - the run itself drained cleanly and every write up to this point already
             # committed (module docstring's "this is a checkpoint, not a failure to recover from"),
             # so the ledger's own status should say the same thing the docstring already argues.
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()
-            ledger.counters = {
-                "cohort_size": len(cohort_ids),
-                "completed": completed,
-                "fetch_failures": fetch_failures,
-                "short_circuited": short_circuited,
-                "lockout_hit": lockout_hit,
-                "rss_limit_hit": rss_limit_hit,
-                "elapsed_s": round(elapsed, 1),
-            }
+            ledger.counters = merge_counters(
+                ledger.counters,
+                {
+                    "cohort_size": len(cohort_ids),
+                    "completed": completed,
+                    "fetch_failures": fetch_failures,
+                    "short_circuited": short_circuited,
+                    "lockout_hit": lockout_hit,
+                    "rss_limit_hit": rss_limit_hit,
+                    "elapsed_s": round(elapsed, 1),
+                },
+            )
             ledger.save(update_fields=["status", "finished_at", "counters"])
+
+            with resilient_terminal_output():
+                self.stdout.write(
+                    f"DONE run_id={run_id} completed={completed}/{len(cohort_ids)} elapsed={elapsed:.0f}s "
+                    f"rate={rate:.3f}/s fetch_failures={fetch_failures} lockout_hit={lockout_hit} "
+                    f"short_circuited={short_circuited} rss_limit_hit={rss_limit_hit} "
+                    f"rss_mb={f'{final_rss_mb:.0f}' if final_rss_mb is not None else '?'}"
+                )
 
             if rss_limit_hit:
                 # Nonzero exit (2026-07-22, item 3's own "cleanly checkpoints+exits nonzero" ask) -

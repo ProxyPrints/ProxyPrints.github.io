@@ -1131,6 +1131,38 @@ Verified 2026-07-21 running `cardpicker/tests/test_local_ocr.py`,
 `test_reparse_collector_evidence.py` together (370 passed) this way
 against the live prod containers with no observed impact.
 
+## Running the full `pytest cardpicker` suite gets mass `docker.errors.APIError`/`OperationalError: connection to server` failures across unrelated files
+
+**Symptom**: a full `pytest cardpicker -q` run (not a targeted file/module)
+produces hundreds of `ERROR`s spread across many files that have nothing to
+do with your change (`test_views.py`, `test_vote_consensus.py`,
+`test_sources.py`, etc.) — either `django.db.utils.OperationalError: connection to server at "localhost"` or, on a worse collision,
+`docker.errors.APIError: 500 Server Error for http+docker://localhost/...`.
+Individually running the files your change actually touches passes cleanly
+(100%), which is the tell that this isn't a regression in your code.
+
+**Cause**: this repo's `db`/`transactional_db` pytest fixtures spin up
+throwaway `testcontainers` Postgres/Elasticsearch containers per test run
+(`cardpicker/tests/conftest.py`) — a full-suite run launches (and tears
+down) a lot of them in a short window. This machine runs more than one
+Claude Code worktree session at a time (see `WORKERS.md` at the repo root,
+machine-local); if another session is running its own full suite (or
+`pytest .` at the repo root) concurrently, both sessions compete for the
+same Docker daemon and Postgres connection ceiling, and one or both runs
+get spurious infrastructure-level failures that have nothing to do with
+either session's actual code changes. `docker ps`/`ps aux | grep pytest`
+will show another session's containers/process still running if this is
+the cause.
+
+**Fix**: before trusting a full-suite failure list, check for a concurrent
+`pytest` process (`ps aux | grep pytest`) and concurrent testcontainers
+(`docker ps`) from another session. If found, wait for it to finish (or
+coordinate via `WORKERS.md`) and re-run — don't debug your own code against
+a result contaminated by another session's resource contention. Trust your
+own affected-files-only run (individually and together) as the primary
+verification signal in the meantime; a full-suite run is a nice-to-have
+confirmation, not the only valid one, when this box is shared.
+
 ## A per-instance `viewBox` crop on an inlined SVG shows the _entire_ source art instead of just its own band
 
 **Symptom**: three separate `<svg viewBox="...">` elements, each meant to

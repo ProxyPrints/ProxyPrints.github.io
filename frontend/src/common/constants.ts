@@ -119,6 +119,13 @@ export const FavoritesKey = "favorites";
 export const BackendURLKey = "backendURL";
 export const AnonymousIdKey = "anonymousId";
 export const ManualOverridesKey = "manualOverrides";
+// /display left-rail Sources accordion pinned-favourites strip (#353 seam, owner-directed
+// 2026-07-23 - "implement the pin UI + localStorage persistence now," the account-tied "save as
+// my defaults" version stays a disabled seam under #353). Local/device-only by design for this
+// round - see docs/features/display-left-rail.md's "Pinned favourite sources" section for the
+// full rationale on why this specific, narrow, owner-approved case is exempt from this repo's
+// usual "no localStorage for state that should survive a clear-site-data test" rule.
+export const PinnedSourcesKey = "pinnedSources";
 
 export const Brackets: Array<number> = [
   18, 36, 55, 72, 90, 108, 126, 144, 162, 180, 198, 216, 234, 396, 504, 612,

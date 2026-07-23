@@ -4,6 +4,11 @@
  * (getCardSlotMenuActions), same handlers, as CardSlot.tsx's own 3-dot dropdown/context menu -
  * "rendered as a plain action list inside the section body instead of a dropdown/context-menu
  * overlay," per the design doc's own component-mapping row for this section.
+ *
+ * diverges from upstream: upstream renders the CardSlotMenuActions list only as Dropdown.Items /
+ * a context menu (CardSlotContextMenu.tsx); this rail renders the SAME action list as a stacked
+ * outline-light/outline-danger button column instead. Behavior/actions are identical; only the
+ * presentation diverges (SPEC-display-left-rail.md §8's buttons-look-like-buttons audit).
  */
 import React from "react";
 import Button from "react-bootstrap/Button";
@@ -72,15 +77,28 @@ export function SlotActionsSection({
 
   return (
     <div
-      className="d-flex flex-column gap-1"
+      className="d-flex flex-column"
+      // CSS-fidelity pass (SPEC-display-left-rail.md §2/§8, 2026-07-23) - `gap-2` (0.5rem/8px)
+      // approximated the density table's own literal "button stack gap:6px" - no exact Bootstrap
+      // spacing-scale match, so it's set directly, same as the rest of this round's exact-px
+      // values (`.d14`/`.ufilter`/`.vgrid` etc).
+      style={{ gap: "6px" }}
       data-testid="display-slot-actions-section"
     >
+      {/* Buttons-look-like-buttons audit (SPEC-display-left-rail.md §8): these were already real
+          `Button`s, not bare text rows as the audit's own summary table (item 4) describes -
+          `outline-secondary` (`$secondary`/`#4e5d6c` on the dark rail surface) was the actual
+          near-invisible problem the audit's rule targets, not the element type. `Delete` (the
+          one destructive action, keyed off `getCardSlotMenuActions`' own "delete" key) gets
+          `outline-danger`; every other action gets `outline-light` (`$light`/`#abb6c2`) instead
+          of the near-invisible `outline-secondary`. `w-100` replaces Bootstrap 4's removed
+          `btn-block` (BS5 idiom) so each action still fills the rail's width. */}
       {menuActions.map((action) => (
         <Button
           key={action.key}
-          variant="outline-secondary"
+          variant={action.key === "delete" ? "outline-danger" : "outline-light"}
           size="sm"
-          className="text-start"
+          className="text-start w-100"
           onClick={action.onClick}
           data-testid={`display-slot-action-${action.key}`}
         >

@@ -13,6 +13,12 @@ interface AutofillCollapseProps {
   children: ReactElement;
   sticky?: boolean;
   pad?: number;
+  /** Additive, optional (SPEC-display-left-rail.md §4's Sources accordion a11y requirement -
+   * "summary row is a button, aria-expanded/aria-controls") - when supplied, pairs a real
+   * `aria-controls` on the header with a matching `id` on the collapsible body. `undefined`
+   * (every pre-existing caller) renders exactly as before, just gaining the always-safe
+   * `aria-expanded` below. */
+  id?: string;
 }
 
 /**
@@ -35,6 +41,7 @@ export function AutofillCollapse({
   subtitle,
   sticky = false,
   pad = 0,
+  id,
 }: AutofillCollapseProps) {
   return (
     <>
@@ -42,6 +49,8 @@ export function AutofillCollapse({
         <Card.Header
           className={`border-light${sticky ? " sticky-top" : ""}`}
           onClick={onClick}
+          aria-expanded={expanded}
+          aria-controls={id != null ? `${id}-body` : undefined}
           style={{
             backgroundColor: "#4E5D6B",
             zIndex: zIndex + 1,
@@ -66,7 +75,7 @@ export function AutofillCollapse({
         <Card.Body className={`p-0 m-0`}>
           <Collapse in={expanded}>
             {/* https://react-bootstrap.netlify.app/docs/utilities/transitions/#collapse */}
-            <div>
+            <div id={id != null ? `${id}-body` : undefined}>
               <Container className={`p-${pad} m-0`}>{children}</Container>
             </div>
           </Collapse>

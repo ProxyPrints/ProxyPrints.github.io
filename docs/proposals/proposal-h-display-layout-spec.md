@@ -768,13 +768,34 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   everywhere, is a separate, parked owner decision — this note fixes only the
   [Confidence Funnel](#printing-confidence-funnel)/§4.3 surface.)
 
-  **Placeholder note (2026-07-22 audit):** `ConfidenceElement.tsx` — the
-  component implementing this design — currently ships as the narrower
-  PLACEHOLDER cut of [Confidence Funnel](#printing-confidence-funnel) (`SetIcon` + resolved/suggested read + a disabled
+  **Built (2026-07-23, PR #352, `SPEC-display-left-rail.md`, owner-approved)
+  — supersedes the 2026-07-22 placeholder note below.** `ConfidenceElement.tsx`
+  now ships the full interactive form this entry describes: `SetIcon` +
+  ✓/numeric-score corner badge + "Confirmed"/"N% confident" pill, a live
+  `OverlayTrigger`+`Popover` Scryfall reference image on hover/focus
+  (`buildScryfallReferenceImageUrl`, Scryfall's own CDN, display-only), and a
+  real vote on "✗ not this printing" — `APISubmitPrintingTag(..., isNoMatch: true, "display-confidence")`, the printing-tag consensus
+  endpoint (not literally `useTagVoting.ts`, which is the ATTRIBUTE-tag
+  hook of a similar shape - this bullet's own "no new vote semantics"
+  intent is satisfied by reusing that EXISTING printing-vote path, the
+  same one `DeckbuilderConfirmAffordance.tsx`'s YES button already casts
+  through). **One deviation from this bullet's literal text (owner
+  answer #2, 2026-07-23)**: "✗ not this printing" stays visible
+  (de-emphasised via CSS opacity, not hidden) on an ALREADY-`resolved`
+  printing too, so disputing settled consensus is always possible - not
+  only shown for the `suggested` state as this bullet's own diagram
+  implies. The numeric score (`92%` in this bullet's own example) is a
+  seam - the backend doesn't expose a calibrated confidence score yet, so
+  it renders the qualitative "Suggested" pill until a `suggestedCanonicalCardConfidence`
+  field lands server-side (see `common/schema_types.ts`'s own doc comment
+  for the exact expected shape/name). Full writeup:
+  [`docs/features/display-left-rail.md`](../features/display-left-rail.md).
+
+  **Placeholder note (2026-07-22 audit, historical - superseded above):**
+  `ConfidenceElement.tsx` — the component implementing this design —
+  used to ship as the narrower PLACEHOLDER cut of [Confidence Funnel](#printing-confidence-funnel) (`SetIcon` + resolved/suggested read + a disabled
   "not this printing" affordance, no live Scryfall-hover popover, no real
-  `useTagVoting` dispatch yet); the full interactive version this entry
-  describes lands with the unified-page bundle PR. See that component's own
-  module comment.
+  vote dispatch yet). Kept for historical context, not deleted.
 
 - <a id="import-dropdown-variety-confirmation"></a>**Import variety confirmed in the search-bar Import dropdown** (locked 2026-07-21, issue #272 item 1; formerly labeled _D15_ in this document). (#272 item
   1 + #267). The populated-state search bar's `Import ▾` dropdown carries the

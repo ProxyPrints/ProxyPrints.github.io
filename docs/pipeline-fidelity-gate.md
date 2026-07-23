@@ -837,10 +837,15 @@ misread as one at a glance.
 
 **`consensus_recompute --apply`** — executed 2026-07-23T13:25:37Z, exit
 code 0. Predates the `PilotRunLedger` self-recording convention (no
-ledger row exists for it — confirmed live, highest id remains 42) — a
-small follow-up flagged beside the already-tracked §11 Stage C
-run-identity gap, both being "command predates the ledger convention"
-instances rather than a broken command. Outcome: artist 7,130 pairs
+ledger row exists for it — confirmed live, highest id remains 42) — this
+was flagged beside the already-tracked §11 Stage C run-identity gap as a
+"command predates the ledger convention" instance rather than a broken
+command, and is now resolved going forward: `consensus_recompute` gained
+its own self-recording ledger row (RUNNING at start, COMPLETED/FAILED at
+end, per-family `pairs_checked`/`rows_written`/`transitions` counters)
+as part of the command-lifecycle hardening pass, matching every other
+Stage C/D pilot command's lifecycle. This specific 2026-07-23T13:25:37Z
+run predates that fix and has no ledger row, immutably. Outcome: artist 7,130 pairs
 checked, 0 transitions; tag 61,329 pairs checked, 49,206
 `None→UNRESOLVED` materializations (one fewer than the 49,207 sized in
 §6's earlier dry-run — organic interim resolution in the gap between

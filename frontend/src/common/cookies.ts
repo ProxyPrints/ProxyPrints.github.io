@@ -10,6 +10,7 @@ import {
   CSRFKey,
   FavoritesKey,
   ManualOverridesKey,
+  PinnedSourcesKey,
   SearchSettingsKey,
 } from "@/common/constants";
 import { Convert } from "@/common/schema_types";
@@ -189,6 +190,38 @@ export function setLocalStorageBackendURL(url: string) {
 
 export function clearLocalStorageBackendURL(): void {
   localStorage.removeItem(BackendURLKey);
+}
+
+//# endregion
+
+//# region /display left-rail pinned-favourite sources (#353 seam)
+
+/**
+ * Owner-directed 2026-07-23 ("implement the pin UI + localStorage persistence now"): which
+ * source pks the visitor has starred in the left rail's Sources accordion, so the collapsed
+ * summary can show a quick-glance favourites strip. Deliberately device-local, not account-tied -
+ * the real "save these as my defaults" version is issue #353, a disabled seam in the accordion's
+ * UI until that ships. See docs/features/display-left-rail.md for the full rationale (same
+ * validated-JSON-with-fallback shape as `getLocalStorageFavorites` above).
+ */
+export function getLocalStoragePinnedSourcePks(): number[] {
+  const serialised = localStorage.getItem(PinnedSourcesKey);
+  if (serialised == null) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(serialised);
+    if (Array.isArray(parsed) && parsed.every((pk) => typeof pk === "number")) {
+      return parsed as number[];
+    }
+    return [];
+  } catch (e) {
+    return [];
+  }
+}
+
+export function setLocalStoragePinnedSourcePks(pks: number[]): void {
+  localStorage.setItem(PinnedSourcesKey, JSON.stringify(pks));
 }
 
 //# endregion
