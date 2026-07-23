@@ -543,13 +543,21 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # yield than collector_line_ocr's own 10/30, but genuinely different cards fired - this crop
     # region is a NEW, dedicated area, not a reuse), and this catalog being specifically an
     # MTG-proxy print catalog (not a scan archive) means the proxy/not-for-sale marker fires far
-    # more often than a random sample of authentic scans would (10/30, not a rare edge case) -
+    # more often than a random sample of authentic scans would (11/30 as of the 2026-07-23
+    # correction below, was 10/30 on the original 2026-07-20 run - not a rare edge case) -
     # confirmed genuine on inspection, not a detector bug: real hits include "NOT FOR SALE"
     # (145081), "Custom Proxy *NOTFORSALE" (161020), "MTG PROXY" (190895), "Proxy - <username>"
     # community-credit watermarks baked into the source image (37962), and combined "Proxy / Not
     # for Sale" legends with a real year (128981: 1998). Kept as-is per the same "don't discard a
     # real all-negative OR all-positive outcome" rationale every prior extractor's own golden-set
     # comment gives.
+    #
+    # 208337 CORRECTED (2026-07-23, JestaProxy ticket): this card's real stored
+    # legal_line_raw_text contains "ZESTAPROXY" (an OCR misread of "JestaProxy", same maker brand
+    # as the ticket's own live example) - `False` was the correct output of the OLD \\b-anchored
+    # `_PROXY_MARKER_RE` (no word boundary between the brand prefix and "PROXY"), but is no longer
+    # what the current parser produces; `local_ocr.py`'s own regex comment has the full false-
+    # positive analysis for the widening this pin now reflects.
     "legal_line": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
@@ -579,7 +587,7 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
             200668: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
             204427: {"legal_line_copyright_year": "2024", "legal_line_proxy_marker_detected": False},
             207913: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
-            208337: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            208337: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
             208569: {"legal_line_copyright_year": "2025", "legal_line_proxy_marker_detected": True},
             214113: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
             217783: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},

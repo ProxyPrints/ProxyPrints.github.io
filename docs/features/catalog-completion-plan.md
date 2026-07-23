@@ -2076,6 +2076,19 @@ BrokenPipeError/IOError on a severed stdout can never flip an already-completed 
 stdout after every write had already committed, and the terminal-phase exception it caused
 overwrote the ledger row's true COMPLETED status with FAILED and no counters).
 
+**Detection-rule fix (2026-07-23, JestaProxy ticket)**: `_PROXY_MARKER_RE` (`local_ocr.py`)
+widened to an unbounded "proxy"/"proxies"/"proxied" substring match (a maker brand gluing the
+word directly onto its own prefix with no space, e.g. "JestaProxy"/"ValarProxy", previously never
+matched a `\b`-anchored regex) plus a bounded "original design" maker-attribution heuristic - see
+that regex's own comment for the full false-positive analysis. This directly shrinks item 4's own
+False population above but does NOT itself build the still-unbuilt compliance scan - it's a
+detection-accuracy fix one layer below it. `reparse_legal_line_proxy_marker` (new management
+command, dry-run default, `--write` to persist) re-derives `legal_line_proxy_marker_detected`
+for every stored `ImageEvidence` row from its already-stored `legal_line_raw_text` - parse-only,
+zero fetches, additive-only (never flips True back to False). A live prod dry-run (2026-07-23,
+218k `ImageEvidence` rows) found 2,508 rows whose stored `False` flips to `True` under the new
+parser - see this PR's own description for the sampled examples.
+
 Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
 owner directive 2026-07-19) — calculators must call the existing
