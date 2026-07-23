@@ -9,8 +9,12 @@ doc is the single, un-fragmented home for the round shipped 2026-07-23
 §10 for the presentation-only upstream-divergence ledger this round seeded
 (not duplicated here). A corrected fidelity round (also 2026-07-23,
 Yori) normalized every rail block-boundary divider to `#16202b` (O1,
-below) — see that section for the one binding-table row it deliberately
-did NOT apply.
+below). A follow-up machine-diff round (same day) fixed 63 further
+mismatches a computed-style diff against the corrected mockup caught —
+mostly Bootstrap body-default font-size fall-throughs, plus (per an
+explicit owner ruling) the `AutofillCollapse` header hex, the Source
+toggle's visual shape, and the Filters toggle's `.btn-sm` sizing — see
+the "Machine-diff fix round" section below.
 
 Companion design artifacts (spec + mockup) live at
 [`docs/proposals/mockups/proposal-h/display-left-rail-mockup.html`](../proposals/mockups/proposal-h/display-left-rail-mockup.html)
@@ -306,21 +310,79 @@ wrapper (gained a `select-version-wrapper` className plus a new
 `RailRoot` rule — it never had a boundary before); the unified filter
 `fieldset`'s own border and its internal `UnifiedFilterDivider` (both
 inline/styled-component literals in `SelectVersionResults.tsx`). The
-Sources list's own inner border and each source row's own bottom divider
-were deliberately left at `rgba(0,0,0,.22)` — the spec's own binding
-table marks those two specifically as unchanged (`I`, not `I (border N)`), not part of O1's scope.
+Sources list's own inner border was deliberately left at `rgba(0,0,0,.22)`
+— the spec's own binding table marks that one specifically as unchanged
+(`I`, not `I (border N)`), not part of O1's scope. Each source ROW's own
+bottom divider was ALSO meant to stay `rgba(0,0,0,.22)` per that same
+table, but O1's own named list (`.rail-head`/`.artist-line`/`.sources`
+only) missed that it was ALSO using the ambiguous Bootstrap utility and
+resolving to the wrong colour (`#ced4da`) — caught and fixed in the
+machine-diff round below, not this one.
 
-**Deliberately NOT applied this round**: the same corrected spec's §A/
-§D.1 also calls for every rail `.btn-sm` to return to Bootstrap's real
-`sm` metrics (`14px`/`4px 8px`), reversing the smaller, already-shipped
-`CompactButton`/`CompactToggleButton`/`CompactLinkButton`/`TreatmentChip`
-sizing from the earlier "the buttons are too big" owner fix round. The
-spec's own §A flags that specific row as needing its own owner sign-off
-(distinct from O1's separately-confirmed divider normalization), and it
-directly conflicts with the more specific, already-shipped directive on
-the exact same controls — left as shipped pending an explicit owner call
-on that one row (`funnel-filters-toggle`'s own 12px assertion in
-`DisplayLeftRailFidelity.spec.ts` documents this).
+## Machine-diff fix round (2026-07-23)
+
+A throwaway Playwright/computed-style diff (session tmp dir, not
+committed) measured the corrected mockup against the O1-round build and
+found 63 property mismatches — mostly Bootstrap body-default (16px)
+font-size fall-throughs on bespoke rail classnames that had never had
+their own font-size rule at all (`.rail-head .slot` -> 14px, `.rail-head .name` -> 15px + `margin-top:1px`, `.artist-line` -> 13px (replacing the
+close-but-not-exact Bootstrap `small` utility), `.select-version-heading`
+-> 14px), plus the Sources filter input's font-size/padding (Bootstrap's
+stock `.form-control` -> the spec's `14px`/`6px 10px`, fixed as a
+component-scoped inline style, not a `.form-control` RailRoot selector),
+the source row's own border-bottom (the same ambiguous-Bootstrap-utility
+pattern O1 missed on this one element, now `rgba(0,0,0,.22)` explicitly),
+the tile corner tag (`0.5rem`/alpha `.9` -> the spec's `7px`/alpha
+`.92`), and the Ghost "+N" tile's padding (a real `<button>` needed an
+explicit `padding:0` reset against the browser's own UA-stylesheet
+default).
+
+Three further rows the diff also flagged were held back for an explicit
+owner ruling rather than applied speculatively — **all three are now
+resolved, same day, per that ruling** (the corrected mockup is the
+binding reference for all three, confirmed by the owner):
+
+- **`AutofillCollapse` header background hex** — `#4E5D6B` is REVERTED
+  from PR #400's own "correction" to `#4e5d6c` (`$secondary`). The owner
+  confirmed `#4E5D6B` is deliberate, distinct from the panel/seticon
+  token elsewhere in the rail, one hex digit apart by design. Do not
+  "fix" this back again — `AutofillCollapse.tsx`'s own comment at this
+  line carries the note.
+- **Source toggle shape** — restyled from the shared
+  `react-bootstrap-toggle` library's stock sliding single-label switch
+  into the corrected mockup's static two-cell segmented control (both
+  On/Off labels always visible). The library's own DOM already renders
+  both cells with the correct colour classes unconditionally; only its
+  `overflow:hidden`/sliding-`.toggle-group` CSS needed overriding, scoped
+  to a `rail-source-toggle` className `SourcesAccordion.tsx`'s Toggle
+  passes — every other `react-bootstrap-toggle` mount sitewide (roughly
+  ten other call sites: `FinishSettings`, `PDFGenerator`,
+  `SearchTypeSettings`, the filter Toggles, etc) is unaffected.
+- **`.btn-sm` sizing** — the Filters disclosure toggle (`CompactButton`,
+  `SelectVersionResults.tsx`) returns to the spec's real Bootstrap `sm`
+  metrics (`14px`/`4px 8px`), superseding the earlier "the buttons are
+  too big" shrink for that one control. `CompactButton` has exactly one
+  call site, so this is component-scoped by construction.
+  `CompactToggleButton` (Frame/Border segments) and `TreatmentChip`
+  (Treatment chips) are UNCHANGED — they bind to their own distinct,
+  still-in-force spec rows (`11px` each), never the generic `.btn-sm`
+  row. Every OTHER `.btn-sm`-class rail control (Sources bulk/save-
+  defaults, Slot Actions, Artist support, D14 `✗`) was already at
+  `14px`/`4px 8px` via plain `<Button size="sm">` with no override at
+  all — this ruling only ever affected the one Compact-wrapped control.
+
+**Deliberately left open this round**: "Demoted body" `13px` (§D.1) — a
+known gap the diff's own measurement surfaced (via Slot Actions' body
+font-size), not fixed because the mechanical repair (an additive
+`bodyFontSize?: string` prop on `AutofillCollapse.tsx`, mirroring the
+existing `headerPadding` precedent) would touch every demoted
+`RailSection` — Card Details/Attributes/Printing Tags/Print Options/
+Report, not just Slot Actions (the only one the diff actually measured)
+— and the blast radius across the other four wasn't verified. See
+`SPEC-display-left-rail.md` §D.1's own note under the "Demoted body" row
+for the full reasoning.
+
+`frontend/tests/DisplayLeftRailFidelity.spec.ts` asserts every fix above.
 
 ## File-level summary
 

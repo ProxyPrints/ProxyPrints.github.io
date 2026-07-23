@@ -448,11 +448,18 @@ const RailHeader = ({ face, slot, cardName, searchQuery }: RailHeaderProps) => (
     style={{ padding: "8px 10px" }}
     data-testid="display-rail-header"
   >
-    <div className="fw-bold">
+    {/* Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - `.rail-head`
+        itself sets no font-size, so `.slot`/`.name` used to fall through to the Bootstrap body
+        default (16px) instead of the spec's own `14px/700` and `15px` values. Component-scoped
+        inline styles on these two specific nodes (not a new `.rail-head .slot`/`.rail-head .name`
+        RailRoot descendant selector) per the #400 rule - `.slot`/`.name` are bare, reusable
+        classnames that could in principle appear elsewhere, so the fix travels with the exact DOM
+        node instead of a broader selector. */}
+    <div className="fw-bold" style={{ fontSize: "14px" }}>
       Slot {slot + 1}{" "}
       <span className="text-muted text-uppercase small ms-1">{face}</span>
     </div>
-    <div>
+    <div style={{ fontSize: "15px", marginTop: "1px" }}>
       {cardName ?? (
         <span className="text-muted fst-italic">No art selected yet</span>
       )}
@@ -496,8 +503,12 @@ const PromotedZone = ({ cardDocument, backendURL }: PromotedZoneProps) => (
     <div
       // O1 fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - see RailHeader's
       // own identical comment for why the Bootstrap `.border-bottom` utility is retired here too.
-      className="artist-line small"
-      style={{ padding: "8px 10px" }}
+      // Machine-diff fix round: the `small` Bootstrap utility (0.875em -> 14px off a 16px parent)
+      // was CLOSE to the spec's own literal `.artist-line` binding value but not exact - replaced
+      // with an explicit `13px` inline style (component-scoped, this exact node only) matching
+      // §D.1 precisely.
+      className="artist-line"
+      style={{ padding: "8px 10px", fontSize: "13px" }}
     >
       <ArtistSection cardDocument={cardDocument} />
     </div>
@@ -1002,6 +1013,13 @@ const RailRoot = styled.div`
     margin: 0;
     padding: 8px 0 4px;
     font-weight: 600;
+    /* Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this
+       bespoke, single-use classname had no font-size rule at all, so it fell through to the
+       Bootstrap body default (16px) instead of the spec's own 14px. This selector is invented
+       for this one heading element only (not a reused Bootstrap classname like the old
+       .card-header pattern), so extending its existing RailRoot rule is component-scoped in the
+       sense the #400 rule cares about - it cannot clobber anything else on the page. */
+    font-size: 14px;
   }
   /* D14 confidence band - full-width, no floating chip inset margin (density §2: "kills the
      floating-chip inset margin"). */
@@ -1092,6 +1110,46 @@ const RailRoot = styled.div`
      too (dispute is always possible, D1 semantics) - de-emphasised via opacity, not hidden. */
   .d14 .notthis[data-confirmed="true"] {
     opacity: 0.6;
+  }
+  /* Machine-diff fix round (owner ruling, 2026-07-23) - restyles the shared
+     react-bootstrap-toggle library into the corrected mockup's static two-cell segmented look
+     (both On/Off labels always visible, side by side) instead of its own stock sliding
+     single-label switch. Scoped to .rail-source-toggle (the className SourcesAccordion.tsx's own
+     Toggle passes) so every OTHER react-bootstrap-toggle mount sitewide (FinishSettings,
+     PDFGenerator, SearchTypeSettings, the filter Toggles, etc) is completely unaffected - this
+     selector can only ever match the rail's own Sources list toggles. The library's real DOM
+     already renders both toggle-on/toggle-off spans, each already carrying the requested
+     btn-primary/btn-secondary colour classes unconditionally (confirmed by reading
+     node_modules/react-bootstrap-toggle/dist/react-bootstrap-toggle.js) - only the sliding
+     positioning/overflow-clipping needed overriding to reveal both at once. */
+  .rail-source-toggle {
+    overflow: visible;
+    background: transparent;
+    border: 1px solid #6b7d8e;
+  }
+  .rail-source-toggle .toggle-group {
+    position: static;
+    width: 100%;
+    display: flex;
+    left: 0 !important;
+    transition: none;
+  }
+  .rail-source-toggle .toggle-on,
+  .rail-source-toggle .toggle-off {
+    position: static;
+    flex: 1;
+    left: auto;
+    right: auto;
+    padding: 0;
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .rail-source-toggle .toggle-off {
+    color: #8fa0b0;
+  }
+  .rail-source-toggle .toggle-handle {
+    display: none;
   }
 `;
 

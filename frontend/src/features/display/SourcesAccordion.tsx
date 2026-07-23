@@ -198,6 +198,14 @@ export function SourcesAccordion() {
             value={filterQuery}
             onChange={(event) => setFilterQuery(event.target.value)}
             className="mb-2"
+            // Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) -
+            // `Form.Control` is a genuinely global Bootstrap classname (`.form-control`), so this
+            // is fixed via an inline style on THIS specific input (component-scoped) rather than
+            // a `.form-control` selector anywhere in RailRoot, which would be exactly the
+            // sitewide-clobber pattern the #400 rule retired `.card-header` for. Bootstrap's own
+            // stock `.form-control` padding (`.375rem .75rem` = 6px 12px) and unset font-size
+            // (16px body default) both fell through to the spec's own 14px/`padding:6px 10px`.
+            style={{ fontSize: "14px", padding: "6px 10px" }}
             data-testid="display-sources-filter"
           />
           <div
@@ -270,7 +278,14 @@ export function SourcesAccordion() {
               return (
                 <div
                   key={pk}
-                  className="d-flex align-items-center gap-2 p-2 border-bottom"
+                  className="d-flex align-items-center gap-2 p-2"
+                  // Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected
+                  // 2026-07-23) - the plain Bootstrap `.border-bottom` utility here resolved to
+                  // the theme's ambiguous `--bs-border-color` (`#ced4da`, one of the two O1 flagged
+                  // as a fidelity hazard generally), not the spec's own explicit `rgba(0,0,0,.22)`
+                  // for this row (D.1: "Source row ... bottom rgba(0,0,0,.22)"). Fixed inline,
+                  // component-scoped to this exact row.
+                  style={{ borderBottom: "1px solid rgba(0,0,0,.22)" }}
                   data-testid={`display-sources-row-${pk}`}
                 >
                   <Toggle
@@ -283,6 +298,18 @@ export function SourcesAccordion() {
                     height={ToggleButtonHeight + "px"}
                     active={enabled}
                     onClick={() => setOne(pk, !enabled)}
+                    // Machine-diff fix round (owner ruling, 2026-07-23) - the library's stock
+                    // look is a sliding single-label switch (react-bootstrap-toggle's own
+                    // `overflow:hidden`/`.toggle-group{width:200%}` CSS); the corrected mockup's
+                    // own rendered toggle is a static two-cell segmented control, both "On" and
+                    // "Off" labels always visible side by side. This `className` is the library's
+                    // own additive escape hatch onto the outer root element (see
+                    // `react-bootstrap-toggle`'s own `render()`); the matching CSS override lives
+                    // in `DisplayPage.tsx`'s `RailRoot`, scoped to this exact classname only - it
+                    // does NOT touch the shared, unstyled `.toggle`/`.toggle-group` classes this
+                    // same library renders on every other page (FinishSettings/PDFGenerator/
+                    // SearchTypeSettings/etc), which keep the library's stock sliding-switch look.
+                    className="rail-source-toggle"
                   />
                   <span className="flex-grow-1 small text-truncate">
                     {sourceDocument.name}
