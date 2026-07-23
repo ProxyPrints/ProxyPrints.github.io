@@ -156,12 +156,12 @@ class TestReparseLegalLineProxyMarkerCommand:
         card = CardFactory(name="Command Write Card")
         evidence = _evidence(card, legal_line_raw_text="2025 JestaProxy MTG EN")
 
+        call_command("reparse_legal_line_proxy_marker")  # dry-run first (forced-dry-run guard)
         call_command("reparse_legal_line_proxy_marker", write=True)
 
         evidence.refresh_from_db()
         assert evidence.legal_line_proxy_marker_detected is True
-        ledger = PilotRunLedger.objects.get(command="reparse_legal_line_proxy_marker")
-        assert ledger.dry_run is False
+        ledger = PilotRunLedger.objects.filter(command="reparse_legal_line_proxy_marker", dry_run=False).get()
         assert ledger.status == PilotRunLedger.Status.COMPLETED
         assert ledger.votes_written == 1
 
@@ -184,6 +184,7 @@ class TestReparseLegalLineProxyMarkerCommand:
         card = CardFactory(name="Failure Card")
         _evidence(card, legal_line_raw_text="2025 JestaProxy MTG EN")
 
+        call_command("reparse_legal_line_proxy_marker")  # dry-run first (forced-dry-run guard)
         with patch(
             "cardpicker.management.commands.reparse_legal_line_proxy_marker.reparse_legal_line_proxy_marker",
             side_effect=RuntimeError("boom"),
@@ -191,5 +192,41 @@ class TestReparseLegalLineProxyMarkerCommand:
             with pytest.raises(RuntimeError):
                 call_command("reparse_legal_line_proxy_marker", write=True)
 
-        ledger = PilotRunLedger.objects.get(command="reparse_legal_line_proxy_marker")
+        ledger = PilotRunLedger.objects.filter(command="reparse_legal_line_proxy_marker", dry_run=False).get()
         assert ledger.status == PilotRunLedger.Status.FAILED
+
+
+class TestReparseLegalLineProxyMarkerCommandDryRunGuard:
+    """Phase 0 rails (issues #362/#153's milestone, PR #373): the forced-dry-run guard
+    (`scope=None` - module docstring's own SCOPE paragraph) wired into this command's own
+    `Command.handle()`."""
+
+    def test_write_refused_without_a_prior_dry_run(self, db):
+        card = CardFactory(name="Guard Card")
+        _evidence(card, legal_line_raw_text="2025 JestaProxy MTG EN")
+
+        with pytest.raises(CommandError, match="FORCED DRY-RUN GUARD"):
+            call_command("reparse_legal_line_proxy_marker", write=True)
+
+    def test_write_succeeds_after_a_matching_dry_run(self, db):
+        card = CardFactory(name="Guard Card 2")
+        _evidence(card, legal_line_raw_text="2025 JestaProxy MTG EN")
+
+        call_command("reparse_legal_line_proxy_marker")  # dry-run (default)
+        call_command("reparse_legal_line_proxy_marker", write=True)
+
+        ledgers = list(PilotRunLedger.objects.filter(command="reparse_legal_line_proxy_marker").order_by("started_at"))
+        assert len(ledgers) == 2
+        assert ledgers[0].dry_run is True and ledgers[0].status == PilotRunLedger.Status.COMPLETED
+        assert ledgers[1].dry_run is False and ledgers[1].status == PilotRunLedger.Status.COMPLETED
+
+    def test_skip_dryrun_check_bypasses_the_guard_and_is_recorded(self, db, capsys):
+        card = CardFactory(name="Guard Card 3")
+        _evidence(card, legal_line_raw_text="2025 JestaProxy MTG EN")
+
+        call_command("reparse_legal_line_proxy_marker", write=True, skip_dryrun_check=True)
+
+        printed = capsys.readouterr().out
+        assert "SKIP-DRYRUN-CHECK" in printed
+        ledger = PilotRunLedger.objects.get(command="reparse_legal_line_proxy_marker")
+        assert ledger.counters["skip_dryrun_check_used"] is True

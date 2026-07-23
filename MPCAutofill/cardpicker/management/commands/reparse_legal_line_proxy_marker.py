@@ -38,8 +38,18 @@ verifies this on every row it touches, structurally (only a False-or-unconsidere
 written), and the command's own `--write` path never issues an `UPDATE` that could set the field
 back to False.
 
-Dry-run by default (matches `reparse_collector_evidence`/`retract_stage_d_by_run_id`/
-`local_calculate_verdicts`'s own convention); `--write` required to persist anything.
+PHASE 0 RAILS (`cardpicker.pilot_run_lifecycle`, issues #362/#153, PR #373): the forced-dry-run
+guard (a `--write` invocation refuses to proceed without a matching COMPLETED dry-run
+`PilotRunLedger` row for this command within the recency window, `--skip-dryrun-check` to
+override) and the counters-before-output/resilient-terminal-output hardening are both wired in
+here, matching `consensus_recompute`/`local_calculate_verdicts`'s own usage. `scope=None`
+throughout (module docstring's own SCOPE paragraph) - this command always operates over the WHOLE
+`legal_line_proxy_marker_detected=False` population, no caller-chosen cohort narrower than "the
+whole command" the way `reparse_collector_evidence`'s `--selector`/`--card-ids-file` is, matching
+`consensus_recompute`/`local_calculate_verdicts`'s own identical reasoning for `scope=None`.
+
+Dry-run by default (matches every other pilot command's own convention); `--write` required to
+persist anything.
 """
 
 from dataclasses import dataclass, field
@@ -51,6 +61,13 @@ from django.utils import timezone
 from cardpicker.local_identify_printing_tags import generate_run_id
 from cardpicker.local_ocr import parse_legal_line
 from cardpicker.models import ImageEvidence, PilotRunLedger
+from cardpicker.pilot_run_lifecycle import (
+    add_dry_run_guard_arguments,
+    enforce_dry_run_precondition,
+    initial_counters,
+    merge_counters,
+    resilient_terminal_output,
+)
 from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
 
 # matches Card.objects...iterator(chunk_size=500)/ImageEvidence bulk_update batch_size precedent
@@ -145,7 +162,9 @@ class Command(BaseCommand):
         "every ImageEvidence row's stored legal_line_raw_text and flips "
         "legal_line_proxy_marker_detected from False to True wherever the fresh parse now "
         "detects a marker. Parse-only - zero image fetches, zero OCR re-run. Additive-only: "
-        "never flips True to False. Dry-run by default; --write required to persist anything."
+        "never flips True to False. Dry-run by default; --write required to persist anything. "
+        "--write also requires a matching COMPLETED dry-run within --dry-run-window-hours "
+        "(forced-dry-run guard, issue #362) - see --skip-dryrun-check to override."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -154,7 +173,9 @@ class Command(BaseCommand):
             action="store_true",
             default=False,
             help="Actually persist the legal_line_proxy_marker_detected flips. Default is "
-            "dry-run: compute and report every counter below without writing anything.",
+            "dry-run: compute and report every counter below without writing anything. "
+            "Requires a matching recent COMPLETED dry-run ledger row (forced-dry-run guard) "
+            "unless --skip-dryrun-check is passed.",
         )
         parser.add_argument(
             "--audit-sample-size",
@@ -163,6 +184,12 @@ class Command(BaseCommand):
             help="How many newly-True rows to include in the printed audit sample (default 20).",
         )
         parser.add_argument("--run-id", default=None, help="Reuse a specific run_id. Default: freshly generated.")
+        # Forced-dry-run guard (issue #362, Phase 0 rails): this command always operates over the
+        # WHOLE legal_line_proxy_marker_detected=False population - no caller-chosen cohort
+        # narrower than "the whole command" (module docstring's own SCOPE paragraph), matching
+        # consensus_recompute/local_calculate_verdicts's own identical reasoning - so the guard
+        # below always passes scope=None.
+        add_dry_run_guard_arguments(parser, write_flag="--write")
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         stale = find_stale_applied_migrations()
@@ -174,8 +201,16 @@ class Command(BaseCommand):
                 "code before running this command."
             )
 
-        evidence_ids = select_evidence_ids()
         write = kwargs["write"]
+        skip_used = enforce_dry_run_precondition(
+            command="reparse_legal_line_proxy_marker",
+            write_mode=write,
+            skip_check=kwargs["skip_dryrun_check"],
+            window_hours=kwargs["dry_run_window_hours"],
+            scope=None,
+        )
+
+        evidence_ids = select_evidence_ids()
         dry_run = not write
         mode = "WRITE" if write else "DRY RUN"
         self.stdout.write(f"[{mode}] reparse_legal_line_proxy_marker candidates={len(evidence_ids)}")
@@ -191,38 +226,51 @@ class Command(BaseCommand):
             dry_run=dry_run,
             status=PilotRunLedger.Status.RUNNING,
             git_sha=get_baked_git_sha(),
+            counters=initial_counters(skip_dryrun_check_used=skip_used),
         )
         try:
             result = reparse_legal_line_proxy_marker(
                 evidence_ids, run_id=run_id, dry_run=dry_run, audit_sample_size=kwargs["audit_sample_size"]
             )
 
-            self.stdout.write(
-                f"considered={result.considered} already_true={result.already_true} "
-                f"still_false={result.still_false}"
-            )
-            if dry_run:
-                self.stdout.write(f"(dry-run) would_flip_false_to_true={result.flipped_false_to_true}")
-            else:
-                self.stdout.write(f"flipped_false_to_true={result.flipped_false_to_true}")
-            for entry in result.audit:
-                self.stdout.write(f"  sample: {entry}")
-
+            # Counters-before-output (production incident 2026-07-23, see
+            # cardpicker.pilot_run_lifecycle's own module docstring point 1): the ledger row is
+            # saved COMPLETED here, BEFORE the terminal summary prints below - a BrokenPipeError
+            # on a severed stdout while printing that summary must never look like this run failed.
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()
             # repurposed for this command, same convention reparse_collector_evidence's own
             # ledger.votes_written comment gives: rows this run's own write actually touched, not
             # "votes cast" (this command casts no votes at all).
             ledger.votes_written = result.flipped_false_to_true
-            ledger.counters = {
-                "considered": result.considered,
-                "already_true": result.already_true,
-                "still_false": result.still_false,
-                "flipped_false_to_true": result.flipped_false_to_true,
-            }
+            ledger.counters = merge_counters(
+                ledger.counters,
+                {
+                    "considered": result.considered,
+                    "already_true": result.already_true,
+                    "still_false": result.still_false,
+                    "flipped_false_to_true": result.flipped_false_to_true,
+                },
+            )
             ledger.save(update_fields=["status", "finished_at", "votes_written", "counters"])
+
+            with resilient_terminal_output():
+                self.stdout.write(
+                    f"considered={result.considered} already_true={result.already_true} "
+                    f"still_false={result.still_false}"
+                )
+                if dry_run:
+                    self.stdout.write(f"(dry-run) would_flip_false_to_true={result.flipped_false_to_true}")
+                else:
+                    self.stdout.write(f"flipped_false_to_true={result.flipped_false_to_true}")
+                for entry in result.audit:
+                    self.stdout.write(f"  sample: {entry}")
         except Exception:
-            ledger.status = PilotRunLedger.Status.FAILED
-            ledger.finished_at = timezone.now()
-            ledger.save(update_fields=["status", "finished_at"])
+            # Only a still-RUNNING row gets marked FAILED here - a run this invocation already
+            # marked COMPLETED above must never be overwritten by a later exception (e.g. from the
+            # terminal print, if resilient_terminal_output didn't already swallow it).
+            if ledger.status == PilotRunLedger.Status.RUNNING:
+                ledger.status = PilotRunLedger.Status.FAILED
+                ledger.finished_at = timezone.now()
+                ledger.save(update_fields=["status", "finished_at"])
             raise
