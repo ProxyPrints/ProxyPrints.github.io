@@ -1,11 +1,14 @@
 import { expect } from "@playwright/test";
 import { http, HttpResponse } from "msw";
 
+import { computeSearchQueryHashKey } from "@/common/processing";
+import { CardType } from "@/common/schema_types";
 import {
   cardDocument1,
   cardDocument2,
   cardDocument3,
   cardDocument8,
+  cardDocument13,
   localBackendURL,
 } from "@/common/test-constants";
 import {
@@ -22,6 +25,7 @@ import {
   searchResultsThreeResultsPlusCard2SelfQuery,
   searchResultsUnresolvedCanonicalImport,
   sourceDocumentsOneResult,
+  sourceDocumentsThreeResults,
   tagConsensusTwoUnresolvedTags,
 } from "@/mocks/handlers";
 
@@ -544,7 +548,13 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     expect(blue).toBeLessThan(Math.min(red, green) - 20);
   });
 
-  test("the Confirm? affordance mounts in the rail's always-visible header (same component CardSlot.tsx mounts, adapted only via onOpenGridSelector) and YES submits the same vote", async ({
+  // D14 fix round (SPEC-display-left-rail.md §3, owner-approved 2026-07-23): the rail-header
+  // `DeckbuilderConfirmAffordance` mount these two tests used to cover is REMOVED (superseded by
+  // `ConfidenceElement.tsx`'s own fuller D14 form - see RailHeader's own removal comment). The
+  // component itself is untouched and still covered elsewhere (CardSlot.tsx's editor grid,
+  // SelectVersionSection.spec.ts's suggested-printing confirm-ribbon coverage) - these two tests
+  // are replaced with direct D14 coverage instead of being deleted outright.
+  test("the D14 confidence element shows Confirmed for a resolved canonicalCard, and '✗ not this printing' still casts a real is_no_match vote even though the printing is already confirmed (owner answer #2, D1 dissent semantics)", async ({
     page,
     network,
   }) => {
@@ -553,17 +563,10 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       cardDocumentsWithCanonicalCards,
       sourceDocumentsOneResult,
       searchResultsUnresolvedCanonicalImport,
-      http.post(buildRoute("2/printingCandidates/"), () =>
-        HttpResponse.json({ results: [REFERENCE_CANDIDATE] }, { status: 200 })
-      ),
       http.post(buildRoute("2/submitPrintingTag/"), async ({ request }) => {
         submittedBody = (await request.json()) as Record<string, unknown>;
         return HttpResponse.json(
-          {
-            resolvedPrinting: REFERENCE_CANDIDATE,
-            isNoMatch: false,
-            voteTally: [],
-          },
+          { resolvedPrinting: null, isNoMatch: true, voteTally: [] },
           { status: 200 }
         );
       }),
@@ -575,56 +578,157 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
-    const header = page.getByTestId("display-rail-header");
-    const yesButton = header.getByTestId("deckbuilder-confirm-yes");
-    await expect(yesButton).toBeDisabled();
+    const d14 = page.getByTestId("display-confidence-element");
+    await expect(d14).toBeVisible();
+    await expect(d14.getByText("Confirmed")).toBeVisible();
 
-    await header.getByTestId("deckbuilder-confirm-badge").hover();
-    await expect(header.getByTestId("deckbuilder-compare-pin")).toBeVisible();
-    await expect(yesButton).toBeEnabled();
+    const notThisButton = d14.getByTestId(
+      "display-confidence-not-this-printing"
+    );
+    // Owner answer #2 - stays visible (de-emphasised, not hidden) on a confirmed printing.
+    await expect(notThisButton).toBeVisible();
+    await expect(notThisButton).toBeEnabled();
+    await expect(notThisButton).toHaveAttribute("data-confirmed", "true");
 
-    await yesButton.click();
+    await notThisButton.click();
 
     await expect
-      .poll(() => submittedBody.printingIdentifier)
-      .toBe(REFERENCE_CANDIDATE.identifier);
-    expect(submittedBody.voteSurface).toBe("deckbuilder");
-    await expect(
-      header.getByTestId(`deckbuilder-confirm-${cardDocument8.identifier}`)
-    ).toHaveCount(0);
+      .poll(() => submittedBody.identifier)
+      .toBe(cardDocument8.identifier);
+    expect(submittedBody.isNoMatch).toBe(true);
+    expect(submittedBody.voteSurface).toBe("display-confidence");
   });
 
-  test("the Confirm? affordance's NO is a no-op on Select Version's always-open state (E2/E3 promoted the section, so there's nothing left to expand)", async ({
+  test("the D14 confidence element shows the qualitative 'Suggested' state (no fabricated number) for a card with only a suggestedCanonicalCard, and '✗ not this printing' casts the same real vote", async ({
     page,
     network,
   }) => {
+    let submittedBody: Record<string, unknown> = {};
     network.use(
-      cardDocumentsWithCanonicalCards,
-      sourceDocumentsOneResult,
-      searchResultsUnresolvedCanonicalImport,
-      http.post(buildRoute("2/printingCandidates/"), () =>
-        HttpResponse.json({ results: [REFERENCE_CANDIDATE] }, { status: 200 })
+      http.post(buildRoute("2/cards/"), () =>
+        HttpResponse.json(
+          { results: { [cardDocument13.identifier]: cardDocument13 } },
+          { status: 200 }
+        )
       ),
+      sourceDocumentsOneResult,
+      http.post(buildRoute("3/editorSearch/"), () =>
+        HttpResponse.json(
+          {
+            results: {
+              [computeSearchQueryHashKey({
+                query: "card 13",
+                cardType: CardType.Card,
+              })]: [cardDocument13.identifier],
+            },
+          },
+          { status: 200 }
+        )
+      ),
+      http.post(buildRoute("2/submitPrintingTag/"), async ({ request }) => {
+        submittedBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(
+          { resolvedPrinting: null, isNoMatch: true, voteTally: [] },
+          { status: 200 }
+        );
+      }),
       tagConsensusTwoUnresolvedTags,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 8 (xyz) 001");
+    await importText(page, "1 card 13");
     await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
-    // Select Version is promoted + always open now (E2/E3/L4) - no accordion left for NO to
-    // "expand"; onOpenGridSelector is a documented no-op (see RailHeader's own comment). The
-    // surface is visible both before and after clicking NO.
-    await expect(page.getByRole("button", { name: /Filters/ })).toBeVisible();
+    const d14 = page.getByTestId("display-confidence-element");
+    await expect(d14).toBeVisible();
+    // Open Item 1 / honesty note - suggestedCanonicalCardConfidence is a not-yet-populated seam
+    // field (test fixture doesn't set it), so this renders the qualitative fallback, never a
+    // fabricated "N% confident" number.
+    await expect(d14.getByText("Suggested", { exact: true })).toBeVisible();
 
-    const header = page.getByTestId("display-rail-header");
-    await header.getByTestId("deckbuilder-confirm-badge").hover();
-    const noButton = header.getByTestId("deckbuilder-confirm-no");
-    await expect(noButton).toBeEnabled();
-    await noButton.click();
+    const notThisButton = d14.getByTestId(
+      "display-confidence-not-this-printing"
+    );
+    await expect(notThisButton).toHaveAttribute("data-confirmed", "false");
+    await notThisButton.click();
 
-    await expect(page.getByRole("button", { name: /Filters/ })).toBeVisible();
+    await expect
+      .poll(() => submittedBody.identifier)
+      .toBe(cardDocument13.identifier);
+    expect(submittedBody.isNoMatch).toBe(true);
+    expect(submittedBody.voteSurface).toBe("display-confidence");
+  });
+
+  // Sources accordion (SPEC-display-left-rail.md §4, brief item 1; owner answers #3/#4/#5,
+  // 2026-07-23): inline (not overlay), in the LEFT rail, with a pinned-favourites strip visible
+  // while collapsed.
+  test("the Sources accordion shows a live enabled count, expands inline to filter/bulk-toggle/pin sources, and keeps the pin strip visible while collapsed", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsThreeResults,
+      sourceDocumentsThreeResults,
+      searchResultsThreeResults,
+      tagConsensusTwoUnresolvedTags,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "1 card 1\n1 card 2\n1 card 3");
+    await page.getByRole("link", { name: "Editor" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+
+    const accordion = page.getByTestId("display-sources-accordion");
+    await expect(accordion).toBeVisible();
+    await expect(
+      page.getByTestId("display-sources-summary-count")
+    ).toContainText("3 of 3 enabled");
+
+    // Collapsed by default - the body (filter/bulk/list) isn't reachable until expanded.
+    await expect(page.getByTestId("display-sources-filter")).toBeHidden();
+    await page.getByTestId("display-sources-summary-label").click();
+    await expect(page.getByTestId("display-sources-filter")).toBeVisible();
+
+    // Filter narrows the toggle list by name.
+    await page.getByTestId("display-sources-filter").fill("Source 2");
+    await expect(page.getByTestId("display-sources-row-1")).toBeVisible();
+    await expect(page.getByTestId("display-sources-row-0")).toBeHidden();
+    await page.getByTestId("display-sources-filter").fill("");
+
+    // Toggling one source off updates the live summary count.
+    await page.getByTestId("display-sources-row-0").getByText("On").click();
+    await expect(
+      page.getByTestId("display-sources-summary-count")
+    ).toContainText("2 of 3 enabled");
+
+    // Invert flips every row - the just-disabled source 0 comes back on, the other two flip off.
+    await page.getByTestId("display-sources-invert").click();
+    await expect(
+      page.getByTestId("display-sources-summary-count")
+    ).toContainText("1 of 3 enabled");
+
+    // Enable all restores every source.
+    await page.getByTestId("display-sources-enable-all").click();
+    await expect(
+      page.getByTestId("display-sources-summary-count")
+    ).toContainText("3 of 3 enabled");
+
+    // #353 seam - visible, disabled, named.
+    const saveDefaults = page.getByTestId("display-sources-save-defaults");
+    await expect(saveDefaults).toBeVisible();
+    await expect(saveDefaults).toBeDisabled();
+
+    // Pinning a source shows it in the collapsed-visible favourites strip.
+    await page.getByTestId("display-sources-pin-0").click();
+    await expect(page.getByTestId("display-sources-pin-chip-0")).toContainText(
+      "Source 1"
+    );
+    // Collapsing the accordion again - the pin chip strip stays visible (it lives in the
+    // AutofillCollapse `title` node, never collapsed).
+    await page.getByTestId("display-sources-summary-label").click();
+    await expect(page.getByTestId("display-sources-filter")).toBeHidden();
+    await expect(page.getByTestId("display-sources-pin-chip-0")).toBeVisible();
   });
 
   test("a slot with no resolved image shows its query text on the sheet instead of a blank hole (item 1, owner's hands-on review)", async ({
@@ -768,7 +872,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(select).toHaveValue("force-bleed");
   });
 
-  test("the promoted artist line shows a support link for a card with a known canonical artist (E2 - promoted, no longer a collapsed accordion)", async ({
+  test("the promoted artist line shows a plain credit + a support button naming MTG Artist Connection for a card with a known canonical artist (E2 - promoted, no longer a collapsed accordion; SPEC-display-left-rail.md §5/§8)", async ({
     page,
     network,
   }) => {
@@ -784,9 +888,21 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.getByRole("link", { name: "Editor" }).click();
     await page.getByTestId("page-preview-slot").first().click();
 
+    // Plain (non-linked) credit line names the artist.
+    await expect(page.getByTestId("display-artist-section")).toContainText(
+      "Art by"
+    );
+    await expect(page.getByTestId("display-artist-section")).toContainText(
+      "Alpha Artist"
+    );
+
+    // The support link itself now visibly names its destination and reads as a real button
+    // (btn-outline-primary btn-sm), not a bare orange hotlink - the artist's own name moved to
+    // the plain credit line above.
     const link = page.getByTestId("artist-support-link");
     await expect(link).toBeVisible();
-    await expect(link).toContainText("Alpha Artist");
+    await expect(link).toContainText("Support on MTG Artist Connection");
+    await expect(link).toHaveClass(/btn-outline-primary/);
     await expect(link).toHaveAttribute(
       "href",
       "https://www.mtgartistconnection.com/artist/Alpha%20Artist"

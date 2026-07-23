@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ProxyPrints — /display left rail redesign (D14 · Sources · Artist · Buttons · Density)</title>
+<style>
+/* ============================================================================
+   REAL #302 THEME VALUES (extracted from bootswatch/superhero + styles.scss).
+   NOT approximated — these are the fork's live tokens. Where a value is a
+   deliberate refinement (not the current theme) it is labelled .propose in the
+   mockup so the owner approves the look knowingly.
+   ============================================================================ */
+:root{
+  --body:#0f2537;          /* $body-bg (Superhero native, kept by #302 T2) */
+  --panel:#4e5d6c;         /* $secondary / card bg / offcanvas bg */
+  --raised:#22303f;        /* $dark / $input-bg / rail-head + artist-line */
+  --conf:#2b3e50;          /* confidence chip surface (shipped ConfidenceElement) */
+  --text:#ebebeb;          /* $gray-100 / body color */
+  --muted:#8fa0b0;         /* $input-placeholder-color */
+  --light:#abb6c2;         /* $light */
+  --primary:#df6919;       /* $primary = $orange */
+  --primary-hover:#be5915;
+  --success:#5cb85c;
+  --danger:#d9534f;
+  --warning:#ffc107;
+  --info:#5bc0de;
+  --input-border:#4e5d6c;
+  --border:rgba(0,0,0,.22);        /* $border-color-translucent-ish */
+  --hair:rgba(235,235,235,.15);    /* subtle divider */
+  --pinline:rgba(235,235,235,.18); /* D17 sheet pinline */
+  --annotate:#ffd76a;
+  --radius:0;              /* Superhero is FLAT (border-radius:0) */
+  --radius-chip:6px;       /* the ONE rounded exception the shipped ConfidenceElement uses */
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#08161f;color:var(--text);
+  font-family:Lato,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;font-size:16px;line-height:1.5}
+
+/* ---------- demo strip (forces Desktop/Tablet/Phone at any width) ---------- */
+.demo{position:fixed;top:0;left:0;right:0;z-index:9000;display:flex;flex-wrap:wrap;
+  align-items:center;gap:8px;padding:8px 12px;background:#000;border-bottom:2px solid var(--primary);
+  font-size:12px}
+.demo b{color:var(--primary);letter-spacing:.04em;text-transform:uppercase;font-size:11px}
+.demo .grp{display:flex;gap:4px;align-items:center;padding:0 6px;border-right:1px solid #333}
+.demo button{background:#22303f;color:var(--text);border:1px solid #46586a;padding:4px 9px;
+  cursor:pointer;font-size:12px;font-family:inherit}
+.demo button.on{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:700}
+.demo .hint{color:var(--muted);font-size:11px}
+
+.stage{padding-top:52px;min-height:100vh}
+.framewrap{overflow:hidden}
+.frame{transform-origin:top left;background:var(--body);position:relative}
+.frame-tag{position:absolute;top:6px;left:8px;z-index:50;color:var(--annotate);
+  font-family:"Courier New",monospace;font-size:12px;background:rgba(0,0,0,.5);padding:1px 7px}
+
+/* ============================ APP CHROME ============================ */
+.appbar{display:flex;align-items:center;gap:12px;height:52px;padding:0 12px;
+  background:var(--body);border-bottom:1px solid var(--hair);font-size:14px}
+.appbar .deck{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.appbar .pill{margin-left:auto;background:rgba(0,0,0,.35);border:1px solid var(--hair);
+  padding:2px 10px;font-variant-numeric:tabular-nums;font-size:12px}
+.appbar .gear{width:34px;height:34px;display:flex;align-items:center;justify-content:center;
+  background:var(--panel);border:1px solid var(--hair);cursor:pointer}
+
+.body-cols{display:flex;align-items:stretch;min-height:520px}
+
+/* center sheet region (D7/D17: outline-only pinline sheets, tight gap, floating n/M pill) */
+.center{flex:1;display:flex;flex-direction:column;align-items:center;padding:16px;gap:4px;
+  position:relative;overflow:auto;background:var(--body)}
+.npill{position:sticky;top:4px;align-self:flex-end;background:rgba(0,0,0,.5);
+  border:1px solid var(--hair);border-radius:20px;padding:2px 10px;font-size:11px;
+  font-variant-numeric:tabular-nums;pointer-events:none}
+.sheet{width:100%;max-width:520px;aspect-ratio:279.4/215.9;border:1px solid var(--pinline);
+  border-radius:7px;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);
+  column-gap:2px;row-gap:10px;padding:6px}
+.cell{aspect-ratio:63/88;background:repeating-linear-gradient(45deg,#33475a,#33475a 7px,#2b3c4d 7px,#2b3c4d 14px);
+  outline:1px solid rgba(255,255,255,.06);position:relative}
+.cell.sel{outline:2px solid var(--primary);outline-offset:-2px}
+.cell .cn{position:absolute;top:2px;left:2px;font-size:8px;color:#9fb0c0;font-family:monospace}
+
+/* right rail (present for three-region completeness; not this round's focus — lighter detail) */
+.rrail{width:300px;background:var(--panel);border-left:1px solid var(--border);padding:10px;
+  font-size:13px;flex:0 0 300px}
+.rrail h6{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 6px}
+.rrail .grp{background:var(--raised);border:1px solid var(--border);padding:8px;margin-bottom:6px}
+.rrail .muted{color:var(--muted);font-size:12px}
+.rrail .foot{display:flex;gap:6px;margin-top:8px}
+
+/* ============================ LEFT RAIL (this round) ============================ */
+.lrail{width:380px;flex:0 0 380px;background:var(--panel);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;overflow:hidden}
+.lscroll{overflow-y:auto;display:flex;flex-direction:column}
+/* DENSITY: sections butt against each other, separated by 1px borders — NOT gap:16px.
+   Vertical rhythm comes from each block's own compact padding, named in the spec. */
+
+/* --- rail header (promoted identity) --- */
+.rhead{background:var(--raised);padding:8px 10px;border-bottom:1px solid var(--border)}
+.rhead .slot{font-weight:700;font-size:14px}
+.rhead .slot .face{font-weight:400;color:var(--muted);font-size:11px;text-transform:uppercase;margin-left:6px}
+.rhead .name{font-size:15px;margin-top:1px}
+.rhead .reqbadge{display:inline-block;margin-top:5px;background:var(--panel);color:#fff;
+  padding:2px 8px;font-family:monospace;font-size:12px;border-radius:0}
+.rhead .reqbadge.degraded{background:var(--warning);color:#111}
+
+/* --- D14 CONFIDENCE ELEMENT (replaces the old Confirm?/Y-N affordance entirely) --- */
+.d14{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0;
+  padding:8px 10px;background:var(--conf);border-bottom:1px solid var(--border)}
+.seticon{position:relative;width:30px;height:30px;flex:0 0 30px;display:inline-flex;
+  align-items:center;justify-content:center;background:var(--panel);border:1px solid #7f8fa0;
+  border-radius:50%;cursor:pointer}
+.seticon svg{width:17px;height:17px;fill:var(--text)}
+/* CONFIRMED: small green check badge on the set icon */
+.seticon .check{position:absolute;right:-3px;bottom:-3px;width:15px;height:15px;background:var(--success);
+  color:#fff;border:2px solid var(--conf);border-radius:50%;display:none;align-items:center;
+  justify-content:center;font-size:9px;font-weight:900}
+/* SUGGESTED: numeric confidence score badge on the set icon */
+.seticon .score{position:absolute;right:-7px;bottom:-7px;background:var(--primary);color:#fff;
+  border:2px solid var(--conf);border-radius:10px;font-size:9px;font-weight:800;padding:1px 4px;
+  display:none;line-height:1;font-variant-numeric:tabular-nums}
+.d14 .idtext{font-size:12px;font-family:monospace}
+.d14 .statepill{padding:1px 8px;border:1px solid var(--panel);border-radius:10px;font-size:11px;font-weight:700}
+.d14 .statepill.confirmed{border-color:#3f7a2f;color:#a7e08a}
+.d14 .statepill.suggested{border-color:var(--primary);color:#ffb27d}
+.d14 .notthis{margin-left:auto}
+/* confirmed vs suggested visibility */
+body[data-conf="confirmed"] .seticon .check{display:flex}
+body[data-conf="confirmed"] .statepill.suggested{display:none}
+/* ✗ vote stays available in both states (dispute is always possible); on confirmed it is
+   de-emphasised. Open question: hide it once consensus is settled? */
+body[data-conf="confirmed"] .d14 .notthis{opacity:.6}
+body[data-conf="suggested"] .seticon .score{display:block}
+body[data-conf="suggested"] .statepill.confirmed{display:none}
+
+/* Scryfall hover popover (CDN image in the real app; display-only, nothing stored) */
+.seticon .pop{position:absolute;left:36px;top:-6px;z-index:60;width:150px;background:#0b1520;
+  border:1px solid #7f8fa0;padding:6px;display:none;box-shadow:0 6px 18px rgba(0,0,0,.5)}
+.seticon:hover .pop{display:block}
+.pop .img{aspect-ratio:63/88;background:repeating-linear-gradient(45deg,#2a3a49,#2a3a49 8px,#22303f 8px,#22303f 16px);
+  border:1px solid var(--hair);display:flex;align-items:center;justify-content:center;text-align:center;
+  font-size:9px;color:var(--muted);padding:4px}
+.pop .cap{font-size:9px;color:var(--muted);margin-top:4px;line-height:1.3}
+
+/* --- Artist support (button, credits MTG Artist Connection) --- */
+.artist{background:var(--raised);padding:8px 10px;border-bottom:1px solid var(--border)}
+.artist .by{font-size:13px;margin-bottom:6px}
+.artist .by .nm{color:var(--text);font-weight:600}
+
+/* --- Sources accordion --- */
+.sources{border-bottom:1px solid var(--border)}
+.src-summary{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;
+  background:#4e5d6b;user-select:none}
+.src-summary .lbl{font-size:12px;text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.src-summary .count{font-variant-numeric:tabular-nums}
+.src-summary .count b{color:var(--success)}
+.src-summary .chev{margin-left:auto;transition:transform .2s;font-size:12px}
+.sources.open .src-summary .chev{transform:rotate(90deg)}
+.src-pins{display:flex;flex-wrap:wrap;gap:4px;padding:0 10px 8px;background:#4e5d6b}
+.pinchip{font-size:11px;background:var(--conf);border:1px solid var(--hair);padding:1px 7px;
+  display:inline-flex;gap:3px;align-items:center}
+.pinchip .star{color:var(--warning)}
+.src-body{padding:8px 10px;display:none;background:var(--panel)}
+.sources.open .src-body{display:block}
+.src-body .filter{display:block;width:100%;background:var(--raised);color:var(--text);
+  border:1px solid var(--input-border);padding:5px 9px;font-size:13px;margin-bottom:8px}
+.src-body .filter::placeholder{color:var(--muted)}
+.src-bulk{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.src-defaults{margin-bottom:8px}
+.src-list{max-height:190px;overflow-y:auto;border:1px solid var(--border);background:var(--raised)}
+.src-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid var(--hair)}
+.src-row:last-child{border-bottom:none}
+.tgl{flex:0 0 54px;height:24px;border:1px solid #6b7d8e;display:inline-flex;font-size:10px;
+  font-weight:700;cursor:pointer;user-select:none}
+.tgl span{flex:1;display:flex;align-items:center;justify-content:center}
+.tgl .on{background:var(--primary);color:#fff}
+.tgl .off{background:var(--panel);color:var(--muted)}
+.tgl[data-on="false"] .on{background:var(--panel);color:var(--muted)}
+.tgl[data-on="false"] .off{background:#3a4653;color:var(--text)}
+.tgl[data-on="true"] .off{background:var(--panel);color:var(--muted)}
+.src-row .snm{flex:1;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.src-row .pin{background:transparent;border:none;color:#5b6b7b;cursor:pointer;font-size:14px;padding:0 2px}
+.src-row .pin.on{color:var(--warning)}
+
+/* Sources OVERLAY variant (alternative interaction shape, shown when body[data-src="overlay"]) */
+.src-overlay-panel{position:absolute;left:10px;right:10px;top:100%;z-index:70;background:var(--panel);
+  border:1px solid #7f8fa0;box-shadow:0 8px 22px rgba(0,0,0,.55);padding:8px 10px;display:none}
+body[data-src="overlay"] .sources.open .src-body{display:none}          /* inline body hidden */
+body[data-src="overlay"] .sources.open .src-overlay-panel{display:block} /* floats instead */
+body[data-src="overlay"] .sources{position:relative}
+
+/* --- Select Version (promoted, always open) --- */
+.sv{padding:8px 10px;border-bottom:1px solid var(--border)}
+.sv h6{margin:0 0 6px;font-weight:600;font-size:14px}
+.sv .head{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px;color:var(--muted)}
+.sv .head .n{color:var(--text);font-weight:700}
+.seg{display:inline-flex;border:1px solid var(--input-border)}
+.seg button{background:var(--raised);color:var(--text);border:none;border-right:1px solid var(--input-border);
+  padding:3px 8px;font-size:11px;cursor:pointer}
+.seg button:last-child{border-right:none}
+.seg button.on{background:var(--primary);color:#fff;font-weight:700}
+.axis{margin-bottom:6px}
+.axis .axl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:3px}
+/* PR #352 tile densities: dense 72 / medium 88 / hero 112 */
+.vgrid{display:flex;flex-wrap:wrap;gap:6px}
+.vtile{width:72px;aspect-ratio:63/88;background:repeating-linear-gradient(45deg,#33475a,#33475a 7px,#2b3c4d 7px,#2b3c4d 14px);
+  outline:1px solid var(--hair);position:relative}
+.vtile.hero{width:112px}
+.vtile.sel{outline:2px solid var(--primary)}
+.vtile .vl{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);font-size:8px;
+  text-align:center;padding:1px;font-family:monospace}
+/* group membership shown as a CORNER TAG on tiles, never a separator row (owner: read as ONE grid) */
+.vtile .corner{position:absolute;top:0;left:0;font-size:7px;font-weight:800;letter-spacing:.03em;
+  padding:0 3px;color:#fff;text-transform:uppercase}
+.vtile .corner.canon{background:rgba(92,184,92,.9)}
+.vtile .corner.alt{background:rgba(91,192,222,.9)}
+.vtile .corner.unk{background:rgba(120,135,150,.9)}
+.vtile .req{position:absolute;top:0;right:0;background:var(--primary);color:#fff;font-size:8px;padding:0 3px;font-weight:800}
+/* suggested representative: confirm affordance = a corner ribbon ON the tile, not a block below */
+.vtile .confirm{position:absolute;top:0;right:0;width:0;height:0;border-top:16px solid var(--warning);
+  border-left:16px solid transparent;cursor:pointer}
+.vtile .confirm i{position:absolute;top:-15px;right:1px;color:#111;font-size:8px;font-weight:900;font-style:normal}
+/* inline ghost "+N more of this printing" — same 72 footprint, flows in the grid */
+.vtile.ghost{background:transparent;outline:1px dashed var(--light);display:flex;align-items:center;
+  justify-content:center;color:var(--light);font-size:11px;cursor:pointer}
+/* unified Frame & Treatment filter block */
+.ufilter{border:1px solid var(--border);background:var(--raised);padding:6px 8px;margin-bottom:6px}
+.ufilter .row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px}
+.ufilter .row:last-child{margin-bottom:0}
+.ufilter .rl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);flex:0 0 58px}
+.ufilter .divider{align-self:stretch;width:1px;background:var(--border);margin:0 2px}
+/* tri-state treatment chips: neutral / include(+) / exclude(−) */
+.tchip{font-size:11px;padding:2px 7px;border:1px solid #6b7d8e;background:transparent;color:var(--text);
+  cursor:pointer;display:inline-flex;gap:3px;align-items:center}
+.tchip .st{font-weight:900;font-size:10px}
+.tchip[data-s="inc"]{border-color:var(--success);background:rgba(92,184,92,.22);color:#bfe6ad}
+.tchip[data-s="exc"]{border-color:var(--danger);background:rgba(217,83,79,.22);color:#f0b3b1;text-decoration:line-through}
+.tchip[data-s="neutral"] .st{color:var(--muted)}
+
+/* --- demoted accordion sections (AutofillCollapse look) --- */
+.acc{border-bottom:1px solid var(--border)}
+.acc-h{display:flex;align-items:center;padding:7px 10px;background:#4e5d6b;cursor:pointer;user-select:none}
+.acc-h h6{margin:0;font-size:13px;font-weight:600}
+.acc-h .chev{margin-left:auto;font-size:12px;transition:transform .2s}
+.acc.open .acc-h .chev{transform:rotate(90deg)}
+.acc-b{display:none;padding:8px 10px;background:var(--panel);font-size:13px}
+.acc.open .acc-b{display:block}
+.slotacts{display:flex;flex-direction:column;gap:6px}
+
+/* buttons — real Superhero .btn (flat, radius 0) */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;font-family:inherit;
+  font-size:13px;line-height:1.4;padding:5px 11px;border:1px solid transparent;border-radius:0;
+  cursor:pointer;text-decoration:none;white-space:nowrap;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.15),0 1px 1px rgba(0,0,0,.075)}
+.btn-sm{font-size:12px;padding:3px 8px}
+.btn-block{width:100%}
+.btn-primary{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+.btn-primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+.btn-o-primary{background:transparent;border-color:var(--primary);color:var(--primary);font-weight:600}
+.btn-o-primary:hover{background:var(--primary);color:#fff}
+.btn-o-danger{background:transparent;border-color:var(--danger);color:var(--danger);font-weight:600}
+.btn-o-danger:hover{background:var(--danger);color:#fff}
+.btn-o-light{background:transparent;border-color:var(--light);color:var(--light)}
+.btn-o-light:hover{background:var(--light);color:#111}
+.btn-o-success{background:transparent;border-color:var(--success);color:var(--success)}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+
+/* Before/After swap for Select Version */
+.sv-before{display:none}
+body[data-sv="before"] .sv-after{display:none}
+body[data-sv="before"] .sv-before{display:block}
+/* BEFORE recreation (faithful to owner's live 390px screenshot): single-column stacks
+   fragmented by Confirm?/Y·N block, "+N more" text link, suggested/More-like-this links,
+   FRAME and TREATMENT as separate stacked rows, Filters as an underlined text link. */
+.sv-before .bhead{display:flex;align-items:center;margin-bottom:6px;font-size:12px;color:var(--muted)}
+.sv-before .blink{color:var(--primary);text-decoration:underline;cursor:pointer;font-size:12px}
+.sv-before .baxis{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.sv-before .baxis .bl{font-size:10px;text-transform:uppercase;color:var(--muted);flex:0 0 74px}
+.sv-before .bseg{border:1px dashed var(--primary);color:var(--muted);padding:3px 10px;font-size:12px}
+.sv-before .bseg.solid{border-style:solid;border-color:#6b7d8e}
+.sv-before .bstack{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.sv-before .btile{width:120px;aspect-ratio:63/88;background:#5c6b7a;display:flex;align-items:center;
+  justify-content:center;color:#c3ccd4;font-size:11px;text-align:center}
+.sv-before .brow2{display:flex;gap:8px}
+.sv-before .bconfirm{background:#1c3a5e;color:#fff;font-weight:700;font-size:12px;padding:3px 12px;
+  border-radius:12px;width:max-content}
+.sv-before .byn{display:flex;gap:24px;color:var(--muted);font-size:12px;padding-left:8px}
+.sv-before .bmore{color:var(--primary);text-decoration:underline;font-size:12px;text-align:center;cursor:pointer}
+.sv-before .bsug{color:var(--primary);font-weight:700;font-size:12px}
+.beforeflag{background:var(--danger);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;text-transform:uppercase}
+.afterflag{background:var(--success);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;text-transform:uppercase}
+
+/* annotation callouts */
+.note{color:var(--annotate);font-size:11px;font-family:"Courier New",monospace;
+  padding:3px 10px;background:rgba(255,215,106,.06);border-left:2px solid var(--annotate)}
+.propose{display:inline-block;font-size:10px;color:#111;background:var(--annotate);
+  padding:0 5px;font-family:"Courier New",monospace;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+
+/* drawer chrome for tablet/phone forced frames */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:80}
+.drawer{position:absolute;z-index:81;background:var(--panel);box-shadow:0 0 30px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column}
+.drawer.start{top:0;bottom:0;left:0;width:380px;border-right:1px solid var(--border)}
+.drawer.bottom{left:0;right:0;bottom:0;height:74%;border-top-left-radius:14px;border-top-right-radius:14px}
+.drawer-grip{width:40px;height:4px;background:#6b7d8e;border-radius:2px;margin:8px auto 2px}
+.drawer-hd{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border)}
+.drawer-hd button{background:transparent;border:1px solid var(--hair);color:var(--text);padding:2px 10px;cursor:pointer}
+</style>
+</head>
+<body data-conf="suggested" data-src="inline" data-sv="after">
+
+<div class="demo">
+  <span class="grp"><b>View</b>
+    <button data-view="auto" class="on">Auto</button>
+    <button data-view="desktop">Desktop</button>
+    <button data-view="tablet">Tablet</button>
+    <button data-view="phone">Phone</button>
+  </span>
+  <span class="grp"><b>D14 state</b>
+    <button data-conf="suggested" class="on">Suggested (score)</button>
+    <button data-conf="confirmed">Confirmed (✓)</button>
+  </span>
+  <span class="grp"><b>Sources shape</b>
+    <button data-src="inline" class="on">Inline ✓rec</button>
+    <button data-src="overlay">Overlay</button>
+  </span>
+  <span class="grp"><b>Select Version</b>
+    <button data-sv="before">Before (live)</button>
+    <button data-sv="after" class="on">After (new)</button>
+  </span>
+  <span class="hint">Forced frames are transform-scaled to fit — review the full composition (incl. drawers) on a phone.</span>
+</div>
+
+<div class="stage" id="stage"></div>
+
+<script>
+/* tri-state chip cycle: neutral -> include -> exclude -> neutral (attributeChips.nextChipState) */
+function cyc(el){
+  const n={neutral:'inc',inc:'exc',exc:'neutral'}[el.getAttribute('data-s')];
+  el.setAttribute('data-s',n);
+  el.querySelector('.st').textContent={neutral:'·',inc:'+',exc:'−'}[n];
+}
+/* ------------------------------------------------------------------ set glyph */
+function setGlyph(){
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l3 6 6 .9-4.5 4.3 1 6.3L12 16.9 6.5 19.5l1-6.3L3 8.9 9 8z"/></svg>';
+}
+
+/* ------------------------------------------------------------------ LEFT RAIL
+   ONE builder, shared by every breakpoint frame — so forced views can never
+   drift from the responsive one (spec §8 principle). `expandedSources` and the
+   demoted-section open flags are baked so the mock shows the key states. */
+function leftRail(){
+  return `
+  <div class="lrail"><div class="lscroll">
+
+    <!-- (1) promoted identity header -->
+    <div class="rhead">
+      <div class="slot">Slot 3 <span class="face">Front</span></div>
+      <div class="name">Lightning Bolt</div>
+      <span class="reqbadge">2X2 117</span>
+    </div>
+
+    <!-- (2) D14 CONFIDENCE ELEMENT — supersedes the old Confirm?/Y·N affordance -->
+    <div class="d14" data-testid="display-confidence-element">
+      <span class="seticon" tabindex="0" title="Reference image via Scryfall (hover)">
+        ${setGlyph()}
+        <span class="check">✓</span>
+        <span class="score">92%</span>
+        <span class="pop">
+          <span class="img">Scryfall reference<br>image (CDN)</span>
+          <span class="cap">Popover · Scryfall CDN · display-only, nothing stored (governing premise + #271)</span>
+        </span>
+      </span>
+      <span class="idtext">2X2 · 117</span>
+      <span class="statepill confirmed">Confirmed</span>
+      <span class="statepill suggested">92% confident</span>
+      <button class="btn btn-sm btn-o-danger notthis" data-testid="display-confidence-not-this-printing">✗ not this printing</button>
+    </div>
+    <div class="note">D14: set icon = confidence anchor. Human-confirmed → green ✓ on the icon +
+      "Confirmed" pill. Not confirmed → numeric score badge on the icon + "N% confident" pill +
+      one-click "✗ not this printing" (real useTagVoting vote). Hover the icon → Scryfall popover.</div>
+
+    <!-- (3) ARTIST support — now a button that names the destination site -->
+    <div class="artist">
+      <div class="by">Art by <span class="nm">Christopher Rush</span></div>
+      <a class="btn btn-sm btn-o-primary" href="#" target="_blank" rel="noopener noreferrer"
+         title="via MTG Artist Connection" data-testid="artist-support-link">
+        Support on MTG Artist Connection
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8.636 3.5a.5.5 0 0 0-.5-.5H1.5A1.5 1.5 0 0 0 0 4.5v10A1.5 1.5 0 0 0 1.5 16h10a1.5 1.5 0 0 0 1.5-1.5V7.864a.5.5 0 0 0-1 0V14.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5h6.636a.5.5 0 0 0 .5-.5z"/><path d="M16 .5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1h3.793L6.146 9.146a.5.5 0 1 0 .708.708L15 1.707V5.5a.5.5 0 0 0 1 0z"/></svg>
+      </a>
+    </div>
+    <div class="note">Item 3: was a bare orange hotlink. Now a btn-o-primary that visibly credits
+      "MTG Artist Connection" (text credit only — zero-crawl, no fetched logo). Reuses ArtistSupportLink
+      (className + children props already exist; behavior-preserving).</div>
+
+    <!-- (4) SOURCES accordion -->
+    <div class="sources open" id="srcAcc">
+      <div class="src-summary" onclick="document.getElementById('srcAcc').classList.toggle('open')">
+        <span class="lbl">Sources</span>
+        <span class="count"><b>182</b> of 247 enabled</span>
+        <span class="chev">›</span>
+      </div>
+      <div class="src-pins">
+        <span class="pinchip"><span class="star">★</span> Chilli's Cube</span>
+        <span class="pinchip"><span class="star">★</span> MPCFill Community</span>
+        <span class="annotate" style="align-self:center">← pinned favourites, visible when collapsed (#353 seam)</span>
+      </div>
+      <div class="src-body">
+        <input class="filter" placeholder="Filter sources…  (type to narrow the list)">
+        <div class="src-bulk">
+          <button class="btn btn-sm btn-o-light">Enable all</button>
+          <button class="btn btn-sm btn-o-light">Disable all</button>
+          <button class="btn btn-sm btn-o-light">Invert</button>
+        </div>
+        <div class="src-defaults">
+          <button class="btn btn-sm btn-o-success btn-block" disabled title="Account-tied preferred sources — issue #353">
+            ☆ Save these as my defaults <span class="propose">#353 seam</span>
+          </button>
+        </div>
+        <div class="src-list" id="srcList"></div>
+      </div>
+      <!-- overlay-shape alternative (shown when Sources shape = Overlay) -->
+      <div class="src-overlay-panel">
+        <input class="filter" placeholder="Filter sources…">
+        <div class="src-bulk">
+          <button class="btn btn-sm btn-o-light">Enable all</button>
+          <button class="btn btn-sm btn-o-light">Disable all</button>
+          <button class="btn btn-sm btn-o-light">Invert</button>
+        </div>
+        <div class="src-list" id="srcListOv"></div>
+        <div class="note" style="margin-top:6px">OVERLAY shape: floats over rail content. On phone
+          (bottom-sheet) / tablet (start-drawer) this is an overlay-over-an-overlay — cramped, the
+          exact stacking hazard the spec warns against. INLINE is recommended.</div>
+      </div>
+    </div>
+
+    <!-- (5) SELECT VERSION — promoted, always open (funnel), PR #352 densities -->
+    <!-- BEFORE: faithful recreation of the owner's live 390px screenshot (single-column stacks
+         fragmented by Confirm?/Y·N, "+N more" links, suggested/More-like-this, split FRAME+TREATMENT). -->
+    <div class="sv sv-before">
+      <h6>Select Version <span class="beforeflag">before — live</span></h6>
+      <div class="bhead">6 versions <span class="blink" style="margin-left:auto">› Filters</span></div>
+      <div class="baxis"><span class="bl">Frame</span><span class="bseg">Old Border ⋮</span></div>
+      <div class="baxis"><span class="bl">Treatment</span><span class="bseg solid">Full Art</span></div>
+      <div class="bstack">
+        <div class="btile">Image<br>unavailable</div>
+        <div class="btile">Image<br>unavailable</div>
+        <div><span class="bconfirm">Confirm?</span><div class="byn"><span>Y</span><span>N</span></div></div>
+        <div class="bmore">+1 more of this printing</div>
+        <div class="btile">Image<br>unavailable</div>
+        <div class="brow2"><div class="btile">Image<br>unavailable</div><div class="btile">Image<br>unavailable</div></div>
+        <div><span class="bsug">⌇ suggested</span> · <span class="blink">More like this</span></div>
+      </div>
+      <div class="note">BEFORE (owner screenshot 8f5b65ce): 6 tiles fragmented into stacked
+        single-column mini-blocks; the Confirm?/Y·N block is the D14-SUPERSEDED element; FRAME and
+        TREATMENT are separate rows; Filters is an underlined text link. Toggle "After" above.</div>
+    </div>
+    <div class="sv sv-after">
+      <h6>Select Version <span class="afterflag">after — new</span></h6>
+      <div class="head"><span class="n">14</span> results
+        <button class="btn btn-sm btn-o-light" style="margin-left:auto">▾ Filters</button>
+      </div>
+      <!-- UNIFIED FILTERS: Border (exclusive) row, then Frame Style (exclusive) + Treatment
+           (tri-state chips) sharing ONE block to save space (owner addendum item 1) -->
+      <div class="ufilter">
+        <div class="row"><span class="rl">Border</span>
+          <span class="seg"><button class="on">Any</button><button>Black</button><button>White</button><button>Silver</button></span>
+        </div>
+        <div class="row"><span class="rl">Frame</span>
+          <span class="seg"><button class="on">Any</button><button>Old</button><button>Modern</button><button>Future</button></span>
+          <span class="divider"></span>
+          <span class="rl" style="flex:0 0 auto">Treatment</span>
+          <span class="tchip" data-s="neutral" onclick="cyc(this)"><span class="st">·</span>Full Art</span>
+          <span class="tchip" data-s="inc" onclick="cyc(this)"><span class="st">+</span>Borderless</span>
+          <span class="tchip" data-s="neutral" onclick="cyc(this)"><span class="st">·</span>Showcase</span>
+          <span class="tchip" data-s="exc" onclick="cyc(this)"><span class="st">−</span>Extended</span>
+          <span class="tchip" data-s="neutral" onclick="cyc(this)"><span class="st">·</span>Etched</span>
+        </div>
+      </div>
+      <div class="note">Item 1: Frame (exclusive segments — mutual-exclusivity kept) + Treatment
+        (tri-state chips: · neutral → + include → − exclude, from attributeChips.ts) share ONE
+        block. Border stays its own exclusive row.</div>
+      <!-- ONE CONTINUOUS GRID across canonical → custom → unknown. No separator rows: group
+           membership = a corner tag on each tile; "+N more" = an inline ghost tile; the
+           suggested-printing confirm = a corner ribbon ON the tile (owner addendum item 2). -->
+      <div class="vgrid">
+        <span class="vtile sel"><span class="req">REQ</span><span class="vl">2X2·117</span></span>
+        <span class="vtile"><span class="corner canon">✓</span><span class="vl">LEA·161</span></span>
+        <span class="vtile"><span class="corner canon">✓</span><span class="vl">M10·146</span></span>
+        <span class="vtile ghost" title="Expand this printing's other copies in place">+9</span>
+        <span class="vtile"><span class="confirm" title="Confirm this suggested printing"><i>?</i></span><span class="vl">A25·141</span></span>
+        <span class="vtile"><span class="corner alt">Alt</span><span class="vl">CLB·176</span></span>
+        <span class="vtile"><span class="corner alt">Alt</span><span class="vl">custom</span></span>
+        <span class="vtile"><span class="corner unk">?</span><span class="vl">unknown</span></span>
+      </div>
+      <div class="note">Item 2: canonical (✓) → custom (Alt) → unknown (?) read as one grid.
+        REQ = requested printing, sorts first. Amber ribbon = one-tap confirm on a suggested rep.
+        Ghost "+9" expands that printing's copies in place — no full-width rows break the grid.
+        PR #352 densities: dense 72px (shown) / medium 88 / hero 112.</div>
+    </div>
+
+    <!-- (6) demoted sections — collapsed by default; Slot Actions shown open to prove button-ification -->
+    ${accSection('Card Details','')}
+    ${accSection('Attributes','')}
+    ${accSection('Printing Tags','')}
+    ${accSection('Print Options','')}
+    <div class="acc open">
+      <div class="acc-h" onclick="this.parentNode.classList.toggle('open')"><h6>Slot Actions</h6><span class="chev">›</span></div>
+      <div class="acc-b">
+        <div class="slotacts">
+          <button class="btn btn-sm btn-o-light btn-block">Change query…</button>
+          <button class="btn btn-sm btn-o-light btn-block">Duplicate slot</button>
+          <button class="btn btn-sm btn-o-danger btn-block">Delete slot</button>
+        </div>
+        <div class="note" style="margin-top:6px">Item 4: actions were bare text rows. Now real buttons
+          (Delete = btn-o-danger). Same CardSlotMenuActions list, rendered as buttons not a menu.</div>
+      </div>
+    </div>
+    ${accSection('Report','')}
+
+  </div></div>`;
+}
+function accSection(title){
+  return `<div class="acc"><div class="acc-h" onclick="this.parentNode.classList.toggle('open')">
+    <h6>${title}</h6><span class="chev">›</span></div>
+    <div class="acc-b"><span class="rrail" style="all:unset;color:var(--muted);font-size:12px">Collapsed by default (D3). Content reachable, not deleted.</span></div></div>`;
+}
+
+/* center + right rail (present so the three-region layout reads true) */
+function center(){
+  let cells='';
+  for(let i=1;i<=8;i++) cells+=`<span class="cell${i===3?' sel':''}"><span class="cn">${i}</span></span>`;
+  let sheets='';
+  for(let s=0;s<3;s++) sheets+=`<div class="sheet">${cells}</div>`;
+  return `<div class="center"><span class="npill">1 / 6</span>${sheets}</div>`;
+}
+function rightRail(){
+  return `<div class="rrail">
+    <h6>Print &amp; Settings</h6>
+    <div class="grp"><b style="font-size:12px">Page Setup</b><div class="muted">Letter · borderless · bleed 3.175mm</div></div>
+    <div class="grp"><b style="font-size:12px">Finish · Cardback · Colour</b><div class="muted">collapsed</div></div>
+    <div class="foot">
+      <button class="btn btn-primary" style="flex:1">Save Deck</button>
+      <button class="btn btn-primary" style="flex:1">Print / Export →</button>
+    </div>
+    <div class="note" style="margin-top:6px">Right rail shown for three-region context only — not this round's scope.</div>
+  </div>`;
+}
+
+/* ------------------------------------------------------------------ frame assembly */
+function desktopFrame(){
+  return `<div class="appbar"><span class="deck">Modern Burn</span>
+      <span class="pill">Sheet 1 / 6</span></div>
+    <div class="body-cols">${leftRail()}${center()}${rightRail()}</div>`;
+}
+function tabletFrame(){
+  return `<div class="appbar"><span class="deck">Modern Burn</span>
+      <span class="pill">Sheet 1 / 6</span><span class="gear">⚙</span></div>
+    <div class="body-cols">${center()}</div>
+    <div class="scrim"></div>
+    <div class="drawer start">
+      <div class="drawer-hd"><span style="font-weight:700">Card details</span><button>Close ✕</button></div>
+      ${leftRail()}
+    </div>`;
+}
+function phoneFrame(){
+  return `<div class="appbar"><span class="deck">Modern Burn</span>
+      <span class="pill">1 / 6</span><span class="gear">⚙</span></div>
+    <div class="body-cols">${center()}</div>
+    <div class="scrim"></div>
+    <div class="drawer bottom">
+      <div class="drawer-grip"></div>
+      <div class="drawer-hd"><span style="font-weight:700">Slot 3 · Front</span><button>Close ✕</button></div>
+      ${leftRail()}
+    </div>`;
+}
+
+/* forced-frame widths */
+const W={desktop:1400,tablet:900,phone:390};
+const H={desktop:820,tablet:900,phone:820};
+
+function render(){
+  const view=document.body.getAttribute('data-view')||'auto';
+  const stage=document.getElementById('stage');
+  const avail=window.innerWidth;
+
+  function scaledFrame(tier,html){
+    const fw=W[tier], fh=H[tier];
+    const scale=Math.min(1, (avail-24)/fw);
+    return `<div class="framewrap" style="height:${Math.ceil(fh*scale)+18}px">
+      <div class="frame" style="width:${fw}px;height:${fh}px;transform:scale(${scale})">
+        <span class="frame-tag">${tier.toUpperCase()} — ${fw}px, scaled ${(scale*100).toFixed(0)}%</span>
+        ${html}
+      </div></div>`;
+  }
+  const build={desktop:desktopFrame,tablet:tabletFrame,phone:phoneFrame};
+
+  if(view==='auto'){
+    // pick a tier from real width; render at native width (no scaling)
+    let tier = avail>=1200?'desktop':avail>=768?'tablet':'phone';
+    stage.innerHTML=`<div class="frame" style="width:100%;position:relative">
+      <span class="frame-tag">AUTO — ${avail}px → ${tier}</span>${build[tier]()}</div>`;
+  }else{
+    stage.innerHTML=scaledFrame(view,build[view]());
+  }
+  fillSources();
+}
+
+/* source list rows */
+const SRC=[['Chilli’s Cube',true,true],['MPCFill Community',true,true],['Nexus Proxies',true,false],
+  ['GoodGamery Scans',true,false],['Old School 93/94',false,false],['Retro Frame Vault',true,false],
+  ['Alt Art Collective',true,false],['Silver Border Depot',false,false],['Judge Foils Archive',true,false],
+  ['Textless Originals',false,false]];
+function srcRows(){
+  return SRC.map(([n,on,pin])=>`<div class="src-row">
+    <span class="tgl" data-on="${on}" onclick="this.setAttribute('data-on', this.getAttribute('data-on')==='true'?'false':'true')">
+      <span class="on">On</span><span class="off">Off</span></span>
+    <span class="snm">${n}</span>
+    <button class="pin${pin?' on':''}" title="Pin as favourite (#353)">★</button>
+  </div>`).join('');
+}
+function fillSources(){
+  document.querySelectorAll('#srcList,#srcListOv,[id^=srcList]').forEach(el=>{el.innerHTML=srcRows();});
+  document.querySelectorAll('.src-list').forEach(el=>{if(!el.innerHTML)el.innerHTML=srcRows();});
+}
+
+/* demo strip wiring */
+document.querySelector('.demo').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  ['view','conf','src','sv'].forEach(k=>{
+    if(b.dataset[k]!==undefined){
+      document.body.setAttribute('data-'+k,b.dataset[k]);
+      b.parentNode.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+      if(k==='view')render();
+    }
+  });
+});
+window.addEventListener('resize',()=>{clearTimeout(window._t);window._t=setTimeout(render,120);});
+render();
+</script>
+</body>
+</html>

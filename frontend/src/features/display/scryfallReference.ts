@@ -26,3 +26,28 @@ export function buildScryfallReferenceUrl(
   }
   return undefined;
 }
+
+/**
+ * D14 confidence element (SPEC-display-left-rail.md §3) - the set-icon hover Popover's reference
+ * image. Same zero-crawl, nothing-stored posture as `buildScryfallReferenceUrl` above (governing
+ * premise + #271): Scryfall's own documented `?format=image` convenience redirect
+ * (https://scryfall.com/docs/api/cards - "Card image" content negotiation) resolves a set code +
+ * collector number straight to the actual card image on Scryfall's own CDN, with no Scryfall
+ * card-UUID lookup step needed first - the frontend never fetches or stores the image itself,
+ * only points an `<img src>` at it. `null`/absent inputs (no set or no number) return `undefined`,
+ * same "nothing to build a URL from" convention as the sibling function above.
+ */
+export function buildScryfallReferenceImageUrl(
+  expansionCode: string | null | undefined,
+  collectorNumber: string | null | undefined
+): string | undefined {
+  if (expansionCode == null || expansionCode.length === 0) {
+    return undefined;
+  }
+  if (collectorNumber == null || collectorNumber.length === 0) {
+    return undefined;
+  }
+  return `https://api.scryfall.com/cards/${encodeURIComponent(
+    expansionCode.toLowerCase()
+  )}/${encodeURIComponent(collectorNumber)}?format=image`;
+}
