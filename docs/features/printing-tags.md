@@ -88,17 +88,24 @@ printings, artists, tags, and moderation from one screen.
   place that knows which `VoteSource` values are machine-derived, so no
   volume of machine-only votes can resolve a card alone. The shared core
   (`vote_consensus.resolve_weighted_consensus`, used by printing/artist/tag
-  alike) additionally implements two owner-ratified mechanisms (2026-07-22
-  vote-weight scenario matrix — see that function's own docstring for the
-  exact arithmetic):
-  - **D1** — if two or more outcome groups each carry SOME human-backed
+  alike) additionally implements two owner-ratified mechanisms from the
+  2026-07-22 vote-weight scenario matrix (owner-ratified 2026-07-22, PR
+  #325; raw ratification record: [`docs/reference/vote-weight-matrix.md`](../reference/vote-weight-matrix.md)
+  — see that function's own docstring for the exact arithmetic):
+  - <a id="human-contest-machine-weight-drop"></a>**No machine tipping of
+    a human-vs-human contest** (formerly labeled _D1_ in this document):
+    if two or more outcome groups each carry SOME human-backed
     weight (a genuine human-vs-human disagreement), every group's
     non-human-backed weight (machine/implicit alike) is dropped entirely
     for both winner-selection and the gate checks — machine/implicit
     weight can pool an already-agreeing human side's total, but can never
     be the deciding weight in an actual human-vs-human contest it isn't
     part of.
-  - **D4** — if D1 didn't trigger and the winner's own human-backed weight
+  - <a id="machine-dissent-never-de-resolves"></a>**Machine dissent never
+    de-resolves an already-quorum-valid human winner** (formerly labeled
+    _D4_ in this document): if the [no-machine-tipping
+    mechanism](#human-contest-machine-weight-drop) above didn't trigger and
+    the winner's own human-backed weight
     alone already clears `PRINTING_TAG_MIN_VOTES`, the share computation
     is recomputed from human-backed weight only across every group — so a
     pile of machine/implicit dissent elsewhere can't drag an
@@ -110,7 +117,7 @@ printings, artists, tags, and moderation from one screen.
     it — this is fixed, not merely documented). Promotion (a lone human
     vote plus agreeing machine weight resolving a previously-UNRESOLVED
     pair) is unaffected by either mechanism — that's Stage D's own purpose
-    and neither D1 nor D4's trigger condition is met in that shape.
+    and neither mechanism's trigger condition is met in that shape.
   - **Tag-path-only**: dissent whose only weight is machine/implicit-
     derived no longer classifies a `CardTagVote` pair's persisted status
     as `contested` (`tag_consensus.py::resolve_and_persist_tag_votes`) —
@@ -159,8 +166,10 @@ printings, artists, tags, and moderation from one screen.
   SUM of implicit weight per (card, tag, polarity) outcome group is hard-
   capped at `PRINTING_TAG_IMPLICIT_CAP` (default 1.0, strictly below
   `PRINTING_TAG_MIN_VOTES`) — a pile of implicit votes can never form
-  quorum alone, decide a live human-vs-human contest (D1 above), or veto
-  an already-quorum-valid human win (D4 above). Lifecycle: one implicit
+  quorum alone, decide a live human-vs-human contest (the [no-machine-tipping
+  mechanism](#human-contest-machine-weight-drop) above), or veto
+  an already-quorum-valid human win (the [machine-dissent-never-de-resolves
+  mechanism](#machine-dissent-never-de-resolves) above). Lifecycle: one implicit
   vote per (anonymous identity, card, tag) — `views.py::_cast_implicit_vote_and_resolve`
   supersedes (via `update_or_create`) a stale implicit vote from the same
   identity, and refuses (silent no-op) to touch a row that's already a
@@ -181,12 +190,16 @@ printings, artists, tags, and moderation from one screen.
   call per candidate pick, casting/superseding an implicit vote for every
   named tag; unknown/guarded tag names are silently skipped, never an
   error) and `POST 2/retractImplicitVote/` (`{identifier, tagName, anonymousId}` — the deselect path). `cardpicker.vote_consensus.VoteTuple.is_implicit`
-  is the flag the shared resolver core keys its cap/D1/D4 treatment off of
+  is the flag the shared resolver core keys its cap and its two
+  human-contest-protection mechanisms off of
   — set by `tag_consensus.py`'s wrappers, never inferred from `source`
   inside the resolver itself (same "caller decides" convention
   `is_human_backed` already used).
-- **Suggested filter tags / suggestedness excludes implicit** (decision
-  D6): `tag_consensus.py::get_tag_net_polarity` (the questionFeed
+- <a id="suggestedness-excludes-implicit"></a>**Suggested filter tags /
+  suggestedness excludes implicit** (owner-ratified 2026-07-22, PR #325;
+  formerly labeled decision _D6_ in this document; raw ratification
+  record: [`docs/reference/vote-weight-matrix.md`](../reference/vote-weight-matrix.md)):
+  `tag_consensus.py::get_tag_net_polarity` (the questionFeed
   confidence-fill scalar) EXCLUDES `VoteSource.IMPLICIT` weight entirely —
   an implicit vote is a passive selection by-product, not independent
   evidence, so it must never color a chip's confidence fill or let a
@@ -648,7 +661,8 @@ printings, artists, tags, and moderation from one screen.
   alongside the chip-render/vote-submission logic so the display page's
   rail Attributes section could reuse the exact same chip, per the
   left-panel-unification pass — see
-  `docs/proposals/proposal-h-unified-display-page.md`). Level 3's
+  `docs/proposals/proposal-h-unified-display-page.md` (historical doc —
+  see its own banner)). Level 3's
   Confirm/Skip pair also gained `flex-column flex-sm-row` (previously
   always side-by-side, squeezed to half-width each on a phone) to match
   the stacking-to-full-width pattern every other level already used.
@@ -1348,8 +1362,8 @@ printings, artists, tags, and moderation from one screen.
     test now asserts card-left-of-questions (was candidates-left-of-card
     pre-#305); `WhatsThatWordsAnimation.spec.ts` (new) asserts computed
     CSS animation properties (`animation-name`/`-duration`/`-delay`/
-    `-timing-function`), not mid-frame screenshots (the D17 flake lesson,
-    `docs/troubleshooting.md`) — Playwright's project-wide
+    `-timing-function`), not mid-frame screenshots (the sheet-position-pill
+    flake lesson, `docs/troubleshooting.md`) — Playwright's project-wide
     `reducedMotion: "reduce"` default means every _other_ existing spec
     never has to account for this animation at all; this file explicitly
     overrides it per-test where it needs the animation actually running.
