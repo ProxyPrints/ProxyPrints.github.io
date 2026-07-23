@@ -13,12 +13,24 @@ directly, or the expansion_hint-narrows-to-one case) - visual disambiguation (a 
 collector line, or a matching art crop) is exactly the signal that's missing there. Selection
 also revisits single-candidate names deductive backfill's own Scryfall printings_count
 cross-check rejected, since those are still unresolved despite one local match.
+
+FILENAME-STYLE DUPLICATE-UPLOAD SUFFIX NORMALIZATION (2026-07-23, `CandidateNameIndex.
+candidates_for` - live-proven defect, card_id 7173 "Plaguecrafter (1)"): a source folder's own
+auto-dedup naming (two files sharing a name - Google Drive/local-filesystem convention) or the
+OS's own duplicate-file convention appends a suffix to `Card.name` that was never part of the
+real card name, and `candidates_for` is an EXACT-STRING lookup on `to_searchable(name)` (no
+fuzzy/substring matching, unlike `printing_candidates.find_candidates_by_name`'s own
+`icontains`-per-word search), so any surviving suffix character produces zero candidates. See
+`_strip_filename_duplicate_suffix`'s own docstring immediately below `CandidateNameIndex` for
+the exact patterns handled, why (a live catalog survey, not a guess), and what's deliberately
+left unhandled.
 """
 
 import collections
 import functools
 import logging
 import os
+import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -139,6 +151,69 @@ class CandidatePrinting:
     edhrec_rank: Optional[int] = None
 
 
+# FILENAME-STYLE DUPLICATE-UPLOAD SUFFIX (module docstring) - stripped from the RAW name BEFORE
+# to_searchable normalisation, so an upload carrying this suffix still resolves to the same
+# candidate set as the un-suffixed name. Two patterns, both confirmed against a live catalog
+# survey (2026-07-23), not guessed:
+#   - `\(\d+\)` ("Plaguecrafter (1)", "Mountain (4)" - a source folder's own auto-dedup naming
+#     when two uploads share a name): already incidentally covered by `to_searchable`'s own
+#     general-purpose bracket-stripping (`re.sub(r"[\(\[].*?[\)\]]", "", ...)` - confirmed live,
+#     card_id 7173 "Plaguecrafter (1)" already resolves 8 real candidates under the UNCHANGED
+#     `to_searchable` alone) - included here anyway so this index's own matching behavior is
+#     explicit and self-contained, not silently dependent on a shared, general-purpose search
+#     primitive's own unrelated bracket-stripping (which strips ANY bracketed content for a
+#     different reason - general search noise removal - and could change independently of this
+#     concern). Zero new collision risk: `to_searchable` already strips ALL bracket content on
+#     the STORED (`CanonicalCard.name`) side too, so a real catalog name that happens to end in
+#     "(<digits>)" (e.g. "Tom van de Logt Bio (2000)") already collapses to the identical
+#     normalised key with or without this pattern - confirmed against the live catalog's 71
+#     parenthesis-carrying `CanonicalCard` rows, none of which this pattern changes the outcome
+#     for.
+#   - `-\s*copy` ("Polluted Delta - Copy" - the OS's own duplicate-file naming convention): a
+#     REAL, previously-unhandled gap - `to_searchable` converts the hyphen to a space (its own
+#     existing behaviour for compound names) and has no reason to then strip the literal
+#     surviving word "Copy". Requires the hyphen specifically (not a bare trailing "copy"): the
+#     live catalog carries real `CanonicalCard` rows literally named "Copy" and "Pirated Copy"
+#     (40 rows total ending in "copy", live-checked, none hyphen-preceded), so a bare trailing
+#     "copy" strip would corrupt an upload of either real card; requiring the hyphen is a safe,
+#     non-colliding signal.
+# Applied repeatedly, not just once (`_strip_filename_duplicate_suffix` below) - the two patterns
+# can stack on a real upload (a duplicate re-downloaded a second time: "Name (1) - Copy").
+#
+# SURVEYED BUT DELIBERATELY NOT HANDLED (same live survey, 2026-07-23) - both are pre-existing
+# `to_searchable` tokenisation/exact-match limitations with a much larger blast radius than a
+# suffix strip, out of scope here:
+#   - underscore/no-separator duplicate-number suffixes ("Yen_02", "Spirit_Token_3-2") -
+#     `to_searchable` treats "_" as punctuation to DELETE, not a separator to convert to a space
+#     (unlike "-", which it does convert) - "Spirit_Token_3-2" normalises to "spirittoken", not
+#     "spirit token", so it can never match the real candidate "Spirit Token" regardless of any
+#     trailing-suffix fix. Changing "_" handling is a change to `to_searchable` itself (shared,
+#     general-purpose search infra used far beyond this index), not a targeted suffix strip.
+#   - short/partial-name uploads ("Lazav_1" for the real "Lazav, Dimir Mastermind", "Ciri_01"/
+#     "Yen_02"/"TreacheryGame_*" for custom Witcher-crossover/game-prop uploads with no real
+#     `CanonicalCard` match at all) - `candidates_for` is an EXACT-normalised-string lookup, not
+#     fuzzy/substring matching (that's `printing_candidates.find_candidates_by_name`'s own
+#     `icontains`-per-word job, a different consumer); recovering these would mean building a
+#     fuzzy/nickname matcher here, not stripping a suffix - most of this specific sample turned
+#     out to be genuinely custom, non-Magic filenames anyway (zero real candidates IS correct for
+#     them), not evidence of a normalisation bug.
+_FILENAME_DUPLICATE_SUFFIX_RE = re.compile(r"\s*(?:\(\d+\)|-\s*copy)\s*$", re.IGNORECASE)
+
+
+def _strip_filename_duplicate_suffix(name: str) -> str:
+    """Strips a trailing filename-style duplicate-upload suffix (see `_FILENAME_DUPLICATE_SUFFIX_
+    RE`'s own comment for the exact patterns/rationale) - repeatedly, since more than one such
+    suffix can stack on a real upload (e.g. a duplicate re-downloaded a second time: "Name (1) -
+    Copy"). A name carrying no such suffix is returned byte-identical (`re.sub` is a no-op on a
+    non-match), so this is always safe to call unconditionally."""
+    previous = None
+    stripped = name
+    while stripped != previous:
+        previous = stripped
+        stripped = _FILENAME_DUPLICATE_SUFFIX_RE.sub("", stripped)
+    return stripped
+
+
 class CandidateNameIndex:
     """
     Like cardpicker.deductive_backfill.CanonicalNameIndex, but keyed on the same to_searchable
@@ -165,7 +240,19 @@ class CandidateNameIndex:
         self._by_name = dict(by_name)
 
     def candidates_for(self, name: str) -> list[CandidatePrinting]:
-        return self._by_name.get(to_searchable(name), [])
+        """Direct lookup first (the common, unsuffixed case - unchanged). Only when that finds
+        NOTHING does this fall back to stripping a filename-style duplicate-upload suffix
+        (module docstring / `_strip_filename_duplicate_suffix`) and retrying - most names carry
+        no such suffix, so this keeps the extra regex work scoped to the cohort that actually
+        needs it, the same "only pay for what you use" shape `_resolve_candidates_for_card`'s own
+        DFC-back-face fallback in `local_calculate_verdicts.py` already established."""
+        direct = self._by_name.get(to_searchable(name), [])
+        if direct:
+            return direct
+        stripped = _strip_filename_duplicate_suffix(name)
+        if stripped == name:
+            return []
+        return self._by_name.get(to_searchable(stripped), [])
 
 
 @dataclass(frozen=True)

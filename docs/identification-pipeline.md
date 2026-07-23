@@ -54,8 +54,23 @@ identity, and (safety) nothing already resolved. Then five stages per card:
   the input.
 - **g2 — candidate constraint.** Candidates are only the real printings **of
   this card's name**. The parsed (set, number) must match: exactly one
-  candidate → match; none → _parsed-but-no-match_ (confident no-match);
-  no usable parse → _no-text_ skip; several → _ambiguous_.
+  candidate → match; none → _parsed-but-no-match_; no usable parse →
+  _no-text_ skip; several → _ambiguous_. **Set-code lexicon gate (2026-07-23):**
+  a `parsed-but-no-match` outcome only casts the confident no-match
+  vote below when the parsed set code is a REAL `CanonicalExpansion` code —
+  a live audit found 85.5% of this outcome's parsed set codes matched no
+  real expansion at all (dominated by proxy/watermark text the collector-line
+  crop also caught: "proxy", "mtg", "not", "card"), un-parsed noise, not
+  validated evidence. A lexicon-invalid parse abstains instead (a named,
+  non-rescannable skip, routed to the slow path below exactly like
+  `no-text`) - no confidence/
+  OCR-quality split was separable (checked directly: in-lexicon and
+  out-of-lexicon parses have near-identical tesseract confidence
+  distributions), so this is gated on lexicon membership alone; a
+  genuinely-custom set code on a proxy of a non-existent printing is also
+  abstained by this gate, a deliberate, documented tradeoff (see
+  `local_calculate_verdicts.py`'s own module docstring for the full
+  reasoning and numbers).
 - **g3 — tie-break.** Ambiguity only: compare the set-symbol phash against
   each candidate's rendered symbol; accept only within distance threshold AND
   a margin over the runner-up; a near-tie stays unresolved. (Fired for 2 of

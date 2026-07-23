@@ -58,6 +58,15 @@ TWO-STEP RUNBOOK (this command's own --help repeats this - read it before runnin
        "proxy-marker-veto")` row from exactly `--stage-d-run-id` and retracts it so the card is
        eligible again for `local_calculate_verdicts`'s own next `--write` pass to cast the real
        match this fix now allows.
+     - `--selector set-code-lexicon-gate --stage-d-run-id RUN_ID` (2026-07-23,
+       `local_calculate_verdicts`'s own SET-CODE LEXICON GATE): immediately actionable, exactly
+       like `proxy-marker-veto` above - the code fix alone changes `calculate_join_key_verdict`'s
+       conclusion for the SAME stored `ImageEvidence` row. Targets every card carrying a
+       `CardPrintingTag(anonymous_id=stage-d-join-key-v1, is_no_match=True)` vote from exactly
+       `--stage-d-run-id` (the calculator's FULL is_no_match cohort for that run, not
+       pre-filtered to the lexicon-invalid subset - see `select_card_ids_set_code_lexicon_gate`'s
+       own docstring for why) and retracts exactly the ones whose fresh conclusion is now the new
+       `"unknown-set-code"` skip instead - the rest is left as a genuine, unchanged no-match vote.
   2. `local_calculate_verdicts` (UNCHANGED by this PR) - once step 1 retracts a card's stale
      vote/scan-log, it is eligible again for that command's own `_eligible_cards_queryset` and
      gets a fresh join-key verdict the next time it runs.
@@ -96,6 +105,7 @@ from cardpicker.local_calculate_verdicts import (
     JoinKeyVerdict,
     _resolve_candidates_for_card,
     calculate_join_key_verdict,
+    known_set_codes,
 )
 from cardpicker.local_identify_printing_tags import CandidateNameIndex, generate_run_id
 from cardpicker.local_ocr import parse_collector_line
@@ -202,6 +212,30 @@ def select_card_ids_proxy_marker_veto(stage_d_run_id: str) -> list[int]:
     )
 
 
+def select_card_ids_set_code_lexicon_gate(stage_d_run_id: str) -> list[int]:
+    """
+    2026-07-23, `local_calculate_verdicts`'s own SET-CODE LEXICON GATE - every card carrying a
+    `CardPrintingTag(anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True)` vote from exactly
+    `stage_d_run_id` - the join-key calculator's own full is_no_match cohort for one past
+    invocation, NOT pre-filtered to the lexicon-invalid subset. Immediately actionable, like
+    `proxy-marker-veto` above: the code fix alone changes `calculate_join_key_verdict`'s
+    conclusion for the SAME stored evidence, no re-extraction needed. Deliberately broader than
+    the actual defect (most of this cohort's `set_code` values ARE real, in-lexicon set codes -
+    only 85.5% measured out-of-lexicon at write time, not 100%) rather than re-deriving the
+    lexicon check here a second time: `reparse_and_retract`'s own recorded-vs-fresh comparison
+    already no-ops any card whose conclusion genuinely didn't change (the in-lexicon majority),
+    so a broader selector costs some wasted re-derivation work, not correctness - simpler and
+    less drift-prone than keeping two lexicon-check implementations in sync.
+    """
+    return sorted(
+        set(
+            CardPrintingTag.objects.filter(
+                anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True, run_id=stage_d_run_id
+            ).values_list("card_id", flat=True)
+        )
+    )
+
+
 def _current_evidence_for_card(card: Card) -> Optional[ImageEvidence]:
     """The CURRENT `ImageEvidence` row for `card` - same convention
     `local_calculate_verdicts.run_join_key_calculator`'s own eligibility query uses:
@@ -258,6 +292,8 @@ def reparse_and_retract(
     result = ReparseResult(dry_run=dry_run, run_id=run_id)
     index = CandidateNameIndex()  # built once, reused across the whole cohort - matches
     # run_join_key_calculator's own "one query over CanonicalCard, not one per card" precedent.
+    lexicon = known_set_codes()  # module docstring's "--selector set-code-lexicon-gate" - same
+    # build-once-per-batch shape as `index` immediately above.
 
     for card in Card.objects.filter(pk__in=card_ids).iterator(chunk_size=500):
         evidence = _current_evidence_for_card(card)
@@ -298,7 +334,7 @@ def reparse_and_retract(
             continue
 
         candidates = _resolve_candidates_for_card(card.name, index, default_cards_path=default_cards_path)
-        fresh_verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+        fresh_verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=lexicon)
         fresh_state = _verdict_state(fresh_verdict)
 
         if fresh_state == recorded_state:
@@ -330,12 +366,13 @@ def reparse_and_retract(
 class Command(BaseCommand):
     help = (
         "Supersede/re-vote tooling (issue #259 follow-up, extended 2026-07-21 for the "
-        "moderator-flag-signal correction): re-parses ImageEvidence.collector_line_raw_text with "
-        "the CURRENT local_ocr parser and retracts the stale stage-d-join-key-v1 vote/scan-log "
-        "for any card whose join-key CONCLUSION changed as a result - zero image fetches. See "
-        "this command's own module docstring for the full two-step runbook (re-extraction via "
-        "run_image_evidence_cohort --card-ids-file is a SEPARATE, prerequisite step for "
-        "--selector no-text ONLY - --selector proxy-marker-veto is immediately actionable, like "
+        "moderator-flag-signal correction and 2026-07-23 for the set-code lexicon gate): "
+        "re-parses ImageEvidence.collector_line_raw_text with the CURRENT local_ocr parser and "
+        "retracts the stale stage-d-join-key-v1 vote/scan-log for any card whose join-key "
+        "CONCLUSION changed as a result - zero image fetches. See this command's own module "
+        "docstring for the full two-step runbook (re-extraction via run_image_evidence_cohort "
+        "--card-ids-file is a SEPARATE, prerequisite step for --selector no-text ONLY - "
+        "--selector proxy-marker-veto/set-code-lexicon-gate are immediately actionable, like "
         "parser-bug). Dry-run by default; --write required to persist anything. --write also "
         "requires a matching COMPLETED dry-run of the SAME --selector/--stage-d-run-id/"
         "--card-ids-file within --dry-run-window-hours (forced-dry-run guard, issue #362) - see "
@@ -352,7 +389,7 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--selector",
-            choices=["parser-bug", "no-text", "proxy-marker-veto"],
+            choices=["parser-bug", "no-text", "proxy-marker-veto", "set-code-lexicon-gate"],
             default=None,
             help="parser-bug: cards whose CURRENT ImageEvidence.collector_line_set_code matches "
             "the old #260 bug's misparse shape. no-text: cards carrying a CardScanLog"
@@ -362,14 +399,20 @@ class Command(BaseCommand):
             "cards carrying a CardScanLog(anonymous_id=stage-d-join-key-v1, "
             "skip_reason='proxy-marker-veto') from --stage-d-run-id - immediately actionable, no "
             "re-extraction needed (the code fix alone changes the conclusion for the same stored "
-            "evidence). Mutually exclusive with --card-ids-file.",
+            "evidence). set-code-lexicon-gate (2026-07-23): cards carrying a "
+            "CardPrintingTag(anonymous_id=stage-d-join-key-v1, is_no_match=True) vote from "
+            "--stage-d-run-id - immediately actionable like proxy-marker-veto; only the subset "
+            "whose parsed set_code isn't a real CanonicalExpansion code actually retracts, the "
+            "rest is left unchanged by reparse_and_retract's own comparison. Mutually exclusive "
+            "with --card-ids-file.",
         )
         parser.add_argument(
             "--stage-d-run-id",
             type=str,
             default=None,
-            help="Required with --selector no-text or --selector proxy-marker-veto - the run_id "
-            "of the local_calculate_verdicts invocation whose scan-log rows to target.",
+            help="Required with --selector no-text, --selector proxy-marker-veto, or --selector "
+            "set-code-lexicon-gate - the run_id of the local_calculate_verdicts invocation whose "
+            "scan-log/vote rows to target.",
         )
         parser.add_argument(
             "--write",
@@ -399,7 +442,7 @@ class Command(BaseCommand):
             raise CommandError("Exactly one of --card-ids-file or --selector is required.")
 
         stage_d_run_id = kwargs["stage_d_run_id"]
-        if selector in ("no-text", "proxy-marker-veto") and not stage_d_run_id:
+        if selector in ("no-text", "proxy-marker-veto", "set-code-lexicon-gate") and not stage_d_run_id:
             raise CommandError(f"--selector {selector} requires --stage-d-run-id.")
 
         # Forced-dry-run guard scope (issue #362): the INPUT that defines this invocation's own
@@ -428,9 +471,11 @@ class Command(BaseCommand):
             card_ids = select_card_ids_parser_bug()
         elif selector == "no-text":
             card_ids = select_card_ids_no_text(stage_d_run_id)
-        else:
-            assert selector == "proxy-marker-veto"
+        elif selector == "proxy-marker-veto":
             card_ids = select_card_ids_proxy_marker_veto(stage_d_run_id)
+        else:
+            assert selector == "set-code-lexicon-gate"
+            card_ids = select_card_ids_set_code_lexicon_gate(stage_d_run_id)
 
         if not card_ids:
             self.stdout.write("No candidate cards found for this selector - nothing to do.")

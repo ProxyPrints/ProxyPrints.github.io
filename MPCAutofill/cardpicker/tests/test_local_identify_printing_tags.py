@@ -509,6 +509,82 @@ class TestCandidateNameIndex:
         index = CandidateNameIndex()
         assert len(index.candidates_for("Kusari-Gama (Modern Tomas Giorello)")) == 1
 
+    def test_direct_match_takes_precedence_over_any_suffix_handling(self, db):
+        """The common, unsuffixed case is completely unaffected by the new fallback - confirmed
+        directly, not just inferred from candidates_for's own "direct first" docstring."""
+        CanonicalCardFactory(name="Lightning Bolt")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("Lightning Bolt")) == 1
+
+    def test_paren_digit_suffix_already_resolves_via_to_searchable_alone(self, db):
+        """Live-proven case (card_id 7173, "Plaguecrafter (1)") - confirmed here as a REGRESSION
+        pin, not a new behavior: to_searchable's own general-purpose bracket-stripping already
+        strips "(1)" with no help from _strip_filename_duplicate_suffix at all (both the stored
+        CanonicalCard name and the queried name normalise to the identical "plaguecrafter" key).
+        See test_paren_digit_suffix_survives_even_if_to_searchable_ever_stopped_stripping_it below
+        for proof this index doesn't SILENTLY depend on that to_searchable behavior either."""
+        CanonicalCardFactory(name="Plaguecrafter")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("Plaguecrafter (1)")) == 1
+
+    def test_paren_digit_suffix_survives_even_if_to_searchable_ever_stopped_stripping_it(self, db):
+        """_strip_filename_duplicate_suffix's own \\(\\d+\\) pattern, exercised directly (not
+        through candidates_for's to_searchable-first fast path) - this index's own suffix
+        handling doesn't silently rely on a shared, general-purpose search primitive's unrelated
+        bracket-stripping behavior for this pattern."""
+        from cardpicker.local_identify_printing_tags import (
+            _strip_filename_duplicate_suffix,
+        )
+
+        assert _strip_filename_duplicate_suffix("Plaguecrafter (1)") == "Plaguecrafter"
+        assert _strip_filename_duplicate_suffix("Mountain (4)") == "Mountain"
+
+    def test_dash_copy_suffix_is_stripped(self, db):
+        """The genuine, previously-unhandled gap (live catalog survey, 2026-07-23):
+        to_searchable converts "-" to a space but has no reason to then strip the surviving
+        literal word "Copy" - "Polluted Delta - Copy" real production example."""
+        CanonicalCardFactory(name="Polluted Delta")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("Polluted Delta - Copy")) == 1
+
+    def test_stacked_suffixes_are_both_stripped(self, db):
+        """A duplicate-of-a-duplicate ("Name (1) - Copy") - _strip_filename_duplicate_suffix
+        applies repeatedly, not just once."""
+        CanonicalCardFactory(name="Polluted Delta")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("Polluted Delta (1) - Copy")) == 1
+
+    def test_bare_trailing_copy_is_not_stripped_real_card_named_copy(self, db):
+        """Collision guard (module docstring): the catalog carries a REAL CanonicalCard literally
+        named "Copy" - a bare (non-hyphen-preceded) trailing "copy" must NOT be stripped, or an
+        upload of the real "Copy" card would corrupt into an empty/wrong lookup."""
+        CanonicalCardFactory(name="Copy")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("Copy")) == 1
+        # a bare space (no hyphen) before "copy" is deliberately NOT treated as the OS-duplicate
+        # marker - only the hyphen-separated form is.
+        assert index.candidates_for("Copy Copy") == []
+
+    def test_bare_trailing_copy_is_not_stripped_real_card_named_pirated_copy(self, db):
+        CanonicalCardFactory(name="Pirated Copy")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("Pirated Copy")) == 1
+
+    def test_suffix_stripping_does_not_manufacture_a_match_for_a_name_with_no_real_candidate(self, db):
+        """No CanonicalCard exists at all here - the suffix-stripped lookup still correctly
+        returns nothing, it doesn't manufacture a false match out of thin air."""
+        index = CandidateNameIndex()
+        assert index.candidates_for("Totally Made Up Card (1)") == []
+
+    def test_underscore_duplicate_suffix_is_deliberately_left_unhandled(self, db):
+        """Documents the surveyed-but-not-fixed gap (module docstring) - "_" is punctuation to
+        to_searchable, not a separator, so an underscore-suffixed real card name still doesn't
+        match even after this fix. A deliberate scope boundary, pinned here so a future change
+        to this behavior is a conscious decision, not an accidental regression."""
+        CanonicalCardFactory(name="Spirit Token")
+        index = CandidateNameIndex()
+        assert index.candidates_for("Spirit_Token_3") == []
+
 
 class TestOcrParsing:
     def test_standard_modern_collector_line(self):

@@ -715,6 +715,47 @@ skip.
 `TappedOut`/`ManaStack`, `MPCAutofill/cardpicker/integrations/game/base.py`'s
 `ImportSite.request`.
 
+## `test_rate_limited_after_exceeding_the_configured_rate` fails intermittently in CI, passes on rerun, unrelated to your change
+
+**Symptom**: `TestPostSubmitTagVote::test_rate_limited_after_exceeding_the_configured_rate`
+(`cardpicker/tests/test_tag_votes.py`) fails in CI (`assert 200 == 429` -
+the test's SECOND request wasn't rate-limited as expected) on a PR that
+never touched rate-limiting, tag votes, or `views.py` (first observed PR
+#380, 2026-07-23). Re-running the SAME CI job with zero code changes
+passed clean (4m12s) - confirmed non-deterministic, not a real
+regression, before landing.
+
+**Cause**: `post_submit_printing_tag`'s own docstring already names the
+mechanism: `django-ratelimit` here "relies on Django's default
+(in-process) cache" - a single process-lifetime `LocMemCache`, not
+something pytest-django's per-test DB-transaction rollback resets. The
+sibling endpoint this specific test exercises (`post_submit_tag_vote`)
+shares the same in-process cache backend. Whichever OTHER test in the
+same worker process happens to run immediately before this one, and how
+many rate-limited requests it fires against an overlapping cache key/
+window, can leave the sliding-window counter in a different state than a
+fresh run would see, so the outcome depends on execution order/
+parallel-worker assignment, not just this test's own two requests. This
+is a pre-existing structural gap (no per-test cache clear), not
+something a single PR's diff can trigger or fix incidentally.
+
+**Fix applied so far**: none - out of scope for a diff that doesn't
+touch rate-limiting; confirmed-flaky via a clean rerun and documented
+here instead of silently waved through, per this project's own
+"a red Backend-tests check now means something real - investigate it"
+rule (CLAUDE.md). If this starts recurring often enough to cost real
+review time, the real fix is a per-test cache clear (e.g. an autouse
+fixture calling `django.core.cache.cache.clear()`), the same category of
+fix `test_valid_url`'s own entry above applies to network flakiness -
+not attempted here since one observed occurrence doesn't yet justify
+guessing at the right isolation boundary for every rate-limited endpoint
+in the same file.
+
+**Refs**: `MPCAutofill/cardpicker/tests/test_tag_votes.py`'s
+`TestPostSubmitTagVote`, and `MPCAutofill/cardpicker/views.py`'s
+`post_submit_printing_tag`/`post_submit_tag_vote` `@ratelimit` decorator
+and `_printing_tag_rate_limit_rate`'s own in-process-cache comment.
+
 ## Every PR's prettier pre-commit check fails on a docs file the PR never touched
 
 **Symptom**: the "Formatting and static type checking" CI job fails the
