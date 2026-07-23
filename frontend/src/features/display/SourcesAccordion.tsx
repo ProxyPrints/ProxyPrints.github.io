@@ -192,7 +192,14 @@ export function SourcesAccordion() {
             className="mb-2"
             data-testid="display-sources-filter"
           />
-          <div className="d-flex gap-2 flex-wrap mb-2">
+          <div
+            className="d-flex flex-wrap"
+            // CSS-fidelity pass (SPEC-display-left-rail.md §4/§2, 2026-07-23) - the mockup's own
+            // `.src-bulk{gap:6px;margin-bottom:6px}` has no exact Bootstrap spacing-scale match
+            // (`gap-2 mb-2` = 8px both) - set directly, same as this round's other exact-px
+            // values.
+            style={{ gap: "6px", marginBottom: "6px" }}
+          >
             <Button
               size="sm"
               variant="outline-light"
@@ -233,8 +240,17 @@ export function SourcesAccordion() {
             </Button>
           </div>
           <div
-            className="border"
-            style={{ maxHeight: 190, overflowY: "auto" }}
+            // CSS-fidelity pass (SPEC-display-left-rail.md §4/§0, 2026-07-23) - Bootstrap's
+            // plain `.border` utility renders the theme's stock gray (`--bs-border-color`, never
+            // overridden by #302), not the mockup's own `.src-list{border:1px solid
+            // var(--border);background:var(--raised)}` tokens (`rgba(0,0,0,.22)` /
+            // `#22303f`) - set directly so this named surface matches the approved mockup.
+            style={{
+              maxHeight: 190,
+              overflowY: "auto",
+              border: "1px solid rgba(0,0,0,.22)",
+              background: "#22303f",
+            }}
             data-testid="display-sources-list"
           >
             {visibleRows.map(([pk, enabled]) => {

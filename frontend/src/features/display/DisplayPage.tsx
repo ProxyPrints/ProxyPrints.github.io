@@ -932,11 +932,7 @@ const ActionBarSearchGroup = styled.div`
 
 // Editor-completion package, E1/X6 - the mockup's rail stylesheet, lifted verbatim per the
 // owner's grant (spec §5: "the left rail MAY lift the mockup's CSS verbatim rather than
-// re-approximate through react-bootstrap idioms"). Scoped to this one wrapper (not global) so it
-// only ever touches the /display rail's own promoted-zone markup (PromotedZone/ConfidenceElement
-// above) - nothing here overrides AutofillCollapse's own chrome for the demoted accordion
-// sections below (the owner's grant covers dropping that look "where fidelity requires"; the
-// promoted zone is where it's required, the demoted accordions keep today's proven pattern).
+// re-approximate through react-bootstrap idioms").
 // Fix round (SPEC-display-left-rail.md §0/§2/§3, owner-approved 2026-07-23): the mockup's rail
 // stylesheet, lifted verbatim per the owner's existing grant (spec §5 of the earlier
 // editor-completion round: "the left rail MAY lift the mockup's CSS verbatim rather than
@@ -946,9 +942,24 @@ const ActionBarSearchGroup = styled.div`
 // `.seticon`/`.idtext`/`.statepill`/`.notthis` replace the old `.confidence`/`.set-symbol`/
 // `.conf-badge`/`.conf-x` set (ConfidenceElement.tsx's own markup was rewritten to match - see
 // that file's own module comment).
+//
+// CSS-fidelity pass (owner-reported regression, 2026-07-23): §2's density table has its own row
+// for "AutofillCollapse header in rail" (Superhero's stock `.card-header` `0.5rem 1rem` (8/16) ->
+// rail-scoped `padding:7px 10px`) - this was in the spec from the start but never actually
+// landed as CSS (the comment this replaced claimed the demoted accordions deliberately "keep
+// today's proven pattern," which was true for the CARD look/chrome but wrong for padding - the
+// spec never carved padding out of scope). Scoped here (not a global AutofillCollapse.tsx
+// change) via a plain `.card-header` descendant selector, which - at two class selectors deep
+// under Emotion's own scoped RailRoot class - already outranks Bootstrap's bare `.card-header`
+// rule without `!important`. Covers every rail-mounted AutofillCollapse: the five demoted
+// RailSections below AND SourcesAccordion (§4 - "shell = AutofillCollapse"), both descendants of
+// this same RailRoot node.
 const RailRoot = styled.div`
   .rail-head {
     background: #22303f;
+  }
+  .card-header {
+    padding: 7px 10px;
   }
   .artist-line {
     background: #22303f;

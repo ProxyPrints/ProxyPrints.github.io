@@ -77,7 +77,12 @@ export function SlotActionsSection({
 
   return (
     <div
-      className="d-flex flex-column gap-2"
+      className="d-flex flex-column"
+      // CSS-fidelity pass (SPEC-display-left-rail.md §2/§8, 2026-07-23) - `gap-2` (0.5rem/8px)
+      // approximated the density table's own literal "button stack gap:6px" - no exact Bootstrap
+      // spacing-scale match, so it's set directly, same as the rest of this round's exact-px
+      // values (`.d14`/`.ufilter`/`.vgrid` etc).
+      style={{ gap: "6px" }}
       data-testid="display-slot-actions-section"
     >
       {/* Buttons-look-like-buttons audit (SPEC-display-left-rail.md §8): these were already real

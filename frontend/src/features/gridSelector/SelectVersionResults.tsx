@@ -601,6 +601,14 @@ interface FunnelAxisRowProps {
   membershipByTagName: Record<string, ChipMembershipState>;
   onAxisChange: (axis: FunnelAxis, nextValue: string | string[]) => void;
   getTagDisplayName: (tagName: string) => string;
+  /** CSS-fidelity pass (2026-07-23) - this row div doubles as BOTH the Border axis's own
+   * standalone `.ufilter .row` (mockup: `margin-bottom:5px`, since it's not the fieldset's last
+   * row) AND, nested, the Frame half of the shared Frame+Treatment row (mockup: no margin of its
+   * own - `frame-treatment-row`, the actual last `.row`, owns the `margin-bottom:0`). A single
+   * hardcoded margin on this component would be right for one call site and wrong for the other;
+   * each call site supplies its own via this optional passthrough (undefined -> 0, matching the
+   * nested/nothing-to-add case). */
+  rowStyle?: React.CSSProperties;
 }
 
 function FunnelAxisRow({
@@ -609,6 +617,7 @@ function FunnelAxisRow({
   membershipByTagName,
   onAxisChange,
   getTagDisplayName,
+  rowStyle,
 }: FunnelAxisRowProps) {
   const visibleChips = axis.chips.filter(
     (chip) => membershipByTagName[chip.tagName] != null
@@ -627,12 +636,18 @@ function FunnelAxisRow({
 
   return (
     <div
-      className="d-flex align-items-center flex-wrap gap-2 mb-1"
+      className="d-flex align-items-center flex-wrap"
+      // CSS-fidelity pass (2026-07-23, SPEC-display-left-rail.md §6/§2) - `gap-2` (0.5rem/8px)
+      // was never the mockup's actual value: `.ufilter .row{gap:6px}` - a literal px value with
+      // no exact Bootstrap spacing-scale match (gap-1=4px, gap-2=8px), so it's set directly
+      // rather than approximated through a utility class, same as every other exact-px value
+      // already inline throughout this rail (`.d14`/`.ufilter` padding, etc).
+      style={{ gap: "6px", marginBottom: 0, ...rowStyle }}
       data-testid={`funnel-axis-${axis.id}`}
     >
       <span
         className="text-muted text-uppercase"
-        style={{ minWidth: 62, fontSize: "0.7rem", letterSpacing: "0.03em" }}
+        style={{ flex: "0 0 58px", fontSize: "10px", letterSpacing: "0.05em" }}
       >
         {axis.label}
       </span>
@@ -724,12 +739,18 @@ function TreatmentChipRow({
 
   return (
     <div
-      className="d-flex align-items-center flex-wrap gap-2"
+      // CSS-fidelity pass (2026-07-23) - see FunnelAxisRow's own comment on the same exact-6px
+      // `gap-2` (8px) mismatch; this row shares the fieldset's `.ufilter .row{gap:6px}` value.
+      className="d-flex align-items-center flex-wrap"
+      style={{ gap: "6px" }}
       data-testid={`funnel-axis-${axis.id}`}
     >
       <span
         className="text-muted text-uppercase"
-        style={{ fontSize: "0.7rem", letterSpacing: "0.03em" }}
+        // Mockup's Treatment `.rl` keeps the shared `.ufilter .rl` font-size/letter-spacing but
+        // overrides width to `flex:0 0 auto` (no fixed label column, unlike Border/Frame) - kept
+        // as the implicit default here (no `flex` set at all).
+        style={{ fontSize: "10px", letterSpacing: "0.05em" }}
       >
         {axis.label}
       </span>
@@ -1458,7 +1479,12 @@ export function SelectVersionResults({
 
   const continuousGridElement = (
     <div
-      className="d-flex flex-wrap gap-1"
+      className="d-flex flex-wrap"
+      // CSS-fidelity pass (2026-07-23, SPEC-display-left-rail.md §7/§2) - `gap-1` (0.25rem/4px)
+      // was too tight; the mockup's own literal `.vgrid{gap:6px}` has no exact Bootstrap
+      // spacing-scale match (`gap-1`=4px, `gap-2`=8px), so it's set directly, same as this file's
+      // other exact-px values.
+      style={{ gap: "6px" }}
       role="list"
       aria-label="Candidate printings"
       data-testid="select-version-continuous-grid"
@@ -1724,11 +1750,15 @@ export function SelectVersionResults({
             active-pill summary at hero/none. */}
         {showAxes && (
           <fieldset
-            className="ufilter mb-1"
+            className="ufilter"
             style={{
               border: "1px solid rgba(0,0,0,.22)",
               background: "#22303f",
               padding: "6px 8px",
+              // CSS-fidelity pass (2026-07-23) - `mb-1` (0.25rem/4px) approximated the mockup's
+              // own literal `.ufilter{margin-bottom:6px}`; set directly, same rationale as the
+              // row gaps below.
+              marginBottom: "6px",
             }}
             data-testid="funnel-unified-filter"
           >
@@ -1741,9 +1771,16 @@ export function SelectVersionResults({
               membershipByTagName={membershipByTagName}
               onAxisChange={handleAxisChange}
               getTagDisplayName={getTagDisplayName}
+              // Border is the fieldset's first `.ufilter .row` - mockup:
+              // `.ufilter .row{margin-bottom:5px}` (not the last row, so the
+              // `.row:last-child{margin-bottom:0}` override doesn't apply to it).
+              rowStyle={{ marginBottom: "5px" }}
             />
             <div
-              className="d-flex align-items-center flex-wrap gap-2"
+              className="d-flex align-items-center flex-wrap"
+              // CSS-fidelity pass (2026-07-23) - see FunnelAxisRow's own gap comment; this IS the
+              // fieldset's actual last `.ufilter .row` (mockup: `margin-bottom:0`, the default).
+              style={{ gap: "6px" }}
               data-testid="funnel-frame-treatment-row"
             >
               <FunnelAxisRow
@@ -1752,6 +1789,8 @@ export function SelectVersionResults({
                 membershipByTagName={membershipByTagName}
                 onAxisChange={handleAxisChange}
                 getTagDisplayName={getTagDisplayName}
+                // Nested inside this shared row (not a `.row` in its own right) - no margin of
+                // its own, matching FunnelAxisRow's own default.
               />
               <UnifiedFilterDivider aria-hidden="true" />
               <TreatmentChipRow
