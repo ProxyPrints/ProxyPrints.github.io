@@ -24,8 +24,11 @@ from typing import Any
 import imagehash
 import pytest
 
+from django.db import connection
+
 from cardpicker.local_calculate_verdicts import (
     COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS,
+    EXCLUDED_RESOLVED_TAGS,
     FALLBACK_NO_EVIDENCE_SKIP_REASON,
     FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
     JOIN_KEY_ANONYMOUS_ID,
@@ -34,9 +37,11 @@ from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_CONFIDENCE_COLLECTOR_ONLY,
     JOIN_KEY_CONFIDENCE_SYMBOL_TIEBREAK,
     JOIN_KEY_NO_MATCH_CONFIDENCE,
+    RESOLUTION_FLOOR_DPI,
     SLOW_PATH_ANONYMOUS_ID,
     SLOW_PATH_TO_REVIEW_REASON,
     STAGE_D_FALLBACK_ANONYMOUS_ID,
+    _eligible_cards_queryset,
     _filter_by_symbol_phash,
     _resolve_candidates_for_card,
     _symbol_phash_tiebreak,
@@ -57,6 +62,7 @@ from cardpicker.local_identify_printing_tags import (
     CandidatePrinting,
 )
 from cardpicker.models import (
+    Card,
     CardPrintingTag,
     CardScanLog,
     PrintingTagStatus,
@@ -439,6 +445,66 @@ class TestRunJoinKeyCalculator:
         assert result.votes_written == 1
         vote = CardPrintingTag.objects.get(card=card)
         assert vote.printing_id == printing.pk
+
+
+class TestEligibleCardsQueryset:
+    """`_eligible_cards_queryset`'s two knowledge-inventory excludes (module docstring's
+    "CONSTANT #3" section; owner-ruled must-fix, 2026-07-22) - `RESOLUTION_FLOOR_DPI` and
+    `EXCLUDED_RESOLVED_TAGS`. Exercised directly against the private queryset helper (this test
+    suite's own established precedent for private helpers - `_resolve_candidates_for_card`/
+    `_symbol_phash_tiebreak` above are imported and tested directly too), which isolates each
+    exclusion's own boundary condition from join-key-matching mechanics entirely."""
+
+    @staticmethod
+    def _eligible_pks() -> set[int]:
+        return set(_eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID).values_list("pk", flat=True))
+
+    def test_below_floor_card_is_excluded(self, db):
+        below = CardFactory(dpi=RESOLUTION_FLOOR_DPI - 1)
+        assert below.pk not in self._eligible_pks()
+
+    def test_dpi_at_the_floor_boundary_is_included(self, db):
+        """The floor is `dpi < RESOLUTION_FLOOR_DPI`, exclusive - `dpi == RESOLUTION_FLOOR_DPI`
+        itself is NOT below the floor and stays eligible."""
+        at_floor = CardFactory(dpi=RESOLUTION_FLOOR_DPI)
+        assert at_floor.pk in self._eligible_pks()
+
+    def test_null_dpi_card_is_not_excluded_by_the_resolution_floor(self, db):
+        """`Card.dpi` is a DB-level NOT NULL column today (confirmed live: 0 nulls in
+        production), so this pins the QUERYSET's own null-safety defensively rather than relying
+        on that constraint never moving - see `_eligible_cards_queryset`'s own docstring. A
+        genuinely null-dpi row can't be produced through the ORM's normal validated write path
+        (`Card.objects.filter(...).update(dpi=None)` alone raises `IntegrityError` against the
+        live schema), so this test relaxes the column's own NOT NULL constraint for the duration
+        of this one test only - inside pytest-django's per-test transaction, which is rolled back
+        automatically afterwards (Postgres DDL is transactional), so the real schema is untouched
+        outside this test."""
+        with connection.cursor() as cursor:
+            cursor.execute("ALTER TABLE cardpicker_card ALTER COLUMN dpi DROP NOT NULL")
+        card = CardFactory(dpi=RESOLUTION_FLOOR_DPI)
+        Card.objects.filter(pk=card.pk).update(dpi=None)
+
+        assert card.pk in self._eligible_pks()
+
+    def test_custom_art_tagged_card_is_excluded(self, db):
+        assert EXCLUDED_RESOLVED_TAGS[0] == "custom-art"
+        card = CardFactory(tags=["custom-art"])
+        assert card.pk not in self._eligible_pks()
+
+    def test_non_english_tagged_card_is_excluded(self, db):
+        assert EXCLUDED_RESOLVED_TAGS[1] == "non-english"
+        card = CardFactory(tags=["non-english"])
+        assert card.pk not in self._eligible_pks()
+
+    def test_untagged_card_is_included(self, db):
+        card = CardFactory(tags=[])
+        assert card.pk in self._eligible_pks()
+
+    def test_differently_tagged_card_is_included(self, db):
+        """A tag that ISN'T one of the two `EXCLUDED_RESOLVED_TAGS` doesn't withhold the card -
+        the exclusion is scoped to those two tag names specifically, not "any tag at all"."""
+        card = CardFactory(tags=["altered-art"])
+        assert card.pk in self._eligible_pks()
 
 
 class TestResolveCandidatesForCard:
