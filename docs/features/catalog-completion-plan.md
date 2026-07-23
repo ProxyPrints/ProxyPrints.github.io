@@ -2629,7 +2629,10 @@ bundled ahead of the full-catalog fire per owner ruling; see
 [[../pipeline-fidelity-gate.md]] §3 for the gate context)**: code-only —
 does not run the full-catalog fire, the targeted re-extraction of issue
 #340's 373-card cohort, or any other prod extraction/write, both of which
-remain separate, owner-gated prod steps.
+remain separate, owner-gated prod steps — see
+[[../pipeline-fidelity-gate.md]] §9 for the full gated fire sequence
+those steps sit in, ratified 2026-07-23. That sequence's step (c) is the
+first production run of this calculator, per its own docstring.
 
 **`calculate_fallback_verdict`/`run_fallback_calculator`** (own
 `anonymous_id="stage-d-fallback-v1"`) — Stage D's own port of

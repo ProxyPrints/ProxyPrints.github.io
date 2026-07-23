@@ -637,6 +637,18 @@ separately gated Stage C re-extraction. This is a corroborating
 empirical check, not a new calibrated `εᵢ` — §9's calibration program
 is unaffected by it.
 
+**Measurement basis going forward (owner-ratified 2026-07-23).** This
+replay is the last data point measured against the legacy multi-channel
+pilot as a moving baseline — that comparison is now closed history,
+kept here as permanent cross-method corroboration, not something to
+re-run as new data lands. Going forward, the measurement basis is this
+system's own full-catalog evidence (the 2026-07-22 Stage C sweep) plus
+its own derived pilot: the upcoming full-pool Stage D dry-run is the
+pilot of record, and its own statistics become the cited figures for
+any future soundness claim about this chain. Full detail and the fire
+sequence this basis change feeds into:
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §8–§9.
+
 ## 8. Confidence semantics for downstream consumers
 
 The federation program (`docs/federation-v1.md`,
@@ -816,3 +828,10 @@ new number. The owner accepted the underlying replay outcome
 divergences, 0/373 a wrong-printing vote); full numbers and the ruling
 live in [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §4,
 not duplicated here.
+
+**§7c amended 2026-07-23**: added the owner-ratified measurement-basis
+change — the legacy-pilot comparison this subsection describes is now
+closed history, not a baseline to keep re-measuring against; the new
+system's own full-pool Stage D dry-run becomes the pilot/measurement of
+record going forward. Full detail:
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §8–§9.
