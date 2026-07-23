@@ -81,7 +81,15 @@ printings, artists, tags, and moderation from one screen.
   — weighted-vote formula, weight by source (user 1, admin
   `PRINTING_TAG_ADMIN_WEIGHT` default 5, machine (deduction/OCR)
   `PRINTING_TAG_MACHINE_WEIGHT` default 0.5; settings in
-  `MPCAutofill/MPCAutofill/settings.py`). `PRINTING_TAG_MIN_VOTES` compares against
+  `MPCAutofill/MPCAutofill/settings.py`), resolved per-vote via
+  `vote_consensus.resolve_vote_weight(source, anonymous_id)` rather than a
+  bare source-keyed lookup — the one override it applies: the 2026-07-14
+  deductive-name-backfill's 28,112 votes (`source=deduction`,
+  `anonymous_id="deductive-backfill-v1"`) carry weight **0**, permanently,
+  per the 2026-07-23 owner ruling (see [`theory.md`](../theory.md)'s
+  soundness section and [`pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md)'s
+  §3 item 3) — every other `deduction`/`ocr` vote is unaffected and still
+  carries `PRINTING_TAG_MACHINE_WEIGHT`. `PRINTING_TAG_MIN_VOTES` compares against
   _summed weight_, not row count. A winning group also needs
   `PRINTING_TAG_MIN_SHARE` (default 0.6) of total weight **and** at least
   one non-machine vote — `vote_consensus.is_human_backed_source()` is the one
@@ -2850,6 +2858,20 @@ implied by this OCR fix and was not built.
   with `cardpicker.deductive_backfill`'s deterministic tiers (D1/D2), not
   Stage 8's visual-disambiguation engines — explicitly not the "D2.5
   arriving for free" the autopsy's cross-check ruled out.
+  **Now tracked with real sizing**, not just this note: issue #386
+  (2026-07-23, found live while investigating issue #372's own "Malakir
+  Rebirth" sub-question) confirms the specific mechanism — `DFCPair` rows
+  are correct and complete (this is NOT a missing-data gap), but neither
+  `deductive_backfill.CanonicalNameIndex` nor
+  `local_identify_printing_tags.CandidateNameIndex` consult `DFCPair` at
+  all, so a card uploaded under just one MDFC face's name (with or
+  without an explicit `(Front)`/`(Back)` literal tag) never matches the
+  combined `"Front // Back"` `CanonicalCard.name` either index keys on.
+  34 confirmed live in #372's own 135-card cohort alone (not the full
+  catalog count). Deliberately left untouched by #372's own fix (a
+  same-index, narrowly-scoped de-concatenation fallback for
+  space-stripped filenames) — MDFC face names are correctly space-
+  delimited already, so that fallback's own gate never fires for them.
 - **`deductive_backfill.py`'s own votes don't carry `run_id` yet** (2026-07-16,
   iteration-safety Part 1's explicit scoping decision, not an oversight) —
   the `run_id` threading in this section only covers

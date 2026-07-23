@@ -35,7 +35,24 @@ pre-197k review.
    the first pass reads text with **no digit-bearing structure**, escalation is
    skipped entirely — measured 99.7% of such cards never yield a collector line
    at any tier (customs). A `short_circuited` counter logs every skip so the
-   197k run itself validates this. Escape hatch: `--no-shortcircuit`.
+   197k run itself validates this. Escape hatch: `--no-shortcircuit`. **Set-code
+   lexicon gate on acceptance (2026-07-23, issue #370):** a tier's parse only
+   terminates escalation if its set code is a REAL `CanonicalExpansion` code (or
+   the pre-M15 collector-number-only case, no set code parsed at all) — a live
+   structural finding (issue #370) traced 94% of a lexicon-invalid-no-match
+   sample to the OLD "any parse" criterion accepting tier 1's own OCR noise
+   before tiers 2/3 ever got a chance to run. A `collector_number`-bearing parse
+   whose set code ISN'T a real one no longer stops the loop; it's kept as the
+   running best invalid candidate (first such parse, by tier order) while
+   escalation continues, and only becomes the stored outcome if no later tier
+   ever produces a lexicon-valid parse — the exact value pre-gate code already
+   stored for that case, so this only changes the PATH there, never the result.
+   Governs acceptance during escalation, not whether escalation starts (the
+   digit-free short-circuit above is unaffected). The live-pilot OCR engine
+   (`local_identify_printing_tags.run_ocr_for_card`) applies the same lexicon
+   check at its own "parsed-but-no-match" outcome: a lexicon-invalid parse
+   there abstains (`unknown-set-code`, non-rescannable) instead of casting the
+   confident `is_no_match` vote it used to.
 4. **Parse**: set code + collector number from the collector line
    (slash-format-aware since #260); the legal band is scanned for proxy
    marking — `not for sale`, `proxy/proxies/proxied`, `playtest` variants
@@ -54,8 +71,23 @@ identity, and (safety) nothing already resolved. Then five stages per card:
   the input.
 - **g2 — candidate constraint.** Candidates are only the real printings **of
   this card's name**. The parsed (set, number) must match: exactly one
-  candidate → match; none → _parsed-but-no-match_ (confident no-match);
-  no usable parse → _no-text_ skip; several → _ambiguous_.
+  candidate → match; none → _parsed-but-no-match_; no usable parse →
+  _no-text_ skip; several → _ambiguous_. **Set-code lexicon gate (2026-07-23):**
+  a `parsed-but-no-match` outcome only casts the confident no-match
+  vote below when the parsed set code is a REAL `CanonicalExpansion` code —
+  a live audit found 85.5% of this outcome's parsed set codes matched no
+  real expansion at all (dominated by proxy/watermark text the collector-line
+  crop also caught: "proxy", "mtg", "not", "card"), un-parsed noise, not
+  validated evidence. A lexicon-invalid parse abstains instead (a named,
+  non-rescannable skip, routed to the slow path below exactly like
+  `no-text`) - no confidence/
+  OCR-quality split was separable (checked directly: in-lexicon and
+  out-of-lexicon parses have near-identical tesseract confidence
+  distributions), so this is gated on lexicon membership alone; a
+  genuinely-custom set code on a proxy of a non-existent printing is also
+  abstained by this gate, a deliberate, documented tradeoff (see
+  `local_calculate_verdicts.py`'s own module docstring for the full
+  reasoning and numbers).
 - **g3 — tie-break.** Ambiguity only: compare the set-symbol phash against
   each candidate's rendered symbol; accept only within distance threshold AND
   a margin over the runner-up; a near-tie stays unresolved. (Fired for 2 of

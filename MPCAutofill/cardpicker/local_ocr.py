@@ -149,12 +149,29 @@ _BARE_YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 # on garbled OCR. Case-insensitive. Three families, each a plain, complete literal word/phrase -
 # no letter-substitution/OCR-noise tolerance for any of them:
 #   1. "not for sale", tolerant of "NOT-FOR-SALE"/"NOT   FOR SALE" spacing/hyphen variants only.
-#   2. "proxy"/"proxies"/"proxied" as distinct word-bounded alternatives (a marker diagnostic,
-#      2026-07-21, found ~512 marker-absent evidence rows carrying the exact substring
-#      "proxies"/"proxied" - e.g. "Proxies by Smaug", "POGO PROXIES", "PROXIED" - that a
-#      singular-only \bproxy\b could never match, since \b requires a word break immediately
-#      after the "y") - the same mechanical plural/passive gap as an earlier missed-match fix
-#      elsewhere in this module, not a relaxation of the exactness this comment argues for above.
+#   2. "proxy"/"proxies"/"proxied" - an UNBOUNDED substring match, not \b-anchored on either side
+#      (2026-07-23, JestaProxy ticket: card 208067's legal line "2025 JestaProxy MTG (c) EN (c)"
+#      went undetected because the maker brand glues "Proxy" directly onto its own prefix with no
+#      word break at all - "JestaProxy", "ValarProxy", "DankProxyStash", "OxProxies",
+#      "HoneyBunnyProxy" - \b requires a transition between a word character and a non-word
+#      character, and there is none between a brand prefix and "Proxy"/"Proxies"/"Proxied" glued
+#      onto it. A live prod sample (2026-07-23, 218k ImageEvidence rows) found 901 marker-negative
+#      rows carrying one of these three substrings with NO word boundary on the left that the
+#      previous \b-anchored version could never match. Same reasoning as the 2026-07-21
+#      proxies/proxied widening below took one step further: the previous version already
+#      concluded that any occurrence of "proxy"/"proxies"/"proxied" is itself the safe signal (a
+#      genuine WotC copyright line never contains any of these strings, bounded or not) - so
+#      requiring a word boundary was never buying safety against a real false positive, only
+#      losing recall against exactly this maker-brand-glued shape. Re-verified this call against
+#      the same live sample used for item 4 below: zero marker-negative OR marker-positive rows in
+#      the full corpus contain "prox" as a substring of anything OTHER than one of these three
+#      forms (no "approximate"/"proximity"-shaped false positive risk - those don't contain the
+#      literal substring "proxy": "proximity" has "proxim", not "proxy"). Originally added as
+#      distinct word-bounded alternatives (2026-07-21, found ~512 marker-absent evidence rows
+#      carrying the exact substring "proxies"/"proxied" - e.g. "Proxies by Smaug", "POGO
+#      PROXIES", "PROXIED" - that a singular-only \bproxy\b could never match) - the same
+#      mechanical plural/passive gap as an earlier missed-match fix elsewhere in this module, not
+#      a relaxation of the exactness this comment argues for.
 #   3. "play test"/"play-test"/"playtest" (owner decision, 2026-07-21: playtest cards and their
 #      variants count as proxy markers) - tolerant of the same spacing/hyphen variants as "not for
 #      sale" above. Deliberately only \b-anchored on the LEFT (before "play"), not the right (after
@@ -167,7 +184,20 @@ _BARE_YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 #      only narrow this family for no safety benefit. Same diagnostic found ~14 additional
 #      marker-absent evidence rows (distinct from the ~512 proxy-plural rows above) carrying this
 #      exact family, e.g. "OMNIPROXY - PLAYTEST COPY", "Rustom Playtest Card - Not for Sale".
-_PROXY_MARKER_RE = re.compile(r"not[\s-]*for[\s-]*sale|\bprox(?:y|ies|ied)\b|\bplay[\s-]*test", re.IGNORECASE)
+#   4. "original design" (2026-07-23, JestaProxy ticket's second live example - card 215657,
+#      "TrixAreforScoot Original Design"): unlike items 1-3, this isn't a "proxy"-family word at
+#      all - it's a maker-attribution heuristic, included only because it's boundable, not by
+#      default. Checked live against prod (2026-07-23, 218k ImageEvidence rows) rather than
+#      assumed: the exact substring "original design" appears in exactly ONE distinct legal line
+#      across the ENTIRE corpus - all 1093 occurrences are the identical "TrixAreforScoot Original
+#      Design" watermark, marker-negative before this fix. The only OTHER "design"-adjacent text
+#      found in the same sweep (125 rows) is a real, GENUINE WotC feature - "Designed by Gavin
+#      Verheys" on Unknown Event promos - which the substring "original design" does not match
+#      (no "original" anywhere in that phrase). Deliberately NOT generalized to a bare "design"
+#      heuristic - that WOULD collide with the genuine Unknown Event case above.
+_PROXY_MARKER_RE = re.compile(
+    r"not[\s-]*for[\s-]*sale|prox(?:y|ies|ied)|\bplay[\s-]*test|original[\s-]*design", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True)

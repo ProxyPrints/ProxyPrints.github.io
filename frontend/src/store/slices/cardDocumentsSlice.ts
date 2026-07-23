@@ -4,12 +4,15 @@
 
 import { createSelector } from "@reduxjs/toolkit";
 
-import { CardEndpointPageSize } from "@/common/constants";
+import { Back, CardEndpointPageSize, Front } from "@/common/constants";
+import { buildOrphanCardDocuments } from "@/common/orphanCard";
+import { CardType } from "@/common/schema_types";
 import {
   CardDocument,
   CardDocumentsState,
   createAppAsyncThunk,
   createAppSlice,
+  Faces,
   OramaCardDocument,
   useAppSelector,
 } from "@/common/types";
@@ -24,6 +27,37 @@ import {
 import { fetchSearchResultsAndReportError } from "@/store/slices/searchResultsSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 import { AppDispatch, RootState } from "@/store/store";
+
+/**
+ * For every project member's selectedImage, remember the query text/cardType that slot
+ * actually asked for - foreign-order resilience Phase 1 (issue #324) needs this so an orphan's
+ * synthesized CardDocument (see buildOrphanCardDocuments below) can carry the user's own stand-in
+ * name and the correct front/back-consistent card type, rather than a generic placeholder. First
+ * slot to reference a given identifier wins if more than one slot happens to share it under
+ * different query text - an edge case, not the common path.
+ */
+const buildStandInQueryByIdentifier = (
+  projectMembers: RootState["project"]["members"]
+): Map<string, { name: string | null; cardType: CardType }> => {
+  const standInQueryByIdentifier = new Map<
+    string,
+    { name: string | null; cardType: CardType }
+  >();
+  for (const member of projectMembers) {
+    for (const face of [Front, Back] as Array<Faces>) {
+      const projectMemberAtFace = member[face];
+      const identifier = projectMemberAtFace?.selectedImage;
+      const query = projectMemberAtFace?.query;
+      if (identifier != null && !standInQueryByIdentifier.has(identifier)) {
+        standInQueryByIdentifier.set(identifier, {
+          name: query?.query ?? null,
+          cardType: query?.cardType ?? CardType.Card,
+        });
+      }
+    }
+  }
+  return standInQueryByIdentifier;
+};
 
 //# region async thunk
 
@@ -59,7 +93,14 @@ export const getCardDocumentRequestPromiseChain = async (
   }
 };
 
-const fetchCardDocuments = createAppAsyncThunk(
+// Exported (not just via fetchCardDocumentsAndReportError below) so listenerMiddleware.ts can
+// match on fetchCardDocuments.fulfilled directly - foreign-order resilience Phase 1 (issue
+// #324) needs its own invalid-identifier listener to re-run once cardDocuments.cardDocuments
+// actually reflects whether an identifier is a real catalog card, an orphan, or neither, which
+// isn't settled yet by the time fetchSearchResults.fulfilled/fetchCardbacks.fulfilled (the
+// listener's original triggers) fire - see that listener's own comment for the full ordering
+// rationale.
+export const fetchCardDocuments = createAppAsyncThunk(
   typePrefix,
   /**
    * This function queries card documents (entire database rows) from the backend. It only queries cards which have
@@ -79,7 +120,15 @@ const fetchCardDocuments = createAppAsyncThunk(
 
     const state = getState() as RootState;
 
-    const allIdentifiers = selectUniqueCardIdentifiers(state);
+    // Union of the search-derived identifier set (the pre-existing source of truth) with every
+    // raw selectedImage the project actually references, including ones the fork of the site's
+    // search index never matched (see this thunk's own foreign-order-resilience comment below).
+    // selectUniqueCardIdentifiers alone would never even attempt to resolve an orphan's
+    // identifier, since by definition it never appears in any search result.
+    const allIdentifiers = new Set([
+      ...selectUniqueCardIdentifiers(state),
+      ...selectProjectMemberIdentifiers(state),
+    ]);
     const identifiersWithKnownData = new Set(
       Object.keys(state.cardDocuments.cardDocuments)
     );
@@ -99,7 +148,28 @@ const fetchCardDocuments = createAppAsyncThunk(
         ? getCardDocumentRequestPromiseChain(identifiersToSearch, backendURL)
         : new Promise(async (resolve) => resolve({}));
     return await Promise.all([localResultsPromise, remoteResultsPromise]).then(
-      ([localResults, remoteResults]) => ({ ...remoteResults, ...localResults })
+      ([localResults, remoteResults]) => {
+        const resolvedDocuments = { ...remoteResults, ...localResults };
+        // Foreign-order resilience Phase 1 (issue #324): anything still unresolved after both
+        // lookups, that also looks like a real Drive file ID, gets a synthesized orphan
+        // CardDocument instead of being left out entirely - see common/orphanCard.ts's module
+        // doc for the full rationale. Genuinely invalid identifiers (garbage, or a real
+        // catalog ID whose source got disabled/removed) are unaffected - buildOrphanCardDocuments
+        // only emits entries for identifiers that pass isLikelyDriveFileId, so anything else
+        // stays exactly as absent as it always was, and listenerMiddleware.ts's existing
+        // Invalid Cards flow still catches it.
+        const stillUnresolved = identifiersToSearch.filter(
+          (identifier) => resolvedDocuments[identifier] == null
+        );
+        const orphanDocuments =
+          stillUnresolved.length > 0
+            ? buildOrphanCardDocuments(
+                stillUnresolved,
+                buildStandInQueryByIdentifier(state.project.members)
+              )
+            : {};
+        return { ...orphanDocuments, ...resolvedDocuments };
+      }
     );
   }
 );

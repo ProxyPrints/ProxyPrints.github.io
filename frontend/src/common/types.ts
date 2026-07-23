@@ -65,6 +65,16 @@ export type Card = Omit<
 > & {
   smallThumbnailUrl: string | undefined;
   mediumThumbnailUrl: string | undefined;
+  /**
+   * Frontend-only marker (never sent to or received from the backend - CardSchema is
+   * quicktype-generated from the API's own serialisers, which have no concept of this) for
+   * foreign-order resilience Phase 1 (issue #324): true only for a CardDocument synthesized
+   * client-side (`common/orphanCard.ts`'s synthesizeOrphanCardDocument) to represent a Google
+   * Drive file ID this catalog has never indexed. Every consumer that must never route an
+   * orphan through our own image-CDN Worker/bucket, offer it tag/consensus surfaces, or treat
+   * it as a real catalog match checks this flag - see docs/features/foreign-order-resilience.md.
+   */
+  isOrphan?: boolean;
 };
 export type CardDocument = Card;
 

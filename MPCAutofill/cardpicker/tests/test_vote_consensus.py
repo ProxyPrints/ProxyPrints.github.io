@@ -6,9 +6,11 @@ from cardpicker.models import VoteSource
 from cardpicker.tests.factories import CardArtistVoteFactory, CardFactory
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
+    DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
     PENDING_PRIVILEGED,
     VoteTuple,
     is_human_backed_source,
+    resolve_vote_weight,
     resolve_weighted_consensus,
 )
 
@@ -35,6 +37,42 @@ class TestIsHumanBackedSource:
     def test_user_and_admin_are_human_backed(self):
         assert is_human_backed_source(VoteSource.USER) is True
         assert is_human_backed_source(VoteSource.ADMIN) is True
+
+
+class TestResolveVoteWeight:
+    """
+    2026-07-23 owner ruling: the 2026-07-14 deductive-name-backfill's 28,112 votes
+    (source=DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID) carry weight 0.0 in every
+    consensus computation - `resolve_vote_weight` is the one function that mechanism lives in,
+    so it's the unit tested directly here (the printing_consensus-level effect is proven
+    separately in test_printing_consensus.py).
+    """
+
+    def test_deductive_backfill_deduction_vote_is_zero_weight(self):
+        assert resolve_vote_weight(VoteSource.DEDUCTION, DEDUCTIVE_BACKFILL_ANONYMOUS_ID) == 0.0
+
+    def test_ordinary_deduction_vote_keeps_its_normal_weight(self):
+        # a DEDUCTION-sourced vote NOT carrying the backfill's own anonymous_id is unaffected -
+        # the override is scoped to (source, anonymous_id) together, not to DEDUCTION alone
+        assert (
+            resolve_vote_weight(VoteSource.DEDUCTION, "some-other-anonymous-id")
+            == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
+        )
+
+    def test_ocr_vote_with_the_backfill_anonymous_id_is_unaffected(self):
+        # defensive: the override requires source == DEDUCTION specifically - an OCR-sourced
+        # vote is never written under this anonymous_id in practice (deductive_backfill.py only
+        # ever writes DEDUCTION), but the function itself must not zero it out if it somehow was
+        assert resolve_vote_weight(VoteSource.OCR, DEDUCTIVE_BACKFILL_ANONYMOUS_ID) == _SOURCE_WEIGHTS[VoteSource.OCR]
+
+    def test_user_vote_with_the_backfill_anonymous_id_is_unaffected(self):
+        # same defensive point as above, for the human-backed source: matching anonymous_id
+        # alone is never enough, source must also be DEDUCTION
+        assert resolve_vote_weight(VoteSource.USER, DEDUCTIVE_BACKFILL_ANONYMOUS_ID) == _SOURCE_WEIGHTS[VoteSource.USER]
+
+    @pytest.mark.parametrize("source", [VoteSource.USER, VoteSource.ADMIN, VoteSource.OCR, VoteSource.FEDERATED])
+    def test_every_other_source_matches_the_plain_source_weights_table(self, source):
+        assert resolve_vote_weight(source, "anonymous-1") == _SOURCE_WEIGHTS[source]
 
 
 class TestResolveWeightedConsensus:

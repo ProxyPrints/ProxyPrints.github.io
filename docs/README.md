@@ -136,6 +136,11 @@ The methodology and the systems it governs.
   bottom-corner accept/decline prompt shown only right before an action
   that needs it, per-permission-key session scoping, no dependency on any
   consumer feature yet.
+- [`features/foreign-order-resilience.md`](features/foreign-order-resilience.md)
+  — issue #324 Phase 1: rendering "orphan" cards (Drive file IDs the
+  catalog has never indexed) from text/XML import, direct-from-Google
+  fetch with tiered sizing, the invalidation-listener root-cause fix,
+  round-trip export, and what's deferred to Phase 2.
 
 ## Using it
 

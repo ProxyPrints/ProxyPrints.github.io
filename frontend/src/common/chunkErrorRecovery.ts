@@ -35,7 +35,11 @@ export function isRecoveryReloadInFlight(): boolean {
   return recoveryReloadInFlight;
 }
 
-const CHUNK_RELOAD_GUARD_KEY = "chunkReloadAttemptedAt";
+// Exported (pure data, no behaviour change) so chunkErrorRecovery.spec.ts can defensively clear
+// this key before dispatching its own synthetic error - see that file's own comment for why a
+// real, unrelated chunk hiccup during dev-server on-demand compilation can otherwise pre-consume
+// this one-shot guard before the test's synthetic dispatch ever runs.
+export const CHUNK_RELOAD_GUARD_KEY = "chunkReloadAttemptedAt";
 // A real deploy-caused chunk failure is fixed by exactly one reload (the browser fetches the
 // fresh HTML/chunk manifest). This window exists only to stop a reload LOOP if reloading somehow
 // doesn't fix it (e.g. a mid-deploy race, or a genuinely broken deploy) - not a retry budget.

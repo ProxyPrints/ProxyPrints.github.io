@@ -715,6 +715,47 @@ skip.
 `TappedOut`/`ManaStack`, `MPCAutofill/cardpicker/integrations/game/base.py`'s
 `ImportSite.request`.
 
+## `test_rate_limited_after_exceeding_the_configured_rate` fails intermittently in CI, passes on rerun, unrelated to your change
+
+**Symptom**: `TestPostSubmitTagVote::test_rate_limited_after_exceeding_the_configured_rate`
+(`cardpicker/tests/test_tag_votes.py`) fails in CI (`assert 200 == 429` -
+the test's SECOND request wasn't rate-limited as expected) on a PR that
+never touched rate-limiting, tag votes, or `views.py` (first observed PR
+#380, 2026-07-23). Re-running the SAME CI job with zero code changes
+passed clean (4m12s) - confirmed non-deterministic, not a real
+regression, before landing.
+
+**Cause**: `post_submit_printing_tag`'s own docstring already names the
+mechanism: `django-ratelimit` here "relies on Django's default
+(in-process) cache" - a single process-lifetime `LocMemCache`, not
+something pytest-django's per-test DB-transaction rollback resets. The
+sibling endpoint this specific test exercises (`post_submit_tag_vote`)
+shares the same in-process cache backend. Whichever OTHER test in the
+same worker process happens to run immediately before this one, and how
+many rate-limited requests it fires against an overlapping cache key/
+window, can leave the sliding-window counter in a different state than a
+fresh run would see, so the outcome depends on execution order/
+parallel-worker assignment, not just this test's own two requests. This
+is a pre-existing structural gap (no per-test cache clear), not
+something a single PR's diff can trigger or fix incidentally.
+
+**Fix applied so far**: none - out of scope for a diff that doesn't
+touch rate-limiting; confirmed-flaky via a clean rerun and documented
+here instead of silently waved through, per this project's own
+"a red Backend-tests check now means something real - investigate it"
+rule (CLAUDE.md). If this starts recurring often enough to cost real
+review time, the real fix is a per-test cache clear (e.g. an autouse
+fixture calling `django.core.cache.cache.clear()`), the same category of
+fix `test_valid_url`'s own entry above applies to network flakiness -
+not attempted here since one observed occurrence doesn't yet justify
+guessing at the right isolation boundary for every rate-limited endpoint
+in the same file.
+
+**Refs**: `MPCAutofill/cardpicker/tests/test_tag_votes.py`'s
+`TestPostSubmitTagVote`, and `MPCAutofill/cardpicker/views.py`'s
+`post_submit_printing_tag`/`post_submit_tag_vote` `@ratelimit` decorator
+and `_printing_tag_rate_limit_rate`'s own in-process-cache comment.
+
 ## Every PR's prettier pre-commit check fails on a docs file the PR never touched
 
 **Symptom**: the "Formatting and static type checking" CI job fails the
@@ -1136,32 +1177,57 @@ against the live prod containers with no observed impact.
 **Symptom**: a full `pytest cardpicker -q` run (not a targeted file/module)
 produces hundreds of `ERROR`s spread across many files that have nothing to
 do with your change (`test_views.py`, `test_vote_consensus.py`,
-`test_sources.py`, etc.) — either `django.db.utils.OperationalError: connection to server at "localhost"` or, on a worse collision,
-`docker.errors.APIError: 500 Server Error for http+docker://localhost/...`.
-Individually running the files your change actually touches passes cleanly
-(100%), which is the tell that this isn't a regression in your code.
+`test_sources.py`, etc.) — either `django.db.utils.OperationalError: connection to server at "localhost"`, or, on a worse collision,
+`docker.errors.APIError: 500 Server Error for http+docker://localhost/...`
+(e.g. `Bind for 0.0.0.0:9300 failed: port is already allocated`, or the
+same for `:47000`). Individually running the files your change actually
+touches passes cleanly (100%), which is the tell that this isn't a
+regression in your code. Every test in an affected run shows as `ERROR`,
+not `FAILED`, and the traceback bottoms out in `cardpicker/tests/conftest.py`'s
+`postgres_container`/`elasticsearch_container` fixtures, not in your own
+code.
 
 **Cause**: this repo's `db`/`transactional_db` pytest fixtures spin up
 throwaway `testcontainers` Postgres/Elasticsearch containers per test run
-(`cardpicker/tests/conftest.py`) — a full-suite run launches (and tears
-down) a lot of them in a short window. This machine runs more than one
-Claude Code worktree session at a time (see `WORKERS.md` at the repo root,
-machine-local); if another session is running its own full suite (or
-`pytest .` at the repo root) concurrently, both sessions compete for the
-same Docker daemon and Postgres connection ceiling, and one or both runs
-get spurious infrastructure-level failures that have nothing to do with
-either session's actual code changes. `docker ps`/`ps aux | grep pytest`
-will show another session's containers/process still running if this is
-the cause.
+(`cardpicker/tests/conftest.py`) on **fixed** host ports (`POSTGRES_PORT = 47000`, `ELASTICSEARCH_PORT = 9300` - the latter is also
+`pytest_elasticsearch`'s own hardcoded default) - a full-suite run
+launches (and tears down) a lot of them in a short window. This machine
+runs more than one Claude Code worktree session at a time (see
+`WORKERS.md` at the repo root, machine-local); every worktree shares the
+same Docker daemon, so two sessions running `pytest` at the same moment
+compete for the same Postgres connection ceiling and/or try to bind the
+same two fixed host ports - only one port-bind wins, and testcontainers
+surfaces the loser's failure as a raw Docker API error rather than a
+friendly retry/backoff message. `docker ps`/`ps aux | grep pytest` will
+show another session's containers/process still running if this is the
+cause. A related, quieter form of the same root cause needs no other
+session at all: if a PRIOR run of yours was interrupted (or one of its
+fixtures failed) before its own `postgres_container`/
+`elasticsearch_container.stop()` teardown ran, the now-orphaned container
+keeps holding the port for every subsequent run of yours too - `docker ps -a` showing a `romantic_elion`/`relaxed_mccarthy`-style random-named
+container still `Up` on `:47000`/`:9300` from an earlier failed session
+is the tell.
 
-**Fix**: before trusting a full-suite failure list, check for a concurrent
-`pytest` process (`ps aux | grep pytest`) and concurrent testcontainers
-(`docker ps`) from another session. If found, wait for it to finish (or
-coordinate via `WORKERS.md`) and re-run — don't debug your own code against
-a result contaminated by another session's resource contention. Trust your
-own affected-files-only run (individually and together) as the primary
-verification signal in the meantime; a full-suite run is a nice-to-have
-confirmation, not the only valid one, when this box is shared.
+**Fix**: this is infrastructure contention, not a code bug - don't debug
+your own change against it. Before trusting a full-suite failure list,
+check for a concurrent `pytest` process (`ps aux | grep pytest`) and
+concurrent testcontainers (`docker ps`) from another session. If found,
+wait for it to finish (or coordinate via `WORKERS.md`) and re-run - don't
+debug your own code against a result contaminated by another session's
+resource contention; trust your own affected-files-only run
+(individually and together) as the primary verification signal in the
+meantime, with a full-suite run as a nice-to-have confirmation, not the
+only valid one, when this box is shared. If instead the container
+holding the port is an ORPHAN of your own prior failed run (you recognize
+the run as yours and it's been sitting idle, not freshly created) rather
+than a live concurrent session's, it's safe to `docker rm -f <name>` it
+and retry immediately - but never remove a container you don't recognize
+as your own leftover, since a live session's containers still mid-test
+are exactly the "port is already allocated" collision this entry
+describes, not a target for cleanup. Confirmed one 2026-07-23 session
+hitting this twice in the same task (once from a genuine concurrent
+session, once from its own prior run's orphaned containers) - `docker rm -f` on the confirmed-orphan case, then a plain retry once ports read
+free resolved both.
 
 ## A per-instance `viewBox` crop on an inlined SVG shows the _entire_ source art instead of just its own band
 
@@ -1519,3 +1585,44 @@ per a repo-wide grep). The real fix is straightforward whenever someone
 picks it up: pass a proper `{ pathname: router.pathname, query: { ...router.query, server } }` shape (or drop the `shallow` URL-object
 call entirely in favor of `router.replace(router.asPath.split("?")[0] + buildQueryString(...))`) so existing query params and the fragment
 survive the same clean-up step.
+
+## `chunkErrorRecovery.spec.ts`'s `expect.poll(() => reloadRequests).toBe(1)` fails with "Received: 0" in CI, passes locally
+
+**Symptom**: one of the first three `chunkErrorRecovery.spec.ts` tests
+(the ones that dispatch a synthetic `ChunkLoadError` and expect exactly
+one intercepted reload request) times out at 0 reload requests on a CI
+shard, including on a clean re-run, while passing reliably on a local
+machine. No error is thrown anywhere in the test itself (`page.route()`
+registers fine, `page.evaluate()` dispatching the synthetic error
+completes fine) — the reload request simply never arrives.
+
+**Cause**: `useChunkErrorRecovery`'s guard
+(`chunkErrorRecovery.ts`'s `CHUNK_RELOAD_GUARD_KEY`, a real 10s
+sessionStorage-backed "only one reload per window" debounce, working
+exactly as designed) gets consumed by a **real** chunk hiccup before
+the test's own synthetic dispatch ever runs. CI's `playwright.config.ts`
+webServer runs `npm run dev` (not a prebuilt static export), and Next's
+dev server compiles pages on demand — the navbar's own "Editor" nav
+link (visible even while already on `/editor`) gets prefetched by
+`next/link`'s default viewport `IntersectionObserver` behaviour, which
+can trigger a second on-demand recompile of `pages/editor.js` mid-test
+(confirmed via a CI trace: an ~800ms second compile of that exact
+chunk, network-adjacent in time to the test's own dispatch). A slow/
+cold CI runner is more likely to still be mid-churn from that when the
+test body reaches its own dispatch, and any real transient chunk error
+during that churn legitimately consumes the guard first. This is a
+dev-server/test-harness artifact only — the deployed static export has
+no on-demand compilation or HMR at all, so it can't happen in
+production.
+
+**Fix**: the test now imports `CHUNK_RELOAD_GUARD_KEY` from
+`chunkErrorRecovery.ts` and calls
+`page.evaluate((key) => window.sessionStorage.removeItem(key), CHUNK_RELOAD_GUARD_KEY)`
+immediately before each test's own synthetic dispatch, establishing a
+clean precondition regardless of whatever real dev-server chunk noise
+happened during page load. The one test that specifically exercises the
+guard-suppression behaviour (two dispatches in one test) only clears it
+once, before the first dispatch, so the guard is still genuinely
+exercised for real on the second one. See `chunkErrorRecovery.spec.ts`'s
+own comment above `clearReloadGuard` for the full trace-based diagnosis
+(root-caused against CI run 30039392833, shard 1/4).
