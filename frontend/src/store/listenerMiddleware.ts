@@ -184,7 +184,18 @@ startAppListening({
 });
 
 startAppListening({
-  actionCreator: fetchCardbacks.fulfilled,
+  // Foreign-order resilience Phase 1 (issue #324) follow-up - the owner's own repro traced this
+  // exact listener as "the CARDBACK display path [that] doesn't resolve orphan identifiers": it
+  // unconditionally cleared state.project.cardback (the "Common Cardback" panel/toolbar picker's
+  // own selection - a SEPARATE concept from any individual slot's own back, see
+  // cardDocumentsSlice.ts's own comment on that distinction) whenever it wasn't a real indexed
+  // cardback, with no orphan-candidate carve-out at all - unlike the sibling per-slot listener
+  // below, which already got that fix. fetchCardDocuments.fulfilled added to the trigger set
+  // (same ordering rationale as the per-slot listener's own comment): cardDocuments isn't settled
+  // yet on the original fetchCardbacks.fulfilled-only trigger, so this listener needs a second
+  // pass once it is, to let a genuinely-known-but-filtered/removed cardback (isOrphan
+  // false/undefined) still fall through to being cleared exactly as before.
+  matcher: isAnyOf(fetchCardbacks.fulfilled, fetchCardDocuments.fulfilled),
   /**
    * Whenever the list of cardbacks changes, this listener will deselect the cardback
    * if it's no longer valid, then select the first cardback in the list if there are
@@ -199,7 +210,19 @@ startAppListening({
 
     let newCardback = currentCardback;
     if (newCardback != null && !cardbacks.includes(newCardback)) {
-      newCardback = undefined;
+      // Same "wait and see" carve-out as the per-slot listener below: an identifier already
+      // resolved to a synthesized orphan CardDocument, or not resolved either way yet but still
+      // looks like a real Drive file ID, is left selected rather than cleared.
+      const knownCardDocument = selectCardDocumentByIdentifier(
+        state,
+        newCardback
+      );
+      const isOrphanCandidate =
+        knownCardDocument?.isOrphan === true ||
+        (knownCardDocument == null && isLikelyDriveFileId(newCardback));
+      if (!isOrphanCandidate) {
+        newCardback = undefined;
+      }
     }
     if (newCardback == null && cardbacks.length > 0) {
       newCardback = selectFirstFavoritedOrFirst(

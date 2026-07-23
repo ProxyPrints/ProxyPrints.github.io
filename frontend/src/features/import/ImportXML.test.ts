@@ -132,6 +132,40 @@ describe("foreign-order resilience Phase 1 - unindexed identifiers (issue #324)"
     expect(members[0].front?.query.query).toBe("kharn");
   });
 
+  it("also surfaces the file's own root <cardback> text via the return value's `cardback` field (regardless of catalog/orphan status), for the caller to propagate into state.project.cardback", () => {
+    // Follow-up fix (owner-observed 2026-07-23): parseXmlImport previously only ever fed the
+    // file's own <cardback> into each individual backless front's own per-slot fallback - never
+    // back out to the caller for state.project.cardback itself, which is why the "Common
+    // Cardback" panel (CommonCardback.tsx) kept showing "Card not found" after an XML import
+    // instead of the file's actual cardback (orphan or not) - see ImportXML.tsx's own
+    // parseXMLFile comment for the caller-side half of this fix.
+    const xml = `<?xml version="1.0"?>
+<order>
+  <details>
+    <quantity>1</quantity>
+    <stock>(S30) Standard Smooth</stock>
+    <foil>false</foil>
+  </details>
+  <fronts>
+    <card>
+      <id>abc123</id>
+      <sourceType>google_drive</sourceType>
+      <slots>0</slots>
+      <name>Kharn.png</name>
+      <query>kharn</query>
+    </card>
+  </fronts>
+  <cardback>${orphanId}</cardback>
+</order>`;
+    const { cardback } = parseXmlImport(xml, 0, null, true);
+    expect(cardback).toBe(orphanId);
+  });
+
+  it("`cardback` is undefined when the file has no <cardback> element (or an empty one) at all", () => {
+    const { cardback } = parseXmlImport(XML_1_0, 0, null, true);
+    expect(cardback).toBeUndefined();
+  });
+
   it("reads an unindexed <cardback> as the implicit back face (the reported b:null case), unchanged", () => {
     // The owner's screenshot showed an Invalid Cards row "Back | b:null | <id>" -
     // stringifySearchQuery renders "b:null" specifically when query.query is the literal JS

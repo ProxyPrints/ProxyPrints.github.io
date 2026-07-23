@@ -121,6 +121,64 @@ regression-guarded addition, not a loosening of that existing behaviour
   sources, or local dev with `NEXT_PUBLIC_IMAGE_BUCKET_URL` unset) — not
   orphan-specific, just the same code path.
 
+## Rendering surfaces & acceptance (2026-07-23 owner review round)
+
+- **Acceptance surface**: the classic `/editor` page is a legacy route held
+  behind the route-swap PR #389 — owner ruling, this review round: the
+  UNIFIED `/display` page (nav "Editor") is the only acceptance surface for
+  frontend rendering work. `OrphanRendering.spec.ts`'s two Playwright cases
+  (originally verified against `/editor`) were moved to run against
+  `/display` instead, screenshotting `test-results/orphan-text-import-desktop.png`/
+  `orphan-xml-import-desktop.png`/`orphan-xml-import-backs-desktop.png`.
+- **The `/display` sheet needed no code change**: `PagePreview.tsx` (the
+  unified page's own sheet-cell renderer, a DIFFERENT component from
+  `Card.tsx`) reads `cardDocument.mediumThumbnailUrl`/`isOrphan` straight off
+  the same shared `cardDocuments` store slice — since `synthesizeOrphanCardDocument`
+  already sets both, an orphan's image renders correctly there for free, for
+  both fronts (text import) and backs (the XML `b:null` case, once the page's
+  own Fronts/Backs toggle is switched — the "cardback corner" from the
+  owner's report; see the next bullet for the surface that PagePreview.tsx
+  is NOT). One gap this surfaces: `PagePreview.tsx` has no `OrphanBadge`
+  equivalent (`Card.tsx`'s corner label) — a pre-existing, page-scoped visual
+  gap the sheet already had for every other card attribute it doesn't badge,
+  not a regression from this pass.
+- **REAL BUG, fixed**: the classic editor's "Common Cardback" panel
+  (`CommonCardback.tsx`'s right-panel mount, `/editor` only — `/display` has
+  no equivalent persistent tile, only the `CardbackToolbarButton` picker)
+  showed "Card not found" after importing an order whose own `<cardback>`
+  was an orphan, even though the very same identifier rendered correctly one
+  panel over as the imported slot's own per-slot back. Root cause was two
+  separate gaps, both now fixed:
+  1. `ImportXML.tsx`'s `parseXmlImport` read the file's own root-level
+     `<cardback>` into each individual backless front's own per-slot
+     fallback, but never fed it back to the caller to also initialise
+     `state.project.cardback` (the Common Cardback panel's own selection) —
+     so a BRAND NEW project (nothing selected yet) never picked it up at
+     all. Fixed by returning the raw `<cardback>` text as `cardback` on
+     `ParsedXmlImport`, and having `ImportXML`'s `parseXMLFile` dispatch
+     `setSelectedCardback` with it — but ONLY when `state.project.cardback`
+     was `null` beforehand (`projectCardback == null`, read from the
+     component's own pre-import selector snapshot). That gate is load-
+     bearing: an EXISTING non-null project cardback deliberately stays
+     untouched by a later import even with "Use XML Cardback" on —
+     `ImportXML.spec.ts`'s pre-existing "import an XML and use its
+     cardback"/"...use the project cardback" tests assert exactly this, and
+     the fix must not (and does not) regress them.
+  2. `listenerMiddleware.ts`'s `fetchCardbacks.fulfilled` listener (which
+     deselects `state.project.cardback` the moment it's absent from the
+     catalog's own indexed cardbacks list) had no orphan-candidate carve-out
+     at all, unlike its sibling per-slot invalid-identifier listener above —
+     so even after fix 1 initialised an orphan cardback, this listener would
+     immediately clear it right back out. Given the same `isOrphan`/
+     `isLikelyDriveFileId` carve-out as the per-slot listener, now also
+     re-triggered on `fetchCardDocuments.fulfilled` for the same
+     not-yet-resolved ordering reason.
+  - Coverage: `listenerMiddleware.test.ts`'s new "project cardback listener"
+    describe block (both the orphan carve-out and its own regression
+    guards), `ImportXML.test.ts`'s new `cardback` field cases, and
+    `ImportXML.spec.ts`'s new "brand new project" Playwright case
+    (`common-cardback`'s `orphan-badge` visible, no "Card Not Found" text).
+
 ## Round-trip (export/re-import)
 
 `downloadXML.ts`'s `createCardElement` already returned `null` (silently
@@ -202,7 +260,9 @@ already offered exactly as it always was for any slot.
 - `frontend/src/store/slices/cardDocumentsSlice.ts` — the broadened
   identifier union and orphan synthesis in `fetchCardDocuments`.
 - `frontend/src/store/listenerMiddleware.ts` — the invalid-identifier
-  listener's orphan-candidate skip.
+  listener's orphan-candidate skip, and (2026-07-23 follow-up) the SEPARATE
+  `fetchCardbacks.fulfilled` project-cardback listener's own matching
+  carve-out.
 - `frontend/src/features/card/Card.tsx` — `OrphanBadge`, the
   bucket-validity-aware `onError` fix, click-to-detail suppression.
 - `frontend/src/features/card/DeckbuilderConfirmAffordance.tsx` — the
@@ -212,9 +272,16 @@ already offered exactly as it always was for any slot.
 - `frontend/src/common/types.ts` — the `isOrphan?: boolean` marker on the
   frontend's own `Card`/`CardDocument` type (never present in the
   quicktype-generated `schema_types.ts`).
+- `frontend/src/features/import/ImportXML.tsx` — (2026-07-23 follow-up)
+  `ParsedXmlImport`'s new `cardback` field and `parseXMLFile`'s gated
+  `setSelectedCardback` dispatch, fixing the Common Cardback panel bug (see
+  "Rendering surfaces & acceptance" above).
 - Tests: `orphanCard.test.ts`, `processing.test.ts` (bracket-token cases),
-  `listenerMiddleware.test.ts`, `ImportXML.test.ts` (front + the b:null
-  back-face case), `downloadXML.test.ts` (round-trip), `Card.test.tsx`
-  (badge/click-suppression/error-degrade), and the Playwright
-  `tests/OrphanRendering.spec.ts` (both reported symptoms, end to end,
-  with screenshots).
+  `listenerMiddleware.test.ts` (both the per-slot AND, as of 2026-07-23, the
+  project-cardback listener), `ImportXML.test.ts` (front + the b:null
+  back-face case, plus the new `cardback` field cases), `downloadXML.test.ts`
+  (round-trip), `Card.test.tsx` (badge/click-suppression/error-degrade),
+  `ImportXML.spec.ts`'s "brand new project" Playwright case (the Common
+  Cardback fix), and the Playwright `tests/OrphanRendering.spec.ts` (both
+  reported symptoms, end to end, on the unified `/display` page as of the
+  2026-07-23 acceptance-surface correction, with screenshots).

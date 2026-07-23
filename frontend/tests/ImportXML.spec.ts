@@ -1,3 +1,5 @@
+import { expect } from "@playwright/test";
+
 import { S30, SelectedImageSeparator } from "@/common/constants";
 import {
   cardDocument1,
@@ -738,5 +740,52 @@ test.describe("ImportXML", () => {
       ]
     );
     await expectCardbackSlotState(page, cardDocument2.name, 1, 2); // cardback should not have changed
+  });
+
+  // Foreign-order resilience Phase 1 follow-up (issue #324, owner-observed 2026-07-23): a BRAND
+  // NEW project (no cardback selected yet - here because the mocked catalog has zero indexed
+  // cardbacks at all, same as OrphanRendering.spec.ts's own repro) previously left the "Common
+  // Cardback" panel (CommonCardback.tsx, the classic editor's right panel) showing "Card not
+  // found" forever after an XML import, right next to a perfectly-rendered orphan back-face slot
+  // tile - even though the import's own <cardback> (an orphan Drive file ID here, but this fix
+  // applies identically to a real catalog cardback) was sitting right there unused. See
+  // ImportXML.tsx's own parseXMLFile comment for the fix (state.project.cardback is now
+  // initialised from the import when nothing was selected before it) and its own gate against
+  // regressing the "should not have changed" tests above (an EXISTING project cardback is never
+  // touched by a later import).
+  test("importing an XML into a brand new project with no cardback yet initialises the Common Cardback panel from the file's own <cardback> - even an orphan", async ({
+    page,
+    network,
+  }) => {
+    network.use(...defaultHandlers);
+    await loadPageWithDefaultBackend(page);
+
+    const orphanFrontId = "1FItgPw7VK_Tbv6dMiqdy5zd-jAoEC9mn";
+    const orphanBackId = "1LrVX0pUcye9n_0RtaDNVl2xPrQgn7CYf";
+
+    await importXML(
+      page,
+      `<order>
+        <details>
+          <quantity>1</quantity>
+          <stock>${S30}</stock>
+          <foil>false</foil>
+        </details>
+        <fronts>
+          <card>
+            <id>${orphanFrontId}</id>
+            <sourceType>google_drive</sourceType>
+            <slots>0</slots>
+            <name>Kharn.png</name>
+            <query>kharn</query>
+          </card>
+        </fronts>
+        <cardback>${orphanBackId}</cardback>
+      </order>`
+    );
+
+    const commonCardback = page.getByTestId("common-cardback");
+    await expect(commonCardback.getByTestId("orphan-badge")).toBeVisible();
+    await expect(commonCardback).not.toContainText("Card Not Found");
   });
 });
