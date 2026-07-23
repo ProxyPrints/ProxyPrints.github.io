@@ -267,10 +267,12 @@ external reader's orientation to the whole fork, see
   #154): artifact 1 (parity replay — DONE, owner-accepted 2026-07-22,
   now closed history per the 2026-07-23 new-data basis ruling) and
   artifact 2 (knowledge-inventory sweep) status — all 3 MISSING
-  constants decided, items 1–2's fix merged (PR #343) and awaiting
-  deploy — plus the ratified fire sequence and #340 root-cause
-  footprint sizing. Single source of truth for this gate's status —
-  don't restate gate status/decisions elsewhere, link here.
+  constants decided, items 1–2's fix merged (PR #343) and deployed
+  2026-07-23T01:33Z — plus the #347-amended fire sequence (Bug-B
+  whole-DB reparse dry-run DONE, write pass onward not yet run) and
+  #340 root-cause footprint sizing. Single source of truth for this
+  gate's status — don't restate gate status/decisions elsewhere, link
+  here.
 - [`docs/documentation-process.md`](docs/documentation-process.md) — docs/
   as source of truth, the wiki as a generated view of it, mechanical lint
   vs. the quarterly judgment pass, upstream wiki tracking.

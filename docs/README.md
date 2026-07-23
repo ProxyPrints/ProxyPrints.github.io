@@ -37,9 +37,10 @@ The methodology and the systems it governs.
   definition, artifact 1 (parity replay — DONE, owner-accepted
   2026-07-22, now closed history per the 2026-07-23 new-data basis
   ruling) and artifact 2 status (all 3 MISSING constants decided, fix
-  for 2 merged and awaiting deploy), the ratified fire sequence, and the
-  #340 root-cause footprint sizing. Single source of truth for this
-  gate's status — `theory.md`, `identification-pipeline.md`,
+  for 2 merged AND deployed 2026-07-23T01:33Z), the #347-amended fire
+  sequence (Bug-B whole-DB reparse dry-run DONE, write pass onward not
+  yet run), and the #340 root-cause footprint sizing. Single source of
+  truth for this gate's status — `theory.md`, `identification-pipeline.md`,
   `features/catalog-completion-plan.md`, and the knowledge-inventory
   report link here rather than restating it.
 - [`federation-v1.md`](federation-v1.md) — federation verdict exchange
@@ -180,12 +181,18 @@ system" + "Using it" + "Operating it" only).
   UI content-accuracy findings) landed via #56 and its Disposition column
   was filled in after the build pass (#64) shipped 11 of 12 findings (#11
   got a process fix instead — see `CLAUDE.md`'s policy-text-dates rule).
-- **`data/`** — dated JSON pipeline snapshots (one file per date, plus a
-  sibling `.md` with per-field query provenance), for chart/infographic
-  generation — the homepage panel's reserved-not-built catalog-stats chart
-  slot ([`features/homepage-panel.md`](features/homepage-panel.md)) is the
+- **`data/`** — dated data records, two conventions so far: (1) JSON
+  pipeline snapshots (one file per date, plus a sibling `.md` with
+  per-field query provenance), for chart/infographic generation — the
+  homepage panel's reserved-not-built catalog-stats chart slot
+  ([`features/homepage-panel.md`](features/homepage-panel.md)) is the
   intended eventual consumer. See
   [`data/2026-07-22-pipeline-snapshot.md`](data/2026-07-22-pipeline-snapshot.md)
+  for the first one. (2) per-run reports + resource metrics (RSS/IO/CPU,
+  per-card cost) keyed by `run_id`, for
+  [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §9's fire
+  sequence specifically — no JSON sibling, `.md` only. See
+  [`data/2026-07-23-bugb-reparse-dryruns.md`](data/2026-07-23-bugb-reparse-dryruns.md)
   for the first one.
 - [`reports/`](reports/README.md) — the report-relay convention (see that
   directory's own README, which indexes every report currently merged).
