@@ -1554,3 +1554,44 @@ occurrence**: before writing this off as "expected," reproduce
 deliberately (recreate the container, watch whether the session
 survives) and confirm which layer is actually responsible, then replace
 this entry's cause with the confirmed one.
+
+## `chunkErrorRecovery.spec.ts`'s `expect.poll(() => reloadRequests).toBe(1)` fails with "Received: 0" in CI, passes locally
+
+**Symptom**: one of the first three `chunkErrorRecovery.spec.ts` tests
+(the ones that dispatch a synthetic `ChunkLoadError` and expect exactly
+one intercepted reload request) times out at 0 reload requests on a CI
+shard, including on a clean re-run, while passing reliably on a local
+machine. No error is thrown anywhere in the test itself (`page.route()`
+registers fine, `page.evaluate()` dispatching the synthetic error
+completes fine) — the reload request simply never arrives.
+
+**Cause**: `useChunkErrorRecovery`'s guard
+(`chunkErrorRecovery.ts`'s `CHUNK_RELOAD_GUARD_KEY`, a real 10s
+sessionStorage-backed "only one reload per window" debounce, working
+exactly as designed) gets consumed by a **real** chunk hiccup before
+the test's own synthetic dispatch ever runs. CI's `playwright.config.ts`
+webServer runs `npm run dev` (not a prebuilt static export), and Next's
+dev server compiles pages on demand — the navbar's own "Editor" nav
+link (visible even while already on `/editor`) gets prefetched by
+`next/link`'s default viewport `IntersectionObserver` behaviour, which
+can trigger a second on-demand recompile of `pages/editor.js` mid-test
+(confirmed via a CI trace: an ~800ms second compile of that exact
+chunk, network-adjacent in time to the test's own dispatch). A slow/
+cold CI runner is more likely to still be mid-churn from that when the
+test body reaches its own dispatch, and any real transient chunk error
+during that churn legitimately consumes the guard first. This is a
+dev-server/test-harness artifact only — the deployed static export has
+no on-demand compilation or HMR at all, so it can't happen in
+production.
+
+**Fix**: the test now imports `CHUNK_RELOAD_GUARD_KEY` from
+`chunkErrorRecovery.ts` and calls
+`page.evaluate((key) => window.sessionStorage.removeItem(key), CHUNK_RELOAD_GUARD_KEY)`
+immediately before each test's own synthetic dispatch, establishing a
+clean precondition regardless of whatever real dev-server chunk noise
+happened during page load. The one test that specifically exercises the
+guard-suppression behaviour (two dispatches in one test) only clears it
+once, before the first dispatch, so the guard is still genuinely
+exercised for real on the second one. See `chunkErrorRecovery.spec.ts`'s
+own comment above `clearReloadGuard` for the full trace-based diagnosis
+(root-caused against CI run 30039392833, shard 1/4).
