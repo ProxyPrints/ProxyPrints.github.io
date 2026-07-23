@@ -9,6 +9,8 @@ input is an already-persisted `ImageEvidence.artist_ocr_raw_text` string.
 
 from io import StringIO
 
+import pytest
+
 from django.core.management import call_command
 
 from cardpicker.models import PilotRunLedger
@@ -20,9 +22,31 @@ from cardpicker.modern_artist_credit import (
 )
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
+    CanonicalCardFactory,
+    CanonicalExpansionFactory,
     CardFactory,
     ImageEvidenceFactory,
+    SourceFactory,
 )
+
+# see test_printing_consensus.py for why this capture-and-restore fixture exists
+_SHARED_FACTORIES = [
+    CardFactory,
+    SourceFactory,
+    CanonicalArtistFactory,
+    CanonicalExpansionFactory,
+    CanonicalCardFactory,
+]
+
+
+@pytest.fixture(autouse=True)
+def _preserve_shared_factory_sequences():
+    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
+    for f, n in before.items():
+        f.reset_sequence(n, force=True)
+    yield
+    for f, n in before.items():
+        f.reset_sequence(n, force=True)
 
 
 def _evidence(card, **overrides):
