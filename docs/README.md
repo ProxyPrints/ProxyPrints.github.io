@@ -114,6 +114,9 @@ The methodology and the systems it governs.
   Google Drive picker, Local Folder, and Save-PDF-to-Drive.
 - [`features/grid-selector.md`](features/grid-selector.md) — the
   card-version-picker modal + `Card.tsx`'s image loading/error states.
+- [`features/search-operator-syntax.md`](features/search-operator-syntax.md)
+  — Scryfall-style `artist:`/`border:`/`frame:`/`tag:`/`set:`/`lang:`
+  search-operator syntax: the pure parser and the fork-coupled wiring seam.
 - [`features/image-cdn.md`](features/image-cdn.md) — the Worker + R2
   bucket image CDN.
 - [`features/local-file-source.md`](features/local-file-source.md) —
