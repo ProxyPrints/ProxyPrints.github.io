@@ -65,7 +65,7 @@ from cardpicker.models import (
     PrintingTagStatus,
     VoteSource,
 )
-from cardpicker.search.sanitisation import to_searchable
+from cardpicker.search.sanitisation import strip_bracketed_groups, to_searchable
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +214,38 @@ def _strip_filename_duplicate_suffix(name: str) -> str:
     return stripped
 
 
+def _has_interior_capital(name: str) -> bool:
+    """
+    issue #372: True if `name` (after stripping any bracketed filename-disambiguation suffix,
+    e.g. " (1)"/" (Modern Tomas Giorello)", case preserved otherwise) consists ENTIRELY of
+    letters and carries an uppercase one somewhere after its first character - the camelCase
+    signature a title-cased multi-word name leaves behind when every space is stripped out of
+    it at upload time (e.g. "VazaltheCompleat" for "Vazal, the Compleat": lowercase "the"
+    wasn't re-capitalised the way major words were, but the word boundary before "Compleat"
+    still shows up as an interior capital "C").
+
+    Used as a conservative trigger gate for CandidateNameIndex's de-concatenation fallback
+    below, alongside "the direct lookup already failed" and "the normalised name has no
+    spaces": an ordinary single-word name that just doesn't exist in the catalog (rather than
+    being a space-stripped multi-word one) essentially never carries an interior capital, so
+    gating on this keeps the fallback from being attempted - and potentially guessing wrong -
+    against names that were never glued together in the first place.
+
+    The "entirely letters" requirement (not just "has an interior capital somewhere") matters
+    for composing correctly with `_strip_filename_duplicate_suffix`'s own, deliberately
+    out-of-scope underscore case ("Spirit_Token_3" for "Spirit Token", pinned unmatched by
+    `test_underscore_duplicate_suffix_is_deliberately_left_unhandled`): `to_searchable` strips
+    "_" as punctuation, so an underscore-separated, title-cased name would otherwise ALSO look
+    like camelCase evidence by capitalisation alone - a genuinely glued name like
+    "VazaltheCompleat" has NO separator characters of any kind left once its bracketed suffix
+    is gone, which is what actually distinguishes it. Confirmed live this doesn't lose any of
+    issue #372's own real recoveries - every one of them carries its digit suffix INSIDE a
+    "(N)"-style bracket, already gone before this check runs.
+    """
+    stripped = strip_bracketed_groups(name).strip()
+    return stripped.isalpha() and any(char.isupper() for char in stripped[1:])
+
+
 class CandidateNameIndex:
     """
     Like cardpicker.deductive_backfill.CanonicalNameIndex, but keyed on the same to_searchable
@@ -221,6 +253,10 @@ class CandidateNameIndex:
     instead of just a printings_count - both engines here need to check a parsed/matched value
     against a candidate's actual identity, not just count how many candidates exist. Built once,
     reused across the whole scan (one query over CanonicalCard's 113k+ rows, not one per card).
+
+    issue #372: also carries a secondary "de-concatenated" index (`_by_concat`) used only as a
+    fallback by `candidates_for` when the direct to_searchable lookup misses - see
+    `_deconcatenated_candidates`'s docstring for the full matching rule.
     """
 
     def __init__(self) -> None:
@@ -239,20 +275,84 @@ class CandidateNameIndex:
             )
         self._by_name = dict(by_name)
 
+        # issue #372: group the same normalised names a second time by their fully
+        # space-stripped form, so a query that's already had ITS spaces stripped (by whatever
+        # tool produced the source filename, not by us) can still be looked up - but only ever
+        # returned by candidates_for when exactly one distinct real name collapses to that
+        # form (see _deconcatenated_candidates), so an accidental collision between two
+        # genuinely different multi-word names never produces a silent wrong-name match.
+        by_concat: dict[str, list[str]] = collections.defaultdict(list)
+        for normalised_name in self._by_name:
+            by_concat[normalised_name.replace(" ", "")].append(normalised_name)
+        self._by_concat = dict(by_concat)
+
     def candidates_for(self, name: str) -> list[CandidatePrinting]:
-        """Direct lookup first (the common, unsuffixed case - unchanged). Only when that finds
-        NOTHING does this fall back to stripping a filename-style duplicate-upload suffix
-        (module docstring / `_strip_filename_duplicate_suffix`) and retrying - most names carry
-        no such suffix, so this keeps the extra regex work scoped to the cohort that actually
-        needs it, the same "only pay for what you use" shape `_resolve_candidates_for_card`'s own
-        DFC-back-face fallback in `local_calculate_verdicts.py` already established."""
-        direct = self._by_name.get(to_searchable(name), [])
+        """Three tiers, cheapest to costliest, each attempted only after the previous one comes
+        up empty:
+          1. direct - the common, unsuffixed case (`to_searchable(name)` against `_by_name`);
+          2. filename-style duplicate-upload suffix strip (`_strip_filename_duplicate_suffix` -
+             "Plaguecrafter (1)"/"Polluted Delta - Copy") - a cheap, safe, idempotent regex
+             strip, retried as a second direct lookup - most names carry no such suffix, so
+             this keeps the extra regex work scoped to the cohort that actually needs it, the
+             same "only pay for what you use" shape `_resolve_candidates_for_card`'s own
+             DFC-back-face fallback in `local_calculate_verdicts.py` already established;
+          3. de-concatenation (`_deconcatenated_candidates` - "VazaltheCompleat") - the most
+             speculative of the three (matches against a name with EVERY space removed, gated
+             on an interior-capital camelCase signal and unambiguous-collision-only acceptance
+             - see that method's own docstring), so it always runs last, and against whichever
+             of `name`/the suffix-stripped form is more normalised - a name carrying BOTH a
+             glued multi-word body and a duplicate-upload suffix (e.g. "VazaltheCompleat (2) -
+             Copy") still reaches the concat lookup suffix-free, not just space-stripped.
+        A card unmatched by all three stays unmatched - never partially or ambiguously guessed
+        at by falling through to a weaker tier."""
+        normalised = to_searchable(name)
+        direct = self._by_name.get(normalised, [])
         if direct:
             return direct
+
         stripped = _strip_filename_duplicate_suffix(name)
-        if stripped == name:
+        if stripped != name:
+            suffix_stripped = self._by_name.get(to_searchable(stripped), [])
+            if suffix_stripped:
+                return suffix_stripped
+
+        effective_name = stripped if stripped != name else name
+        return self._deconcatenated_candidates(effective_name, to_searchable(effective_name))
+
+    def _deconcatenated_candidates(self, raw_name: str, normalised: str) -> list[CandidatePrinting]:
+        """
+        issue #372: recovers cards like "VazaltheCompleat (2)" (real card: "Vazal, the
+        Compleat") whose source filename had every space stripped out of the card name before
+        upload - `to_searchable` has no mechanism to reinsert word boundaries into an
+        already-glued string, so the direct by-name lookup in `candidates_for` always misses
+        these regardless of the bracketed "(2)"-style suffix (which IS already handled, by
+        `to_searchable`'s own bracket-stripping - this fallback is for the separate,
+        glued-name problem underneath it).
+
+        Deliberately conservative, per the task's own "wrong-name matches are worse than none":
+        only attempted when ALL of the following hold, and returns [] (stays unmatched) the
+        moment any of them doesn't -
+          - the direct lookup above already missed;
+          - `normalised` (the bracket-stripped, punctuation/digit-stripped, lowercased name)
+            contains no whitespace at all - a name that DOES still have a space either matched
+            directly above already, or is a genuine no-match unrelated to space-stripping, and
+            forcing it through a fully-concatenated lookup would risk matching totally
+            unrelated words that merely happen to run together;
+          - the original name carries an interior capital letter (`_has_interior_capital`) -
+            the camelCase evidence that this specific name really was glued together from a
+            title-cased multi-word original, not just a single word that doesn't exist;
+          - the fully space-stripped form matches EXACTLY ONE distinct real card name in
+            `_by_concat` - if it collides with more than one (e.g. two differently-worded real
+            names that happen to concatenate to the same string), this returns [] rather than
+            guessing between them, exactly like an ambiguous direct multi-candidate match
+            would be left for a human to disambiguate elsewhere in this pipeline.
+        """
+        if " " in normalised or not _has_interior_capital(raw_name):
             return []
-        return self._by_name.get(to_searchable(stripped), [])
+        matches = self._by_concat.get(normalised, [])
+        if len(matches) != 1:
+            return []
+        return self._by_name[matches[0]]
 
 
 @dataclass(frozen=True)
