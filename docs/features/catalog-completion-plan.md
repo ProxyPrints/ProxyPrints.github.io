@@ -1425,6 +1425,26 @@ nothing newly broken); `makemigrations --check` clean.
 (see the geometry-group paragraph above) — settled afterward, see the
 "back-face flag" paragraph following the legal-line extractor below.
 
+`artist_ocr_name`'s "Illus. <artist>"-only anchor (above) left the
+overwhelming majority of `artist_ocr_raw_text` unparsed — 215,049 rows
+carried raw text but only 13,588 had a parsed name, since modern
+(post-2003) frames print a bare name beside a brush-glyph icon, a
+completely different shape the old-border anchor was never built to
+catch. Closed by issue #368 (2026-07-23), entirely OUTSIDE `local_fallback.py`
+(PROTECTED CORE, never touched): `cardpicker.modern_artist_credit`, a
+from-scratch recognizer that re-parses the SAME already-stored raw text
+via fuzzy-matching name candidates against the `CanonicalArtist` lexicon
+(tolerant of OCR garble — e.g. "Kalk Kopinski" for the real "Karl
+Kopinski" — via a ratio-plus-margin threshold pair, conservative by
+design per that module's own docstring), plus the
+`backfill_modern_artist_names` management command (dry-run by default,
+`--write` to persist, never overwrites a non-blank name) that fills the
+gap. No new wiring needed downstream: `local_calculate_verdicts`'s
+existing "ARTIST-OCR corroboration" step (few paragraphs below) already
+consumes `artist_ocr_name` in production, so every name this backfill
+fills flows into printing identification on that calculator's next
+pass.
+
 **symbol_region — fourth manifest extractor, built** (public issue #160,
 "Part 4b: symbol harness", 2026-07-20): adds `symbol_crop_px` and
 `symbol_phash` to `ImageEvidence` (migration `0073`, additive-only
