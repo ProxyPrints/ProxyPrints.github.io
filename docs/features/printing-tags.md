@@ -81,7 +81,15 @@ printings, artists, tags, and moderation from one screen.
   — weighted-vote formula, weight by source (user 1, admin
   `PRINTING_TAG_ADMIN_WEIGHT` default 5, machine (deduction/OCR)
   `PRINTING_TAG_MACHINE_WEIGHT` default 0.5; settings in
-  `MPCAutofill/MPCAutofill/settings.py`). `PRINTING_TAG_MIN_VOTES` compares against
+  `MPCAutofill/MPCAutofill/settings.py`), resolved per-vote via
+  `vote_consensus.resolve_vote_weight(source, anonymous_id)` rather than a
+  bare source-keyed lookup — the one override it applies: the 2026-07-14
+  deductive-name-backfill's 28,112 votes (`source=deduction`,
+  `anonymous_id="deductive-backfill-v1"`) carry weight **0**, permanently,
+  per the 2026-07-23 owner ruling (see [`theory.md`](../theory.md)'s
+  soundness section and [`pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md)'s
+  §3 item 3) — every other `deduction`/`ocr` vote is unaffected and still
+  carries `PRINTING_TAG_MACHINE_WEIGHT`. `PRINTING_TAG_MIN_VOTES` compares against
   _summed weight_, not row count. A winning group also needs
   `PRINTING_TAG_MIN_SHARE` (default 0.6) of total weight **and** at least
   one non-machine vote — `vote_consensus.is_human_backed_source()` is the one

@@ -1136,32 +1136,57 @@ against the live prod containers with no observed impact.
 **Symptom**: a full `pytest cardpicker -q` run (not a targeted file/module)
 produces hundreds of `ERROR`s spread across many files that have nothing to
 do with your change (`test_views.py`, `test_vote_consensus.py`,
-`test_sources.py`, etc.) — either `django.db.utils.OperationalError: connection to server at "localhost"` or, on a worse collision,
-`docker.errors.APIError: 500 Server Error for http+docker://localhost/...`.
-Individually running the files your change actually touches passes cleanly
-(100%), which is the tell that this isn't a regression in your code.
+`test_sources.py`, etc.) — either `django.db.utils.OperationalError: connection to server at "localhost"`, or, on a worse collision,
+`docker.errors.APIError: 500 Server Error for http+docker://localhost/...`
+(e.g. `Bind for 0.0.0.0:9300 failed: port is already allocated`, or the
+same for `:47000`). Individually running the files your change actually
+touches passes cleanly (100%), which is the tell that this isn't a
+regression in your code. Every test in an affected run shows as `ERROR`,
+not `FAILED`, and the traceback bottoms out in `cardpicker/tests/conftest.py`'s
+`postgres_container`/`elasticsearch_container` fixtures, not in your own
+code.
 
 **Cause**: this repo's `db`/`transactional_db` pytest fixtures spin up
 throwaway `testcontainers` Postgres/Elasticsearch containers per test run
-(`cardpicker/tests/conftest.py`) — a full-suite run launches (and tears
-down) a lot of them in a short window. This machine runs more than one
-Claude Code worktree session at a time (see `WORKERS.md` at the repo root,
-machine-local); if another session is running its own full suite (or
-`pytest .` at the repo root) concurrently, both sessions compete for the
-same Docker daemon and Postgres connection ceiling, and one or both runs
-get spurious infrastructure-level failures that have nothing to do with
-either session's actual code changes. `docker ps`/`ps aux | grep pytest`
-will show another session's containers/process still running if this is
-the cause.
+(`cardpicker/tests/conftest.py`) on **fixed** host ports (`POSTGRES_PORT = 47000`, `ELASTICSEARCH_PORT = 9300` - the latter is also
+`pytest_elasticsearch`'s own hardcoded default) - a full-suite run
+launches (and tears down) a lot of them in a short window. This machine
+runs more than one Claude Code worktree session at a time (see
+`WORKERS.md` at the repo root, machine-local); every worktree shares the
+same Docker daemon, so two sessions running `pytest` at the same moment
+compete for the same Postgres connection ceiling and/or try to bind the
+same two fixed host ports - only one port-bind wins, and testcontainers
+surfaces the loser's failure as a raw Docker API error rather than a
+friendly retry/backoff message. `docker ps`/`ps aux | grep pytest` will
+show another session's containers/process still running if this is the
+cause. A related, quieter form of the same root cause needs no other
+session at all: if a PRIOR run of yours was interrupted (or one of its
+fixtures failed) before its own `postgres_container`/
+`elasticsearch_container.stop()` teardown ran, the now-orphaned container
+keeps holding the port for every subsequent run of yours too - `docker ps -a` showing a `romantic_elion`/`relaxed_mccarthy`-style random-named
+container still `Up` on `:47000`/`:9300` from an earlier failed session
+is the tell.
 
-**Fix**: before trusting a full-suite failure list, check for a concurrent
-`pytest` process (`ps aux | grep pytest`) and concurrent testcontainers
-(`docker ps`) from another session. If found, wait for it to finish (or
-coordinate via `WORKERS.md`) and re-run — don't debug your own code against
-a result contaminated by another session's resource contention. Trust your
-own affected-files-only run (individually and together) as the primary
-verification signal in the meantime; a full-suite run is a nice-to-have
-confirmation, not the only valid one, when this box is shared.
+**Fix**: this is infrastructure contention, not a code bug - don't debug
+your own change against it. Before trusting a full-suite failure list,
+check for a concurrent `pytest` process (`ps aux | grep pytest`) and
+concurrent testcontainers (`docker ps`) from another session. If found,
+wait for it to finish (or coordinate via `WORKERS.md`) and re-run - don't
+debug your own code against a result contaminated by another session's
+resource contention; trust your own affected-files-only run
+(individually and together) as the primary verification signal in the
+meantime, with a full-suite run as a nice-to-have confirmation, not the
+only valid one, when this box is shared. If instead the container
+holding the port is an ORPHAN of your own prior failed run (you recognize
+the run as yours and it's been sitting idle, not freshly created) rather
+than a live concurrent session's, it's safe to `docker rm -f <name>` it
+and retry immediately - but never remove a container you don't recognize
+as your own leftover, since a live session's containers still mid-test
+are exactly the "port is already allocated" collision this entry
+describes, not a target for cleanup. Confirmed one 2026-07-23 session
+hitting this twice in the same task (once from a genuine concurrent
+session, once from its own prior run's orphaned containers) - `docker rm -f` on the confirmed-orphan case, then a plain retry once ports read
+free resolved both.
 
 ## A per-instance `viewBox` crop on an inlined SVG shows the _entire_ source art instead of just its own band
 

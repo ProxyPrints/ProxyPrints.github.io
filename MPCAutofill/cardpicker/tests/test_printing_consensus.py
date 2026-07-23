@@ -6,6 +6,7 @@ from cardpicker.models import PrintingTagStatus, VoteSource
 from cardpicker.printing_consensus import (
     NO_MATCH,
     get_resolved_printings,
+    get_vote_tally,
     resolve_and_persist_printing,
     resolve_printing,
 )
@@ -18,6 +19,7 @@ from cardpicker.tests.factories import (
     CardPrintingTagFactory,
     SourceFactory,
 )
+from cardpicker.vote_consensus import DEDUCTIVE_BACKFILL_ANONYMOUS_ID
 
 # `factory.Sequence` counters are process-global, and some other test modules'
 # snapshot assertions hardcode exact sequence-derived values (e.g. "Artist 0").
@@ -157,6 +159,116 @@ class TestResolvePrinting:
         CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
         CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
         assert resolve_printing(card) == printing_a
+
+
+class TestDeductiveBackfillZeroWeight:
+    """
+    2026-07-23 owner ruling: the 2026-07-14 deductive-name-backfill's votes (source=DEDUCTION,
+    anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID) carry weight 0.0 in every consensus
+    computation, permanently - proven here at the `resolve_printing` level (winner selection,
+    the quorum/share gate, and promotion), contrasted against unchanged behaviour for ordinary
+    (non-backfill) machine votes and human votes.
+
+    Every scenario below casts AT MOST ONE backfill-sourced vote per card, matching a genuine
+    DB invariant (not just a test-data choice): `cardprintingtag_unique_printing_vote` is
+    unique on `(card, printing, anonymous_id)`, and `deductive_backfill.py`'s own eligibility
+    query only ever considers a card with ZERO pre-existing votes of any kind, so it writes
+    at most one vote per card, ever - the backfill's own pile size (28,112) is spread across
+    28,112 distinct cards, never stacked on one. Stage D's OCR/phash engines ARE allowed to
+    vote on a card the backfill already touched (see `pipeline-fidelity-gate.md`'s §3 item 3 -
+    the exclusion was deliberately NOT restored), so a card carrying one backfill vote
+    alongside separate, ordinary OCR votes is the realistic shape these tests model.
+    """
+
+    def test_backfill_vote_alone_cannot_resolve(self, db):
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(
+            card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+        )
+        assert resolve_printing(card) is None
+
+    def test_backfill_vote_does_not_help_promote_a_card_an_ordinary_machine_vote_would_have(self, db):
+        # 1 human vote (weight 1.0) + 1 ordinary OCR vote (weight 0.5) + 1 backfill deduction
+        # vote (weight 0, all agreeing on the same printing): total human-backed weight 1.0,
+        # non-human weight 0.5 (only the OCR vote counts) - 1.5 total, below
+        # PRINTING_TAG_MIN_VOTES=2, so this must stay UNRESOLVED. If the backfill vote carried
+        # its old machine weight (0.5) instead, the total would be 2.0 and this WOULD resolve
+        # (see the control test immediately below, which is identical except the backfill vote
+        # is swapped for a second ordinary machine vote) - this is the one scenario where the
+        # zero-weighting is actually load-bearing for the outcome, not just "still insufficient
+        # either way".
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="local-ocr-v1")
+        CardPrintingTagFactory(
+            card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+        )
+        assert resolve_printing(card) is None
+
+    def test_equivalent_shape_with_an_ordinary_second_machine_vote_does_resolve(self, db):
+        # control for the test above: the identical shape (1 human vote + 2 machine-weight
+        # votes for the same printing), but with a second ORDINARY machine vote (not the
+        # zero-weighted backfill cohort) in the third slot - 1.0 + 0.5 + 0.5 = 2.0, share 1.0,
+        # so this DOES promote to RESOLVED. Proves the zero-weighting is scoped to the
+        # backfill's own anonymous_id, not to VoteSource.DEDUCTION (or "machine evidence") as a
+        # whole, and that ordinary human+machine promotion behaviour is unchanged by this
+        # ruling.
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="local-ocr-v1")
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="local-phash-v1")
+        assert resolve_printing(card) == printing
+
+    def test_backfill_vote_pooled_on_one_side_cannot_tip_a_human_vs_human_contest(self, db):
+        # a single backfill vote pooled behind one side of a genuine human-vs-human contest
+        # must not be able to tip it - mirrors test_machine_pooling_cannot_decide_a_live_
+        # human_vs_human_contest, with the pooled machine vote specifically the zero-weighted
+        # backfill cohort rather than an ordinary DEDUCTION/OCR vote
+        card = CardFactory()
+        printing_a = CanonicalCardFactory()
+        printing_b = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        CardPrintingTagFactory(
+            card=card, printing=printing_a, source=VoteSource.DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+        )
+        CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
+        assert resolve_printing(card) is None
+
+    def test_backfill_dissent_does_not_shrink_an_already_resolved_winners_share(self, db):
+        # 2 user votes already resolve printing_a outright (weight 2.0, share 1.0); a single
+        # backfill dissent vote for printing_b must not be able to drag that share back down -
+        # mirrors test_machine_dissent_cannot_de_resolve_a_human_quorum_valid_winner, with the
+        # dissenting vote specifically the zero-weighted backfill cohort
+        card = CardFactory()
+        printing_a = CanonicalCardFactory()
+        printing_b = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
+        CardPrintingTagFactory(
+            card=card, printing=printing_b, source=VoteSource.DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+        )
+        assert resolve_printing(card) == printing_a
+
+    def test_backfill_votes_remain_visible_in_the_raw_vote_tally(self, db):
+        # the ruling zeroes CONSENSUS WEIGHT only - the row itself stays on the record forever
+        # and must still show up, unweighted, in the raw per-outcome tally (`get_vote_tally`)
+        # that display surfaces (e.g. /whatsthat) read from
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(
+            card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+        )
+        CardPrintingTagFactory(card=card, printing=None, is_no_match=True, source=VoteSource.USER)
+
+        tally = get_vote_tally(card)
+        entry_by_printing = {entry["printing"]: entry for entry in tally}
+        assert entry_by_printing[printing]["count"] == 1
+        assert entry_by_printing[printing]["is_no_match"] is False
+        assert entry_by_printing[None]["count"] == 1
+        assert entry_by_printing[None]["is_no_match"] is True
 
 
 class TestResolveAndPersistPrintingReindex:

@@ -56,6 +56,49 @@ def is_human_backed_source(source: str) -> bool:
     return source not in _MACHINE_DERIVED_SOURCES
 
 
+# `cardpicker.deductive_backfill.DEDUCTIVE_BACKFILL_ANONYMOUS_ID`, duplicated as a literal here
+# (same convention `local_identify_printing_tags.py` already uses for its own copy) rather than
+# importing that module - keeps this shared consensus core free of a dependency on one specific
+# backfill script.
+#
+# Owner ruling 2026-07-23: the 28,112 `CardPrintingTag` votes this backfill run wrote (source=
+# DEDUCTION, anonymous_id=this constant - pure name-matching inference, zero image inspection,
+# see `deductive_backfill.py`'s own module docstring) carry ZERO weight in every consensus
+# computation, forever - the rows themselves are KEPT as history (raw tallies/display paths,
+# e.g. `get_vote_tally`/`_suggested_canonical_card`/the questionFeed tier-1 surface, are
+# unaffected - this only zeroes WEIGHT). Basis, verified live against the production run at
+# ratification time: 60% of the 28,112 were already redundant with an agreeing image-channel
+# (DEDUCTION/OCR) vote, 17% were opposed by an explicit human no-match vote, 66 were directly
+# contradicted by a later human vote for a different printing, and only 459 were unopposed yet
+# unverifiable against any independent evidence. Soundness is strictly tightening: this removes
+# name-derived weight from resolution, leaving only image-derived machine evidence (OCR/phash/
+# fallback - see `local_phash.py`/`local_fallback.py`) plus human votes - see docs/theory.md's
+# soundness section for the full writeup. This is scoped to (source, anonymous_id) together,
+# not to `VoteSource.DEDUCTION` alone, so a future, differently-sourced DEDUCTION-labelled
+# cohort (should one ever be ratified) isn't silently swept in by this same override without
+# its own separate review.
+DEDUCTIVE_BACKFILL_ANONYMOUS_ID = "deductive-backfill-v1"
+
+
+def resolve_vote_weight(source: str, anonymous_id: str) -> float:
+    """
+    Resolves a single vote's consensus weight from its `source` (via `_SOURCE_WEIGHTS`), with
+    one override: a vote carrying `source=VoteSource.DEDUCTION` AND
+    `anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID` (see that constant's own docstring for the
+    2026-07-23 owner ruling) resolves to 0.0 regardless of `_SOURCE_WEIGHTS[DEDUCTION]`.
+
+    Every call site that builds a `VoteTuple`'s (or an inline weighted-sum's) `weight` from a
+    `CardPrintingTag` row's `source` should route through this rather than indexing
+    `_SOURCE_WEIGHTS` directly, so a future new zero-weight cohort (should one ever be ratified)
+    has exactly one place to add it. `CardArtistVote`/`CardTagVote` rows are unaffected in
+    practice (`deductive_backfill.py` only ever writes `CardPrintingTag` rows) but are safe to
+    route through this too - the override simply never matches for them.
+    """
+    if source == VoteSource.DEDUCTION and anonymous_id == DEDUCTIVE_BACKFILL_ANONYMOUS_ID:
+        return 0.0
+    return _SOURCE_WEIGHTS[source]
+
+
 class VoteTuple(NamedTuple):
     """
     A single vote reduced to just what `resolve_weighted_consensus` needs to reconcile it: the
@@ -292,4 +335,6 @@ __all__ = [
     "_SOURCE_WEIGHTS",
     "contested_queryset",
     "is_human_backed_source",
+    "DEDUCTIVE_BACKFILL_ANONYMOUS_ID",
+    "resolve_vote_weight",
 ]
