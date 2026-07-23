@@ -49,12 +49,22 @@ import {
   addMembers,
   selectProjectCardback,
   selectProjectSize,
+  setSelectedCardback,
 } from "@/store/slices/projectSlice";
 
 export interface ParsedXmlImport {
   members: Array<Omit<SlotProjectMembers, "id">>;
   stock?: string;
   foil?: boolean;
+  /** The file's own root-level `<cardback>` text, verbatim - `undefined` when the file carries
+   * no `<cardback>` element (or an empty one) at all, distinct from the internal
+   * `xmlCardback` variable below (which additionally falls back to the CURRENT project
+   * cardback, purely for populating each backless front's own per-slot fallback). Foreign-order
+   * resilience Phase 1 (issue #324) follow-up: the caller (`ImportXML`'s `parseXMLFile`) uses
+   * this to initialise `state.project.cardback` when the project doesn't have one selected yet -
+   * see that call site's own comment for why, and why it's gated on the project's own cardback
+   * still being unset. */
+  cardback?: string;
 }
 
 /**
@@ -104,9 +114,13 @@ export function parseXmlImport(
       ? backsElement.getElementsByTagName("card")
       : undefined;
 
-  const xmlCardback =
-    rootElement.getElementsByTagName("cardback")[0]?.textContent ??
-    projectCardback;
+  // The file's own literal `<cardback>` text - `undefined` for a missing OR empty element ("" is
+  // not a usable identifier - see the XML_1_0 test fixture's `<cardback></cardback>`), kept
+  // separate from `xmlCardback` below (which additionally falls back to the CURRENT project
+  // cardback, purely for populating each individual backless front's own per-slot fallback).
+  const xmlCardbackElementText =
+    rootElement.getElementsByTagName("cardback")[0]?.textContent || undefined;
+  const xmlCardback = xmlCardbackElementText ?? projectCardback;
 
   // `newMembers` is initialised with the maximum length it might need to contain all cards
   // the project can hold, then is truncated later according to `lastNonNullSlot`
@@ -197,6 +211,7 @@ export function parseXmlImport(
     members: newMembers.slice(0, lastNonNullSlot + 1),
     stock: stock ?? undefined,
     foil,
+    cardback: xmlCardbackElementText,
   };
 }
 
@@ -221,13 +236,32 @@ export function ImportXML({ onImportComplete }: ImportXMLProps) {
     }
 
     // TODO: throw a user-visible error if the xml doc is malformed
-    const { members, stock, foil } = parseXmlImport(
+    const { members, stock, foil, cardback } = parseXmlImport(
       fileContents,
       projectSize,
       projectCardback,
       useXMLCardback
     );
     dispatch(addMembers({ members }));
+
+    // Foreign-order resilience Phase 1 (issue #324) follow-up (owner-observed 2026-07-23): a
+    // BRAND NEW project (state.project.cardback still null - nothing auto-selected yet, e.g. the
+    // catalog has zero indexed cardbacks at all) never got state.project.cardback initialised
+    // from the very XML file just imported, even when the user opted to use that file's own
+    // cardback - so the "Common Cardback" panel (CommonCardback.tsx, the classic editor's right
+    // panel - a SEPARATE, project-wide concept from any individual slot's own back, see
+    // cardDocumentsSlice.ts's own comment on that distinction) kept showing "Card not found"
+    // right next to a perfectly-rendered orphan back-face slot tile, independent of whether the
+    // file's own cardback identifier is a real catalog cardback or an orphan Drive file ID this
+    // catalog has never indexed. Deliberately gated on `projectCardback == null` (the value
+    // already read above, before this import): an EXISTING non-null project cardback must stay
+    // untouched by a later XML import even with useXMLCardback=true - that's a real, deliberate,
+    // already-tested distinction (ImportXML.spec.ts's "import an XML and use its cardback" -
+    // useXMLCardback only ever governed each backless front's OWN per-slot fallback, never this
+    // project-wide setting) which this fix must not regress.
+    if (useXMLCardback && cardback != null && projectCardback == null) {
+      dispatch(setSelectedCardback({ selectedImage: cardback }));
+    }
 
     if (
       useXMLFinishSettings &&

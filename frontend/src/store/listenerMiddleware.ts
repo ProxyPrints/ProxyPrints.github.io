@@ -10,6 +10,7 @@ import {
   setLocalStorageFavorites,
   setLocalStorageManualOverrides,
 } from "@/common/cookies";
+import { isLikelyDriveFileId } from "@/common/orphanCard";
 import { computeSearchQueryHashKey } from "@/common/processing";
 import { Faces } from "@/common/types";
 import { api } from "@/store/api";
@@ -23,7 +24,11 @@ import {
   fetchCardbacksAndReportError,
   selectCardbacks,
 } from "@/store/slices/cardbackSlice";
-import { fetchCardDocumentsAndReportError } from "@/store/slices/cardDocumentsSlice";
+import {
+  fetchCardDocuments,
+  fetchCardDocumentsAndReportError,
+  selectCardDocumentByIdentifier,
+} from "@/store/slices/cardDocumentsSlice";
 import {
   clearFavoriteRenders,
   removeFavoriteRender,
@@ -179,7 +184,18 @@ startAppListening({
 });
 
 startAppListening({
-  actionCreator: fetchCardbacks.fulfilled,
+  // Foreign-order resilience Phase 1 (issue #324) follow-up - the owner's own repro traced this
+  // exact listener as "the CARDBACK display path [that] doesn't resolve orphan identifiers": it
+  // unconditionally cleared state.project.cardback (the "Common Cardback" panel/toolbar picker's
+  // own selection - a SEPARATE concept from any individual slot's own back, see
+  // cardDocumentsSlice.ts's own comment on that distinction) whenever it wasn't a real indexed
+  // cardback, with no orphan-candidate carve-out at all - unlike the sibling per-slot listener
+  // below, which already got that fix. fetchCardDocuments.fulfilled added to the trigger set
+  // (same ordering rationale as the per-slot listener's own comment): cardDocuments isn't settled
+  // yet on the original fetchCardbacks.fulfilled-only trigger, so this listener needs a second
+  // pass once it is, to let a genuinely-known-but-filtered/removed cardback (isOrphan
+  // false/undefined) still fall through to being cleared exactly as before.
+  matcher: isAnyOf(fetchCardbacks.fulfilled, fetchCardDocuments.fulfilled),
   /**
    * Whenever the list of cardbacks changes, this listener will deselect the cardback
    * if it's no longer valid, then select the first cardback in the list if there are
@@ -194,7 +210,19 @@ startAppListening({
 
     let newCardback = currentCardback;
     if (newCardback != null && !cardbacks.includes(newCardback)) {
-      newCardback = undefined;
+      // Same "wait and see" carve-out as the per-slot listener below: an identifier already
+      // resolved to a synthesized orphan CardDocument, or not resolved either way yet but still
+      // looks like a real Drive file ID, is left selected rather than cleared.
+      const knownCardDocument = selectCardDocumentByIdentifier(
+        state,
+        newCardback
+      );
+      const isOrphanCandidate =
+        knownCardDocument?.isOrphan === true ||
+        (knownCardDocument == null && isLikelyDriveFileId(newCardback));
+      if (!isOrphanCandidate) {
+        newCardback = undefined;
+      }
     }
     if (newCardback == null && cardbacks.length > 0) {
       newCardback = selectFirstFavoritedOrFirst(
@@ -271,7 +299,17 @@ startAppListening({
 });
 
 startAppListening({
-  matcher: isAnyOf(fetchSearchResults.fulfilled, fetchCardbacks.fulfilled),
+  // Foreign-order resilience Phase 1 (issue #324) added fetchCardDocuments.fulfilled to this
+  // matcher: this listener needs to know whether an unmatched selectedImage is a genuinely
+  // invalid identifier or an orphan (a Drive file ID the catalog's search doesn't back up but
+  // hasn't necessarily failed either), and that isn't settled until
+  // cardDocuments.cardDocuments actually reflects it - see the isOrphanCandidate comment below
+  // for the full ordering rationale. The original two triggers are unchanged.
+  matcher: isAnyOf(
+    fetchSearchResults.fulfilled,
+    fetchCardbacks.fulfilled,
+    fetchCardDocuments.fulfilled
+  ),
   /**
    * Whenever search results change, this listener will inspect each card slot
    * and ensure that their selected images are valid.
@@ -297,22 +335,44 @@ startAppListening({
           if (searchResultsForQueryOrDefault != null) {
             let mutatedSelectedImage = projectMember.selectedImage;
 
-            // If an image is selected and it's not in the search results, deselect the image and let the user know about it
+            // If an image is selected and it's not in the search results, deselect the image and let the user know about it -
+            // UNLESS it's a foreign-order-resilience orphan (issue #324), which is neither invalid nor cleared.
             if (
               mutatedSelectedImage != null &&
               !searchResultsForQueryOrDefault.includes(mutatedSelectedImage)
             ) {
-              if (searchResultsForQueryOrDefault.length > 0) {
-                dispatch(
-                  recordInvalidIdentifier({
-                    slot,
-                    face,
-                    searchQuery,
-                    identifier: mutatedSelectedImage,
-                  })
-                );
+              const knownCardDocument = selectCardDocumentByIdentifier(
+                state,
+                mutatedSelectedImage
+              );
+              // An identifier the search doesn't back up isn't automatically invalid: if it's
+              // already resolved to a synthesized orphan CardDocument, or hasn't been resolved
+              // either way yet but still looks like a real Drive file ID, treat it as an
+              // orphan candidate and leave it selected. `knownCardDocument == null` covers the
+              // early passes of this listener (fired by fetchSearchResults.fulfilled/
+              // fetchCardbacks.fulfilled, both of which can run before cardDocuments knows
+              // anything) - erring towards NOT clearing yet is safe, because this same listener
+              // re-runs once fetchCardDocuments.fulfilled settles cardDocuments definitively,
+              // at which point a genuinely-known-but-filtered/removed catalog card (
+              // knownCardDocument defined, isOrphan false/undefined) still falls through to the
+              // existing Invalid Cards flow below exactly as before.
+              const isOrphanCandidate =
+                knownCardDocument?.isOrphan === true ||
+                (knownCardDocument == null &&
+                  isLikelyDriveFileId(mutatedSelectedImage));
+              if (!isOrphanCandidate) {
+                if (searchResultsForQueryOrDefault.length > 0) {
+                  dispatch(
+                    recordInvalidIdentifier({
+                      slot,
+                      face,
+                      searchQuery,
+                      identifier: mutatedSelectedImage,
+                    })
+                  );
+                }
+                mutatedSelectedImage = undefined;
               }
-              mutatedSelectedImage = undefined;
             }
 
             // If no image is selected and there are search results, select the first favorited image or the first image
