@@ -35,6 +35,25 @@ itself - it asserts the actual property that broke (peak simultaneously-alive fe
 bounded by `queue_depth`, not by cohort size), using the same real-`ThreadPoolExecutor` +
 manually-driven-compute-stub pattern `TestRunCohortBackpressure` already established for
 observing `_run_cohort` mid-flight.
+
+2026-07-23 update (PilotRunLedger self-recording): every command-level test that reaches
+`handle()`'s `_parent_connections.close_all()` call (i.e. anything past a non-empty cohort - see
+that call's own comment for why it exists, real fork-safety, not just this test file's problem)
+now needs `@pytest.mark.django_db(transaction=True)` instead of the plain form. Reason: plain
+`@pytest.mark.django_db` wraps a test in one outer atomic() block; Django's own `close()` behaves
+differently inside an atomic block (`closed_in_transaction=True`, leaves `self.connection` non-None
+rather than nulling it) than outside one (`self.connection = None`, safe lazy reconnect on next
+query) - see `django.db.backends.base.base.BaseDatabaseWrapper.close`. In production there is no
+surrounding atomic block, so the plain-close-and-lazily-reconnect path this command always relied
+on (fetch threads reusing the connection pool post-close, and now this run's own ledger
+COMPLETED/FAILED write after `_run_cohort` returns) already worked correctly; only the test-only
+atomic wrapper made a second post-close query raise `psycopg2.InterfaceError: connection already
+closed`. `transaction=True` swaps that wrapper for real commit-and-truncate isolation (matching
+prod's own "no atomic block" shape), which is the documented pytest-django fix for code under test
+that manages DB connections directly - not a workaround. Tests that never reach that line (the
+"Nothing to do" empty-cohort early return, and every pool-internals/`_fetch_one_card`/
+`_compute_one_card` unit test that never calls `handle()` at all) are deliberately left on the
+plain marker - transaction=True is slower and only worth paying for where it's actually needed.
 """
 
 import threading
@@ -49,6 +68,7 @@ from django.core.management.base import CommandError
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.management.commands import run_image_evidence_cohort as cohort_command
+from cardpicker.models import PilotRunLedger
 from cardpicker.tests.factories import CardFactory
 
 
@@ -114,7 +134,7 @@ def _stub_pools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cohort_command, "ProcessPoolExecutor", _SyncPoolStub)
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_command_exits_cleanly_with_a_non_empty_cohort(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
@@ -147,7 +167,7 @@ def test_empty_cohort_still_exits_cleanly(capsys: pytest.CaptureFixture) -> None
     assert "Nothing to do." in out
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_card_ids_file_bypasses_the_resume_filter(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, tmp_path: Any
 ) -> None:
@@ -181,7 +201,7 @@ def test_card_ids_file_bypasses_the_resume_filter(
     assert "completed=1/1" in out
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_card_ids_file_with_a_nonexistent_card_id_drops_cleanly(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, tmp_path: Any
 ) -> None:
@@ -206,6 +226,186 @@ def test_card_ids_file_with_a_nonexistent_card_id_drops_cleanly(
     out = capsys.readouterr().out
     assert "DONE" in out
     assert "fetch_failures=1" in out
+
+
+class TestPilotRunLedger:
+    """2026-07-23: `run_image_evidence_cohort` was the last Stage C/D pilot command with no
+    `PilotRunLedger` row of its own (see the command's own prior --run-id --help text) - its
+    completion counters were log-only and lost once the run's stdout scrolled away. This class
+    covers the self-recording lifecycle added to close that gap, following
+    `local_calculate_verdicts`'s own exact RUNNING-at-start/COMPLETED-or-FAILED-at-end pattern."""
+
+    @pytest.mark.django_db(transaction=True)
+    def test_a_run_writes_a_completed_ledger_row_with_its_counters(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        CardFactory(content_phash=123456789)
+
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+        call_command("run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "ledger-run-1")
+        capsys.readouterr()
+
+        ledger = PilotRunLedger.objects.get(run_id="ledger-run-1")
+        assert ledger.command == "run_image_evidence_cohort"
+        assert ledger.dry_run is False
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.finished_at is not None
+        assert ledger.counters == {
+            "cohort_size": 1,
+            "completed": 1,
+            "fetch_failures": 0,
+            "short_circuited": 0,
+            "lockout_hit": False,
+            "rss_limit_hit": False,
+            "elapsed_s": ledger.counters["elapsed_s"],  # timing - only its presence/type matters
+        }
+        assert isinstance(ledger.counters["elapsed_s"], float)
+
+    @pytest.mark.django_db(transaction=True)
+    def test_dry_run_flag_is_recorded_on_the_ledger(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        CardFactory(content_phash=123456789)
+
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+        call_command(
+            "run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "ledger-dry-run", "--dry-run"
+        )
+        capsys.readouterr()
+
+        ledger = PilotRunLedger.objects.get(run_id="ledger-dry-run")
+        assert ledger.dry_run is True
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+
+    @pytest.mark.django_db(transaction=True)
+    def test_fetch_failures_and_short_circuited_land_in_ledger_counters(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Exercises the two counters called out explicitly in this command's own task spec
+        (short_circuited/fetch_failures) end to end, not just the all-zeros happy path above."""
+        CardFactory(content_phash=1)
+        CardFactory(content_phash=2)
+
+        def _stub_fetch_one_dropped(card_id: int, stop_event: threading.Event) -> "cohort_command._FetchOutcome":
+            return cohort_command._FetchOutcome(card_id=card_id, outcome="dropped")
+
+        def _stub_compute_short_circuited(
+            card_id: int,
+            content_hash: Optional[int],
+            image_bytes: Optional[bytes],
+            fetch_latency_ms: float,
+            dry_run: bool,
+            run_id: str,
+            profile: bool = False,
+            short_circuit: Optional[bool] = None,
+        ) -> tuple[int, str, Optional[dict[str, float]], bool]:
+            return card_id, "ok", None, True
+
+        # First card's fetch is dropped (counts as a fetch_failure and never reaches compute);
+        # the real fetch stub only fires for whichever card the resume filter actually submits,
+        # so a single stub covering both call sites keeps this deterministic regardless of order.
+        calls = {"count": 0}
+
+        def _fetch_first_dropped_rest_ok(card_id: int, stop_event: threading.Event) -> "cohort_command._FetchOutcome":
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return _stub_fetch_one_dropped(card_id, stop_event)
+            return _stub_fetch_ok(card_id, stop_event)
+
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _fetch_first_dropped_rest_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_short_circuited)
+
+        call_command("run_image_evidence_cohort", "--limit", "2", "--workers", "1", "--run-id", "ledger-counters")
+        capsys.readouterr()
+
+        ledger = PilotRunLedger.objects.get(run_id="ledger-counters")
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.counters["cohort_size"] == 2
+        assert ledger.counters["completed"] == 2
+        assert ledger.counters["fetch_failures"] == 1
+        assert ledger.counters["short_circuited"] == 1
+        assert ledger.counters["lockout_hit"] is False
+
+    @pytest.mark.django_db
+    def test_empty_cohort_still_writes_a_completed_ledger_row_with_zeroed_counters(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        call_command("run_image_evidence_cohort", "--limit", "0", "--run-id", "ledger-empty-cohort")
+        capsys.readouterr()
+
+        ledger = PilotRunLedger.objects.get(run_id="ledger-empty-cohort")
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.finished_at is not None
+        assert ledger.counters == {
+            "cohort_size": 0,
+            "completed": 0,
+            "fetch_failures": 0,
+            "short_circuited": 0,
+            "lockout_hit": False,
+            "rss_limit_hit": False,
+        }
+
+    @pytest.mark.django_db(transaction=True)
+    def test_max_rss_mb_exceeded_marks_ledger_completed_not_failed(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The `--max-rss-mb` guard raises `CommandError` to force a nonzero exit (see
+        `TestMaxRssGuardEndToEnd` above), but the run itself drained cleanly and every write
+        already committed - matching the module docstring's own "checkpoint, not a failure"
+        framing, the ledger row must land COMPLETED (with rss_limit_hit=True in its counters),
+        never FAILED."""
+        CardFactory(content_phash=123456789)
+
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+        monkeypatch.setattr(cohort_command, "_get_rss_mb", lambda: 2000.0)
+
+        with pytest.raises(CommandError, match="max-rss-mb"):
+            call_command(
+                "run_image_evidence_cohort",
+                "--limit",
+                "1",
+                "--workers",
+                "1",
+                "--run-id",
+                "ledger-rss-exceeded",
+                "--max-rss-mb",
+                "1000",
+            )
+        capsys.readouterr()
+
+        ledger = PilotRunLedger.objects.get(run_id="ledger-rss-exceeded")
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.counters["rss_limit_hit"] is True
+
+    @pytest.mark.django_db(transaction=True)
+    def test_a_genuine_mid_run_exception_marks_the_ledger_failed(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Distinguishes a real crash (ledger row never reaches COMPLETED, still RUNNING when the
+        exception hits) from the --max-rss-mb checkpoint case above - both raise, but only this
+        one should land FAILED."""
+        CardFactory(content_phash=123456789)
+
+        def _stub_run_cohort_raises(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("boom - simulated mid-run crash")
+
+        monkeypatch.setattr(cohort_command, "_run_cohort", _stub_run_cohort_raises)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            call_command(
+                "run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "ledger-genuine-failure"
+            )
+        capsys.readouterr()
+
+        ledger = PilotRunLedger.objects.get(run_id="ledger-genuine-failure")
+        assert ledger.status == PilotRunLedger.Status.FAILED
+        assert ledger.finished_at is not None
+        assert ledger.counters is None
 
 
 class TestFetchOneCard:
@@ -868,7 +1068,7 @@ class TestMaxRssGuardEndToEnd:
     """End-to-end (`call_command`) coverage for `--max-rss-mb` - the same synchronous-stub pattern
     every other command-level test in this file uses (see `_stub_pools` autouse fixture)."""
 
-    @pytest.mark.django_db
+    @pytest.mark.django_db(transaction=True)
     def test_exceeding_max_rss_mb_stops_cleanly_and_exits_non_zero(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
     ) -> None:
@@ -895,7 +1095,7 @@ class TestMaxRssGuardEndToEnd:
         assert "RSS limit exceeded" in out
         assert "rss_limit_hit=True" in out
 
-    @pytest.mark.django_db
+    @pytest.mark.django_db(transaction=True)
     def test_max_rss_mb_unset_never_stops_the_run_regardless_of_rss(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
     ) -> None:

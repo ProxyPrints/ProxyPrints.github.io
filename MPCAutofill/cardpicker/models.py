@@ -1226,6 +1226,13 @@ class PilotRunLedger(models.Model):
     finished_at = models.DateTimeField(null=True, blank=True)
     votes_written = models.IntegerField(null=True, blank=True)
     purged_at = models.DateTimeField(null=True, blank=True)
+    # Free-form aggregate counters for commands whose completion shape doesn't fit votes_written
+    # (e.g. run_image_evidence_cohort's Stage C fetch/compute counts - cohort_size/completed/
+    # fetch_failures/short_circuited/lockout_hit/rss_limit_hit/elapsed_s) - added so a future
+    # command's own counters never need a fresh migration, matching CardScanLog's own
+    # survivor_pks JSONField convention elsewhere in this file. Never interpreted by any
+    # purge/consensus code path, purely a queryable audit payload.
+    counters = models.JSONField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"[{self.status}] {self.command} run_id={self.run_id}"

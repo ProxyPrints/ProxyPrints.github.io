@@ -185,10 +185,11 @@ from typing import Any, Optional
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db.models import Min
+from django.utils import timezone
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
-from cardpicker.models import CanonicalCard, Card, ImageEvidence
-from cardpicker.utils import read_card_ids_file
+from cardpicker.models import CanonicalCard, Card, ImageEvidence, PilotRunLedger
+from cardpicker.utils import get_baked_git_sha, read_card_ids_file
 
 logger = logging.getLogger(__name__)
 
@@ -637,7 +638,8 @@ class Command(BaseCommand):
             type=str,
             default=None,
             help="Free-text run identifier stored on each ImageEvidence/CardScanLog row this run "
-            "writes (no PilotRunLedger row - out of scope for this bounded run). Default: "
+            "writes, and on this run's own PilotRunLedger row (self-recorded per the same "
+            "start/complete lifecycle local_calculate_verdicts already follows). Default: "
             "auto-generated from the current UTC timestamp.",
         )
         parser.add_argument(
@@ -733,107 +735,163 @@ class Command(BaseCommand):
         if profile:
             self.stdout.write(f"Profile JSONL: {profile_output}")
 
-        card_ids_file: Optional[str] = options["card_ids_file"]
-        if card_ids_file:
-            # Targeted re-extraction path (issue #259) - explicit ids, priority ordering AND the
-            # resume filter both bypassed (see this flag's own --help): the whole point of using
-            # it is to force a re-run against cards whose ImageEvidence already exists.
-            cohort_ids = read_card_ids_file(card_ids_file)
-            self.stdout.write(
-                f"--card-ids-file given: {len(cohort_ids)} explicit card ids "
-                "(priority ordering and the resume filter are bypassed for these)"
-            )
-        else:
-            # Step 1: cheap name -> min(edhrec_rank) map - see module docstring for why this
-            # replaces a per-row correlated subquery.
-            t0 = time.monotonic()
-            name_rank: dict[str, int] = {}
-            rank_rows = (
-                CanonicalCard.objects.filter(printing_metadata__edhrec_rank__isnull=False)
-                .values("name")
-                .annotate(min_rank=Min("printing_metadata__edhrec_rank"))
-            )
-            for row in rank_rows.iterator():
-                key = row["name"].lower()
-                existing = name_rank.get(key)
-                if existing is None or row["min_rank"] < existing:
-                    name_rank[key] = row["min_rank"]
-            self.stdout.write(f"Built name->edhrec_rank map ({len(name_rank)} names) in {time.monotonic() - t0:.2f}s")
-
-            # Step 2: resume filter - cards whose ImageEvidence row already has every manifest key.
-            already_done_ids: set[int] = set()
-            for card_id, extractor_versions in ImageEvidence.objects.values_list("card_id", "extractor_versions"):
-                if MANIFEST_EXTRACTOR_KEYS.issubset(extractor_versions.keys()):
-                    already_done_ids.add(card_id)
-            if already_done_ids:
-                self.stdout.write(f"Resume filter: skipping {len(already_done_ids)} already-fully-processed cards")
-
-            # Step 3: candidate (id, name) pairs, cheapest possible shape for the Python-side sort.
-            candidates = (
-                Card.objects.filter(content_phash__isnull=False)
-                .exclude(id__in=already_done_ids)
-                .values_list("id", "name")
-            )
-            id_name_pairs = list(candidates)
-            self.stdout.write(f"{len(id_name_pairs)} eligible cards before cohort slicing")
-
-            def priority_key(pair: tuple[int, str]) -> tuple[float, int]:
-                card_id, name = pair
-                rank = name_rank.get(name.lower())
-                return (rank if rank is not None else math.inf, card_id)
-
-            id_name_pairs.sort(key=priority_key)
-            cohort_ids = [card_id for card_id, _name in id_name_pairs[:limit]]
-            self.stdout.write(f"Cohort: {len(cohort_ids)} cards (prioritized by edhrec_rank, cold tail last)")
-
-        if not cohort_ids:
-            self.stdout.write("Nothing to do.")
-            return
-
-        # Close the parent's own DB connection(s) before forking the compute pool - belt-and-
-        # braces alongside each compute worker's own _init_worker close_all() call, so the
-        # connection this command's own step 1/2/3 queries above used is never inherited by any
-        # child either. Fetch threads keep using this same parent-process connection pool (safe -
-        # threads within one process, unlike a fork).
-        from django.db import connections as _parent_connections
-
-        _parent_connections.close_all()
-
-        run_start = time.monotonic()
-        try:
-            completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit = _run_cohort(
-                cohort_ids=cohort_ids,
-                fetch_threads=fetch_threads,
-                workers=workers,
-                queue_depth=queue_depth,
-                dry_run=dry_run,
-                run_id=run_id,
-                stdout_write=self.stdout.write,
-                profile=profile,
-                profile_file=profile_file,
-                short_circuit=short_circuit,
-                max_rss_mb=max_rss_mb,
-            )
-        finally:
-            if profile_file is not None:
-                profile_file.close()
-
-        elapsed = time.monotonic() - run_start
-        rate = completed / elapsed if elapsed > 0 else 0.0
-        final_rss_mb = _get_rss_mb()
-        self.stdout.write(
-            f"DONE run_id={run_id} completed={completed}/{len(cohort_ids)} elapsed={elapsed:.0f}s "
-            f"rate={rate:.3f}/s fetch_failures={fetch_failures} lockout_hit={lockout_hit} "
-            f"short_circuited={short_circuited} rss_limit_hit={rss_limit_hit} "
-            f"rss_mb={f'{final_rss_mb:.0f}' if final_rss_mb is not None else '?'}"
+        # Self-recording (2026-07-23): one PilotRunLedger row per invocation, written RUNNING here
+        # and updated to COMPLETED/FAILED once the run's aggregate counters are known - the same
+        # start/complete lifecycle local_calculate_verdicts already follows, so this command's own
+        # completion counters (previously log-only, see this command's prior --run-id help text)
+        # are durably queryable by run_id like every other Stage C/D pilot command's are.
+        ledger = PilotRunLedger.objects.create(
+            run_id=run_id,
+            command="run_image_evidence_cohort",
+            dry_run=dry_run,
+            status=PilotRunLedger.Status.RUNNING,
+            git_sha=get_baked_git_sha(),
         )
-        if rss_limit_hit:
-            # Nonzero exit (2026-07-22, item 3's own "cleanly checkpoints+exits nonzero" ask) -
-            # every persist_evidence write up to this point already committed and the resume
-            # filter (module docstring's "Resume/kill-safety" section) makes a re-invocation safe,
-            # so this is a checkpoint, not a failure to recover from.
-            raise CommandError(
-                f"--max-rss-mb={max_rss_mb:.0f} exceeded - run stopped cleanly at "
-                f"completed={completed}/{len(cohort_ids)}; re-invoke the same command to resume "
-                "(the resume filter skips everything already fully processed)."
+
+        try:
+            card_ids_file: Optional[str] = options["card_ids_file"]
+            if card_ids_file:
+                # Targeted re-extraction path (issue #259) - explicit ids, priority ordering AND
+                # the resume filter both bypassed (see this flag's own --help): the whole point of
+                # using it is to force a re-run against cards whose ImageEvidence already exists.
+                cohort_ids = read_card_ids_file(card_ids_file)
+                self.stdout.write(
+                    f"--card-ids-file given: {len(cohort_ids)} explicit card ids "
+                    "(priority ordering and the resume filter are bypassed for these)"
+                )
+            else:
+                # Step 1: cheap name -> min(edhrec_rank) map - see module docstring for why this
+                # replaces a per-row correlated subquery.
+                t0 = time.monotonic()
+                name_rank: dict[str, int] = {}
+                rank_rows = (
+                    CanonicalCard.objects.filter(printing_metadata__edhrec_rank__isnull=False)
+                    .values("name")
+                    .annotate(min_rank=Min("printing_metadata__edhrec_rank"))
+                )
+                for row in rank_rows.iterator():
+                    key = row["name"].lower()
+                    existing = name_rank.get(key)
+                    if existing is None or row["min_rank"] < existing:
+                        name_rank[key] = row["min_rank"]
+                self.stdout.write(
+                    f"Built name->edhrec_rank map ({len(name_rank)} names) in {time.monotonic() - t0:.2f}s"
+                )
+
+                # Step 2: resume filter - cards whose ImageEvidence row already has every manifest key.
+                already_done_ids: set[int] = set()
+                for card_id, extractor_versions in ImageEvidence.objects.values_list("card_id", "extractor_versions"):
+                    if MANIFEST_EXTRACTOR_KEYS.issubset(extractor_versions.keys()):
+                        already_done_ids.add(card_id)
+                if already_done_ids:
+                    self.stdout.write(f"Resume filter: skipping {len(already_done_ids)} already-fully-processed cards")
+
+                # Step 3: candidate (id, name) pairs, cheapest possible shape for the Python-side sort.
+                candidates = (
+                    Card.objects.filter(content_phash__isnull=False)
+                    .exclude(id__in=already_done_ids)
+                    .values_list("id", "name")
+                )
+                id_name_pairs = list(candidates)
+                self.stdout.write(f"{len(id_name_pairs)} eligible cards before cohort slicing")
+
+                def priority_key(pair: tuple[int, str]) -> tuple[float, int]:
+                    card_id, name = pair
+                    rank = name_rank.get(name.lower())
+                    return (rank if rank is not None else math.inf, card_id)
+
+                id_name_pairs.sort(key=priority_key)
+                cohort_ids = [card_id for card_id, _name in id_name_pairs[:limit]]
+                self.stdout.write(f"Cohort: {len(cohort_ids)} cards (prioritized by edhrec_rank, cold tail last)")
+
+            if not cohort_ids:
+                self.stdout.write("Nothing to do.")
+                ledger.status = PilotRunLedger.Status.COMPLETED
+                ledger.finished_at = timezone.now()
+                ledger.counters = {
+                    "cohort_size": 0,
+                    "completed": 0,
+                    "fetch_failures": 0,
+                    "short_circuited": 0,
+                    "lockout_hit": False,
+                    "rss_limit_hit": False,
+                }
+                ledger.save(update_fields=["status", "finished_at", "counters"])
+                return
+
+            # Close the parent's own DB connection(s) before forking the compute pool - belt-and-
+            # braces alongside each compute worker's own _init_worker close_all() call, so the
+            # connection this command's own step 1/2/3 queries above used is never inherited by any
+            # child either. Fetch threads keep using this same parent-process connection pool (safe -
+            # threads within one process, unlike a fork).
+            from django.db import connections as _parent_connections
+
+            _parent_connections.close_all()
+
+            run_start = time.monotonic()
+            try:
+                completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit = _run_cohort(
+                    cohort_ids=cohort_ids,
+                    fetch_threads=fetch_threads,
+                    workers=workers,
+                    queue_depth=queue_depth,
+                    dry_run=dry_run,
+                    run_id=run_id,
+                    stdout_write=self.stdout.write,
+                    profile=profile,
+                    profile_file=profile_file,
+                    short_circuit=short_circuit,
+                    max_rss_mb=max_rss_mb,
+                )
+            finally:
+                if profile_file is not None:
+                    profile_file.close()
+
+            elapsed = time.monotonic() - run_start
+            rate = completed / elapsed if elapsed > 0 else 0.0
+            final_rss_mb = _get_rss_mb()
+            self.stdout.write(
+                f"DONE run_id={run_id} completed={completed}/{len(cohort_ids)} elapsed={elapsed:.0f}s "
+                f"rate={rate:.3f}/s fetch_failures={fetch_failures} lockout_hit={lockout_hit} "
+                f"short_circuited={short_circuited} rss_limit_hit={rss_limit_hit} "
+                f"rss_mb={f'{final_rss_mb:.0f}' if final_rss_mb is not None else '?'}"
             )
+
+            # Written COMPLETED (not FAILED) even when --max-rss-mb is about to force a nonzero
+            # exit below - the run itself drained cleanly and every write up to this point already
+            # committed (module docstring's "this is a checkpoint, not a failure to recover from"),
+            # so the ledger's own status should say the same thing the docstring already argues.
+            ledger.status = PilotRunLedger.Status.COMPLETED
+            ledger.finished_at = timezone.now()
+            ledger.counters = {
+                "cohort_size": len(cohort_ids),
+                "completed": completed,
+                "fetch_failures": fetch_failures,
+                "short_circuited": short_circuited,
+                "lockout_hit": lockout_hit,
+                "rss_limit_hit": rss_limit_hit,
+                "elapsed_s": round(elapsed, 1),
+            }
+            ledger.save(update_fields=["status", "finished_at", "counters"])
+
+            if rss_limit_hit:
+                # Nonzero exit (2026-07-22, item 3's own "cleanly checkpoints+exits nonzero" ask) -
+                # every persist_evidence write up to this point already committed and the resume
+                # filter (module docstring's "Resume/kill-safety" section) makes a re-invocation safe,
+                # so this is a checkpoint, not a failure to recover from.
+                raise CommandError(
+                    f"--max-rss-mb={max_rss_mb:.0f} exceeded - run stopped cleanly at "
+                    f"completed={completed}/{len(cohort_ids)}; re-invoke the same command to resume "
+                    "(the resume filter skips everything already fully processed)."
+                )
+        except Exception:
+            # Only a genuine mid-run failure (an exception raised while the ledger row is still
+            # RUNNING) gets marked FAILED here - the --max-rss-mb CommandError above already moved
+            # the row to COMPLETED with its counters filled in before raising, so this is a no-op
+            # for that path (matching local_calculate_verdicts's own try/except FAILED convention,
+            # scoped to not overwrite a completion this run genuinely reached).
+            if ledger.status == PilotRunLedger.Status.RUNNING:
+                ledger.status = PilotRunLedger.Status.FAILED
+                ledger.finished_at = timezone.now()
+                ledger.save(update_fields=["status", "finished_at"])
+            raise
