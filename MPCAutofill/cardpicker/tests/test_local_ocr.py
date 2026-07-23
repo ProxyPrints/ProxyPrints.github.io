@@ -30,6 +30,7 @@ from cardpicker.local_ocr import (
     TESSERACT_CONFIG,
     _median_from_histogram,
     parse_collector_line,
+    parse_legal_line,
     preprocess_fallback_variants,
     preprocess_variants,
     run_tesseract,
@@ -184,3 +185,72 @@ class TestFallbackTierRecoversBlurryUpload:
             for variant in preprocess_fallback_variants(crop)
         )
         assert recovered
+
+
+class TestParseLegalLineProxyMarker:
+    """`parse_legal_line`'s `proxy_marker_detected` field - pure string-matching logic, no
+    image/tesseract dependency, so tested directly against raw text (matching the file's own
+    testing convention for `parse_collector_line` elsewhere in this module). Covers the
+    2026-07-23 JestaProxy fix (`_PROXY_MARKER_RE`'s own comment): unbounded proxy/proxies/proxied
+    substring matching, the "original design" maker-attribution heuristic, and the false-positive
+    guards that fix's own comment argues for (verified live against prod, not just asserted here -
+    see PR description for the query results these guard cases are drawn from).
+    """
+
+    # --- the live JestaProxy ticket's own two examples ---
+
+    def test_detects_proxy_glued_onto_a_brand_prefix_with_no_word_boundary(self):
+        # card 208067's real legal line - "Proxy" glued directly onto "Jesta" with no space/
+        # punctuation between them, the exact shape a \b-anchored regex could never match.
+        assert parse_legal_line("2025 JestaProxy MTG © EN ©").proxy_marker_detected is True
+
+    def test_detects_original_design_maker_attribution(self):
+        # card 215657's real legal line - the "TrixAreforScoot Original Design" maker-brand
+        # watermark, no "proxy"-family word anywhere in it at all.
+        assert parse_legal_line("TrixAreforScoot Original Design").proxy_marker_detected is True
+
+    # --- unbounded proxy/proxies/proxied substring matching, more generally ---
+
+    def test_detects_proxy_prefixed_brand_name(self):
+        assert parse_legal_line("ValarProxy 2025 MTG EN MIDJOURNEY").proxy_marker_detected is True
+
+    def test_detects_proxy_infixed_brand_name(self):
+        assert parse_legal_line("2023 DankProxyStash MTG EN 7IFE").proxy_marker_detected is True
+
+    def test_detects_proxies_glued_with_no_boundary(self):
+        assert parse_legal_line("R 0311 OxProxies TDC EN BRAM SELS").proxy_marker_detected is True
+
+    def test_still_detects_word_bounded_proxy_forms(self):
+        # the pre-existing, already-working bounded cases must keep working under the widened
+        # regex - this is an ADDITIVE change, not a rewrite.
+        assert parse_legal_line("Proxies by Smaug").proxy_marker_detected is True
+        assert parse_legal_line("POGO PROXIES").proxy_marker_detected is True
+        assert parse_legal_line("Rustom Playtest Card - Not for Sale").proxy_marker_detected is True
+
+    # --- false-positive guards (module comment's own reasoning, checked here as a regression
+    # test rather than left as an argued-only claim) ---
+
+    def test_does_not_match_proximity(self):
+        # "proximity" contains "proxim", not "proxy" - the module comment's own reasoning for why
+        # unbounding the proxy family is safe.
+        assert parse_legal_line("PROXIMITY MTG EN SOME ARTIST").proxy_marker_detected is False
+
+    def test_does_not_match_approximate(self):
+        assert parse_legal_line("approximate value only").proxy_marker_detected is False
+
+    def test_does_not_match_genuine_designed_by_credit(self):
+        # the real Unknown Event promo shape ("Designed by Gavin Verheys") that the "original
+        # design" heuristic is deliberately narrow enough to not collide with.
+        assert parse_legal_line("UNK EN DESIGNED BY GAVIN VERHEYS").proxy_marker_detected is False
+
+    def test_does_not_match_a_clean_genuine_legal_line(self):
+        assert parse_legal_line("158/287 R MOM EN GREG STAPLES").proxy_marker_detected is False
+
+    def test_empty_text_is_not_detected(self):
+        assert parse_legal_line("").proxy_marker_detected is False
+
+    # --- case-insensitivity ---
+
+    def test_case_insensitive_match(self):
+        assert parse_legal_line("jestaproxy mtg en").proxy_marker_detected is True
+        assert parse_legal_line("ORIGINAL DESIGN").proxy_marker_detected is True
