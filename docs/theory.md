@@ -649,6 +649,31 @@ any future soundness claim about this chain. Full detail and the fire
 sequence this basis change feeds into:
 [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §8–§9.
 
+### 7d. Full-catalog fire outcome (2026-07-23) — the soundness design empirically confirmed at scale
+
+The §9 fire sequence completed end to end 2026-07-23: the pilot's
+full-eligible-pool `--write` cast **130,210** machine votes across both
+channels (join-key 100,500 — 39,253 match / 61,247 no_match; fallback
+29,710 match, its first production execution), followed strictly last
+by `consensus_recompute --apply`. Against that ~130k-vote input, the
+human-backed gate materialized **exactly one additional resolved
+printing** (3 → 4) — every other card either stayed unresolved (pending
+further evidence/votes) or, where the machine channels abstained
+(no-match/skip), correctly cast no resolving signal at all. This is the
+same conservative-abstention asymmetry §7c already established at
+41,586-card replay scale (zero of 373 unexplained divergences was a
+wrong-printing commitment) now observed at full-catalog production
+scale with real writes, not a replay: a large volume of machine votes
+does not translate into a large volume of resolutions unless the
+gate's own consensus threshold is actually met card-by-card. Full
+numbers, the write's DB-verification against the dry-run's prediction,
+and the `consensus_recompute` outcome:
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §14 and
+[`data/2026-07-23-pilot-write-and-recompute.md`](data/2026-07-23-pilot-write-and-recompute.md).
+Not a new calibrated `εᵢ` — a corroborating data point at the scale
+that matters most (full catalog, real writes), same as §7c's replay was
+at replay scale.
+
 ## 8. Confidence semantics for downstream consumers
 
 The federation program (`docs/federation-v1.md`,
@@ -835,3 +860,12 @@ closed history, not a baseline to keep re-measuring against; the new
 system's own full-pool Stage D dry-run becomes the pilot/measurement of
 record going forward. Full detail:
 [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §8–§9.
+
+**§7d added 2026-07-23**: the §9 fire sequence completed end to end the
+same day (pilot `--write` + `consensus_recompute --apply`) — folded in
+as the soundness design's first full-catalog, real-write empirical
+confirmation: ~130k machine votes entered, the human-backed gate
+resolved exactly one additional card. Corroborating data, not a new
+calibrated number; full figures live in
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §14, not
+duplicated here.

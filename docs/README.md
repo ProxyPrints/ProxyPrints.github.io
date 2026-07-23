@@ -38,8 +38,11 @@ The methodology and the systems it governs.
   2026-07-22, now closed history per the 2026-07-23 new-data basis
   ruling) and artifact 2 status (all 3 MISSING constants decided, fix
   for 2 merged AND deployed 2026-07-23T01:33Z), the #347-amended fire
-  sequence (Bug-B whole-DB reparse dry-run DONE, write pass onward not
-  yet run), and the #340 root-cause footprint sizing. Single source of
+  sequence — now **COMPLETE end to end, gate FIRED (2026-07-23)**: Bug-B
+  whole-DB reparse dry-run, the pilot dry-run and `--write` (130,210
+  votes), and `consensus_recompute --apply` all DONE (Bug-A's full
+  re-scan deferred post-pilot is the one tracked open item) — and the
+  #340 root-cause footprint sizing. Single source of
   truth for this gate's status — `theory.md`, `identification-pipeline.md`,
   `features/catalog-completion-plan.md`, and the knowledge-inventory
   report link here rather than restating it.

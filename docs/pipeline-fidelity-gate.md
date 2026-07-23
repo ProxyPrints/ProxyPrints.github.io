@@ -23,7 +23,11 @@ Tron-reviewed zeroing plan. §13 carries a further dated update
 forced-escalation sample, re-verified live at that time. §9(d) carries
 a further update (2026-07-23T09:14–11:12Z) recording the 4c pilot
 dry-run's own outcome, which was still in progress as of §13's own
-check. See "Chain" below for where each number's provenance sits.
+check. **§14 carries the closing update (2026-07-23, live-verified)**:
+the §9 fire sequence's remaining steps — owner sample audit, the pilot
+`--write`, and `consensus_recompute --apply` — all completed the same
+day, and the gate is now **fired end to end**. See "Chain" below for
+where each number's provenance sits.
 
 ## 1. Gate definition
 
@@ -46,30 +50,35 @@ precondition wording and the Stage D build it gates:
 | **Artifact 2 — knowledge-inventory sweep**       | **DONE** (2026-07-22); all 3 MISSING-constant decisions now made — see §3 below. Full constant-by-constant table: [`reports/2026-07-22-knowledge-inventory.md`](reports/2026-07-22-knowledge-inventory.md).                                                                                                                                                                                               |
 | **Artifact 1 — stratified-sample parity replay** | **DONE** (2026-07-22), outcome **owner-accepted**. 83.2% OCR-channel agreement (28,456-card reproducible-channel subset); 373/41,586 (0.9%) unexplained divergences, 0/373 a wrong-printing vote — all conservative abstentions. Not literally "zero unexplained divergence," but ruled to satisfy the gate's soundness intent. Full outcome, methodology, and the owner-acceptance ruling: see §4 below. |
 
-**Gate verdict: NOT YET clean.** Every owner decision this gate needed
-is now made (§3, §4), and the deploy step is now **done**: master
-`a587000` (PR #345) went live in prod 2026-07-23T01:33Z — migration
-`0078` auto-applied, and §3 items 1–2's `RESOLUTION_FLOOR_DPI`/
+**Gate verdict: FIRED — §9 sequence complete end to end (2026-07-23).**
+Every owner decision this gate needed is made (§3, §4); the deploy step
+is done: master `a587000` (PR #345) went live in prod 2026-07-23T01:33Z
+— migration `0078` auto-applied, and §3 items 1–2's `RESOLUTION_FLOOR_DPI`/
 `EXCLUDED_RESOLVED_TAGS` constants (PR #343) verified live in the
 running container (see §3, §12). Item 3 (deductive-backfill exclusion)
 was separately ruled NOT restored, already merged (§3). Artifact 1 (§4)
 is DONE and owner-accepted 2026-07-22 as satisfying the gate's soundness
 intent, even though the literal "zero unexplained divergence" bar
 wasn't hit (373 remained, all conservative abstentions; both root
-causes since fixed in code by merged PR #340). Artifact 1 itself is now
+causes since fixed in code by merged PR #340). Artifact 1 itself is
 **closed history**, not a baseline to keep re-measuring against — see
-§8 for the new-data basis ratified 2026-07-23. Full-catalog fire now
-stays blocked on the remainder of §9's fire sequence (Bug-B write pass
-→ retraction → Bug-A sample → the 4c pilot dry-run → owner sample audit
-→ write → `consensus_recompute --apply`), amended 2026-07-23 per
-[issue #347](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/347) —
-the Bug-B whole-DB reparse **dry-run** step of that sequence is DONE
-(§12), the zeroing steps (B(i) write, B(ii)+B(iii) retraction) and the
-§9(c) Bug-A forced-escalation sample are also **DONE**, executed and
-DB-verified (§13), and **the 4c pilot dry-run itself is now DONE too**
-(§9(d)) — only the owner sample audit, `--write`, and
-`consensus_recompute --apply` remain. Nothing has been written to
-`CardPrintingTag`/`CardScanLog` by the pilot dry-run itself.
+§8 for the new-data basis ratified 2026-07-23. **The full §9 fire
+sequence** (Bug-B write pass → retraction → Bug-A sample → the 4c pilot
+dry-run → owner sample audit → write → `consensus_recompute --apply`),
+amended 2026-07-23 per
+[issue #347](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/347),
+**is now COMPLETE**: the Bug-B whole-DB reparse dry-run (§12), the
+zeroing steps (B(i) write, B(ii)+B(iii) retraction), the §9(c) Bug-A
+forced-escalation sample, the 4c pilot dry-run (§9(d)), the owner sample
+audit, the pilot `--write` (COMPLETE-BY-VERIFICATION, a documented
+execution-harness artifact — see §14), and `consensus_recompute --apply` (§9(e), §14) are all **DONE**, executed and DB-verified. The
+measurement of record for this fire is
+[`reports/2026-07-23-4c-pilot-dry-run.md`](reports/2026-07-23-4c-pilot-dry-run.md)'s
+dry-run (`pilot-dry-20260723T094518Z`) plus the write's DB-verified
+counts (§14) — the write reproduced the dry-run's predicted counts
+exactly on both channels. The one tracked open item carried forward
+past the fire is the Bug-A full re-scan, deferred to post-pilot per the
+owner ruling in §9(c)/§13.
 
 ## 3. Decision (a), resolved — the three MISSING constants
 
@@ -312,24 +321,25 @@ one flattened figure:
 
 **Stage D run history** (`CardPrintingTag`/`PilotRunLedger`, `local_calculate_verdicts`):
 
-| run_id                                                               |            votes written | notes                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| -------------------------------------------------------------------- | -----------------------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `staged-dryrun-20260721T0423Z`                                       |                        0 | dry-run                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `staged-write-20260721T0434Z`                                        | **0** (live, 2026-07-23) | `PilotRunLedger.votes_written` records 8,925 — the pre-retraction figure; #258's retraction (2026-07-21) brought the live count to 8,825 (already documented in [`reports/2026-07-21-recovery-arc.md`](reports/2026-07-21-recovery-arc.md)); the 2026-07-23 zeroing retraction (§13) then deleted 8,801 of those, leaving 24 — which B(i)'s write pass had already re-labeled off this `run_id` as corrected flips, so **0** remain attributed here live |
-| `staged2-0721`                                                       |     0 (live, 2026-07-23) | was 70; all 70 deleted by the 2026-07-23 zeroing retraction (§13)                                                                                                                                                                                                                                                                                                                                                                                        |
-| `staged3-0721`                                                       |     0 (live, 2026-07-23) | was 3,010; all 3,010 deleted by the 2026-07-23 zeroing retraction (§13)                                                                                                                                                                                                                                                                                                                                                                                  |
-| `staged4-0721`                                                       |     0 (live, 2026-07-23) | was 999; all 999 deleted by the 2026-07-23 zeroing retraction (§13)                                                                                                                                                                                                                                                                                                                                                                                      |
-| `interim-peek-0722`                                                  |                        0 | dry-run                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `bugb-reparse-dry-20260723T014652Z` (`PilotRunLedger` id 32)         |                        0 | dry-run, `reparse_collector_evidence` whole-DB Bug-B measurement, 197,938 considered — see §12                                                                                                                                                                                                                                                                                                                                                           |
-| `bugb-reparse-scoped-dry-20260723T020508Z` (`PilotRunLedger` id 33)  |                        0 | dry-run, `reparse_collector_evidence` scoped to the 284-signature ID file — see §12                                                                                                                                                                                                                                                                                                                                                                      |
-| `bugb-reparse-voted33-dry-20260723T0206Z` (`PilotRunLedger` id 34)   |                        0 | dry-run, `reparse_collector_evidence` scoped to the 33 previously-voted Bug-B cards — see §12                                                                                                                                                                                                                                                                                                                                                            |
-| `bugb-write-dry-20260723T090258Z` (`PilotRunLedger` id 35)           |                        0 | dry-run, pre-write confirmation for B(i) — see §13                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `20260723T090331-fdf5822b` (`PilotRunLedger` id 36)                  |                        — | dry-run, `retract_stage_d_by_run_id` pre-retraction preview (12,904 votes / 7,773 skips previewed) — see §13                                                                                                                                                                                                                                                                                                                                             |
-| `bugb-write-20260723T0905Z` (`PilotRunLedger` id 37)                 |                  **236** | **B(i) live write** — `reparse_collector_evidence --write`, considered 285 / fields_fixed 285 / retracted 236 / gate_refused 0 — see §13                                                                                                                                                                                                                                                                                                                 |
-| `20260723T091446-35a1bde5` (`PilotRunLedger` id 38)                  |                        — | **B(ii)+B(iii) live retraction** — `retract_stage_d_by_run_id --write`: 12,880 votes deleted (+24 already flipped by B(i) = 12,904 total staged votes accounted for), 7,773 skips deleted, 20,653 cards resynced, 0 resolved-gate refusals — see §13                                                                                                                                                                                                     |
-| `buga-sample-20260723T0927Z` (`PilotRunLedger` id 39)                |                        — | **§9(c) Bug-A sample** — `run_image_evidence_cohort`, live, 300-card uniform sample (seed 20260723) of the 17,531-card blank-tier-1 pool, `--no-shortcircuit` — see §13                                                                                                                                                                                                                                                                                  |
-| `buga-sample-verdicts-dry-20260723T093321Z` (`PilotRunLedger` id 40) |                        0 | dry-run, `reparse_collector_evidence` verdict pass over the id-39 sample — 1 genuine match / 76 no-match / 223 skips — see §13                                                                                                                                                                                                                                                                                                                           |
-| `pilot-dry-<ts>` (§9(d), the 4c pilot)                               |        PENDING — RUNNING | **IN PROGRESS** at this table's update time — full eligible-pool Stage D dry-run; its own report + run_id land separately once complete, see §13                                                                                                                                                                                                                                                                                                         |
+| run_id                                                               |             votes written | notes                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------------------------- | ------------------------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `staged-dryrun-20260721T0423Z`                                       |                         0 | dry-run                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `staged-write-20260721T0434Z`                                        |  **0** (live, 2026-07-23) | `PilotRunLedger.votes_written` records 8,925 — the pre-retraction figure; #258's retraction (2026-07-21) brought the live count to 8,825 (already documented in [`reports/2026-07-21-recovery-arc.md`](reports/2026-07-21-recovery-arc.md)); the 2026-07-23 zeroing retraction (§13) then deleted 8,801 of those, leaving 24 — which B(i)'s write pass had already re-labeled off this `run_id` as corrected flips, so **0** remain attributed here live |
+| `staged2-0721`                                                       |      0 (live, 2026-07-23) | was 70; all 70 deleted by the 2026-07-23 zeroing retraction (§13)                                                                                                                                                                                                                                                                                                                                                                                        |
+| `staged3-0721`                                                       |      0 (live, 2026-07-23) | was 3,010; all 3,010 deleted by the 2026-07-23 zeroing retraction (§13)                                                                                                                                                                                                                                                                                                                                                                                  |
+| `staged4-0721`                                                       |      0 (live, 2026-07-23) | was 999; all 999 deleted by the 2026-07-23 zeroing retraction (§13)                                                                                                                                                                                                                                                                                                                                                                                      |
+| `interim-peek-0722`                                                  |                         0 | dry-run                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `bugb-reparse-dry-20260723T014652Z` (`PilotRunLedger` id 32)         |                         0 | dry-run, `reparse_collector_evidence` whole-DB Bug-B measurement, 197,938 considered — see §12                                                                                                                                                                                                                                                                                                                                                           |
+| `bugb-reparse-scoped-dry-20260723T020508Z` (`PilotRunLedger` id 33)  |                         0 | dry-run, `reparse_collector_evidence` scoped to the 284-signature ID file — see §12                                                                                                                                                                                                                                                                                                                                                                      |
+| `bugb-reparse-voted33-dry-20260723T0206Z` (`PilotRunLedger` id 34)   |                         0 | dry-run, `reparse_collector_evidence` scoped to the 33 previously-voted Bug-B cards — see §12                                                                                                                                                                                                                                                                                                                                                            |
+| `bugb-write-dry-20260723T090258Z` (`PilotRunLedger` id 35)           |                         0 | dry-run, pre-write confirmation for B(i) — see §13                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `20260723T090331-fdf5822b` (`PilotRunLedger` id 36)                  |                         — | dry-run, `retract_stage_d_by_run_id` pre-retraction preview (12,904 votes / 7,773 skips previewed) — see §13                                                                                                                                                                                                                                                                                                                                             |
+| `bugb-write-20260723T0905Z` (`PilotRunLedger` id 37)                 |                   **236** | **B(i) live write** — `reparse_collector_evidence --write`, considered 285 / fields_fixed 285 / retracted 236 / gate_refused 0 — see §13                                                                                                                                                                                                                                                                                                                 |
+| `20260723T091446-35a1bde5` (`PilotRunLedger` id 38)                  |                         — | **B(ii)+B(iii) live retraction** — `retract_stage_d_by_run_id --write`: 12,880 votes deleted (+24 already flipped by B(i) = 12,904 total staged votes accounted for), 7,773 skips deleted, 20,653 cards resynced, 0 resolved-gate refusals — see §13                                                                                                                                                                                                     |
+| `buga-sample-20260723T0927Z` (`PilotRunLedger` id 39)                |                         — | **§9(c) Bug-A sample** — `run_image_evidence_cohort`, live, 300-card uniform sample (seed 20260723) of the 17,531-card blank-tier-1 pool, `--no-shortcircuit` — see §13                                                                                                                                                                                                                                                                                  |
+| `buga-sample-verdicts-dry-20260723T093321Z` (`PilotRunLedger` id 40) |                         0 | dry-run, `reparse_collector_evidence` verdict pass over the id-39 sample — 1 genuine match / 76 no-match / 223 skips — see §13                                                                                                                                                                                                                                                                                                                           |
+| `pilot-dry-20260723T094518Z` (`PilotRunLedger` id 41, §9(d) dry-run) |                         0 | dry-run, full eligible-pool Stage D pass — join-key 39,253 match/61,247 no_match, fallback 29,710 (read-only recomputation) — see [`reports/2026-07-23-4c-pilot-dry-run.md`](reports/2026-07-23-4c-pilot-dry-run.md)                                                                                                                                                                                                                                     |
+| `pilot-write-20260723T1202Z` (`PilotRunLedger` id 42, §9(d) write)   | **130,210** (DB-verified) | **live write** — join-key 100,500 (39,253 match/61,247 no_match) + fallback 29,710 match, exact match to the dry-run's prediction; ledger row reads `status=failed`/`votes_written=None`, a documented execution-harness artifact (client timeout severed the executor's stdout mid-run, not the write) — see §14/[`data/2026-07-23-pilot-write-and-recompute.md`](data/2026-07-23-pilot-write-and-recompute.md)                                         |
 
 **Stage C run history** (`ImageEvidence.run_id`, current last-writer row
 count per run — canaries first, then the main leg):
@@ -365,12 +375,18 @@ should not be cited as a baseline.
 
 **`printing_tag_status`**: 218,281 unresolved, 3 resolved, 1 no_match.
 
-**`consensus_impact_report` dry-run** (today, `--sample-limit 20`, zero
-writes): printing 92,368 pairs checked / 0 transitions; artist 7,130
-pairs / 0 transitions; tag 61,328 pairs, with 49,207 `None→UNRESOLVED`
-materializations still pending a separately owner-gated recompute pass.
-"Zero transitions" on printing/artist means the ratified resolver's
-answer already matches every currently-persisted status exactly.
+**`consensus_impact_report` dry-run** (2026-07-22, `--sample-limit 20`,
+zero writes): printing 92,368 pairs checked / 0 transitions; artist
+7,130 pairs / 0 transitions; tag 61,328 pairs, with 49,207
+`None→UNRESOLVED` materializations sized as pending a separately
+owner-gated recompute pass. "Zero transitions" on printing/artist means
+the ratified resolver's answer already matched every currently-persisted
+status exactly, at that date. **Superseded by the real apply**: this
+dry-run's tag/printing sizing is now closed history —
+`consensus_recompute --apply` ran 2026-07-23T13:25:37Z and materialized
+49,206 of the sized 49,207 tag transitions (organic interim resolution
+accounts for the one-fewer figure) plus one additional printing
+resolution (3 → 4); see §9(e)/§14.
 
 ## 7. Chain — where each underlying fact actually lives
 
@@ -420,6 +436,15 @@ fact below is the linked source, not duplicated here.
   — the Tron-reviewed pre-pilot machine-vote zeroing plan that amended
   §9 2026-07-23 (the retraction step, the Tron corrections, the
   consensus-safety verification cited in §9/§12).
+- [`reports/2026-07-23-4c-pilot-dry-run.md`](reports/2026-07-23-4c-pilot-dry-run.md)
+  — the §9(d) measurement of record: the full eligible-pool Stage D
+  dry-run's per-channel counters and the read-only fallback-recovery
+  methodology, cited in §9(d)/§14.
+- [`data/2026-07-23-pilot-write-and-recompute.md`](data/2026-07-23-pilot-write-and-recompute.md)
+  — the §9(d)/§9(e) fire-sequence closing steps: the pilot `--write`'s
+  DB-verified vote counts, the `status=failed` execution-harness
+  artifact explanation, and `consensus_recompute --apply`'s outcome,
+  the source for §14 above.
 - [`data/2026-07-23-bugb-reparse-dryruns.md`](data/2026-07-23-bugb-reparse-dryruns.md)
   — the §9(b)/§12 Bug-B whole-DB reparse dry-run report + resource
   metrics, keyed by `run_id`.
@@ -575,26 +600,38 @@ were recovered via a bounded, zero-write diagnostic that re-derives the
 join-key no-hit population in-memory using the same production
 functions, then calls the actual `calculate_fallback_verdict` per
 eligible card — see the linked report for the full methodology and
-results. Followed by an owner **SAMPLE AUDIT** (150 uniformly sampled verdicts,
-seed `20260723150`) — sheet written machine-local only (not committed;
-see the linked report for its exact path and provenance), then
-`--write`.
+results. Followed by an owner **SAMPLE AUDIT — DONE** (150 uniformly
+sampled verdicts, seed `20260723150`) — sheet written machine-local only
+(not committed; see the linked report for its exact path and
+provenance), then **`--write` — DONE 2026-07-23** (run
+`pilot-write-20260723T1202Z`, `PilotRunLedger` id 42,
+COMPLETE-BY-VERIFICATION — both channels' vote counts DB-verified to
+match the dry-run's prediction exactly, 130,210 total votes; full
+outcome and the `status=failed` execution-harness artifact explanation:
+[`data/2026-07-23-pilot-write-and-recompute.md`](data/2026-07-23-pilot-write-and-recompute.md)).
 
-**(e) `consensus_recompute --apply` — STRICTLY LAST, NOT YET RUN.**
-Materializes the 49,207 pending `None→UNRESOLVED` tag transitions
-already sized in §6's `consensus_impact_report` dry-run, via the
-command in
+**(e) `consensus_recompute --apply` — STRICTLY LAST — DONE 2026-07-23T13:25:37Z.**
+Materialized the pending `None→UNRESOLVED` tag transitions sized in
+§6's `consensus_impact_report` dry-run (49,206 of the 49,207 sized
+there — one fewer, organic interim resolution, not a discrepancy), via
+the command in
 [`consensus_recompute.py`](../MPCAutofill/cardpicker/management/commands/consensus_recompute.py)
-(PR #336). **Tron correction to an earlier "tag-orthogonal" claim**:
-`consensus_recompute` recomputes **printing + artist + tag** state via
-the real resolver paths, not tag state alone — its safety in this
-sequence comes from **idempotence plus running strictly last**, not
-from any orthogonality to the printing-layer steps above. Never reorder
-this step earlier.
+(PR #336). Exit code 0. **Tron correction to an earlier "tag-orthogonal"
+claim**: `consensus_recompute` recomputes **printing + artist + tag**
+state via the real resolver paths, not tag state alone — its safety in
+this sequence comes from **idempotence plus running strictly last**,
+not from any orthogonality to the printing-layer steps above; it was
+run strictly last here too. Printing resolution moved 3 → 4 resolved
+cards (DB-verified); artist (7,130 pairs) had zero transitions. Full
+outcome: [`data/2026-07-23-pilot-write-and-recompute.md`](data/2026-07-23-pilot-write-and-recompute.md).
+**Note**: this command predates the `PilotRunLedger` self-recording
+convention — no ledger row exists for it, a small follow-up flagged
+beside the already-tracked §11 Stage C run-identity gap.
 
-**Order is load-bearing**: (a) → (b)/B(i) → B(ii)+B(iii) → (c) → (d) →
-sample audit → `--write` → (e) `consensus_recompute --apply` strictly
-last.
+**Order was load-bearing and followed exactly**: (a) → (b)/B(i) →
+B(ii)+B(iii) → (c) → (d) → sample audit → `--write` → (e)
+`consensus_recompute --apply` strictly last. **The full §9 sequence is
+now COMPLETE.**
 
 Every run in this sequence gets its own report plus resource metrics
 (RSS/IO/CPU, per-card cost) committed under `docs/data/`, keyed by that
@@ -762,4 +799,62 @@ counters for every run in this section:
 
 **B(i)/B(ii)+B(iii)/(c)/(d) are now all DONE** (§9's own entries carry
 the live-verified detail and ledger ids); **sample audit, `--write`, and
-(e) remain NOT YET RUN** as of this page's latest edit.
+(e) remained NOT YET RUN as of this page's edit at the time this
+section was written. §14 below carries the closing update: all three
+completed the same day, 2026-07-23 — the full §9 sequence is COMPLETE.**
+
+## 14. Fire sequence complete — pilot `--write` + `consensus_recompute --apply` (2026-07-23)
+
+The owner sample audit, the pilot `--write`, and `consensus_recompute --apply` — the three steps §12/§13 left NOT YET RUN — all completed the
+same day. **The §9 fire sequence is now COMPLETE end to end** and the
+gate is **FIRED** (§2). Full detail, DB-verified counters, and the
+`status=failed` artifact explanation:
+[`data/2026-07-23-pilot-write-and-recompute.md`](data/2026-07-23-pilot-write-and-recompute.md).
+
+**Pilot `--write`** — run `pilot-write-20260723T1202Z`, `PilotRunLedger`
+id 42, `started_at` 2026-07-23T12:06:53Z, `finished_at` 2026-07-23T13:06:16Z.
+DB-verified vote counts match the §9(d) dry-run's prediction **exactly**
+on both channels: join-key 100,500 (39,253 match / 61,247 no_match,
+same as the dry-run's `would_cast` figures), fallback 29,710 match (the
+fallback channel's **first production execution** — its votes did not
+exist before this run). Grand total **130,210** `CardPrintingTag` rows
+written.
+
+**The `status=failed` / `votes_written=None` artifact**: the ledger row
+itself reads as a failed run with no vote count. This is **NOT** a
+failed or partial write — it is a documented execution-harness
+artifact. The authorization executor enforced a **1800s client-side
+timeout** on the launching connection; that timeout severed the
+executor's own stdout stream at ~12:36Z, not the in-container process,
+which kept running to completion (`finished_at` 13:06:16Z, ~30 minutes
+past the timeout boundary) and hit a terminal-phase exception in its own
+summary/ledger-update code, after the last vote write, not during it.
+The DB-verified vote counts above — an exact match to the dry-run's
+prediction on both channels — are the direct evidence the writes
+themselves completed cleanly. Recorded here as
+**COMPLETE-BY-VERIFICATION**, not as a failed fire, so this row is never
+misread as one at a glance.
+
+**`consensus_recompute --apply`** — executed 2026-07-23T13:25:37Z, exit
+code 0. Predates the `PilotRunLedger` self-recording convention (no
+ledger row exists for it — confirmed live, highest id remains 42) — a
+small follow-up flagged beside the already-tracked §11 Stage C
+run-identity gap, both being "command predates the ledger convention"
+instances rather than a broken command. Outcome: artist 7,130 pairs
+checked, 0 transitions; tag 61,329 pairs checked, 49,206
+`None→UNRESOLVED` materializations (one fewer than the 49,207 sized in
+§6's earlier dry-run — organic interim resolution in the gap between
+measurement and apply, not a discrepancy); printing resolved 3 → 4
+(DB-verified: `Card.printing_tag_status` distribution = unresolved
+218,309 / resolved 4 / no_match 1).
+
+**End-state vote pool** (DB-verified live, post-write and
+post-recompute): join-key 100,500 / fallback 29,710 / user 57 /
+deduction 28,112 / legacy pilot 43,425 — full breakdown, including the
+live per-`anonymous_id` and per-`source` cuts, in the linked data file.
+
+**What remains open**: the Bug-A full re-scan of the 17,531-card
+blank-tier-1 pool, deferred to post-pilot per the owner ruling in §9(c)
+(recipe documented there and in §13, not re-derived here). This is the
+one tracked open item carried forward past the fire — every other §9
+step is complete.
