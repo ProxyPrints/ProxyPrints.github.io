@@ -290,8 +290,10 @@ coverage for a protection Stage D's vote-consensus layer already provides indepe
 long-standing idempotence mechanism, entirely independent of this constant) is unaffected and
 unchanged by this decision - see that function's own docstring.
 
-Constants #1 (`RESOLUTION_FLOOR_DPI`) and #2 (`EXCLUDED_RESOLVED_TAGS`) remain open pending
-forward-impact sizing per the gate page, unaffected by this ruling on #3.
+Constants #1 (`RESOLUTION_FLOOR_DPI`) and #2 (`EXCLUDED_RESOLVED_TAGS`) were ruled
+must-fix-before-fire the same day (owner ruling, 2026-07-22) and are applied in
+`_eligible_cards_queryset` below (see that function's own docstring and the two constants'
+definitions immediately above it) - unaffected by, and independent of, the ruling on #3 above.
 
 This PR is CODE ONLY: it does not run the full-catalog Stage D fire, the targeted re-extraction of
 issue #340's 373-card cohort, or any other prod extraction/write - both remain separate,
@@ -728,6 +730,29 @@ class JoinKeyCalculatorResult:
     audit: list[dict[str, object]] = field(default_factory=list)
 
 
+# Knowledge-inventory constants #1/#2 (module docstring's "CONSTANT #3" section; full finding:
+# `docs/pipeline-fidelity-gate.md` SS3, `docs/reports/2026-07-22-knowledge-inventory.md`) - the
+# two remaining MISSING pilot-era constants the sweep found absent from Stage D, ruled
+# must-fix-before-fire by the owner (2026-07-22), unlike constant #3 (the deductive-backfill
+# exclusion) which was ruled the opposite way the same day and must NOT be reintroduced here (see
+# `_eligible_cards_queryset`'s own docstring below). Duplicated as literals rather than imported
+# from `local_identify_printing_tags` - same "avoid a hard import-time dependency between sibling
+# engines over one constant" precedent `JOIN_KEY_CONFIDENCE_BOTH`'s own comment above already
+# establishes for this module, not a fresh decision.
+
+# Constant #1: the empirically-validated resolution floor (dpi<=150 measurably degrades OCR
+# yield - see `local_identify_printing_tags.RESOLUTION_FLOOR_DPI`'s own sweep comment for the
+# full 6-way dpi sweep this number comes from) - the pilot never fetched, let alone voted on, a
+# card whose source image sits below it. Same value as that sibling module's own constant.
+RESOLUTION_FLOOR_DPI = 200
+
+# Constant #2: a card already tagged custom-art/non-english has its printing-identification
+# precondition (an authentic depiction of a real printing) already falsified, so the pilot
+# excluded it from selection entirely - same exclusion rationale, same tag names, as
+# `local_identify_printing_tags.EXCLUDED_RESOLVED_TAGS`.
+EXCLUDED_RESOLVED_TAGS = ["custom-art", "non-english"]
+
+
 def _eligible_cards_queryset(
     anonymous_id: str, rescannable_skip_reasons: frozenset[str] = JOIN_KEY_RESCANNABLE_SKIP_REASONS
 ) -> "QuerySet[Card]":
@@ -752,6 +777,27 @@ def _eligible_cards_queryset(
     "CONSTANT #3" section for the full reasoning): that exclusion would strand ~27,819
     sound-but-UNRESOLVED cards outside Stage D for no protective benefit, since the human-backed
     consensus gate already makes re-evaluating them safe. Do not re-add it without a fresh ruling.
+
+    Applies the two remaining MISSING knowledge-inventory constants (owner-ruled must-fix,
+    2026-07-22 - see `RESOLUTION_FLOOR_DPI`/`EXCLUDED_RESOLVED_TAGS`'s own comments above):
+
+    1. `RESOLUTION_FLOOR_DPI` - excluded via `.exclude(Q(dpi__lt=...) & Q(dpi__isnull=False))`
+       rather than the pilot's own bare `.exclude(dpi__lt=RESOLUTION_FLOOR_DPI)`
+       (`local_identify_printing_tags.select_candidates`'s own usage): a bare `dpi__lt` exclude is
+       NOT null-safe. SQL's three-valued logic means `NOT (dpi < 200)` evaluates to NULL, not
+       TRUE, for a NULL `dpi`, so a plain `.exclude(dpi__lt=...)` would silently drop a null-dpi
+       card from the eligible pool too, not just a genuinely-low-dpi one - confirmed directly
+       against this project's own Postgres (`str(Card.objects.exclude(dpi__lt=200).query)`
+       compiles to exactly `WHERE NOT ("dpi" < 200)`, no `IS NULL` branch). `Card.dpi` is a
+       DB-level NOT NULL column today (confirmed live: 0 nulls in production), so this never bites
+       in practice yet - guarded anyway since the floor's own justification (a source image too
+       coarse to trust) says nothing about a row where dpi was never computed at all, and this is
+       cheaper than trusting a constraint that could someday move.
+    2. `EXCLUDED_RESOLVED_TAGS` - same `tags__contains` mechanism the pilot's own
+       `_eligible_base_queryset` already uses, one `.exclude(...)` per tag. `Card.tags` is a
+       Postgres `ArrayField`; `__contains` here is Django's array-containment lookup (`tags @>
+       ARRAY[...]`), not the JSONField `contains` operator - same lookup name, different
+       semantics, matching the pilot's own established usage.
     """
     non_rescannable_scanned_card_ids = (
         CardScanLog.objects.filter(anonymous_id=anonymous_id)
@@ -766,6 +812,9 @@ def _eligible_cards_queryset(
         )
         .exclude(printing_tags__anonymous_id=anonymous_id)
         .exclude(pk__in=non_rescannable_scanned_card_ids)
+        .exclude(Q(dpi__lt=RESOLUTION_FLOOR_DPI) & Q(dpi__isnull=False))
+        .exclude(tags__contains=[EXCLUDED_RESOLVED_TAGS[0]])
+        .exclude(tags__contains=[EXCLUDED_RESOLVED_TAGS[1]])
         .distinct()
         .select_related("source")
     )
@@ -1397,6 +1446,8 @@ def run_slow_path_calculator(
 
 
 __all__ = [
+    "RESOLUTION_FLOOR_DPI",
+    "EXCLUDED_RESOLVED_TAGS",
     "JOIN_KEY_ANONYMOUS_ID",
     "JOIN_KEY_CONFIDENCE_BOTH",
     "JOIN_KEY_CONFIDENCE_COLLECTOR_ONLY",
