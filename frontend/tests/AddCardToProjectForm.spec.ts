@@ -12,27 +12,19 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  expectCardGridSlotStates,
+  closeDetailedView,
+  expectDisplaySheetSlotStates,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDetailedView,
 } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page -
+// AddCardToProjectForm is unforked and mounted the same way the rest of the card-detail modal
+// cluster reaches it (Browse mode - see openDetailedView's own module comment, test-utils.ts).
+// Per-slot assertions ported via expectDisplaySheetSlotStates - see that helper's own comment for
+// why dropping the selectedImage/totalImages numeric checks doesn't weaken what this test actually
+// verifies (the right card landing in the right slot, the right number of times).
 
 test.describe("AddCardToProjectForm tests", () => {
   for (const quantity of [1, 2, 3]) {
@@ -55,77 +47,50 @@ test.describe("AddCardToProjectForm tests", () => {
         `card one${SelectedImageSeparator}${cardDocument1.identifier}`
       );
 
-      await expectCardGridSlotStates(
+      await expectDisplaySheetSlotStates(
         page,
-        [
-          {
-            slot: 1,
-            name: cardDocument1.name,
-            selectedImage: 1,
-            totalImages: 1,
-          },
-        ],
-        [
-          {
-            slot: 1,
-            name: cardDocument2.name,
-            selectedImage: 1,
-            totalImages: 2,
-          },
-        ]
+        [{ slot: 1, name: cardDocument1.name }],
+        [{ slot: 1, name: cardDocument2.name }]
       );
 
-      // Click on the card to open detailed view
-      await page.getByAltText(cardDocument1.name).click();
-      await expect(page.getByText("Card Details")).toBeVisible();
+      // Open the detail view (via Browse mode) for the same card already in the project
+      await openDetailedView(page, "card one", cardDocument1.identifier);
 
-      // Fill in the quantity
-      const quantityInput = page.getByAltText(
+      // Fill in the quantity - scoped to the modal itself, since Browse mode's own catalog tile
+      // (still in the DOM behind the modal) mounts its own, unforked AddCardToProjectForm too
+      // (CatalogBrowseResults.tsx's own "+Add" affordance) - a bare page-wide locator collides
+      // with both.
+      const detailedView = page.getByTestId("detailed-view");
+      const quantityInput = detailedView.getByAltText(
         "Quantity of card to add to project"
       );
       await quantityInput.clear();
       await quantityInput.fill(quantity.toString());
 
       // Add to project
-      await page.getByRole("button", { name: "Add to Project" }).click();
+      await detailedView
+        .getByRole("button", { name: "Add to Project" })
+        .click();
 
       // Close the detailed view
-      await page.getByTestId("detailed-view").getByLabel("Close").click();
+      await closeDetailedView(page);
+
+      // openDetailedView's own Browse-mode route (test-utils.ts) left the shared Add/Browse
+      // toggle on Browse - the center region renders catalog results, not the print-sheet stack,
+      // while that's active (DisplayPage.tsx's own module comment), so the sheet assertions below
+      // need Add mode back first.
+      await page.getByTestId("display-search-mode-add").click();
 
       // Verify that the cards were added (original slot + new slots)
-      const expectedFronts = [
-        {
-          slot: 1,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 1,
-        },
-      ];
-      const expectedBacks = [
-        {
-          slot: 1,
-          name: cardDocument2.name,
-          selectedImage: 1,
-          totalImages: 2,
-        },
-      ];
+      const expectedFronts = [{ slot: 1, name: cardDocument1.name }];
+      const expectedBacks = [{ slot: 1, name: cardDocument2.name }];
 
       for (let i = 0; i < quantity; i++) {
-        expectedFronts.push({
-          slot: i + 2,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 1,
-        });
-        expectedBacks.push({
-          slot: i + 2,
-          name: cardDocument2.name,
-          selectedImage: 1,
-          totalImages: 2,
-        });
+        expectedFronts.push({ slot: i + 2, name: cardDocument1.name });
+        expectedBacks.push({ slot: i + 2, name: cardDocument2.name });
       }
 
-      await expectCardGridSlotStates(page, expectedFronts, expectedBacks);
+      await expectDisplaySheetSlotStates(page, expectedFronts, expectedBacks);
     });
   }
 });

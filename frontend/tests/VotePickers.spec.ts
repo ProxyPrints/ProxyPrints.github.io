@@ -29,39 +29,15 @@ import { test } from "../playwright.setup";
 import {
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDetailedView,
 } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
-
-// Shared by all three picker suites below (identical across their source files).
-//
-// Proposal H switchover (2026-07-23, issues #231/#272) note: /editor now resolves to the
-// unified page, whose own left rail ALSO carries "Card details" text (offcanvas title, handle
-// button) in addition to CardDetailedViewBody's own "Card Details" heading - a plain
-// getByText("Card Details") (case-insensitive substring by default) matched all three and threw
-// a strict-mode violation. The heading role disambiguates to the one that's actually
-// CardDetailedViewBody's own content, which is what this helper always meant to assert on.
-const openDetailedView = async (page: any, cardName: string) => {
-  await page.getByAltText(cardName).click();
-  await expect(
-    page.getByRole("heading", { name: "Card Details" })
-  ).toBeVisible();
-};
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page.
+// Shared by all three picker suites below (identical across their source files) - the pickers
+// themselves live inside CardDetailedViewModal's own "Printing Tags" region (PrintingTagsBlock,
+// CardDetailedViewBody.tsx), reached the same way the rest of this cluster reaches the modal - see
+// openDetailedView's own module comment (test-utils.ts) for the Browse-mode route and the "Card
+// details" text-collision fix.
 
 test.describe("ArtistVotePicker tests", () => {
   test("shows the attribute-voting panel once printing consensus is unresolved, listing candidate artists", async ({
@@ -86,7 +62,7 @@ test.describe("ArtistVotePicker tests", () => {
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     // longer than the default 5s: showing this panel is gated behind a chain of fetches
     // (printing consensus resolves -> CardDetailedViewModal re-renders -> the panel mounts
@@ -124,7 +100,7 @@ test.describe("ArtistVotePicker tests", () => {
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const artistPicker = page.getByTestId("artist-vote-picker");
     await expect(artistPicker.getByText("Not yet resolved")).toBeVisible();
@@ -163,7 +139,7 @@ test.describe("TagVotePicker tests", () => {
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const tagPicker = page.getByTestId("tag-vote-picker");
     await expect(tagPicker.getByText("Borderless")).toBeVisible();
@@ -193,7 +169,7 @@ test.describe("TagVotePicker tests", () => {
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const tagPicker = page.getByTestId("tag-vote-picker");
     // "Borderless" has displayName "Frameless Border" set - shown instead of the raw name
@@ -228,7 +204,7 @@ test.describe("TagVotePicker tests", () => {
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const tagPicker = page.getByTestId("tag-vote-picker");
     await tagPicker.getByText("Borderless").click();
@@ -259,7 +235,7 @@ test.describe("PrintingTagPicker tests", () => {
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     await expect(
       page.getByTestId("detailed-view").getByText("What's That Card?")
@@ -337,7 +313,7 @@ test.describe("PrintingTagPicker tests", () => {
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const picker = page.getByTestId("printing-tag-picker");
     await expect(page.getByText("Not yet resolved")).toBeVisible();

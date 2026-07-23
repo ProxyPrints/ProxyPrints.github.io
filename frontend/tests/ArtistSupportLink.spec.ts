@@ -17,32 +17,15 @@ import { test } from "../playwright.setup";
 import {
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDetailedView,
 } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
-
-const openDetailedView = async (page: any, cardName: string) => {
-  await page.getByAltText(cardName).click();
-  await expect(page.getByText("Card Details")).toBeVisible();
-};
-
-// Artist Support Links v1, surface 1: the Card Detail Modal's "Canonical Aritst" row (see
-// docs/features/artist-support-links.md). Surface 2 (the /whatsthat post-answer moment) is
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page.
+// CardDetailedViewModal (the shared, unforked component this whole cluster exercises) is reached
+// via Browse mode - see openDetailedView's own module comment (test-utils.ts) for why that's the
+// one surface on this page that still opens it, and the "Card details" text-collision fix that
+// cluster needed. Its own "Canonical Aritst" table row is what this file's own assertions target
+// (docs/features/artist-support-links.md). Surface 2 (the /whatsthat post-answer moment) is
 // covered in QuestionFeed.spec.ts.
 test.describe("Artist Support Link - Card Detail Modal", () => {
   test("a known canonical artist renders as an Artist Support Link, built deterministically from their name", async ({
@@ -64,7 +47,7 @@ test.describe("Artist Support Link - Card Detail Modal", () => {
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const link = page.getByTestId("artist-support-link");
     await expect(link).toBeVisible();
@@ -98,7 +81,7 @@ test.describe("Artist Support Link - Card Detail Modal", () => {
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     await expect(page.getByTestId("artist-support-link")).toHaveCount(0);
     await expect(

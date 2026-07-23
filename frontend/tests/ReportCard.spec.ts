@@ -14,32 +14,16 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  expectCardGridSlotState,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDetailedView,
 } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
-
-const openDetailedView = async (page: any, cardName: string) => {
-  await page.getByAltText(cardName).click();
-  await expect(page.getByText("Card Details")).toBeVisible();
-};
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page -
+// ReportCardPanel lives inside CardDetailedViewModal's own "Report" region (ReportBlock,
+// CardDetailedViewBody.tsx), reached the same way the rest of this cluster reaches the modal - see
+// openDetailedView's own module comment (test-utils.ts) for the Browse-mode route and the "Card
+// details" text-collision fix.
 
 const setUpCardAndOpenModal = async (page: any) => {
   await loadPageWithDefaultBackend(page);
@@ -47,8 +31,7 @@ const setUpCardAndOpenModal = async (page: any) => {
     page,
     `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
   );
-  await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
-  await openDetailedView(page, cardDocument1.name);
+  await openDetailedView(page, "my search query", cardDocument1.identifier);
 };
 
 test.describe("report card flow", () => {
