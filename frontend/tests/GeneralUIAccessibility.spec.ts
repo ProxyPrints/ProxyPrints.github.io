@@ -17,11 +17,20 @@ const threeCardHandlers = [
   ...defaultHandlers,
 ];
 
+// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified page;
+// the classic grid `front-slot`/`left-panel`/`right-panel` testids these tests target have no
+// equivalent there, so they're individually skipped below rather than the whole file - the last
+// three describe blocks (About page, Home page logo, and the home-page half of Console warning
+// regressions) don't touch /editor at all and are unaffected.
 test.describe("Card slot controls - accessibility", () => {
   test("the more-options button has an accessible name", async ({
     page,
     network,
-  }) => {
+  }, testInfo) => {
+    testInfo.skip(
+      true,
+      "Proposal H switchover (2026-07-23): targets classic /editor-only front-slot testid, now unrouted - see issue #272"
+    );
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
@@ -36,7 +45,11 @@ test.describe("Card slot controls - accessibility", () => {
   test("the select/remove buttons meet a comfortable touch-target size and have a visible focus style", async ({
     page,
     network,
-  }) => {
+  }, testInfo) => {
+    testInfo.skip(
+      true,
+      "Proposal H switchover (2026-07-23): targets classic /editor-only front-slot testid, now unrouted - see issue #272"
+    );
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importText(page, "my search query");
@@ -65,7 +78,11 @@ test.describe("Editor - mobile layout", () => {
   test("at a mobile viewport, the settings panel stacks below the card grid instead of splitting the screen 50/50", async ({
     page,
     network,
-  }) => {
+  }, testInfo) => {
+    testInfo.skip(
+      true,
+      "Proposal H switchover (2026-07-23): targets classic /editor-only left-panel/right-panel testids, now unrouted - see issue #272"
+    );
     network.use(...threeCardHandlers);
     await page.setViewportSize({ width: 390, height: 844 });
     await loadPageWithDefaultBackend(page);
@@ -87,7 +104,11 @@ test.describe("Editor - mobile layout", () => {
   test("at desktop width, the settings panel still sits beside the card grid (unaffected by the mobile change)", async ({
     page,
     network,
-  }) => {
+  }, testInfo) => {
+    testInfo.skip(
+      true,
+      "Proposal H switchover (2026-07-23): targets classic /editor-only left-panel/right-panel testids, now unrouted - see issue #272"
+    );
     network.use(...threeCardHandlers);
     // default chromium project viewport (800x600) is above the md breakpoint
     await loadPageWithDefaultBackend(page);
@@ -141,7 +162,11 @@ test.describe("Console warning regressions", () => {
   test("the editor page renders with none of the previously-observed console warnings", async ({
     page,
     network,
-  }) => {
+  }, testInfo) => {
+    testInfo.skip(
+      true,
+      "Proposal H switchover (2026-07-23): importText is classic /editor-only UI, now unrouted - see issue #272"
+    );
     network.use(...threeCardHandlers);
     const warnings: string[] = [];
     page.on("console", (msg) => {

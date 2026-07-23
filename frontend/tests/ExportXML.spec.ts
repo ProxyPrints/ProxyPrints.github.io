@@ -21,10 +21,27 @@ import {
   downloadXML,
   expectCardbackSlotState,
   expectCardGridSlotState,
-  importText,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
   normaliseString,
 } from "./test-utils";
+
+// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
+// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
+// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
+// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
+// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
+// not just delisted from the nav. Skipped here rather than deleted (component files themselves
+// are untouched, per this swap's own scope) or silently left red - porting this coverage to
+// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
+// route swap itself (the owner's directive was to proceed with the swap regardless of the
+// checklist's open items).
+test.beforeEach(async ({}, testInfo) => {
+  testInfo.skip(
+    true,
+    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
+  );
+});
 
 test.describe("ExportXML", () => {
   test("the XML representation of a simple project with no custom backs", async ({
@@ -40,7 +57,7 @@ test.describe("ExportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(page, "query 1\nquery 2");
+    await importTextOnEditorLanding(page, "query 1\nquery 2");
     await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
     await expectCardGridSlotState(page, 2, "front", cardDocument2.name, 1, 1);
     await expectCardbackSlotState(page, cardDocument5.name, 1, 1);
@@ -91,7 +108,10 @@ test.describe("ExportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(page, `query 1\nquery 2${FaceSeparator}t:query 6`);
+    await importTextOnEditorLanding(
+      page,
+      `query 1\nquery 2${FaceSeparator}t:query 6`
+    );
     await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
     await expectCardGridSlotState(page, 2, "front", cardDocument2.name, 1, 1);
     await expectCardGridSlotState(page, 2, "back", cardDocument6.name, 1, 1);
@@ -152,7 +172,10 @@ test.describe("ExportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(page, `2x query 1\nquery 2${FaceSeparator}query 1`);
+    await importTextOnEditorLanding(
+      page,
+      `2x query 1\nquery 2${FaceSeparator}query 1`
+    );
     await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
     await expectCardGridSlotState(page, 2, "front", cardDocument1.name, 1, 1);
     await expectCardGridSlotState(page, 3, "front", cardDocument2.name, 1, 1);

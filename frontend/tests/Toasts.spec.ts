@@ -21,10 +21,16 @@ import { test } from "../playwright.setup";
 import {
   getAddCardsMenu,
   getErrorToast,
-  importText,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
   openImportTextModal,
 } from "./test-utils";
+
+// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified page,
+// which has no equivalent of the classic editor's "Add Cards" dropdown (openImportTextModal/
+// getAddCardsMenu, both classic-only) - 3 tests below that trigger their fetch through that
+// dropdown are individually skipped rather than the whole file, since the other tests here
+// (triggered by plain page load or the unified page's own inline importer) are unaffected.
 
 test.describe("error reporting toasts", () => {
   async function assertErrorToast(
@@ -68,7 +74,7 @@ test.describe("error reporting toasts", () => {
         searchResultsServerError,
       ],
       async () => {
-        await importText(page, "mountain");
+        await importTextOnEditorLanding(page, "mountain");
       }
     );
   });
@@ -103,7 +109,11 @@ test.describe("error reporting toasts", () => {
     );
   });
 
-  test("/2/DFCPairs", async ({ page, network }) => {
+  test("/2/DFCPairs", async ({ page, network }, testInfo) => {
+    testInfo.skip(
+      true,
+      "Proposal H switchover (2026-07-23): openImportTextModal is classic /editor-only UI, now unrouted - see issue #272"
+    );
     await assertErrorToast(
       page,
       network,
@@ -137,7 +147,11 @@ test.describe("error reporting toasts", () => {
     );
   });
 
-  test("/2/importSites", async ({ page, network }) => {
+  test("/2/importSites", async ({ page, network }, testInfo) => {
+    testInfo.skip(
+      true,
+      "Proposal H switchover (2026-07-23): getAddCardsMenu is classic /editor-only UI, now unrouted - see issue #272"
+    );
     await assertErrorToast(
       page,
       network,
@@ -156,7 +170,11 @@ test.describe("error reporting toasts", () => {
     );
   });
 
-  test("/2/sampleCards", async ({ page, network }) => {
+  test("/2/sampleCards", async ({ page, network }, testInfo) => {
+    testInfo.skip(
+      true,
+      "Proposal H switchover (2026-07-23): openImportTextModal is classic /editor-only UI, now unrouted - see issue #272"
+    );
     await assertErrorToast(
       page,
       network,

@@ -1488,3 +1488,34 @@ occurrence**: before writing this off as "expected," reproduce
 deliberately (recreate the container, watch whether the session
 survives) and confirm which layer is actually responsible, then replace
 this entry's cause with the confirmed one.
+
+## Any `?server=...` link that also carries another query param or a URL fragment silently loses everything but `server` on load
+
+**Symptom**: visiting e.g. `/editor?server=http://host:8000&foo=bar#frag`
+(or any other page) ends up at plain `/editor` in the address bar once
+the page finishes mounting — not just `foo`/`frag` dropped, `server`
+itself vanishes too, along with a console warning: `Unknown key passed via urlObject into url.format: server`. Confirmed to reproduce on a
+**direct** page load with no redirect involved at all — this is not
+specific to any one route.
+
+**Cause**: `useBackendSetter.ts`'s own `?server=` clean-up step calls
+`router.replace({ server }, undefined, { shallow: true })` — passing a
+bare `{ server }` object with no `pathname` as the `url` argument.
+Next.js's `url.format` doesn't recognize `server` as a valid key on an
+object missing `pathname`/`query`, silently drops it, and the resulting
+URL is just the bare pathname. Reproduced during the Proposal H
+route-swap task (2026-07-23) while verifying `/display`'s new
+query-param-preserving redirect to `/editor` — the redirect itself
+(`pages/display.tsx`, reading `window.location.search`/`hash` directly)
+forwards params/fragment correctly on its own (verified with a
+`?server=`-free URL, which never triggers this code path); this bug
+fires independently, on `/editor` directly, once `useBackendSetter`'s
+effect runs.
+
+**Fix**: not fixed as part of the route-swap task (unrelated, pre-existing,
+and in practice harmless for real traffic — no code in the app builds a
+`/display` or `/editor` link with extra query params/a fragment today,
+per a repo-wide grep). The real fix is straightforward whenever someone
+picks it up: pass a proper `{ pathname: router.pathname, query: { ...router.query, server } }` shape (or drop the `shallow` URL-object
+call entirely in favor of `router.replace(router.asPath.split("?")[0] + buildQueryString(...))`) so existing query params and the fragment
+survive the same clean-up step.

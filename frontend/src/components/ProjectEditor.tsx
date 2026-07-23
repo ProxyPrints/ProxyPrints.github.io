@@ -1,6 +1,15 @@
 /**
  * This component represents the complete MPC Autofill project editor, ready to
  * drop into a page (as the only component). Must be wrapped with a Redux provider.
+ *
+ * UNROUTED as of the Proposal H switchover (2026-07-23, issues #231/#272) - `pages/editor.tsx`
+ * now mounts `DisplayPage` instead of this component; nothing in the app routes here anymore.
+ * Left in-tree deliberately (not deleted) - that's a separate later cleanup decision the
+ * switchover's own report calls out as still open, pending usage data/owner sign-off per the
+ * design doc's own migration-plan step 6. Several `beforeunload`/chunk-error-recovery comments
+ * elsewhere in the codebase still narrate this component's pre-swap behavior for historical
+ * context - see `DisplayPage.tsx`'s own ported copy of the beforeunload guard below for where
+ * that specific piece of behavior actually lives now.
  */
 
 import React, { useEffect, useState } from "react";

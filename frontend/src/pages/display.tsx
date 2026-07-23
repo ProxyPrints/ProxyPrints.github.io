@@ -1,52 +1,20 @@
-import Head from "next/head";
+import { useRouter } from "next/router";
+import { useEffect } from "react";
 
-import { ProjectName } from "@/common/constants";
-import { isUnifiedDisplayPageEnabled } from "@/common/featureFlags";
-import { NoBackendDefault } from "@/components/NoBackendDefault";
-import { DisplayPage } from "@/features/display/DisplayPage";
-import { GenericErrorPage } from "@/features/ui/GenericErrorPage";
-import { ProjectContainer } from "@/features/ui/Layout";
-import { useAnyBackendConfigured } from "@/store/slices/backendSlice";
-require("bootstrap-icons/font/bootstrap-icons.css");
-
-// Proposal H, Step 1 (docs/proposals/proposal-h-unified-display-page.md) - this route is
-// entirely behind NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED per the design doc's §6 migration plan
-// ("new route behind a flag"). It renders a real 404-shaped page rather than actually 404ing
-// (Next's static export has no server-side route gating) - functionally equivalent from a
-// visitor's perspective, since nothing links here while the flag is off.
-function DisplayPageOrDefault() {
-  const anyBackendConfigured = useAnyBackendConfigured();
-  return anyBackendConfigured ? (
-    <DisplayPage />
-  ) : (
-    <NoBackendDefault requirement="any" />
-  );
-}
-
-export default function Display() {
-  if (!isUnifiedDisplayPageEnabled()) {
-    return (
-      <GenericErrorPage
-        title="Page Not Found"
-        text={["You took a bad turn! Sorry about that."]}
-      />
-    );
-  }
-  return (
-    // Issue #287 - opts out of the app-wide 1200px ContentMaxWidth cap: at >=1200px viewports
-    // with both rails inline, the cap otherwise leaves only ~520px for the center sheet region
-    // (1200 - 380 left rail - 300 right rail) where the approved design calls for ~720px (the
-    // same width the naturally-uncapped <1200px laptop tier already renders at). See Layout.tsx's
-    // ProjectContainer/MaxWidthContainer for the additive mechanism this opts into.
-    <ProjectContainer gutter={0} fullWidth>
-      <Head>
-        <title>Display (Preview)</title>
-        <meta
-          name="description"
-          content={`${ProjectName}'s unified print-sheet display page (in development).`}
-        />
-      </Head>
-      <DisplayPageOrDefault />
-    </ProjectContainer>
-  );
+// Proposal H switchover (2026-07-23, issues #231/#272, following up on nav-redesign PR #313) -
+// /display used to host the unified editor+sheet page; it now lives at /editor (see
+// pages/editor.tsx), so this route is a plain client-side bounce forward to preserve old
+// bookmarks/links, mirroring pages/printingQueue.tsx's own redirect-shell pattern for the same
+// underlying reason (a Next static export on GitHub Pages has no server-side redirect config
+// available to us). Query params and the URL fragment are forwarded byte-for-byte from
+// window.location rather than reconstructed from router.query, since router.query never
+// reflects the fragment - see SharedDeckPage.tsx's own comment on the same point. Deck state
+// itself lives in the client-side Redux store, not the URL, so nothing deck-specific needs
+// forwarding beyond whatever query/hash the visitor already had.
+export default function DisplayRedirect() {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(`/editor${window.location.search}${window.location.hash}`);
+  }, [router]);
+  return null;
 }

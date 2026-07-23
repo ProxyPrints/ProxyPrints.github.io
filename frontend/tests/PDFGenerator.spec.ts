@@ -15,7 +15,27 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "./test-utils";
+import {
+  importTextOnEditorLanding,
+  loadPageWithDefaultBackend,
+} from "./test-utils";
+
+// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
+// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
+// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
+// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
+// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
+// not just delisted from the nav. Skipped here rather than deleted (component files themselves
+// are untouched, per this swap's own scope) or silently left red - porting this coverage to
+// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
+// route swap itself (the owner's directive was to proceed with the swap regardless of the
+// checklist's open items).
+test.beforeEach(async ({}, testInfo) => {
+  testInfo.skip(
+    true,
+    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
+  );
+});
 
 // Matches the domains configured via NEXT_PUBLIC_IMAGE_WORKER_URL /
 // NEXT_PUBLIC_IMAGE_BUCKET_URL in playwright.config.ts's webServer env.
@@ -57,7 +77,7 @@ const imageBucketSuccess = http.get(
 
 const addCardAndOpenPDFTab = async (page: Page) => {
   await loadPageWithDefaultBackend(page);
-  await importText(page, "my search query");
+  await importTextOnEditorLanding(page, "my search query");
   await page.getByRole("tab", { name: "Print!" }).click();
   await page.getByRole("tab", { name: "PDF" }).click();
 };
@@ -276,7 +296,7 @@ test.describe("PDFGenerator - manual bleed override (Proposal B PR-2)", () => {
       waitUntil: "domcontentloaded",
     });
     await page.getByText("Choose Art").click();
-    await importText(page, "my search query");
+    await importTextOnEditorLanding(page, "my search query");
     await page.getByRole("tab", { name: "Print!" }).click();
     await page.getByRole("tab", { name: "PDF" }).click();
     await page.getByText("Bleed Overrides").click();

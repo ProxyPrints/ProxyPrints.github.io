@@ -66,7 +66,7 @@ describe("Navbar - nav+footer redesign (N1-N7)", () => {
 
     expect(await screen.findByRole("link", { name: "Editor" })).toHaveAttribute(
       "href",
-      "/display"
+      "/editor"
     );
     expect(
       screen.getByRole("link", { name: "What's That Card?" })
@@ -96,7 +96,8 @@ describe("Navbar - nav+footer redesign (N1-N7)", () => {
     expect(
       screen.queryByRole("link", { name: "Download" })
     ).not.toBeInTheDocument();
-    // The old classic-editor label/route - "Editor" now names /display instead (N2).
+    // The old classic-editor label/route - "Editor" now names the unified page at /editor
+    // itself, post Proposal H switchover (2026-07-23) (N2).
     expect(screen.queryByText("Display (beta)")).not.toBeInTheDocument();
   });
 

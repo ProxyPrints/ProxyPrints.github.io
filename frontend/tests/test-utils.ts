@@ -18,24 +18,20 @@ export const configureBackend = async (page: Page, url: string) => {
 export const configureDefaultBackend = async (page: Page) =>
   configureBackend(page, "http://127.0.0.1:8000");
 
+// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
+// sheet+rail page (`DisplayPage.tsx`), not the classic grid `ProjectEditor` this helper used to
+// assume. The old "editor" special-case (click "Choose Art", wait for "Your project is empty at
+// the moment.") described that classic page's own onboarding flow and no longer applies to
+// anything reachable by URL - the classic page is fully unrouted (component kept in-tree, not
+// deleted; see pages/editor.tsx's own comment). Callers that still depend on that classic-only
+// onboarding/DOM (many pre-swap suites do) are the swap's own known, tracked test-suite
+// regression - see this swap's PR description for the full list and rationale, not silently
+// worked around here.
 export const loadPageWithDefaultBackend = async (
   page: Page,
   pageName: string = "editor"
 ) => {
   await page.goto(`/${pageName}?server=http://127.0.0.1:8000`);
-  if (pageName === "editor") {
-    await page.getByText("Choose Art").click();
-    await page.getByText("Your project is empty at the moment.");
-  }
-};
-
-// Nav+footer redesign (2026-07-22) - the classic /editor page left the nav entirely (its
-// "Editor" label now names the unified /display route instead, see Navbar.tsx's own comment),
-// so it's no longer reachable via a nav-link click; this navigates there directly by URL, which
-// is still valid since /editor itself wasn't removed, just delisted from the nav.
-export const navigateToEditor = async (page: Page) => {
-  await page.goto("/editor?server=http://127.0.0.1:8000");
-  await page.getByText("Choose Art").click();
 };
 
 // "What's New?" was cut from the nav entirely (N5) - /new itself still exists, just
@@ -66,6 +62,19 @@ export const openAddCardsDropdown = async (page: Page) => {
 export const openImportTextModal = async (page: Page) => {
   await openAddCardsDropdown(page);
   const textButton = await page.getByRole("button", { name: " Text" }).click();
+};
+
+// The unified editor's (`/editor`, post-swap - see loadPageWithDefaultBackend's own comment)
+// empty-project landing renders its `import-text` textbox directly, with no "Add Cards"
+// dropdown to open first (unlike `importText` above, which is the classic grid editor's own
+// flow and no longer reachable by URL) - see DisplayPage.spec.ts's own empty-landing tests for
+// the precedent this mirrors.
+export const importTextOnEditorLanding = async (page: Page, text: string) => {
+  await page.getByRole("textbox", { name: "import-text" }).fill(text);
+  await page.getByRole("button", { name: "import-text-submit" }).click();
+  await expect(
+    page.locator('span:has-text("Loading your cards...")')
+  ).not.toBeVisible();
 };
 
 export const importText = async (page: Page, text: string) => {
