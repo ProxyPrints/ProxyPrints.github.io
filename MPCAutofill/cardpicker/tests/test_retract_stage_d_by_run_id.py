@@ -284,7 +284,9 @@ class TestRetractStageDByRunIdCommand:
             card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-A", skip_reason="no-evidence"
         )
 
-        call_command("retract_stage_d_by_run_id", "--run-id=run-A", "--write")
+        # --skip-dryrun-check: this test exercises the write path in isolation, not the
+        # forced-dry-run guard (issue #362) - that guard has its own dedicated test class below.
+        call_command("retract_stage_d_by_run_id", "--run-id=run-A", "--write", "--skip-dryrun-check")
 
         printed = capsys.readouterr().out
         assert "[WRITE]" in printed
@@ -304,7 +306,7 @@ class TestRetractStageDByRunIdCommand:
         CardPrintingTagFactory(card=card_a, source=VoteSource.OCR, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-1")
         CardPrintingTagFactory(card=card_b, source=VoteSource.OCR, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-2")
 
-        call_command("retract_stage_d_by_run_id", "--run-id=run-1", "--run-id=run-2", "--write")
+        call_command("retract_stage_d_by_run_id", "--run-id=run-1", "--run-id=run-2", "--write", "--skip-dryrun-check")
 
         assert not CardPrintingTag.objects.filter(anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
         ledger = PilotRunLedger.objects.get(command="retract_stage_d_by_run_id")
@@ -319,7 +321,9 @@ class TestRetractStageDByRunIdCommand:
         CardPrintingTagFactory(card=card_b, source=VoteSource.OCR, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-2")
         CardPrintingTagFactory(card=card_c, source=VoteSource.OCR, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-3")
 
-        call_command("retract_stage_d_by_run_id", "--run-id=run-1", "--run-ids=run-2,run-3", "--write")
+        call_command(
+            "retract_stage_d_by_run_id", "--run-id=run-1", "--run-ids=run-2,run-3", "--write", "--skip-dryrun-check"
+        )
 
         assert not CardPrintingTag.objects.filter(anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
         ledger = PilotRunLedger.objects.get(command="retract_stage_d_by_run_id")
@@ -335,7 +339,7 @@ class TestRetractStageDByRunIdCommand:
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER, anonymous_id="human-2")
         resolve_and_persist_printing(card)
 
-        call_command("retract_stage_d_by_run_id", "--run-id=run-A", "--write")
+        call_command("retract_stage_d_by_run_id", "--run-id=run-A", "--write", "--skip-dryrun-check")
 
         printed = capsys.readouterr().out
         assert "HUMAN REVIEW NEEDED" in printed
@@ -363,7 +367,78 @@ class TestRetractStageDByRunIdCommand:
             side_effect=RuntimeError("boom"),
         ):
             with pytest.raises(RuntimeError):
-                call_command("retract_stage_d_by_run_id", "--run-id=run-A", "--write")
+                call_command("retract_stage_d_by_run_id", "--run-id=run-A", "--write", "--skip-dryrun-check")
 
         ledger = PilotRunLedger.objects.get(command="retract_stage_d_by_run_id")
         assert ledger.status == PilotRunLedger.Status.FAILED
+
+
+class TestRetractStageDByRunIdDryRunGuard:
+    """Phase 0 rails (issues #362/#153's milestone): the forced-dry-run guard (issue #362) and
+    the counters-before-output hardening (production incident 2026-07-23), both wired into
+    retract_stage_d_by_run_id's own Command.handle()."""
+
+    def test_write_refused_without_a_prior_matching_dry_run(self, db):
+        card = CardFactory(name="Forest")
+        CardPrintingTagFactory(card=card, source=VoteSource.OCR, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-A")
+
+        with pytest.raises(CommandError, match="FORCED DRY-RUN GUARD"):
+            call_command("retract_stage_d_by_run_id", "--run-id=run-A", "--write")
+
+    def test_write_succeeds_after_a_matching_dry_run(self, db):
+        card = CardFactory(name="Forest")
+        CardPrintingTagFactory(card=card, source=VoteSource.OCR, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-A")
+
+        call_command("retract_stage_d_by_run_id", "--run-id=run-A")  # dry-run (default)
+        call_command("retract_stage_d_by_run_id", "--run-id=run-A", "--write")
+
+        ledgers = list(PilotRunLedger.objects.filter(command="retract_stage_d_by_run_id").order_by("started_at"))
+        assert len(ledgers) == 2
+        assert ledgers[0].dry_run is True and ledgers[0].status == PilotRunLedger.Status.COMPLETED
+        assert ledgers[1].dry_run is False and ledgers[1].status == PilotRunLedger.Status.COMPLETED
+
+    def test_write_refused_when_the_target_run_id_set_differs_from_the_dry_run(self, db):
+        card_a = CardFactory(name="Forest")
+        card_b = CardFactory(name="Island")
+        CardPrintingTagFactory(card=card_a, source=VoteSource.OCR, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-A")
+        CardPrintingTagFactory(card=card_b, source=VoteSource.OCR, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-B")
+
+        call_command("retract_stage_d_by_run_id", "--run-id=run-A")  # dry-run of run-A only
+
+        with pytest.raises(CommandError, match="FORCED DRY-RUN GUARD"):
+            call_command("retract_stage_d_by_run_id", "--run-id=run-B", "--write")
+
+    def test_skip_dryrun_check_bypasses_the_guard_and_is_recorded(self, db, capsys):
+        card = CardFactory(name="Forest")
+        CardPrintingTagFactory(card=card, source=VoteSource.OCR, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-A")
+
+        call_command("retract_stage_d_by_run_id", "--run-id=run-A", "--write", "--skip-dryrun-check")
+
+        printed = capsys.readouterr().out
+        assert "SKIP-DRYRUN-CHECK" in printed
+        ledger = PilotRunLedger.objects.get(command="retract_stage_d_by_run_id")
+        assert ledger.counters["skip_dryrun_check_used"] is True
+
+    def test_broken_pipe_during_terminal_summary_does_not_flip_completed_to_failed(self, db, monkeypatch):
+        """Production incident 2026-07-23: a client-side timeout severed stdout AFTER every write
+        had already committed and the ledger row had already been saved COMPLETED - the terminal
+        summary prints (self.stdout.write) must never be able to flip that back to FAILED."""
+        from django.core.management.base import OutputWrapper
+
+        card = CardFactory(name="Forest")
+        CardPrintingTagFactory(card=card, source=VoteSource.OCR, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="run-A")
+
+        real_write = OutputWrapper.write
+
+        def raising_write(self, msg="", *args, **kwargs):
+            if isinstance(msg, str) and msg.startswith("TOTALS:"):
+                raise BrokenPipeError("stdout severed")
+            return real_write(self, msg, *args, **kwargs)
+
+        monkeypatch.setattr(OutputWrapper, "write", raising_write, raising=False)
+
+        call_command("retract_stage_d_by_run_id", "--run-id=run-A", "--write", "--skip-dryrun-check")
+
+        ledger = PilotRunLedger.objects.get(command="retract_stage_d_by_run_id")
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.finished_at is not None

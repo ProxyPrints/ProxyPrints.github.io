@@ -15,6 +15,13 @@ from cardpicker.local_identify_printing_tags import (
     verify_zero_resolutions,
 )
 from cardpicker.models import CardPrintingTag, PilotRunLedger
+from cardpicker.pilot_run_lifecycle import (
+    add_dry_run_guard_arguments,
+    enforce_dry_run_precondition,
+    initial_counters,
+    merge_counters,
+    resilient_terminal_output,
+)
 from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
 
 
@@ -31,7 +38,9 @@ class Command(BaseCommand):
         "CardPrintingTag votes via the existing, unmodified vote-consensus machinery; never "
         "resolves a card by itself - the slow-path half casts no votes at all. Defaults to dry-run "
         "and requires an explicit --write to actually write, matching local_residual_classify's "
-        "own convention."
+        "own convention. --write also requires a matching COMPLETED dry-run PilotRunLedger row "
+        "from the last --dry-run-window-hours (forced-dry-run guard, issue #362) - see "
+        "--skip-dryrun-check to override."
     )
 
     def add_arguments(self, parser: Any) -> None:
@@ -40,12 +49,18 @@ class Command(BaseCommand):
             action="store_true",
             default=False,
             help="Actually write CardPrintingTag/CardScanLog rows. Default is dry-run: compute "
-            "and count everything without writing.",
+            "and count everything without writing. Requires a matching recent COMPLETED dry-run "
+            "ledger row (forced-dry-run guard) unless --skip-dryrun-check is passed.",
         )
         parser.add_argument("--run-id", default=None, help="Reuse a specific run_id. Default: freshly generated.")
         parser.add_argument(
             "--chunk-size", type=int, default=500, help="Queryset .iterator() chunk size. Default: 500."
         )
+        # Forced-dry-run guard (issue #362, Phase 0 rails): this command has no caller-chosen
+        # cohort narrower than "whatever's currently eligible" (unlike reparse_collector_evidence's
+        # --selector or retract_stage_d_by_run_id's --run-id), so the guard below always passes
+        # scope=None - ANY matching recent dry-run of this command satisfies it.
+        add_dry_run_guard_arguments(parser, write_flag="--write")
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         stale = find_stale_applied_migrations()
@@ -62,12 +77,21 @@ class Command(BaseCommand):
         mode = "WRITE" if kwargs["write"] else "DRY RUN"
         print(f"[{mode}] local_calculate_verdicts run_id={run_id} git_sha={get_baked_git_sha()}")
 
+        skip_used = enforce_dry_run_precondition(
+            command="local_calculate_verdicts",
+            write_mode=kwargs["write"],
+            skip_check=kwargs["skip_dryrun_check"],
+            window_hours=kwargs["dry_run_window_hours"],
+            scope=None,
+        )
+
         ledger = PilotRunLedger.objects.create(
             run_id=run_id,
             command="local_calculate_verdicts",
             dry_run=dry_run,
             status=PilotRunLedger.Status.RUNNING,
             git_sha=get_baked_git_sha(),
+            counters=initial_counters(skip_dryrun_check_used=skip_used),
         )
 
         try:
@@ -158,16 +182,27 @@ class Command(BaseCommand):
             for entry in slow_path_result.audit[:10]:
                 print(f"  sample: {entry}")
 
+            # Counters-before-output (production incident 2026-07-23, see
+            # cardpicker.pilot_run_lifecycle's own module docstring point 1): the ledger row is
+            # saved COMPLETED here, BEFORE the terminal summary print below - a BrokenPipeError on
+            # a severed stdout while printing that summary must never look like this run failed.
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()
             ledger.votes_written = votes_written
-            ledger.save(update_fields=["status", "finished_at", "votes_written"])
-            print(
-                f"[{mode}] done. run_id={run_id} "
-                f"total_votes={'written' if not dry_run else 'would_cast'}={votes_written if not dry_run else would_cast}"
-            )
+            ledger.counters = merge_counters(ledger.counters, {})
+            ledger.save(update_fields=["status", "finished_at", "votes_written", "counters"])
+            with resilient_terminal_output():
+                print(
+                    f"[{mode}] done. run_id={run_id} "
+                    f"total_votes={'written' if not dry_run else 'would_cast'}={votes_written if not dry_run else would_cast}"
+                )
         except Exception:
-            ledger.status = PilotRunLedger.Status.FAILED
-            ledger.finished_at = timezone.now()
-            ledger.save(update_fields=["status", "finished_at"])
+            # Only a still-RUNNING row gets marked FAILED here - if this invocation already
+            # reached the COMPLETED save above, a later exception (e.g. from the terminal print,
+            # if resilient_terminal_output didn't already swallow it) must never overwrite that
+            # completion (same reasoning as run_image_evidence_cohort's own pre-existing guard).
+            if ledger.status == PilotRunLedger.Status.RUNNING:
+                ledger.status = PilotRunLedger.Status.FAILED
+                ledger.finished_at = timezone.now()
+                ledger.save(update_fields=["status", "finished_at"])
             raise

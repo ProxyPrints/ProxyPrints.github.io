@@ -72,14 +72,17 @@ from typing import Any, Iterable, Iterator
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.utils import timezone
 
 from cardpicker.artist_consensus import UNKNOWN as ARTIST_UNKNOWN
 from cardpicker.artist_consensus import resolve_and_persist_artist, resolve_artist
+from cardpicker.local_identify_printing_tags import generate_run_id
 from cardpicker.management.commands.consensus_impact_report import DEFAULT_SAMPLE_LIMIT
 from cardpicker.models import (
     ArtistVoteStatus,
     Card,
     CardTagVote,
+    PilotRunLedger,
     PrintingTagStatus,
     Tag,
     TagModerationClass,
@@ -92,13 +95,20 @@ from cardpicker.moderation import (
     is_privileged_vote,
     privileged_weight,
 )
+from cardpicker.pilot_run_lifecycle import (
+    add_dry_run_guard_arguments,
+    enforce_dry_run_precondition,
+    initial_counters,
+    merge_counters,
+    resilient_terminal_output,
+)
 from cardpicker.printing_consensus import (
     NO_MATCH,
     resolve_and_persist_printing,
     resolve_printing,
 )
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
-from cardpicker.utils import find_stale_applied_migrations
+from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
 from cardpicker.vote_consensus import (
     PENDING_PRIVILEGED,
     VoteTuple,
@@ -344,7 +354,11 @@ class Command(BaseCommand):
         "transition summary consensus_impact_report does. Intended ONLY for the owner-gated prod "
         "recompute window (docs/features/catalog-completion-plan.md) - running --apply against "
         "production requires fresh, explicit owner authorization every time; this command's mere "
-        "existence authorizes nothing."
+        "existence authorizes nothing. Self-records a PilotRunLedger row (RUNNING at start, "
+        "COMPLETED/FAILED at end, per-family pairs_checked/rows_written/transitions counters) "
+        "matching every other Stage C/D pilot command's own lifecycle. --apply also requires a "
+        "matching COMPLETED dry-run PilotRunLedger row from the last --dry-run-window-hours "
+        "(forced-dry-run guard, issue #362) - see --skip-dryrun-check to override."
     )
 
     def add_arguments(self, parser: Any) -> None:
@@ -353,7 +367,9 @@ class Command(BaseCommand):
             action="store_true",
             default=False,
             help="Perform the real writes. Default is a dry run identical in output shape to "
-            "consensus_impact_report, performing zero writes.",
+            "consensus_impact_report, performing zero writes. Requires a matching recent "
+            "COMPLETED dry-run ledger row (forced-dry-run guard) unless --skip-dryrun-check is "
+            "passed.",
         )
         parser.add_argument(
             "--batch-size",
@@ -367,6 +383,12 @@ class Command(BaseCommand):
             default=DEFAULT_SAMPLE_LIMIT,
             help=f"Max sample identifiers recorded per transition (default {DEFAULT_SAMPLE_LIMIT}).",
         )
+        parser.add_argument("--run-id", default=None, help="Reuse a specific run_id. Default: freshly generated.")
+        # Forced-dry-run guard (issue #362, Phase 0 rails): this command always operates over the
+        # WHOLE voted pool (printing/artist/tag) - no caller-chosen cohort narrower than "the
+        # whole command", matching local_calculate_verdicts's own reasoning - so the guard below
+        # always passes scope=None.
+        add_dry_run_guard_arguments(parser, write_flag="--apply")
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         stale = find_stale_applied_migrations()
@@ -381,28 +403,83 @@ class Command(BaseCommand):
         apply = kwargs["apply"]
         batch_size = kwargs["batch_size"]
         sample_limit = kwargs["sample_limit"]
+        dry_run = not apply
+        run_id = kwargs["run_id"] or generate_run_id()
 
         mode = "APPLY" if apply else "DRY RUN"
         suffix = "" if apply else " - zero writes will occur."
-        print(f"[{mode}] consensus_recompute --batch-size={batch_size}{suffix}")
+        print(f"[{mode}] consensus_recompute run_id={run_id} --batch-size={batch_size}{suffix}")
 
-        report = run_consensus_recompute(apply=apply, batch_size=batch_size, sample_limit=sample_limit)
+        skip_used = enforce_dry_run_precondition(
+            command="consensus_recompute",
+            write_mode=apply,
+            skip_check=kwargs["skip_dryrun_check"],
+            window_hours=kwargs["dry_run_window_hours"],
+            scope=None,
+        )
 
-        for kind in ("printing", "artist", "tag"):
-            section = report[kind]
-            written_suffix = f", {section['written']} row(s) written" if apply else ""
-            print(f"=== {kind} ({section['checked']} pair(s) checked{written_suffix}) ===")
-            if not section["transitions"]:
-                print("  no transitions - persisted state already matches the ratified resolver.")
-                continue
-            for transition, count in sorted(section["transitions"].items(), key=lambda item: -item[1]):
-                print(f"  {transition}: {count}")
-                for sample in section["samples"][transition]:
-                    print(f"    - {sample}")
+        ledger = PilotRunLedger.objects.create(
+            run_id=run_id,
+            command="consensus_recompute",
+            dry_run=dry_run,
+            status=PilotRunLedger.Status.RUNNING,
+            git_sha=get_baked_git_sha(),
+            counters=initial_counters(skip_dryrun_check_used=skip_used),
+        )
 
-        if apply:
+        try:
+            report = run_consensus_recompute(apply=apply, batch_size=batch_size, sample_limit=sample_limit)
+
             total_written = sum(report[kind]["written"] for kind in ("printing", "artist", "tag"))
             total_changed = sum(sum(report[kind]["transitions"].values()) for kind in ("printing", "artist", "tag"))
-            print(f"APPLY complete - {total_written} row(s) written, {total_changed} status transition(s) total.")
-        else:
-            print("Dry run complete - zero writes performed.")
+
+            per_family_counters: dict[str, Any] = {
+                kind: {
+                    "pairs_checked": report[kind]["checked"],
+                    "rows_written": report[kind]["written"],
+                    "transitions": dict(report[kind]["transitions"]),
+                }
+                for kind in ("printing", "artist", "tag")
+            }
+            per_family_counters["total_written"] = total_written
+            per_family_counters["total_transitions"] = total_changed
+
+            # Counters-before-output (production incident 2026-07-23, see
+            # cardpicker.pilot_run_lifecycle's own module docstring point 1): the ledger row is
+            # saved COMPLETED here, BEFORE the terminal transition-summary prints below - a
+            # BrokenPipeError on a severed stdout while printing that summary must never look like
+            # this run failed.
+            ledger.status = PilotRunLedger.Status.COMPLETED
+            ledger.finished_at = timezone.now()
+            ledger.counters = merge_counters(ledger.counters, per_family_counters)
+            ledger.save(update_fields=["status", "finished_at", "counters"])
+
+            with resilient_terminal_output():
+                for kind in ("printing", "artist", "tag"):
+                    section = report[kind]
+                    written_suffix = f", {section['written']} row(s) written" if apply else ""
+                    print(f"=== {kind} ({section['checked']} pair(s) checked{written_suffix}) ===")
+                    if not section["transitions"]:
+                        print("  no transitions - persisted state already matches the ratified resolver.")
+                        continue
+                    for transition, count in sorted(section["transitions"].items(), key=lambda item: -item[1]):
+                        print(f"  {transition}: {count}")
+                        for sample in section["samples"][transition]:
+                            print(f"    - {sample}")
+
+                if apply:
+                    print(
+                        f"APPLY complete - {total_written} row(s) written, {total_changed} status "
+                        "transition(s) total."
+                    )
+                else:
+                    print("Dry run complete - zero writes performed.")
+        except Exception:
+            # Only a still-RUNNING row gets marked FAILED here - a run this invocation already
+            # marked COMPLETED above must never be overwritten by a later exception (e.g. from the
+            # terminal print, if resilient_terminal_output didn't already swallow it).
+            if ledger.status == PilotRunLedger.Status.RUNNING:
+                ledger.status = PilotRunLedger.Status.FAILED
+                ledger.finished_at = timezone.now()
+                ledger.save(update_fields=["status", "finished_at"])
+            raise

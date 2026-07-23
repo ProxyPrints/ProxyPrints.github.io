@@ -147,8 +147,12 @@ def test_command_exits_cleanly_with_a_non_empty_cohort(
     monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
 
     # No exception escaping call_command is the regression assertion - the bug this guards
-    # against made this raise on every invocation, not just some.
-    call_command("run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "test-run")
+    # against made this raise on every invocation, not just some. --skip-dryrun-check: this test
+    # exercises the write path in isolation, not the forced-dry-run guard (issue #362) - that
+    # guard has its own dedicated test class below.
+    call_command(
+        "run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "test-run", "--skip-dryrun-check"
+    )
 
     out = capsys.readouterr().out
     assert "DONE" in out
@@ -161,7 +165,7 @@ def test_empty_cohort_still_exits_cleanly(capsys: pytest.CaptureFixture) -> None
     """Sanity check for the OTHER early-return path (`if not cohort_ids: return`, before either
     executor is ever constructed) - kept alongside the regression case above so both exits from
     `handle()` are covered, not just the one the bug lived in."""
-    call_command("run_image_evidence_cohort", "--limit", "0", "--run-id", "test-run-empty")
+    call_command("run_image_evidence_cohort", "--limit", "0", "--run-id", "test-run-empty", "--skip-dryrun-check")
 
     out = capsys.readouterr().out
     assert "Nothing to do." in out
@@ -193,7 +197,14 @@ def test_card_ids_file_bypasses_the_resume_filter(
     monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
 
     call_command(
-        "run_image_evidence_cohort", "--card-ids-file", str(ids_file), "--workers", "1", "--run-id", "test-run-ids"
+        "run_image_evidence_cohort",
+        "--card-ids-file",
+        str(ids_file),
+        "--workers",
+        "1",
+        "--run-id",
+        "test-run-ids",
+        "--skip-dryrun-check",
     )
 
     out = capsys.readouterr().out
@@ -221,7 +232,16 @@ def test_card_ids_file_with_a_nonexistent_card_id_drops_cleanly(
     ids_file = tmp_path / "ids.txt"
     ids_file.write_text("999999999\n")
 
-    call_command("run_image_evidence_cohort", "--card-ids-file", str(ids_file), "--workers", "1", "--run-id", "t")
+    call_command(
+        "run_image_evidence_cohort",
+        "--card-ids-file",
+        str(ids_file),
+        "--workers",
+        "1",
+        "--run-id",
+        "t",
+        "--skip-dryrun-check",
+    )
 
     out = capsys.readouterr().out
     assert "DONE" in out
@@ -244,7 +264,16 @@ class TestPilotRunLedger:
         monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
         monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
 
-        call_command("run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "ledger-run-1")
+        call_command(
+            "run_image_evidence_cohort",
+            "--limit",
+            "1",
+            "--workers",
+            "1",
+            "--run-id",
+            "ledger-run-1",
+            "--skip-dryrun-check",
+        )
         capsys.readouterr()
 
         ledger = PilotRunLedger.objects.get(run_id="ledger-run-1")
@@ -260,6 +289,8 @@ class TestPilotRunLedger:
             "lockout_hit": False,
             "rss_limit_hit": False,
             "elapsed_s": ledger.counters["elapsed_s"],  # timing - only its presence/type matters
+            "scope": ledger.counters["scope"],  # opaque hash - see TestForcedDryRunGuard below
+            "skip_dryrun_check_used": True,
         }
         assert isinstance(ledger.counters["elapsed_s"], float)
 
@@ -319,7 +350,16 @@ class TestPilotRunLedger:
         monkeypatch.setattr(cohort_command, "_fetch_one_card", _fetch_first_dropped_rest_ok)
         monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_short_circuited)
 
-        call_command("run_image_evidence_cohort", "--limit", "2", "--workers", "1", "--run-id", "ledger-counters")
+        call_command(
+            "run_image_evidence_cohort",
+            "--limit",
+            "2",
+            "--workers",
+            "1",
+            "--run-id",
+            "ledger-counters",
+            "--skip-dryrun-check",
+        )
         capsys.readouterr()
 
         ledger = PilotRunLedger.objects.get(run_id="ledger-counters")
@@ -334,7 +374,9 @@ class TestPilotRunLedger:
     def test_empty_cohort_still_writes_a_completed_ledger_row_with_zeroed_counters(
         self, capsys: pytest.CaptureFixture
     ) -> None:
-        call_command("run_image_evidence_cohort", "--limit", "0", "--run-id", "ledger-empty-cohort")
+        call_command(
+            "run_image_evidence_cohort", "--limit", "0", "--run-id", "ledger-empty-cohort", "--skip-dryrun-check"
+        )
         capsys.readouterr()
 
         ledger = PilotRunLedger.objects.get(run_id="ledger-empty-cohort")
@@ -347,6 +389,8 @@ class TestPilotRunLedger:
             "short_circuited": 0,
             "lockout_hit": False,
             "rss_limit_hit": False,
+            "scope": ledger.counters["scope"],  # opaque hash - see TestForcedDryRunGuard below
+            "skip_dryrun_check_used": True,
         }
 
     @pytest.mark.django_db(transaction=True)
@@ -375,6 +419,7 @@ class TestPilotRunLedger:
                 "ledger-rss-exceeded",
                 "--max-rss-mb",
                 "1000",
+                "--skip-dryrun-check",
             )
         capsys.readouterr()
 
@@ -398,14 +443,25 @@ class TestPilotRunLedger:
 
         with pytest.raises(RuntimeError, match="boom"):
             call_command(
-                "run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "ledger-genuine-failure"
+                "run_image_evidence_cohort",
+                "--limit",
+                "1",
+                "--workers",
+                "1",
+                "--run-id",
+                "ledger-genuine-failure",
+                "--skip-dryrun-check",
             )
         capsys.readouterr()
 
         ledger = PilotRunLedger.objects.get(run_id="ledger-genuine-failure")
         assert ledger.status == PilotRunLedger.Status.FAILED
         assert ledger.finished_at is not None
-        assert ledger.counters is None
+        # counters holds only the creation-time scope/skip-dryrun-check metadata (issue #362) -
+        # no REAL completion counters (cohort_size etc.) were ever computed, since the crash hit
+        # before _run_cohort returned.
+        assert "cohort_size" not in (ledger.counters or {})
+        assert ledger.counters["skip_dryrun_check_used"] is True
 
 
 class TestFetchOneCard:
@@ -1089,6 +1145,7 @@ class TestMaxRssGuardEndToEnd:
                 "test-rss-exceeded",
                 "--max-rss-mb",
                 "1000",
+                "--skip-dryrun-check",
             )
 
         out = capsys.readouterr().out
@@ -1105,8 +1162,131 @@ class TestMaxRssGuardEndToEnd:
         monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
         monkeypatch.setattr(cohort_command, "_get_rss_mb", lambda: 999999.0)
 
-        call_command("run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "test-rss-unset")
+        call_command(
+            "run_image_evidence_cohort",
+            "--limit",
+            "1",
+            "--workers",
+            "1",
+            "--run-id",
+            "test-rss-unset",
+            "--skip-dryrun-check",
+        )
 
         out = capsys.readouterr().out
         assert "DONE" in out
         assert "rss_limit_hit=False" in out
+
+
+class TestDryRunGuard:
+    """Phase 0 rails (issues #362/#153's milestone): the forced-dry-run guard (issue #362). NOTE
+    this command's own write mode is the DEFAULT (dry_run=False unless --dry-run is passed) -
+    unlike the other four commands this guard also covers, a NORMAL (write) invocation needs a
+    matching prior --dry-run of the same scope, not just a targeted retroactive fix - see this
+    command's own module docstring comment at the guard's own call site in handle()."""
+
+    @pytest.mark.django_db(transaction=True)
+    def test_write_refused_without_a_prior_matching_dry_run(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        CardFactory(content_phash=123456789)
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+        with pytest.raises(CommandError, match="FORCED DRY-RUN GUARD"):
+            call_command("run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "guard-no-dry-run")
+        assert not PilotRunLedger.objects.filter(run_id="guard-no-dry-run").exists()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_write_succeeds_after_a_matching_dry_run_of_the_same_limit(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        CardFactory(content_phash=123456789)
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+        call_command(
+            "run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "guard-dry", "--dry-run"
+        )
+        call_command("run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "guard-write")
+
+        dry_ledger = PilotRunLedger.objects.get(run_id="guard-dry")
+        write_ledger = PilotRunLedger.objects.get(run_id="guard-write")
+        assert dry_ledger.dry_run is True and dry_ledger.status == PilotRunLedger.Status.COMPLETED
+        assert write_ledger.dry_run is False and write_ledger.status == PilotRunLedger.Status.COMPLETED
+
+    @pytest.mark.django_db(transaction=True)
+    def test_write_refused_when_the_limit_scope_differs_from_the_dry_run(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        CardFactory(content_phash=123456789)
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+        call_command(
+            "run_image_evidence_cohort", "--limit", "1", "--workers", "1", "--run-id", "guard-dry-1", "--dry-run"
+        )
+
+        with pytest.raises(CommandError, match="FORCED DRY-RUN GUARD"):
+            call_command("run_image_evidence_cohort", "--limit", "2", "--workers", "1", "--run-id", "guard-write-2")
+
+    @pytest.mark.django_db(transaction=True)
+    def test_skip_dryrun_check_bypasses_the_guard_and_is_recorded(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        CardFactory(content_phash=123456789)
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+        call_command(
+            "run_image_evidence_cohort",
+            "--limit",
+            "1",
+            "--workers",
+            "1",
+            "--run-id",
+            "guard-skip",
+            "--skip-dryrun-check",
+        )
+
+        printed = capsys.readouterr().out
+        assert "SKIP-DRYRUN-CHECK" in printed
+        ledger = PilotRunLedger.objects.get(run_id="guard-skip")
+        assert ledger.counters["skip_dryrun_check_used"] is True
+
+    @pytest.mark.django_db(transaction=True)
+    def test_broken_pipe_during_terminal_summary_does_not_flip_completed_to_failed(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Production incident 2026-07-23: a client-side timeout severed stdout AFTER every write
+        had already committed and the ledger row had already been saved COMPLETED - the terminal
+        DONE summary print (self.stdout.write) must never be able to flip that back to FAILED."""
+        from django.core.management.base import OutputWrapper
+
+        CardFactory(content_phash=123456789)
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+        real_write = OutputWrapper.write
+
+        def raising_write(self: OutputWrapper, msg: str = "", *args: Any, **kwargs: Any) -> None:
+            if isinstance(msg, str) and msg.startswith("DONE run_id="):
+                raise BrokenPipeError("stdout severed")
+            return real_write(self, msg, *args, **kwargs)
+
+        monkeypatch.setattr(OutputWrapper, "write", raising_write, raising=False)
+
+        call_command(
+            "run_image_evidence_cohort",
+            "--limit",
+            "1",
+            "--workers",
+            "1",
+            "--run-id",
+            "guard-broken-pipe",
+            "--skip-dryrun-check",
+        )
+
+        ledger = PilotRunLedger.objects.get(run_id="guard-broken-pipe")
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.finished_at is not None
