@@ -1148,8 +1148,7 @@ code.
 
 **Cause**: this repo's `db`/`transactional_db` pytest fixtures spin up
 throwaway `testcontainers` Postgres/Elasticsearch containers per test run
-(`cardpicker/tests/conftest.py`) on **fixed** host ports (`POSTGRES_PORT
-= 47000`, `ELASTICSEARCH_PORT = 9300` - the latter is also
+(`cardpicker/tests/conftest.py`) on **fixed** host ports (`POSTGRES_PORT = 47000`, `ELASTICSEARCH_PORT = 9300` - the latter is also
 `pytest_elasticsearch`'s own hardcoded default) - a full-suite run
 launches (and tears down) a lot of them in a short window. This machine
 runs more than one Claude Code worktree session at a time (see
@@ -1164,8 +1163,7 @@ cause. A related, quieter form of the same root cause needs no other
 session at all: if a PRIOR run of yours was interrupted (or one of its
 fixtures failed) before its own `postgres_container`/
 `elasticsearch_container.stop()` teardown ran, the now-orphaned container
-keeps holding the port for every subsequent run of yours too - `docker ps
--a` showing a `romantic_elion`/`relaxed_mccarthy`-style random-named
+keeps holding the port for every subsequent run of yours too - `docker ps -a` showing a `romantic_elion`/`relaxed_mccarthy`-style random-named
 container still `Up` on `:47000`/`:9300` from an earlier failed session
 is the tell.
 
@@ -1187,8 +1185,7 @@ as your own leftover, since a live session's containers still mid-test
 are exactly the "port is already allocated" collision this entry
 describes, not a target for cleanup. Confirmed one 2026-07-23 session
 hitting this twice in the same task (once from a genuine concurrent
-session, once from its own prior run's orphaned containers) - `docker rm
--f` on the confirmed-orphan case, then a plain retry once ports read
+session, once from its own prior run's orphaned containers) - `docker rm -f` on the confirmed-orphan case, then a plain retry once ports read
 free resolved both.
 
 ## A per-instance `viewBox` crop on an inlined SVG shows the _entire_ source art instead of just its own band
