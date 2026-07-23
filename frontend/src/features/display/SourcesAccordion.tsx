@@ -132,7 +132,11 @@ export function SourcesAccordion() {
 
   return (
     <div
-      className="sources border-bottom"
+      // O1 fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - the plain Bootstrap
+      // `.border-bottom` utility used to sit here; `.sources`'s normalized `border-bottom:1px
+      // solid #16202b` now lives in DisplayPage.tsx's RailRoot styled-component (this div is a
+      // descendant of that scope) - see that rule's own comment for the full O1 rationale.
+      className="sources"
       data-testid="display-sources-accordion"
     >
       <AutofillCollapse

@@ -3,52 +3,64 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ProxyPrints — /display left rail redesign (D14 · Sources · Artist · Buttons · Density)</title>
+<title>ProxyPrints — /display left rail (CORRECTED fidelity round: D14 · Sources · Filters · Artist · Buttons)</title>
 <style>
 /* ============================================================================
-   REAL #302 THEME VALUES (extracted from bootswatch/superhero + styles.scss).
-   NOT approximated — these are the fork's live tokens. Where a value is a
-   deliberate refinement (not the current theme) it is labelled .propose in the
-   mockup so the owner approves the look knowingly.
+   BINDING #302 THEME TOKENS — grounded in the SHIPPED code, not approximated.
+   Sources per token below (extracted 2026-07-23):
+     • bootswatch/dist/superhero/_variables.scss
+     • frontend/src/styles/styles.scss  (#302 T2–T7 overrides)
+     • frontend/src/features/display/DisplayPage.tsx  RailRoot styled-component (live values)
+     • frontend/src/components/AutofillCollapse.tsx    Card.Header inline #4E5D6B
+     • frontend/src/common/constants.ts                ToggleButtonHeight = 38
+   Every element on the rail draws from these — no invented hexes. Where a value
+   is a PROPOSED normalization (not yet uniform in shipped code) it is labelled
+   .propose in the mockup so the owner approves the look knowingly.
    ============================================================================ */
 :root{
-  --body:#0f2537;          /* $body-bg (Superhero native, kept by #302 T2) */
-  --panel:#4e5d6c;         /* $secondary / card bg / offcanvas bg */
-  --raised:#22303f;        /* $dark / $input-bg / rail-head + artist-line */
-  --conf:#2b3e50;          /* confidence chip surface (shipped ConfidenceElement) */
-  --text:#ebebeb;          /* $gray-100 / body color */
-  --muted:#8fa0b0;         /* $input-placeholder-color */
-  --light:#abb6c2;         /* $light */
-  --primary:#df6919;       /* $primary = $orange */
+  --body:#0f2537;          /* $body-bg (Superhero native, kept by #302 T2)          — page bg */
+  --panel:#4e5d6c;         /* $secondary = $gray-600 = $card-bg                      — rail + card surface */
+  --card-header:#4e5d6b;   /* AutofillCollapse.tsx Card.Header inline #4E5D6B (shipped verbatim) */
+  --raised:#22303f;        /* $dark / $input-bg (#302 T3/T4)                         — rail-head, artist band, inputs */
+  --conf:#2b3e50;          /* D14 confidence-band surface (shipped RailRoot .d14)    */
+  --text:#ebebeb;          /* $gray-100 / $body-color (#302 T5)                      */
+  --muted:#8fa0b0;         /* $input-placeholder-color (#302 T7)                     — muted / placeholder */
+  --light:#abb6c2;         /* $light = lighten($gray-600,35%)                        — neutral outline btn */
+  --primary:#df6919;       /* $primary = $orange (hover #be5915)                     — accent */
   --primary-hover:#be5915;
-  --success:#5cb85c;
-  --danger:#d9534f;
-  --warning:#ffc107;
-  --info:#5bc0de;
-  --input-border:#4e5d6c;
-  --border:rgba(0,0,0,.22);        /* $border-color-translucent-ish */
-  --hair:rgba(235,235,235,.15);    /* subtle divider */
-  --pinline:rgba(235,235,235,.18); /* D17 sheet pinline */
-  --annotate:#ffd76a;
-  --radius:0;              /* Superhero is FLAT (border-radius:0) */
-  --radius-chip:6px;       /* the ONE rounded exception the shipped ConfidenceElement uses */
+  --success:#5cb85c;       /* $success   */
+  --danger:#d9534f;        /* $danger    */
+  --warning:#ffc107;       /* $warning   */
+  --info:#5bc0de;          /* $info      */
+  --input-border:#4e5d6c;  /* $input-border-color (#302 T6)                          */
+  --divider:#16202b;       /* PROPOSED normalized rail-block hairline — adopts the shipped .d14
+                              border-bottom (#16202b) across ALL block boundaries, retiring the
+                              mixed Bootstrap `.border-bottom` util (ambiguous --bs-border-color).
+                              Flagged .propose where it lands. */
+  --list-border:rgba(0,0,0,.22); /* shipped SourcesAccordion src-list border (kept)  */
+  --radius:0;              /* $border-radius:0 — Superhero is FLAT (buttons/inputs/badges square) */
+  --radius-pill:10px;      /* D14 status pills — the shipped rounded exception (RailRoot)       */
+  --toggle-h:38px;         /* ToggleButtonHeight (constants.ts) — was mis-sized 24px last round */
+  --toggle-w:54px;         /* shipped SourcesAccordion Toggle width */
+  --annotate:#ffd76a;      /* mockup annotation ink (not a theme token) */
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:#08161f;color:var(--text);
   font-family:Lato,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;font-size:16px;line-height:1.5}
 
-/* ---------- demo strip (forces Desktop/Tablet/Phone at any width) ---------- */
+/* ---------- demo strip (forces Desktop/Tablet/Phone at any window width) ---------- */
 .demo{position:fixed;top:0;left:0;right:0;z-index:9000;display:flex;flex-wrap:wrap;
   align-items:center;gap:8px;padding:8px 12px;background:#000;border-bottom:2px solid var(--primary);
   font-size:12px}
 .demo b{color:var(--primary);letter-spacing:.04em;text-transform:uppercase;font-size:11px}
-.demo .grp{display:flex;gap:4px;align-items:center;padding:0 6px;border-right:1px solid #333}
+.demo .grp{display:flex;gap:4px;align-items:center;padding:0 8px;border-right:1px solid #333}
 .demo button{background:#22303f;color:var(--text);border:1px solid #46586a;padding:4px 9px;
-  cursor:pointer;font-size:12px;font-family:inherit}
+  cursor:pointer;font-size:12px;font-family:inherit;border-radius:0}
 .demo button.on{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:700}
-.demo .hint{color:var(--muted);font-size:11px}
+.demo button:focus-visible{outline:2px solid var(--annotate);outline-offset:1px}
+.demo .hint{color:var(--muted);font-size:11px;max-width:340px}
 
-.stage{padding-top:52px;min-height:100vh}
+.stage{padding-top:56px;min-height:100vh} /* JS overrides padding-top to the demo bar's real height */
 .framewrap{overflow:hidden}
 .frame{transform-origin:top left;background:var(--body);position:relative}
 .frame-tag{position:absolute;top:6px;left:8px;z-index:50;color:var(--annotate);
@@ -56,22 +68,22 @@ html,body{margin:0;padding:0;background:#08161f;color:var(--text);
 
 /* ============================ APP CHROME ============================ */
 .appbar{display:flex;align-items:center;gap:12px;height:52px;padding:0 12px;
-  background:var(--body);border-bottom:1px solid var(--hair);font-size:14px}
+  background:var(--body);border-bottom:1px solid var(--divider);font-size:14px}
 .appbar .deck{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
-.appbar .pill{margin-left:auto;background:rgba(0,0,0,.35);border:1px solid var(--hair);
+.appbar .pill{margin-left:auto;background:rgba(0,0,0,.35);border:1px solid var(--divider);
   padding:2px 10px;font-variant-numeric:tabular-nums;font-size:12px}
 .appbar .gear{width:34px;height:34px;display:flex;align-items:center;justify-content:center;
-  background:var(--panel);border:1px solid var(--hair);cursor:pointer}
+  background:var(--panel);border:1px solid var(--divider);cursor:pointer}
 
 .body-cols{display:flex;align-items:stretch;min-height:520px}
 
-/* center sheet region (D7/D17: outline-only pinline sheets, tight gap, floating n/M pill) */
+/* center sheet region (three-region context only — out of this round's scope) */
 .center{flex:1;display:flex;flex-direction:column;align-items:center;padding:16px;gap:4px;
   position:relative;overflow:auto;background:var(--body)}
 .npill{position:sticky;top:4px;align-self:flex-end;background:rgba(0,0,0,.5);
-  border:1px solid var(--hair);border-radius:20px;padding:2px 10px;font-size:11px;
+  border:1px solid var(--divider);border-radius:20px;padding:2px 10px;font-size:11px;
   font-variant-numeric:tabular-nums;pointer-events:none}
-.sheet{width:100%;max-width:520px;aspect-ratio:279.4/215.9;border:1px solid var(--pinline);
+.sheet{width:100%;max-width:520px;aspect-ratio:279.4/215.9;border:1px solid rgba(235,235,235,.18);
   border-radius:7px;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);
   column-gap:2px;row-gap:10px;padding:6px}
 .cell{aspect-ratio:63/88;background:repeating-linear-gradient(45deg,#33475a,#33475a 7px,#2b3c4d 7px,#2b3c4d 14px);
@@ -79,23 +91,23 @@ html,body{margin:0;padding:0;background:#08161f;color:var(--text);
 .cell.sel{outline:2px solid var(--primary);outline-offset:-2px}
 .cell .cn{position:absolute;top:2px;left:2px;font-size:8px;color:#9fb0c0;font-family:monospace}
 
-/* right rail (present for three-region completeness; not this round's focus — lighter detail) */
-.rrail{width:300px;background:var(--panel);border-left:1px solid var(--border);padding:10px;
+/* right rail (three-region context only — lighter detail, not this round's scope) */
+.rrail{width:300px;background:var(--panel);border-left:1px solid var(--divider);padding:10px;
   font-size:13px;flex:0 0 300px}
 .rrail h6{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 6px}
-.rrail .grp{background:var(--raised);border:1px solid var(--border);padding:8px;margin-bottom:6px}
+.rrail .grp{background:var(--raised);border:1px solid var(--divider);padding:8px;margin-bottom:6px}
 .rrail .muted{color:var(--muted);font-size:12px}
 .rrail .foot{display:flex;gap:6px;margin-top:8px}
 
 /* ============================ LEFT RAIL (this round) ============================ */
-.lrail{width:380px;flex:0 0 380px;background:var(--panel);border-right:1px solid var(--border);
+.lrail{width:380px;flex:0 0 380px;background:var(--panel);border-right:1px solid var(--divider);
   display:flex;flex-direction:column;overflow:hidden}
 .lscroll{overflow-y:auto;display:flex;flex-direction:column}
-/* DENSITY: sections butt against each other, separated by 1px borders — NOT gap:16px.
-   Vertical rhythm comes from each block's own compact padding, named in the spec. */
+/* DENSITY (§2): sections BUTT together, separated by one 1px hairline — NOT a gap.
+   Vertical rhythm comes from each block's own compact padding. */
 
-/* --- rail header (promoted identity) --- */
-.rhead{background:var(--raised);padding:8px 10px;border-bottom:1px solid var(--border)}
+/* --- rail header (promoted identity) — shipped .rail-head bg #22303f, padding 8px 10px --- */
+.rhead{background:var(--raised);padding:8px 10px;border-bottom:1px solid var(--divider)}
 .rhead .slot{font-weight:700;font-size:14px}
 .rhead .slot .face{font-weight:400;color:var(--muted);font-size:11px;text-transform:uppercase;margin-left:6px}
 .rhead .name{font-size:15px;margin-top:1px}
@@ -103,142 +115,151 @@ html,body{margin:0;padding:0;background:#08161f;color:var(--text);
   padding:2px 8px;font-family:monospace;font-size:12px;border-radius:0}
 .rhead .reqbadge.degraded{background:var(--warning);color:#111}
 
-/* --- D14 CONFIDENCE ELEMENT (replaces the old Confirm?/Y-N affordance entirely) --- */
+/* --- D14 CONFIDENCE ELEMENT — supersedes the old Confirm?/Y·N affordance entirely (§3, #271) ---
+   All values verbatim from shipped RailRoot .d14 / .seticon / .statepill / .notthis. */
 .d14{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0;
-  padding:8px 10px;background:var(--conf);border-bottom:1px solid var(--border)}
+  padding:8px 10px;background:var(--conf);border-bottom:1px solid var(--divider);font-size:12px}
 .seticon{position:relative;width:30px;height:30px;flex:0 0 30px;display:inline-flex;
   align-items:center;justify-content:center;background:var(--panel);border:1px solid #7f8fa0;
   border-radius:50%;cursor:pointer}
 .seticon svg{width:17px;height:17px;fill:var(--text)}
-/* CONFIRMED: small green check badge on the set icon */
+.seticon:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+/* CONFIRMED: small green check badge on the set icon (shipped .seticon .check) */
 .seticon .check{position:absolute;right:-3px;bottom:-3px;width:15px;height:15px;background:var(--success);
   color:#fff;border:2px solid var(--conf);border-radius:50%;display:none;align-items:center;
   justify-content:center;font-size:9px;font-weight:900}
-/* SUGGESTED: numeric confidence score badge on the set icon */
+/* SUGGESTED: numeric confidence score badge on the set icon (shipped .seticon .score) */
 .seticon .score{position:absolute;right:-7px;bottom:-7px;background:var(--primary);color:#fff;
   border:2px solid var(--conf);border-radius:10px;font-size:9px;font-weight:800;padding:1px 4px;
   display:none;line-height:1;font-variant-numeric:tabular-nums}
 .d14 .idtext{font-size:12px;font-family:monospace}
-.d14 .statepill{padding:1px 8px;border:1px solid var(--panel);border-radius:10px;font-size:11px;font-weight:700}
+.d14 .statepill{padding:1px 8px;border:1px solid var(--panel);border-radius:var(--radius-pill);font-size:11px;font-weight:700}
 .d14 .statepill.confirmed{border-color:#3f7a2f;color:#a7e08a}
 .d14 .statepill.suggested{border-color:var(--primary);color:#ffb27d}
 .d14 .notthis{margin-left:auto}
 /* confirmed vs suggested visibility */
 body[data-conf="confirmed"] .seticon .check{display:flex}
 body[data-conf="confirmed"] .statepill.suggested{display:none}
-/* ✗ vote stays available in both states (dispute is always possible); on confirmed it is
-   de-emphasised. Open question: hide it once consensus is settled? */
+/* DECIDED — owner answer #2 (2026-07-23): the ✗ vote STAYS on an already-confirmed printing
+   (explicit human dissent opens a D1 human-vs-human contest); de-emphasised via opacity, NOT
+   hidden. This is settled, not an open question. Shipped as `.notthis[data-confirmed="true"]{opacity:.6}`. */
 body[data-conf="confirmed"] .d14 .notthis{opacity:.6}
 body[data-conf="suggested"] .seticon .score{display:block}
 body[data-conf="suggested"] .statepill.confirmed{display:none}
 
-/* Scryfall hover popover (CDN image in the real app; display-only, nothing stored) */
+/* Scryfall hover popover (real app: OverlayTrigger+Popover, image from Scryfall CDN, nothing stored) */
 .seticon .pop{position:absolute;left:36px;top:-6px;z-index:60;width:150px;background:#0b1520;
   border:1px solid #7f8fa0;padding:6px;display:none;box-shadow:0 6px 18px rgba(0,0,0,.5)}
-.seticon:hover .pop{display:block}
+.seticon:hover .pop,.seticon:focus-within .pop{display:block}
 .pop .img{aspect-ratio:63/88;background:repeating-linear-gradient(45deg,#2a3a49,#2a3a49 8px,#22303f 8px,#22303f 16px);
-  border:1px solid var(--hair);display:flex;align-items:center;justify-content:center;text-align:center;
+  border:1px solid rgba(235,235,235,.15);display:flex;align-items:center;justify-content:center;text-align:center;
   font-size:9px;color:var(--muted);padding:4px}
 .pop .cap{font-size:9px;color:var(--muted);margin-top:4px;line-height:1.3}
 
-/* --- Artist support (button, credits MTG Artist Connection) --- */
-.artist{background:var(--raised);padding:8px 10px;border-bottom:1px solid var(--border)}
+/* --- Artist support (button that visibly credits MTG Artist Connection) — shipped .artist-line bg #22303f, padding 8px 10px --- */
+.artist{background:var(--raised);padding:8px 10px;border-bottom:1px solid var(--divider)}
 .artist .by{font-size:13px;margin-bottom:6px}
 .artist .by .nm{color:var(--text);font-weight:600}
 
-/* --- Sources accordion --- */
-.sources{border-bottom:1px solid var(--border)}
-.src-summary{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;
-  background:#4e5d6b;user-select:none}
+/* --- Sources accordion (AutofillCollapse shell; header = shipped #4e5d6b) --- */
+.sources{border-bottom:1px solid var(--divider)}
+.src-summary{display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;
+  background:var(--card-header);user-select:none}
+.src-summary:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
 .src-summary .lbl{font-size:12px;text-transform:uppercase;letter-spacing:.05em;font-weight:700}
-.src-summary .count{font-variant-numeric:tabular-nums}
+.src-summary .count{font-variant-numeric:tabular-nums;font-size:12px}
 .src-summary .count b{color:var(--success)}
 .src-summary .chev{margin-left:auto;transition:transform .2s;font-size:12px}
 .sources.open .src-summary .chev{transform:rotate(90deg)}
-.src-pins{display:flex;flex-wrap:wrap;gap:4px;padding:0 10px 8px;background:#4e5d6b}
-.pinchip{font-size:11px;background:var(--conf);border:1px solid var(--hair);padding:1px 7px;
+.src-pins{display:flex;flex-wrap:wrap;gap:4px;padding:0 10px 7px;background:var(--card-header)}
+.pinchip{font-size:11px;background:var(--raised);border:1px solid rgba(0,0,0,.22);padding:1px 7px;
   display:inline-flex;gap:3px;align-items:center}
 .pinchip .star{color:var(--warning)}
 .src-body{padding:8px 10px;display:none;background:var(--panel)}
 .sources.open .src-body{display:block}
 .src-body .filter{display:block;width:100%;background:var(--raised);color:var(--text);
-  border:1px solid var(--input-border);padding:5px 9px;font-size:13px;margin-bottom:8px}
+  border:1px solid var(--input-border);padding:6px 10px;font-size:14px;margin-bottom:8px;border-radius:0}
 .src-body .filter::placeholder{color:var(--muted)}
 .src-bulk{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
 .src-defaults{margin-bottom:8px}
-.src-list{max-height:190px;overflow-y:auto;border:1px solid var(--border);background:var(--raised)}
-.src-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid var(--hair)}
+.src-list{max-height:190px;overflow-y:auto;border:1px solid var(--list-border);background:var(--raised)}
+.src-row{display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid rgba(0,0,0,.22)}
 .src-row:last-child{border-bottom:none}
-.tgl{flex:0 0 54px;height:24px;border:1px solid #6b7d8e;display:inline-flex;font-size:10px;
-  font-weight:700;cursor:pointer;user-select:none}
+/* react-bootstrap-toggle, sized to the real ToggleButtonHeight (38px) × width 54px */
+.tgl{flex:0 0 var(--toggle-w);width:var(--toggle-w);height:var(--toggle-h);border:1px solid #6b7d8e;
+  display:inline-flex;font-size:11px;font-weight:700;cursor:pointer;user-select:none}
 .tgl span{flex:1;display:flex;align-items:center;justify-content:center}
-.tgl .on{background:var(--primary);color:#fff}
-.tgl .off{background:var(--panel);color:var(--muted)}
+.tgl .on{background:var(--primary);color:#fff}       /* onstyle="primary" */
+.tgl .off{background:var(--panel);color:var(--muted)} /* offstyle="secondary" */
 .tgl[data-on="false"] .on{background:var(--panel);color:var(--muted)}
 .tgl[data-on="false"] .off{background:#3a4653;color:var(--text)}
 .tgl[data-on="true"] .off{background:var(--panel);color:var(--muted)}
 .src-row .snm{flex:1;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.src-row .pin{background:transparent;border:none;color:#5b6b7b;cursor:pointer;font-size:14px;padding:0 2px}
+.src-row .pin{background:transparent;border:none;color:#5b6b7b;cursor:pointer;font-size:16px;
+  min-width:var(--toggle-h);min-height:var(--toggle-h);display:inline-flex;align-items:center;justify-content:center}
 .src-row .pin.on{color:var(--warning)}
+.src-row .pin:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
 
-/* Sources OVERLAY variant (alternative interaction shape, shown when body[data-src="overlay"]) */
+/* Sources OVERLAY variant (owner-REJECTED alt shape — kept as a demo toggle to show why inline won) */
 .src-overlay-panel{position:absolute;left:10px;right:10px;top:100%;z-index:70;background:var(--panel);
   border:1px solid #7f8fa0;box-shadow:0 8px 22px rgba(0,0,0,.55);padding:8px 10px;display:none}
-body[data-src="overlay"] .sources.open .src-body{display:none}          /* inline body hidden */
-body[data-src="overlay"] .sources.open .src-overlay-panel{display:block} /* floats instead */
+body[data-src="overlay"] .sources.open .src-body{display:none}
+body[data-src="overlay"] .sources.open .src-overlay-panel{display:block}
 body[data-src="overlay"] .sources{position:relative}
 
-/* --- Select Version (promoted, always open) --- */
-.sv{padding:8px 10px;border-bottom:1px solid var(--border)}
-.sv h6{margin:0 0 6px;font-weight:600;font-size:14px}
+/* --- Select Version (promoted, always open) — shipped .sv padding 8px 10px, heading 8px 0 4px --- */
+.sv{padding:8px 10px;border-bottom:1px solid var(--divider)}
+.sv h6{margin:0;padding:8px 0 4px;font-weight:600;font-size:14px}
 .sv .head{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px;color:var(--muted)}
 .sv .head .n{color:var(--text);font-weight:700}
 .seg{display:inline-flex;border:1px solid var(--input-border)}
 .seg button{background:var(--raised);color:var(--text);border:none;border-right:1px solid var(--input-border);
-  padding:3px 8px;font-size:11px;cursor:pointer}
+  padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit}
 .seg button:last-child{border-right:none}
 .seg button.on{background:var(--primary);color:#fff;font-weight:700}
-.axis{margin-bottom:6px}
-.axis .axl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:3px}
-/* PR #352 tile densities: dense 72 / medium 88 / hero 112 */
+.seg button:focus-visible{outline:2px solid var(--primary);outline-offset:-1px}
+/* PR #352 tile densities (unchanged): dense 72 / medium 88 / hero 112 */
 .vgrid{display:flex;flex-wrap:wrap;gap:6px}
 .vtile{width:72px;aspect-ratio:63/88;background:repeating-linear-gradient(45deg,#33475a,#33475a 7px,#2b3c4d 7px,#2b3c4d 14px);
-  outline:1px solid var(--hair);position:relative}
+  outline:1px solid rgba(235,235,235,.15);position:relative}
+.vtile.med{width:88px}
 .vtile.hero{width:112px}
 .vtile.sel{outline:2px solid var(--primary)}
 .vtile .vl{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);font-size:8px;
   text-align:center;padding:1px;font-family:monospace}
-/* group membership shown as a CORNER TAG on tiles, never a separator row (owner: read as ONE grid) */
+/* group membership = a CORNER TAG on tiles, never a separator row (owner: read as ONE grid) */
 .vtile .corner{position:absolute;top:0;left:0;font-size:7px;font-weight:800;letter-spacing:.03em;
   padding:0 3px;color:#fff;text-transform:uppercase}
-.vtile .corner.canon{background:rgba(92,184,92,.9)}
-.vtile .corner.alt{background:rgba(91,192,222,.9)}
-.vtile .corner.unk{background:rgba(120,135,150,.9)}
+.vtile .corner.canon{background:rgba(92,184,92,.92)}   /* $success */
+.vtile .corner.alt{background:rgba(91,192,222,.92)}    /* $info */
+.vtile .corner.unk{background:rgba(120,135,150,.92)}   /* muted */
 .vtile .req{position:absolute;top:0;right:0;background:var(--primary);color:#fff;font-size:8px;padding:0 3px;font-weight:800}
-/* suggested representative: confirm affordance = a corner ribbon ON the tile, not a block below */
+/* suggested representative: confirm affordance = a corner RIBBON on the tile, not a Y·N block below (§7 moment-a) */
 .vtile .confirm{position:absolute;top:0;right:0;width:0;height:0;border-top:16px solid var(--warning);
   border-left:16px solid transparent;cursor:pointer}
 .vtile .confirm i{position:absolute;top:-15px;right:1px;color:#111;font-size:8px;font-weight:900;font-style:normal}
 /* inline ghost "+N more of this printing" — same 72 footprint, flows in the grid */
 .vtile.ghost{background:transparent;outline:1px dashed var(--light);display:flex;align-items:center;
   justify-content:center;color:var(--light);font-size:11px;cursor:pointer}
-/* unified Frame & Treatment filter block */
-.ufilter{border:1px solid var(--border);background:var(--raised);padding:6px 8px;margin-bottom:6px}
+/* unified Frame & Treatment filter block (§6) */
+.ufilter{border:1px solid var(--divider);background:var(--raised);padding:6px 8px;margin-bottom:6px}
 .ufilter .row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px}
 .ufilter .row:last-child{margin-bottom:0}
 .ufilter .rl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);flex:0 0 58px}
-.ufilter .divider{align-self:stretch;width:1px;background:var(--border);margin:0 2px}
-/* tri-state treatment chips: neutral / include(+) / exclude(−) */
+.ufilter .divider{align-self:stretch;width:1px;background:var(--divider);margin:0 2px}
+/* tri-state treatment chips (attributeChips.ts cycle): neutral(·) / include(+) / exclude(−) */
 .tchip{font-size:11px;padding:2px 7px;border:1px solid #6b7d8e;background:transparent;color:var(--text);
-  cursor:pointer;display:inline-flex;gap:3px;align-items:center}
+  cursor:pointer;display:inline-flex;gap:3px;align-items:center;font-family:inherit}
+.tchip:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
 .tchip .st{font-weight:900;font-size:10px}
 .tchip[data-s="inc"]{border-color:var(--success);background:rgba(92,184,92,.22);color:#bfe6ad}
 .tchip[data-s="exc"]{border-color:var(--danger);background:rgba(217,83,79,.22);color:#f0b3b1;text-decoration:line-through}
 .tchip[data-s="neutral"] .st{color:var(--muted)}
 
-/* --- demoted accordion sections (AutofillCollapse look) --- */
-.acc{border-bottom:1px solid var(--border)}
-.acc-h{display:flex;align-items:center;padding:7px 10px;background:#4e5d6b;cursor:pointer;user-select:none}
+/* --- demoted accordion sections (AutofillCollapse look) — header #4e5d6b, padding 7px 10px --- */
+.acc{border-bottom:1px solid var(--divider)}
+.acc-h{display:flex;align-items:center;padding:7px 10px;background:var(--card-header);cursor:pointer;user-select:none}
+.acc-h:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
 .acc-h h6{margin:0;font-size:13px;font-weight:600}
 .acc-h .chev{margin-left:auto;font-size:12px;transition:transform .2s}
 .acc.open .acc-h .chev{transform:rotate(90deg)}
@@ -246,18 +267,19 @@ body[data-src="overlay"] .sources{position:relative}
 .acc.open .acc-b{display:block}
 .slotacts{display:flex;flex-direction:column;gap:6px}
 
-/* buttons — real Superhero .btn (flat, radius 0) */
+/* buttons — real Superhero .btn (FLAT, radius 0); btn-sm = Bootstrap 14px / 4px 8px */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;font-family:inherit;
-  font-size:13px;line-height:1.4;padding:5px 11px;border:1px solid transparent;border-radius:0;
-  cursor:pointer;text-decoration:none;white-space:nowrap;
+  font-size:16px;line-height:1.5;padding:6px 12px;border:1px solid transparent;border-radius:0;
+  cursor:pointer;text-decoration:none;white-space:nowrap;font-weight:400;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.15),0 1px 1px rgba(0,0,0,.075)}
-.btn-sm{font-size:12px;padding:3px 8px}
+.btn:focus-visible{outline:2px solid var(--annotate);outline-offset:1px}
+.btn-sm{font-size:14px;padding:4px 8px}
 .btn-block{width:100%}
-.btn-primary{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+.btn-primary{background:var(--primary);border-color:var(--primary);color:#fff}
 .btn-primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
-.btn-o-primary{background:transparent;border-color:var(--primary);color:var(--primary);font-weight:600}
+.btn-o-primary{background:transparent;border-color:var(--primary);color:var(--primary)}
 .btn-o-primary:hover{background:var(--primary);color:#fff}
-.btn-o-danger{background:transparent;border-color:var(--danger);color:var(--danger);font-weight:600}
+.btn-o-danger{background:transparent;border-color:var(--danger);color:var(--danger)}
 .btn-o-danger:hover{background:var(--danger);color:#fff}
 .btn-o-light{background:transparent;border-color:var(--light);color:var(--light)}
 .btn-o-light:hover{background:var(--light);color:#111}
@@ -268,9 +290,10 @@ body[data-src="overlay"] .sources{position:relative}
 .sv-before{display:none}
 body[data-sv="before"] .sv-after{display:none}
 body[data-sv="before"] .sv-before{display:block}
-/* BEFORE recreation (faithful to owner's live 390px screenshot): single-column stacks
-   fragmented by Confirm?/Y·N block, "+N more" text link, suggested/More-like-this links,
-   FRAME and TREATMENT as separate stacked rows, Filters as an underlined text link. */
+/* BEFORE recreation (faithful to owner's live 390px screenshot 8f5b65ce): single-column stacks
+   fragmented by the Confirm?/Y·N block (the D14-SUPERSEDED element), "+N more" text link,
+   suggested/More-like-this links, FRAME and TREATMENT as separate stacked rows, Filters as an
+   underlined text link. */
 .sv-before .bhead{display:flex;align-items:center;margin-bottom:6px;font-size:12px;color:var(--muted)}
 .sv-before .blink{color:var(--primary);text-decoration:underline;cursor:pointer;font-size:12px}
 .sv-before .baxis{display:flex;align-items:center;gap:8px;margin-bottom:5px}
@@ -289,20 +312,24 @@ body[data-sv="before"] .sv-before{display:block}
 .beforeflag{background:var(--danger);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;text-transform:uppercase}
 .afterflag{background:var(--success);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;text-transform:uppercase}
 
-/* annotation callouts */
+/* annotation callouts (mockup scaffolding, not part of the app) */
 .note{color:var(--annotate);font-size:11px;font-family:"Courier New",monospace;
   padding:3px 10px;background:rgba(255,215,106,.06);border-left:2px solid var(--annotate)}
+.note.decided{color:#a7e08a;border-left-color:var(--success);background:rgba(92,184,92,.07)}
 .propose{display:inline-block;font-size:10px;color:#111;background:var(--annotate);
+  padding:0 5px;font-family:"Courier New",monospace;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+.tag-decided{display:inline-block;font-size:10px;color:#fff;background:var(--success);
   padding:0 5px;font-family:"Courier New",monospace;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
 
 /* drawer chrome for tablet/phone forced frames */
 .scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:80}
 .drawer{position:absolute;z-index:81;background:var(--panel);box-shadow:0 0 30px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column}
-.drawer.start{top:0;bottom:0;left:0;width:380px;border-right:1px solid var(--border)}
-.drawer.bottom{left:0;right:0;bottom:0;height:74%;border-top-left-radius:14px;border-top-right-radius:14px}
+.drawer.start{top:0;bottom:0;left:0;width:380px;border-right:1px solid var(--divider)}
+.drawer.bottom{left:0;right:0;bottom:0;height:72%;border-top-left-radius:14px;border-top-right-radius:14px}
 .drawer-grip{width:40px;height:4px;background:#6b7d8e;border-radius:2px;margin:8px auto 2px}
-.drawer-hd{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border)}
-.drawer-hd button{background:transparent;border:1px solid var(--hair);color:var(--text);padding:2px 10px;cursor:pointer}
+.drawer-hd{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--divider)}
+.drawer-hd button{background:transparent;border:1px solid rgba(235,235,235,.15);color:var(--text);padding:2px 10px;cursor:pointer}
+@media (prefers-reduced-motion: reduce){*{transition:none !important}}
 </style>
 </head>
 <body data-conf="suggested" data-src="inline" data-sv="after">
@@ -319,14 +346,14 @@ body[data-sv="before"] .sv-before{display:block}
     <button data-conf="confirmed">Confirmed (✓)</button>
   </span>
   <span class="grp"><b>Sources shape</b>
-    <button data-src="inline" class="on">Inline ✓rec</button>
-    <button data-src="overlay">Overlay</button>
+    <button data-src="inline" class="on">Inline ✓#3</button>
+    <button data-src="overlay">Overlay (rejected)</button>
   </span>
   <span class="grp"><b>Select Version</b>
     <button data-sv="before">Before (live)</button>
     <button data-sv="after" class="on">After (new)</button>
   </span>
-  <span class="hint">Forced frames are transform-scaled to fit — review the full composition (incl. drawers) on a phone.</span>
+  <span class="hint">Forced frames are transform-scaled to fit any width — review the full composition (incl. tablet/phone drawers) on a phone.</span>
 </div>
 
 <div class="stage" id="stage"></div>
@@ -337,16 +364,16 @@ function cyc(el){
   const n={neutral:'inc',inc:'exc',exc:'neutral'}[el.getAttribute('data-s')];
   el.setAttribute('data-s',n);
   el.querySelector('.st').textContent={neutral:'·',inc:'+',exc:'−'}[n];
+  el.setAttribute('aria-label', el.textContent.trim().replace(/^[·+−]/,'') + ': ' + {neutral:'not filtered',inc:'included',exc:'excluded'}[n]);
 }
-/* ------------------------------------------------------------------ set glyph */
+/* set glyph placeholder (real app: Keyrune `ss ss-<code>` webfont via SetIcon.tsx) */
 function setGlyph(){
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l3 6 6 .9-4.5 4.3 1 6.3L12 16.9 6.5 19.5l1-6.3L3 8.9 9 8z"/></svg>';
 }
 
 /* ------------------------------------------------------------------ LEFT RAIL
    ONE builder, shared by every breakpoint frame — so forced views can never
-   drift from the responsive one (spec §8 principle). `expandedSources` and the
-   demoted-section open flags are baked so the mock shows the key states. */
+   drift from the responsive one (content is IDENTICAL at every breakpoint, D2). */
 function leftRail(){
   return `
   <div class="lrail"><div class="lscroll">
@@ -358,42 +385,49 @@ function leftRail(){
       <span class="reqbadge">2X2 117</span>
     </div>
 
-    <!-- (2) D14 CONFIDENCE ELEMENT — supersedes the old Confirm?/Y·N affordance -->
+    <!-- (2) D14 CONFIDENCE ELEMENT — supersedes the old Confirm?/Y·N affordance (§3, #271) -->
     <div class="d14" data-testid="display-confidence-element">
-      <span class="seticon" tabindex="0" title="Reference image via Scryfall (hover)">
+      <span class="seticon" tabindex="0" role="button" aria-label="Show reference image for 2X2 117">
         ${setGlyph()}
-        <span class="check">✓</span>
-        <span class="score">92%</span>
+        <span class="check" aria-hidden="true">✓</span>
+        <span class="score" aria-hidden="true">92%</span>
         <span class="pop">
           <span class="img">Scryfall reference<br>image (CDN)</span>
           <span class="cap">Popover · Scryfall CDN · display-only, nothing stored (governing premise + #271)</span>
         </span>
       </span>
       <span class="idtext">2X2 · 117</span>
-      <span class="statepill confirmed">Confirmed</span>
-      <span class="statepill suggested">92% confident</span>
-      <button class="btn btn-sm btn-o-danger notthis" data-testid="display-confidence-not-this-printing">✗ not this printing</button>
+      <span class="statepill confirmed" aria-label="confirmed printing">Confirmed</span>
+      <span class="statepill suggested" aria-label="machine-suggested, 92 percent confidence">92% confident</span>
+      <button class="btn btn-sm btn-o-danger notthis" data-testid="display-confidence-not-this-printing"
+              aria-label="Vote: this is not printing 2X2 117">✗ not this printing</button>
     </div>
-    <div class="note">D14: set icon = confidence anchor. Human-confirmed → green ✓ on the icon +
-      "Confirmed" pill. Not confirmed → numeric score badge on the icon + "N% confident" pill +
-      one-click "✗ not this printing" (real useTagVoting vote). Hover the icon → Scryfall popover.</div>
+    <div class="note decided">D14 [DECIDED]: set icon = confidence anchor + hover→Scryfall popover.
+      Confirmed → green ✓ + "Confirmed" pill, NO number. Suggested → score badge + "N% confident" pill.
+      "✗ not this printing" = a real useTagVoting vote and, per owner answer #2 (2026-07-23), it STAYS
+      visible on a confirmed printing too (de-emphasised, opacity .6) — explicit human dissent = D1
+      human-vs-human contest. There is NO standalone "matching? Y/N" block anywhere (removed, #271).</div>
+    <div class="note">Q1 seam: the "92%" reads the suggestedCanonicalCardConfidence field. Until the backend
+      supplies the calibrated number (owner: "arriving shortly — wire the field, graceful until live"),
+      the pill falls back to a qualitative "Suggested" — never a fabricated %.</div>
 
-    <!-- (3) ARTIST support — now a button that names the destination site -->
+    <!-- (3) ARTIST support — a button that visibly credits the destination site (§5) -->
     <div class="artist">
       <div class="by">Art by <span class="nm">Christopher Rush</span></div>
       <a class="btn btn-sm btn-o-primary" href="#" target="_blank" rel="noopener noreferrer"
          title="via MTG Artist Connection" data-testid="artist-support-link">
         Support on MTG Artist Connection
-        <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8.636 3.5a.5.5 0 0 0-.5-.5H1.5A1.5 1.5 0 0 0 0 4.5v10A1.5 1.5 0 0 0 1.5 16h10a1.5 1.5 0 0 0 1.5-1.5V7.864a.5.5 0 0 0-1 0V14.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5h6.636a.5.5 0 0 0 .5-.5z"/><path d="M16 .5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1h3.793L6.146 9.146a.5.5 0 1 0 .708.708L15 1.707V5.5a.5.5 0 0 0 1 0z"/></svg>
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8.636 3.5a.5.5 0 0 0-.5-.5H1.5A1.5 1.5 0 0 0 0 4.5v10A1.5 1.5 0 0 0 1.5 16h10a1.5 1.5 0 0 0 1.5-1.5V7.864a.5.5 0 0 0-1 0V14.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5h6.636a.5.5 0 0 0 .5-.5z"/><path d="M16 .5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1h3.793L6.146 9.146a.5.5 0 1 0 .708.708L15 1.707V5.5a.5.5 0 0 0 1 0z"/></svg>
       </a>
     </div>
-    <div class="note">Item 3: was a bare orange hotlink. Now a btn-o-primary that visibly credits
-      "MTG Artist Connection" (text credit only — zero-crawl, no fetched logo). Reuses ArtistSupportLink
-      (className + children props already exist; behavior-preserving).</div>
+    <div class="note">Item 3: was a bare orange hotlink. Now a btn-outline-primary that NAMES the
+      destination ("MTG Artist Connection") — text credit only, zero-crawl, no fetched logo. Reuses
+      ArtistSupportLink (className + children props already exist; behaviour-preserving).</div>
 
-    <!-- (4) SOURCES accordion -->
+    <!-- (4) SOURCES accordion — inline (owner answer #3), header #4e5d6b -->
     <div class="sources open" id="srcAcc">
-      <div class="src-summary" onclick="document.getElementById('srcAcc').classList.toggle('open')">
+      <div class="src-summary" tabindex="0" role="button" aria-expanded="true" aria-controls="srcBody"
+           onclick="document.getElementById('srcAcc').classList.toggle('open')">
         <span class="lbl">Sources</span>
         <span class="count"><b>182</b> of 247 enabled</span>
         <span class="chev">›</span>
@@ -401,10 +435,9 @@ function leftRail(){
       <div class="src-pins">
         <span class="pinchip"><span class="star">★</span> Chilli's Cube</span>
         <span class="pinchip"><span class="star">★</span> MPCFill Community</span>
-        <span class="annotate" style="align-self:center">← pinned favourites, visible when collapsed (#353 seam)</span>
       </div>
-      <div class="src-body">
-        <input class="filter" placeholder="Filter sources…  (type to narrow the list)">
+      <div class="src-body" id="srcBody">
+        <input class="filter" placeholder="Filter sources…" aria-label="Filter sources">
         <div class="src-bulk">
           <button class="btn btn-sm btn-o-light">Enable all</button>
           <button class="btn btn-sm btn-o-light">Disable all</button>
@@ -416,25 +449,27 @@ function leftRail(){
           </button>
         </div>
         <div class="src-list" id="srcList"></div>
+        <div class="note" style="margin-top:6px">Item 1: the ~247-row toggle list collapses behind ONE
+          summary row (<b>N of M enabled</b>). Pinned ★ favourites show as chips while collapsed
+          (owner answer #5: pin UI + localStorage now; account-tie under #353). Toggles are the shipped
+          react-bootstrap-toggle at its real 38px height.</div>
       </div>
-      <!-- overlay-shape alternative (shown when Sources shape = Overlay) -->
+      <!-- overlay-shape alternative (owner REJECTED — kept only to show the tradeoff) -->
       <div class="src-overlay-panel">
-        <input class="filter" placeholder="Filter sources…">
+        <input class="filter" placeholder="Filter sources…" aria-label="Filter sources (overlay demo)">
         <div class="src-bulk">
           <button class="btn btn-sm btn-o-light">Enable all</button>
           <button class="btn btn-sm btn-o-light">Disable all</button>
           <button class="btn btn-sm btn-o-light">Invert</button>
         </div>
         <div class="src-list" id="srcListOv"></div>
-        <div class="note" style="margin-top:6px">OVERLAY shape: floats over rail content. On phone
-          (bottom-sheet) / tablet (start-drawer) this is an overlay-over-an-overlay — cramped, the
-          exact stacking hazard the spec warns against. INLINE is recommended.</div>
+        <div class="note" style="margin-top:6px">OVERLAY shape (owner answer #3: NOT chosen). On phone
+          (bottom-sheet) / tablet (start-drawer) this floats an overlay over an overlay — the stacking
+          hazard the base spec warns against. INLINE won.</div>
       </div>
     </div>
 
     <!-- (5) SELECT VERSION — promoted, always open (funnel), PR #352 densities -->
-    <!-- BEFORE: faithful recreation of the owner's live 390px screenshot (single-column stacks
-         fragmented by Confirm?/Y·N, "+N more" links, suggested/More-like-this, split FRAME+TREATMENT). -->
     <div class="sv sv-before">
       <h6>Select Version <span class="beforeflag">before — live</span></h6>
       <div class="bhead">6 versions <span class="blink" style="margin-left:auto">› Filters</span></div>
@@ -450,17 +485,17 @@ function leftRail(){
         <div><span class="bsug">⌇ suggested</span> · <span class="blink">More like this</span></div>
       </div>
       <div class="note">BEFORE (owner screenshot 8f5b65ce): 6 tiles fragmented into stacked
-        single-column mini-blocks; the Confirm?/Y·N block is the D14-SUPERSEDED element; FRAME and
+        single-column mini-blocks; the <b>Confirm?/Y·N block is the D14-SUPERSEDED element</b>; FRAME and
         TREATMENT are separate rows; Filters is an underlined text link. Toggle "After" above.</div>
     </div>
     <div class="sv sv-after">
       <h6>Select Version <span class="afterflag">after — new</span></h6>
       <div class="head"><span class="n">14</span> results
-        <button class="btn btn-sm btn-o-light" style="margin-left:auto">▾ Filters</button>
+        <button class="btn btn-sm btn-o-light" style="margin-left:auto" aria-expanded="true">▾ Filters</button>
       </div>
-      <!-- UNIFIED FILTERS: Border (exclusive) row, then Frame Style (exclusive) + Treatment
+      <!-- UNIFIED FILTERS (§6): Border (exclusive) row, then Frame Style (exclusive) + Treatment
            (tri-state chips) sharing ONE block to save space (owner addendum item 1) -->
-      <div class="ufilter">
+      <div class="ufilter" role="group" aria-label="Frame and treatment filters">
         <div class="row"><span class="rl">Border</span>
           <span class="seg"><button class="on">Any</button><button>Black</button><button>White</button><button>Silver</button></span>
         </div>
@@ -468,42 +503,43 @@ function leftRail(){
           <span class="seg"><button class="on">Any</button><button>Old</button><button>Modern</button><button>Future</button></span>
           <span class="divider"></span>
           <span class="rl" style="flex:0 0 auto">Treatment</span>
-          <span class="tchip" data-s="neutral" onclick="cyc(this)"><span class="st">·</span>Full Art</span>
-          <span class="tchip" data-s="inc" onclick="cyc(this)"><span class="st">+</span>Borderless</span>
-          <span class="tchip" data-s="neutral" onclick="cyc(this)"><span class="st">·</span>Showcase</span>
-          <span class="tchip" data-s="exc" onclick="cyc(this)"><span class="st">−</span>Extended</span>
-          <span class="tchip" data-s="neutral" onclick="cyc(this)"><span class="st">·</span>Etched</span>
+          <span class="tchip" data-s="neutral" role="button" tabindex="0" onclick="cyc(this)" aria-label="Full Art: not filtered"><span class="st">·</span>Full Art</span>
+          <span class="tchip" data-s="inc" role="button" tabindex="0" onclick="cyc(this)" aria-label="Borderless: included"><span class="st">+</span>Borderless</span>
+          <span class="tchip" data-s="neutral" role="button" tabindex="0" onclick="cyc(this)" aria-label="Showcase: not filtered"><span class="st">·</span>Showcase</span>
+          <span class="tchip" data-s="exc" role="button" tabindex="0" onclick="cyc(this)" aria-label="Extended Art: excluded"><span class="st">−</span>Extended</span>
+          <span class="tchip" data-s="neutral" role="button" tabindex="0" onclick="cyc(this)" aria-label="Etched: not filtered"><span class="st">·</span>Etched</span>
         </div>
       </div>
       <div class="note">Item 1: Frame (exclusive segments — mutual-exclusivity kept) + Treatment
-        (tri-state chips: · neutral → + include → − exclude, from attributeChips.ts) share ONE
-        block. Border stays its own exclusive row.</div>
+        (tri-state chips: · neutral → + include → − exclude, from attributeChips.ts) share ONE block.
+        Border stays its own exclusive row above.</div>
       <!-- ONE CONTINUOUS GRID across canonical → custom → unknown. No separator rows: group
-           membership = a corner tag on each tile; "+N more" = an inline ghost tile; the
-           suggested-printing confirm = a corner ribbon ON the tile (owner addendum item 2). -->
-      <div class="vgrid">
-        <span class="vtile sel"><span class="req">REQ</span><span class="vl">2X2·117</span></span>
-        <span class="vtile"><span class="corner canon">✓</span><span class="vl">LEA·161</span></span>
-        <span class="vtile"><span class="corner canon">✓</span><span class="vl">M10·146</span></span>
-        <span class="vtile ghost" title="Expand this printing's other copies in place">+9</span>
-        <span class="vtile"><span class="confirm" title="Confirm this suggested printing"><i>?</i></span><span class="vl">A25·141</span></span>
-        <span class="vtile"><span class="corner alt">Alt</span><span class="vl">CLB·176</span></span>
-        <span class="vtile"><span class="corner alt">Alt</span><span class="vl">custom</span></span>
-        <span class="vtile"><span class="corner unk">?</span><span class="vl">unknown</span></span>
+           membership = a corner tag; "+N more" = an inline ghost tile; the suggested-printing
+           confirm = a corner ribbon ON the tile (§7). -->
+      <div class="vgrid" role="list">
+        <span class="vtile sel" role="listitem" aria-label="requested printing 2X2 117"><span class="req">REQ</span><span class="vl">2X2·117</span></span>
+        <span class="vtile" role="listitem" aria-label="canonical printing LEA 161"><span class="corner canon">✓</span><span class="vl">LEA·161</span></span>
+        <span class="vtile" role="listitem" aria-label="canonical printing M10 146"><span class="corner canon">✓</span><span class="vl">M10·146</span></span>
+        <span class="vtile ghost" role="button" tabindex="0" aria-label="Show 9 more copies of this printing">+9</span>
+        <span class="vtile" role="listitem" aria-label="machine-suggested printing A25 141"><span class="confirm" role="button" tabindex="0" aria-label="Confirm suggested printing A25 141"><i>?</i></span><span class="vl">A25·141</span></span>
+        <span class="vtile" role="listitem" aria-label="alternate/custom printing CLB 176"><span class="corner alt">Alt</span><span class="vl">CLB·176</span></span>
+        <span class="vtile" role="listitem" aria-label="alternate/custom printing"><span class="corner alt">Alt</span><span class="vl">custom</span></span>
+        <span class="vtile" role="listitem" aria-label="unknown printing"><span class="corner unk">?</span><span class="vl">unknown</span></span>
       </div>
-      <div class="note">Item 2: canonical (✓) → custom (Alt) → unknown (?) read as one grid.
-        REQ = requested printing, sorts first. Amber ribbon = one-tap confirm on a suggested rep.
-        Ghost "+9" expands that printing's copies in place — no full-width rows break the grid.
-        PR #352 densities: dense 72px (shown) / medium 88 / hero 112.</div>
+      <div class="note">Item 2: canonical (✓) → custom (Alt) → unknown (?) read as ONE grid (owner:
+        "the 5 cards should be in 1 section"). REQ = requested, sorts first. The amber corner ribbon =
+        one-tap confirm on a machine-suggested rep (this is the ONLY place the confirm affordance
+        survives — folded onto the tile, never a Y/N block). Ghost "+9" expands that printing's copies
+        in place. PR #352 densities: dense 72px (shown) / medium 88 / hero 112.</div>
     </div>
 
     <!-- (6) demoted sections — collapsed by default; Slot Actions shown open to prove button-ification -->
-    ${accSection('Card Details','')}
-    ${accSection('Attributes','')}
-    ${accSection('Printing Tags','')}
-    ${accSection('Print Options','')}
+    ${accSection('Card Details')}
+    ${accSection('Attributes')}
+    ${accSection('Printing Tags')}
+    ${accSection('Print Options')}
     <div class="acc open">
-      <div class="acc-h" onclick="this.parentNode.classList.toggle('open')"><h6>Slot Actions</h6><span class="chev">›</span></div>
+      <div class="acc-h" tabindex="0" role="button" aria-expanded="true" onclick="this.parentNode.classList.toggle('open')"><h6>Slot Actions</h6><span class="chev">›</span></div>
       <div class="acc-b">
         <div class="slotacts">
           <button class="btn btn-sm btn-o-light btn-block">Change query…</button>
@@ -511,17 +547,17 @@ function leftRail(){
           <button class="btn btn-sm btn-o-danger btn-block">Delete slot</button>
         </div>
         <div class="note" style="margin-top:6px">Item 4: actions were bare text rows. Now real buttons
-          (Delete = btn-o-danger). Same CardSlotMenuActions list, rendered as buttons not a menu.</div>
+          (Delete = btn-outline-danger). Same CardSlotMenuActions list, rendered as buttons not a menu.</div>
       </div>
     </div>
-    ${accSection('Report','')}
+    ${accSection('Report')}
 
   </div></div>`;
 }
 function accSection(title){
-  return `<div class="acc"><div class="acc-h" onclick="this.parentNode.classList.toggle('open')">
+  return `<div class="acc"><div class="acc-h" tabindex="0" role="button" aria-expanded="false" onclick="this.parentNode.classList.toggle('open')">
     <h6>${title}</h6><span class="chev">›</span></div>
-    <div class="acc-b"><span class="rrail" style="all:unset;color:var(--muted);font-size:12px">Collapsed by default (D3). Content reachable, not deleted.</span></div></div>`;
+    <div class="acc-b"><span style="color:var(--muted);font-size:12px">Collapsed by default (D3). Content reachable, not deleted.</span></div></div>`;
 }
 
 /* center + right rail (present so the three-region layout reads true) */
@@ -577,10 +613,15 @@ function phoneFrame(){
 const W={desktop:1400,tablet:900,phone:390};
 const H={desktop:820,tablet:900,phone:820};
 
+function syncDemoOffset(){
+  const demo=document.querySelector('.demo');
+  document.getElementById('stage').style.paddingTop=(demo.offsetHeight+8)+'px';
+}
 function render(){
   const view=document.body.getAttribute('data-view')||'auto';
   const stage=document.getElementById('stage');
   const avail=window.innerWidth;
+  syncDemoOffset();
 
   function scaledFrame(tier,html){
     const fw=W[tier], fh=H[tier];
@@ -594,7 +635,6 @@ function render(){
   const build={desktop:desktopFrame,tablet:tabletFrame,phone:phoneFrame};
 
   if(view==='auto'){
-    // pick a tier from real width; render at native width (no scaling)
     let tier = avail>=1200?'desktop':avail>=768?'tablet':'phone';
     stage.innerHTML=`<div class="frame" style="width:100%;position:relative">
       <span class="frame-tag">AUTO — ${avail}px → ${tier}</span>${build[tier]()}</div>`;
@@ -605,21 +645,21 @@ function render(){
 }
 
 /* source list rows */
-const SRC=[['Chilli’s Cube',true,true],['MPCFill Community',true,true],['Nexus Proxies',true,false],
+const SRC=[["Chilli's Cube",true,true],['MPCFill Community',true,true],['Nexus Proxies',true,false],
   ['GoodGamery Scans',true,false],['Old School 93/94',false,false],['Retro Frame Vault',true,false],
   ['Alt Art Collective',true,false],['Silver Border Depot',false,false],['Judge Foils Archive',true,false],
   ['Textless Originals',false,false]];
 function srcRows(){
   return SRC.map(([n,on,pin])=>`<div class="src-row">
-    <span class="tgl" data-on="${on}" onclick="this.setAttribute('data-on', this.getAttribute('data-on')==='true'?'false':'true')">
+    <span class="tgl" data-on="${on}" role="switch" aria-checked="${on}" tabindex="0" aria-label="${n}"
+          onclick="this.setAttribute('data-on', this.getAttribute('data-on')==='true'?'false':'true')">
       <span class="on">On</span><span class="off">Off</span></span>
     <span class="snm">${n}</span>
-    <button class="pin${pin?' on':''}" title="Pin as favourite (#353)">★</button>
+    <button class="pin${pin?' on':''}" aria-pressed="${pin}" aria-label="Pin ${n} as a favourite source">★</button>
   </div>`).join('');
 }
 function fillSources(){
-  document.querySelectorAll('#srcList,#srcListOv,[id^=srcList]').forEach(el=>{el.innerHTML=srcRows();});
-  document.querySelectorAll('.src-list').forEach(el=>{if(!el.innerHTML)el.innerHTML=srcRows();});
+  document.querySelectorAll('.src-list').forEach(el=>{el.innerHTML=srcRows();});
 }
 
 /* demo strip wiring */
@@ -635,6 +675,7 @@ document.querySelector('.demo').addEventListener('click',e=>{
 });
 window.addEventListener('resize',()=>{clearTimeout(window._t);window._t=setTimeout(render,120);});
 render();
+window.addEventListener('load',syncDemoOffset);
 </script>
 </body>
 </html>

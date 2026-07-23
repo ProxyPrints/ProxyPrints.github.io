@@ -7,7 +7,10 @@ doc is the single, un-fragmented home for the round shipped 2026-07-23
 (`SPEC-display-left-rail.md`, owner-approved; built into PR #352) — see
 [`docs/upstreaming/readiness-audit.md`](../upstreaming/readiness-audit.md)'s
 §10 for the presentation-only upstream-divergence ledger this round seeded
-(not duplicated here).
+(not duplicated here). A corrected fidelity round (also 2026-07-23,
+Yori) normalized every rail block-boundary divider to `#16202b` (O1,
+below) — see that section for the one binding-table row it deliberately
+did NOT apply.
 
 Companion design artifacts (spec + mockup) live at
 [`docs/proposals/mockups/proposal-h/display-left-rail-mockup.html`](../proposals/mockups/proposal-h/display-left-rail-mockup.html)
@@ -270,7 +273,7 @@ bulk/pin/save-defaults controls (above). The empty-state "Find this card
 ↗" link stays a link — pure navigation out to Scryfall, the rule's own
 explicit exception.
 
-## Density (mechanical, SPEC §2)
+## Density (mechanical, SPEC §D.1)
 
 Rail blocks now butt against each other separated by 1px borders —
 vertical rhythm comes from each block's own compact padding
@@ -280,6 +283,44 @@ wrapper), not an inter-block `gap`. Tile-wrapping rows already use
 behavior changed — see `proposal-h-display-layout-spec.md` §4.1 for the
 unchanged R2 shell (Offcanvas placement per tier, 380px inline width,
 etc.); this round only restyles/recomposes the rail's interior.
+
+## O1 — divider normalization (corrected fidelity round, 2026-07-23)
+
+The rail's own block-boundary hairlines were inconsistent: `.d14` (the
+confidence band) already used an explicit `#16202b`, while `.rail-head`,
+`.artist-line`, and the Sources accordion's outer wrapper used the plain
+Bootstrap `.border-bottom` utility — whose active `--bs-border-color` is
+genuinely ambiguous in this theme's compiled CSS (both `#495057` and
+`#ced4da` are present), risking a pale line on the dark rail depending on
+cascade order. The unified Frame+Treatment filter's own border (and its
+internal Frame↔Treatment divider) separately hardcoded the unthemed
+`rgba(0,0,0,.22)`. The Select Version wrapper had no boundary divider at
+all.
+
+**Normalized (owner-approved, corrected `SPEC-display-left-rail.md` §A/
+§D.1) — every one of the above now explicitly renders `#16202b`, 1px**:
+`.rail-head`, `.artist-line`, and `.sources` (all three now via
+`RailRoot`'s own styled-component rules in `DisplayPage.tsx`, replacing
+the Bootstrap utility classes they used to carry); the Select Version
+wrapper (gained a `select-version-wrapper` className plus a new
+`RailRoot` rule — it never had a boundary before); the unified filter
+`fieldset`'s own border and its internal `UnifiedFilterDivider` (both
+inline/styled-component literals in `SelectVersionResults.tsx`). The
+Sources list's own inner border and each source row's own bottom divider
+were deliberately left at `rgba(0,0,0,.22)` — the spec's own binding
+table marks those two specifically as unchanged (`I`, not `I (border N)`), not part of O1's scope.
+
+**Deliberately NOT applied this round**: the same corrected spec's §A/
+§D.1 also calls for every rail `.btn-sm` to return to Bootstrap's real
+`sm` metrics (`14px`/`4px 8px`), reversing the smaller, already-shipped
+`CompactButton`/`CompactToggleButton`/`CompactLinkButton`/`TreatmentChip`
+sizing from the earlier "the buttons are too big" owner fix round. The
+spec's own §A flags that specific row as needing its own owner sign-off
+(distinct from O1's separately-confirmed divider normalization), and it
+directly conflicts with the more specific, already-shipped directive on
+the exact same controls — left as shipped pending an explicit owner call
+on that one row (`funnel-filters-toggle`'s own 12px assertion in
+`DisplayLeftRailFidelity.spec.ts` documents this).
 
 ## File-level summary
 

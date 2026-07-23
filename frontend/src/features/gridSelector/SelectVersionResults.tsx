@@ -489,11 +489,14 @@ const TreatmentChip = styled.button<{ $state: ChipVoteState }>`
 `;
 
 /** A thin vertical rule separating Frame's segmented control from Treatment's chip row within
- * the one shared `.ufilter` block (§6's ASCII diagram). */
+ * the one shared `.ufilter` block (§6's ASCII diagram). O1 fix round (SPEC-display-left-rail.md
+ * §D.1, corrected 2026-07-23) - the mockup's own `.ufilter .divider{background:var(--divider)}`
+ * maps this to the normalized `#16202b` rail-boundary hairline, not the unthemed
+ * `rgba(0,0,0,.22)` this used to hardcode. */
 const UnifiedFilterDivider = styled.span`
   align-self: stretch;
   width: 1px;
-  background: rgba(0, 0, 0, 0.22);
+  background: #16202b;
   margin: 0 2px;
 `;
 
@@ -1752,7 +1755,10 @@ export function SelectVersionResults({
           <fieldset
             className="ufilter"
             style={{
-              border: "1px solid rgba(0,0,0,.22)",
+              // O1 fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23,
+              // owner-approved) - normalized to the `#16202b` rail-boundary hairline (was the
+              // unthemed `rgba(0,0,0,.22)`), same value every other rail block boundary now uses.
+              border: "1px solid #16202b",
               background: "#22303f",
               padding: "6px 8px",
               // CSS-fidelity pass (2026-07-23) - `mb-1` (0.25rem/4px) approximated the mockup's

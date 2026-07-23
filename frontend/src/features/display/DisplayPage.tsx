@@ -437,7 +437,14 @@ interface RailHeaderProps {
 // badge's own margin is enough).
 const RailHeader = ({ face, slot, cardName, searchQuery }: RailHeaderProps) => (
   <div
-    className="border-bottom rail-head"
+    // O1 fix round (SPEC-display-left-rail.md §D.1/"Introduced this round" #1, corrected
+    // 2026-07-23, owner-approved): the plain Bootstrap `.border-bottom` utility used to sit here -
+    // its active `--bs-border-color` is genuinely ambiguous in the compiled CSS (both `#495057`
+    // and `#ced4da` are present), which could render a pale line on this dark rail. Retired in
+    // favour of RailRoot's own explicit `.rail-head{border-bottom:1px solid #16202b}` rule below -
+    // the same literal dark value `.d14` already used, now normalized across every rail block
+    // boundary.
+    className="rail-head"
     style={{ padding: "8px 10px" }}
     data-testid="display-rail-header"
   >
@@ -487,7 +494,9 @@ const PromotedZone = ({ cardDocument, backendURL }: PromotedZoneProps) => (
   <>
     <ConfidenceElement cardDocument={cardDocument} backendURL={backendURL} />
     <div
-      className="artist-line border-bottom small"
+      // O1 fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - see RailHeader's
+      // own identical comment for why the Bootstrap `.border-bottom` utility is retired here too.
+      className="artist-line small"
       style={{ padding: "8px 10px" }}
     >
       <ArtistSection cardDocument={cardDocument} />
@@ -963,12 +972,31 @@ const ActionBarSearchGroup = styled.div`
 // (RailSection/SourcesAccordion) - the value now travels WITH the component invocation instead
 // of being injected from this ancestor wrapper two files away. See that prop's own comment in
 // AutofillCollapse.tsx for the full before/after.
+//
+// O1 fix round (SPEC-display-left-rail.md §D.1/§A "Introduced this round" #1, corrected
+// 2026-07-23, owner-approved): divider normalization to #16202b, 1px, on every rail block
+// boundary. Shipped code was inconsistent - `.d14` already used the explicit `#16202b` literal
+// below, while `.rail-head`/`.artist-line`/`.sources` (SourcesAccordion.tsx's own outer wrapper -
+// a descendant of this styled-component's scope, so the selector below reaches it too) instead
+// used Bootstrap's `.border-bottom` utility, whose active `--bs-border-color` is genuinely
+// ambiguous in the compiled CSS (`#495057` vs `#ced4da` both present - the light value would
+// render a pale line on this dark rail). Retired in favour of the one explicit shipped dark value
+// everywhere; the Select Version wrapper gains a boundary hairline it never had before (mockup:
+// `.sv{border-bottom:1px solid var(--divider)}`).
 const RailRoot = styled.div`
   .rail-head {
     background: #22303f;
+    border-bottom: 1px solid #16202b;
   }
   .artist-line {
     background: #22303f;
+    border-bottom: 1px solid #16202b;
+  }
+  .sources {
+    border-bottom: 1px solid #16202b;
+  }
+  .select-version-wrapper {
+    border-bottom: 1px solid #16202b;
   }
   .select-version-heading {
     margin: 0;
@@ -1157,8 +1185,11 @@ const Rail = ({
       <SourcesAccordion />
       {/* E2/E3/L4 - Select Version, promoted + always open (renamed from "Choose Image", no
           collapse chrome at all - the primary art surface, not one accordion among several).
-          Density (§2): `px-2 pt-2` (8/8-top) -> explicit `8px 10px`. */}
-      <div style={{ padding: "8px 10px" }}>
+          Density (§2): `px-2 pt-2` (8/8-top) -> explicit `8px 10px`. O1 fix round
+          (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this wrapper gains a
+          `select-version-wrapper` class carrying the normalized `#16202b` bottom hairline (see
+          RailRoot's own rule below) - it had no block-boundary divider of its own before. */}
+      <div className="select-version-wrapper" style={{ padding: "8px 10px" }}>
         <h6 className="select-version-heading">Select Version</h6>
         <SelectVersionSection
           face={selectedSlotRef.face}
