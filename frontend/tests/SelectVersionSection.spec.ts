@@ -24,7 +24,7 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "./test-utils";
+import { openSelectVersionSection } from "./test-utils";
 
 function buildRoute(route: string): string {
   return `${localBackendURL}/${route}`;
@@ -51,17 +51,6 @@ const selectVersionHandlers = [
 // groups in one result set - see those fixtures' own comments for the exact shape.
 test.describe("SelectVersionSection (issue #167)", () => {
   test.describe.configure({ timeout: 60_000 });
-
-  const openSelectVersionSection = async (
-    page: import("@playwright/test").Page
-  ) => {
-    await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
-    await page.getByTestId("page-preview-slot").first().click();
-    // The rail always renders compressed tiles now (editor-completion package, E4/L9 - the
-    // toggle is gone entirely, hard-pinned true) - no "Compressed" click needed any more.
-  };
 
   // Addendum item 2 (SPEC-display-left-rail.md §7, owner verbatim: "the 5 cards should be in 1
   // section") - the old per-group wrapper divs (`select-version-group-*`,
