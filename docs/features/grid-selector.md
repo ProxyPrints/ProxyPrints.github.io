@@ -223,8 +223,17 @@ described above.
 - **Count-proportional disclosure** (F1/D21, named constants
   `FUNNEL_DENSE_ABOVE = 8` / `FUNNEL_HERO_AT_OR_BELOW = 2`): `>8`
   survivors → axes shown + advanced filters auto-expanded once + dense
-  ~72px tiles; `3–8` → axes shown + medium ~104px tiles; `≤2` → axes
-  collapse to the head's active-pill summary + expanded (`compressed= false`) hero tiles; `0` → an empty state with a "Clear filters" link.
+  ~72px tiles; `3–8` → axes shown + medium ~88px tiles; `≤2` → axes
+  collapse to the head's active-pill summary + expanded (`compressed= false`) ~112px hero tiles; `0` → an empty state with a "Clear filters" link.
+  **Owner fix round (2026-07-23, "the elements of the cardpicker are
+  too large still")**: `medium`/`hero` had no design-doc grounding
+  (invented during the funnel round itself, unlike `dense`'s
+  mockup-sourced 72px) and had drifted to 104px/150px - tightened to
+  88px/112px (`FUNNEL_TIER_TILE_WIDTH_REM`,
+  `SelectVersionResults.tsx`), and the tile-wrapping rows' gap dropped
+  from Bootstrap's `gap-2` (8px) to `gap-1` (4px) so more tiles fit per
+  row at the rail's ~380px width. `dense`'s 72px is untouched - it
+  already matched the reference.
 - **D20 implicit vote — the pick IS the vote, no second tap.** Picking a
   candidate while ≥1 chip is active computes `supportTagNames` (active
   tags the candidate satisfies ONLY via a suggested/unconfirmed vote,

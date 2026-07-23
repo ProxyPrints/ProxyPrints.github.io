@@ -327,13 +327,20 @@ export function funnelDisclosureTier(
   return "medium";
 }
 
+// Owner fix round (2026-07-23, "the elements of the cardpicker are too large still" - issue
+// #302's sitewide retheme, /display reference density): `dense` stays pinned to the
+// owner-approved editor-completion mockup's own `.version-grid .card63` value (72px) - that one
+// has real design-doc grounding. `medium`/`hero` had none (invented during the funnel round,
+// F1/D21) and had drifted well past what the rail's own ~380px width needs for legibility -
+// tightened down (104px->88px, 150px->112px) so more tiles fit per row and a `hero`-tier
+// single/pair-survivor pick isn't dramatically larger than everything else in the pane.
 const FUNNEL_TIER_TILE_WIDTH_REM: Record<
   Exclude<FunnelDisclosureTier, "none">,
   number
 > = {
   dense: 4.5,
-  medium: 6.5,
-  hero: 9.4,
+  medium: 5.5,
+  hero: 7,
 };
 
 // F3 - dashed accent border + trailing glyph for a SUGGESTED chip; solid/plain otherwise. Reuses
@@ -907,7 +914,7 @@ export function SelectVersionResults({
             instead of each stacking on its own full-width line, now that SelectVersionTile
             itself carries a real fixed width (see that component's own comment) rather than a
             no-op `width: auto`. */}
-        <div className="d-flex flex-wrap gap-2">
+        <div className="d-flex flex-wrap gap-1">
           <SelectVersionTile
             {...tileProps(
               group.representative,
@@ -951,7 +958,7 @@ export function SelectVersionResults({
         className="mb-2"
         data-testid={`select-version-reason-group-${group.tagName}`}
       >
-        <div className="d-flex flex-wrap gap-2">
+        <div className="d-flex flex-wrap gap-1">
           <SelectVersionTile
             {...tileProps(group.representative, label, false)}
           />
@@ -1027,7 +1034,7 @@ export function SelectVersionResults({
       )}
       {groups.unknown.length > 0 && (
         <div
-          className="d-flex flex-wrap gap-2"
+          className="d-flex flex-wrap gap-1"
           data-testid="select-version-group-unknown"
         >
           {groups.unknown.map((identifier) => {
