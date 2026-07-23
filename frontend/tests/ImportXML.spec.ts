@@ -33,7 +33,7 @@ import {
 } from "./test-utils";
 
 // Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page.
-// 8 of these 9 tests import into an EMPTY project - DisplayPage's empty-project landing mounts
+// 9 of these 10 tests import into an EMPTY project - DisplayPage's empty-project landing mounts
 // the same plain ImportXML component verbatim, inline inside a collapsed "Import a File or URL"
 // accordion (importXMLOnEmptyLanding, test-utils.ts). The remaining test ("into a non-empty
 // project") uses the populated toolbar's own "Add Cards" dropdown instead - the SAME classic
@@ -544,7 +544,7 @@ test.describe("ImportXML", () => {
     const orphanFrontId = "1FItgPw7VK_Tbv6dMiqdy5zd-jAoEC9mn";
     const orphanBackId = "1LrVX0pUcye9n_0RtaDNVl2xPrQgn7CYf";
 
-    await importXML(
+    await importXMLOnEmptyLanding(
       page,
       `<order>
         <details>
