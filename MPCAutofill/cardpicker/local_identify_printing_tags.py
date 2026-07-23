@@ -570,10 +570,36 @@ def run_ocr_for_card(
     image: Optional["Image.Image"],
     crop_box: tuple[float, float, float, float] = local_ocr.DEFAULT_CROP_BOX,
     bleed_class: Optional[str] = None,
+    known_set_codes: Optional[frozenset[str]] = None,
 ) -> OcrCardResult:
     """`bleed_class` (from local_fallback.classify_bleed_edge, run once per card ahead of
     everything else - see run_pilot) remaps `crop_box` via local_fallback.normalize_crop_box for
-    a trimmed image; a no-op otherwise."""
+    a trimmed image; a no-op otherwise.
+
+    `known_set_codes` (2026-07-23, issue #370's own recorded follow-up - the deferred item
+    `local_calculate_verdicts.py`'s own module docstring flagged: "known_set_codes() below is
+    written so that engine's own selection loop could reuse it directly in a focused follow-up"):
+    the SET-CODE LEXICON GATE `local_calculate_verdicts.known_set_codes()` produces, threaded
+    straight through from `run_pilot` (built once per invocation there - one DB query, not one
+    per card - via a deferred/local import, since a module-level import here would be circular:
+    `local_calculate_verdicts.py` already imports FROM this module). Gates which "no candidate
+    matched" outcome this loop reports, not whether the loop tries every variant - it already
+    does (no early exit on a non-match, only on a real match). A `parsed-but-no-match` variant
+    (`validate_against_candidates` found 0 candidates - `local_ocr.py`'s own outcome) only keeps
+    that label, which `run_pilot`'s own write loop casts a real, confident `is_no_match=True` vote
+    from, when at least one tried variant's `set_code` is either `None` (the pre-M15 collector-
+    number-only case, deliberately UNAFFECTED by this gate - the same carve-out
+    `calculate_join_key_verdict`'s own SET-CODE LEXICON GATE uses) or a real `known_set_codes`
+    member. If EVERY variant's `parsed-but-no-match` outcome carried an out-of-lexicon `set_code`
+    (un-parsed noise shaped like a set code - `local_calculate_verdicts.py`'s own module docstring
+    documents a live audit finding this is 85.5% of that outcome's real-world population), the
+    outcome demotes to `unknown-set-code` instead: a named, non-rescannable ABSTENTION (no vote
+    cast, the same treatment `no-text` already gets), never a confident negative the parse can't
+    actually back up. `None` (the default - an older/direct caller that doesn't thread this
+    through, e.g. a pre-2026-07-23 test) disables the gate entirely, reproducing the exact
+    pre-2026-07-23 behavior (every `parsed-but-no-match` outcome casts a vote, regardless of
+    `set_code` validity) - so this is purely additive: a card whose winning variant is a genuine
+    candidate match, or whose collector line is genuinely illegible, sees zero behavior change."""
     if image is None:
         return OcrCardResult(skip_reason="unfetchable-image")
 
@@ -591,6 +617,13 @@ def run_ocr_for_card(
     # something (more than one something), which is real evidence the parse was plausible, not
     # the same as every variant failing to match anything at all.
     saw_ambiguous = False
+    # SET-CODE LEXICON GATE (2026-07-23, issue #370's own recorded follow-up - see this
+    # function's own `known_set_codes` docstring paragraph above for the full mechanism): True
+    # once ANY tried variant's "parsed-but-no-match" outcome carries trustworthy signal (a real/
+    # lexicon set code, or a genuine pre-M15 collector-number-only parse) rather than un-parsed
+    # noise shaped like a set code - decides below whether the final outcome keeps the real
+    # "parsed-but-no-match" label (casts a vote) or demotes to "unknown-set-code" (abstains).
+    saw_lexicon_valid_no_match = False
     for variant in variants:
         raw_text = local_ocr.run_tesseract(variant)
         result.raw_texts.append(raw_text)
@@ -606,10 +639,19 @@ def run_ocr_for_card(
             return result
         if reason == "ambiguous":
             saw_ambiguous = True
+        elif reason == "parsed-but-no-match" and (
+            parsed.set_code is None or known_set_codes is None or parsed.set_code in known_set_codes
+        ):
+            saw_lexicon_valid_no_match = True
     if saw_ambiguous:
         result.skip_reason = "ambiguous"
-    elif result.parsed_a_collector_number:
+    elif saw_lexicon_valid_no_match:
         result.skip_reason = "parsed-but-no-match"
+    elif result.parsed_a_collector_number:
+        # every "parsed-but-no-match" outcome this loop saw carried an out-of-lexicon set_code -
+        # a distinct, non-rescannable ABSTENTION (see this function's own known_set_codes
+        # docstring paragraph), not the confident "parsed-but-no-match" negative.
+        result.skip_reason = "unknown-set-code"
     else:
         result.skip_reason = "no-text"
     return result
@@ -755,6 +797,7 @@ def _compute_card(
     phash_margin: int,
     phash_max_candidates: int,
     fetch_dpi: Optional[int],
+    known_set_codes: Optional[frozenset[str]] = None,
 ) -> CardComputeResult:
     """The parallelizable half of a card's work (pre-scale program item 3d): fetch + every
     read-only heuristic reading (OCR, phash, border/frame/bleed classification, pass-2
@@ -769,6 +812,10 @@ def _compute_card(
     2026-07-15) - it's the one reading every other fixed-fraction crop box in this function
     needs (via local_fallback.normalize_crop_box) to know whether to correct itself for a
     trimmed image, so it has to be available before OCR/phash/illus-anchor/border/symbol crop.
+
+    `known_set_codes` (2026-07-23, issue #370's own recorded follow-up): built once by
+    `run_pilot` and forwarded straight through to `run_ocr_for_card` - see that function's own
+    docstring for the SET-CODE LEXICON GATE this controls.
     """
     card_id = selected.card.pk
     outcome = CardOutcome(card_id=card_id)
@@ -787,7 +834,7 @@ def _compute_card(
     outcome.bleed_class = bleed_class
 
     if card_id in ocr_selected_ids:
-        ocr_result = run_ocr_for_card(selected, image, ocr_crop_box, bleed_class)
+        ocr_result = run_ocr_for_card(selected, image, ocr_crop_box, bleed_class, known_set_codes)
         outcome.ocr_vote, outcome.ocr_skip_reason = ocr_result.vote, ocr_result.skip_reason
         ocr_raw_texts = ocr_result.raw_texts
     if card_id in phash_selected_ids:
@@ -802,8 +849,16 @@ def _compute_card(
     if image is not None:
         outcome.border_color = local_fallback.classify_border_color(image, bleed_class)
         illus_anchor_fired, _artist_name = local_fallback.detect_illus_anchor(image, ocr_raw_texts, bleed_class)
+        # "unknown-set-code" (2026-07-23, the SET-CODE LEXICON GATE - see run_ocr_for_card's own
+        # known_set_codes docstring paragraph) is included alongside "parsed-but-no-match" here
+        # for the same reason OcrCardResult.parsed_a_collector_number's own docstring already
+        # gives: a legible collector-line FORMAT is evidence of a post-2003 frame independent of
+        # whether the specific number matched a real candidate OR whether its set_code happened
+        # to be a real lexicon member - this signal is orthogonal to lexicon validity by design.
         parsed_a_collector_number = card_id in ocr_selected_ids and bool(
-            outcome.ocr_vote is not None or outcome.ocr_skip_reason == "parsed-but-no-match"
+            outcome.ocr_vote is not None
+            or outcome.ocr_skip_reason == "parsed-but-no-match"
+            or outcome.ocr_skip_reason == "unknown-set-code"
         )
         outcome.frame_reading_attempted = True
         outcome.frame_class = local_fallback.classify_frame_style(parsed_a_collector_number, illus_anchor_fired)
@@ -929,6 +984,17 @@ def run_pilot(
     run_start_time = time.time()
 
     index = CandidateNameIndex()
+    # Set-code lexicon (2026-07-23, issue #370's own recorded follow-up - see run_ocr_for_card's
+    # own known_set_codes docstring paragraph for the full mechanism this feeds): a DEFERRED
+    # import, not a module-level one - local_calculate_verdicts.py already imports FROM this
+    # module (CandidateNameIndex/generate_run_id/etc above), so a module-level import back here
+    # would be circular. Built ONCE per invocation (one DB query, the same "call-once-reuse-
+    # across-the-batch" convention CandidateNameIndex() above already follows), then threaded
+    # through _compute_card/run_ocr_for_card via the functools.partial below rather than queried
+    # per card.
+    from cardpicker.local_calculate_verdicts import known_set_codes as _known_set_codes
+
+    ocr_known_set_codes = _known_set_codes()
     engines_to_run: list[Engine] = ["ocr", "phash"] if engine == "both" else [engine]
     results: dict[str, PilotResult] = {e: PilotResult(engine=e, dry_run=dry_run, run_id=run_id) for e in engines_to_run}
     results["fallback"] = PilotResult(engine="fallback", dry_run=dry_run, run_id=run_id)
@@ -1165,6 +1231,7 @@ def run_pilot(
         phash_margin=phash_margin,
         phash_max_candidates=phash_max_candidates,
         fetch_dpi=fetch_dpi,
+        known_set_codes=ocr_known_set_codes,
     )
 
     chunk_start = 0
