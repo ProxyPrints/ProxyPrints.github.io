@@ -69,13 +69,29 @@ The knowledge-inventory sweep confirmed three pilot-era constants have
    live: all 28,112 carry `run_id=None`, `anonymous_id="deductive-backfill-v1"`,
    `created_at` between 2026-07-14T18:21:49Z and 2026-07-14T18:22:05Z.
    See `journal/2026-07-14-deductive-printing-tag-backfill.md` (gitignored,
-   machine-local) for that run's own narrative.
+   machine-local) for that run's own narrative. **INTENTIONALLY NOT
+   RESTORED (owner ruling, 2026-07-22)**, superseding an earlier same-day
+   revision of this page that marked it "addressed in code": a read-only
+   investigation of the 2026-07-14 backfill found it is pure name/metadata
+   deduction (never phash/OCR — zero image inspection) whose votes check
+   out sound (a 15-card sample all correct), and that excluding those
+   cards would strand ~27,819 sound-but-UNRESOLVED cards outside Stage D
+   for no protective benefit — re-evaluating them is safe under the
+   human-backed consensus gate (agreement dedups, disagreement surfaces to
+   human review). The pilot's own exclusion was a performance
+   optimization (skip a card its weaker engines couldn't add to), not a
+   soundness mechanism, so restoring it here would trade real coverage for
+   a protection the vote-consensus layer already provides independently.
+   See `local_calculate_verdicts._eligible_cards_queryset`'s own docstring
+   for the in-code record of this decision.
 
 None of these three are soundness violations — the human-backed
 consensus gate still applies to every vote Stage D casts regardless.
-**Owner ruling needed**: are these three must-fix-before-fire, or an
-accepted gap the gate can clear without them? Full detail, plus 3 lower
-grade "open items" that are separate from these 3 MISSING findings:
+**Owner ruling still needed on #1/#2** (item #3 above is now resolved —
+deliberately not restored, per the ruling above): are the remaining two
+must-fix-before-fire, or an accepted gap the gate can clear without them?
+Full detail, plus 3 lower grade "open items" that are separate from these
+3 MISSING findings:
 [`reports/2026-07-22-knowledge-inventory.md`](reports/2026-07-22-knowledge-inventory.md).
 
 ## 4. Open decision (b) — the corrected parity-replay methodology

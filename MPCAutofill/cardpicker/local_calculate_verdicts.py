@@ -197,6 +197,105 @@ Golden-gated the same way the join-key calculator itself was (synthetic `ImageEv
 `CanonicalCard`/`CanonicalPrintingMetadata`/`DFCPair` DB fixtures, not a live fetch - Stage D
 consumes stored evidence + Scryfall-backed models, it never touches a live image, so Stage C's
 golden-set convention of a real network fetch over 30 pinned cards doesn't apply here).
+
+PRE-FIRE PREP (this PR, owner-bundled ahead of the full-catalog Stage D fire - two pieces, both
+code-only, neither runs any prod extraction/write):
+
+PIECE 1 - THE FALLBACK CHANNEL CALCULATOR (`calculate_fallback_verdict`/`run_fallback_calculator`,
+own `anonymous_id="stage-d-fallback-v1"`): Stage D's own port of `local_fallback.py`'s pilot
+"Pass 2" evidence-combination model (that module's own docstring: "fires only when pass 1
+(OCR/phash) yields no accepted vote for a card") - here, "pass 1" is the join-key calculator
+above, and this calculator is Stage D's own pass 2, run over exactly the cards the join-key
+calculator already concluded have no confident hit (the SAME population
+`run_slow_path_calculator` already routes to human review - `_fallback_eligible_cards_queryset`
+reuses that exact eligibility shape). Unlike the pilot's own `run_fallback_for_card` (which crops
+and phash-scans a LIVE `PIL.Image`), this calculator operates ENTIRELY off already-persisted
+`ImageEvidence` fields - it never re-fetches an image (this file never has - "we index, we do not
+store images", CLAUDE.md's Governing premise):
+
+  - border sub-check: `evidence.layout_class` (Stage C's own `classify_border_color` output,
+    PROTECTED CORE, already computed) fed straight into `local_fallback.filter_by_border_color`
+    (PROTECTED CORE, called not modified) - identical to the pilot's own border filter, just fed a
+    pre-computed reading instead of a fresh pixel sample.
+  - artist sub-check: `evidence.artist_ocr_name` (Stage C's own `artist_ocr` extractor, which
+    itself calls `local_fallback.extract_artist_name` - the SAME "Illus. <name>" extraction the
+    pilot's own `detect_illus_anchor` performs, confirmed by reading `image_evidence.py`'s own
+    `artist_ocr` section) fed straight into `local_fallback.match_artist` (PROTECTED CORE, called
+    not modified).
+  - symbol sub-check (`_filter_by_symbol_phash`): the pilot's own `find_symbol_matches` scans a
+    live crop against a rendered keyrune glyph via phash; here, `evidence.symbol_phash` (Stage C's
+    own precomputed region hash) is compared to each candidate's DISTINCT expansion's rendered
+    glyph (`local_fallback.render_set_symbol`, PROTECTED CORE, called not modified) via the SAME
+    pure-Hamming-distance-arithmetic reimplementation `_symbol_phash_tiebreak` above already
+    established for the join-key calculator's own symbol tie-break (`SYMBOL_DISTANCE_THRESHOLD`/
+    `SYMBOL_MARGIN`, PROTECTED CORE constants, reused verbatim) - duplicated rather than shared
+    with `_symbol_phash_tiebreak` (this module's own "duplicate the arithmetic, reimplement
+    nothing decision-shaped" convention, same reasoning `JOIN_KEY_CONFIDENCE_BOTH`'s own comment
+    already gives) because the two return different shapes: `_symbol_phash_tiebreak` returns one
+    winning `CandidatePrinting` for its own tie-break call site, `_filter_by_symbol_phash` returns
+    the FULL SET of surviving candidate pks, mirroring `find_symbol_matches`'s own return
+    convention and this calculator's own filter-intersection model.
+
+  A vote is cast ONLY when the intersection across every sub-check that DID produce a reading
+  narrows to EXACTLY ONE candidate - `local_fallback.py`'s own documented rule, reproduced exactly,
+  never loosened. No agreement/corroboration layer (frame/copyright-year/truncated-image) is
+  applied here, unlike the join-key calculator above - the task scope is a FAITHFUL port of
+  `local_fallback.py`'s own decision model, not an augmented one; `local_fallback.py` itself never
+  performed those checks, so adding them here would not be "reproducing local-fallback-v1's
+  decision" as scoped. `FALLBACK_CONFIDENCE_MULTI_EVIDENCE`/`FALLBACK_CONFIDENCE_SINGLE_EVIDENCE`
+  (imported from `local_fallback`, not duplicated - these ARE the pilot's own exact values, not a
+  new Stage-D-specific tier) are used verbatim, unlike the join-key calculator's own brand-new
+  confidence constants.
+
+  `source=VoteSource.OCR` (not `VoteSource.DEDUCTION`): `VoteSource`'s own docstring in
+  `models.py` explicitly names "the border/artist/symbol evidence-combination fallback" as part of
+  OCR's own umbrella definition ("everything in `cardpicker.local_identify_printing_tags`/
+  `local_fallback` that actually looks at the card image") - this calculator inspects image-derived
+  evidence (border/artist/symbol readings), it does not perform `deductive_backfill.py`'s own
+  "pure logical inference from already-trusted structured data, zero image inspection." Machine
+  weight (`PRINTING_TAG_MACHINE_WEIGHT`) either way - the human-backed consensus gate in
+  `vote_consensus.resolve_weighted_consensus` (PROTECTED CORE, unmodified) applies identically
+  regardless of which `VoteSource` value is used, so this is a naming-precision choice, not a
+  soundness one.
+
+  Wired into `run_slow_path_calculator`'s own eligibility query
+  (`_slow_path_eligible_cards_queryset`): a card this calculator successfully votes on is excluded
+  from slow-path routing (an additional exclusion alongside its own pre-existing ones) - otherwise,
+  within the SAME invocation, slow-path would route a card to human review that this calculator
+  resolves moments later, since the management command runs join-key -> fallback -> slow-path in
+  that order. A card this calculator merely SCANNED but abstained on (no-evidence/eliminated/
+  ambiguous) is NOT excluded - it still has no confident automated hit and belongs in the review
+  queue exactly as before.
+
+CONSTANT #3 - INTENTIONALLY NOT RESTORED (owner ruling, 2026-07-22, superseding an earlier draft
+of this PR that DID add a `.exclude(printing_tags__source=VoteSource.DEDUCTION)` clause here):
+`docs/pipeline-fidelity-gate.md` SS3 item 3 / `docs/reports/2026-07-22-knowledge-inventory.md`'s
+former MISSING item 3 flagged that the pilot never re-voted a card
+`deductive_backfill.py`'s own `DEDUCTIVE_BACKFILL_ANONYMOUS_ID="deductive-backfill-v1"` pass had
+already voted for (28,112 live production votes, `run_id=None`, per the gate page's SS6). A
+read-only backfill investigation found this exclusion would be a net-negative single-cohort
+carve-out, not a restoration worth making: that 2026-07-14 backfill is pure name/metadata
+deduction (never phash/OCR - zero image inspection, see `deductive_backfill.py`'s own module
+docstring), its votes are sound (a 15-card sample checked all correct), and excluding those cards
+from Stage D would strand ~27,819 sound-but-UNRESOLVED cards outside the new pipeline for no
+protective benefit. Re-evaluating them is safe: the human-backed consensus gate
+(`vote_consensus.resolve_weighted_consensus`, PROTECTED CORE, unmodified) still prevents any
+machine-only vote accumulation from resolving a card by itself regardless of how many engines
+vote on it, agreement between the backfill's vote and a fresh Stage D vote simply dedups (no harm
+done), and a disagreement surfaces the card to human review (a genuine corroboration signal, not
+noise). The pilot's own exclusion was a PERFORMANCE optimization (skip a card its own weaker
+engines couldn't add anything to), not a soundness mechanism - restoring it here would trade real
+coverage for a protection Stage D's vote-consensus layer already provides independently.
+`_eligible_cards_queryset`'s pre-existing per-calculator stable-`anonymous_id` exclusion (its own
+long-standing idempotence mechanism, entirely independent of this constant) is unaffected and
+unchanged by this decision - see that function's own docstring.
+
+Constants #1 (`RESOLUTION_FLOOR_DPI`) and #2 (`EXCLUDED_RESOLVED_TAGS`) remain open pending
+forward-impact sizing per the gate page, unaffected by this ruling on #3.
+
+This PR is CODE ONLY: it does not run the full-catalog Stage D fire, the targeted re-extraction of
+issue #340's 373-card cohort, or any other prod extraction/write - both remain separate,
+owner-gated prod steps.
 """
 
 import logging
@@ -209,9 +308,12 @@ import imagehash
 from django.db.models import Q, QuerySet
 
 from cardpicker.local_fallback import (
+    FALLBACK_CONFIDENCE_MULTI_EVIDENCE,
+    FALLBACK_CONFIDENCE_SINGLE_EVIDENCE,
     SYMBOL_DISTANCE_THRESHOLD,
     SYMBOL_MARGIN,
     classify_frame_style,
+    filter_by_border_color,
     frame_style_is_consistent,
     match_artist,
     render_set_symbol,
@@ -626,18 +728,34 @@ class JoinKeyCalculatorResult:
     audit: list[dict[str, object]] = field(default_factory=list)
 
 
-def _eligible_cards_queryset(anonymous_id: str) -> "QuerySet[Card]":
+def _eligible_cards_queryset(
+    anonymous_id: str, rescannable_skip_reasons: frozenset[str] = JOIN_KEY_RESCANNABLE_SKIP_REASONS
+) -> "QuerySet[Card]":
     """
     Mirrors `local_identify_printing_tags._eligible_base_queryset`'s shape (unresolved, no
     confirmed indexing match, card_type=CARD only, no existing vote from this calculator's own
     anonymous_id, no non-rescannable scan-log row for it) - a fresh, independent eligibility
     query rather than a call into that function directly, since this calculator's resume/skip
     population (cards with a CURRENT `ImageEvidence` row) is a genuinely different concept from
-    the live pilot's own per-run candidate selection, not a variant of it.
+    the live pilot's own per-run candidate selection, not a variant of it. `rescannable_skip_reasons`
+    defaults to `JOIN_KEY_RESCANNABLE_SKIP_REASONS` (this function's original, only caller for a
+    long time); `run_fallback_calculator` passes its own `FALLBACK_RESCANNABLE_SKIP_REASONS`
+    instead, since the two calculators' own skip vocabularies mean different things by the same
+    "transient, re-selectable" concept.
+
+    Idempotence for a repeated multi-pass Stage D fire comes entirely from the stable, per-
+    calculator `anonymous_id` exclusion above (`.exclude(printing_tags__anonymous_id=anonymous_id)`)
+    - deliberately the ONLY vote-population exclusion here. An earlier draft of this module also
+    excluded any card already carrying a `VoteSource.DEDUCTION` printing vote (the pilot's own
+    "don't re-vote a card the deductive backfill already covered" behavior, `docs/pipeline-
+    fidelity-gate.md` SS3 item 3) - owner-ruled OUT (2026-07-22, see module docstring's own
+    "CONSTANT #3" section for the full reasoning): that exclusion would strand ~27,819
+    sound-but-UNRESOLVED cards outside Stage D for no protective benefit, since the human-backed
+    consensus gate already makes re-evaluating them safe. Do not re-add it without a fresh ruling.
     """
     non_rescannable_scanned_card_ids = (
         CardScanLog.objects.filter(anonymous_id=anonymous_id)
-        .exclude(skip_reason__in=JOIN_KEY_RESCANNABLE_SKIP_REASONS)
+        .exclude(skip_reason__in=rescannable_skip_reasons)
         .values_list("card_id", flat=True)
     )
     return (
@@ -745,6 +863,305 @@ def run_join_key_calculator(
 
         result.votes_written = sum(1 for v in votes_batch if not v.is_no_match)
         result.no_match_votes_written = sum(1 for v in votes_batch if v.is_no_match)
+
+    return result
+
+
+# ---------------------------------------------------------------------------------------------
+# PIECE 1: the fallback channel calculator (module docstring) - Stage D's own port of
+# local_fallback.py's pilot "Pass 2" evidence-combination model. Own anonymous_id, same rationale
+# as JOIN_KEY_ANONYMOUS_ID's own comment - a distinct, independently purgeable/re-runnable
+# population, kept separate from the pilot's own "local-fallback-v1" identity (that identity
+# belongs to the live legacy engine, which continues to run against a fresh per-invocation fetch;
+# this calculator consumes stored ImageEvidence instead, a genuinely different population).
+# ---------------------------------------------------------------------------------------------
+
+STAGE_D_FALLBACK_ANONYMOUS_ID = "stage-d-fallback-v1"
+
+# This calculator's own skip vocabulary. Deliberately NOT "no-evidence" for the
+# no-sub-check-produced-a-reading case (unlike local_fallback.FallbackOutcome's own literal
+# "no-evidence" naming for the identical concept) - "no-evidence" is already Stage D's own
+# established name (see JOIN_KEY_RESCANNABLE_SKIP_REASONS above) for a DIFFERENT concept ("this
+# card's ImageEvidence row itself doesn't exist yet") - reusing it here for a different meaning,
+# even scoped to a different anonymous_id, would be a needless collision in a reader's head for
+# no benefit. "eliminated"/"ambiguous" ARE kept verbatim from the pilot's own vocabulary - those
+# two carry the same meaning here as there, no rename needed.
+FALLBACK_NO_EVIDENCE_SKIP_REASON = "no-evidence"  # this calculator's own ImageEvidence-row-missing case, same meaning as JOIN_KEY's own identical string, different anonymous_id scope
+FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON = "no-sub-check-evidence"  # local_fallback.FallbackOutcome's own "no-evidence" concept, renamed to avoid colliding with the line above
+FALLBACK_RESCANNABLE_SKIP_REASONS = frozenset({FALLBACK_NO_EVIDENCE_SKIP_REASON})
+
+
+@dataclass(frozen=True)
+class FallbackVerdict:
+    """
+    Pure result of one card's fallback-calculator run (module docstring's PIECE 1) - no DB write
+    has happened yet, mirrors `JoinKeyVerdict`'s own compute/persist split. Exactly one of two
+    shapes: a positive match (`printing_pk` set, `is_no_match` always False - this calculator, like
+    the pilot's own fallback pass, never casts a genuine no-match vote, only a match or an
+    abstention) or a named skip (`skip_reason` set, `printing_pk` is None).
+    """
+
+    card_id: int
+    printing_pk: Optional[int] = None
+    confidence: Optional[float] = None
+    detail: str = ""
+    skip_reason: str = ""
+    evidence_types_used: tuple[str, ...] = ()
+
+
+def _filter_by_symbol_phash(symbol_phash: Optional[int], candidates: list[CandidatePrinting]) -> Optional[set[int]]:
+    """
+    The fallback calculator's own symbol sub-check (module docstring's PIECE 1) - the SAME
+    pure-Hamming-distance-arithmetic reimplementation `_symbol_phash_tiebreak` above already
+    established (`render_set_symbol`, PROTECTED CORE, called not modified; `SYMBOL_DISTANCE_THRESHOLD`/
+    `SYMBOL_MARGIN`, PROTECTED CORE constants, reused verbatim), duplicated rather than shared with
+    `_symbol_phash_tiebreak` (this module's own "duplicate the arithmetic, reimplement nothing
+    decision-shaped" convention - see `JOIN_KEY_CONFIDENCE_BOTH`'s own comment for the same
+    reasoning applied to a constant rather than a function) because the two return different
+    shapes: `_symbol_phash_tiebreak` returns one winning `CandidatePrinting` for the join-key
+    calculator's own tie-break call site (only ever called against an already-narrowed "ambiguous"
+    subset), while this returns the FULL SET of surviving candidate pks across the WHOLE candidate
+    list passed in - mirroring `local_fallback.find_symbol_matches`'s own return convention exactly,
+    which is what this calculator's border/artist/symbol INTERSECTION model needs to compose with
+    `filter_by_border_color`/`match_artist`'s own `Optional[set[int]]` shape.
+
+    Returns `None` (no reading - filters nothing) if `symbol_phash` is `None`, no candidate's
+    expansion glyph could be rendered, the best distance exceeds `SYMBOL_DISTANCE_THRESHOLD`, or a
+    runner-up sits within `SYMBOL_MARGIN` of the best (an unresolved tie) - the same four
+    abstention cases `find_symbol_matches`'s own docstring documents for its live-image-scan
+    version.
+    """
+    if symbol_phash is None:
+        return None
+
+    distances: list[tuple[str, int]] = []
+    seen_expansions: set[str] = set()
+    for candidate in candidates:
+        if candidate.expansion_code in seen_expansions:
+            continue
+        seen_expansions.add(candidate.expansion_code)
+        reference = render_set_symbol(candidate.expansion_code)
+        if reference is None:
+            continue
+        reference_hash_int = twos_complement(str(imagehash.phash(reference)), _SYMBOL_HASH_BITS)
+        distances.append((candidate.expansion_code, _hamming_distance(symbol_phash, reference_hash_int)))
+
+    if not distances:
+        return None
+
+    distances.sort(key=lambda pair: pair[1])
+    best_expansion, best_distance = distances[0]
+    if best_distance > SYMBOL_DISTANCE_THRESHOLD:
+        return None
+    if len(distances) > 1 and (distances[1][1] - best_distance) <= SYMBOL_MARGIN:
+        return None
+
+    return {c.pk for c in candidates if c.expansion_code == best_expansion}
+
+
+def calculate_fallback_verdict(
+    card_id: int, evidence: ImageEvidence, candidates: list[CandidatePrinting]
+) -> FallbackVerdict:
+    """
+    The fallback channel calculator (module docstring's PIECE 1) - Stage D's own port of
+    `local_fallback.run_fallback_for_card`'s evidence-combination model, operating ENTIRELY off
+    already-persisted `ImageEvidence` fields (never a live image/re-OCR - this file never
+    re-fetches). Each sub-check is either a DIRECT CALL into `local_fallback`'s own pure decision
+    function (`filter_by_border_color`, `match_artist` - both PROTECTED CORE, neither touches a raw
+    image, both accept already-extracted strings - called, never reimplemented, the same
+    "import helpers, call don't reimplement" pattern `_apply_agreement_checks` above already
+    established) or, for the symbol sub-check, `_filter_by_symbol_phash`'s own reimplemented
+    arithmetic (see that function's own docstring).
+
+    Conservative by design, reproducing `local_fallback.py`'s own documented rule exactly (that
+    module's own docstring: "A vote is written only when the intersection across every sub-check
+    that DID produce a reading narrows to EXACTLY ONE candidate") - never loosened, never extended
+    with the join-key calculator's own agreement/corroboration layer (frame/copyright-year/
+    truncated-image checks do not exist in `local_fallback.py` and are deliberately NOT added
+    here - this is a faithful port of that module's own decision model, not an augmented one).
+
+    Pure function, no DB write (aside from the one read-only `CanonicalCard` query below, mirroring
+    `_apply_agreement_checks`'s own single-query pattern) - callers persist via
+    `CardPrintingTag`/`CardScanLog` exactly like the join-key calculator's own
+    `run_join_key_calculator`. Same name-scoping caller contract as `calculate_join_key_verdict`:
+    `candidates` MUST already be narrowed to this card's own name (`_resolve_candidates_for_card`).
+    """
+    candidate_pks = {c.pk for c in candidates}
+    canonicals = {
+        c.pk: c
+        for c in CanonicalCard.objects.select_related("artist", "printing_metadata").filter(pk__in=candidate_pks)
+    }
+    artist_by_pk = {pk: c.artist.name for pk, c in canonicals.items()}
+    border_color_by_pk = {
+        pk: c.printing_metadata.border_color
+        for pk, c in canonicals.items()
+        if getattr(c, "printing_metadata", None) is not None and c.printing_metadata.border_color
+    }
+
+    border_filtered = filter_by_border_color(evidence.layout_class or None, candidates, border_color_by_pk)
+    artist_filtered = (
+        match_artist(evidence.artist_ocr_name, candidates, artist_by_pk) if evidence.artist_ocr_name else None
+    )
+    symbol_filtered = _filter_by_symbol_phash(evidence.symbol_phash, candidates)
+
+    survivors = set(candidate_pks)
+    evidence_types_used: list[str] = []
+    for name, filtered in (("border", border_filtered), ("artist", artist_filtered), ("symbol", symbol_filtered)):
+        if filtered is not None:
+            survivors &= filtered
+            evidence_types_used.append(name)
+
+    if not evidence_types_used:
+        return FallbackVerdict(card_id=card_id, skip_reason=FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON)
+    if len(survivors) == 0:
+        return FallbackVerdict(
+            card_id=card_id, skip_reason="eliminated", evidence_types_used=tuple(evidence_types_used)
+        )
+    if len(survivors) > 1:
+        return FallbackVerdict(card_id=card_id, skip_reason="ambiguous", evidence_types_used=tuple(evidence_types_used))
+
+    confidence = (
+        FALLBACK_CONFIDENCE_MULTI_EVIDENCE if len(evidence_types_used) > 1 else FALLBACK_CONFIDENCE_SINGLE_EVIDENCE
+    )
+    return FallbackVerdict(
+        card_id=card_id,
+        printing_pk=next(iter(survivors)),
+        confidence=confidence,
+        evidence_types_used=tuple(evidence_types_used),
+    )
+
+
+@dataclass
+class FallbackCalculatorResult:
+    dry_run: bool = False
+    run_id: str = ""
+    cards_considered: int = 0
+    votes_would_cast: int = 0
+    votes_written: int = 0
+    skip_counts: dict[str, int] = field(default_factory=dict)
+    # capped audit sample, mirroring JoinKeyCalculatorResult.audit's own convention.
+    audit: list[dict[str, object]] = field(default_factory=list)
+
+
+def _fallback_eligible_cards_queryset() -> "QuerySet[Card]":
+    """
+    Cards the join-key calculator already concluded have no confident hit - the SAME population
+    `_slow_path_eligible_cards_queryset` below selects from (a real `is_no_match` vote, or a
+    non-rescannable skip in `JOIN_KEY_NO_HIT_SKIP_REASONS`) - that this calculator's own
+    `STAGE_D_FALLBACK_ANONYMOUS_ID` hasn't already processed (scanned OR voted), via the shared
+    `_eligible_cards_queryset` helper (idempotence mechanism only - see that function's own
+    docstring for why a deduction-vote exclusion was considered and deliberately not added).
+    """
+    join_key_no_match_card_ids = CardPrintingTag.objects.filter(
+        anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
+    ).values_list("card_id", flat=True)
+    join_key_no_hit_scanned_card_ids = CardScanLog.objects.filter(
+        anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
+    ).values_list("card_id", flat=True)
+    return _eligible_cards_queryset(
+        STAGE_D_FALLBACK_ANONYMOUS_ID, rescannable_skip_reasons=FALLBACK_RESCANNABLE_SKIP_REASONS
+    ).filter(Q(pk__in=join_key_no_match_card_ids) | Q(pk__in=join_key_no_hit_scanned_card_ids))
+
+
+def run_fallback_calculator(
+    run_id: Optional[str] = None,
+    dry_run: bool = True,
+    chunk_size: int = 500,
+    audit_sample_size: int = 20,
+    default_cards_path: Optional[Path] = None,
+) -> FallbackCalculatorResult:
+    """
+    Batch runner for PIECE 1 (module docstring) - mirrors `run_join_key_calculator`'s own shape
+    (dry-run default, CardScanLog/CardPrintingTag batching, `resolve_and_persist_printing` called
+    per touched card, `PilotRunLedger`/gate-check wiring living in the management command exactly
+    like the join-key calculator's own). Only ever considers cards the join-key calculator ALREADY
+    concluded have no confident hit (`_fallback_eligible_cards_queryset`) - this calculator is
+    Stage D's own "pass 2", the same relationship `local_fallback.py`'s own module docstring
+    documents between the pilot's pass 1 (OCR/phash) and pass 2 (fallback). `default_cards_path` is
+    threaded through to `_resolve_candidates_for_card` exactly as `run_join_key_calculator`'s own
+    parameter is.
+    """
+    run_id = run_id or generate_run_id()
+    index = CandidateNameIndex()
+    result = FallbackCalculatorResult(dry_run=dry_run, run_id=run_id)
+
+    votes_batch: list[CardPrintingTag] = []
+    scan_log_batch: list[CardScanLog] = []
+    touched_card_ids: list[int] = []
+
+    for card in _fallback_eligible_cards_queryset().iterator(chunk_size=chunk_size):
+        if card.content_phash is None:
+            continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
+
+        evidence = (
+            ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)
+            .filter(extractor_versions__has_key="collector_line_ocr")
+            .order_by("-updated_at")
+            .first()
+        )
+        if evidence is None:
+            result.skip_counts[FALLBACK_NO_EVIDENCE_SKIP_REASON] = (
+                result.skip_counts.get(FALLBACK_NO_EVIDENCE_SKIP_REASON, 0) + 1
+            )
+            if not dry_run:
+                scan_log_batch.append(
+                    CardScanLog(
+                        card_id=card.pk,
+                        anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+                        run_id=run_id,
+                        skip_reason=FALLBACK_NO_EVIDENCE_SKIP_REASON,
+                    )
+                )
+            continue
+
+        result.cards_considered += 1
+        candidates = _resolve_candidates_for_card(card.name, index, default_cards_path=default_cards_path)
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        if verdict.skip_reason:
+            result.skip_counts[verdict.skip_reason] = result.skip_counts.get(verdict.skip_reason, 0) + 1
+            if not dry_run:
+                scan_log_batch.append(
+                    CardScanLog(
+                        card_id=card.pk,
+                        anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+                        run_id=run_id,
+                        skip_reason=verdict.skip_reason,
+                    )
+                )
+            continue
+
+        result.votes_would_cast += 1
+        if len(result.audit) < audit_sample_size:
+            result.audit.append(
+                {
+                    "card_id": card.pk,
+                    "detail": verdict.detail,
+                    "evidence_types_used": list(verdict.evidence_types_used),
+                }
+            )
+
+        if not dry_run:
+            votes_batch.append(
+                CardPrintingTag(
+                    card_id=card.pk,
+                    printing_id=verdict.printing_pk,
+                    is_no_match=False,
+                    anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+                    source=VoteSource.OCR,
+                    confidence=verdict.confidence,
+                    run_id=run_id,
+                )
+            )
+            touched_card_ids.append(card.pk)
+
+    if not dry_run:
+        CardPrintingTag.objects.bulk_create(votes_batch)
+        CardScanLog.objects.bulk_create(scan_log_batch)
+        for touched_card in Card.objects.filter(pk__in=touched_card_ids):
+            resolve_and_persist_printing(touched_card)
+
+        result.votes_written = len(votes_batch)
 
     return result
 
@@ -870,6 +1287,16 @@ def _slow_path_eligible_cards_queryset() -> "QuerySet[Card]":
     A card the join-key calculator hasn't looked at yet at all (no vote, no scan-log row) is
     simply not yet in scope - this calculator only ever consumes the join-key calculator's own
     output, it never runs independently of it.
+
+    ALSO excludes any card the fallback calculator (`STAGE_D_FALLBACK_ANONYMOUS_ID`, module
+    docstring's PIECE 1) already successfully voted on - a real printing match, not merely a scan
+    it abstained on. This is the wiring that makes PIECE 1 actually take effect: the management
+    command runs join-key -> fallback -> slow-path in that order, and without this exclusion
+    slow-path would route a card to human review that the fallback calculator resolves moments
+    earlier in the SAME invocation. A card the fallback calculator merely SCANNED but abstained on
+    (`no-evidence-types-used`/`eliminated`/`ambiguous`) is deliberately NOT excluded here - it
+    still has no confident automated hit from either calculator and belongs in the review queue
+    exactly as before this PR.
     """
     join_key_no_match_card_ids = CardPrintingTag.objects.filter(
         anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
@@ -880,6 +1307,9 @@ def _slow_path_eligible_cards_queryset() -> "QuerySet[Card]":
     already_routed_card_ids = CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID).values_list(
         "card_id", flat=True
     )
+    fallback_voted_card_ids = CardPrintingTag.objects.filter(
+        anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID, is_no_match=False
+    ).values_list("card_id", flat=True)
     return (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
@@ -888,6 +1318,7 @@ def _slow_path_eligible_cards_queryset() -> "QuerySet[Card]":
         )
         .filter(Q(pk__in=join_key_no_match_card_ids) | Q(pk__in=join_key_no_hit_scanned_card_ids))
         .exclude(pk__in=already_routed_card_ids)
+        .exclude(pk__in=fallback_voted_card_ids)
         .distinct()
         .select_related("source")
     )
@@ -975,6 +1406,14 @@ __all__ = [
     "JOIN_KEY_RESCANNABLE_SKIP_REASONS",
     "JOIN_KEY_NO_HIT_SKIP_REASONS",
     "COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS",
+    "STAGE_D_FALLBACK_ANONYMOUS_ID",
+    "FALLBACK_NO_EVIDENCE_SKIP_REASON",
+    "FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON",
+    "FALLBACK_RESCANNABLE_SKIP_REASONS",
+    "FallbackVerdict",
+    "calculate_fallback_verdict",
+    "FallbackCalculatorResult",
+    "run_fallback_calculator",
     "SLOW_PATH_ANONYMOUS_ID",
     "SLOW_PATH_TO_REVIEW_REASON",
     "SLOW_PATH_RAW_SIGNAL_FIELDS",

@@ -26,6 +26,8 @@ import pytest
 
 from cardpicker.local_calculate_verdicts import (
     COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS,
+    FALLBACK_NO_EVIDENCE_SKIP_REASON,
+    FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
     JOIN_KEY_ANONYMOUS_ID,
     JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT,
     JOIN_KEY_CONFIDENCE_BOTH,
@@ -34,14 +36,22 @@ from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_NO_MATCH_CONFIDENCE,
     SLOW_PATH_ANONYMOUS_ID,
     SLOW_PATH_TO_REVIEW_REASON,
+    STAGE_D_FALLBACK_ANONYMOUS_ID,
+    _filter_by_symbol_phash,
     _resolve_candidates_for_card,
     _symbol_phash_tiebreak,
+    calculate_fallback_verdict,
     calculate_join_key_verdict,
     calculate_slow_path_verdict,
+    run_fallback_calculator,
     run_join_key_calculator,
     run_slow_path_calculator,
 )
-from cardpicker.local_fallback import render_set_symbol
+from cardpicker.local_fallback import (
+    FALLBACK_CONFIDENCE_MULTI_EVIDENCE,
+    FALLBACK_CONFIDENCE_SINGLE_EVIDENCE,
+    render_set_symbol,
+)
 from cardpicker.local_identify_printing_tags import (
     CandidateNameIndex,
     CandidatePrinting,
@@ -1057,3 +1067,299 @@ class TestRunSlowPathCalculator:
 
         assert result.cards_considered == 0
         assert CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID).count() == 0
+
+
+class TestFilterBySymbolPhash:
+    """Mirrors TestSymbolPhashTiebreak's own cases - same underlying arithmetic, different return
+    shape (a full set of surviving pks vs. one winning CandidatePrinting), see
+    _filter_by_symbol_phash's own docstring for why the two are duplicated rather than shared."""
+
+    def test_returns_none_without_a_symbol_hash(self):
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        assert _filter_by_symbol_phash(None, candidates) is None
+
+    def test_returns_none_with_no_candidates(self):
+        assert _filter_by_symbol_phash(_hash_of("mom"), []) is None
+
+    def test_returns_none_for_an_unrenderable_expansion_code(self):
+        candidates = [CandidatePrinting(pk=1, expansion_code="zzznotarealcode", collector_number="1")]
+        assert _filter_by_symbol_phash(_hash_of("mom"), candidates) is None
+
+    def test_returns_every_pk_sharing_the_winning_expansion(self):
+        candidates = [
+            CandidatePrinting(pk=1, expansion_code="mir", collector_number="1"),
+            CandidatePrinting(pk=2, expansion_code="mir", collector_number="2"),
+            CandidatePrinting(pk=3, expansion_code="som", collector_number="1"),
+        ]
+        assert _filter_by_symbol_phash(_hash_of("mir"), candidates) == {1, 2}
+
+
+class TestCalculateFallbackVerdict:
+    """PIECE 1 (module docstring) - the border/artist/symbol intersection model, ported off
+    already-persisted ImageEvidence fields rather than a live image. See local_fallback.py's own
+    module docstring for the evidence-combination model this reproduces exactly."""
+
+    def test_border_alone_narrows_to_one_and_casts_a_vote(self, db):
+        printing_black = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing_black, border_color="black")
+        printing_white = CanonicalCardFactory(name="Test Card", expansion__code="vow", collector_number="200")
+        CanonicalPrintingMetadataFactory(canonical_card=printing_white, border_color="white")
+        card = CardFactory(name="Test Card")
+        candidates = [
+            CandidatePrinting(pk=printing_black.pk, expansion_code="mom", collector_number="158"),
+            CandidatePrinting(pk=printing_white.pk, expansion_code="vow", collector_number="200"),
+        ]
+        evidence = _evidence(card, layout_class="black")
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing_black.pk
+        assert verdict.evidence_types_used == ("border",)
+        assert verdict.confidence == FALLBACK_CONFIDENCE_SINGLE_EVIDENCE
+        assert verdict.skip_reason == ""
+
+    def test_symbol_alone_narrows_to_one_and_casts_a_vote(self, db):
+        printing_a = CanonicalCardFactory(name="Test Card", expansion__code="mir", collector_number="1")
+        printing_b = CanonicalCardFactory(name="Test Card", expansion__code="som", collector_number="1")
+        card = CardFactory(name="Test Card")
+        candidates = [
+            CandidatePrinting(pk=printing_a.pk, expansion_code="mir", collector_number="1"),
+            CandidatePrinting(pk=printing_b.pk, expansion_code="som", collector_number="1"),
+        ]
+        evidence = _evidence(card, symbol_phash=_hash_of("mir"))
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing_a.pk
+        assert verdict.evidence_types_used == ("symbol",)
+        assert verdict.confidence == FALLBACK_CONFIDENCE_SINGLE_EVIDENCE
+
+    def test_border_and_artist_agreement_gives_multi_evidence_confidence(self, db):
+        printing_a = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=printing_a, border_color="black")
+        printing_b = CanonicalCardFactory(
+            name="Test Card", expansion__code="vow", collector_number="200", artist__name="Someone Else"
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=printing_b, border_color="white")
+        card = CardFactory(name="Test Card")
+        candidates = [
+            CandidatePrinting(pk=printing_a.pk, expansion_code="mom", collector_number="158"),
+            CandidatePrinting(pk=printing_b.pk, expansion_code="vow", collector_number="200"),
+        ]
+        evidence = _evidence(card, layout_class="black", artist_ocr_name="Rebecca Guay")
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing_a.pk
+        assert set(verdict.evidence_types_used) == {"border", "artist"}
+        assert verdict.confidence == FALLBACK_CONFIDENCE_MULTI_EVIDENCE
+
+    def test_border_and_artist_disagreement_abstains_never_a_false_accept(self, db):
+        """The no-false-accept property (module docstring): border evidence alone points at
+        printing_a, artist evidence alone points at printing_b - their intersection is empty, so
+        this MUST abstain ('eliminated'), never pick either candidate."""
+        printing_a = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=printing_a, border_color="black")
+        printing_b = CanonicalCardFactory(
+            name="Test Card", expansion__code="vow", collector_number="200", artist__name="Someone Else"
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=printing_b, border_color="white")
+        card = CardFactory(name="Test Card")
+        candidates = [
+            CandidatePrinting(pk=printing_a.pk, expansion_code="mom", collector_number="158"),
+            CandidatePrinting(pk=printing_b.pk, expansion_code="vow", collector_number="200"),
+        ]
+        # border evidence -> printing_a ("black"); artist evidence -> printing_b ("Someone Else")
+        evidence = _evidence(card, layout_class="black", artist_ocr_name="Someone Else")
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk is None
+        assert verdict.skip_reason == "eliminated"
+
+    def test_ambiguous_when_the_only_reading_matches_more_than_one_candidate(self, db):
+        printing_a = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing_a, border_color="black")
+        printing_b = CanonicalCardFactory(name="Test Card", expansion__code="vow", collector_number="200")
+        CanonicalPrintingMetadataFactory(canonical_card=printing_b, border_color="black")
+        card = CardFactory(name="Test Card")
+        candidates = [
+            CandidatePrinting(pk=printing_a.pk, expansion_code="mom", collector_number="158"),
+            CandidatePrinting(pk=printing_b.pk, expansion_code="vow", collector_number="200"),
+        ]
+        evidence = _evidence(card, layout_class="black")
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk is None
+        assert verdict.skip_reason == "ambiguous"
+
+    def test_no_sub_check_produced_a_reading_abstains_even_with_a_single_candidate(self, db):
+        """A single remaining candidate is NOT itself evidence - local_fallback.py's own rule
+        (module docstring) checks "did any sub-check produce a reading at all" BEFORE ever looking
+        at how many candidates survive, so a lone candidate with zero corroborating evidence must
+        still abstain, not be nodded through by default."""
+        printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(card)  # no layout_class, no artist_ocr_name, no symbol_phash
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk is None
+        assert verdict.skip_reason == FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON
+
+
+class TestRunFallbackCalculator:
+    def _no_hit_card(self, *, skip_reason="no-text", is_no_match=False, **evidence_overrides):
+        card = CardFactory(name="Some Card", content_phash=42)
+        evidence = _evidence(card, **evidence_overrides)
+        if is_no_match:
+            CardPrintingTag.objects.create(
+                card=card, printing=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+            )
+        else:
+            CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason=skip_reason)
+        return card, evidence
+
+    def test_dry_run_counts_without_writing(self, db):
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+        self._no_hit_card(layout_class="black")
+
+        result = run_fallback_calculator(dry_run=True)
+
+        assert result.cards_considered == 1
+        assert result.votes_would_cast == 1
+        assert CardPrintingTag.objects.filter(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 0
+        assert CardScanLog.objects.filter(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 0
+
+    def test_write_casts_a_vote_and_never_resolves_alone(self, db):
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+        card, _ = self._no_hit_card(layout_class="black")
+
+        result = run_fallback_calculator(dry_run=False)
+
+        assert result.votes_written == 1
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+        assert vote.source == VoteSource.OCR
+        assert vote.run_id == result.run_id
+
+        card.refresh_from_db()
+        # a single VoteSource.OCR vote (weight 0.5) can never clear the human-backed gate alone.
+        assert card.printing_tag_status == PrintingTagStatus.UNRESOLVED
+
+    def test_a_card_the_join_key_calculator_already_resolved_is_not_eligible(self, db):
+        card = CardFactory(name="Some Card", content_phash=42)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+        _evidence(card, layout_class="black")
+        CardPrintingTag.objects.create(
+            card=card, printing=printing, is_no_match=False, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+
+        result = run_fallback_calculator(dry_run=False)
+
+        assert result.cards_considered == 0
+        assert CardPrintingTag.objects.filter(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 0
+
+    def test_skip_writes_a_scan_log_row(self, db):
+        card, _ = self._no_hit_card()  # no layout_class/artist_ocr_name/symbol_phash at all
+
+        result = run_fallback_calculator(dry_run=False)
+
+        assert result.votes_written == 0
+        assert CardPrintingTag.objects.filter(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 0
+        log = CardScanLog.objects.get(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert log.skip_reason == FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON
+
+    def test_idempotent_against_its_own_anonymous_id(self, db):
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+        card, _ = self._no_hit_card(layout_class="black")
+
+        first = run_fallback_calculator(dry_run=False)
+        assert first.votes_written == 1
+
+        second = run_fallback_calculator(dry_run=False)
+        assert second.cards_considered == 0
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 1
+
+    def test_card_without_evidence_is_a_rescannable_no_evidence_skip(self, db):
+        card = CardFactory(name="Some Card", content_phash=42)
+        CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+
+        result = run_fallback_calculator(dry_run=False)
+
+        assert result.cards_considered == 0
+        assert result.skip_counts.get(FALLBACK_NO_EVIDENCE_SKIP_REASON) == 1
+        log = CardScanLog.objects.get(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert log.skip_reason == FALLBACK_NO_EVIDENCE_SKIP_REASON
+
+        # rescannable: adding evidence and re-running picks the card back up.
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+        _evidence(card, layout_class="black")
+
+        second = run_fallback_calculator(dry_run=False)
+        assert second.cards_considered == 1
+        assert second.votes_written == 1
+
+    def test_evidence_from_a_stale_content_hash_is_not_used(self, db):
+        card = CardFactory(name="Some Card", content_phash=99)
+        CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+        _evidence(card, content_hash=42, layout_class="black")  # stale - card.content_phash is 99
+
+        result = run_fallback_calculator(dry_run=False)
+
+        assert result.cards_considered == 0
+        assert result.skip_counts.get(FALLBACK_NO_EVIDENCE_SKIP_REASON) == 1
+
+
+class TestFallbackSlowPathInteraction:
+    def test_a_card_the_fallback_calculator_resolved_is_not_routed_to_slow_path(self, db):
+        """Wiring necessity (module docstring's PIECE 1 section): without this exclusion,
+        slow-path would route a card to human review that the fallback calculator resolves
+        moments earlier in the SAME invocation - the management command runs join-key -> fallback
+        -> slow-path in that order."""
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+        card = CardFactory(name="Some Card", content_phash=42)
+        _evidence(card, layout_class="black")
+        CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+        CardPrintingTag.objects.create(
+            card=card,
+            printing=printing,
+            is_no_match=False,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+        )
+
+        result = run_slow_path_calculator(dry_run=False)
+
+        assert result.cards_considered == 0
+        assert CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID).count() == 0
+
+    def test_a_card_the_fallback_calculator_only_scanned_is_still_routed(self, db):
+        """The exclusion is scoped to a real fallback VOTE only - a card the fallback calculator
+        scanned but abstained on (no confident hit from either calculator) still has nothing
+        automated resolving it, and belongs in the review queue exactly as before this PR."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        _evidence(card)
+        CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+        CardScanLog.objects.create(
+            card=card,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+            skip_reason=FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
+        )
+
+        result = run_slow_path_calculator(dry_run=False)
+
+        assert result.cards_considered == 1
+        assert CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID, card=card).count() == 1
