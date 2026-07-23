@@ -506,7 +506,59 @@ computing its own forced height).
    simply swaps its contents again — no close-then-reopen animation
    round-trip.
 
-### 4.3 Confirm flow (printing confirmation)
+### 4.3 Confirm flow (printing confirmation) — SUPERSEDED by D14 (owner-ratified, issue #271 comment, locked 2026-07-21)
+
+Status: the Y/N `DeckbuilderConfirmAffordance` badge flow originally
+specified here (below, for history — see git blame) is SUPERSEDED by the
+D14 design addendum. **`proposal-h-display-layout-spec.md`'s own D14
+entry is the canonical statement of this flow**; this section restates
+it in this doc's own interaction-flow numbering and defers to that entry
+on any wording conflict between the two. No successor "4.3′" section
+exists — this section is rewritten in place rather than left as dead
+history, unlike §4.4 below.
+
+1. A slot whose search named a specific printing, or whose selected
+   candidate carries printing-identity data (`canonicalCard` or
+   `suggestedCanonicalCard`), shows a compact **confidence element** in
+   the rail's promoted identity header (§2's amendment; always-visible,
+   not inside any accordion section) once that slot is selected —
+   directly under the card name + `RequestedPrintingBadge`. This is
+   identity information, promoted, not demoted metadata (matches D14's
+   own placement rationale).
+2. The element itself: `[set icon] SET · COLLECTOR# · <confidence read> [✗ not this printing]`. The confidence read is **a small checkmark**
+   next to the set icon when the printing is human-resolved consensus
+   (`canonicalCard` present), or a **numeric confidence score** when it's
+   only machine-suggested (`suggestedCanonicalCard` only, no
+   `canonicalCard`) — never a bare "Confirm?" Y/N badge.
+3. Hovering (desktop) or tapping (touch) the set icon opens an
+   `OverlayTrigger`/`Popover` pinning the Scryfall reference image for
+   that printing — display-serving only, straight from Scryfall's own
+   CDN, nothing stored (satisfies the governing premise and #271's own
+   note).
+4. **"✗ not this printing"**: one click casts a real human vote through
+   the existing consensus path (`useTagVoting`, the same submission path
+   `AttributeVotingPanel`/`AttributeChipPanel.tsx` already use — no new
+   vote semantics), the human half of the Stage D machine-vote funnel;
+   composes with the review queue (#262). Shown only when the printing
+   isn't yet human-resolved (paired with the numeric-confidence state).
+5. There is no positive "Y, this is right" button in this flow. Positive
+   confirmation instead flows through the funnel's own implicit/support
+   voting mechanics (D20 — see `docs/features/grid-selector.md`'s
+   "art-picker FUNNEL" section): picking a candidate while ≥1 attribute
+   chip is active casts implicit support votes for the tags that pick
+   satisfies. There is no separate explicit "confirm this printing"
+   affordance parallel to the old Y button — a resolved printing simply
+   never needs confirming again.
+
+**Placeholder note (2026-07-22 audit):** `ConfidenceElement.tsx` — the
+component this flow describes — currently ships as the narrower
+PLACEHOLDER cut of D14 (SetIcon + resolved/suggested read + a disabled
+"not this printing" affordance, no live Scryfall-hover popover, no real
+`useTagVoting` dispatch yet); the full interactive version this section
+describes lands with the unified-page bundle PR. See that component's
+own module comment.
+
+**Superseded original (kept for history, not current):**
 
 1. A slot whose search named a specific printing but whose selected
    image isn't yet the human-resolved consensus for that printing shows
@@ -592,10 +644,14 @@ together.
 deliberate, none silent):**
 
 - **(a) Suggested-printing Confirm.** Suggested-printing
-  representatives carry the shared Confirm affordance — the exact same
-  `DeckbuilderConfirmAffordance.tsx` component already mounted in the
-  rail header (2b), same votes, same API `/whatsthat` itself uses.
-  Never required, never blocking.
+  representatives carry the shared Confirm affordance — the same
+  `DeckbuilderConfirmAffordance.tsx` component `CardSlot.tsx`'s editor
+  slots already mount, same votes, same API `/whatsthat` itself uses.
+  Never required, never blocking. (2026-07-22 audit note: the
+  cross-reference this bullet used to make to "the rail header (2b)" is
+  stale — that rail-header instance is superseded by D14/§4.3's
+  confidence element; this grid-level badge is a separate mount, not the
+  rail header one, and is unaffected by that supersession.)
 - **(b) Art-as-filter.** Selecting/focusing any card offers "more like
   this" — filters the section to cards sharing its resolved tags
   (frame, border, fullart). One tap on/off, state visible as chips.
@@ -667,12 +723,12 @@ coverage.
 
 **Component breakdown (build, once un-HOLD'd):**
 
-| Component                                                         | New or reused | Notes                                                                                                                                                                                                                                         |
-| ----------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Group/sub-group sectioning + "+N more of this printing" expansion | New           | Pure client-side grouping over the existing `GridSelectorResults` candidate list, keyed on `canonicalCard`/`suggestedCanonicalCard` once available; the "+N more" expansion is local component state, no new Redux slice                      |
-| Suggested-printing Confirm badge (moment a)                       | Reused        | `DeckbuilderConfirmAffordance.tsx`, unchanged — already proven inline in this exact rail (2b)                                                                                                                                                 |
-| Art-as-filter chip bar (moment b)                                 | New, thin     | A plain filter-chip row (not `AttributeChipPanel.tsx`'s ring) built on `attributeChips.ts`'s existing `ALL_ATTRIBUTE_CHIPS`/`filterCandidatesByChipStates`/`useTagDisplayName` — filters against `card.tags`, no vote cast by filtering alone |
-| Filtered-selection confirm chip (moment c)                        | New, thin     | Calls the existing `APISubmitTagVote` (same function `AttributeChipPanel.tsx` already calls); gated on the new `tagVoteStatuses` field being `"suggested"` for the active filter tag(s) on the just-selected card                             |
+| Component                                                         | New or reused | Notes                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Group/sub-group sectioning + "+N more of this printing" expansion | New           | Pure client-side grouping over the existing `GridSelectorResults` candidate list, keyed on `canonicalCard`/`suggestedCanonicalCard` once available; the "+N more" expansion is local component state, no new Redux slice                                                                               |
+| Suggested-printing Confirm badge (moment a)                       | Reused        | `DeckbuilderConfirmAffordance.tsx`, unchanged — proven inline in `CardSlot.tsx`'s editor slots (2026-07-22 audit: no longer cross-referenced to "the rail header (2b)" — that rail-header mount is superseded by D14/§4.3's confidence element; this grid-level badge is a separate, unaffected mount) |
+| Art-as-filter chip bar (moment b)                                 | New, thin     | A plain filter-chip row (not `AttributeChipPanel.tsx`'s ring) built on `attributeChips.ts`'s existing `ALL_ATTRIBUTE_CHIPS`/`filterCandidatesByChipStates`/`useTagDisplayName` — filters against `card.tags`, no vote cast by filtering alone                                                          |
+| Filtered-selection confirm chip (moment c)                        | New, thin     | Calls the existing `APISubmitTagVote` (same function `AttributeChipPanel.tsx` already calls); gated on the new `tagVoteStatuses` field being `"suggested"` for the active filter tag(s) on the just-selected card                                                                                      |
 
 ### 4.5 Export
 
@@ -704,7 +760,7 @@ coverage.
 | `CardSlot.tsx` (minus its own grid-selector modal chrome)                                                                                                                                                                                                                       | Individual sheet slots                                                                                                                                | Restyle only: slot dimensions/positioning already come from `PagePreview`'s own absolute-mm layout, not `CardSlot`'s current grid-flow CSS; the click target and per-slot Redux wiring (`selectedImage`, `toggleMemberSelection`, etc.) carry over unchanged                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `AutofillCollapse.tsx`                                                                                                                                                                                                                                                          | Rail's section chrome — one instance per accordion section (Choose Image / Attributes / Print Options / Artist / Slot Actions)                        | None — same component `PDFGenerator.tsx`'s own settings groups already use (`PageSizeSettings`, `EdgeSettings`, etc.); each rail section is one more caller with its own local `expanded` boolean, defaults per §2's amendment                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `GridSelectorModal.tsx` + `GridSelectorFilters.tsx` + `JumpToVersion.tsx`                                                                                                                                                                                                       | Rail's **Choose Image** accordion section (open by default), §4.4                                                                                     | Props-level: rendered inline inside `AutofillCollapse`'s body instead of inside a `react-bootstrap` `Modal`; internal filter/search/debounce logic unchanged                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `DeckbuilderConfirmAffordance.tsx`                                                                                                                                                                                                                                              | Rail's **always-visible header** (outside the accordion — status, not a setting)                                                                      | None — same component, mounted once for the selected slot instead of once per visible grid slot                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `ConfidenceElement.tsx` (net-new — supersedes the `DeckbuilderConfirmAffordance.tsx` row this table used to carry here, per D14/§4.3, owner-ratified 2026-07-21)                                                                                                                | Rail's **always-visible promoted identity header** (outside the accordion — status, not a setting)                                                    | **New UI** — set icon + checkmark/numeric-confidence read + Scryfall-hover `Popover` + `✗ not this printing` casting a `useTagVoting` vote (D14). 2026-07-22 audit: `ConfidenceElement.tsx` currently ships as the narrower PLACEHOLDER cut (no live hover popover, no real vote dispatch yet) — the full interactive version this row describes lands with the unified-page bundle PR; see that component's own module comment. `DeckbuilderConfirmAffordance.tsx` itself is unchanged and still mounted elsewhere (`CardSlot.tsx`'s editor slots, the Select Version grid's moment (a) badge) — only its former rail-header mount is what D14 replaces                     |
 | `AttributeChipPanel.tsx` / `attributeChips.ts`                                                                                                                                                                                                                                  | Rail's **Attributes** accordion section (collapsed by default)                                                                                        | Props-level: currently composed around a `cardSlot` node for the question-feed's ring layout (`CardArea`); the rail mounts the same `ChipRing`/`TopArea`/`LeftArea`/`RightArea` styled parts directly in a vertical arrangement inside the section body, rather than around a centered card image — the tri-state cycling and vote-submission logic is unchanged                                                                                                                                                                                                                                                                                                             |
 | Requested-printing badge (currently rendered inline per search-query display logic)                                                                                                                                                                                             | Rail's **always-visible header** (outside the accordion — status, not a setting)                                                                      | Restyle + a new degraded-state style variant keyed off `degradedQueries` (existing field, not new data)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Manual bleed override (`ManualOverride`/`resolveBleedPlan` in `bleedNormalize.ts`)                                                                                                                                                                                              | Rail's **Print Options** accordion section (collapsed by default)                                                                                     | **New UI** — the algorithm exists but the control and its persistence are explicitly not-yet-built per Proposal B's own status doc (§1); this design assigns it a rail section but its build is Proposal B PR-2's scope, not this proposal's                                                                                                                                                                                                                                                                                                                                                                                                                                 |

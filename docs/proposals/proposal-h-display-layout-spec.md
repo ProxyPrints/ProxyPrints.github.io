@@ -720,7 +720,9 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   header (§4.1 promoted zone — this is identity information, not demoted
   metadata), directly under the card name + `RequestedPrintingBadge`:
 
-  `[⛨ set symbol] SET · 117 · 92% confident · [✗ not this printing]`
+  `[⛨ set symbol] SET · 117 · 92% confident · [✗ not this printing]` (suggested
+  state, shown above); `[⛨ set symbol ✓] SET · 117 · [no incorrect control]`
+  (confirmed state).
 
   - **Set symbol**: the existing `SetIcon` (`components/SetIcon.tsx`, a Keyrune
     `ss ss-<code>` glyph) — already mounted in `CardDetailedViewModal`,
@@ -730,8 +732,12 @@ upstream-clean, react-bootstrap primitives only, three-region language.
     `canonicalCard` present ⇒ human-resolved/high-confidence; only
     `suggestedCanonicalCard` ⇒ machine-suggested/lower-confidence; the
     `suggestedCanonicalCard`/`tagVoteStatuses` plumbing marked shipped in #236).
-    A `resolved` printing reads "confirmed"; a `suggested` one shows the
-    machine-suggested confidence.
+    A `resolved` printing shows **a small checkmark** next to the set icon — a
+    visual, not the word "confirmed" (tightened per the D14 addendum, owner
+    comment on #271, locked 2026-07-21, which supersedes this bullet's earlier
+    text-only "reads 'confirmed'" wording); a `suggested` printing shows the
+    numeric machine-suggested confidence score in its place (e.g. "92%
+    confident").
   - **Scryfall image on hover**: an `OverlayTrigger`+`Popover` on the set symbol
     shows the Scryfall image of that printing — **display-serving only, from
     Scryfall's own CDN, nothing stored** (satisfies the governing premise and
@@ -740,13 +746,32 @@ upstream-clean, react-bootstrap primitives only, three-region language.
     human vote through the existing consensus path (`useTagVoting` /
     `AttributeVotingPanel`'s submission — no new vote semantics), the human half
     of the Stage D machine-vote funnel (#271), composing with the review queue
-    (#262).
+    (#262). Positive confirmation is never a Y/N button in this flow — it flows
+    through the funnel's own implicit/support voting mechanics instead (D20).
 
   Reconciliation with #271's "don't push to design" note: that hold was against
   the _then-current_ #266–268 mockup round; the owner has now explicitly scoped
   the confidence funnel INTO this polish round (task item 6), so it is designed
   here. The implementation still sequences after the #266–268 layout lands, per
   #271.
+
+  **Canonical statement**: this D14 entry is the AUTHORITATIVE design spec for
+  the `/display` printing-confidence funnel. `proposal-h-unified-display-page.md`'s
+  §4.3 ("Confirm flow (printing confirmation)") restates this same flow in that
+  doc's own interaction-flow numbering and defers to this entry on any wording
+  conflict between the two — see that section's own cross-reference back here.
+  (The broader question of whether these two proposal-h documents should be
+  co-authoritative more generally, versus one deferring to the other
+  everywhere, is a separate, parked owner decision — this note fixes only the
+  D14/§4.3 surface.)
+
+  **Placeholder note (2026-07-22 audit):** `ConfidenceElement.tsx` — the
+  component implementing this design — currently ships as the narrower
+  PLACEHOLDER cut of D14 (`SetIcon` + resolved/suggested read + a disabled
+  "not this printing" affordance, no live Scryfall-hover popover, no real
+  `useTagVoting` dispatch yet); the full interactive version this entry
+  describes lands with the unified-page bundle PR. See that component's own
+  module comment.
 
 - **D15 — Import variety confirmed in the search-bar Import dropdown** (#272 item
   1 + #267). The populated-state search bar's `Import ▾` dropdown carries the
