@@ -15,6 +15,17 @@
  * branch is a practical no-op (the landing only ever renders while `selectIsProjectEmpty` is
  * true), but the hook stays generic rather than special-casing that fact, since it's also used by
  * MyDecksPage where the project can genuinely be dirty.
+ *
+ * `autoPromptOnLock` (default false, opt in per caller): whether a locked crypto session should
+ * pop the unlock modal the instant this hook mounts, with no user action. This defaulted to
+ * always-on until it was found gating an unrelated page (the /display empty-project landing,
+ * SavedDecksLandingPanel.tsx) behind an unrequested passphrase prompt the moment a signed-in user
+ * with any saved deck landed there to do something else entirely (type a list, import a file) -
+ * see the bugfix this comment accompanies. MyDecksPage is the one caller that opts back in: its
+ * entire mount IS the user's deliberate "open my saved decks" action (arriving at /myDecks), so
+ * the prompt firing immediately there is the expected, engaged-not-ambient case. Any other caller
+ * should leave this false and rely on the locked-session fallback affordance (`showUnlock` +
+ * `openUnlock`) it already exposes below instead.
  */
 import { useRouter } from "next/router";
 import React, { useCallback, useEffect, useState } from "react";
@@ -41,6 +52,11 @@ export interface UseLoadSavedDeckOptions {
    * deck into the current project in place, without navigating anywhere - the /display landing's
    * own use. */
   navigateTo?: string;
+  /** Auto-pop the unlock modal the moment this hook mounts against a locked crypto session, with
+   * no user action. Defaults to false - see this file's own module comment for why. Pass true
+   * only for a call site whose entire mount already IS the user deliberately engaging saved-decks
+   * functionality (MyDecksPage's own use, navigating to /myDecks). */
+  autoPromptOnLock?: boolean;
 }
 
 export interface UseLoadSavedDeckResult {
@@ -62,6 +78,7 @@ export interface UseLoadSavedDeckResult {
 
 export function useLoadSavedDeck({
   navigateTo,
+  autoPromptOnLock = false,
 }: UseLoadSavedDeckOptions = {}): UseLoadSavedDeckResult {
   const router = useRouter();
   const dispatch = useAppDispatch();
@@ -73,13 +90,16 @@ export function useLoadSavedDeck({
   const [pendingLoadDeck, setPendingLoadDeck] =
     useState<DecryptedSavedDeck | null>(null);
 
-  // Preserved verbatim from MyDecksPage: auto-prompt the passphrase unlock the moment this
-  // hook mounts against a locked crypto session, so a caller never has to wire that up itself.
+  // Opt-in only (see this file's own module comment + `autoPromptOnLock`'s own docstring above):
+  // auto-prompt the passphrase unlock the moment this hook mounts against a locked crypto
+  // session, but ONLY for a caller that explicitly asked for it - never as this hook's default,
+  // since a caller mounted ambiently as part of a broader page (the /display landing) must never
+  // gate that page's unrelated functionality behind an unrequested modal.
   useEffect(() => {
-    if (session.status === "locked") {
+    if (autoPromptOnLock && session.status === "locked") {
       setShowUnlock(true);
     }
-  }, [session.status]);
+  }, [autoPromptOnLock, session.status]);
 
   const openUnlock = useCallback(() => setShowUnlock(true), []);
 

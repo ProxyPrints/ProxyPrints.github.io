@@ -109,13 +109,16 @@ export function MyDecksPage() {
 
   // Extracted (design doc §5/§6 row S1, issue #268) into useLoadSavedDeck.ts so the /display
   // landing's SavedDecksLandingPanel can share the exact same open/load path - this page passes
-  // navigateTo: "/editor" (its own long-standing behaviour), the landing omits it.
+  // navigateTo: "/editor" (its own long-standing behaviour), the landing omits it. This page also
+  // opts into autoPromptOnLock: arriving at /myDecks already IS the user's deliberate "open my
+  // saved decks" action, unlike the /display landing where the hook mounts ambiently alongside
+  // unrelated import functionality (see useLoadSavedDeck.ts's own module comment).
   const {
     element: loadSavedDeckModals,
     openDeck,
     showUnlock,
     openUnlock,
-  } = useLoadSavedDeck({ navigateTo: "/editor" });
+  } = useLoadSavedDeck({ navigateTo: "/editor", autoPromptOnLock: true });
 
   const [decrypted, setDecrypted] = useState<Array<DecryptedSavedDeck>>([]);
   const [decrypting, setDecrypting] = useState(false);
