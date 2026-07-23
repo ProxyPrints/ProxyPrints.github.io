@@ -95,13 +95,25 @@ const dispatchChunkError = (page: Page) =>
 // identical symptom ("sometimes playwright is too 'fast' and clicking doesn't open the dropdown").
 // See docs/troubleshooting.md's chunkErrorRecovery.spec.ts entry for the full trace-based
 // diagnosis of all three rounds.
+//
+// Proposal H route swap (2026-07-23): loadPageWithDefaultBackend() now lands on the unified
+// /editor page (DisplayPage.tsx), not the classic ProjectEditor grid the "Choose Art" tab/
+// "Your project is empty at the moment." text above targeted - that tab and text no longer exist
+// anywhere in this app (the classic grid is fully unrouted, see pages/editor.tsx's own comment).
+// The underlying hydration-proof requirement is unchanged: Layout.tsx wraps DisplayPage the exact
+// same way it wrapped ProjectEditor, so React still flushes Layout's own mount effects (including
+// useChunkErrorRecovery's listener registration) in the same top-down commit pass that first
+// renders DisplayPage's real content. This is a Next static export (no per-request SSR) - the
+// initial HTML is a generic placeholder shell, so ANY real, data-driven content becoming visible
+// is already proof the client bundle mounted and ran its first commit, with no click/retry needed
+// at all (nothing to race against, unlike the old tab-click). `display-empty-state` is the
+// unified page's own fresh-project landing and wave-1's own established readiness proof for this
+// exact page (DisplayPage.spec.ts, OrphanRendering.spec.ts) - reused here so this file doesn't
+// re-derive a second convention for the same thing.
 const awaitHydrated = (page: Page) =>
-  expect(async () => {
-    await page.getByText("Choose Art").click();
-    await expect(
-      page.getByText("Your project is empty at the moment.")
-    ).toBeVisible();
-  }).toPass({ timeout: 10_000 });
+  expect(page.getByTestId("display-empty-state")).toBeVisible({
+    timeout: 10_000,
+  });
 
 const clearReloadGuard = (page: Page) =>
   page.evaluate(
