@@ -222,6 +222,21 @@ export const importText = async (page: Page, text: string) => {
   ).not.toBeVisible();
 };
 
+// Issue #167 (Select Version section) - navigates to the unified /display rail with a slot
+// selected, so its always-open Select Version surface (and the rest of the promoted/demoted rail
+// content around it) is on screen. Shared by SelectVersionSection.spec.ts (issue #167's own
+// behavior coverage) and DisplayLeftRailFidelity.spec.ts (SPEC-display-left-rail.md's permanent
+// CSS-fidelity guard - see that file's own module comment) so both drive the identical navigation
+// path rather than each re-deriving it.
+export const openSelectVersionSection = async (page: Page) => {
+  await loadPageWithDefaultBackend(page);
+  await importText(page, "my search query");
+  await page.getByRole("link", { name: "Editor" }).click();
+  await page.getByTestId("page-preview-slot").first().click();
+  // The rail always renders compressed tiles now (editor-completion package, E4/L9 - the
+  // toggle is gone entirely, hard-pinned true) - no "Compressed" click needed any more.
+};
+
 export async function expectCardSlotToExist(page: Page, slot: number) {
   await expect(page.getByTestId(`front-slot${slot - 1}`)).toContainText(
     `Slot ${slot}`

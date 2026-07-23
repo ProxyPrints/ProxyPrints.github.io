@@ -19,6 +19,18 @@ interface AutofillCollapseProps {
    * (every pre-existing caller) renders exactly as before, just gaining the always-safe
    * `aria-expanded` below. */
   id?: string;
+  /** Additive, optional (CSS-fidelity source-map pass, SPEC-display-left-rail.md §2/§9 -
+   * "AutofillCollapse header in rail: Superhero's stock `.card-header` `0.5rem 1rem` (8/16) ->
+   * rail-scoped `padding:7px 10px`"). Component-scoped replacement for what used to be a
+   * `RailRoot`-level `.card-header{padding:7px 10px}` descendant-selector override living two
+   * files away from the `Card.Header` it targeted (DisplayPage.tsx's own RailRoot, clobbering
+   * Bootstrap's global `card.scss` rule by selector specificity, not by scope) - see that
+   * commit's own note in SPEC-display-left-rail.md's "Source map addendum" for why that pattern
+   * is the recurrence signature this prop retires. `undefined` (every pre-existing caller, and
+   * every non-rail caller of this shared component - CardDetailedViewBody/PDFGenerator/
+   * JumpToVersion/CardResultSet/GridSelectorFilters) renders with Bootstrap's own stock padding,
+   * byte-for-byte unchanged. */
+  headerPadding?: string;
 }
 
 /**
@@ -42,6 +54,7 @@ export function AutofillCollapse({
   sticky = false,
   pad = 0,
   id,
+  headerPadding,
 }: AutofillCollapseProps) {
   return (
     <>
@@ -52,9 +65,15 @@ export function AutofillCollapse({
           aria-expanded={expanded}
           aria-controls={id != null ? `${id}-body` : undefined}
           style={{
-            backgroundColor: "#4E5D6B",
+            // CSS-fidelity source-map pass (SPEC-display-left-rail.md §0) - was "#4E5D6B" (a
+            // hand-typed literal one hex digit off the real theme token in the blue channel,
+            // 0x6B vs 0x6C - imperceptible but never actually sourced from the theme). Corrected
+            // to the exact `$secondary`/`$card-bg` value (#4e5d6c) SPEC-display-left-rail.md §0
+            // documents.
+            backgroundColor: "#4e5d6c",
             zIndex: zIndex + 1,
             cursor: "pointer",
+            ...(headerPadding != null ? { padding: headerPadding } : {}),
           }}
         >
           <Stack direction="horizontal" gap={2} className="d-flex px-0">

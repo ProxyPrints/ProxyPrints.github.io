@@ -27,44 +27,124 @@ const dispatchChunkError = (page: Page) =>
     );
   });
 
-// CI diagnosis (PR #395, run 30039392833, shard 1/4 - failed twice consecutively, including a
-// clean re-run, while passing locally): the recovery mechanism's own sessionStorage guard
-// (chunkErrorRecovery.ts's CHUNK_RELOAD_GUARD_KEY, a real 10s "don't loop" debounce, not a bug)
-// can legitimately already be set by the time a test gets around to dispatching its own synthetic
-// error. `npm run dev`'s webserver compiles /editor on demand (its own network trace showed a
-// second, ~800ms recompile of pages/editor.js mid-test, triggered by the navbar's own "Editor"
-// nav link - visible while already ON /editor - being prefetched by next/link's default viewport
-// IntersectionObserver behaviour), and that on-demand-compilation churn is exactly the class of
-// transient chunk hiccup this whole mechanism exists to recover from - it's plausible for a real
-// one to fire and consume the guard before a slow/cold CI runner's test body gets to its own
-// dispatch. This is a dev-server/test-harness artifact only: the deployed static export has no
-// on-demand compilation or HMR at all, so this can't happen in production, and the guard
-// suppressing a second reload within its window is the product working exactly as designed - see
-// docs/troubleshooting.md's chunkErrorRecovery.spec.ts entry. Clearing the guard immediately
-// before each test's own dispatch establishes the clean precondition the assertion actually means
-// to test ("a synthetic ChunkLoadError triggers exactly one reload"), independent of whatever
-// unrelated real chunk noise the dev server produced getting the page ready - it does not touch
-// the guard-suppression behaviour itself, which the last test below still exercises for real via
-// two dispatches inside the same clean window.
+// CI diagnosis #1 (PR #395, run 30039392833, shard 1/4 - failed twice consecutively, including a
+// clean re-run, while passing locally; fixed by PR #397): the recovery mechanism's own
+// sessionStorage guard (chunkErrorRecovery.ts's CHUNK_RELOAD_GUARD_KEY, a real 10s "don't loop"
+// debounce, not a bug) can legitimately already be set by the time a test gets around to
+// dispatching its own synthetic error - `npm run dev`'s on-demand page compilation, triggered by
+// the navbar's own "Editor" nav link being prefetched by next/link while already ON /editor, is
+// exactly the class of transient chunk hiccup this mechanism exists to recover from, and a real
+// one firing first consumes the guard before the test's own dispatch. PR #397 fixed this by
+// clearing the guard immediately before each test's own dispatch.
+//
+// CI diagnosis #2 (PR #395, run 30043836352, shard 1/4, after #397 was merged - all 3 attempts
+// including retries failed, and reproduced intermittently on a local box too): #397's fix wasn't
+// sufficient on its own, for two independent reasons.
+//
+// (a) #397 called clearReloadGuard(page) and dispatchChunkError(page) as two SEPARATE
+// page.evaluate() round-trips, leaving a real (if narrow) gap between them for the exact same
+// class of dev-server chunk noise diagnosis #1 already identified to land in. Fixed below by
+// folding the clear and the dispatch into one page.evaluate() call
+// (clearGuardAndDispatchChunkError / clearGuardAndDispatchChunkErrorAsRejection) - a single
+// synchronous browser-side task nothing else on the page's event loop can interleave with.
+//
+// (b) loadPageWithDefaultBackend()'s own "Choose Art" click is a raw DOM click, which Chromium
+// dispatches whether or not React has actually hydrated and useChunkErrorRecovery's useEffect has
+// run yet - a successful click is not proof the recovery listener is live. Locally, this spec
+// failed intermittently at `--workers=4` (parallel Playwright workers contending for CPU with the
+// dev server's own on-demand compilation) but passed reliably at `--workers=1` - that
+// serial-vs-parallel signature points squarely at hydration timing. A native DOM event dispatched
+// before a listener is attached is simply lost (never delivered once the listener does attach),
+// so this can't be worked around by polling for longer - it has to be worked around by proving
+// hydration completed *before* the test's own real dispatch.
+//
+// CI diagnosis #3 (this box, reproduced locally at `--workers=4 --repeat-each=10` against a cold
+// `.next` cache) - two dead ends before landing on the fix below, both worth recording since
+// they're each individually tempting to re-derive:
+//   - A disposable warm-up ChunkLoadError dispatch, intercepted and aborted via page.route()
+//     (mirroring how every other dispatch in this file is guarded): under this exact stress, EVERY
+//     test started failing deterministically (40/40) with `page.evaluate: SecurityError: Failed to
+//     read the 'sessionStorage' property from 'Window': Access is denied for this document` on the
+//     very next page.evaluate() call after that abort - evidence the document was transiently in
+//     an about:blank-like state right after the abort completed (Chromium's bookkeeping for an
+//     aborted top-level navigation isn't fully synchronous under this much contention).
+//   - Letting that same warm-up reload complete for real (no interception), then re-running
+//     loadPageWithDefaultBackend() to get back to a configured page: this traded the SecurityError
+//     for `page.goto: Navigation ... is interrupted by another navigation to ".../editor"` -
+//     confirming the self-referential "Editor" nav-link prefetch (diagnosis #1) is a genuinely
+//     recurring background navigation under this stress, not a one-off, and collides with ANY
+//     explicit page.goto()/reload this file issues, not just the first one.
+// Both dead ends required an EXTRA top-level navigation beyond what PR #397's baseline already
+// safely did (confirmed 40/40 stable under the identical stress in an A/B before either attempt).
+// The fix below requires none: react-bootstrap's uncontrolled `Tab.Container` in
+// ProjectEditor.tsx defaults `editorPanel` to `"import"` (the "Add Cards" tab), so the "editor"
+// tab's content - including CardGrid.tsx's "Your project is empty at the moment." empty-state
+// text - is present in the DOM either way but only becomes *visible* once Tab.Container's
+// onSelect handler actually runs and flips `activeKey` to `"editor"`, which needs the same
+// hydration/effect-flush pass that mounts useChunkErrorRecovery's own listeners (React flushes a
+// commit's effects top-down in one pass, and Layout wraps ProjectEditor). Waiting for that text to
+// become visible is therefore direct, hydration-dependent proof, entirely via DOM state - no
+// dispatch, no route, no navigation, so nothing left to race.
+//
+// loadPageWithDefaultBackend() (test-utils.ts) already clicks "Choose Art" once, but if that
+// single click lands before hydration finishes, it's a dead click - React never sees it, the tab
+// never switches, and no later click replays it (a native DOM event dispatched into an inert,
+// not-yet-hydrated element is simply gone). So this can't just *wait* for the earlier click's
+// result; it has to be prepared to *retry* the click itself until one lands after hydration -
+// exactly the established pattern test-utils.ts's own openAddCardsDropdown() already uses for the
+// identical symptom ("sometimes playwright is too 'fast' and clicking doesn't open the dropdown").
+// See docs/troubleshooting.md's chunkErrorRecovery.spec.ts entry for the full trace-based
+// diagnosis of all three rounds.
+const awaitHydrated = (page: Page) =>
+  expect(async () => {
+    await page.getByText("Choose Art").click();
+    await expect(
+      page.getByText("Your project is empty at the moment.")
+    ).toBeVisible();
+  }).toPass({ timeout: 10_000 });
+
 const clearReloadGuard = (page: Page) =>
   page.evaluate(
     (key) => window.sessionStorage.removeItem(key),
     CHUNK_RELOAD_GUARD_KEY
   );
 
+const clearGuardAndDispatchChunkError = (page: Page) =>
+  page.evaluate((key) => {
+    window.sessionStorage.removeItem(key);
+    const error = new Error("Loading chunk 5 failed.");
+    error.name = "ChunkLoadError";
+    window.dispatchEvent(
+      new ErrorEvent("error", { error, message: error.message })
+    );
+  }, CHUNK_RELOAD_GUARD_KEY);
+
+const clearGuardAndDispatchChunkErrorAsRejection = (page: Page) =>
+  page.evaluate((key) => {
+    window.sessionStorage.removeItem(key);
+    const error = new Error("Loading CSS chunk 2 failed.");
+    // PromiseRejectionEvent isn't constructible directly in most browsers - a plain object
+    // with the same shape the real listener reads (`.reason`) is sufficient here since the
+    // hook only ever reads that one property.
+    window.dispatchEvent(
+      Object.assign(new Event("unhandledrejection"), { reason: error })
+    );
+  }, CHUNK_RELOAD_GUARD_KEY);
+
 test.describe("Chunk-load-error recovery", () => {
   test("a ChunkLoadError dispatched as a window 'error' event triggers a reload", async ({
     page,
   }) => {
     await loadPageWithDefaultBackend(page);
+    await awaitHydrated(page);
+
     let reloadRequests = 0;
     await page.route(page.url(), async (route) => {
       reloadRequests++;
       await route.abort();
     });
 
-    await clearReloadGuard(page);
-    await dispatchChunkError(page);
+    await clearGuardAndDispatchChunkError(page);
 
     await expect.poll(() => reloadRequests).toBe(1);
   });
@@ -73,28 +153,23 @@ test.describe("Chunk-load-error recovery", () => {
     page,
   }) => {
     await loadPageWithDefaultBackend(page);
+    await awaitHydrated(page);
+
     let reloadRequests = 0;
     await page.route(page.url(), async (route) => {
       reloadRequests++;
       await route.abort();
     });
 
-    await clearReloadGuard(page);
-    await page.evaluate(() => {
-      const error = new Error("Loading CSS chunk 2 failed.");
-      // PromiseRejectionEvent isn't constructible directly in most browsers - a plain object
-      // with the same shape the real listener reads (`.reason`) is sufficient here since the
-      // hook only ever reads that one property.
-      window.dispatchEvent(
-        Object.assign(new Event("unhandledrejection"), { reason: error })
-      );
-    });
+    await clearGuardAndDispatchChunkErrorAsRejection(page);
 
     await expect.poll(() => reloadRequests).toBe(1);
   });
 
   test("an unrelated error never triggers a reload", async ({ page }) => {
     await loadPageWithDefaultBackend(page);
+    await awaitHydrated(page);
+
     let reloadRequests = 0;
     await page.route(page.url(), async (route) => {
       reloadRequests++;
@@ -118,20 +193,21 @@ test.describe("Chunk-load-error recovery", () => {
     page,
   }) => {
     await loadPageWithDefaultBackend(page);
+    await awaitHydrated(page);
+
     let reloadRequests = 0;
     await page.route(page.url(), async (route) => {
       reloadRequests++;
       await route.abort();
     });
 
-    await clearReloadGuard(page);
-    await dispatchChunkError(page);
+    await clearGuardAndDispatchChunkError(page);
     await expect.poll(() => reloadRequests).toBe(1);
 
     // The aborted reload never completed, so the same document/listeners are still live -
     // dispatch a second chunk error and confirm the guard window suppresses a second attempt.
-    // (Deliberately no clearReloadGuard() call here - this second dispatch is exactly what's
-    // meant to hit the still-live guard from the first one above.)
+    // (Deliberately no guard-clear here - this second dispatch is exactly what's meant to hit
+    // the still-live guard from the first one above.)
     await dispatchChunkError(page);
     await page.waitForTimeout(1_000);
     expect(reloadRequests).toBe(1);
