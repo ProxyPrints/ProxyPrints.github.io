@@ -510,11 +510,14 @@ class TestCandidateNameIndex:
         assert len(index.candidates_for("Kusari-Gama (Modern Tomas Giorello)")) == 1
 
     def test_direct_match_takes_precedence_over_any_suffix_handling(self, db):
-        """The common, unsuffixed case is completely unaffected by the new fallback - confirmed
+        """The common, unsuffixed case is completely unaffected by any fallback tier - confirmed
         directly, not just inferred from candidates_for's own "direct first" docstring."""
         CanonicalCardFactory(name="Lightning Bolt")
         index = CandidateNameIndex()
         assert len(index.candidates_for("Lightning Bolt")) == 1
+
+    # Tier 2: filename-style duplicate-upload suffix strip (issue #380 - "Plaguecrafter (1)",
+    # "Polluted Delta - Copy").
 
     def test_paren_digit_suffix_already_resolves_via_to_searchable_alone(self, db):
         """Live-proven case (card_id 7173, "Plaguecrafter (1)") - confirmed here as a REGRESSION
@@ -584,6 +587,74 @@ class TestCandidateNameIndex:
         CanonicalCardFactory(name="Spirit Token")
         index = CandidateNameIndex()
         assert index.candidates_for("Spirit_Token_3") == []
+
+    # Tier 3 (last resort): de-concatenation (issue #372 - "VazaltheCompleat"-style names, where
+    # a source filename stripped every space out of a multi-word card name but otherwise
+    # preserved title-case word boundaries).
+
+    def test_deconcatenated_camelcase_name_matches_unambiguously(self, db):
+        CanonicalCardFactory(name="Vazal, the Compleat")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("VazaltheCompleat")) == 1
+
+    def test_deconcatenated_camelcase_name_with_filename_suffix_matches(self, db):
+        # the real reported case (card 40746) carries a trailing " (2)" duplicate-upload
+        # suffix on top of the space-stripping - both problems are handled together, not just
+        # the space-stripping in isolation.
+        CanonicalCardFactory(name="Vazal, the Compleat")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("VazaltheCompleat (2)")) == 1
+
+    def test_deconcatenated_name_returns_every_printing_of_the_matched_name(self, db):
+        CanonicalCardFactory(name="Throat Wolf")
+        CanonicalCardFactory(name="Throat Wolf")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("ThroatWolf (1)")) == 2
+
+    def test_ambiguous_deconcatenation_is_rejected(self, db):
+        # two distinct real names, split into words differently, that happen to collapse to the
+        # identical concatenated form - a de-concatenation match here would have no principled
+        # way to choose between them, so neither is returned (wrong-name matches are worse than
+        # none, per the task's own framing and this module's PRINCIPLE). Neither name matches
+        # the query directly (both still carry their own internal space), so this genuinely
+        # exercises the ambiguous branch of the fallback, not the direct-match path.
+        CanonicalCardFactory(name="Cat Nap")
+        CanonicalCardFactory(name="Catn Ap")
+        index = CandidateNameIndex()
+        assert index.candidates_for("CatNap") == []
+
+    def test_genuinely_nonexistent_single_word_name_stays_unmatched(self, db):
+        # no interior capital, so the fallback gate never even attempts a concat lookup -
+        # this is a real absence, not a space-stripping artifact.
+        CanonicalCardFactory(name="Lightning Bolt")
+        index = CandidateNameIndex()
+        assert index.candidates_for("qwertyuiop") == []
+
+    def test_single_word_name_that_genuinely_does_not_exist_is_not_forced_to_match(self, db):
+        # single-word query with an interior capital, but nothing in the catalog concatenates
+        # to it - stays unmatched rather than matching something unrelated.
+        CanonicalCardFactory(name="Lightning Bolt")
+        index = CandidateNameIndex()
+        assert index.candidates_for("SomeCustomCard") == []
+
+    def test_name_with_a_genuine_space_and_no_direct_match_stays_unmatched(self, db):
+        # already has a real word boundary and still doesn't match anything directly - the
+        # fallback must not be attempted for this at all (the "no spaces" gate), since forcing
+        # a concatenated lookup on a name that already delimited its own words correctly could
+        # only ever produce an accidental, unrelated match.
+        CanonicalCardFactory(name="Vazal, the Compleat")
+        index = CandidateNameIndex()
+        assert index.candidates_for("Totally Unrelated Name") == []
+
+    # Composition: a name carrying BOTH a tier-2 duplicate-upload suffix AND a tier-3 glued body
+    # must still resolve - tier 2 alone doesn't find it (the suffix-stripped name is still
+    # glued), so it has to fall all the way through to tier 3, fed the suffix-free name.
+
+    def test_suffix_and_deconcatenation_compose_for_a_stacked_case(self, db):
+        CanonicalCardFactory(name="Vazal, the Compleat")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("VazaltheCompleat - Copy")) == 1
+        assert len(index.candidates_for("VazaltheCompleat (2) - Copy")) == 1
 
 
 class TestOcrParsing:
