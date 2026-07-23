@@ -2765,6 +2765,17 @@ implied by this OCR fix and was not built.
   detail), `cardpicker/utils.py` (`find_stale_applied_migrations`,
   `get_baked_git_sha`), `cardpicker/management/commands/purge_machine_votes.py`,
   migration `0061_pilotrunledger_cardartistvote_run_id_and_more.py`
+- `cardpicker/local_layout_class_cast.py` + management command
+  `local_layout_class_cast` (public issue #369, "the Hidden Courtyard should
+  register as borderless") - closes the gap between Stage C's
+  `ImageEvidence.layout_class` (issue #148's geometry-group extractor) and an
+  actual `CardTagVote`: any card whose Stage C evidence carries a confident
+  border-color reading but never got a border-attribute vote cast by the
+  live pilot/fallback engine (e.g. extracted before that engine ran, or
+  whose printing resolved before reaching the fallback stage) is picked up
+  by this standalone, zero-image-fetch caster instead. See that module's own
+  docstring for the full mapping/anonymous-id/confidence-tier rationale -
+  not duplicated here.
 
 ## Known gaps (Stage 8 era, historical)
 
