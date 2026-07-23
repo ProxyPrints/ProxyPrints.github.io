@@ -608,9 +608,12 @@ class Command(BaseCommand):
         "a prioritized (edhrec_rank-ordered) cohort of cards via a decoupled fetch-thread-pool + "
         "compute-process-pool pipeline (Stage C fetch/compute decoupling design, #228). NOT the "
         "full-catalog harvest - see this command's own module docstring. Write mode is the "
-        "DEFAULT (pass --dry-run to preview) - a normal (write) invocation requires a matching "
-        "COMPLETED dry-run of the SAME --card-ids-file/--limit scope within --dry-run-window-"
-        "hours (forced-dry-run guard, issue #362) - see --skip-dryrun-check to override."
+        "DEFAULT (pass --dry-run to preview). The forced-dry-run guard (issue #362) applies ONLY "
+        "to the targeted --card-ids-file path - it requires a matching COMPLETED dry-run of the "
+        "SAME --card-ids-file within --dry-run-window-hours (see --skip-dryrun-check to override). "
+        "The routine --limit bulk-harvest path is intentionally UNGATED: unlike the targeted path, "
+        "its own dry-run preview pays the same full fetch/OCR/extraction compute cost as a real "
+        "run, so the guard's cheap-preview rationale doesn't hold there (owner decision, PR #373)."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -715,10 +718,10 @@ class Command(BaseCommand):
             "set because a re-invocation picks up exactly where a stopped run left off (the "
             "resume filter - see module docstring's 'Resume/kill-safety' section).",
         )
-        # Forced-dry-run guard (issue #362, Phase 0 rails): NOTE this command's own write mode is
-        # the DEFAULT (no --dry-run passed), unlike the other four commands this guard also
-        # covers - see this command's own scope comment in handle() for how that's reflected here.
-        add_dry_run_guard_arguments(parser, write_flag="the default (write) mode")
+        # Forced-dry-run guard (issue #362, Phase 0 rails, narrowed per owner decision on PR #373's
+        # review - see the guard's own call site in handle() for the full reasoning): applies ONLY
+        # to a --card-ids-file write, never to the routine --limit bulk-harvest path.
+        add_dry_run_guard_arguments(parser, write_flag="a --card-ids-file write")
 
     def handle(self, *args: Any, **options: Any) -> None:
         limit: int = options["limit"]
@@ -750,16 +753,18 @@ class Command(BaseCommand):
         if profile:
             self.stdout.write(f"Profile JSONL: {profile_output}")
 
-        # Forced-dry-run guard scope (issue #362): the INPUT that defines this invocation's own
-        # target cohort - a card-ids-file path (the targeted re-extraction path, the closest
-        # analogue to the other four commands' own retroactive-fix cohorts) or the plain --limit
-        # value (the routine edhrec-priority bulk harvest path). NOTE this command's own write
-        # mode is the DEFAULT (dry_run=False unless --dry-run is passed) - unlike the other four
-        # commands this guard also covers, so a normal invocation of THIS command needs a matching
-        # --dry-run of the same scope within the window (or --skip-dryrun-check) EVERY time, not
-        # just for a targeted retroactive fix. Flagged as an operational open item in this PR's own
-        # report, not silently narrowed here - applying it uniformly, as spec'd, is the safer
-        # default until the owner decides otherwise.
+        # Forced-dry-run guard scope (issue #362, narrowed per owner decision on PR #373's review):
+        # the guard applies ONLY to the targeted --card-ids-file path - the closest analogue to the
+        # other four commands' own retroactive-fix cohorts, and cheap to preview (a small explicit
+        # id list). The routine --limit bulk-harvest path is intentionally UNGATED: write_mode below
+        # is forced False whenever no --card-ids-file is given, regardless of --dry-run, so
+        # enforce_dry_run_precondition is a guaranteed no-op (no CommandError, no ledger-row
+        # precondition) for that path - a --limit run's own "dry-run" still pays full fetch/OCR/
+        # extraction compute cost (there is no cheap bulk preview), so the guard's cheap-preview
+        # rationale doesn't hold there, and gating it would force every routine harvest invocation
+        # to either find a matching recent dry-run of the same --limit or pass --skip-dryrun-check
+        # every time. `scope` itself is still computed/recorded for BOTH paths (cheap, and useful
+        # audit-trail context even when the guard doesn't consult it for --limit).
         card_ids_file_for_scope: Optional[str] = options["card_ids_file"]
         scope = (
             scope_hash("card_ids_file", card_ids_file_for_scope)
@@ -768,7 +773,7 @@ class Command(BaseCommand):
         )
         skip_used = enforce_dry_run_precondition(
             command="run_image_evidence_cohort",
-            write_mode=not dry_run,
+            write_mode=(not dry_run) and bool(card_ids_file_for_scope),
             skip_check=options["skip_dryrun_check"],
             window_hours=options["dry_run_window_hours"],
             scope=scope,
