@@ -143,6 +143,71 @@ would naturally produce a NEW `ImageEvidence` row only if the card's `content_ha
 (this model's own "computed-once-forever" design) - re-running the same evidence forward gains
 nothing.
 
+THE SET-CODE LEXICON GATE (2026-07-23, owner-directed correction, live-proven defect - card_ids
+77046/31096/14961 among others): `local_ocr.parse_collector_line` is deliberately tolerant (its
+own docstring: "extraction, not validation" - ANY 3-5 char alnum token in a plausible position is
+returned as `set_code`, real or not). Before this fix, `calculate_join_key_verdict`'s
+"parsed-but-no-match" branch (a parsed `(set_code, collector_number)` pair matching none of this
+card's own candidates) cast a real `is_no_match=True` vote unconditionally, on the reasoning that
+a validated-but-unmatched parse is real (if weaker) negative evidence (issue #207's own
+`JOIN_KEY_NO_MATCH_CONFIDENCE` framing). That reasoning silently assumed the parsed `set_code`
+was at least a REAL set code that simply doesn't apply to this card - false for a large,
+now-measured share of this population: a live read-only audit of the full `is_no_match=True`
+cohort under `JOIN_KEY_ANONYMOUS_ID` (61,247 votes) found 52,349 (85.5%) carrying a `set_code`
+that matches NO row in `CanonicalExpansion` at all - dominated by proxy/watermark text the
+collector-line crop happened to also catch ("proxy" 11,283, "mtg" 4,084, "not" 3,912, "card"
+2,717, "mtgx" 1,229 - the top 5 alone are 43.9% of the whole out-of-lexicon population) and
+short OCR noise fragments ("sew", "ree", "eee", "vme", "sol" - 5,651 distinct out-of-lexicon
+codes total, heavily long-tailed). None of that is a validated non-match against a real
+printing; it is un-parsed noise the tolerant parser happened to shape like a set code.
+
+THE FIX: `calculate_join_key_verdict` now takes an explicit `known_set_codes` argument (every
+`CanonicalExpansion.code`, lowercased - built once per batch via the new `known_set_codes()`
+helper below, the same "one query, not one per card" convention `CandidateNameIndex.__init__`
+already established). In the "parsed-but-no-match" branch, when `parsed.set_code is not None`
+and it is NOT in `known_set_codes`, the card gets a new named, non-rescannable skip
+(`"unknown-set-code"`) instead of a vote - the same "abstain, don't guess" treatment `"no-text"`
+already gets, not a stronger conclusion than the evidence supports. A `None` `parsed.set_code`
+(the pre-M15 collector-number-only case) is UNAFFECTED - the gate only ever applies when a
+set-code-shaped token was actually found. `"unknown-set-code"` is added to
+`JOIN_KEY_NO_HIT_SKIP_REASONS` (below) so this cohort still routes to the fallback calculator and
+the slow-path human-review queue exactly as a genuine no-match vote already did - abstaining is
+not the same as discarding the card.
+
+WHY GATE ON LEXICON MEMBERSHIP ALONE, NOT A CONFIDENCE/QUALITY SPLIT: the obvious concern is a
+genuinely-custom set code on a proxy of a non-existent/homebrew printing (e.g. a made-up code
+like "ra03b") - that case SHOULD still cast a no-match vote (crisp, deliberate text that simply
+isn't in Scryfall's lexicon, not noise), and a lexicon-only gate can't distinguish it from
+garbage OCR. A principled split was investigated, not assumed away: `ImageEvidence.
+collector_line_word_boxes` carries tesseract's own per-word `conf` (0-100) from the SAME
+extraction pass, so the specific word-box matching each cohort's `set_code` token was checked
+directly. There is no usable separation - in-lexicon-but-still-no-match tokens (a real set code
+that just doesn't apply to this candidate) had a mean/median confidence of 76.7/90.0 (n=4,312);
+out-of-lexicon tokens had 67.6/88.0 (n=52,349) - both ranges span 0-97, and the highest-confidence
+out-of-lexicon tokens are exactly the crisp, clearly-printed proxy/watermark words ("not" at
+conf=96, "proxy" at conf=96, "mtg" at conf=82-87) that are semantically wrong, not visually
+noisy - OCR confidence measures legibility, not whether the legible text is actually a set code,
+so it cannot separate "clean parse of a genuine custom code" from "clean parse of a proxy
+watermark". Per the standing instruction covering this exact case: no separable signal exists, so
+this gates on lexicon membership ALONE, and says so here - a real custom-set-code proxy is
+therefore also abstained (not vetoed - `"unknown-set-code"` routes to the fallback calculator and
+the slow-path human review queue as described above, so a human still sees it, they just don't
+see a confident-looking machine vote asserting a specific negative that the parse can't actually
+back up). Given the 85.5%-vs-a-thin-custom-code-minority shape of the measured population, this
+trade is a large net soundness improvement, paid for by asking a human to type "no match" that a
+low-confidence machine vote used to assert (weight `PRINTING_TAG_MACHINE_WEIGHT`, never enough to
+resolve consensus alone regardless).
+
+NOT APPLIED to `cardpicker.local_identify_printing_tags`'s own live-pilot OCR engine
+(`OCR_ANONYMOUS_ID="local-ocr-v1"`, `run_ocr_for_card`/`_compute_card`), which casts an
+`is_no_match=True` vote from the identical `"parsed-but-no-match"` outcome at its own call site -
+same underlying defect, deliberately left unfixed here: that engine fetches and processes a live
+image per card (a materially larger, higher-risk surface than this module's own zero-fetch,
+already-persisted-`ImageEvidence` design), no live-proven case was found against it specifically,
+and it sits outside this task's own explicit "join-key calculator" scope. `known_set_codes()`
+below is written so that engine's own selection loop could reuse it directly in a focused
+follow-up - flagged, not silently left inconsistent.
+
 TWO FURTHER CHEAP ADDITIONS (this PR, built 2026-07-20, owner decision on issue #220):
 
 1. **Slow-path routing** (`calculate_slow_path_verdict`/`run_slow_path_calculator`, own
@@ -332,6 +397,7 @@ from cardpicker.local_ocr import (
 )
 from cardpicker.models import (
     CanonicalCard,
+    CanonicalExpansion,
     Card,
     CardPrintingTag,
     CardScanLog,
@@ -390,6 +456,29 @@ JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT = 0.65
 # because ImageEvidence simply hadn't been extracted yet for this card at selection time is a
 # transient state (a future extraction run may still land it), not a permanent conclusion.
 JOIN_KEY_RESCANNABLE_SKIP_REASONS = frozenset({"no-evidence"})
+
+# THE SET-CODE LEXICON GATE (module docstring) - a parsed `set_code` that matches no
+# `CanonicalExpansion.code` at all, same permanent-conclusion category as "no-text"/"ambiguous"
+# (re-selecting the same card against the same stored evidence would deterministically reproduce
+# the same lexicon miss forever) - deliberately NOT in JOIN_KEY_RESCANNABLE_SKIP_REASONS above.
+JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON = "unknown-set-code"
+
+
+def known_set_codes() -> frozenset[str]:
+    """
+    The set-code lexicon (module docstring's SET-CODE LEXICON GATE) - every `CanonicalExpansion.
+    code`, lowercased, as a plain in-memory set. Cheap (~1,000s of rows, confirmed live) and built
+    once per call site, the same "one query, not one per card" convention `CandidateNameIndex.
+    __init__` already established for `CanonicalCard` - NOT memoized at module scope (unlike
+    `local_fallback`'s own `@lru_cache` static-file loaders): this is a live DB read, and a
+    process-lifetime cache would leak a stale lexicon across Django test cases (each gets its own
+    transactional `CanonicalExpansion` rows) and would never notice a genuinely new expansion
+    import landing mid-process. Callers (`run_join_key_calculator`, `reparse_and_retract`) call
+    this once per batch invocation and pass the result through explicitly, mirroring `index =
+    CandidateNameIndex()`'s own call-once-reuse-across-the-batch shape.
+    """
+    return frozenset(code.lower() for code in CanonicalExpansion.objects.values_list("code", flat=True))
+
 
 # The copyright-year era check (module docstring): a gap this large or larger between the legal
 # line's parsed copyright year and the matched printing's own Scryfall release year withholds the
@@ -600,7 +689,10 @@ def _apply_agreement_checks(
 
 
 def calculate_join_key_verdict(
-    card_id: int, evidence: ImageEvidence, candidates: list[CandidatePrinting]
+    card_id: int,
+    evidence: ImageEvidence,
+    candidates: list[CandidatePrinting],
+    known_set_codes: Optional[frozenset[str]] = None,
 ) -> JoinKeyVerdict:
     """
     The join-key calculator. Pure function, no DB write (aside from `_apply_agreement_checks`'s
@@ -612,6 +704,18 @@ def calculate_join_key_verdict(
     would-be match (direct OR symbol-phash tie-broken) is routed through
     `_apply_agreement_checks` (module docstring's "agreement/corroboration layer") before being
     returned, rather than accepted outright.
+
+    `known_set_codes` (module docstring's SET-CODE LEXICON GATE, 2026-07-23) - the output of
+    `known_set_codes()`, built once per batch by the caller and passed through explicitly (the
+    same "caller builds it once, this function stays pure" shape `candidates` itself already has).
+    Defaults to `None`, meaning "no lexicon available to gate against" - the "parsed-but-no-match"
+    branch below then falls back to its pre-2026-07-23 behavior (always casts `is_no_match=True`)
+    rather than silently querying the DB itself. Every real caller (`run_join_key_calculator`,
+    `reparse_collector_evidence.reparse_and_retract`) always passes a concrete lexicon; `None` only
+    ever shows up in a test that doesn't care about the lexicon gate at all (and, deliberately,
+    every such existing test already exercises the "parsed-but-no-match" branch with a `None`
+    `parsed.set_code`, i.e. the pre-M15 collector-number-only case the gate never touches anyway -
+    see this function's own set-code lexicon gate test coverage for the explicit confirmation).
 
     INVARIANT (module docstring's collector-number-only ambiguity guard): `candidates` MUST
     already be narrowed to this card's own name - the only correct way to produce it is
@@ -653,6 +757,18 @@ def calculate_join_key_verdict(
         return JoinKeyVerdict(card_id=card_id, skip_reason="ambiguous", detail=parsed.raw_text)
 
     if reason == "parsed-but-no-match":
+        # THE SET-CODE LEXICON GATE (module docstring, 2026-07-23) - a parsed set_code that
+        # doesn't exist in the real Scryfall expansion lexicon at all is un-parsed noise (a
+        # proxy/watermark word, an OCR-garbled fragment), not validated negative evidence -
+        # abstain (a named, non-rescannable skip) instead of casting a confident no-match vote
+        # the parse can't actually back up. Only checked when a lexicon was actually supplied
+        # AND a set_code was actually parsed - a None known_set_codes (no lexicon available) or a
+        # None parsed.set_code (pre-M15 collector-number-only case) both fall through unchanged
+        # to the genuine no-match vote below, exactly as before this fix.
+        if known_set_codes is not None and parsed.set_code is not None and parsed.set_code not in known_set_codes:
+            return JoinKeyVerdict(
+                card_id=card_id, skip_reason=JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON, detail=parsed.raw_text
+            )
         # genuine whole-candidate-set negative evidence - same issue #207 "the vote IS the
         # record" convention every other engine's real is_no_match cast already follows.
         return JoinKeyVerdict(
@@ -840,6 +956,8 @@ def run_join_key_calculator(
     """
     run_id = run_id or generate_run_id()
     index = CandidateNameIndex()
+    lexicon = known_set_codes()  # module docstring's SET-CODE LEXICON GATE - built once, reused
+    # across the whole batch, same shape as `index` immediately above.
     result = JoinKeyCalculatorResult(dry_run=dry_run, run_id=run_id)
 
     votes_batch: list[CardPrintingTag] = []
@@ -868,7 +986,7 @@ def run_join_key_calculator(
 
         result.cards_considered += 1
         candidates = _resolve_candidates_for_card(card.name, index, default_cards_path=default_cards_path)
-        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=lexicon)
 
         if verdict.skip_reason:
             result.skip_counts[verdict.skip_reason] = result.skip_counts.get(verdict.skip_reason, 0) + 1
@@ -1248,6 +1366,13 @@ SLOW_PATH_TO_REVIEW_REASON = "to-review"
 # becoming routing-invisible; removing it from this set would be strictly worse than leaving it -
 # a dead value in a frozenset costs nothing, an orphaned unrouted card costs a real review-queue
 # gap.
+#
+# JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON ("unknown-set-code", 2026-07-23, module docstring's
+# SET-CODE LEXICON GATE): this outcome used to be indistinguishable from a real is_no_match vote
+# (already routed via the CardPrintingTag branch below) - now that it's a named skip instead, it
+# needs to be listed HERE for the same reason every other named skip is: without this, a card the
+# lexicon gate abstains on would silently stop routing to the fallback calculator/slow-path human
+# review queue, a real review-queue gap, not just a naming detail.
 JOIN_KEY_NO_HIT_SKIP_REASONS = frozenset(
     {
         "ambiguous",
@@ -1257,6 +1382,7 @@ JOIN_KEY_NO_HIT_SKIP_REASONS = frozenset(
         "frame-mismatch",
         "truncated-image",
         "copyright-year-mismatch",
+        JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
     }
 )
 
@@ -1456,6 +1582,8 @@ __all__ = [
     "JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT",
     "JOIN_KEY_RESCANNABLE_SKIP_REASONS",
     "JOIN_KEY_NO_HIT_SKIP_REASONS",
+    "JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON",
+    "known_set_codes",
     "COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS",
     "STAGE_D_FALLBACK_ANONYMOUS_ID",
     "FALLBACK_NO_EVIDENCE_SKIP_REASON",

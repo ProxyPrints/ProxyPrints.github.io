@@ -36,7 +36,9 @@ from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_CONFIDENCE_BOTH,
     JOIN_KEY_CONFIDENCE_COLLECTOR_ONLY,
     JOIN_KEY_CONFIDENCE_SYMBOL_TIEBREAK,
+    JOIN_KEY_NO_HIT_SKIP_REASONS,
     JOIN_KEY_NO_MATCH_CONFIDENCE,
+    JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
     RESOLUTION_FLOOR_DPI,
     SLOW_PATH_ANONYMOUS_ID,
     SLOW_PATH_TO_REVIEW_REASON,
@@ -48,6 +50,7 @@ from cardpicker.local_calculate_verdicts import (
     calculate_fallback_verdict,
     calculate_join_key_verdict,
     calculate_slow_path_verdict,
+    known_set_codes,
     run_fallback_calculator,
     run_join_key_calculator,
     run_slow_path_calculator,
@@ -174,6 +177,30 @@ class TestCalculateJoinKeyVerdict:
         assert verdict.printing_pk is None
         assert verdict.skip_reason == ""
         assert verdict.confidence == JOIN_KEY_NO_MATCH_CONFIDENCE
+
+    def test_parsed_but_no_match_with_no_lexicon_supplied_keeps_pre_2026_07_23_behavior(self, db):
+        """known_set_codes defaults to None - the exact pre-fix behavior, unconditionally
+        (module docstring's own explicit contract for the None case)."""
+        card = CardFactory(name="Some Card")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(card, collector_line_set_code="sew", collector_line_collector_number="2")
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.is_no_match is True
+        assert verdict.skip_reason == ""
+
+    def test_collector_number_only_parsed_but_no_match_is_unaffected_by_the_lexicon_gate(self, db):
+        """The pre-M15 case (no set code printed at all) - parsed.set_code is None, so the gate
+        never applies regardless of what known_set_codes contains (even an empty lexicon)."""
+        card = CardFactory(name="Some Old Card")
+        candidates = [CandidatePrinting(pk=1, expansion_code="lea", collector_number="93")]
+        evidence = _evidence(card, collector_line_collector_number="999")
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=frozenset())
+
+        assert verdict.is_no_match is True
+        assert verdict.skip_reason == ""
 
     def test_no_text_is_a_named_skip(self, db):
         card = CardFactory(name="Some Card")
@@ -302,6 +329,161 @@ class TestCalculateJoinKeyVerdict:
 
         assert verdict.is_no_match is True
         assert verdict.skip_reason == ""
+
+
+class TestSetCodeLexiconGate:
+    """Module docstring's SET-CODE LEXICON GATE (2026-07-23) - `calculate_join_key_verdict`'s
+    "parsed-but-no-match" branch abstains (a named skip) instead of casting is_no_match=True when
+    the parsed set_code isn't a real CanonicalExpansion code."""
+
+    def test_out_of_lexicon_set_code_abstains_instead_of_casting_no_match(self, db):
+        CanonicalExpansionFactory(code="mom")
+        card = CardFactory(name="Some Card")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(card, collector_line_set_code="zzq", collector_line_collector_number="2")
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=frozenset({"mom"}))
+
+        assert verdict.skip_reason == JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON
+        assert verdict.is_no_match is False
+        assert verdict.printing_pk is None
+
+    def test_in_lexicon_set_code_still_casts_a_genuine_no_match(self, db):
+        """Regression pin - the gate must not touch a real set code that simply doesn't apply to
+        this card's own candidates (issue #207's pre-existing, still-valid negative evidence)."""
+        CanonicalExpansionFactory(code="mom")
+        CanonicalExpansionFactory(code="isd")
+        card = CardFactory(name="Some Card")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(card, collector_line_set_code="isd", collector_line_collector_number="2")
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=frozenset({"mom", "isd"}))
+
+        assert verdict.is_no_match is True
+        assert verdict.skip_reason == ""
+        assert verdict.confidence == JOIN_KEY_NO_MATCH_CONFIDENCE
+
+    @pytest.mark.parametrize(
+        "raw_text,set_code,collector_number",
+        [
+            # card_id 77046, live production - a proxy-watermark region OCR'd into the collector
+            # line crop, "Sew" parsed as a plausible-looking 3-char set code.
+            ("——— SRe © < iE 2 e Sew «", "sew", "2"),
+            # card_id 31096, live production.
+            ("aN 6 ree MRA Alin tO AAS OL ARON pt perl", "ree", "6"),
+            # card_id 14961, live production.
+            (". 'a eee +... 5 eee ee", "eee", "5"),
+        ],
+    )
+    def test_live_proven_garbage_set_codes_abstain(self, db, raw_text, set_code, collector_number):
+        CanonicalExpansionFactory(code="mom")
+        card = CardFactory(name="Some Card")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text=raw_text,
+            collector_line_set_code=set_code,
+            collector_line_collector_number=collector_number,
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=frozenset({"mom"}))
+
+        assert verdict.skip_reason == JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON
+        assert verdict.is_no_match is False
+
+    def test_genuinely_custom_set_code_on_a_proxy_is_also_abstained_not_vetoed(self, db):
+        """The documented tradeoff (module docstring's "WHY GATE ON LEXICON MEMBERSHIP ALONE"
+        section): a real, deliberately-custom set code on a proxy of a non-existent printing
+        (e.g. "ra03b") reads exactly like noise to a lexicon-only gate, since no separable
+        confidence/quality signal was found to distinguish the two. This is the accepted cost,
+        pinned here so it's a documented decision, not a silent surprise - the card still routes
+        to human review (JOIN_KEY_NO_HIT_SKIP_REASONS below), it just no longer carries a
+        confident-looking machine vote."""
+        CanonicalExpansionFactory(code="mom")
+        card = CardFactory(name="Some Card")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(card, collector_line_set_code="ra03b", collector_line_collector_number="12")
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=frozenset({"mom"}))
+
+        assert verdict.skip_reason == JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON
+
+    def test_unknown_set_code_is_a_non_rescannable_skip_that_still_routes_to_review(self, db):
+        from cardpicker.local_calculate_verdicts import (
+            JOIN_KEY_RESCANNABLE_SKIP_REASONS,
+        )
+
+        assert JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON not in JOIN_KEY_RESCANNABLE_SKIP_REASONS
+        assert JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON in JOIN_KEY_NO_HIT_SKIP_REASONS
+
+    def test_promo_star_suffixed_collector_number_is_unaffected_by_the_lexicon_gate(self, db):
+        """Edge case named in the fix's own directive - a promo/star-suffixed collector number
+        (local_ocr._COLLECTOR_NUMBER_RE's own "★?" handling, stripped before this function
+        ever sees it) combined with a real, in-lexicon set code that genuinely doesn't match any
+        candidate still casts a real no-match vote, exactly as before this fix - the gate is
+        about the SET CODE half of the join key, not the collector number half."""
+        CanonicalExpansionFactory(code="mom")
+        card = CardFactory(name="Some Card")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        # local_ocr.parse_collector_line already strips a leading "★" before storing
+        # collector_line_collector_number - simulated directly here since this function consumes
+        # the already-parsed/stored field, not raw OCR text.
+        evidence = _evidence(card, collector_line_set_code="mom", collector_line_collector_number="999")
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=frozenset({"mom"}))
+
+        assert verdict.is_no_match is True
+        assert verdict.skip_reason == ""
+
+    def test_language_marker_de_globbed_code_unaffected_when_valid(self, db):
+        """2026-07-22 language-marker de-globbing fix (local_ocr.py's own
+        _LANGUAGE_MARKER_ADJACENCY_RE) - the DE-GLUED code ("znr", not the raw glued "znre") is
+        what reaches this function, and it's a real lexicon code, so the gate never applies."""
+        from cardpicker.local_ocr import parse_collector_line
+
+        parsed = parse_collector_line("239/280 R\nZNRe EN b> DAARKEN")
+        assert parsed.set_code == "znr"  # confirms the de-glob already happened upstream
+
+        CanonicalExpansionFactory(code="znr")
+        card = CardFactory(name="Verazol")
+        candidates = [CandidatePrinting(pk=1, expansion_code="znr", collector_number="280")]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="239/280 R\nZNRe EN b> DAARKEN",
+            collector_line_set_code=parsed.set_code,
+            collector_line_collector_number="999",  # force parsed-but-no-match
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=frozenset({"znr"}))
+
+        assert verdict.is_no_match is True
+        assert verdict.skip_reason == ""
+
+    def test_written_via_run_join_key_calculator_ends_up_as_a_scan_log_row(self, db):
+        """Integration check (mirrors test_border_mismatch_writes_a_scan_log_row_via_the_full_
+        runner's own convention) - the real batch runner builds and threads known_set_codes()
+        through automatically, not just the pure-function unit tests above."""
+        card = CardFactory(name="Test Card", content_phash=42)
+        CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_set_code="zzq", collector_line_collector_number="2")
+
+        result = run_join_key_calculator(dry_run=False)
+
+        assert result.skip_counts.get(JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON) == 1
+        scan_log = CardScanLog.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert scan_log.skip_reason == JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
+
+
+class TestKnownSetCodes:
+    def test_returns_lowercased_codes_from_the_db(self, db):
+        CanonicalExpansionFactory(code="MOM")
+        CanonicalExpansionFactory(code="isd")
+
+        assert known_set_codes() == frozenset({"mom", "isd"})
+
+    def test_empty_when_no_expansions_exist(self, db):
+        assert known_set_codes() == frozenset()
 
 
 class TestSymbolPhashTiebreak:

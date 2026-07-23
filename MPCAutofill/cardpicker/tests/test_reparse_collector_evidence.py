@@ -20,6 +20,7 @@ from cardpicker.management.commands.reparse_collector_evidence import (
     select_card_ids_no_text,
     select_card_ids_parser_bug,
     select_card_ids_proxy_marker_veto,
+    select_card_ids_set_code_lexicon_gate,
 )
 from cardpicker.models import (
     CardPrintingTag,
@@ -148,6 +149,48 @@ class TestSelectCardIdsProxyMarkerVeto:
         CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text", run_id="run-1")
 
         assert select_card_ids_proxy_marker_veto("run-1") == []
+
+
+class TestSelectCardIdsSetCodeLexiconGate:
+    """2026-07-23, module docstring's SET-CODE LEXICON GATE - unlike the two selectors above,
+    this one targets CardPrintingTag VOTES (is_no_match=True), not a CardScanLog skip row,
+    since the pre-fix behavior cast a real vote, not a skip."""
+
+    def test_finds_cards_from_exactly_the_given_run_id(self, db):
+        card_a = CardFactory(name="Card I", content_phash=9)
+        card_b = CardFactory(name="Card J", content_phash=10)
+        CardPrintingTagFactory(
+            card=card_a,
+            printing=None,
+            is_no_match=True,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            run_id="run-1",
+        )
+        CardPrintingTagFactory(
+            card=card_b,
+            printing=None,
+            is_no_match=True,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            run_id="run-2",
+        )
+
+        assert select_card_ids_set_code_lexicon_gate("run-1") == [card_a.pk]
+
+    def test_ignores_a_real_match_vote(self, db):
+        card = CardFactory(name="Card K", content_phash=11)
+        printing = CanonicalCardFactory(name="Card K", expansion__code="mom", collector_number="1")
+        CardPrintingTagFactory(
+            card=card,
+            printing=printing,
+            is_no_match=False,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            run_id="run-1",
+        )
+
+        assert select_card_ids_set_code_lexicon_gate("run-1") == []
 
 
 class TestReparseAndRetract:
@@ -361,6 +404,107 @@ class TestReparseAndRetract:
         assert after.votes_written == 1
         vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
         assert vote.printing_id == printing.pk
+
+    def test_set_code_lexicon_gate_selector_retracts_a_lexicon_invalid_no_match_vote(self, db):
+        """2026-07-23 - the FULL cohort selector deliberately over-selects (module docstring's
+        own reasoning on select_card_ids_set_code_lexicon_gate), but reparse_and_retract's own
+        comparison only actually retracts the lexicon-invalid subset - proven here end to end,
+        not just via the pure calculate_join_key_verdict unit tests."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_raw_text="——— SRe © < iE 2 e Sew «",
+            collector_line_set_code="sew",  # not a real CanonicalExpansion code
+            collector_line_collector_number="2",
+        )
+        CardPrintingTagFactory(
+            card=card,
+            printing=None,
+            is_no_match=True,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            run_id="stage-d-run-z",
+        )
+
+        card_ids = select_card_ids_set_code_lexicon_gate("stage-d-run-z")
+        assert card_ids == [card.pk]
+
+        result = reparse_and_retract(card_ids, run_id="reparse-5", dry_run=False)
+
+        assert result.changed == 1
+        assert result.retracted == 1
+        # reparse_and_retract only ever DELETES the stale vote (step 1 of the two-step runbook -
+        # module docstring) - it never writes the fresh verdict itself, that's step 2's job (the
+        # next local_calculate_verdicts run, proven end to end just below).
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
+        assert not CardScanLog.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
+
+    def test_set_code_lexicon_gate_selector_end_to_end_recasts_the_fresh_abstention(self, db):
+        """Full two-step runbook proof (mirrors test_proxy_marker_veto_selector_end_to_end_
+        recasts_the_real_vote's own convention) - once this selector retracts the stale
+        is_no_match vote, the standard, UNCHANGED local_calculate_verdicts run writes the fresh
+        "unknown-set-code" scan-log row the corrected code now produces."""
+        from cardpicker.local_calculate_verdicts import run_join_key_calculator
+
+        card = CardFactory(name="Some Card", content_phash=44)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_raw_text="aN 6 ree MRA Alin tO AAS OL ARON pt perl",
+            collector_line_set_code="ree",
+            collector_line_collector_number="6",
+        )
+        CardPrintingTagFactory(
+            card=card,
+            printing=None,
+            is_no_match=True,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            run_id="stage-d-run-z3",
+        )
+
+        before = run_join_key_calculator(dry_run=False)
+        assert before.cards_considered == 0  # excluded: an is_no_match vote already exists
+
+        reparse_and_retract(select_card_ids_set_code_lexicon_gate("stage-d-run-z3"), run_id="reparse-7", dry_run=False)
+
+        after = run_join_key_calculator(dry_run=False)
+        assert after.cards_considered == 1
+        assert after.skip_counts.get("unknown-set-code") == 1
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
+        scan_log = CardScanLog.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert scan_log.skip_reason == "unknown-set-code"
+
+    def test_set_code_lexicon_gate_selector_leaves_a_genuinely_in_lexicon_no_match_vote_unchanged(self, db):
+        """The over-selection's own safety net (module docstring) - a real, in-lexicon set code
+        that simply doesn't match this card's own candidates is left as the same genuine
+        no-match vote it already was, not retracted."""
+        card = CardFactory(name="Some Card", content_phash=43)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalExpansionFactory(code="isd")
+        _evidence(
+            card,
+            collector_line_raw_text="2/280 R ISD EN",
+            collector_line_set_code="isd",  # a REAL set code, just not this card's own candidate
+            collector_line_collector_number="2",
+        )
+        CardPrintingTagFactory(
+            card=card,
+            printing=None,
+            is_no_match=True,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            run_id="stage-d-run-z2",
+        )
+
+        card_ids = select_card_ids_set_code_lexicon_gate("stage-d-run-z2")
+        result = reparse_and_retract(card_ids, run_id="reparse-6", dry_run=False)
+
+        assert result.unchanged == 1
+        assert result.retracted == 0
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.is_no_match is True
 
     def test_unchanged_when_fresh_verdict_matches_the_recorded_vote(self, db):
         card = CardFactory(name="Some Card", content_phash=42)
@@ -599,6 +743,12 @@ class TestReparseCollectorEvidenceCommand:
 
         with pytest.raises(CommandError):
             call_command("reparse_collector_evidence", selector="proxy-marker-veto")
+
+    def test_set_code_lexicon_gate_selector_requires_stage_d_run_id(self, db):
+        from django.core.management import CommandError, call_command
+
+        with pytest.raises(CommandError):
+            call_command("reparse_collector_evidence", selector="set-code-lexicon-gate")
 
     def test_card_ids_file_selector_end_to_end(self, db, tmp_path):
         from django.core.management import call_command
