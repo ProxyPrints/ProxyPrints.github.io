@@ -20,10 +20,10 @@ amended the same day per [issue #347](https://github.com/ProxyPrints/ProxyPrints
 Tron-reviewed zeroing plan. §13 carries a further dated update
 (2026-07-23T09:0x–09:3xZ) for the zeroing steps' actual execution
 (B(i) write, B(ii)+B(iii) retraction) and the §9(c) Bug-A
-forced-escalation sample, re-verified live at that time — the §9(d) 4c
-pilot dry-run was still in progress at that check and is not yet
-reported here (see §13's own note). See "Chain" below for where each
-number's provenance sits.
+forced-escalation sample, re-verified live at that time. §9(d) carries
+a further update (2026-07-23T09:14–11:12Z) recording the 4c pilot
+dry-run's own outcome, which was still in progress as of §13's own
+check. See "Chain" below for where each number's provenance sits.
 
 ## 1. Gate definition
 
@@ -64,11 +64,12 @@ stays blocked on the remainder of §9's fire sequence (Bug-B write pass
 → write → `consensus_recompute --apply`), amended 2026-07-23 per
 [issue #347](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/347) —
 the Bug-B whole-DB reparse **dry-run** step of that sequence is DONE
-(§12), and as of a later same-day update the zeroing steps (B(i) write,
-B(ii)+B(iii) retraction) and the §9(c) Bug-A forced-escalation sample
-are also **DONE**, executed and DB-verified (§13). The §9(d) 4c pilot
-dry-run is **IN PROGRESS** at this update's time — see §13; its own
-report lands separately once complete.
+(§12), the zeroing steps (B(i) write, B(ii)+B(iii) retraction) and the
+§9(c) Bug-A forced-escalation sample are also **DONE**, executed and
+DB-verified (§13), and **the 4c pilot dry-run itself is now DONE too**
+(§9(d)) — only the owner sample audit, `--write`, and
+`consensus_recompute --apply` remain. Nothing has been written to
+`CardPrintingTag`/`CardScanLog` by the pilot dry-run itself.
 
 ## 3. Decision (a), resolved — the three MISSING constants
 
@@ -503,7 +504,10 @@ AND the four staged run ids, deleted:
   cohort = all 12,904 originally-staged votes accounted for**,
   matching §6's table exactly (8,825 + 70 + 3,010 + 999 = 12,904; a
   pre-retraction dry-run preview, `20260723T090331-fdf5822b`, confirmed
-  the full 12,904 before B(i)'s write ran).
+  the full 12,904 before B(i)'s write ran). This task's own independent
+  pre-flight check (2026-07-23T09:41Z, ahead of launching (d)) confirmed
+  the same end state: 0 `CardPrintingTag` rows remain with
+  `anonymous_id=stage-d-join-key-v1`.
 - **7,773 non-rescannable `CardScanLog` stale skips** from the same
   four runs (per-run: 7,187 / 14 / 19 / 553), exactly as predicted. (The
   much larger `no-evidence` skip population from these same runs was
@@ -553,17 +557,28 @@ recipe so it is not re-derived. Full run report, funnel table, and the
 recipe's full rationale:
 [`data/2026-07-23-zeroing-and-buga-sample.md`](data/2026-07-23-zeroing-and-buga-sample.md).
 
-**(d) Stage D dry-run over the full eligible pool = THE PILOT — IN
-PROGRESS** (§8), started after (a)–(c) above completed 2026-07-23; not
-yet complete as of this section's update. Full statistics captured: match/no-match/abstain counts,
-and the per-channel join-key-vs-fallback breakdown — the fallback
-channel (`calculate_fallback_verdict`/`stage-d-fallback-v1`, built per
-[`features/catalog-completion-plan.md`](features/catalog-completion-plan.md)'s
-"Pre-fire prep" note) has **never executed against production data**
-before this run — verified live: 0 `CardPrintingTag` rows carry
-`anonymous_id='stage-d-fallback-v1'`. "Both channels" means join-key
-and fallback both dry-run here. Followed by an owner **SAMPLE AUDIT**
-(100–200 uniformly sampled verdicts), then `--write`.
+**(d) Stage D dry-run over the full eligible pool = THE PILOT — DONE
+2026-07-23** (§8), run_id `pilot-dry-20260723T094518Z`, git_sha
+`42a09b3c794f7cf8aca5eb1ca2d4f6cdaa2895a6`, eligible pool 200,366 (post-
+zeroing, live-verified immediately pre-run). Full statistics, the
+per-channel join-key-vs-fallback breakdown, and the read-only fallback
+recomputation methodology (the actual command reports fallback
+considered=0/votes=0 for a **structural** reason — see below — not a
+data gap): [`reports/2026-07-23-4c-pilot-dry-run.md`](reports/2026-07-23-4c-pilot-dry-run.md).
+**Structural finding**: `_fallback_eligible_cards_queryset` sources its
+"join-key found no confident hit" population from PERSISTED
+`CardPrintingTag`/`CardScanLog` rows — which a same-invocation DRY RUN
+never writes — so `local_calculate_verdicts` (no `--write`) can concretely never produce a nonzero fallback count in one pass, regardless of flags;
+this is inherent to the current implementation, not fixable by a
+different invocation. The fallback channel's real first-ever numbers
+were recovered via a bounded, zero-write diagnostic that re-derives the
+join-key no-hit population in-memory using the same production
+functions, then calls the actual `calculate_fallback_verdict` per
+eligible card — see the linked report for the full methodology and
+results. Followed by an owner **SAMPLE AUDIT** (150 uniformly sampled verdicts,
+seed `20260723150`) — sheet written machine-local only (not committed;
+see the linked report for its exact path and provenance), then
+`--write`.
 
 **(e) `consensus_recompute --apply` — STRICTLY LAST, NOT YET RUN.**
 Materializes the 49,207 pending `None→UNRESOLVED` tag transitions
@@ -671,15 +686,20 @@ provenance: [`data/2026-07-23-bugb-reparse-dryruns.md`](data/2026-07-23-bugb-rep
 This also doubles as the first runtime calibration for the §9(d) 4c
 pilot dry-run — same verdict-computation code path.
 
-**Fallback channel (§9(d)):** verified live, 0 `CardPrintingTag` rows
-carry `anonymous_id='stage-d-fallback-v1'` — the fallback channel has
-never cast a vote in production.
+**Fallback channel (§9(d)):** as of this section's original
+2026-07-23T01:33Z-onward timestamp, verified live 0 `CardPrintingTag`
+rows carried `anonymous_id='stage-d-fallback-v1'` — the fallback
+channel had never cast a vote in production. §9(d)'s own entry now has
+the full outcome (still zero **live votes** — the pilot is DRY-RUN
+only — but the channel's own would-cast statistics are now known, via
+a read-only recomputation; see that entry and its linked report).
 
 **Remaining §9 steps as of this section's timestamp (2026-07-23T01:33Z
 onward): B(i), B(ii)+B(iii), (c), (d), sample audit, `--write`, (e) were
 all NOT YET RUN.** §13 below carries a later same-day update: B(i),
-B(ii)+B(iii), and (c) are now **DONE**; (d) (the 4c pilot) is **IN
-PROGRESS**; sample audit / `--write` / (e) remain NOT YET RUN.
+B(ii)+B(iii), (c), **and (d) (the 4c pilot dry-run) are now all DONE**
+(§9(d)'s own entry carries the full outcome); sample audit / `--write` /
+(e) remain NOT YET RUN.
 
 ## 13. Zeroing execution + Bug-A sample outcome (2026-07-23T09:0x–09:3xZ)
 
@@ -731,11 +751,15 @@ used) → run a follow-up scoped Stage D pass (`local_calculate_verdicts`)
 to actually cast votes. Recorded here as the standing recipe so it is
 not re-derived next time.
 
-**§9(d) the 4c pilot dry-run — IN PROGRESS** as of this section's
-timestamp, started immediately after (c) above completed. Its own
-run_id, full statistics, and report land separately once complete — not
-guessed at here.
+**§9(d) the 4c pilot dry-run — DONE**, started immediately after (c)
+above completed. Full run_id, statistics, per-channel breakdown, and the
+read-only fallback-channel recovery methodology: see §9(d)'s own entry
+above and [`reports/2026-07-23-4c-pilot-dry-run.md`](reports/2026-07-23-4c-pilot-dry-run.md).
 
 Full run reports, resource metrics, and per-run `PilotRunLedger`
 counters for every run in this section:
 [`data/2026-07-23-zeroing-and-buga-sample.md`](data/2026-07-23-zeroing-and-buga-sample.md).
+
+**B(i)/B(ii)+B(iii)/(c)/(d) are now all DONE** (§9's own entries carry
+the live-verified detail and ledger ids); **sample audit, `--write`, and
+(e) remain NOT YET RUN** as of this page's latest edit.
