@@ -6,9 +6,8 @@ verbatim (branch report-ocr-preprocessing-probe-2b17e9, MPCAutofill/scripts/expe
 ocr_preprocessing_probe.py). No branch pushed for code (worktree-only experimental scripts,
 deliberately not merged - verdict: no variant won). This report file ships on branch
 report-ocr-preprocessing-probe-2-f4c91e. GitHub comments posted to issue #370
-(https://github.com/ProxyPrints/ProxyPrints.github.io/issues/370#issuecomment-PLACEHOLDER) and
-issue #360 (https://github.com/ProxyPrints/ProxyPrints.github.io/issues/360#issuecomment-PLACEHOLDER)
-- see LIVE STATE for the real URLs once posted.
+(https://github.com/ProxyPrints/ProxyPrints.github.io/issues/370#issuecomment-5061330755) and
+issue #360 (https://github.com/ProxyPrints/ProxyPrints.github.io/issues/360#issuecomment-5061333416).
 
 WHAT SHIPPED:
 1. Built a stratified sampler (MPCAutofill/scripts/experiments/ocr_preprocessing_probe2_sample.py,
@@ -220,9 +219,9 @@ LIVE STATE:
   sessions add no row" rule). Checked for an active `deploy-freeze-active` GitHub label before
   starting - none found.
 - GitHub: comments posted to issue #370
-  (https://github.com/ProxyPrints/ProxyPrints.github.io/issues/370#issuecomment-PLACEHOLDER) and
-  issue #360 (https://github.com/ProxyPrints/ProxyPrints.github.io/issues/360#issuecomment-PLACEHOLDER)
-  - see the task's own turn output for the real comment URLs once posted. No PR opened. This
+  (https://github.com/ProxyPrints/ProxyPrints.github.io/issues/370#issuecomment-5061330755) and
+  issue #360 (https://github.com/ProxyPrints/ProxyPrints.github.io/issues/360#issuecomment-5061333416).
+  No PR opened. This
   report file is committed on branch `report-ocr-preprocessing-probe-2-f4c91e` and pushed to
   origin - not merged, awaiting the owner (per this repo's own "PRs+owner sequencing" push-policy
   note, applied conservatively to a report artifact as prior probe reports have been).
