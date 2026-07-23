@@ -5,59 +5,59 @@ route `frontend/src/pages/display.tsx`). Companion mockup: `display-mockup.html`
 directory; open standalone via file://, use its top demo strip to force any breakpoint's
 view at any window width) — synced (this PR) with the committed mockup under
 `docs/proposals/mockups/proposal-h/responsive-layout-2026-07-21.html`, which previously
-predated this file's ADDENDUM (polish round) and D17/D18/D19 additions. All primitives are
+predated this file's ADDENDUM (polish round) and [Sheet-Presentation Refinement](#sheet-presentation-refinement)/[Inter-Card Spacing](#default-inter-card-spacing)/[Card-Spacing Control](#card-spacing-control) additions. All primitives are
 react-bootstrap 2.10.10 / Bootstrap 5.3.8 (confirmed installed, including
 responsive-Offcanvas). No new dependencies.
 
 **Implementation status (2026-07-21):** #266 shipped (PR #274 — sheet fit-to-width,
-both rails as `Offcanvas` nodes). #267 shipped (PR #283): **D12 v1** (dual-mode
+both rails as `Offcanvas` nodes). #267 shipped (PR #283): **[Dual-Mode Browse](#dual-mode-browse-search-bar) v1** (dual-mode
 Add/Browse `ToggleButtonGroup` + `CatalogBrowseResults.tsx`, filters-first plain text —
-the typed operator grammar is explicitly out of scope, tracked as #276), **D15** (the
-existing `Import.tsx` Text/XML/CSV/URL dropdown, mounted verbatim), and **D13's
+the typed operator grammar is explicitly out of scope, tracked as #276), **[Import-Dropdown Variety](#import-dropdown-variety-confirmation)** (the
+existing `Import.tsx` Text/XML/CSV/URL dropdown, mounted verbatim), and **[Project Status Surface](#project-status-surface)'s
 landing/search-bar feedback half** (`InvalidIdentifiersStatus`, mounted in both the
 populated-state action bar and the empty-project landing — the right-rail Status row is
-D13's OTHER half, issue #272's own remaining scope, not that PR's). #268 shipped
+[Project Status Surface](#project-status-surface)'s OTHER half, issue #272's own remaining scope, not that PR's). #268 shipped
 (PR #293): **#268's own mapped rows (§5, §6 rows S1–S3)**: `DeckRow` (exported, gained an
 `openLabel` prop) and a new `useLoadSavedDeck` hook extracted from `MyDecksPage.tsx`
 (S1); `SavedDecksLandingPanel.tsx` (S2); `DeckInputLanding`'s `Col lg={4}`/`Col lg={8}`
 grid, decks first when stacked, rendering neither column when there's nothing to show
-(S3). **R7/D17/D18/D19 shipped (this PR — issue #284):** screen-only sheet presentation
+(S3). **R7/[Sheet-Presentation Refinement](#sheet-presentation-refinement)/[Inter-Card Spacing](#default-inter-card-spacing)/[Card-Spacing Control](#card-spacing-control) shipped (this PR — issue #284):** screen-only sheet presentation
 (hairline pinline, no white fill, tightened inter-sheet gap, per-page label lines retired
-in favor of one floating "n/M" pill — R7/D17); the asymmetric default inter-card gutter
-(`spacing.col=0`/`spacing.row=14.5`, D18); and the right rail's Card Spacing (X/Y +
-link/unlink) control that makes that gutter user-editable and persists it per deck (D19).
-**D1/D4/D5/D6/M1 shipped (PR #286):** LETTER (not A4) is now the default paper size, matching
-the D4–D6 fit math (an audit-driven amendment to issue #286 named this explicitly, since the
+in favor of one floating "n/M" pill — R7/[Sheet-Presentation Refinement](#sheet-presentation-refinement)); the asymmetric default inter-card gutter
+(`spacing.col=0`/`spacing.row=14.5`, [Inter-Card Spacing](#default-inter-card-spacing)); and the right rail's Card Spacing (X/Y +
+link/unlink) control that makes that gutter user-editable and persists it per deck ([Card-Spacing Control](#card-spacing-control)).
+**[Landscape Default](#landscape-default-orientation)/[4×2 Grid](#4x2-landscape-grid)/[Margin Defaults](#margin-defaults-epson-et-8500)/[Default Bleed](#default-bleed-3175mm)/M1 shipped (PR #286):** LETTER (not A4) is now the default paper size, matching
+the [4×2 Grid](#4x2-landscape-grid)–[Default Bleed](#default-bleed-3175mm) fit math (an audit-driven amendment to issue #286 named this explicitly, since the
 original fit tables were computed against Letter throughout); the default bleed edge is now
 `STANDARD_BLEED_MARGIN_MM` (3.175mm) rather than the old `BleedEdgeMM` (3.048mm); and the right
 rail's Page Setup section gains a new margin-profile `Form.Select` (Borderless 0mm — the
 default — / Bordered 3mm / Rear-feed 3mm+20mm trailing edge, `marginProfiles.ts`), persisted
 per deck via a new `marginProfileSlice` riding the same `deckPayload.ts` precedent
-`cardSpacingSlice` (D19) established. The old hardcoded Bleed-edge input `max` clamp is
+`cardSpacingSlice` ([Card-Spacing Control](#card-spacing-control)) established. The old hardcoded Bleed-edge input `max` clamp is
 removed — a soft warning (never a hard clamp) now surfaces when the current bleed exceeds the
-selected profile's D6-table cap for a 4-column sheet, computed dynamically
+selected profile's [Default Bleed](#default-bleed-3175mm)-table cap for a 4-column sheet, computed dynamically
 (`maxBleedForFourColumns`) rather than copying the table's numbers verbatim. At these shipped
-defaults, /display's sheet now renders the spec's own 4×2 grid (D4) exactly, not the 4×1 this
-doc previously reported as the interim state before D5/D6 landed. **D9/D10 shipped (this PR —
+defaults, /display's sheet now renders the spec's own 4×2 grid ([4×2 Grid](#4x2-landscape-grid)) exactly, not the 4×1 this
+doc previously reported as the interim state before [Margin Defaults](#margin-defaults-epson-et-8500)/[Default Bleed](#default-bleed-3175mm) landed. **[Finish Footer](#finish-footer-save-before-print)/[Print-Page Funnel](#print-page-funnel-destination) shipped (this PR —
 issue #275):** the right-rail Finish footer (`FinishFooter.tsx`) now holds `Save Deck` and
 `Print / Export →` as co-equal `btn-primary` buttons plus the unchanged `Export ▾`, replacing
 the old three-button "Prepare Print" stack; the memory-heavy Generate PDF/Save PDF to Google
 Drive operations (and this page's own item-2 inline export pipeline that drove them) are
 removed from `/display` outright, not merely hidden — PDF generation now lives solely on the new
-`pages/print.tsx` (D10/F5, a thin wrapper mounting the unchanged `FinishedMyProject`, mirroring
+`pages/print.tsx` ([Print-Page Funnel](#print-page-funnel-destination)/F5, a thin wrapper mounting the unchanged `FinishedMyProject`, mirroring
 `pages/myDecks.tsx`). `useProjectDraftBackup.ts` (F1) mirrors the working project to
 `localStorage` (indexes/settings only) on a debounce, offers a restore nudge on the empty-project
-landing, and fires D9(2)'s promotion nudge post-import; `PrePrintSaveGate.tsx` (F3) runs the
-D9(3) flush-then-optionally-prompt-then-navigate sequence the footer's `Print / Export →` button
+landing, and fires [Finish Footer](#finish-footer-save-before-print)(2)'s promotion nudge post-import; `PrePrintSaveGate.tsx` (F3) runs the
+[Finish Footer](#finish-footer-save-before-print)(3) flush-then-optionally-prompt-then-navigate sequence the footer's `Print / Export →` button
 triggers. Deliberately NOT built by this PR: the Print page's own tab REORDER (owner order PDF ·
-MakePlayingCards · NotMPC · PringlePrints, PDF default) and its PDF tab's preview removal (D10's
+MakePlayingCards · NotMPC · PringlePrints, PDF default) and its PDF tab's preview removal ([Print-Page Funnel](#print-page-funnel-destination)'s
 own owner addendum, both tracked as their own follow-up), and a genuine, out-of-scope gap this
 PR leaves documented rather than silently accepted — `/display`'s own Page Setup controls (paper
 size/bleed edge/guides, plain component state, never persisted) don't carry over to the Print
 page's classic `PDFGenerator`, which has its own separate settings and doesn't read this page's
-margin-profile/card-spacing redux slices either; a future issue, not D9/D10's own scope (save-
+margin-profile/card-spacing redux slices either; a future issue, not [Finish Footer](#finish-footer-save-before-print)/[Print-Page Funnel](#print-page-funnel-destination)'s own scope (save-
 vs-print ordering and route linkage, not settings portability). Deliberately NOT built here
-(this PR, and not by #266/#267/#268/#284 above either): D11/D14/D16 (own future issues, per
+(this PR, and not by #266/#267/#268/#284 above either): [Finish-Settings Relocation](#finish-settings-relocation)/[Confidence Funnel](#printing-confidence-funnel)/[Cardback Swatch Strip](#cardback-swatch-strip) (own future issues, per
 §A2's own issue mapping).
 
 Issue mapping (explicit):
@@ -65,26 +65,26 @@ Issue mapping (explicit):
 - **#266** (mobile fit-to-width sheet + bottom-sheet drawer, tablet off-canvas) = §2
   (sheet scaling), §4 (rail placement per breakpoint), §6 rows R1–R6.
 - **#267** (settings banner / deck input evolves into top search bar) = §3 (action
-  bar + search-bar states) and §4.2 (the settings surface — owner decision D2 below
+  bar + search-bar states) and §4.2 (the settings surface — owner decision [Three-Region Layout](#three-region-layout) below
   moved it from a top banner into the RIGHT rail; on phone/tablet it remains
   reachable from a top-bar gear control, preserving the issue's intent), §6 rows
   T1–T5, I1.
 - **#268** (landing cohesion with saved decks) = §5, §6 rows S1–S3.
-- Owner decisions D4–D6 (grid/margins/bleed defaults, §6 row M1) and D8 (color
+- Owner decisions [4×2 Grid](#4x2-landscape-grid)–[Default Bleed](#default-bleed-3175mm) (grid/margins/bleed defaults, §6 row M1) and [Color Calibration](#deck-wide-color-calibration) (color
   calibration, rows C1–C2) are NEW scope beyond these three issues — file as their
   own issues at implementation time.
 
 ## 0. Owner decisions log (2026-07-21 review round)
 
-- **D1 — Landscape is the default PDF orientation at ALL breakpoints.** Even though
+- <a id="landscape-default-orientation"></a>**Landscape is the default PDF orientation at ALL breakpoints** (locked 2026-07-21, issues #266/#267/#268 review round; formerly labeled _D1_ in this document). Even though
   portrait renders larger on phones, landscape stays the default; the fit-to-width
   rule (§2) therefore letterboxes the landscape page on phones (full page visible,
   smaller cards) rather than switching orientation per device. Mechanics verified:
   `computeLayout()` (`frontend/src/features/pdf/layout.ts`) with `DisplayPage.tsx`'s
   existing portrait-swap; cards are never rotated by the layout engine. (At the OLD
-  defaults — 5mm margins, 3.048mm bleed — Letter landscape gave only 3×2; D4–D6
+  defaults — 5mm margins, 3.048mm bleed — Letter landscape gave only 3×2; [4×2 Grid](#4x2-landscape-grid)–[Default Bleed](#default-bleed-3175mm)
   below change those defaults.)
-- **D2 — Three regions, split roles** (owner framing, verbatim: "rail on left,
+- <a id="three-region-layout"></a>**Three regions, split roles** (locked 2026-07-21, issues #266/#267/#268 review round; formerly labeled _D2_ in this document). (owner framing, verbatim: "rail on left,
   center where our PDF preview is, then the right rail where settings are. might be
   3 rails not 2 depending how you think about it"; earlier: "the left rail to be
   the old card details page and the old art selector page merged… united on mobile
@@ -94,20 +94,20 @@ Issue mapping (explicit):
   project/print surface (§4.2). This supersedes the earlier top-settings-banner
   layout for #267 item 1; the "banner near the top" ask survives as the gear
   control in the top action bar opening the right rail below desktop width.
-- **D3 — Left-rail de-clutter hierarchy** (verbatim: "information not related to art
+- <a id="left-rail-declutter-hierarchy"></a>**Left-rail de-clutter hierarchy** (locked 2026-07-21, issues #266/#267/#268 review round; formerly labeled _D3_ in this document). (verbatim: "information not related to art
   selection or supporting the artist should be hidden or near the bottom of the new
   unified details page. it was previously cluttered and used a lot of space").
   TOP/always-visible = art selection + artist support; everything else the old
   details modal showed is demoted to collapsed-by-default sections near the bottom —
   collapsed, not deleted, since moderation/tagging surfaces must stay reachable.
   Full promoted/demoted assignment in §4.1.
-- **D4 — 4×2 landscape grid (8/page)** (verbatim: "4×2 will fit certainly. might
+- <a id="4x2-landscape-grid"></a>**4×2 landscape grid (8/page)** (locked 2026-07-21, issues #266/#267/#268 review round; formerly labeled _D4_ in this document). (verbatim: "4×2 will fit certainly. might
   have an upperbound on the amount of bleed available but it will fit"). Correct:
   the column axis binds via `fitCardsInDimension`'s strict
   `4·(63+2b) + 0.1 < 279.4 − (marginL+marginR)`; the row axis never binds
-  (b ≤ 8.45mm even at 3mm margins). The bleed upper bound depends on the D5 margin
-  profile — table under D6 below.
-- **D5 — Near-zero default margins, calibrated to the Epson ET-8500** (verbatim:
+  (b ≤ 8.45mm even at 3mm margins). The bleed upper bound depends on the [Margin Defaults](#margin-defaults-epson-et-8500) margin
+  profile — table under [Default Bleed](#default-bleed-3175mm) below.
+- <a id="margin-defaults-epson-et-8500"></a>**Near-zero default margins, calibrated to the Epson ET-8500** (locked 2026-07-21, issues #266/#267/#268 review round; formerly labeled _D5_ in this document). (verbatim:
   "our PDFs should have close to no margins. (calibrate based on an Epson ET-8500
   rear/top feeder forced margins, should be a lead/right edge only thing)").
   Researched from Epson's own ET-8500/ET-8550 User's Guide (CPD-59879), "Printable
@@ -127,14 +127,14 @@ Issue mapping (explicit):
   `SpacingAndMarginsSettings` is; this page hardcodes them) — the right rail's
   Page Setup section gains a margin-profile control (Borderless / Bordered 3mm /
   Rear-feed +20mm trail), which is also where user override lives.
-- **D6 — Default bleed = MPC standard 3.175mm (1/8in)**, replacing 3.048mm.
+- <a id="default-bleed-3175mm"></a>**Default bleed = MPC standard 3.175mm (1/8in), replacing 3.048mm** (locked 2026-07-21, issues #266/#267/#268 review round; formerly labeled _D6_ in this document).
   Verified in-repo: `STANDARD_BLEED_MARGIN_MM = 3.175` in
   `frontend/src/features/pdf/bleedNormalize.ts` (line 145; its comments cite the
   1/8in-at-63×88mm-trim convention and the backend's ~97.5% bleed-prevalence
   finding across DB images), vs `constants.ts`'s `BleedEdgeMM = 3.048`
   (0.12in — an Epson-margin-shaped constant, inherited from upstream).
   **Fit check, 4×2 Letter landscape at exactly b=3.175**: needs
-  4·69.35 + 0.1 = **277.5mm** of printable width. Results per D5 profile:
+  4·69.35 + 0.1 = **277.5mm** of printable width. Results per [Margin Defaults](#margin-defaults-epson-et-8500) profile:
 
   | Margin profile (landscape L/R)     | Printable width | 4×2 at b=3.175?                     | Max bleed for 4×2 |
   | ---------------------------------- | --------------- | ----------------------------------- | ----------------- |
@@ -146,14 +146,15 @@ Issue mapping (explicit):
   So the binding constraint: **full MPC bleed + 4×2 requires borderless mode**
   (which the ET-8500 supports for Letter); any bordered profile caps bleed below
   3.175 — most severely the rear straight-pass (0.54mm). Default = borderless +
-  3.175mm bleed; the Page Setup margin-profile control (D5) surfaces the trade-off.
+  3.175mm bleed; the Page Setup margin-profile control ([Margin Defaults](#margin-defaults-epson-et-8500)) surfaces the trade-off.
 
-- **D7 — Screen-only sheet presentation**: minimal wasted space between pages,
+- <a id="screen-only-sheet-presentation"></a>**Screen-only sheet presentation** (locked 2026-07-21, issues #266/#267/#268 review round; formerly labeled _D7_ in this document): minimal wasted space between pages,
   slightly rounded page corners, pages drawn as OUTLINE ONLY (a subtle border
   frame around the card grid, no solid white page fill). Applies to the /display
-  render only — the real PDF is untouched. Kills the letterbox-white look D1 would
+  render only — the real PDF is untouched. Kills the letterbox-white look the
+  [landscape-default decision](#landscape-default-orientation) would
   otherwise produce on phones.
-- **D8 — Deck-wide color calibration in the PDF output** (relayed as the round's
+- <a id="deck-wide-color-calibration"></a>**Deck-wide color calibration in the PDF output** (locked 2026-07-21, issues #266/#267/#268 review round; formerly labeled _D8_ in this document). (relayed as the round's
   final addition; rationale recorded as relayed: "the ET-8500's Linux driver only
   exposes brightness/saturation/contrast, so color-cast calibration must live in
   our PDF output itself" — owner wrote "CY…etc." for the channel controls).
@@ -222,13 +223,13 @@ The old single toolbar's settings controls (Fronts/Backs, paper, bleed, guides,
 (`DisplayExportMenu`, Save-to-Drive, Generate PDF) ALL move into the right rail —
 the action bar keeps only identity + add-cards + the gear.
 
-## 2. Center region: sheet scaling + presentation (#266 item 1; D1, D4–D7)
+## 2. Center region: sheet scaling + presentation (#266 item 1; [Landscape Default](#landscape-default-orientation), [4×2 Grid](#4x2-landscape-grid)–[Screen-Only Presentation](#screen-only-sheet-presentation))
 
 **Rule: rendered sheet width = `min(960, sheetRegionClientWidth)` px, always; the
-page is landscape (D1), so on phones this letterboxes** — a 390px viewport shows the
+page is landscape ([Landscape Default](#landscape-default-orientation)), so on phones this letterboxes** — a 390px viewport shows the
 full 279.4×215.9mm Letter page at ~366px wide / ~283px tall. No horizontal overflow
 at any width; pinch-zoom deferred (issue text: optional later). Each page renders
-4×2 (D4, at the D5/D6 borderless + 3.175mm defaults).
+4×2 ([4×2 Grid](#4x2-landscape-grid), at the [Margin Defaults](#margin-defaults-epson-et-8500)/[Default Bleed](#default-bleed-3175mm) borderless + 3.175mm defaults).
 
 Implementation:
 
@@ -240,12 +241,12 @@ Implementation:
   exact.
 - Landscape mechanics already exist: `DisplayPage.tsx` swaps
   `getPageSizeMM`'s portrait width/height (its own "Landscape:" comment) — no change.
-- Defaults change (D5/D6): `DisplayPage.tsx`'s `margins` useMemo 5mm-all →
-  borderless profile (0mm, with the Page Setup margin-profile control per D5), and
+- Defaults change ([Margin Defaults](#margin-defaults-epson-et-8500)/[Default Bleed](#default-bleed-3175mm)): `DisplayPage.tsx`'s `margins` useMemo 5mm-all →
+  borderless profile (0mm, with the Page Setup margin-profile control per [Margin Defaults](#margin-defaults-epson-et-8500)), and
   `DEFAULT_SHEET_SETTINGS.bleedEdgeMM` → `STANDARD_BLEED_MARGIN_MM` (3.175,
   imported from `bleedNormalize.ts` rather than a new literal). `layout.ts`
   untouched — it takes margins/bleed as arguments.
-- Screen presentation (D7): `PagePreview.tsx` gains a screen-presentation variant
+- Screen presentation ([Screen-Only Presentation](#screen-only-sheet-presentation)): `PagePreview.tsx` gains a screen-presentation variant
   (prop or wrapper class): no solid page fill, subtle outline frame, slightly
   rounded corners; `DisplayPage`'s inter-sheet spacing tightens (the current
   `mb-4` + bordered wrapper shrinks to minimal gap). PDF output untouched. (This
@@ -256,7 +257,7 @@ Implementation:
 
 One sticky band (md+; static on phone — docs/lessons.md's no-sticky-below-md lesson):
 sheet indicator · `SavedDeckPanel` · add-cards search bar · gear. `d-flex flex-wrap align-items-center gap-2`, `bg-body`, `z-index` at Bootstrap's sticky tier (1020 —
-under the 1045 offcanvas). Export buttons are NOT here (D2 moved them to the right
+under the 1045 offcanvas). Export buttons are NOT here ([Three-Region Layout](#three-region-layout) moved them to the right
 rail's footer).
 
 Search-bar states (#267 item 2 + proposal H open decision 8):
@@ -271,7 +272,7 @@ Search-bar states (#267 item 2 + proposal H open decision 8):
   editor's existing `Import.tsx` dropdown (`*Button` modal variants) — closing the
   add-cards-to-non-empty-project parity gap with zero new UI.
 
-## 4. The two rails (D2)
+## 4. The two rails ([Three-Region Layout](#three-region-layout))
 
 Both rails follow the same primitive pattern: ONE node each, `Offcanvas responsive={bp}` — left rail `responsive="lg"` (inline ≥992), right rail
 `responsive="xl"` (inline ≥1200) — with `placement` driven by a `matchMedia` hook
@@ -297,7 +298,7 @@ Merged sources (all existing, repurposed — never forked):
   extracted into a `CardDetailedViewBody` component so the modal (editor,
   unchanged) and this rail (new caller) both mount it — repurpose, not fork.
 
-Content hierarchy (D3 — de-clutter mandate; the old details page "was previously
+Content hierarchy ([Left-Rail De-clutter](#left-rail-declutter-hierarchy) — de-clutter mandate; the old details page "was previously
 cluttered and used a lot of space"):
 
 **PROMOTED — top, always visible, no disclosure:**
@@ -340,16 +341,16 @@ slot tap below lg (fixes "tapping a card shows nothing"); closing does not clear
 All existing components, relocated (sources named):
 
 - **Page Setup** section (open): paper `Form.Select`, bleed `Form.Control`
-  (default 3.175 per D6), guides `Form.Check` — today's `DisplayPage.tsx` toolbar
+  (default 3.175 per [Default Bleed](#default-bleed-3175mm)), guides `Form.Check` — today's `DisplayPage.tsx` toolbar
   controls (the page-local subset of `PDFGenerator.tsx`'s
-  `PageSizeSettings`/`EdgeSettings`/`CutLinesSettings`) — plus the NEW D5
+  `PageSizeSettings`/`EdgeSettings`/`CutLinesSettings`) — plus the NEW [Margin Defaults](#margin-defaults-epson-et-8500)
   margin-profile `Form.Select` (Borderless / Bordered 3mm / Rear-feed +20mm
-  trail) and the D19 Card Spacing (X/Y + link/unlink) group — the two genuinely
+  trail) and the [Card-Spacing Control](#card-spacing-control) Card Spacing (X/Y + link/unlink) group — the two genuinely
   new controls in this section.
-- **Color Calibration** section (collapsed, D8): C/M/Y shift +
+- **Color Calibration** section (collapsed, [Color Calibration](#deck-wide-color-calibration)): C/M/Y shift +
   brightness/saturation/contrast sliders + Reset — new UI over a new
   `colorCalibrationSlice`; preview via CSS filter approximation, exact canvas
-  color-matrix at PDF render (see D8 for the honesty note on the approximation).
+  color-matrix at PDF render (see [Color Calibration](#deck-wide-color-calibration) for the honesty note on the approximation).
 - **View** section: Fronts/Backs toggle (`toggleFaces`/`selectFrontsVisible`).
 - **Cardback** section: `CardbackToolbarButton` (`CommonCardback.tsx`), modal
   unchanged.
@@ -380,7 +381,7 @@ first on phone. Renders nothing for anonymous/zero-deck sessions.
 
 ## 6. Concrete change inventory (per file)
 
-Rails + scaling (#266, D1–D3):
+Rails + scaling (#266, [Landscape Default](#landscape-default-orientation)–[Left-Rail De-clutter](#left-rail-declutter-hierarchy)):
 
 - **R1** `DisplayPage.tsx` — sheet-region `ResizeObserver` → `sheetRenderWidthPx`
   feeding `PagePreview.maxWidthPx` + `sheetPixelHeightPx` (§2).
@@ -402,33 +403,33 @@ Rails + scaling (#266, D1–D3):
   cases: 390px letterboxed full sheet visible; card tap opens bottom sheet; gear
   opens end drawer; 1100px left rail inline + right drawer; 1280px both inline;
   unique testids (one instance per rail).
-- **R7** `frontend/src/features/pdf/PagePreview.tsx` — D7 screen-presentation
+- **R7** `frontend/src/features/pdf/PagePreview.tsx` — [Screen-Only Presentation](#screen-only-sheet-presentation) screen-presentation
   variant (no page fill, outline frame, rounded corners; prop or wrapper class,
   PDF untouched) + `DisplayPage.tsx` inter-sheet spacing tightened.
 
-Print defaults + calibration (D4–D6, D8):
+Print defaults + calibration ([4×2 Grid](#4x2-landscape-grid)–[Default Bleed](#default-bleed-3175mm), [Color Calibration](#deck-wide-color-calibration)):
 
-- **M1** `DisplayPage.tsx` — margins memo → D5 borderless default +
+- **M1** `DisplayPage.tsx` — margins memo → [Margin Defaults](#margin-defaults-epson-et-8500) borderless default +
   margin-profile state feeding both `computeLayout` and `exportPdfProps`'
-  `pageMargin*MM`; bleed default → `STANDARD_BLEED_MARGIN_MM` import (D6); the
-  Page Setup profile control clamps the bleed input's max per profile (D6 table).
+  `pageMargin*MM`; bleed default → `STANDARD_BLEED_MARGIN_MM` import ([Default Bleed](#default-bleed-3175mm)); the
+  Page Setup profile control clamps the bleed input's max per profile ([Default Bleed](#default-bleed-3175mm) table).
 - **C1** new `colorCalibrationSlice` + the right rail's Color Calibration section
-  (D8); persistence into the saved-deck payload following the
+  ([Color Calibration](#deck-wide-color-calibration)); persistence into the saved-deck payload following the
   `finishSettingsSlice` precedent in `deckPayload.ts`/`MyDecksPage.performLoad`.
 - **C2** `frontend/src/features/pdf/pdfImage.ts` / `pdf.worker.ts` — canvas
   color-matrix application of the calibration at image-render; CSS `filter`
   approximation applied to `PagePreview` slot images for live preview.
-- **M2** (D18) `DisplayPage.tsx:646` — the `spacing` memo default
+- **M2** ([Inter-Card Spacing](#default-inter-card-spacing)) `DisplayPage.tsx:646` — the `spacing` memo default
   `{ row: 0, col: 0 }` → `{ row: 14.5, col: 0 }` (asymmetric inter-card gutter:
   0mm horizontal, 14.5mm vertical). One-line change; the memo already feeds
   `computeLayout`, `PagePreview`'s `spacing` prop, and `exportPdfProps`'
   `cardSpacingRowMM`/`cardSpacingColMM`, so preview and PDF move together.
-  `layout.ts` untouched (it takes spacing as an argument). **D19 supersedes the
+  `layout.ts` untouched (it takes spacing as an argument). **[Card-Spacing Control](#card-spacing-control) supersedes the
   "default only" scope of this row:** the memo is no longer a hardcoded constant
   — it becomes state written by the new right-rail Card Spacing (X/Y) control
-  (D19 below), seeded from these same D18 defaults (`col`/X = 0, `row`/Y = 14.5)
+  ([Card-Spacing Control](#card-spacing-control) below), seeded from these same [Inter-Card Spacing](#default-inter-card-spacing) defaults (`col`/X = 0, `row`/Y = 14.5)
   and persisted per deck alongside the other print defaults (the
-  `finishSettingsSlice`→`deckPayload.ts` precedent D8/D11 already ride). All three
+  `finishSettingsSlice`→`deckPayload.ts` precedent [Color Calibration](#deck-wide-color-calibration)/[Finish-Settings Relocation](#finish-settings-relocation) already ride). All three
   downstream consumers stay wired to the memo, so the control moves preview + PDF
   in lockstep with no extra plumbing.
 
@@ -453,18 +454,18 @@ Landing (#268):
 
 ## 7. Conflicts / tensions found (honest)
 
-1. **D6's full MPC bleed vs. D5's hardware margin profiles**: 4×2 at exactly
-   3.175mm bleed fits ONLY borderless (D6 table) — every bordered ET-8500 profile
+1. **[Default Bleed](#default-bleed-3175mm)'s full MPC bleed vs. [Margin Defaults](#margin-defaults-epson-et-8500)'s hardware margin profiles**: 4×2 at exactly
+   3.175mm bleed fits ONLY borderless ([Default Bleed](#default-bleed-3175mm) table) — every bordered ET-8500 profile
    caps bleed below the MPC standard, the rear straight-pass (the owner's named
    calibration target) most severely at 0.537mm. The spec defaults to borderless
-   to honor both D4 and D6 simultaneously, but a user who switches to the
+   to honor both [4×2 Grid](#4x2-landscape-grid) and [Default Bleed](#default-bleed-3175mm) simultaneously, but a user who switches to the
    rear-feed profile must accept near-zero bleed or 3 columns — the Page Setup
    control has to make that trade-off visible, not silent. (Also note: Epson's
    borderless mode is designed to overspray/scale slightly — dimensional accuracy
-   of 63×88 cards under borderless needs a print-test before D5/D6 defaults are
+   of 63×88 cards under borderless needs a print-test before [Margin Defaults](#margin-defaults-epson-et-8500)/[Default Bleed](#default-bleed-3175mm) defaults are
    called done.)
-2. **D2 vs. #267's literal "banner near the top"**: settings are now a right rail,
-   not a top banner. Treated as the owner refining their own ask (D2 is newer and
+2. **[Three-Region Layout](#three-region-layout) vs. #267's literal "banner near the top"**: settings are now a right rail,
+   not a top banner. Treated as the owner refining their own ask ([Three-Region Layout](#three-region-layout) is newer and
    verbatim); the gear in the top bar preserves "settings reachable from the top"
    on small screens. The implementing PR should note this on issue #267.
 3. **`ContentMaxWidth` 1200px cap** (`Layout.tsx`): two inline rails (380+300)
@@ -483,7 +484,7 @@ Landing (#268):
 5. **`CardDetailedViewBody` extraction is the largest repurpose refactor**:
    `CardDetailedViewModal.tsx` (244 lines) interleaves modal chrome with body
    content; the extraction must keep the editor modal pixel-identical while
-   letting the rail mount body regions in D3's promoted/demoted order — the body
+   letting the rail mount body regions in [Left-Rail De-clutter](#left-rail-declutter-hierarchy)'s promoted/demoted order — the body
    component needs region-level composability (e.g. exported sub-blocks or a
    `sections` prop), not just one blob, or the rail can't reorder without forking.
 6. **`bootstrap` floor**: `package.json` declares `^5.2.3` but the design needs the
@@ -506,9 +507,9 @@ negative margin-bottom removes the reserved blank space), and because any CSS
 transform makes the frame the containing block for fixed descendants, the drawers
 anchor to — and scale with — the frame, so the full desktop composition including
 the right rail is visible on a ~390px phone. "State" button flips populated ↔
-empty (landing). Landscape Letter 4×2 borderless sheets (D4–D6), outline-only
-presentation (D7), Color Calibration group in the right rail (D8), left-rail
-content ordered per D3.
+empty (landing). Landscape Letter 4×2 borderless sheets ([4×2 Grid](#4x2-landscape-grid)–[Default Bleed](#default-bleed-3175mm)), outline-only
+presentation ([Screen-Only Presentation](#screen-only-sheet-presentation)), Color Calibration group in the right rail ([Color Calibration](#deck-wide-color-calibration)), left-rail
+content ordered per [Left-Rail De-clutter](#left-rail-declutter-hierarchy).
 
 ---
 
@@ -517,8 +518,8 @@ content ordered per D3.
 Scope: the second design round the owner scoped in issue #272's comment
 ("deck auto-backup + Save-co-equal-with-Print finish footer, and rehoming the
 4-tab print page as the funnel destination") plus the placement decisions on
-#272 items 2/4/5/7 and the #271 confidence funnel. **D1–D8 are unchanged**;
-§1–§8 above stand. This addendum adds decisions D9–D16, extends the change
+#272 items 2/4/5/7 and the #271 confidence funnel. **[Landscape Default](#landscape-default-orientation)–[Color Calibration](#deck-wide-color-calibration) are unchanged**;
+§1–§8 above stand. This addendum adds decisions [Finish Footer](#finish-footer-save-before-print)–[Cardback Swatch Strip](#cardback-swatch-strip), extends the change
 inventory (§6) with new rows, and extends the issue mapping. Standing
 constraints from the base spec still bind: repurpose /editor components (never
 fork), compose in display-side containers so shared components stay
@@ -526,8 +527,8 @@ upstream-clean, react-bootstrap primitives only, three-region language.
 
 ## A0. Owner decisions log (polish round)
 
-- **D9 — Finish footer: Save Deck and Print/Export are CO-EQUAL primaries, and
-  persistence always precedes PDF rendering.** HARD OWNER CONSTRAINT (verbatim):
+- <a id="finish-footer-save-before-print"></a>**Finish footer: Save Deck and Print/Export are CO-EQUAL primaries, and
+  persistence always precedes PDF rendering** (locked 2026-07-21, issue #272 polish round; formerly labeled _D9_ in this document). HARD OWNER CONSTRAINT (verbatim):
   _"save deck should come before PDF completes because we have to rely on
   clients available mem for the PDF."_ PDF generation is the client's most
   memory-hungry step and can OOM/crash the tab; therefore the working project
@@ -565,7 +566,7 @@ upstream-clean, react-bootstrap primitives only, three-region language.
      mirroring the existing `LoadSafetyModal` "always take a safety copy before a
      destructive step" pattern, here applied to the PDF-render step instead of a
      deck-load step; (c) only after persistence resolves does navigation to the
-     Print page (D10), and therefore any PDF render, begin. Saving gates PDF;
+     Print page ([Print-Page Funnel](#print-page-funnel-destination)), and therefore any PDF render, begin. Saving gates PDF;
      PDF never gates saving.
 
   Footer layout (replaces §4.2's "Prepare Print footer" three-button stack):
@@ -573,24 +574,24 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   width side by side — `Save Deck` and `Print / Export →`** — with a secondary
   `Export ▾` (the lightweight `DisplayExportMenu`: XML / decklist / images, none
   of which are memory-heavy) below them. The memory-heavy operations (Generate
-  PDF, Save PDF to Google Drive) move OUT of the footer to the Print page (D10),
+  PDF, Save PDF to Google Drive) move OUT of the footer to the Print page ([Print-Page Funnel](#print-page-funnel-destination)),
   so the footer itself can never trigger an OOM. Component sources:
   `SavedDeckPanel.tsx`/`SaveDeckModal.tsx` (Save), `savedDeckSessionSlice`
   (dirty check), `LoadSafetyModal.tsx` (the safety-save precedent),
   `DisplayExportMenu` (lightweight exports). NEW code: `useProjectDraftBackup`
   hook + a `PrePrintSaveGate` composition. This surface needs its OWN issue.
 
-- **D10 — The 4-tab "Print!" page is the funnel DESTINATION, kept intact.**
+- <a id="print-page-funnel-destination"></a>**The 4-tab "Print!" page is the funnel DESTINATION, kept intact** (locked 2026-07-21, issue #272 polish round; formerly labeled _D10_ in this document).
   `FinishedMyProject.tsx` (the MakePlayingCards / NotMPC / PringlePrints supplier
   tabs + the `PDFGenerator` "PDF" sub-tab) is unchanged. Today it is only
   reachable as the /editor "Print!" tab (`ProjectEditor.tsx`'s `PrintPanel`,
-  there is no standalone route). D10 gives it a thin route wrapper —
+  there is no standalone route). [Print-Page Funnel](#print-page-funnel-destination) gives it a thin route wrapper —
   **`pages/print.tsx` mounting `PrintPanel`/`FinishedMyProject`** — mirroring the
   established `pages/myDecks.tsx`→`MyDecksPage` and `pages/shared.tsx`→
   `SharedDeckPage` wrapper pattern (compose, don't fork). The Finish footer's
   `Print / Export →` button navigates there via client-side nav, which preserves
   the in-memory project (DisplayPage.tsx already relies on this for the
-  /display↔/editor hop). The D9 pre-print persist runs before this navigation.
+  /display↔/editor hop). The [Finish Footer](#finish-footer-save-before-print) pre-print persist runs before this navigation.
   **Where the MPC/supplier links live:** they stay in the Print page's own tabs —
   that page IS the print off-ramp (#272 item 3). They are NOT duplicated into the
   /display right rail; the rail funnels to the page, the page owns the supplier
@@ -600,7 +601,7 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   working unchanged — both /display and /editor now funnel to the same
   destination.
 
-  **D10 owner addendum (2026-07-21, relayed):** two changes to the Print page's
+  **[Print-Page Funnel](#print-page-funnel-destination) owner addendum (2026-07-21, relayed):** two changes to the Print page's
   own tabs, folded into this funnel-destination design:
 
   1. **Tab REORDER + default.** Owner order (verbatim, autocorrect noise
@@ -628,11 +629,11 @@ upstream-clean, react-bootstrap primitives only, three-region language.
      the funnel — express it as a prop on the shared component (e.g.
      `showPreview={false}`) composed from the display-side caller, NOT a fork, so
      the /editor "Print!" tab can keep its own preview if desired. (Since the
-     right-rail footer's heavy PDF generation already moves to this tab per D10,
+     right-rail footer's heavy PDF generation already moves to this tab per [Print-Page Funnel](#print-page-funnel-destination),
      the preview-less PDF tab is purely the generate/settings surface reached
-     after the D9 save gate.)
+     after the [Finish Footer](#finish-footer-save-before-print) save gate.)
 
-- **D11 — FinishSettings (foil/finish) → right-rail settings drawer** (owner
+- <a id="finish-settings-relocation"></a>**FinishSettings (foil/finish) → right-rail settings drawer** (locked 2026-07-21, issue #272 item 4; formerly labeled _D11_ in this document). (owner
   decision, #272 item 4). `features/finishSettings/FinishSettings.tsx` (a
   cardstock `Form.Select` of 5 stocks + a Foil/Non-Foil `Toggle`, auto-disabled
   for non-foil-compatible stocks via `CardstockFoilCompatibility`, backed by
@@ -640,10 +641,10 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   (`AutofillCollapse`) in the right rail's settings region (§4.2), placed after
   **View** and before **Cardback**. No fork — the same component /editor's
   MakePlayingCards finish step mounts. Already persists per saved deck via the
-  `finishSettingsSlice`→`deckPayload.ts` precedent (the exact path D8's
+  `finishSettingsSlice`→`deckPayload.ts` precedent (the exact path [Color Calibration](#deck-wide-color-calibration)'s
   `colorCalibrationSlice` rides), so no new persistence plumbing.
 
-- **D12 — Catalog browse via a DUAL-MODE search bar** (owner decision, #272 item
+- <a id="dual-mode-browse-search-bar"></a>**Catalog browse via a DUAL-MODE search bar** (locked 2026-07-21, issue #272 item 5; formerly labeled _D12_ in this document). (owner decision, #272 item
   5 + #267 — replaces porting `CardGrid` as its own page). The #267 populated-
   state search bar (§3) gains two modes:
 
@@ -691,7 +692,7 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   stack. No new page — the machinery is composed into a display-side
   `CatalogBrowseResults` container.
 
-- **D13 — Project status surface** (#272 item 2). Import failures (invalid
+- <a id="project-status-surface"></a>**Project status surface** (locked 2026-07-21, issue #272 item 2; formerly labeled _D13_ in this document). (#272 item 2). Import failures (invalid
   identifiers) and runtime image failures get two coordinated homes, both
   repurposing existing components (`features/status/Status.tsx`,
   `features/invalidIdentifiers/InvalidIdentifiersStatus.tsx` +
@@ -715,12 +716,14 @@ upstream-clean, react-bootstrap primitives only, three-region language.
      "something's wrong with your project" surface /display lacks today, reachable
      from the gear below xl.
 
-- **D14 — Printing-confidence funnel in the left-rail PROMOTED identity zone**
+- <a id="printing-confidence-funnel"></a>**Printing-confidence funnel in the left-rail PROMOTED identity zone** (locked 2026-07-21, issue #271; formerly labeled _D14_ in this document).
   (#271). A compact **confidence element** joins the always-visible identity
   header (§4.1 promoted zone — this is identity information, not demoted
   metadata), directly under the card name + `RequestedPrintingBadge`:
 
-  `[⛨ set symbol] SET · 117 · 92% confident · [✗ not this printing]`
+  `[⛨ set symbol] SET · 117 · 92% confident · [✗ not this printing]` (suggested
+  state, shown above); `[⛨ set symbol ✓] SET · 117 · [no incorrect control]`
+  (confirmed state).
 
   - **Set symbol**: the existing `SetIcon` (`components/SetIcon.tsx`, a Keyrune
     `ss ss-<code>` glyph) — already mounted in `CardDetailedViewModal`,
@@ -730,8 +733,12 @@ upstream-clean, react-bootstrap primitives only, three-region language.
     `canonicalCard` present ⇒ human-resolved/high-confidence; only
     `suggestedCanonicalCard` ⇒ machine-suggested/lower-confidence; the
     `suggestedCanonicalCard`/`tagVoteStatuses` plumbing marked shipped in #236).
-    A `resolved` printing reads "confirmed"; a `suggested` one shows the
-    machine-suggested confidence.
+    A `resolved` printing shows **a small checkmark** next to the set icon — a
+    visual, not the word "confirmed" (tightened per the [Confidence Funnel](#printing-confidence-funnel) addendum, owner
+    comment on #271, locked 2026-07-21, which supersedes this bullet's earlier
+    text-only "reads 'confirmed'" wording); a `suggested` printing shows the
+    numeric machine-suggested confidence score in its place (e.g. "92%
+    confident").
   - **Scryfall image on hover**: an `OverlayTrigger`+`Popover` on the set symbol
     shows the Scryfall image of that printing — **display-serving only, from
     Scryfall's own CDN, nothing stored** (satisfies the governing premise and
@@ -740,7 +747,10 @@ upstream-clean, react-bootstrap primitives only, three-region language.
     human vote through the existing consensus path (`useTagVoting` /
     `AttributeVotingPanel`'s submission — no new vote semantics), the human half
     of the Stage D machine-vote funnel (#271), composing with the review queue
-    (#262).
+    (#262). Positive confirmation is never a Y/N button in this flow — it flows
+    through the funnel's own implicit/support voting mechanics instead (see
+    `grid-selector.md`'s [implicit-vote-is-the-vote
+    decision](../features/grid-selector.md#implicit-vote-is-the-vote)).
 
   Reconciliation with #271's "don't push to design" note: that hold was against
   the _then-current_ #266–268 mockup round; the owner has now explicitly scoped
@@ -748,17 +758,56 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   here. The implementation still sequences after the #266–268 layout lands, per
   #271.
 
-- **D15 — Import variety confirmed in the search-bar Import dropdown** (#272 item
+  **Canonical statement**: this [Confidence Funnel](#printing-confidence-funnel) entry is the AUTHORITATIVE design spec for
+  the `/display` printing-confidence funnel. `proposal-h-unified-display-page.md`'s
+  §4.3 ("Confirm flow (printing confirmation)") restates this same flow in that
+  doc's own interaction-flow numbering and defers to this entry on any wording
+  conflict between the two — see that section's own cross-reference back here.
+  (The broader question of whether these two proposal-h documents should be
+  co-authoritative more generally, versus one deferring to the other
+  everywhere, is a separate, parked owner decision — this note fixes only the
+  [Confidence Funnel](#printing-confidence-funnel)/§4.3 surface.)
+
+  **Built (2026-07-23, PR #352, `SPEC-display-left-rail.md`, owner-approved)
+  — supersedes the 2026-07-22 placeholder note below.** `ConfidenceElement.tsx`
+  now ships the full interactive form this entry describes: `SetIcon` +
+  ✓/numeric-score corner badge + "Confirmed"/"N% confident" pill, a live
+  `OverlayTrigger`+`Popover` Scryfall reference image on hover/focus
+  (`buildScryfallReferenceImageUrl`, Scryfall's own CDN, display-only), and a
+  real vote on "✗ not this printing" — `APISubmitPrintingTag(..., isNoMatch: true, "display-confidence")`, the printing-tag consensus
+  endpoint (not literally `useTagVoting.ts`, which is the ATTRIBUTE-tag
+  hook of a similar shape - this bullet's own "no new vote semantics"
+  intent is satisfied by reusing that EXISTING printing-vote path, the
+  same one `DeckbuilderConfirmAffordance.tsx`'s YES button already casts
+  through). **One deviation from this bullet's literal text (owner
+  answer #2, 2026-07-23)**: "✗ not this printing" stays visible
+  (de-emphasised via CSS opacity, not hidden) on an ALREADY-`resolved`
+  printing too, so disputing settled consensus is always possible - not
+  only shown for the `suggested` state as this bullet's own diagram
+  implies. The numeric score (`92%` in this bullet's own example) is a
+  seam - the backend doesn't expose a calibrated confidence score yet, so
+  it renders the qualitative "Suggested" pill until a `suggestedCanonicalCardConfidence`
+  field lands server-side (see `common/schema_types.ts`'s own doc comment
+  for the exact expected shape/name). Full writeup:
+  [`docs/features/display-left-rail.md`](../features/display-left-rail.md).
+
+  **Placeholder note (2026-07-22 audit, historical - superseded above):**
+  `ConfidenceElement.tsx` — the component implementing this design —
+  used to ship as the narrower PLACEHOLDER cut of [Confidence Funnel](#printing-confidence-funnel) (`SetIcon` + resolved/suggested read + a disabled
+  "not this printing" affordance, no live Scryfall-hover popover, no real
+  vote dispatch yet). Kept for historical context, not deleted.
+
+- <a id="import-dropdown-variety-confirmation"></a>**Import variety confirmed in the search-bar Import dropdown** (locked 2026-07-21, issue #272 item 1; formerly labeled _D15_ in this document). (#272 item
   1 + #267). The populated-state search bar's `Import ▾` dropdown carries the
   full set the /editor `AddCardsPanel` already mounts — **URL / XML / CSV**
   (`ImportURL` / `ImportXML` / `ImportCSV` modal variants from `Import.tsx`), with
   paste covered by the inline `ImportText` input itself. This is the §3 T4 row,
   restated as an explicit coverage confirmation: no new importer UI, the CSV/XML/
-  URL trio is the existing dropdown reused verbatim. Import failures feed D13's
+  URL trio is the existing dropdown reused verbatim. Import failures feed [Project Status Surface](#project-status-surface)'s
   status surface.
 
-- **D16 — Cardback swatch strip in the right-rail Cardback section (optional,
-  lightweight — KEPT).** #272 item 7 (CommonCardback's swatch gallery chrome,
+- <a id="cardback-swatch-strip"></a>**Cardback swatch strip in the right-rail Cardback section (optional,
+  lightweight — KEPT)** (locked 2026-07-21, issue #272 item 7; formerly labeled _D16_ in this document). #272 item 7 (CommonCardback's swatch gallery chrome,
   which #240's button shipped without). It fits the right rail cleanly: the
   Cardback section (§4.2) becomes a compact **horizontal swatch strip** (the
   project's cardback options as small tappable thumbnails, active one outlined)
@@ -769,13 +818,13 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   modal already covers the function; the strip is a convenience, not a
   requirement.
 
-- **D17 — Sheet-presentation refinement (SUPERSEDES D7 where they differ).** Owner
-  refinement of the screen-only sheet presentation; D7's "outline only, no white
+- <a id="sheet-presentation-refinement"></a>**Sheet-presentation refinement (SUPERSEDES [Screen-Only Presentation](#screen-only-sheet-presentation) where they differ)** (locked 2026-07-21, issue #284; formerly labeled _D17_ in this document). Owner
+  refinement of the screen-only sheet presentation; [Screen-Only Presentation](#screen-only-sheet-presentation)'s "outline only, no white
   fill, minimal inter-page space, rounded corners" stands, but its "subtle border
   frame" framing is sharpened and the per-page label is removed:
 
   1. **Page boundary = a HAIRLINE PINLINE, not a drawn box.** The page fill stays
-     fully clear (no white — already so under D7); the boundary is a hairline-weight
+     fully clear (no white — already so under [Screen-Only Presentation](#screen-only-sheet-presentation)); the boundary is a hairline-weight
      pinline with rounded corners — deliberately subtle, read as a hint of a page
      edge, NOT a visible frame. In the render this is a ~1px, very-low-opacity
      border (mockup: `rgba(235,235,235,.18)`), radius ~7px. `PagePreview.tsx`'s
@@ -803,8 +852,8 @@ upstream-clean, react-bootstrap primitives only, three-region language.
      region-inventory row "Sheet indicator" (that row's Action-bar home is retired
      in favor of the center-region floating pill at all breakpoints).
 
-- **D18 — Default inter-card spacing on the sheet: HORIZONTAL 0, VERTICAL 14.5.**
-  Owner reviewed D17 on desktop ("looks good") and added this asymmetric default
+- <a id="default-inter-card-spacing"></a>**Default inter-card spacing on the sheet: HORIZONTAL 0, VERTICAL 14.5** (locked 2026-07-21, issue #284; formerly labeled _D18_ in this document).
+  Owner reviewed [Sheet-Presentation Refinement](#sheet-presentation-refinement) on desktop ("looks good") and added this asymmetric default
   gutter. Parameter mapping to the real engine (`frontend/src/features/pdf/layout.ts`,
   `computeLayout`): the only spacing knob is `spacing: LayoutSpacing = { row, col }`,
   both in **mm** (the whole module is mm — every argument is `*MM`). `spacing.col`
@@ -821,7 +870,7 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   and the exported PDF stay in lockstep with no extra plumbing. Units are mm and
   unambiguous in-code; no flag raised.
 
-  **Fit re-check, 4×2 Letter landscape** at D5 borderless margins (0/0/0/0) + D6
+  **Fit re-check, 4×2 Letter landscape** at [Margin Defaults](#margin-defaults-epson-et-8500) borderless margins (0/0/0/0) + [Default Bleed](#default-bleed-3175mm)
   bleed 3.175 + `spacing.col=0` + `spacing.row=14.5`, using
   `fitCardsInDimension`'s exact `count·slot + (count−1)·spacing + 0.1` formula:
 
@@ -832,15 +881,15 @@ upstream-clean, react-bootstrap primitives only, three-region language.
 
   **Fits.** (Matches the sanity estimate 2·94.35 + 14.5 = 203.2, +0.1 fudge =
   203.3.) **Binding constraint is UNCHANGED — still the width/column axis** (1.9mm
-  slack) as under D4/D6; the new 14.5mm row gutter only eats row-axis slack from
+  slack) as under [4×2 Grid](#4x2-landscape-grid)/[Default Bleed](#default-bleed-3175mm); the new 14.5mm row gutter only eats row-axis slack from
   25.1mm down to 12.6mm, and the row axis stays non-binding (it would tolerate
   vertical spacing up to ~27.0mm, or bleed up to ~6.32mm, before losing the 2nd
-  row). So D18 costs nothing dimensionally: borderless + full MPC bleed + 4×2
-  still holds, and the D6 max-bleed-for-4×2 table (governed by the width axis) is
+  row). So [Inter-Card Spacing](#default-inter-card-spacing) costs nothing dimensionally: borderless + full MPC bleed + 4×2
+  still holds, and the [Default Bleed](#default-bleed-3175mm) max-bleed-for-4×2 table (governed by the width axis) is
   untouched.
 
-- **D19 — Card Spacing (mm) control group in the right rail's Page Setup section.**
-  Owner-directed; makes the D18 default gutter user-editable. **PROVENANCE NOTE
+- <a id="card-spacing-control"></a>**Card Spacing (mm) control group in the right rail's Page Setup section** (locked 2026-07-21, issue #284; formerly labeled _D19_ in this document).
+  Owner-directed; makes the [Inter-Card Spacing](#default-inter-card-spacing) default gutter user-editable. **PROVENANCE NOTE
   (verbatim discipline):** the control's BEHAVIOR is emulated from an owner-provided
   screenshot description of an AGPL-licensed proxy-PDF tool — no source code was
   consulted or is consultable (AGPL); this is the patterns-only posture
@@ -848,12 +897,12 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   public tool is always fine; code reuse is not, and none occurred here). The group:
 
   - **Two numeric inputs**, unit **mm**: **Horizontal (X)** and **Vertical (Y)**,
-    defaults **0 / 14.5** (D18). Axis mapping is D18's, unchanged: **X → `spacing.col`**
+    defaults **0 / 14.5** ([Inter-Card Spacing](#default-inter-card-spacing)). Axis mapping is [Inter-Card Spacing](#default-inter-card-spacing)'s, unchanged: **X → `spacing.col`**
     (the gutter between columns, `fitCardsInDimension`'s width axis), **Y →
     `spacing.row`** (the gutter between rows, the height axis).
   - **A LINK/UNLINK toggle between the two inputs.** Linked ⇒ one value drives both
     axes (editing either writes both); unlinked ⇒ independent X and Y. Because the
-    D18 defaults are asymmetric (0 ≠ 14.5), the group **opens UNLINKED** — linking
+    [Inter-Card Spacing](#default-inter-card-spacing) defaults are asymmetric (0 ≠ 14.5), the group **opens UNLINKED** — linking
     would collapse to a single value and discard the asymmetric default, so linked
     is an opt-in convenience, not the initial state.
   - **Helper text** conveying the rationale: separate axes ease cutting — a 0
@@ -862,14 +911,14 @@ upstream-clean, react-bootstrap primitives only, three-region language.
     horizontal butts columns for strip cutting; a vertical gap suits die cutters.")
   - **Wiring (conceptual, per the M2 row):** the two inputs write the
     `DisplayPage.tsx:646` spacing memo — which stops being a hardcoded constant and
-    becomes state seeded from the D18 defaults. The memo already feeds `computeLayout`,
+    becomes state seeded from the [Inter-Card Spacing](#default-inter-card-spacing) defaults. The memo already feeds `computeLayout`,
     `PagePreview`'s `spacing` prop, and `exportPdfProps`'
     `cardSpacingRowMM`/`cardSpacingColMM` (verified in code at `DisplayPage.tsx`
     lines 720-721, 798, 1145), so the control moves the on-screen sheet and the
     exported PDF in lockstep with no extra plumbing. **Persisted per deck**
     alongside the other print defaults, following the
-    `finishSettingsSlice`→`deckPayload.ts`/`MyDecksPage.performLoad` precedent D8's
-    `colorCalibrationSlice` and D11's `finishSettings` already ride.
+    `finishSettingsSlice`→`deckPayload.ts`/`MyDecksPage.performLoad` precedent [Color Calibration](#deck-wide-color-calibration)'s
+    `colorCalibrationSlice` and [Finish-Settings Relocation](#finish-settings-relocation)'s `finishSettings` already ride.
   - **Placement:** inside the existing **Page Setup** `AutofillCollapse` group
     (§4.2), after the Margins control, grouped with the other page-geometry
     controls; respects the collapsed-group pattern (Page Setup is open by default,
@@ -877,7 +926,7 @@ upstream-clean, react-bootstrap primitives only, three-region language.
     gear-opened right-rail drawer as every other Page Setup control — no new
     surface, no new drawer.
 
-  **Implemented as-shipped (this PR, R7+D17+D18+D19):** the right rail doesn't yet
+  **Implemented as-shipped (this PR, R7+[Sheet-Presentation Refinement](#sheet-presentation-refinement)+[Inter-Card Spacing](#default-inter-card-spacing)+[Card-Spacing Control](#card-spacing-control)):** the right rail doesn't yet
   have `AutofillCollapse` sectioning (that's still the flat, relocated-verbatim
   layout the base spec's own R4 row describes as not-yet-built) — the control is
   placed in the existing flat "Page Setup" block, directly after the Guides toggle,
@@ -886,15 +935,15 @@ upstream-clean, react-bootstrap primitives only, three-region language.
   only UI state (always opens unlinked, never persisted); only the numeric X/Y
   values persist per deck.
 
-- **D8-note (not a new decision): color calibration is CMYK, not just CMY.**
-  #270 extends D8's per-channel controls from cyan/magenta/yellow to full
+- <a id="cmyk-color-calibration-note"></a>**Not a new decision — color calibration is CMYK, not just CMY** (folded into the [Color Calibration](#deck-wide-color-calibration) decision above; formerly labeled _D8-note_ in this document).
+  #270 extends [Color Calibration](#deck-wide-color-calibration)'s per-channel controls from cyan/magenta/yellow to full
   **CMYK (adds black/K)** plus brightness/saturation/contrast. This is an
-  implementation-scope note on the existing D8 group, folded in here so the
+  implementation-scope note on the existing [Color Calibration](#deck-wide-color-calibration) group, folded in here so the
   mockup's Color Calibration group shows the K channel; no layout change.
 
 ## A1. Change inventory (new rows, extending §6)
 
-Finish workflow (D9, D10):
+Finish workflow ([Finish Footer](#finish-footer-save-before-print), [Print-Page Funnel](#print-page-funnel-destination)):
 
 - **F1** new `frontend/src/features/display/useProjectDraftBackup.ts` —
   debounced `localStorage` mirror of the working project (indexes+settings only),
@@ -902,9 +951,9 @@ Finish workflow (D9, D10):
   `buildDeckPayload` plaintext shape + a `draftVersion`.
 - **F2** `DisplayPage.tsx` right-rail footer — replace the three-button stack
   with the two co-equal `btn-primary` (`Save Deck` = `SavedDeckPanel` Save path;
-  `Print / Export →` = D10 nav) + secondary `Export ▾` (`DisplayExportMenu`,
+  `Print / Export →` = [Print-Page Funnel](#print-page-funnel-destination) nav) + secondary `Export ▾` (`DisplayExportMenu`,
   lightweight only). Move Generate PDF / Save-PDF-to-Drive OUT to the Print page.
-- **F3** new `PrePrintSaveGate` (in `DisplayPage.tsx` or a sibling) — the D9(3)
+- **F3** new `PrePrintSaveGate` (in `DisplayPage.tsx` or a sibling) — the [Finish Footer](#finish-footer-save-before-print)(3)
   sequence: flush draft → (auth+dirty) `SaveDeckModal`/Skip → then navigate.
   Reuses `savedDeckSessionSlice` dirty-check + `LoadSafetyModal` precedent.
 - **F4** promotion nudge — one `Toasts` entry fired post-import and pre-print,
@@ -914,17 +963,17 @@ Finish workflow (D9, D10):
   itself UNCHANGED. The export progress bar + Generate-PDF live here now, not the
   rail footer.
 
-Settings relocation (D11, D16, D8-note):
+Settings relocation ([Finish-Settings Relocation](#finish-settings-relocation), [Cardback Swatch Strip](#cardback-swatch-strip), [Color Calibration](#deck-wide-color-calibration) CMYK note):
 
 - **F6** `DisplayPage.tsx` right rail — mount `FinishSettings.tsx` as a `Finish`
   `AutofillCollapse` section (after View, before Cardback). No component change.
 - **F7** `DisplayPage.tsx` Cardback section — compact swatch strip over
-  `CommonCardback`'s gallery data (D16), above the existing Choose-cardback
+  `CommonCardback`'s gallery data ([Cardback Swatch Strip](#cardback-swatch-strip)), above the existing Choose-cardback
   button. Optional/droppable.
-- **F8** (folds into C1/C2) Color Calibration group gains the K channel (D8-note
+- **F8** (folds into C1/C2) Color Calibration group gains the K channel ([Color Calibration](#deck-wide-color-calibration) CMYK note
   / #270) — one extra slider, no layout change.
 
-Browse + status + confidence (D12, D13, D14, D15):
+Browse + status + confidence ([Dual-Mode Browse](#dual-mode-browse-search-bar), [Project Status Surface](#project-status-surface), [Confidence Funnel](#printing-confidence-funnel), [Import-Dropdown Variety](#import-dropdown-variety-confirmation)):
 
 - **F9** `DisplayPage.tsx` search bar — `ToggleButtonGroup` Add/Browse mode
   prefix; Browse-mode filter row (`GridSelectorFilters`); placeholder swap.
@@ -934,50 +983,50 @@ Browse + status + confidence (D12, D13, D14, D15):
   template (not CardGrid itself — that renders project members), each tile with
   an inline `+ Add` (`AddCardToProjectForm` path). Center-region `Print sheets` /
   `Browse results` switch. Operator-grammar parse over the browse input is the
-  one net-new piece (see D12 honesty note).
+  one net-new piece (see [Dual-Mode Browse](#dual-mode-browse-search-bar) honesty note).
 - **F11** `DisplayPage.tsx` — landing/search-bar invalid-identifiers `Alert`
   (repurpose `InvalidIdentifiersStatus`/`InvalidIdentifiersModal`) + a right-rail
   top **Status row** (repurpose `Status.tsx` aggregation). No component fork.
-- **F12** `DisplayPage.tsx` left-rail identity header — the D14 confidence
+- **F12** `DisplayPage.tsx` left-rail identity header — the [Confidence Funnel](#printing-confidence-funnel) confidence
   element: `SetIcon` + resolved/suggested confidence read + Scryfall
   `OverlayTrigger`/`Popover` (CDN-only) + `✗ not this printing` casting a
   `useTagVoting` vote.
 - **F13** search-bar `Import ▾` dropdown — confirm URL/XML/CSV via `Import.tsx`
-  variants (D15; = §6 T4, restated). No new UI.
+  variants ([Import-Dropdown Variety](#import-dropdown-variety-confirmation); = §6 T4, restated). No new UI.
 
-Card spacing control (D19) — **SHIPPED** (this PR, alongside R7/D17/D18):
+Card spacing control ([Card-Spacing Control](#card-spacing-control)) — **SHIPPED** (this PR, alongside R7/[Sheet-Presentation Refinement](#sheet-presentation-refinement)/[Inter-Card Spacing](#default-inter-card-spacing)):
 
 - **F14** `DisplayPage.tsx` right-rail Page Setup section — a **Card Spacing (mm)**
   control group: two `Form.Control type="number"` inputs (Horizontal X / Vertical Y,
   defaults 0 / 14.5) with a LINK/UNLINK toggle (`Button`/`ToggleButton`) between
   them. Converts the `DisplayPage.tsx:646` spacing memo (M2) from a constant to
-  state; X writes `spacing.col`, Y writes `spacing.row` (D18 mapping). Linked ⇒ one
+  state; X writes `spacing.col`, Y writes `spacing.row` ([Inter-Card Spacing](#default-inter-card-spacing) mapping). Linked ⇒ one
   value drives both; opens unlinked (asymmetric defaults). Persist per deck via the
-  `finishSettingsSlice`→`deckPayload.ts` precedent (as D8/D11). All three existing
+  `finishSettingsSlice`→`deckPayload.ts` precedent (as [Color Calibration](#deck-wide-color-calibration)/[Finish-Settings Relocation](#finish-settings-relocation)). All three existing
   memo consumers (`computeLayout`, `PagePreview.spacing`, `exportPdfProps`) stay
   wired, so no new plumbing. Placed after the Guides toggle in the flat (not yet
   `AutofillCollapse`-sectioned) Page Setup block; reachable below xl through the
   gear-opened right-rail drawer. Behavior emulated from an owner-supplied
-  AGPL-tool screenshot — patterns only, no source consulted (D19 provenance note).
-  The only genuinely new control in Page Setup besides D5's margin-profile select
-  (D5 itself is not part of this PR).
+  AGPL-tool screenshot — patterns only, no source consulted ([Card-Spacing Control](#card-spacing-control) provenance note).
+  The only genuinely new control in Page Setup besides [Margin Defaults](#margin-defaults-epson-et-8500)'s margin-profile select
+  ([Margin Defaults](#margin-defaults-epson-et-8500) itself is not part of this PR).
 
 ## A2. Issue mapping (extending the base §"Issue mapping")
 
-- **#267** (search bar) — additionally: D12 dual-mode Add/Browse (F9/F10),
-  D15 Import-dropdown variety (F13), D13 search-bar status feedback (F11).
-- **#270** (color calibration) — D8-note: extend the D8 group to full CMYK
+- **#267** (search bar) — additionally: [Dual-Mode Browse](#dual-mode-browse-search-bar) dual-mode Add/Browse (F9/F10),
+  [Import-Dropdown Variety](#import-dropdown-variety-confirmation) Import-dropdown variety (F13), [Project Status Surface](#project-status-surface) search-bar status feedback (F11).
+- **#270** (color calibration) — [Color Calibration](#deck-wide-color-calibration) CMYK note: extend the [Color Calibration](#deck-wide-color-calibration) group to full CMYK
   (F8). Implementation issue; already filed.
-- **#271** (confidence funnel) — D14 (F12). Already filed; design now provided.
-- **#272** (parity switchover checklist) — item 2 → D13 status surface (F11);
-  item 3 → D10 Print-page rehoming (F5); item 4 → D11 FinishSettings (F6); item
-  5 → D12 browse (F9/F10); item 7 → D16 cardback swatch (F7); item 1 → D15
+- **#271** (confidence funnel) — [Confidence Funnel](#printing-confidence-funnel) (F12). Already filed; design now provided.
+- **#272** (parity switchover checklist) — item 2 → [Project Status Surface](#project-status-surface) status surface (F11);
+  item 3 → [Print-Page Funnel](#print-page-funnel-destination) Print-page rehoming (F5); item 4 → [Finish-Settings Relocation](#finish-settings-relocation) FinishSettings (F6); item
+  5 → [Dual-Mode Browse](#dual-mode-browse-search-bar) browse (F9/F10); item 7 → [Cardback Swatch Strip](#cardback-swatch-strip) cardback swatch (F7); item 1 → [Import-Dropdown Variety](#import-dropdown-variety-confirmation)
   import variety (F13).
-- **#275 (filed, shipped)** — **D9 finish footer + deck auto-backup** (F1–F4),
-  plus D10's `pages/print.tsx` route (F5) — the owner named this in #272's
+- **#275 (filed, shipped)** — **[Finish Footer](#finish-footer-save-before-print) finish footer + deck auto-backup** (F1–F4),
+  plus [Print-Page Funnel](#print-page-funnel-destination)'s `pages/print.tsx` route (F5) — the owner named this in #272's
   comment as polish-round scope; it was filed as its own issue and shipped
   (see this doc's own "Implementation status" line above). The tab
-  REORDER/PDF-tab-preview-removal half of D10's own owner addendum was
+  REORDER/PDF-tab-preview-removal half of [Print-Page Funnel](#print-page-funnel-destination)'s own owner addendum was
   deliberately NOT built by #275 — tracked as its own follow-up, not silently
   dropped.
 
@@ -986,17 +1035,17 @@ Card spacing control (D19) — **SHIPPED** (this PR, alongside R7/D17/D18):
 1. **Server save is authenticated-only; the OOM safety net must not be.** The
    zero-knowledge saved-decks design (saved-decks.md) means a real "Save Deck"
    requires Discord OAuth. The owner's constraint is about not losing work to a
-   PDF-render OOM, which must hold for anonymous users too. D9 resolves this by
+   PDF-render OOM, which must hold for anonymous users too. [Finish Footer](#finish-footer-save-before-print) resolves this by
    making the _local draft_ (F1) the universal safety net and the _server save_
    the authenticated promotion — they are two layers, not one. The nudge copy
    must not imply an anonymous user's work is unsaved when the local draft has it.
-2. **D10 moves Generate PDF off /display.** Some users expect to generate a PDF
+2. **[Print-Page Funnel](#print-page-funnel-destination) moves Generate PDF off /display.** Some users expect to generate a PDF
    without leaving the page. The trade is deliberate: keeping the heavy render on
    the dedicated Print page is exactly what honors the owner's "PDF relies on
    client mem" constraint (a single place, after the save gate, that can OOM
    without taking unsaved work with it). If the owner wants a quick inline PDF
    too, it must sit AFTER the same F3 save gate — flag as open question.
-3. **Center-region contention (D12 browse vs. the sheet stack).** Browse results
+3. **Center-region contention ([Dual-Mode Browse](#dual-mode-browse-search-bar) browse vs. the sheet stack).** Browse results
    and the print-sheet stack both want the center. The `Print sheets`/`Browse results` switch is the resolution, but on phones the center is already tight
    (letterboxed sheet, §2); browse results there render as a single-column scroll
    list rather than a grid. Not a blocker, but the phone browse view is a reduced
@@ -1012,24 +1061,24 @@ Card spacing control (D19) — **SHIPPED** (this PR, alongside R7/D17/D18):
 
 `display-mockup.html` gains, without disturbing the demo strip or the scaled
 forced-view mechanism (§8): the two-co-equal-primary Finish footer (Save Deck /
-Print & Export) + secondary Export row and a "draft backed up ✓" indicator (D9);
-the dual-mode Add/Browse toggle on the search bar with a center-region `Sheets | Browse` switch and a browse-results demo state (D12); a right-rail Status row and
-a search-bar invalid-identifiers alert (D13); the left-rail confidence element
-(set symbol + confidence + Scryfall-hover note + "not this printing", D14); the
+Print & Export) + secondary Export row and a "draft backed up ✓" indicator ([Finish Footer](#finish-footer-save-before-print));
+the dual-mode Add/Browse toggle on the search bar with a center-region `Sheets | Browse` switch and a browse-results demo state ([Dual-Mode Browse](#dual-mode-browse-search-bar)); a right-rail Status row and
+a search-bar invalid-identifiers alert ([Project Status Surface](#project-status-surface)); the left-rail confidence element
+(set symbol + confidence + Scryfall-hover note + "not this printing", [Confidence Funnel](#printing-confidence-funnel)); the
 Finish (foil/cardstock) section and a Cardback swatch strip in the right rail
-(D11/D16); and the Color Calibration group extended with a K (black) channel
-(#270). It also demonstrates D17: the sheets now render with a hairline pinline
+([Finish-Settings Relocation](#finish-settings-relocation)/[Cardback Swatch Strip](#cardback-swatch-strip)); and the Color Calibration group extended with a K (black) channel
+(#270). It also demonstrates [Sheet-Presentation Refinement](#sheet-presentation-refinement): the sheets now render with a hairline pinline
 (no drawn frame), a tightened inter-page gap, no per-sheet label lines, and a
 single floating `n/M` pill (six demo sheets) wired to an `IntersectionObserver`
 that updates it live while scrolling — sticky to the top-right of the center
 column so it never collides with the rails/drawers at any breakpoint. All new
 interactive bits are vanilla-JS toggles consistent with the existing mockup; no
-CDN, still file://-openable. **D18**: the print sheets now render the asymmetric
+CDN, still file://-openable. **[Inter-Card Spacing](#default-inter-card-spacing)**: the print sheets now render the asymmetric
 default gutter — the `.sheet` grid splits its single `gap` into `column-gap: 2.27cqw` (2·3.175mm bleed only, `spacing.col=0`, columns touching) and `row-gap: 7.46cqw` (2·3.175mm bleed + 14.5mm = 20.85mm, `spacing.row=14.5`, rows visibly
 separated); `1cqw = 2.794mm` since the sheet's inline-size represents 279.4mm.
 Applies at every breakpoint (the sheet is `container-type: inline-size`, so the
 gutter scales with the fit-to-width sheet on phone/tablet/desktop alike).
-**D19**: the right rail's Page Setup group gains a **Card Spacing (mm)** control —
+**[Card-Spacing Control](#card-spacing-control)**: the right rail's Page Setup group gains a **Card Spacing (mm)** control —
 two numeric inputs (Horizontal X / Vertical Y, defaults 0 / 14.5) with a
 LINK/UNLINK toggle between them (opens unlinked, since the defaults are
 asymmetric; linking makes one value drive both) and helper text on the
@@ -1038,3 +1087,45 @@ vanilla-JS toggle consistent with the existing mockup; still file://-openable, n
 CDN. In the real page these inputs write the `DisplayPage.tsx:646` spacing memo
 (X→`spacing.col`, Y→`spacing.row`), persisted per deck. Behavior emulated from an
 owner-supplied AGPL-tool screenshot — patterns only, no source consulted.
+
+---
+
+## A5. Consolidation note (2026-07-23) and items carried forward from the earlier proposal-h doc
+
+This file is the **single living spec** for `/display`'s design — denser,
+newer (2026-07-21/22 review rounds vs. the original 2026-07-21 draft), and
+the one every later decision from the 2026-07-21 polish round onward, and every shipped PR since #274,
+was written against. `proposal-h-unified-display-page.md` (the original
+Proposal H design doc) is now a **clearly-marked historical document**
+pointing here; see its own banner. Its content predates the three-region
+(left rail / center sheet / right rail) layout this file specifies —
+most of its own body already self-annotates as SUPERSEDED/BUILT — but
+two items from its "Open decisions" list and one from its migration plan
+were still genuinely open and are carried forward here rather than lost
+with the historical marking:
+
+- **Tablet drawer default-open state on first visit.** Should the left
+  rail's tablet `start` drawer (§4.1) auto-open once on landing (so a
+  first-time tablet user discovers it exists) or always start closed
+  with only the edge handle as discovery? No usage data exists either
+  way — unresolved, not designed here either.
+- **Multi-select interaction on the sheet.** The classic `/editor` grid
+  supports multi-slot selection (shift-click, double-click-to-align,
+  `bulkAlignMemberSelection`) for bulk operations. Nothing in this spec's
+  interaction flows (§2–§4) describes single-slot select generalizing to
+  a multi-select on the sheet's own 4×2-per-page layout — whether/how
+  bulk selection should work across page boundaries in particular has no
+  answer yet.
+- **Switchover / retire old routes** (the historical doc's migration
+  steps 5–6): flipping the default nav entry point to `/display` and
+  eventually retiring `/editor`'s grid-only view + the standalone PDF tab
+  is still not done — `/display` and `/editor` both remain live, reachable
+  routes today. Tracked here as the one still-open piece of that doc's
+  migration plan; no target date set.
+
+Everything else in the historical doc — its original single-toolbar/
+single-rail layout (§2–§3), its component-mapping table (§5), and its
+prior-art/license grounding (§1, already independently captured in
+[`docs/upstreaming/license-provenance.md`](../upstreaming/license-provenance.md)
+and this file's own [Card-Spacing Control](#card-spacing-control) provenance
+note) — is superseded or duplicated and was not re-folded line-by-line.

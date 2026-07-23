@@ -32,14 +32,22 @@ The methodology and the systems it governs.
   record, implemented in PR #325) that `theory.md`'s §4/§7a and
   `identification-pipeline.md`'s g5 paragraph narrate; reference only, not
   re-derived after ratification.
+- [`reference/funnel-spec.md`](reference/funnel-spec.md) — the
+  owner-ratified 2026-07-22 `/display` art-picker funnel spec (raw design
+  record, implemented in PR #329) that `features/grid-selector.md`'s "The
+  art-picker FUNNEL" section narrates; reference only, recovered during
+  the 2026-07-23 D-lettering sweep from a local, never-committed artifact.
 - [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) — canonical
   status page for the pipeline-fidelity gate (GitHub issue #154): gate
   definition, artifact 1 (parity replay — DONE, owner-accepted
   2026-07-22, now closed history per the 2026-07-23 new-data basis
   ruling) and artifact 2 status (all 3 MISSING constants decided, fix
   for 2 merged AND deployed 2026-07-23T01:33Z), the #347-amended fire
-  sequence (Bug-B whole-DB reparse dry-run DONE, write pass onward not
-  yet run), and the #340 root-cause footprint sizing. Single source of
+  sequence — now **COMPLETE end to end, gate FIRED (2026-07-23)**: Bug-B
+  whole-DB reparse dry-run, the pilot dry-run and `--write` (130,210
+  votes), and `consensus_recompute --apply` all DONE (Bug-A's full
+  re-scan deferred post-pilot is the one tracked open item) — and the
+  #340 root-cause footprint sizing. Single source of
   truth for this gate's status — `theory.md`, `identification-pipeline.md`,
   `features/catalog-completion-plan.md`, and the knowledge-inventory
   report link here rather than restating it.
@@ -158,16 +166,16 @@ Deployment, incidents, and cross-session lessons.
 
 One-word status per doc; see each file for the full survey/spec.
 
-| Doc                                                                                                                                                                                                                                                                                                           | Status   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| [`proposals/proposal-b-bleed-normalization.md`](proposals/proposal-b-bleed-normalization.md) — export-time per-side bleed normalization                                                                                                                                                                       | PARTIAL  |
-| [`proposals/proposal-c-context-menu-restyle.md`](proposals/proposal-c-context-menu-restyle.md) — right-click/long-press context menu (shipped); restyle direction (HOLD)                                                                                                                                      | PARTIAL  |
-| [`proposals/proposal-f-public-stats-page.md`](proposals/proposal-f-public-stats-page.md) — public `/stats` transparency page                                                                                                                                                                                  | HOLD     |
-| [`proposals/proposal-g-user-accounts-saved-decks.md`](proposals/proposal-g-user-accounts-saved-decks.md) — user accounts + saved decks via Discord OAuth (core build + PR-5 share links + PR-6 deck portability shipped; see [`features/saved-decks.md`](features/saved-decks.md) — PR-7 addendum still HOLD) | PARTIAL  |
-| [`proposals/proposal-h-unified-display-page.md`](proposals/proposal-h-unified-display-page.md) — one page merging the "Choose Art" editor and PDF export into a live print-sheet preview + card-details rail                                                                                                  | PARTIAL  |
-| [`proposals/proposal-i-docs-as-site-source.md`](proposals/proposal-i-docs-as-site-source.md) — extends the docs/-to-wiki publish pipeline with a second target: rendered site pages + build-time JSON data extracts                                                                                           | BUILDING |
-| [`proposals/proposal-i-readme-pipeline.md`](proposals/proposal-i-readme-pipeline.md) — folds `readme.md` into the same pipeline as a third (`readme`) emit mode: content merge map, owner GO decision, and what shipped                                                                                       | SHIPPED  |
-| [`federation/public-export-v1.md`](federation/public-export-v1.md) — publish-first federation: signed verdict export consumable by mpc-autofill forks and the MIT-lineage proxy tools, no peer required                                                                                                       | HOLD     |
+| Doc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Status   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| [`proposals/proposal-b-bleed-normalization.md`](proposals/proposal-b-bleed-normalization.md) — export-time per-side bleed normalization                                                                                                                                                                                                                                                                                                                                                   | PARTIAL  |
+| [`proposals/proposal-c-context-menu-restyle.md`](proposals/proposal-c-context-menu-restyle.md) — right-click/long-press context menu (shipped); restyle direction (HOLD)                                                                                                                                                                                                                                                                                                                  | PARTIAL  |
+| [`proposals/proposal-f-public-stats-page.md`](proposals/proposal-f-public-stats-page.md) — public `/stats` transparency page                                                                                                                                                                                                                                                                                                                                                              | HOLD     |
+| [`proposals/proposal-g-user-accounts-saved-decks.md`](proposals/proposal-g-user-accounts-saved-decks.md) — user accounts + saved decks via Discord OAuth (core build + PR-5 share links + PR-6 deck portability shipped; see [`features/saved-decks.md`](features/saved-decks.md) — PR-7 addendum still HOLD)                                                                                                                                                                             | PARTIAL  |
+| [`proposals/proposal-h-display-layout-spec.md`](proposals/proposal-h-display-layout-spec.md) — the living `/display` spec: one page merging the "Choose Art" editor and PDF export into a live print-sheet preview + card-details rail (three-region layout and every owner-ratified layout decision since); [`proposals/proposal-h-unified-display-page.md`](proposals/proposal-h-unified-display-page.md) is the original draft, now HISTORICAL/superseded — see that file's own banner | PARTIAL  |
+| [`proposals/proposal-i-docs-as-site-source.md`](proposals/proposal-i-docs-as-site-source.md) — extends the docs/-to-wiki publish pipeline with a second target: rendered site pages + build-time JSON data extracts                                                                                                                                                                                                                                                                       | BUILDING |
+| [`proposals/proposal-i-readme-pipeline.md`](proposals/proposal-i-readme-pipeline.md) — folds `readme.md` into the same pipeline as a third (`readme`) emit mode: content merge map, owner GO decision, and what shipped                                                                                                                                                                                                                                                                   | SHIPPED  |
+| [`federation/public-export-v1.md`](federation/public-export-v1.md) — publish-first federation: signed verdict export consumable by mpc-autofill forks and the MIT-lineage proxy tools, no peer required                                                                                                                                                                                                                                                                                   | HOLD     |
 
 Not every shipped proposal-lettered feature has a survey doc here — some
 (e.g. Proposal A, Proposal D) went straight from idea to shipped PR without

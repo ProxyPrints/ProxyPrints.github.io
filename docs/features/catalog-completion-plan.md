@@ -2980,3 +2980,21 @@ permits your users to be the compute."
     mid-run failure). Issue #347 itself owns the full zeroing plan's
     poll-gated execution order and the specific `run_id`s/counts this
     command targets in production — not restated here.
+
+---
+
+## What remains after the 2026-07-23 full-catalog identification run
+
+This doc stops tracking forward-looking work as of the pipeline-fidelity
+gate firing end to end on 2026-07-23
+([`pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md) §14). Per
+the project's own convention, the roadmap now lives on the issue
+tracker, not here: see the **"Pipeline: post-harvest" milestone**
+(<https://github.com/ProxyPrints/ProxyPrints.github.io/milestone/5>)
+for the current ordered list of what's left — the lands identifier run,
+the needs-review pile's frontend-consumer decision, the deferred
+unreadable-photos re-scan, the crash-recovery drill, three gated safety
+tools, the own-hash deduction idea, and the backfill runbook — each as
+its own issue with prerequisites and gate points. This section
+intentionally does not duplicate that list; if it drifts out of date
+with the board, the board is correct.

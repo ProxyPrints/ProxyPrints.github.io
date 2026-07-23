@@ -268,11 +268,15 @@ external reader's orientation to the whole fork, see
   now closed history per the 2026-07-23 new-data basis ruling) and
   artifact 2 (knowledge-inventory sweep) status — all 3 MISSING
   constants decided, items 1–2's fix merged (PR #343) and deployed
-  2026-07-23T01:33Z — plus the #347-amended fire sequence (Bug-B
-  whole-DB reparse dry-run, B(i) write, B(ii)+B(iii) retraction, and
-  the Bug-A forced-escalation sample all DONE 2026-07-23; the 4c pilot
-  dry-run IN PROGRESS, sample audit/write/`consensus_recompute --apply`
-  not yet run) and #340 root-cause footprint sizing. Single source of
+  2026-07-23T01:33Z — plus the #347-amended fire sequence, now
+  **COMPLETE end to end (2026-07-23) — gate FIRED**: Bug-B whole-DB
+  reparse dry-run, B(i) write, B(ii)+B(iii) retraction, the Bug-A
+  forced-escalation sample, the 4c pilot dry-run, the owner sample
+  audit, the pilot `--write` (130,210 votes, DB-verified exact match to
+  the dry-run's prediction), and `consensus_recompute --apply` (49,206
+  tag transitions, printing 3→4 resolved) all DONE, and #340 root-cause
+  footprint sizing. Bug-A's full re-scan remains deferred post-pilot as
+  the one tracked open item. Single source of
   truth for this
   gate's status — don't restate gate status/decisions elsewhere, link
   here.

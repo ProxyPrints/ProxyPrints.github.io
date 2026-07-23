@@ -23,6 +23,49 @@ the browse results. The **+ Add Cards** dropdown next to the search box
 covers the same Text / XML / CSV / URL import options available
 elsewhere in the app.
 
+You can also type Scryfall-style search operators straight into the
+search box to narrow results, instead of (or alongside) plain card-name
+text: `artist:` (or its short form `a:`) filters by illustrator,
+`border:` and `frame:` by border/frame style, `tag:` by community tag,
+`set:` by three-letter set code, and `lang:` by language code — for
+example `artist:"Rebecca Guay" border:black` or `-tag:foil` to exclude
+foil-tagged results (put a `-` in front of any operator to exclude
+instead of include, and quote a multi-word value like an artist's full
+name). An operator the site doesn't recognize is dropped from your
+search and flagged rather than silently treated as part of your card
+name. See [`features/search-operator-syntax.md`](features/search-operator-syntax.md)
+for the full operator list and how matching works under the hood.
+
+## Picking a card's printing (the art picker)
+
+Once a slot has a card in it, clicking/tapping it on the sheet opens a
+panel showing every piece of art available for that card, so you can
+pick exactly the version you want — or help identify one that isn't
+confirmed yet. Results are grouped: the community-confirmed real Magic
+printings come first (one representative image per printing, with a
+"+N more" to see the rest), then art that's known to be custom/altered/
+AI-generated, then anything with no identifying information yet, last.
+
+Above the grid, a row of filter chips (Border, Frame, Treatment, and
+similar) lets you narrow the panel down to a specific style — tap a chip
+on, and the grid shrinks to just the art matching it; tap it off to see
+everything again. Picking a card while one of these chips is active does
+double duty: it selects that art for your slot, _and_ quietly registers
+that the card supports the style you filtered by. A short note appears
+above the grid before you pick, spelling this out plainly — it always
+says your pick **supports** the tag, never that it **confirms** it
+outright, because one pick is one data point toward the community's
+consensus, not a final verdict on its own. If you change your mind and
+pick a different piece of art afterward, your earlier pick's support is
+automatically withdrawn. Cards whose printing/style is already
+community-confirmed never prompt this — only ones still open to
+community input do.
+
+Right-clicking (or long-pressing on a phone) a card on the sheet, or
+tapping its small "⋯" button, opens the same actions menu you'd get from
+the panel above — swap art, remove the card, and the rest of the
+per-card actions in one place.
+
 ## "What's That Card?" — helping identify printings
 
 ProxyPrints crowdsources which real Magic printing a community-submitted

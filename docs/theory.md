@@ -235,13 +235,20 @@ turns out to be:
    excluded from both winner selection and the quorum/share gate whenever
    any outcome group already holds human-backed weight `>= min_weight`, or
    a live human-vs-human contest exists** (two or more groups each
-   carrying some human-backed weight) — decisions D1/D4 of the matrix.
+   carrying some human-backed weight) — the matrix's [no-machine-tipping
+   and machine-dissent-never-de-resolves
+   mechanisms](features/printing-tags.md#human-contest-machine-weight-drop).
    Concretely: machine/implicit agreement may still _reinforce_ an
    already-human-backed side (a lone human vote plus agreeing machine
-   weight can still promote a previously-unresolved card — D2, unaffected
-   by D1/D4), but machine or implicit dissent can neither tip a genuine
-   human-vs-human contest (D1) nor drag an already-quorum-valid human
-   winner's share back below `min_share` to silently de-resolve it (D4 —
+   weight can still promote a previously-unresolved card — the matrix's
+   promotion-stays ruling, unaffected by the two mechanisms above), but
+   machine or implicit dissent can neither tip a genuine
+   human-vs-human contest (the [no-machine-tipping
+   mechanism](features/printing-tags.md#human-contest-machine-weight-drop))
+   nor drag an already-quorum-valid human
+   winner's share back below `min_share` to silently de-resolve it (the
+   [machine-dissent-never-de-resolves
+   mechanism](features/printing-tags.md#machine-dissent-never-de-resolves) —
    at 28k+ deduction-vote scale, this used to be reachable on any
    thin-margin 2-human-vote card before the ratification). A new passive
    evidence class, `VoteSource.IMPLICIT` (weight 0.25, `PRINTING_TAG_IMPLICIT_WEIGHT`,
@@ -252,16 +259,20 @@ turns out to be:
    below `min_weight` — a pile of implicit votes cannot form quorum on its
    own even before the human-backed check applies. Implicit weight is
    also excluded entirely from the questionFeed's suggestedness/confidence-fill
-   computation (`get_tag_net_polarity`, decision D6) — a passive
+   computation (`get_tag_net_polarity`, the matrix's
+   [suggestedness-excludes-implicit
+   mechanism](features/printing-tags.md#suggestedness-excludes-implicit)) — a passive
    selection by-product must never color a chip's fill or let a person's
    own earlier pick "explain itself" back to them, which would otherwise
    be a self-seeding loop (evidence created by the UI reinforcing the same
    UI's own suggestion of itself). `VoteSource.FEDERATED` (weight 1.0,
-   `VOTE_FEDERATED_WEIGHT`, pinned by decision DF) sits in the same
+   `VOTE_FEDERATED_WEIGHT`, pinned at 1.0 per the matrix's own FEDERATED-weight ruling —
+   see [`reference/vote-weight-matrix.md`](reference/vote-weight-matrix.md))
+   sits in the same
    non-human-backed bucket as machine/implicit weight for gate purposes —
    despite carrying full USER-equivalent weight toward quorum and share,
    an imported federated verdict is a **suggestion**, never itself
-   sufficient to clear `g₅`, and is subject to the same D1/D4 exclusion as
+   sufficient to clear `g₅`, and is subject to the same exclusion as
    machine/implicit weight the moment a human-backed contest or
    already-quorum-valid human winner is in play. Machine evidence narrows
    and prioritizes what a human is asked to confirm; it never substitutes
@@ -378,7 +389,9 @@ sources: OCR and deduction; no generative AI is involved) `=0.5` — now
 `PRINTING_TAG_MACHINE_WEIGHT` in settings.py, with the old name kept as a
 backward-compatible env-var fallback so an existing deployment's config
 can't silently break — human `1.0`, admin `5.0`,
-`VOTE_FEDERATED_WEIGHT=1.0` — non-human-backed, DF, despite matching a
+`VOTE_FEDERATED_WEIGHT=1.0` — non-human-backed (the matrix's own
+FEDERATED-weight ruling, [`reference/vote-weight-matrix.md`](reference/vote-weight-matrix.md)),
+despite matching a
 human vote's raw weight — and, added by the 2026-07-22 vote-weight
 ratification, implicit `0.25` (`PRINTING_TAG_IMPLICIT_WEIGHT`, summed and
 capped per (card, tag) at `PRINTING_TAG_IMPLICIT_CAP=1.0`, also
@@ -518,7 +531,9 @@ printing.
   `VoteSource.FEDERATED`/weight-1.0) is additionally excluded from the
   gate's winner-selection and share arithmetic entirely once a
   human-backed contest or an already-quorum-valid human winner is in
-  play (D1/D4) — so a machine wrong-match can neither win a live
+  play (the [no-machine-tipping and machine-dissent-never-de-resolves
+  mechanisms](features/printing-tags.md#human-contest-machine-weight-drop))
+  — so a machine wrong-match can neither win a live
   human-vs-human disagreement nor de-resolve a human-backed card that
   already cleared this gate. `P(card resolved to catalog | machine wrong-match) = 0` **structurally**, independent of
   `ε₁…ε₄`, and — as of the ratification — so is
@@ -648,6 +663,31 @@ pilot of record, and its own statistics become the cited figures for
 any future soundness claim about this chain. Full detail and the fire
 sequence this basis change feeds into:
 [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §8–§9.
+
+### 7d. Full-catalog fire outcome (2026-07-23) — the soundness design empirically confirmed at scale
+
+The §9 fire sequence completed end to end 2026-07-23: the pilot's
+full-eligible-pool `--write` cast **130,210** machine votes across both
+channels (join-key 100,500 — 39,253 match / 61,247 no_match; fallback
+29,710 match, its first production execution), followed strictly last
+by `consensus_recompute --apply`. Against that ~130k-vote input, the
+human-backed gate materialized **exactly one additional resolved
+printing** (3 → 4) — every other card either stayed unresolved (pending
+further evidence/votes) or, where the machine channels abstained
+(no-match/skip), correctly cast no resolving signal at all. This is the
+same conservative-abstention asymmetry §7c already established at
+41,586-card replay scale (zero of 373 unexplained divergences was a
+wrong-printing commitment) now observed at full-catalog production
+scale with real writes, not a replay: a large volume of machine votes
+does not translate into a large volume of resolutions unless the
+gate's own consensus threshold is actually met card-by-card. Full
+numbers, the write's DB-verification against the dry-run's prediction,
+and the `consensus_recompute` outcome:
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §14 and
+[`data/2026-07-23-pilot-write-and-recompute.md`](data/2026-07-23-pilot-write-and-recompute.md).
+Not a new calibrated `εᵢ` — a corroborating data point at the scale
+that matters most (full catalog, real writes), same as §7c's replay was
+at replay scale.
 
 ## 8. Confidence semantics for downstream consumers
 
@@ -835,3 +875,12 @@ closed history, not a baseline to keep re-measuring against; the new
 system's own full-pool Stage D dry-run becomes the pilot/measurement of
 record going forward. Full detail:
 [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §8–§9.
+
+**§7d added 2026-07-23**: the §9 fire sequence completed end to end the
+same day (pilot `--write` + `consensus_recompute --apply`) — folded in
+as the soundness design's first full-catalog, real-write empirical
+confirmation: ~130k machine votes entered, the human-backed gate
+resolved exactly one additional card. Corroborating data, not a new
+calibrated number; full figures live in
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §14, not
+duplicated here.

@@ -1176,8 +1176,13 @@ SVG/viewBox mechanics themselves.
 
 ## `/display`'s floating "n/M" sheet-position pill under-reports the last sheet (shows `2/3` instead of `3/3`) after scrolling all the way down
 
-**Symptom**: `DisplayPage.spec.ts`'s D17 test ("the floating sheet-position
-pill updates live while scrolling at phone width") fails with
+**Symptom**: `DisplayPage.spec.ts`'s sheet-position-pill test (test title
+carries a trailing "(D17)" — the test's own name literally quotes the
+retired label from `proposal-h-display-layout-spec.md`'s [sheet-presentation
+refinement decision](proposals/proposal-h-display-layout-spec.md#sheet-presentation-refinement),
+kept verbatim here since it's a direct quote of the code, not a fresh
+reference) — "the floating sheet-position
+pill updates live while scrolling at phone width" — fails with
 `getByTestId('display-sheet-position-indicator')` stuck at `"2/3"` after
 scrolling the last sheet into view via `scrollIntoView({ block: "center" })` at 390px wide — reproduces 100% of the time in isolation, both
 locally and in CI (not the intermittent kind), even though the same test
@@ -1211,7 +1216,7 @@ force the last index — falling through to the existing center-band
 as a single writer to `visibleSheetIndex` (not a second `scroll`
 listener racing the observer) since the observer already re-fires on the
 same settling scroll event that changes intersection state. Verified
-5/5 clean repeats of the D17 test plus the full 28-test `DisplayPage.spec.ts`
+5/5 clean repeats of the sheet-position-pill test plus the full 28-test `DisplayPage.spec.ts`
 suite and CI's own shard-2/4 (76 tests) locally.
 
 ## `run_image_evidence_cohort` (Stage C) parent process's RSS climbs unboundedly and OOMs the whole box on a long run
@@ -1312,7 +1317,7 @@ production.
 
 ## `DisplayPage.spec.ts`'s "floating sheet-position pill updates live while scrolling at phone width (D17)" fails intermittently with "2/3" instead of "3/3"
 
-**Symptom**: `tests/DisplayPage.spec.ts`'s D17 sheet-position-pill test
+**Symptom**: `tests/DisplayPage.spec.ts`'s sheet-position-pill test
 (phone viewport, 18 cards / 3 sheets) intermittently reports the
 `display-sheet-position-indicator` still reading `2/3` after
 `scrollIntoView({block:"center"})` on the last sheet, where `3/3` is

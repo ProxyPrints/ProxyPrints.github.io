@@ -78,7 +78,8 @@ Image" accordion before that round) no longer renders the flat
 `GridSelectorResults`/`CardResultSet` grid — it mounts
 `SelectVersionResults.tsx`, which groups the same
 candidate identifier list into the three ordered groups
-`docs/proposals/proposal-h-unified-display-page.md`'s §4.4′ specifies,
+`docs/proposals/proposal-h-unified-display-page.md`'s (historical doc —
+see its own banner) §4.4′ specifies,
 and weaves in its three verification moments. **Scope: this replaces the
 results renderer for `/display`'s embedded picker ONLY** —
 `GridSelectorModal.tsx`'s classic modal (the editor grid's version picker,
@@ -138,7 +139,8 @@ still back that modal.
   names. A "More like this" button on any tile with at least one
   resolved attribute tag seeds the filter from that card's own `tags`.
 - **Moment (c), filtered-selection confirm chip** — **sidebar/modal
-  layout only**, retired on the rail by D20 (see below): after selecting
+  layout only**, retired on the rail by the [implicit-vote-is-the-vote
+  decision](#implicit-vote-is-the-vote) (see below): after selecting
   a card while a filter tag is active, a `ConfirmChip` appears if that
   specific card's `tagVoteStatuses[tagName]` is `"suggested"` (not yet
   resolved) for the active tag — one tap casts a real `APISubmitTagVote`
@@ -159,7 +161,17 @@ still back that modal.
     suggested per active tag — the only reading that makes the spec's
     own (b) and (c) passages internally consistent.
 
-## The art-picker FUNNEL (funnel-spec.md F1-F7, D20-D24 — supersedes moments (b)/(c) on the rail)
+## The art-picker FUNNEL (supersedes moments (b)/(c) on the rail)
+
+Spec items below are this section's own **F1-F7** numbering (distinct from
+`proposal-h-display-layout-spec.md`'s own F1-F14 change-inventory rows).
+The five owner decisions this round locked (2026-07-21/22, PR #329) are
+written out in prose at each relevant bullet below and are no longer
+cross-referenced by bare letter-number — see
+[`docs/reference/funnel-spec.md`](../reference/funnel-spec.md) for the
+full raw ratification record (ground truth, per-breakpoint behavior,
+file-level change inventory, and the "all open questions ruled"
+closeout) this section summarizes.
 
 The owner-ratified funnel round replaced the flat moment-(b) chip wall
 and the two-tap moment-(c) confirm on the `/display` rail's `Select Version` surface (`layout="stacked"`) with a single top-to-bottom
@@ -171,30 +183,58 @@ not actually wired anywhere today) is byte-for-byte unchanged** — it
 still renders the flat `FilterChipBar` and the two-tap `ConfirmChip`
 described above.
 
-- **Per-axis segmented chips** (`attributeChips.ts`'s `FUNNEL_AXES`):
-  Border and Frame render as radio-exclusive `ToggleButtonGroup`s (one
-  segment active at a time; re-tapping the active segment clears the
-  axis back to "any" — D23, since a native radio input doesn't fire a
-  change event for a click on an already-checked option, this is
-  handled on the `ToggleButton`'s own `onClick`, ahead of the group's
-  `onChange`). Only axes with ≥1 surviving candidate render at all
-  (`chipMembershipState`, computed over the OTHER axes' current filter —
-  never the axis's own selection, so picking Black doesn't make White/
-  Silver permanently vanish from their own axis).
-  **Treatment (2026-07-23 round)**: no longer an independent-checkbox
-  group rendered through the same generic axis component - it's a real
-  tri-state cycle (untouched -> include -> exclude -> untouched,
-  `TreatmentChipRow`/`nextChipState`) sharing one unified block with
-  Frame instead of its own stacked row - see
-  [`display-left-rail.md`](display-left-rail.md)'s "Unified Frame +
+- <a id="funnel-chips-positive-or-off"></a>**Per-axis segmented chips are
+  positive-or-off (two-state) for Border/Frame, not the QuestionFeed's
+  tri-state** (locked 2026-07-22, PR #329; formerly labeled _D23_ in this
+  document; full ratification text: `docs/reference/funnel-spec.md`'s
+  §4). The QuestionFeed's chips cycle untouched→positive→negative→untouched
+  (a describe-what-you-see vote); the funnel filter instead wants "narrow
+  to this / don't" — a segmented radio for the exclusive axes (Border,
+  Frame), with no negative-filter state exposed for either (the implicit
+  vote on pick, below, is separate and always positive/support).
+  Mechanically (`attributeChips.ts`'s `FUNNEL_AXES`): Border and Frame
+  render as radio-exclusive `ToggleButtonGroup`s (one segment active at a
+  time; re-tapping the active segment clears the axis back to "any" —
+  since a native radio input doesn't fire a change event for a click on
+  an already-checked option, this is handled on the `ToggleButton`'s own
+  `onClick`, ahead of the group's `onChange`). Only axes with ≥1
+  surviving candidate render at all (`chipMembershipState`, computed over
+  the OTHER axes' current filter — never the axis's own selection, so
+  picking Black doesn't make White/Silver permanently vanish from their
+  own axis).
+  **Treatment is the one exception, added 2026-07-23** (addendum item 1
+  of `SPEC-display-left-rail.md`, owner-approved): it's no longer an
+  independent-checkbox group rendered through the same generic axis
+  component described above — it's a real tri-state cycle (untouched ->
+  include -> exclude -> untouched, `TreatmentChipRow`/`nextChipState`)
+  sharing one unified block with Frame instead of its own stacked row,
+  specifically because the owner asked for a genuine include/exclude
+  filter on Treatment (Full Art/Borderless/Showcase/Extended/Etched) —
+  see [`display-left-rail.md`](display-left-rail.md)'s "Unified Frame +
   Treatment filter" section for the full implementation writeup
-  (`excludedAttributeTags`, `filterOutExcludedChipsVotesGated`); Border/
-  Frame's own exclusive-radio behavior described above is unchanged.
-- **Three chip states** (F3): SETTLED (some survivor resolves the tag —
-  `card.tags`), SUGGESTED (every carrying survivor only has it via
-  `card.suggestedFilterTagNames` — see the compliance note below, dashed
-  border + trailing `⌇`, vote-layer-gated), or absent (no surviving
-  candidate carries the attribute at all). **Deviation from the spec's
+  (`excludedAttributeTags`, `filterOutExcludedChipsVotesGated`). Border/
+  Frame's own two-state, positive-or-off behavior above is unchanged;
+  this is a scoped, additive exception for Treatment only, not a reversal
+  of the 2026-07-22 ratification (whose own "narrow to this / don't"
+  reasoning was about the funnel-vs-QuestionFeed distinction generally,
+  not a hard ban on ever adding an exclude state anywhere in the funnel).
+- <a id="sensitive-tags-excluded-from-funnel"></a>**Three chip states**
+  (F3): SETTLED (some survivor resolves the tag — `card.tags`), SUGGESTED
+  (every carrying survivor only has it via `card.suggestedFilterTagNames`
+  — see the compliance note below, dashed border + trailing `⌇`,
+  vote-layer-gated), or absent (no surviving candidate carries the
+  attribute at all). **The SUGGESTED state and its implicit-support-on-pick
+  vote both exclude sensitive/moderation-gated tags** (locked 2026-07-22,
+  PR #329; formerly labeled _D24_ in this document): a leaning-but-
+  unconfirmed sensitive attribute must never surface as a dashed chip or
+  receive a support vote from a pick, since sensitive tags are
+  moderation-gated ([[moderation.md]]) and a suggested-chip lean would
+  leak a machine guess ahead of human co-sign review. Mechanically this
+  rides `get_suggested_filter_tags_overlay`'s own
+  RESOLVED_APPLY/RESOLVED_REJECT/CONTESTED/PENDING_APPROVAL/SENSITIVE
+  exclusion (see the compliance-fix note below) — `suggestedFilterTagNames`
+  never carries a sensitive tag, so neither the chip render nor the
+  implicit-vote support set can act on one. **Deviation from the spec's
   ground-truth text (documented, not silent)**: the spec describes
   filtering/membership as reading raw Scryfall fields via
   `chip.matches()`/`filterCandidatesByChipStates`
@@ -236,8 +276,11 @@ described above.
     a card whose `tagVoteStatuses` says `"suggested"` but whose
     `suggestedFilterTagNames` excludes the tag renders no suggested
     chip and casts no implicit vote for it.
-- **Count-proportional disclosure** (F1/D21, named constants
-  `FUNNEL_DENSE_ABOVE = 8` / `FUNNEL_HERO_AT_OR_BELOW = 2`): `>8`
+- <a id="count-proportional-disclosure"></a>**Count-proportional disclosure
+  tiers ship as named constants** (F1; locked 2026-07-22, PR #329;
+  formerly labeled _D21_ in this document), refining the editor-completion
+  package's hard `compressed=true`: `FUNNEL_DENSE_ABOVE = 8` / `FUNNEL_HERO_AT_OR_BELOW = 2` so post-launch tuning is a one-line
+  change, not inline magic numbers in the tier picker. `>8`
   survivors → axes shown + advanced filters auto-expanded once + dense
   ~72px tiles; `3–8` → axes shown + medium ~88px tiles; `≤2` → axes
   collapse to the head's active-pill summary + expanded (`compressed= false`) ~112px hero tiles; `0` → an empty state with a "Clear filters" link.
@@ -285,7 +328,21 @@ described above.
   that pads the actual clickable box out to >=40px while the visual
   size stays reference-sized at every breakpoint - verified live via
   `getComputedStyle(el, "::after")` at a 390px viewport.
-- **D20 implicit vote — the pick IS the vote, no second tap.** Picking a
+  **Same PR, third follow-up owner round (SPEC-display-left-rail.md §8's
+  buttons-look-like-buttons audit, 2026-07-23)**: the Filters toggle's
+  `link`/underlined-text shape from the round immediately above was
+  itself superseded one round later - the audit's own rule ("anything
+  clickable that performs an ACTION reads as a button") wins over the
+  reference mockup's text-link treatment, so it's back to a real
+  `outline-light` `Button` (`CompactButton`, unchanged padding/font-size
+  from that round, just the variant/border/background restored) with a
+  chevron - this ALSO happens to agree with upstream's own
+  `GridSelectorFilters`, which already renders its settings toggle as a
+  `Button`. See [`display-left-rail.md`](display-left-rail.md)'s
+  "Buttons-look-like-buttons audit" section for the full round writeup.
+- <a id="implicit-vote-is-the-vote"></a>**Implicit vote — the pick IS the
+  vote, no second tap** (locked 2026-07-21/22, PR #329; formerly labeled
+  _D20_ in this document). Picking a
   candidate while ≥1 chip is active computes `supportTagNames` (active
   tags the candidate satisfies ONLY via a suggested/unconfirmed vote,
   never an already-resolved one) and calls the `voteLayer. onImplicitSupport(candidate, supportTagNames)` seam on EVERY pick
@@ -317,11 +374,16 @@ described above.
   (always, in production); `SelectVersionResults.test.tsx` covers the
   `voteLayer=undefined` path directly, since there's no live in-app
   toggle to reach it end-to-end.
-- **Context menu on `/display` slots (F6/D22)**: `PagePreview.tsx`
+- <a id="context-menu-visible-cue"></a>**Context menu on `/display` slots
+  gains a visible `⋯` cue, bottom-right of each tile** (F6; locked
+  2026-07-22, PR #329; formerly labeled _D22_ in this document — revises
+  the editor-completion package's original "gesture-invoked, no visible
+  three-dots button" stance now that the owner wants a touch-discoverable
+  cue). `PagePreview.tsx`
   gained additive `onSlotContextMenu?(index, x, y)` — right-click
   (`preventDefault`ed, scoped to slots only), long-press
   (`useLongPress`, extracted per-slot into `PagePreviewSlotEl` so the
-  hook can be called once per slot), and a new visible `⋯` cue button
+  hook can be called once per slot), and the new visible `⋯` cue button
   (bottom-right of each tile — its own corner, deliberately separated
   from the top-left/top-right corners a future selection-checkbox/flip
   button would use) all open the SAME existing `CardSlotContextMenu` +
@@ -341,8 +403,11 @@ described above.
   rebuild (E2/E3/L4)**: the rail heading is now genuinely "Select
   Version" (the once-deferred pure-copy rename above), promoted to an
   always-visible, always-open surface with no `AutofillCollapse` wrapper
-  at all - it's no longer one accordion among several (D3: art selection
-  is the primary surface, not something a user has to expand). The same
+  at all - it's no longer one accordion among several (per
+  `proposal-h-display-layout-spec.md`'s [left-rail de-clutter
+  decision](../proposals/proposal-h-display-layout-spec.md#left-rail-declutter-hierarchy):
+  art selection is the primary surface, not something a user has to
+  expand). The same
   round also fixed the rail-specific fidelity breakages this section used
   to carry: `initialSettingsVisible={false}` on `useGridSelectorSearch`
   (Filters starts collapsed in the rail regardless of viewport width -
