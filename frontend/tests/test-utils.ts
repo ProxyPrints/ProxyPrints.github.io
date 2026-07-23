@@ -222,16 +222,22 @@ export const importText = async (page: Page, text: string) => {
   ).not.toBeVisible();
 };
 
-// Issue #167 (Select Version section) - navigates to the unified /display rail with a slot
+// Issue #167 (Select Version section) - navigates to the unified /editor page with a slot
 // selected, so its always-open Select Version surface (and the rest of the promoted/demoted rail
 // content around it) is on screen. Shared by SelectVersionSection.spec.ts (issue #167's own
-// behavior coverage) and DisplayLeftRailFidelity.spec.ts (SPEC-display-left-rail.md's permanent
-// CSS-fidelity guard - see that file's own module comment) so both drive the identical navigation
-// path rather than each re-deriving it.
+// behavior coverage, currently skipped pending its own #272 port - see that file's header) and
+// DisplayLeftRailFidelity.spec.ts (SPEC-display-left-rail.md's permanent CSS-fidelity guard - see
+// that file's own module comment) so both drive the identical navigation path rather than each
+// re-deriving it. Ported (2026-07-23, Proposal H route swap) from the pre-swap classic-editor
+// flow: `openAddCardsDropdown`'s "Add Cards" menu doesn't exist on the unified page's
+// empty-project landing (that's populated-project-only UI, mounted in the toolbar), and the old
+// "Editor" nav-link click targeted the separate /display route, which is now just a redirect
+// shim back to /editor (pages/display.tsx) - both replaced with `importTextOnEditorLanding`'s
+// direct landing-page textbox, matching every other wave-1-ported test's own setup
+// (DisplayPage.spec.ts).
 export const openSelectVersionSection = async (page: Page) => {
   await loadPageWithDefaultBackend(page);
-  await importText(page, "my search query");
-  await page.getByRole("link", { name: "Editor" }).click();
+  await importTextOnEditorLanding(page, "my search query");
   await page.getByTestId("page-preview-slot").first().click();
   // The rail always renders compressed tiles now (editor-completion package, E4/L9 - the
   // toggle is gone entirely, hard-pinned true) - no "Compressed" click needed any more.
