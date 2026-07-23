@@ -106,6 +106,14 @@ from cardpicker.models import (
     ImageEvidence,
     PilotRunLedger,
 )
+from cardpicker.pilot_run_lifecycle import (
+    add_dry_run_guard_arguments,
+    enforce_dry_run_precondition,
+    initial_counters,
+    merge_counters,
+    resilient_terminal_output,
+    scope_hash,
+)
 from cardpicker.printing_consensus import resolve_and_persist_printing, resolve_printing
 from cardpicker.utils import (
     find_stale_applied_migrations,
@@ -328,7 +336,10 @@ class Command(BaseCommand):
         "this command's own module docstring for the full two-step runbook (re-extraction via "
         "run_image_evidence_cohort --card-ids-file is a SEPARATE, prerequisite step for "
         "--selector no-text ONLY - --selector proxy-marker-veto is immediately actionable, like "
-        "parser-bug). Dry-run by default; --write required to persist anything."
+        "parser-bug). Dry-run by default; --write required to persist anything. --write also "
+        "requires a matching COMPLETED dry-run of the SAME --selector/--stage-d-run-id/"
+        "--card-ids-file within --dry-run-window-hours (forced-dry-run guard, issue #362) - see "
+        "--skip-dryrun-check to override."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -365,9 +376,12 @@ class Command(BaseCommand):
             action="store_true",
             default=False,
             help="Actually persist ImageEvidence field updates and retract stale votes/scan-"
-            "logs. Default is dry-run: compute and count everything without writing.",
+            "logs. Default is dry-run: compute and count everything without writing. Requires a "
+            "matching recent COMPLETED dry-run ledger row for the SAME --selector/--stage-d-run-"
+            "id/--card-ids-file (forced-dry-run guard) unless --skip-dryrun-check is passed.",
         )
         parser.add_argument("--run-id", default=None, help="Reuse a specific run_id. Default: freshly generated.")
+        add_dry_run_guard_arguments(parser, write_flag="--write")
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         stale = find_stale_applied_migrations()
@@ -384,20 +398,38 @@ class Command(BaseCommand):
         if bool(card_ids_file) == bool(selector):
             raise CommandError("Exactly one of --card-ids-file or --selector is required.")
 
+        stage_d_run_id = kwargs["stage_d_run_id"]
+        if selector in ("no-text", "proxy-marker-veto") and not stage_d_run_id:
+            raise CommandError(f"--selector {selector} requires --stage-d-run-id.")
+
+        # Forced-dry-run guard scope (issue #362): the INPUT that defines this invocation's own
+        # target cohort (card_ids_file path, or selector+stage_d_run_id) - never the RESOLVED card
+        # id set, matching this exact wording in docs/features/catalog-completion-plan.md's own
+        # "State-clear safety" section ("a dry-run of the EXACT same --selector/--stage-d-run-id/
+        # --card-ids-file invocation"). Computed and enforced BEFORE resolving card_ids (and before
+        # the "no candidates" early return below), so a --write attempt is always gated on its own
+        # invocation shape, not on whether that shape happens to resolve to an empty cohort today.
+        scope = (
+            scope_hash("card_ids_file", card_ids_file)
+            if card_ids_file
+            else scope_hash("selector", selector, stage_d_run_id or "")
+        )
+        skip_used = enforce_dry_run_precondition(
+            command="reparse_collector_evidence",
+            write_mode=kwargs["write"],
+            skip_check=kwargs["skip_dryrun_check"],
+            window_hours=kwargs["dry_run_window_hours"],
+            scope=scope,
+        )
+
         if card_ids_file:
             card_ids = read_card_ids_file(card_ids_file)
         elif selector == "parser-bug":
             card_ids = select_card_ids_parser_bug()
         elif selector == "no-text":
-            stage_d_run_id = kwargs["stage_d_run_id"]
-            if not stage_d_run_id:
-                raise CommandError("--selector no-text requires --stage-d-run-id.")
             card_ids = select_card_ids_no_text(stage_d_run_id)
         else:
             assert selector == "proxy-marker-veto"
-            stage_d_run_id = kwargs["stage_d_run_id"]
-            if not stage_d_run_id:
-                raise CommandError("--selector proxy-marker-veto requires --stage-d-run-id.")
             card_ids = select_card_ids_proxy_marker_veto(stage_d_run_id)
 
         if not card_ids:
@@ -415,40 +447,64 @@ class Command(BaseCommand):
             dry_run=dry_run,
             status=PilotRunLedger.Status.RUNNING,
             git_sha=get_baked_git_sha(),
+            counters=initial_counters(scope=scope, skip_dryrun_check_used=skip_used),
         )
         try:
             result = reparse_and_retract(card_ids, run_id=run_id, dry_run=dry_run)
 
-            self.stdout.write(
-                f"considered={result.considered} no_evidence={result.no_evidence} "
-                f"no_prior_join_key_state={result.no_prior_join_key_state} "
-                f"unchanged={result.unchanged} changed={result.changed}"
-            )
-            if dry_run:
-                self.stdout.write(f"(dry-run) would_fix_fields={result.fields_fixed}")
-                self.stdout.write(f"(dry-run) would_retract={result.changed - len(result.gate_refused_card_ids)}")
-            else:
-                self.stdout.write(f"fields_fixed={result.fields_fixed}")
-                self.stdout.write(f"retracted={result.retracted} gate_refused={len(result.gate_refused_card_ids)}")
-            if result.gate_refused_card_ids:
-                self.stdout.write(
-                    f"HUMAN REVIEW NEEDED - {len(result.gate_refused_card_ids)} card(s) refused "
-                    "retraction (currently a RESOLVED consensus - printing or NO_MATCH). Affected "
-                    f"card pks: {result.gate_refused_card_ids[:50]}"
-                    + (" (truncated)" if len(result.gate_refused_card_ids) > 50 else "")
-                )
-            for entry in result.audit[:10]:
-                self.stdout.write(f"  sample: {entry}")
-
+            # Counters-before-output (production incident 2026-07-23, see
+            # cardpicker.pilot_run_lifecycle's own module docstring point 1): the ledger row is
+            # saved COMPLETED here, BEFORE the terminal summary prints below - a BrokenPipeError on
+            # a severed stdout while printing that summary must never look like this run failed.
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()
             # repurposed for this command: rows this run's own write actually touched (retracted),
             # not "votes cast" (this command casts none) - matches votes_written's own doc-level
             # framing as "best-effort visibility", not a hard cross-command contract.
             ledger.votes_written = result.retracted
-            ledger.save(update_fields=["status", "finished_at", "votes_written"])
+            ledger.counters = merge_counters(
+                ledger.counters,
+                {
+                    "considered": result.considered,
+                    "no_evidence": result.no_evidence,
+                    "no_prior_join_key_state": result.no_prior_join_key_state,
+                    "unchanged": result.unchanged,
+                    "changed": result.changed,
+                    "fields_fixed": result.fields_fixed,
+                    "retracted": result.retracted,
+                    "gate_refused": len(result.gate_refused_card_ids),
+                    "gate_refused_card_ids": result.gate_refused_card_ids[:50],
+                },
+            )
+            ledger.save(update_fields=["status", "finished_at", "votes_written", "counters"])
+
+            with resilient_terminal_output():
+                self.stdout.write(
+                    f"considered={result.considered} no_evidence={result.no_evidence} "
+                    f"no_prior_join_key_state={result.no_prior_join_key_state} "
+                    f"unchanged={result.unchanged} changed={result.changed}"
+                )
+                if dry_run:
+                    self.stdout.write(f"(dry-run) would_fix_fields={result.fields_fixed}")
+                    self.stdout.write(f"(dry-run) would_retract={result.changed - len(result.gate_refused_card_ids)}")
+                else:
+                    self.stdout.write(f"fields_fixed={result.fields_fixed}")
+                    self.stdout.write(f"retracted={result.retracted} gate_refused={len(result.gate_refused_card_ids)}")
+                if result.gate_refused_card_ids:
+                    self.stdout.write(
+                        f"HUMAN REVIEW NEEDED - {len(result.gate_refused_card_ids)} card(s) refused "
+                        "retraction (currently a RESOLVED consensus - printing or NO_MATCH). Affected "
+                        f"card pks: {result.gate_refused_card_ids[:50]}"
+                        + (" (truncated)" if len(result.gate_refused_card_ids) > 50 else "")
+                    )
+                for entry in result.audit[:10]:
+                    self.stdout.write(f"  sample: {entry}")
         except Exception:
-            ledger.status = PilotRunLedger.Status.FAILED
-            ledger.finished_at = timezone.now()
-            ledger.save(update_fields=["status", "finished_at"])
+            # Only a still-RUNNING row gets marked FAILED here - a run this invocation already
+            # marked COMPLETED above must never be overwritten by a later exception (e.g. from the
+            # terminal print, if resilient_terminal_output didn't already swallow it).
+            if ledger.status == PilotRunLedger.Status.RUNNING:
+                ledger.status = PilotRunLedger.Status.FAILED
+                ledger.finished_at = timezone.now()
+                ledger.save(update_fields=["status", "finished_at"])
             raise

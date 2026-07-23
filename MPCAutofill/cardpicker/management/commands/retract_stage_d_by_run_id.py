@@ -73,6 +73,14 @@ from cardpicker.local_calculate_verdicts import (
 )
 from cardpicker.local_identify_printing_tags import generate_run_id
 from cardpicker.models import Card, CardPrintingTag, CardScanLog, PilotRunLedger
+from cardpicker.pilot_run_lifecycle import (
+    add_dry_run_guard_arguments,
+    enforce_dry_run_precondition,
+    initial_counters,
+    merge_counters,
+    resilient_terminal_output,
+    scope_hash,
+)
 from cardpicker.printing_consensus import resolve_and_persist_printing, resolve_printing
 from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
 
@@ -164,7 +172,10 @@ class Command(BaseCommand):
         "and non-rescannable CardScanLog skip rows, scoped to one or more specific --run-id "
         "value(s). Never retracts a card currently sitting under a RESOLVED printing_consensus "
         "outcome (printing or NO_MATCH) - such a card is skipped entirely and listed for human "
-        "review. Dry-run by default; --write required to delete anything or resync any card."
+        "review. Dry-run by default; --write required to delete anything or resync any card. "
+        "--write also requires a matching COMPLETED dry-run of the SAME target run_id set within "
+        "--dry-run-window-hours (forced-dry-run guard, issue #362) - see --skip-dryrun-check to "
+        "override."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -190,8 +201,11 @@ class Command(BaseCommand):
             default=False,
             help="Actually delete the scoped votes/scan-logs and resync each affected card's "
             "printing consensus. Default is dry-run: compute and report every counter below "
-            "without deleting or resyncing anything.",
+            "without deleting or resyncing anything. Requires a matching recent COMPLETED "
+            "dry-run ledger row for the SAME target run_id set (forced-dry-run guard) unless "
+            "--skip-dryrun-check is passed.",
         )
+        add_dry_run_guard_arguments(parser, write_flag="--write")
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
         stale = find_stale_applied_migrations()
@@ -224,6 +238,20 @@ class Command(BaseCommand):
         mode = "WRITE" if write else "DRY RUN"
         self.stdout.write(f"[{mode}] retract_stage_d_by_run_id target_run_ids={target_run_ids}")
 
+        # Forced-dry-run guard scope (issue #362): the target run_id set itself defines this
+        # invocation's own cohort - "the SAME target run_id set" is the natural reading of "the
+        # EXACT same invocation" for this command (module docstring's own MULTI-RUN-ID CLI
+        # ERGONOMICS section already treats the de-duplicated, order-preserving list as the one
+        # canonical target set regardless of which flag(s) built it).
+        scope = scope_hash("target_run_ids", *target_run_ids)
+        skip_used = enforce_dry_run_precondition(
+            command="retract_stage_d_by_run_id",
+            write_mode=write,
+            skip_check=kwargs["skip_dryrun_check"],
+            window_hours=kwargs["dry_run_window_hours"],
+            scope=scope,
+        )
+
         # this command's OWN operational run_id (its PilotRunLedger row) - distinct from, and
         # never to be confused with, the TARGET run_id(s) above being retracted (see the
         # AbstractWeightedVote.run_id docstring's own "NOT reused across invocations" note).
@@ -234,6 +262,7 @@ class Command(BaseCommand):
             dry_run=dry_run,
             status=PilotRunLedger.Status.RUNNING,
             git_sha=get_baked_git_sha(),
+            counters=initial_counters(scope=scope, skip_dryrun_check_used=skip_used),
         )
         try:
             per_run_id = retract_run_ids(target_run_ids, write=write)
@@ -248,18 +277,6 @@ class Command(BaseCommand):
             counters: dict[str, Any] = {}
             for run_id, result in per_run_id.items():
                 gate_ids = result.skipped_resolved_gate_card_ids
-                self.stdout.write(
-                    f"  run_id={run_id}: votes_deleted={result.votes_deleted} "
-                    f"skips_deleted={result.skips_deleted} skipped_rescannable={result.skipped_rescannable} "
-                    f"skipped_resolved_gate={len(gate_ids)} cards_resynced={result.cards_resynced}"
-                )
-                if gate_ids:
-                    self.stdout.write(
-                        f"    HUMAN REVIEW NEEDED - run_id={run_id}: {len(gate_ids)} card(s) refused "
-                        "retraction (currently a RESOLVED consensus - printing or NO_MATCH). Affected "
-                        f"card pks: {gate_ids[:50]}" + (" (truncated)" if len(gate_ids) > 50 else "")
-                    )
-
                 counters[run_id] = {
                     "votes_deleted": result.votes_deleted,
                     "skips_deleted": result.skips_deleted,
@@ -271,20 +288,45 @@ class Command(BaseCommand):
                 for key in totals:
                     totals[key] += counters[run_id][key]
 
-            self.stdout.write(
-                f"TOTALS: votes_deleted={totals['votes_deleted']} skips_deleted={totals['skips_deleted']} "
-                f"skipped_rescannable={totals['skipped_rescannable']} "
-                f"skipped_resolved_gate={totals['skipped_resolved_gate']} cards_resynced={totals['cards_resynced']}"
-            )
-            if dry_run:
-                self.stdout.write("Dry run - nothing deleted, no card resynced.")
-
+            # Counters-before-output (production incident 2026-07-23, see
+            # cardpicker.pilot_run_lifecycle's own module docstring point 1): the ledger row is
+            # saved COMPLETED here, BEFORE the terminal summary prints below - a BrokenPipeError on
+            # a severed stdout while printing that summary must never look like this run failed.
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()
-            ledger.counters = {"target_run_ids": target_run_ids, "per_run_id": counters, "totals": totals}
+            ledger.counters = merge_counters(
+                ledger.counters, {"target_run_ids": target_run_ids, "per_run_id": counters, "totals": totals}
+            )
             ledger.save(update_fields=["status", "finished_at", "counters"])
+
+            with resilient_terminal_output():
+                for run_id, result in per_run_id.items():
+                    gate_ids = result.skipped_resolved_gate_card_ids
+                    self.stdout.write(
+                        f"  run_id={run_id}: votes_deleted={result.votes_deleted} "
+                        f"skips_deleted={result.skips_deleted} skipped_rescannable={result.skipped_rescannable} "
+                        f"skipped_resolved_gate={len(gate_ids)} cards_resynced={result.cards_resynced}"
+                    )
+                    if gate_ids:
+                        self.stdout.write(
+                            f"    HUMAN REVIEW NEEDED - run_id={run_id}: {len(gate_ids)} card(s) refused "
+                            "retraction (currently a RESOLVED consensus - printing or NO_MATCH). Affected "
+                            f"card pks: {gate_ids[:50]}" + (" (truncated)" if len(gate_ids) > 50 else "")
+                        )
+
+                self.stdout.write(
+                    f"TOTALS: votes_deleted={totals['votes_deleted']} skips_deleted={totals['skips_deleted']} "
+                    f"skipped_rescannable={totals['skipped_rescannable']} "
+                    f"skipped_resolved_gate={totals['skipped_resolved_gate']} cards_resynced={totals['cards_resynced']}"
+                )
+                if dry_run:
+                    self.stdout.write("Dry run - nothing deleted, no card resynced.")
         except Exception:
-            ledger.status = PilotRunLedger.Status.FAILED
-            ledger.finished_at = timezone.now()
-            ledger.save(update_fields=["status", "finished_at"])
+            # Only a still-RUNNING row gets marked FAILED here - a run this invocation already
+            # marked COMPLETED above must never be overwritten by a later exception (e.g. from the
+            # terminal print, if resilient_terminal_output didn't already swallow it).
+            if ledger.status == PilotRunLedger.Status.RUNNING:
+                ledger.status = PilotRunLedger.Status.FAILED
+                ledger.finished_at = timezone.now()
+                ledger.save(update_fields=["status", "finished_at"])
             raise

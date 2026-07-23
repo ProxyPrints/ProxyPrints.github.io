@@ -2056,9 +2056,25 @@ default ON, `--no-shortcircuit`/`STAGE_C_NO_SHORTCIRCUIT` escape hatch) — see 
 "moderator-flag signal" write-up above for the companion correction (the marker withhold this
 item's own CRITICAL correction flagged is retired too, in the same PR) and
 `reparse_collector_evidence --selector proxy-marker-veto` for the matching re-scan tooling.
-Item 2 (the retraction-tooling slow-path-delete gap), item 3 (a code-enforced dry-run guard), and
-item 4 (the marker-absence compliance scan) remain unbuilt, owner-gated as this section originally
-scoped them.
+Item 2 (the retraction-tooling slow-path-delete gap) and item 4 (the marker-absence compliance
+scan) remain unbuilt, owner-gated as this section originally scoped them. Item 3 (a code-enforced
+dry-run guard) is now BUILT, as part of the Phase 0 rails pass (owner-approved post-harvest
+sequence, issue #362): every big write command with a dry-run mode (`local_calculate_verdicts`,
+`reparse_collector_evidence`, `retract_stage_d_by_run_id`, `run_image_evidence_cohort`,
+`consensus_recompute`) now refuses to write unless a matching COMPLETED dry-run `PilotRunLedger`
+row for the same command (and, where cheap to compute, the same scope — a `--card-ids-file` path,
+a `--selector`/`--stage-d-run-id` pair, a target `--run-id` set, a `--limit` cohort size) exists
+within a configurable recency window (default 48 hours), implemented once in
+`cardpicker/pilot_run_lifecycle.py` and wired into each command rather than reimplemented five
+times. `--skip-dryrun-check` overrides it for a genuine emergency and is always logged, both to
+stdout immediately and onto the run's own ledger row counters. The same pass also closed two
+related gaps: `consensus_recompute` gained its own self-recording ledger row (it previously had
+none at all), and every one of the five commands now saves its ledger row COMPLETED with its
+counters BEFORE printing its terminal summary, with that terminal print wrapped so a
+BrokenPipeError/IOError on a severed stdout can never flip an already-completed run to FAILED
+(the exact failure mode a 2026-07-23 production incident hit — a client-side timeout severed
+stdout after every write had already committed, and the terminal-phase exception it caused
+overwrote the ledger row's true COMPLETED status with FAILED and no counters).
 
 Queued behind Stage B per the paced task sequence (#145–149, #151, #160). Stage D
 carries a hard precondition: the pipeline-fidelity gate (task #151,
