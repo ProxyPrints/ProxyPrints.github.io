@@ -1,5 +1,7 @@
 import { expect, Page } from "@playwright/test";
 
+import { CHUNK_RELOAD_GUARD_KEY } from "@/common/chunkErrorRecovery";
+
 import { test } from "../playwright.setup";
 import { loadPageWithDefaultBackend } from "./test-utils";
 
@@ -25,6 +27,31 @@ const dispatchChunkError = (page: Page) =>
     );
   });
 
+// CI diagnosis (PR #395, run 30039392833, shard 1/4 - failed twice consecutively, including a
+// clean re-run, while passing locally): the recovery mechanism's own sessionStorage guard
+// (chunkErrorRecovery.ts's CHUNK_RELOAD_GUARD_KEY, a real 10s "don't loop" debounce, not a bug)
+// can legitimately already be set by the time a test gets around to dispatching its own synthetic
+// error. `npm run dev`'s webserver compiles /editor on demand (its own network trace showed a
+// second, ~800ms recompile of pages/editor.js mid-test, triggered by the navbar's own "Editor"
+// nav link - visible while already ON /editor - being prefetched by next/link's default viewport
+// IntersectionObserver behaviour), and that on-demand-compilation churn is exactly the class of
+// transient chunk hiccup this whole mechanism exists to recover from - it's plausible for a real
+// one to fire and consume the guard before a slow/cold CI runner's test body gets to its own
+// dispatch. This is a dev-server/test-harness artifact only: the deployed static export has no
+// on-demand compilation or HMR at all, so this can't happen in production, and the guard
+// suppressing a second reload within its window is the product working exactly as designed - see
+// docs/troubleshooting.md's chunkErrorRecovery.spec.ts entry. Clearing the guard immediately
+// before each test's own dispatch establishes the clean precondition the assertion actually means
+// to test ("a synthetic ChunkLoadError triggers exactly one reload"), independent of whatever
+// unrelated real chunk noise the dev server produced getting the page ready - it does not touch
+// the guard-suppression behaviour itself, which the last test below still exercises for real via
+// two dispatches inside the same clean window.
+const clearReloadGuard = (page: Page) =>
+  page.evaluate(
+    (key) => window.sessionStorage.removeItem(key),
+    CHUNK_RELOAD_GUARD_KEY
+  );
+
 test.describe("Chunk-load-error recovery", () => {
   test("a ChunkLoadError dispatched as a window 'error' event triggers a reload", async ({
     page,
@@ -36,6 +63,7 @@ test.describe("Chunk-load-error recovery", () => {
       await route.abort();
     });
 
+    await clearReloadGuard(page);
     await dispatchChunkError(page);
 
     await expect.poll(() => reloadRequests).toBe(1);
@@ -51,6 +79,7 @@ test.describe("Chunk-load-error recovery", () => {
       await route.abort();
     });
 
+    await clearReloadGuard(page);
     await page.evaluate(() => {
       const error = new Error("Loading CSS chunk 2 failed.");
       // PromiseRejectionEvent isn't constructible directly in most browsers - a plain object
@@ -95,11 +124,14 @@ test.describe("Chunk-load-error recovery", () => {
       await route.abort();
     });
 
+    await clearReloadGuard(page);
     await dispatchChunkError(page);
     await expect.poll(() => reloadRequests).toBe(1);
 
     // The aborted reload never completed, so the same document/listeners are still live -
     // dispatch a second chunk error and confirm the guard window suppresses a second attempt.
+    // (Deliberately no clearReloadGuard() call here - this second dispatch is exactly what's
+    // meant to hit the still-live guard from the first one above.)
     await dispatchChunkError(page);
     await page.waitForTimeout(1_000);
     expect(reloadRequests).toBe(1);
