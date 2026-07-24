@@ -1973,7 +1973,7 @@ const Rail = ({
             fontSize: 10,
             textTransform: "uppercase",
             letterSpacing: "0.05em",
-            color: "#8fa0b0",
+            color: "var(--theme-muted)",
             marginBottom: 5,
           }}
         >

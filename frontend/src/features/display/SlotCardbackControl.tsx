@@ -37,7 +37,7 @@ const Thumb = styled.div<{ $url: string | undefined }>`
   flex: 0 0 54px;
   width: 54px;
   aspect-ratio: 63 / 88;
-  border: 1px solid rgba(235, 235, 235, 0.15);
+  border: 1px solid rgba(var(--bs-body-color-rgb), 0.15);
   position: relative;
   background-color: #2a2320;
   background-image: ${(props) =>
@@ -70,12 +70,12 @@ const Meta = styled.div`
 
   .bname {
     font-size: 13px;
-    color: #ebebeb;
+    color: var(--bs-body-color);
   }
 
   .bsub {
     font-size: 11px;
-    color: #8fa0b0;
+    color: var(--theme-muted);
   }
 `;
 

@@ -43,34 +43,35 @@ const LazyQuestionFeed = dynamic(
 
 const ProgressBox = styled.div`
   margin-top: 12px;
-  background: #22303f;
-  border: 1px solid #16202b;
+  background: var(--theme-raised-bg);
+  border: 1px solid var(--theme-divider);
   padding: 10px 12px;
 `;
 
 const ProgressLabel = styled.div`
   font-size: 12px;
-  color: #ebebeb;
+  color: var(--bs-body-color);
   display: flex;
   justify-content: space-between;
   margin-bottom: 6px;
 
   .pfrac {
     font-variant-numeric: tabular-nums;
-    color: #8fa0b0;
+    color: var(--theme-muted);
   }
 `;
 
 const ProgressSub = styled.div<{ $done?: boolean }>`
   font-size: 11px;
-  color: ${(props) => (props.$done ? "#8fe08f" : "#8fa0b0")};
+  color: ${(props) =>
+    props.$done ? "var(--bs-success)" : "var(--theme-muted)"};
   margin-top: 6px;
 `;
 
 const SeamTag = styled.span`
   display: block;
   font-size: 11px;
-  color: #ffd76a;
+  color: var(--bs-warning);
   margin-top: 6px;
 `;
 
@@ -83,14 +84,14 @@ const SeamTag = styled.span`
 // `aria-busy="true"`, no `aria-valuenow`/`aria-valuemin`/`aria-valuemax` at all.
 const IndeterminateTrack = styled.div`
   height: 10px;
-  background: #16202b;
+  background: var(--theme-divider);
   overflow: hidden;
 `;
 
 const IndeterminateFill = styled.div`
   height: 100%;
   width: 100%;
-  background-color: #df6919;
+  background-color: var(--bs-primary);
   background-image: linear-gradient(
     45deg,
     rgba(255, 255, 255, 0.18) 25%,
@@ -198,8 +199,8 @@ export function PDFProgressBox({
 }
 
 const EmbedFrame = styled.div`
-  border: 1px solid #16202b;
-  background: #22303f;
+  border: 1px solid var(--theme-divider);
+  background: var(--theme-raised-bg);
   height: 100%;
   min-height: 420px;
   display: flex;
@@ -207,8 +208,8 @@ const EmbedFrame = styled.div`
 `;
 
 const EmbedHead = styled.div`
-  background: #2b3e50;
-  border-bottom: 1px solid #16202b;
+  background: var(--theme-band-bg);
+  border-bottom: 1px solid var(--theme-divider);
   padding: 8px 12px;
   display: flex;
   align-items: center;
@@ -218,7 +219,7 @@ const EmbedHead = styled.div`
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #df6919;
+    background: var(--bs-primary);
   }
 
   .h {
@@ -226,23 +227,24 @@ const EmbedHead = styled.div`
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #8fa0b0;
+    color: var(--theme-muted);
   }
 
   .lz {
     margin-left: auto;
     font-size: 10px;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     font-family: "Courier New", monospace;
   }
 `;
 
 const BuildRibbon = styled.div<{ $done?: boolean }>`
   background: #0b1520;
-  border-bottom: 1px solid #16202b;
+  border-bottom: 1px solid var(--theme-divider);
   padding: 6px 12px;
   font-size: 11px;
-  color: ${(props) => (props.$done ? "#8fe08f" : "#ebebeb")};
+  color: ${(props) =>
+    props.$done ? "var(--bs-success)" : "var(--bs-body-color)"};
   display: flex;
   align-items: center;
   gap: 8px;
@@ -250,13 +252,14 @@ const BuildRibbon = styled.div<{ $done?: boolean }>`
   .mini {
     flex: 1;
     height: 6px;
-    background: #16202b;
+    background: var(--theme-divider);
     overflow: hidden;
   }
 
   .mini .b {
     height: 100%;
-    background: ${(props) => (props.$done ? "#5cb85c" : "#df6919")};
+    background: ${(props) =>
+      props.$done ? "var(--bs-success)" : "var(--bs-primary)"};
   }
 `;
 
@@ -302,10 +305,10 @@ export function PDFWaitGameEmbed({
       <div
         style={{
           fontSize: 10,
-          color: "#8fa0b0",
+          color: "var(--theme-muted)",
           textAlign: "center",
           padding: "6px 12px",
-          borderTop: "1px solid #16202b",
+          borderTop: "1px solid var(--theme-divider)",
         }}
       >
         Each answer is submitted the instant you tap — leaving mid-card never
