@@ -157,6 +157,11 @@ class _DestinationLimiter:
         self._semaphore = threading.Semaphore(config.max_concurrency)
         self._request_count = 0
         self._window_start = time.monotonic()
+        # One Session per destination, reused for the life of the process (shared across every
+        # calling thread, same as the limiter itself - Session is thread-safe for concurrent use
+        # of a shared connection pool). Avoids paying a fresh TCP+TLS handshake on every fetch to
+        # the same host (audit finding: 2026-07-24 IO audit, finding 2).
+        self.session = requests.Session()
 
     @property
     def locked_out(self) -> bool:
@@ -250,7 +255,7 @@ def rate_limited_get(config: DestinationLimiterConfig, url: str, **kwargs: Any) 
     red-team review's "prove it holds" observability requirement."""
     limiter = get_limiter(config)
     with limiter.acquire():
-        response = requests.get(url, **kwargs)
+        response = limiter.session.get(url, **kwargs)
     if limiter._request_count % _LOG_EVERY_N_REQUESTS == 0:
         logger.info("%s: %d requests, current rate %.2f/s", config.name, limiter._request_count, limiter.current_rate())
     if response.status_code in config.lockout_status_codes:

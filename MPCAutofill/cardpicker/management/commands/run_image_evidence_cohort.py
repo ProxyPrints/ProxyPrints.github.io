@@ -845,8 +845,17 @@ class Command(BaseCommand):
                 )
 
                 # Step 2: resume filter - cards whose ImageEvidence row already has every manifest key.
+                # .iterator() (2026-07-24 IO audit finding 4): without it, Django caches the FULL
+                # result set (every ImageEvidence row's extractor_versions JSON blob) in memory
+                # before this loop can even start, instead of streaming via server-side cursor -
+                # matching Step 1's own rank_rows.iterator() just above, and worth being
+                # deliberate about given this exact command's own OOM history (see module
+                # docstring's "PARENT-PROCESS MEMORY LEAK" section) and that ImageEvidence is the
+                # fastest-growing table in this pipeline.
                 already_done_ids: set[int] = set()
-                for card_id, extractor_versions in ImageEvidence.objects.values_list("card_id", "extractor_versions"):
+                for card_id, extractor_versions in ImageEvidence.objects.values_list(
+                    "card_id", "extractor_versions"
+                ).iterator():
                     if MANIFEST_EXTRACTOR_KEYS.issubset(extractor_versions.keys()):
                         already_done_ids.add(card_id)
                 if already_done_ids:
