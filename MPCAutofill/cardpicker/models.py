@@ -1741,6 +1741,54 @@ class ImageEvidence(models.Model):
         return f"ImageEvidence card={self.card_id} content_hash={self.content_hash} extractors={sorted(self.extractor_versions)}"
 
 
+class QuestionFeedServedPool(models.TextChoices):
+    """Which side of `question_feed.py`'s >=51% mix-composition split a served question came
+    from - see `QuestionFeedServedLog`'s own docstring."""
+
+    LIKELY_RESOLVE = "likely_resolve", gettext_lazy("Likely resolve")
+    REMAINDER = "remainder", gettext_lazy("Remainder")
+
+
+class QuestionFeedServedLog(models.Model):
+    """
+    One row per `GET 2/questionFeed/` response that actually served a question - the mix-
+    composition record `cardpicker.question_feed`'s >=51%-likely-resolve serving policy
+    requires (2026-07-24 data brief, SOUNDNESS NOTE: "Recommend ... log served-mix composition
+    (ratio + family/reason per served question) per session, so a future audit can correlate
+    click latency/agreement-rate against a session's easy-question exposure" - see
+    docs/features/printing-tags.md's "Unified question feed" section for the full citation).
+    This is a selection-layer bias-conditioning record ONLY - it is never read by
+    `vote_consensus.resolve_weighted_consensus` or any consensus computation, and writing a
+    row here changes no vote's weight, threshold, or gate. Append-only, same convention as
+    `CardScanLog` (a durable audit trail, not a mutated cache) - the serving path's own read of
+    this table (`question_feed._served_mix_ratio`) is a cheap two-count aggregate over
+    `anonymous_id`, not a full-row scan.
+
+    `pool` records which side of the mix split this item came from;`question_type` mirrors
+    `QuestionFeedItem.type` (e.g. "confirm_suggestion"/"identify_printing"/"artist"/"tag");
+    `origin_reason` is a short, human-readable tag for which specific ranked-order rule matched
+    (e.g. "printing_one_vote_from_resolving", "tier_2_contested", "tier_4_quick_negative_to_
+    review", "tier_4_fresh") - free text rather than a closed enum, since the ranked order
+    itself is expected to keep evolving (see this module's own module-level TextChoices for
+    values that ARE meant to be a closed set; this one deliberately isn't).
+    """
+
+    anonymous_id = models.CharField(max_length=40, db_index=True)
+    pool = models.CharField(max_length=16, choices=QuestionFeedServedPool.choices)
+    question_type = models.CharField(max_length=32)
+    origin_reason = models.CharField(max_length=64, blank=True, default="")
+    served_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # explicit name (rather than Django's default hash-derived one) so the migration below
+        # can be hand-written and verified against this file without needing a live `makemigrations`
+        # run to discover what hash Django would have picked.
+        indexes = [models.Index(fields=["anonymous_id", "served_at"], name="qf_served_log_anon_served_idx")]
+
+    def __str__(self) -> str:
+        return f"anonymous_id={self.anonymous_id} pool={self.pool} question_type={self.question_type}"
+
+
 __all__ = [
     "Faces",
     "CardTypes",
@@ -1764,4 +1812,6 @@ __all__ = [
     "UserCryptoProfile",
     "LandsAmbiguousResidue",
     "ImageEvidence",
+    "QuestionFeedServedPool",
+    "QuestionFeedServedLog",
 ]
