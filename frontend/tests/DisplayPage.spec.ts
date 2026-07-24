@@ -953,8 +953,9 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // leaving the sheet showing one fewer filled slot, which is what this test actually checks.
     await importTextOnEditorLanding(page, "2x my search query");
     await page.getByTestId("page-preview-slot").first().click();
-    // Rail-delegacy round (item 7/RD5) - Slot Actions is unconditionally visible inside the
-    // bottom control stack now, no accordion header to expand first.
+    // Rail-delegacy round (item 7/RD5), editor-polish item 4 (REV RD5) - Slot Actions is
+    // unconditionally visible in the rail head's own compact icon row now (no accordion header
+    // to expand first, and no longer part of the bottom control stack at all).
 
     await expect(
       page.getByTestId("page-preview-slot").locator("img")
@@ -1025,6 +1026,53 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("card-slot-context-menu")).not.toBeVisible();
+  });
+
+  // EP6/item 6/E24 (SPEC-editor-polish.md §D.8 `.slot-flip`, N) - the sheet's own reserved
+  // top-right corner flip button: gated to filled cells (same "nothing to act on" reasoning as
+  // the cue's own gate), doesn't open the rail or the context menu, and swaps that ONE slot's
+  // own rendered image without touching any other slot or the project's selection state.
+  test("the sheet's ⟲ flip button swaps only that slot's own rendered face, without opening the rail or the context menu", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    // 2 slots, not 1 - same precedent as the Slot Actions Delete test above: need a SECOND,
+    // untouched filled slot to prove the flip is scoped to the one it was clicked on.
+    await importTextOnEditorLanding(page, "2x my search query");
+    await expect(page.getByTestId("display-rail-idle")).toBeVisible();
+
+    const slots = page.getByTestId("page-preview-slot");
+    const firstSlot = slots.first();
+    const secondSlot = slots.nth(1);
+    const firstSrcBefore = await firstSlot.locator("img").getAttribute("src");
+    const secondSrcBefore = await secondSlot.locator("img").getAttribute("src");
+
+    const flip = firstSlot.getByTestId("page-preview-slot-flip");
+    await flip.click();
+
+    // Neither the rail nor the context menu opened - the flip click is scoped to itself
+    // (stopPropagation), same discipline as the cue.
+    await expect(page.getByTestId("display-rail-idle")).toBeVisible();
+    await expect(page.getByTestId("card-slot-context-menu")).toHaveCount(0);
+
+    // This fixture's own slots carry no distinct back art (front-only text import) - flipping
+    // swaps the slot to its own genuinely-empty back face, so the front <img> disappears from
+    // THAT slot; the untouched second slot's own front image is unaffected either way.
+    await expect(firstSlot.locator("img")).toHaveCount(0);
+    await expect(secondSlot.locator("img")).toHaveAttribute(
+      "src",
+      secondSrcBefore ?? ""
+    );
+    expect(firstSrcBefore).not.toBeNull();
+
+    // Flipping back restores the original front image.
+    await firstSlot.getByTestId("page-preview-slot-flip").click();
+    await expect(firstSlot.locator("img")).toHaveAttribute(
+      "src",
+      firstSrcBefore ?? ""
+    );
   });
 
   // Issue #267 (design doc ADDENDUM D12/F9/F10, owner's locked comment on #267) - the one
@@ -1250,7 +1298,7 @@ test.describe("DisplayPage - phone viewport (issue #266)", () => {
   // reachable by scrolling the 72vh bottom sheet all the way down - the exact regression the
   // spec's own §A note flags (`.lrail`'s inline `flex:0 0 380px` misread as a HEIGHT inside the
   // drawer's column flow, capping the sheet before it could reach the control stack).
-  test("the bottom control stack (Print options / Slot actions / Report) is reachable by scrolling the 72vh bottom sheet at phone width", async ({
+  test("the bottom control stack (Print options / Report) is reachable by scrolling the 72vh bottom sheet at phone width, and the relocated Slot Actions row (rail head, EP4) is reachable too", async ({
     page,
     network,
   }) => {
@@ -1266,12 +1314,20 @@ test.describe("DisplayPage - phone viewport (issue #266)", () => {
     await page.getByTestId("page-preview-slot").first().click();
     await expect(page.getByTestId("display-rail")).toBeInViewport();
 
+    // EP4 (SPEC-editor-polish.md §D.7, REV RD5) - Slot Actions relocated to the rail head's own
+    // compact icon row; it's no longer part of the bottom control stack at all.
+    await expect(
+      page
+        .getByTestId("display-rail-header")
+        .getByTestId("display-slot-actions-section")
+    ).toBeVisible();
+
     const controlStack = page.getByTestId("display-control-stack");
     await controlStack.scrollIntoViewIfNeeded();
     await expect(controlStack).toBeVisible();
     await expect(
       controlStack.getByTestId("display-slot-actions-section")
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(controlStack.getByTestId("report-card-button")).toBeVisible();
   });
 

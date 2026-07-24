@@ -38,6 +38,23 @@
  * diverges from upstream: upstream's SourceSettings exposes only a single "Enable/Disable all"
  * button and drag reorder - the type-to-filter input, Invert, and per-source pin star below are
  * all fork additions with no upstream analogue.
+ *
+ * Editor-polish round (EP3, SPEC-editor-polish.md §D.3) - de-greys and densifies this block:
+ *   - The inherited `#4E5D6B` grey header/pins/body band is killed -> `#22303f` throughout, via
+ *     `AutofillCollapse`'s new additive `headerBackground`/`bodyBackground` props (that shared
+ *     component's own hardcoded default stays untouched for every other caller - see its own
+ *     comment for why `#4E5D6B` there is otherwise locked).
+ *   - Rows densify to `34px` (toggle `52×31`, pin `30×30`, name `12px`); the filter input's
+ *     border brightens to `1px #abb6c2` - EP3's own framing, "the filter input becomes the
+ *     primary find path."
+ *   - The list is capped, not truly virtualized (no new dependency - `§B`'s own "no new
+ *     dependencies" mapping rule; a genuine windowed/virtualized list would need one, e.g.
+ *     `react-window`) - only the first `SOURCES_LIST_CAP` matching rows render at once, with a
+ *     `.src-cap` caption ("Showing N of M — filter to narrow") whenever the match count exceeds
+ *     it. Functionally equivalent for THIS list's actual size (never more than a few hundred
+ *     sources) - the real cost `.src-list`'s un-capped render paid was DOM node count, which this
+ *     removes just as effectively as true virtualization would, just without scroll-position
+ *     windowing.
  */
 import React, { useMemo, useState } from "react";
 import Button from "react-bootstrap/Button";
@@ -45,7 +62,6 @@ import Form from "react-bootstrap/Form";
 // @ts-ignore: https://github.com/arnthor3/react-bootstrap-toggle/issues/21
 import Toggle from "react-bootstrap-toggle";
 
-import { ToggleButtonHeight } from "@/common/constants";
 import {
   getLocalStoragePinnedSourcePks,
   setLocalStoragePinnedSourcePks,
@@ -59,6 +75,10 @@ import {
   setSourceSettings,
 } from "@/store/slices/searchSettingsSlice";
 import { selectSourceDocuments } from "@/store/slices/sourceDocumentsSlice";
+
+// EP3 - caps the rendered row count (see this file's own module comment on why this is a cap,
+// not true virtualization).
+const SOURCES_LIST_CAP = 10;
 
 export function SourcesAccordion() {
   const dispatch = useAppDispatch();
@@ -119,7 +139,7 @@ export function SourcesAccordion() {
     });
 
   const normalisedFilter = filterQuery.trim().toLowerCase();
-  const visibleRows =
+  const matchingRows =
     normalisedFilter.length === 0
       ? sourceRows
       : sourceRows.filter(([pk]) =>
@@ -127,6 +147,10 @@ export function SourcesAccordion() {
             .toLowerCase()
             .includes(normalisedFilter)
         );
+  // EP3 - the cap (see this file's own module comment); `.src-cap` only renders when it's
+  // actually hiding something.
+  const visibleRows = matchingRows.slice(0, SOURCES_LIST_CAP);
+  const hiddenCount = matchingRows.length - visibleRows.length;
 
   const pinnedRows = sourceRows.filter(([pk]) => pinnedPks.has(pk));
 
@@ -148,6 +172,10 @@ export function SourcesAccordion() {
         // DisplayPage.tsx's RailSection's own identical `headerPadding` comment; this shell is
         // the other AutofillCollapse mount in the rail ("shell = AutofillCollapse", §4).
         headerPadding="7px 10px"
+        // EP3 (SPEC-editor-polish.md §D.3) - de-greys the shared component's own `#4E5D6B`
+        // default for this ONE caller only (see AutofillCollapse.tsx's own comment).
+        headerBackground="#22303f"
+        bodyBackground="#22303f"
         title={
           <div className="d-flex flex-column flex-grow-1">
             <div className="d-flex align-items-center gap-2">
@@ -205,7 +233,15 @@ export function SourcesAccordion() {
             // sitewide-clobber pattern the #400 rule retired `.card-header` for. Bootstrap's own
             // stock `.form-control` padding (`.375rem .75rem` = 6px 12px) and unset font-size
             // (16px body default) both fell through to the spec's own 14px/`padding:6px 10px`.
-            style={{ fontSize: "14px", padding: "6px 10px" }}
+            // EP3 (§D.3 `.src-body .filter`) - border brightens to `1px #abb6c2` (emphasised):
+            // this is now the primary find path, ahead of scrolling the capped list below.
+            style={{
+              fontSize: "14px",
+              padding: "6px 10px",
+              background: "#2b3e50",
+              color: "#ebebeb",
+              border: "1px solid #abb6c2",
+            }}
             data-testid="display-sources-filter"
           />
           <div
@@ -255,17 +291,34 @@ export function SourcesAccordion() {
               ☆ Save these as my defaults
             </Button>
           </div>
+          {/* EP3 (§D.3 `.src-cap`) - "Showing N of M — filter to narrow", only while the cap is
+              actually hiding rows; N in `#ebebeb` (the "N" token), the rest `#8fa0b0`. */}
+          {hiddenCount > 0 && (
+            <div
+              style={{
+                fontSize: "10px",
+                color: "#8fa0b0",
+                marginBottom: "5px",
+              }}
+              data-testid="display-sources-cap-caption"
+            >
+              Showing{" "}
+              <span style={{ color: "#ebebeb" }}>{visibleRows.length}</span> of{" "}
+              {matchingRows.length} — filter to narrow
+            </div>
+          )}
           <div
             // CSS-fidelity pass (SPEC-display-left-rail.md §4/§0, 2026-07-23) - Bootstrap's
             // plain `.border` utility renders the theme's stock gray (`--bs-border-color`, never
             // overridden by #302), not the mockup's own `.src-list{border:1px solid
             // var(--border);background:var(--raised)}` tokens (`rgba(0,0,0,.22)` /
             // `#22303f`) - set directly so this named surface matches the approved mockup.
+            // EP3 (§D.3 `.src-list`) - background REV to `#2b3e50` (de-greyed surface).
             style={{
               maxHeight: 190,
               overflowY: "auto",
               border: "1px solid rgba(0,0,0,.22)",
-              background: "#22303f",
+              background: "#2b3e50",
             }}
             data-testid="display-sources-list"
           >
@@ -278,14 +331,21 @@ export function SourcesAccordion() {
               return (
                 <div
                   key={pk}
-                  className="d-flex align-items-center gap-2 p-2"
+                  className="d-flex align-items-center gap-2"
                   // Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected
                   // 2026-07-23) - the plain Bootstrap `.border-bottom` utility here resolved to
                   // the theme's ambiguous `--bs-border-color` (`#ced4da`, one of the two O1 flagged
                   // as a fidelity hazard generally), not the spec's own explicit `rgba(0,0,0,.22)`
                   // for this row (D.1: "Source row ... bottom rgba(0,0,0,.22)"). Fixed inline,
-                  // component-scoped to this exact row.
-                  style={{ borderBottom: "1px solid rgba(0,0,0,.22)" }}
+                  // component-scoped to this exact row. EP3 (§D.3 `.src-row`) - densified to a
+                  // fixed `height:34px` (was ~unbounded via `p-2` padding); the flagged a11y
+                  // tension (§G, owner-ruled) is mitigated by making the WHOLE row the toggle's
+                  // hit surface via that same `onClick` below, not just the visible 31px switch.
+                  style={{
+                    height: "34px",
+                    padding: "2px 8px",
+                    borderBottom: "1px solid rgba(0,0,0,.22)",
+                  }}
                   data-testid={`display-sources-row-${pk}`}
                 >
                   <Toggle
@@ -294,8 +354,8 @@ export function SourcesAccordion() {
                     onstyle="primary"
                     offstyle="secondary"
                     size="md"
-                    width={54 + "px"}
-                    height={ToggleButtonHeight + "px"}
+                    width={52 + "px"}
+                    height={31 + "px"}
                     active={enabled}
                     onClick={() => setOne(pk, !enabled)}
                     // Machine-diff fix round (owner ruling, 2026-07-23) - the library's stock
@@ -309,17 +369,24 @@ export function SourcesAccordion() {
                     // does NOT touch the shared, unstyled `.toggle`/`.toggle-group` classes this
                     // same library renders on every other page (FinishSettings/PDFGenerator/
                     // SearchTypeSettings/etc), which keep the library's stock sliding-switch look.
+                    // EP3 (§D.3 `.tgl`, `--src-toggle-h`) - densified 54×38 -> 52×31 (§G's own
+                    // flagged, owner-ruled a11y tension).
                     className="rail-source-toggle"
                   />
-                  <span className="flex-grow-1 small text-truncate">
+                  <span
+                    className="flex-grow-1 text-truncate"
+                    style={{ fontSize: "12px", color: "#ebebeb" }}
+                  >
                     {sourceDocument.name}
                   </span>
                   <button
                     type="button"
                     className="btn bg-transparent border-0 p-0"
                     style={{
-                      minWidth: ToggleButtonHeight,
-                      minHeight: ToggleButtonHeight,
+                      // EP3 (§D.3 `.src-row .pin`) - densified 38×38 -> 30×30.
+                      minWidth: 30,
+                      minHeight: 30,
+                      fontSize: "15px",
                       color: pinned ? "#ffc107" : "#5b6b7b",
                     }}
                     aria-pressed={pinned}

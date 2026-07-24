@@ -255,12 +255,33 @@ already offered exactly as it always was for any slot.
 - **Per-surface consent ruling** (owner's second security-review round):
   self-import/own saved decks allowed by default; shared decks viewed by
   others deny-by-default behind an explicit per-deck recipient opt-in with
-  a reversible "Hide" control. **Only the editor/self-import surface is
-  wired up in this pass** — `SharedDeckViewer.tsx` and any other read-only
-  viewer were not touched, so they simply don't synthesize orphan
-  CardDocuments at all yet (safe-by-omission: deny-by-default is the
-  correct posture there, just not yet built as an explicit opt-in flow).
-  Building that opt-in UI is future work, not a regression.
+  a reversible "Hide" control. **SHIPPED (editor-polish round, item 11,
+  2026-07-24)** — `SharedDeckViewer.tsx` now synthesizes orphan awareness
+  for a shared-deck recipient (still NOT a full `synthesizeOrphanCardDocument`
+  merge into Redux — this component stays local-state-only, per its own
+  module comment — just enough to detect a face whose `selectedImage`
+  passes `isLikelyDriveFileId` but wasn't resolved by `APIGetCards`, the
+  same "unindexed by this catalog" orphan definition Phase 1 already
+  uses): a `useConsentToast` prompt keyed `shared-deck-orphans:${shareId}`
+  (per-DECK, not per-identifier or global — a second shared deck asks
+  independently even in the same session), deny-by-default (decline or
+  dismiss both leave every orphan face behind a `🔒 External image hidden` placeholder, and NOTHING is fetched — not even the direct-Google
+  URL is built — until the recipient opts in), and a persistent "N
+  external images hidden — Review"/"Hide" banner for the reversibility
+  the base `useConsentToast` `Promise<boolean>` contract doesn't natively
+  offer (the banner's own local `imagesRevealed` boolean is independent
+  of the toast's one-shot stored decision — flipping it back and forth
+  never re-prompts or touches `sessionStorage`). The revealed image uses
+  `getOrphanSmallImageURL` directly (orphanCard.ts) — still never routed
+  through the image-CDN Worker/R2 bucket, same posture as the editor's own
+  orphan rendering. Test coverage: `SharedDeckViewer.test.tsx` (jest/RTL,
+  not Playwright — this is a plain local-state component with no
+  `PagePreview` sheet/rail chrome to drive through a page-load E2E flow).
+  **Still not built**: any OTHER read-only viewer this catalog might grow
+  later inherits nothing automatically — this is `SharedDeckViewer.tsx`
+  specifically, not a shared hook/component other future recipient
+  surfaces can mount directly (a real gap if a second such surface is
+  ever added, flagged here rather than silently assumed-covered).
 - **Bleed normalization for orphans**: `PDF.tsx`'s
   `isBleedNormalizationEligible` still gates on `sourceType === GoogleDrive || sourceType === LocalFile`, which an orphan (no
   `sourceType`) never matches — an orphan's PDF embed uses the plain
@@ -310,6 +331,14 @@ already offered exactly as it always was for any slot.
   `ParsedXmlImport`'s new `cardback` field and `parseXMLFile`'s gated
   `setSelectedCardback` dispatch, fixing the Common Cardback panel bug (see
   "Rendering surfaces & acceptance" above).
+- `frontend/src/features/savedDecks/SharedDeckViewer.tsx` — (editor-polish
+  round, item 11, 2026-07-24) the shared-deck recipient's own orphan
+  detection + consent gate (`isOrphanFace`, the `useConsentToast` mount,
+  the `HiddenOrphanBadge`/`ExtBanner` presentation) — see "Per-surface
+  consent ruling" above for the full behaviour.
+- `frontend/src/features/savedDecks/SharedDeckPage.tsx` — threads the
+  route's own `shareId` query param into `SharedDeckViewer`'s `shareId`
+  prop (the per-deck consent-key scope).
 - Tests: `orphanCard.test.ts`, `processing.test.ts` (bracket-token cases),
   `listenerMiddleware.test.ts` (both the per-slot AND, as of 2026-07-23, the
   project-cardback listener), `ImportXML.test.ts` (front + the b:null
@@ -321,4 +350,7 @@ already offered exactly as it always was for any slot.
   (both reported symptoms, end to end, on the unified `/display` page as of
   the 2026-07-23 acceptance-surface correction, with screenshots, plus the
   sheet's own `orphan-badge` assertions and a dedicated narrow-viewport case
-  added in the same follow-up).
+  added in the same follow-up), and (editor-polish round, item 11)
+  `SharedDeckViewer.test.tsx` (jest/RTL — consent prompt, decline-hides,
+  accept-reveals, the reversible banner toggle, and the per-deck-id
+  independence case).

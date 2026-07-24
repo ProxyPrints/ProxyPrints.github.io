@@ -409,6 +409,58 @@ described above.
   `onSlotContextMenu` (every other `PagePreview` caller, e.g.
   `PDFGenerator`'s fast preview), renders with zero behavior change —
   no cue, no long-press handlers, the browser's native menu untouched.
+  **Editor-polish round (EPcue, SPEC-editor-polish.md §D.8, 2026-07-24)**:
+  the cue grows `20×20` → `26×26` (glyph `13px` → `17px`), higher-contrast
+  (`rgba(11,21,32,.92)` bg, `1.5px #abb6c2` border, `#fff` glyph,
+  drop-shadow) so it reads over card art, and its render gate tightens
+  from "a context menu is wired" alone to "the slot holds a card **and**
+  a context menu is wired" — an empty slot now shows no cue at all. The
+  same round also ships the `⟲` flip button this bullet's own "future
+  selection-checkbox/flip button" note anticipated: top-right corner,
+  same `26×26` sizing/reveal behaviour as the cue, an additive
+  `onSlotFlip?(index)` prop plus a SEPARATE `content.flippable` flag
+  (deliberately independent of `content.imageUrl` — gating the flip
+  button on the CURRENTLY-effective face's own image, the same way the
+  cue is gated, would strand a user the moment they flip to a face with
+  no art of its own, since the very button that let them flip would
+  vanish along with the image). `DisplayPage.tsx` tracks a per-slot
+  `flippedPreviewSlots` set (sheet-local, preview-only — never touches
+  `activeFace`/selection state) so flipping one slot never affects any
+  other slot or the project's own Fronts/Backs view setting.
+- <a id="ghost-tile-thumbnail"></a>**Ghost tile gains a thumbnail + `+N`
+  (EP1, SPEC-editor-polish.md §D.4, 2026-07-24)**: the "+N more
+  copies"/"Show fewer" ghost tile (the "already-link-styled" control the
+  bullet above this one references) used to be a plain dashed empty box
+  with text. It now renders the first hidden copy's own
+  `smallThumbnailUrl`, dimmed (`rgba(11,21,32,.62)` overlay), with a
+  centred `+N` and a "more copies" caption — a real preview of what's
+  being compressed, not just a bare count. Only the EXPAND ("+N") ghost
+  gets this treatment (`GhostThumb`/`GhostDim`/`GhostPlus`/`GhostCap`,
+  `SelectVersionResults.tsx`); the COLLAPSE ("−") ghost stays plain text
+  (nothing to preview there). Border REV: `1px rgba(235,235,235,.15)`
+  (was `1px dashed #abb6c2`).
+- <a id="data-driven-sort"></a>**Data-driven Sort (EP7, SPEC-editor-polish.md
+  §D.4, REVISES RD2, 2026-07-24)**: the `.sortsel` `Form.Select` on the
+  `layout="stacked"` (funnel/rail) surface stops being the backend-driven
+  6-option `SortByOptions` list (`search.sortBy`/`dateCreatedDescending`
+  etc. — that select is untouched on the OTHER, `layout="sidebar"`/modal
+  path, which never had a funnel to begin with) and becomes a
+  client-side comparator over fields the response already carries: **
+  Confirmation status** (`canonicalCard` → `suggestedCanonicalCard` →
+  neither), **Resolution (DPI) high→low**, **File size low→high**,
+  **Pinned sources first** (reads the SAME `getLocalStoragePinnedSourcePks`
+  helper `SourcesAccordion.tsx` writes, re-read fresh on every Sort
+  change — not reactively synced mid-render if a pin is toggled
+  elsewhere in the rail without reselecting the ordering), and **Name
+  (A→Z)**. Only reorders the TOP-LEVEL canonical/non-canonical/unknown
+  groups — `selectVersionGrouping.ts`'s own section ordering and each
+  group's internal representative/rest ordering are untouched. "Community
+  vote weight" (the dispatch's original seventh ordering) needs a
+  per-card numeric weight the response doesn't carry yet
+  (`suggestedCanonicalCardConfidence` is a currently-always-`undefined`
+  seam) — owner-ruled (amendment 2, the same round): ship the five now,
+  render NOTHING for vote-weight until that seam lands (no disabled
+  placeholder).
 - **Open items, not resolved here (owner call needed)**: (1) group 2's
   sub-order beyond "frame type first" — this build picked
   `altered-frame > custom-art > ai-art`
