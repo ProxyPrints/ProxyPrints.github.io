@@ -15,7 +15,7 @@ import Table from "react-bootstrap/Table";
 // @ts-ignore: https://github.com/arnthor3/react-bootstrap-toggle/issues/21
 import Toggle from "react-bootstrap-toggle";
 
-import { ToggleButtonHeight } from "@/common/constants";
+import { CompactToggleHeight, SourceToggleWidth } from "@/common/constants";
 import {
   SourceDocument,
   SourceRow as SourceRowType,
@@ -64,9 +64,9 @@ const SourceRow = ({
           offClassName="flex-centre prevent-select"
           onstyle="primary"
           offstyle="secondary"
-          size="md"
-          width={80 + "%"}
-          height={ToggleButtonHeight + "px"}
+          size="sm"
+          width={SourceToggleWidth + "px"}
+          height={CompactToggleHeight + "px"}
           active={enabled}
           onClick={() => toggleSpecificSourceActiveStatus(index)}
         />
@@ -208,10 +208,20 @@ export function SourceSettings({
   if (maybeSourceDocuments != null) {
     sourceTable = (
       <DragDropProvider onDragEnd={onDragEnd}>
-        <Table variant="secondary" style={{ tableLayout: "auto" }}>
+        <Table
+          size="sm"
+          style={{
+            tableLayout: "auto",
+            fontSize: 14,
+            // dark panel tokens per the approved /display theme - not Bootstrap's
+            // grey "secondary" table variant (the pre-2026-07-24 look)
+            backgroundColor: "#22303f",
+            border: "1px solid rgba(0,0,0,.22)",
+          }}
+        >
           {/* TODO: migrate this to AutofillTable at some point? too big a job for right now. */}
           <thead>
-            <tr style={{ height: ToggleButtonHeight + "px" }}>
+            <tr style={{ height: CompactToggleHeight + "px" }}>
               <th className="prevent-select">Active</th>
               <th className="prevent-select">Name</th>
               <th />
@@ -262,7 +272,7 @@ export function SourceSettings({
         </>
       )}
       <div className="d-grid gap-0 mt-3">
-        <Button variant="primary" onClick={toggleAllSourceActiveness}>
+        <Button size="sm" variant="primary" onClick={toggleAllSourceActiveness}>
           {anySourcesActive ? "Disable" : "Enable"} all drives
         </Button>
       </div>

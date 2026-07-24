@@ -11,7 +11,7 @@ import Container from "react-bootstrap/Container";
 // @ts-ignore: https://github.com/arnthor3/react-bootstrap-toggle/issues/21
 import Toggle from "react-bootstrap-toggle";
 
-import { NSFW_TAG_NAME, ToggleButtonHeight } from "@/common/constants";
+import { CompactToggleHeight, NSFW_TAG_NAME } from "@/common/constants";
 import { FilterSettings } from "@/common/schema_types";
 
 interface MatureContentFilterProps {
@@ -48,9 +48,9 @@ export function MatureContentFilter({
         offClassName="flex-centre"
         onstyle="warning"
         offstyle="info"
-        width={100 + "%"}
-        size="md"
-        height={ToggleButtonHeight + "px"}
+        width={"100%"}
+        size="sm"
+        height={CompactToggleHeight + "px"}
         active={showingMatureContent}
       />
     </Container>

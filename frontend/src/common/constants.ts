@@ -95,6 +95,12 @@ export const Back: Faces = "back";
 export const NavPillButtonHeight = 40; // pixels
 export const NavUnderlineButtonHeight = 42; // pixels
 export const ToggleButtonHeight = 38; // pixels
+// Compact metrics for dense filter panels (grid-selector modal, search settings):
+// Bootstrap sm control height so full-width toggle bars stay short in narrow panels.
+// The 38px ToggleButtonHeight above stays the binding value for the
+// /display rail's source toggles (SPEC-display-left-rail.md) - do not conflate them.
+export const CompactToggleHeight = 31; // pixels
+export const SourceToggleWidth = 88; // pixels
 // The tag name behind the default mature-content exclusion. Must match the backend's
 // cardpicker/constants.py NSFW constant - it's the same string filename-bracket tagging
 // writes into Card.tags and the seeded sensitive tag uses (docs/features/moderation.md).

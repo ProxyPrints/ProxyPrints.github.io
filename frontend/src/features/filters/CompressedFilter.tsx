@@ -2,7 +2,7 @@ import Form from "react-bootstrap/Form";
 // @ts-ignore: https://github.com/arnthor3/react-bootstrap-toggle/issues/21
 import Toggle from "react-bootstrap-toggle";
 
-import { ToggleButtonHeight } from "@/common/constants";
+import { CompactToggleHeight } from "@/common/constants";
 
 interface CompressedFilterProps {
   compressed: boolean;
@@ -24,9 +24,9 @@ export const CompressedFilter = ({
         offClassName="flex-centre"
         onstyle="info"
         offstyle="success"
-        width={100 + "%"}
-        size="md"
-        height={ToggleButtonHeight + "px"}
+        width={"100%"}
+        size="sm"
+        height={CompactToggleHeight + "px"}
         active={compressed}
       />
     </>

@@ -9,7 +9,7 @@ import Container from "react-bootstrap/Container";
 // @ts-ignore: https://github.com/arnthor3/react-bootstrap-toggle/issues/21
 import Toggle from "react-bootstrap-toggle";
 
-import { ToggleButtonHeight } from "@/common/constants";
+import { CompactToggleHeight } from "@/common/constants";
 import { SearchTypeSettings as SearchTypeSettingsType } from "@/common/types";
 
 interface SearchTypeSettingsProps {
@@ -44,9 +44,9 @@ export function SearchTypeSettings({
         offClassName="flex-centre"
         onstyle="success"
         offstyle="info"
-        width={100 + "%"}
-        size="md"
-        height={ToggleButtonHeight + "px"}
+        width={"100%"}
+        size="sm"
+        height={CompactToggleHeight + "px"}
         active={searchTypeSettings.fuzzySearch}
       />
       {enableFiltersApplyToCardbacks && (
@@ -66,9 +66,9 @@ export function SearchTypeSettings({
             offClassName="flex-centre"
             onstyle="success"
             offstyle="info"
-            width={100 + "%"}
-            size="md"
-            height={ToggleButtonHeight + "px"}
+            width={"100%"}
+            size="sm"
+            height={CompactToggleHeight + "px"}
             active={searchTypeSettings.filterCardbacks}
           />
         </>
