@@ -2803,6 +2803,15 @@ likely extends Part 1's existing `PilotRunLedger` rather than a new
 model. Applies to the shared runner, so Stage C golden runs and the
 fidelity replay inherit it for free.
 
+The batch-run contract above is fully specified and its kill-test has
+passed in production (see the crash-drill note earlier in this
+section); extending the same four-piece contract to a continuous
+streaming operating mode (trigger, work granularity, backpressure,
+consensus-recompute placement, the human-backed gate in a continuous
+world, observability) is designed in
+[`docs/proposals/stage-e-streaming.md`](../proposals/stage-e-streaming.md)
+(issue #153, HOLD pending owner review) — not restated here.
+
 ---
 
 ## Part 5 — Residual classification (existing tags only)
