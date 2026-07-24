@@ -223,6 +223,17 @@ directly.
   own Node (v24.11.1 as of `v1.57.0`) isn't the version this repo's other CI
   jobs use. Bumping the pinned Playwright version means bumping this image
   tag in lockstep in both workflow files.
+- `coverage-delta.yml` (issue #415, incident #389: the `/editor` route swap
+  skipped ~190 Playwright tests in one commit and CI stayed green) runs on
+  every `pull_request` with no path filter, pure stdlib Python, no
+  container/`npm ci` needed — `.github/scripts/coverage_delta.py` statically
+  parses `frontend/tests/**/*.spec.ts` test titles + skip state at head and
+  at the PR's merge-base (`git show`, never a `git checkout`), and fails
+  when a title present at base is gone or newly skipped at head unless
+  `.github/coverage-acks.txt` carries a matching
+  `coverage-ack: <test id or glob> — <reason>` line (same tether discipline
+  as `docs_lint.py`'s in-file `ALLOWLIST`). New tests and un-skipping are
+  always fine.
 
 ## Push policy
 

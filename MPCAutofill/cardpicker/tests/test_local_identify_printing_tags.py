@@ -1100,6 +1100,129 @@ class TestOcrAmbiguousSplit:
         assert result.skip_reason == "ambiguous"
 
 
+class TestOcrSetCodeLexiconGate:
+    """2026-07-23, issue #370's own recorded follow-up - the deferred item local_calculate_
+    verdicts.py's own module docstring used to flag ("known_set_codes() below is written so that
+    engine's own selection loop could reuse it directly in a focused follow-up"). run_ocr_for_card's
+    own "parsed-but-no-match" outcome (TestOcrAmbiguousSplit above) now only keeps that label -
+    which run_pilot's write loop casts a real, confident is_no_match=True vote from
+    (TestOcrNoMatchVoteCasting) - when at least one tried variant's parsed set_code is a REAL
+    CanonicalExpansion code (or None, the pre-M15 collector-number-only case). An out-of-lexicon
+    set_code demotes the outcome to "unknown-set-code" (abstain, same non-rescannable treatment
+    as "no-text") instead - the exact same criterion local_calculate_verdicts.calculate_join_key_
+    verdict's own SET-CODE LEXICON GATE already applies to the stored-evidence join-key
+    calculator."""
+
+    def test_lexicon_invalid_set_code_abstains_as_unknown_set_code(self, db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+
+        card = CardFactory(name="Forest")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        # a genuine collector-number-shaped read, but the set code ("fak") isn't a real one.
+        monkeypatch.setattr(module.local_ocr, "run_tesseract", lambda image: "999/287 R FAK EN")
+
+        result = module.run_ocr_for_card(selected, Image.new("RGB", (750, 1050)), known_set_codes=frozenset({"mom"}))
+        assert result.vote is None
+        assert result.skip_reason == "unknown-set-code"
+
+    def test_lexicon_valid_set_code_still_casts_parsed_but_no_match(self, db, monkeypatch):
+        import cardpicker.local_identify_printing_tags as module
+
+        card = CardFactory(name="Forest")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        # "mom" is a real set code (this card's own candidate's own code) but the NUMBER
+        # doesn't match anything - a genuine parsed-but-no-match, not lexicon noise.
+        monkeypatch.setattr(module.local_ocr, "run_tesseract", lambda image: "999/287 R MOM EN")
+
+        result = module.run_ocr_for_card(selected, Image.new("RGB", (750, 1050)), known_set_codes=frozenset({"mom"}))
+        assert result.vote is None
+        assert result.skip_reason == "parsed-but-no-match"
+
+    def test_collector_number_only_parse_unaffected_by_gate(self, db, monkeypatch):
+        """The pre-M15 collector-number-only case (no set-code-shaped token found at all) is
+        deliberately UNAFFECTED by the lexicon gate - the same carve-out
+        calculate_join_key_verdict's own gate uses (its own module docstring: "the gate only
+        ever applies when a set-code-shaped token was actually found")."""
+        import cardpicker.local_identify_printing_tags as module
+
+        card = CardFactory(name="Forest")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        # a bare collector number, no set code at all - "999" never matches "158".
+        monkeypatch.setattr(module.local_ocr, "run_tesseract", lambda image: "999")
+
+        result = module.run_ocr_for_card(
+            selected, Image.new("RGB", (750, 1050)), known_set_codes=frozenset()  # empty lexicon
+        )
+        assert result.vote is None
+        assert result.skip_reason == "parsed-but-no-match"
+
+    def test_known_set_codes_none_disables_the_gate(self, db, monkeypatch):
+        """No known_set_codes threaded through (the default - an older/direct caller) reproduces
+        the exact pre-2026-07-23 behavior: every parsed-but-no-match outcome keeps its label
+        regardless of set_code validity."""
+        import cardpicker.local_identify_printing_tags as module
+
+        card = CardFactory(name="Forest")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        monkeypatch.setattr(module.local_ocr, "run_tesseract", lambda image: "999/287 R FAK EN")
+
+        result = module.run_ocr_for_card(selected, Image.new("RGB", (750, 1050)))
+        assert result.vote is None
+        assert result.skip_reason == "parsed-but-no-match"
+
+    def test_one_lexicon_valid_variant_among_several_keeps_parsed_but_no_match(self, db, monkeypatch):
+        """Multiple preprocessing variants can read differently - ONE lexicon-valid no-match
+        parse is enough to keep the real "parsed-but-no-match" label, even if another variant's
+        read was lexicon-invalid noise (mirrors test_ambiguous_on_one_preprocessing_variant_wins_
+        over_no_match_on_another's own "any real signal wins" precedent above)."""
+        import cardpicker.local_identify_printing_tags as module
+
+        card = CardFactory(name="Forest")
+        candidates = [CandidatePrinting(pk=1, expansion_code="mom", collector_number="158")]
+        selected = module.SelectedCard(card=card, candidates=candidates)
+
+        texts = iter(["999/287 R FAK EN", "999/287 R MOM EN"])
+        monkeypatch.setattr(module.local_ocr, "run_tesseract", lambda image: next(texts))
+
+        result = module.run_ocr_for_card(selected, Image.new("RGB", (750, 1050)), known_set_codes=frozenset({"mom"}))
+        assert result.vote is None
+        assert result.skip_reason == "parsed-but-no-match"
+
+    def test_run_pilot_threads_known_set_codes_end_to_end(self, db, monkeypatch):
+        """Integration: run_pilot itself builds known_set_codes() once (a real DB query against
+        CanonicalExpansion) and threads it through _compute_card/run_ocr_for_card - without
+        stubbing run_ocr_for_card itself, an out-of-lexicon set_code must abstain (a CardScanLog
+        row, skip_reason="unknown-set-code") rather than casting a confident is_no_match vote."""
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        # "mom" is the ONLY real lexicon entry for this test - the card's own candidate is tied
+        # to it, but the stub OCR read below deliberately parses a DIFFERENT, out-of-lexicon code.
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="mom"))
+        card = CardFactory(name="Forest")
+
+        # a genuine collector-number-shaped read whose set code ("fak") is real-looking noise,
+        # not a real CanonicalExpansion.code.
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "999/287 R FAK EN")
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050)))
+
+        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert not CardPrintingTag.objects.filter(card=card).exists()
+        row = CardScanLog.objects.get(card=card, anonymous_id=OCR_ANONYMOUS_ID)
+        assert row.skip_reason == "unknown-set-code"
+        assert results["ocr"].no_match_votes_written == 0
+        assert results["ocr"].skip_counts["unknown-set-code"] == 1
+
+
 class TestPhashThresholdAndMargin:
     def test_clear_winner_within_threshold_and_margin(self):
         candidate_a = CandidatePrinting(pk=1, expansion_code="mom", collector_number="1")
@@ -1272,7 +1395,7 @@ class TestRunPilotAgreementAndDisagreement:
 
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             )
@@ -1301,7 +1424,7 @@ class TestRunPilotAgreementAndDisagreement:
 
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing_a.pk, confidence=0.85, detail="raw")
             )
@@ -1329,7 +1452,7 @@ class TestRunPilotAgreementAndDisagreement:
 
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             )
@@ -1364,7 +1487,7 @@ class TestUncoveredPrintingsClosed:
 
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             )
@@ -1381,7 +1504,7 @@ class TestUncoveredPrintingsClosed:
 
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             )
@@ -1590,7 +1713,7 @@ class TestRunPilotSourceExclusion:
 
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             )
@@ -1622,7 +1745,7 @@ class TestCheckpointing:
     def _wire_fake_ocr(monkeypatch, printing_pk):
         import cardpicker.local_identify_printing_tags as module
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing_pk, confidence=0.85, detail="raw")
             )
@@ -1866,7 +1989,7 @@ class TestIdempotence:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             ),
         )
@@ -1892,7 +2015,9 @@ class TestScanLog:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(skip_reason="no-text"),
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
+                skip_reason="no-text"
+            ),
         )
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
@@ -1915,7 +2040,7 @@ class TestScanLog:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             ),
         )
@@ -1959,7 +2084,9 @@ class TestScanLog:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(skip_reason="no-text"),
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
+                skip_reason="no-text"
+            ),
         )
         # image now "fetches" (a real tiny image - classify_bleed_edge needs .size, not a bare
         # object) - this also makes fallback newly eligible to run (it requires image is not
@@ -1995,7 +2122,13 @@ class TestScanLog:
                 return None  # unfetchable-image every time - genuinely transient
             return Image.new("RGB", (10, 10))  # real image - run_ocr_for_card below is also monkeypatched
 
-        def per_card_ocr_result(selected: object, image: object, crop_box: object, bleed_class: object = None):
+        def per_card_ocr_result(
+            selected: object,
+            image: object,
+            crop_box: object,
+            bleed_class: object = None,
+            known_set_codes: object = None,
+        ):
             card_id = selected.card.pk  # type: ignore[attr-defined]
             if card_id == voted_card.pk:
                 return module.OcrCardResult(
@@ -2038,7 +2171,9 @@ class TestOcrNoMatchVoteCasting:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(skip_reason="parsed-but-no-match"),
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
+                skip_reason="parsed-but-no-match"
+            ),
         )
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
@@ -2055,7 +2190,7 @@ class TestOcrNoMatchVoteCasting:
         # bookkeeping needed (same idempotence mechanism a positive vote already relies on)
         assert select_candidates("ocr") == []
 
-    @pytest.mark.parametrize("skip_reason", ["no-text", "ambiguous", "unfetchable-image"])
+    @pytest.mark.parametrize("skip_reason", ["no-text", "ambiguous", "unfetchable-image", "unknown-set-code"])
     def test_pure_abstention_reasons_never_cast_is_no_match(self, db, monkeypatch, skip_reason):
         CanonicalCardFactory(name="Forest")
         card = CardFactory(name="Forest")
@@ -2064,7 +2199,9 @@ class TestOcrNoMatchVoteCasting:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(skip_reason=skip_reason),
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
+                skip_reason=skip_reason
+            ),
         )
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
@@ -2090,7 +2227,7 @@ class TestOcrNoMatchVoteCasting:
 
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(
                     engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="158/281 R MOM EN"
@@ -2118,7 +2255,7 @@ class TestOcrNoMatchVoteCasting:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing_a.pk, confidence=0.85, detail="a")
             ),
         )
@@ -2148,7 +2285,11 @@ class TestFallbackNoMatchVoteCasting:
     def _wire_pass_1_miss_and_fallback(module, fallback_outcome, image=None):
         image = image or Image.new("RGB", (750, 1050), (5, 5, 5))
         monkeypatch_targets = [
-            (module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()),
+            (
+                module,
+                "run_ocr_for_card",
+                lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
+            ),
             (
                 module,
                 "run_phash_for_card",
@@ -2251,7 +2392,9 @@ class TestFallbackNoMatchVoteCasting:
 
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "Illus. Marie Magny")
         monkeypatch.setattr(
-            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
         )
         monkeypatch.setattr(
             module,
@@ -2440,7 +2583,9 @@ class TestPass2Wiring:
         # real binary reading it accurately; this mirrors what it would extract.
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "Illus. Marie Magny")
         monkeypatch.setattr(
-            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
         )
         monkeypatch.setattr(
             module,
@@ -2483,7 +2628,7 @@ class TestPass2Wiring:
         # detect_illus_anchor() call must not depend on the real binary being present to do so.
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(
                     engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="158/281 R MOM EN"
@@ -2518,7 +2663,9 @@ class TestPass2Wiring:
 
         monkeypatch.setattr(module.local_fallback, "run_fallback_for_card", fail_if_called)
         monkeypatch.setattr(
-            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
         )
         monkeypatch.setattr(
             module,
@@ -2552,7 +2699,7 @@ class TestGroundTruthAttributeVotes:
         # real read would find anyway; see the identical note on TestPass2Wiring above.
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(
                     engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="158/281 R MOM EN"
@@ -2593,7 +2740,9 @@ class TestGroundTruthAttributeVotes:
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
         monkeypatch.setattr(
-            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
         )
         monkeypatch.setattr(
             module,
@@ -2622,7 +2771,7 @@ class TestGroundTruthAttributeVotes:
         # no real tesseract binary in CI - see the identical note on the sibling test above
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
-        def fake_ocr(selected, image, crop_box, bleed_class=None):
+        def fake_ocr(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             return module.OcrCardResult(
                 vote=module.EngineVote(
                     engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="158/281 R MOM EN"
@@ -2658,7 +2807,9 @@ class TestBleedEdgeVotesEndToEnd:
 
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
         monkeypatch.setattr(
-            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
         )
         monkeypatch.setattr(
             module,
@@ -2685,7 +2836,9 @@ class TestBleedEdgeVotesEndToEnd:
 
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
         monkeypatch.setattr(
-            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
         )
         monkeypatch.setattr(
             module,
@@ -2711,7 +2864,9 @@ class TestBleedEdgeVotesEndToEnd:
 
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
         monkeypatch.setattr(
-            module, "run_ocr_for_card", lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult()
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
         )
         monkeypatch.setattr(
             module,
@@ -2939,7 +3094,7 @@ class TestClusterDedup:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             ),
         )
@@ -2984,7 +3139,7 @@ class TestClusterDedup:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             ),
         )
@@ -3025,7 +3180,7 @@ class TestClusterDedup:
 
         ocr_called_for_card_ids: list[int] = []
 
-        def recording_run_ocr_for_card(selected, image, crop_box, bleed_class=None):
+        def recording_run_ocr_for_card(selected, image, crop_box, bleed_class=None, known_set_codes=None):
             ocr_called_for_card_ids.append(selected.card.pk)
             return module.OcrCardResult()
 
@@ -3063,7 +3218,7 @@ class TestClusterDedup:
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None: module.OcrCardResult(
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
                 vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             ),
         )

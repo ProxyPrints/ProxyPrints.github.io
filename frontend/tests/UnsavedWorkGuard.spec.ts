@@ -8,7 +8,10 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "./test-utils";
+import {
+  importTextOnEditorLanding,
+  loadPageWithDefaultBackend,
+} from "./test-utils";
 
 const threeCardHandlers = [
   cardDocumentsThreeResults,
@@ -26,16 +29,23 @@ const threeCardHandlers = [
 // target route's JS chunk failed to fetch. This file covers both the happy path (no false
 // positive on a normal transition) and the guard's own genuine-exit behavior (still fires for a
 // real reload), so a regression on either side is caught.
+//
+// Proposal H switchover (2026-07-23, issues #231/#272) note: the original editor -> /display
+// nav-link transition this first test exercised no longer exists as a cross-page hop (/editor now
+// IS the unified page, /display only redirects there). The same class of client-side transition
+// this test protects against still exists on the unified page itself though - the Finish
+// footer's "Print / Export ->" button (PrePrintSaveGate.tsx) does a real client-side
+// `router.push("/print")` while cards are present, so that's the transition exercised below now.
 test.describe("Unsaved-work guard (priority bug fix)", () => {
   test.describe.configure({ timeout: 60_000 });
 
-  test("editor -> /display with cards selected does not show any dialog, and the same deck renders on arrival", async ({
+  test("editor -> /print with cards selected does not show any dialog, and the deck's cards are the ones sent to print", async ({
     page,
     network,
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
+    await importTextOnEditorLanding(page, "my search query");
 
     let dialogAppeared = false;
     page.on("dialog", (dialog) => {
@@ -43,18 +53,18 @@ test.describe("Unsaved-work guard (priority bug fix)", () => {
       void dialog.dismiss();
     });
 
-    await page.getByRole("link", { name: "Editor" }).click();
+    await page.getByTestId("finish-footer-print-export").click();
 
     // A real navigation, not just a same-page state change - waitForURL fails outright if the
     // click never actually left /editor, which is exactly the failure mode a regression here
-    // would produce.
-    await page.waitForURL("**/display");
-    await expect(page.getByTestId("display-page")).toBeVisible();
-    // Same deck, not an empty /display that merely happened not to show a dialog - the store
-    // genuinely survived the transition, matching the client-side-nav diagnosis. D1/D4/D5/D6
-    // (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + Borderless margins +
-    // 3.175mm bleed + D18's spacing lands the spec's own 4x2 (8) grid.
-    await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
+    // would produce. Generous explicit timeout - /print's first on-demand dev-mode compile
+    // (@react-pdf/renderer transitively, via FinishedMyProject/PDFGenerator) is slow, the same
+    // documented cost DisplayPage.spec.ts's own describe.configure covers for /display's first
+    // hit; see DisplayFinishFooter.spec.ts's own comment for the same finding against this route.
+    await page.waitForURL("**/print", { timeout: 30_000 });
+    // Same deck, not an empty print page that merely happened not to show a dialog - the store
+    // genuinely survived the transition, matching the client-side-nav diagnosis.
+    await expect(page.getByTestId("print-page-empty-state")).toHaveCount(0);
 
     expect(dialogAppeared).toBe(false);
   });
@@ -65,7 +75,7 @@ test.describe("Unsaved-work guard (priority bug fix)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
+    await importTextOnEditorLanding(page, "my search query");
 
     let dialogType: string | null = null;
     page.on("dialog", (dialog) => {

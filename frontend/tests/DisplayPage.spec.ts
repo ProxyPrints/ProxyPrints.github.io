@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 import { http, HttpResponse } from "msw";
 
+import { PinnedSourcesKey } from "@/common/constants";
 import { computeSearchQueryHashKey } from "@/common/processing";
 import { CardType } from "@/common/schema_types";
 import {
@@ -31,7 +32,7 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  importText,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
   openSearchSettingsModal,
 } from "./test-utils";
@@ -40,11 +41,10 @@ const threeCardHandlers = [
   cardDocumentsThreeResults,
   sourceDocumentsOneResult,
   searchResultsThreeResults,
-  // The Attributes rail section (AutofillCollapse keeps every section mounted, not just the
-  // expanded one - same reason ChooseImageSection's own search fires unconditionally on slot
-  // select) fetches tag consensus the moment a slot is selected, whether or not the user ever
-  // opens Attributes - every test below that selects a slot needs this mocked, not just the
-  // ones that expand the section.
+  // Rail-delegacy round - the standalone Attributes accordion that used to fetch tag consensus
+  // unconditionally on slot select is gone (RD1/O1); this mock stays registered defensively for
+  // any test that opens the D14 identify panel (item 6, `PrintingTagsBlock`'s own consensus
+  // fetch), which several tests below still do.
   tagConsensusTwoUnresolvedTags,
   ...defaultHandlers,
 ];
@@ -157,8 +157,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     await expect(
@@ -179,8 +178,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await page.getByTestId("page-preview-slot").first().click();
 
@@ -201,7 +199,12 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       page.getByTestId("display-rail-content").getByAltText(cardDocument1.name)
     ).toBeVisible();
     await expect(page.getByRole("button", { name: /Filters/ })).toBeVisible();
-    await expect(page.getByTestId("attribute-chip-Full Art")).not.toBeVisible();
+    // Rail-delegacy round - the funnel's Border/Frame/Treatment chips now live INSIDE the one
+    // Filters panel (closed by default), not in a separate always-visible/collapsible Attributes
+    // accordion (which is gone entirely, RD1).
+    await expect(
+      page.getByTestId("funnel-treatment-chip-Full Art")
+    ).not.toBeVisible();
   });
 
   test("selecting a candidate image in Select Version updates the sheet's slot immediately", async ({
@@ -210,8 +213,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     const sheetSlot = page.getByTestId("page-preview-slot").first();
     await sheetSlot.click();
@@ -235,8 +237,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
     await page.getByTestId("page-preview-slot").first().click();
 
     const candidateCard = page
@@ -264,23 +265,32 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     expect(hasNestedScrollAncestor).toBe(false);
   });
 
-  test("clicking a collapsed section's header expands it", async ({
+  // Rail-delegacy round (item 1/RD6, SPEC-rail-delegacy.md) - the old "Card Details" grey
+  // AutofillCollapse section is gone; its metadata block now lives in the rail-head's "More
+  // details" disclosure instead.
+  test("clicking 'More details' expands the rail-head metadata disclosure", async ({
     page,
     network,
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
     await page.getByTestId("page-preview-slot").first().click();
 
-    await page
-      .getByRole("heading", { name: "Attributes", exact: true })
-      .click();
-    await expect(page.getByTestId("attribute-chip-Full Art")).toBeVisible();
+    await expect(
+      page.getByTestId("display-rail-more-details-body")
+    ).toBeHidden();
+    await page.getByTestId("display-rail-more-details-toggle").click();
+    await expect(
+      page.getByTestId("display-rail-more-details-body")
+    ).toBeVisible();
   });
 
-  test("selecting a different slot resets the accordion back to its default (Choose Image open again)", async ({
+  // Rail-delegacy round - the old "selecting a different slot resets the accordion" coverage now
+  // exercises the two disclosures that actually remain: rail-head "More details" and the D14
+  // identify panel (item 6). Both reset to closed on a slot swap, same as the retired accordion
+  // did, since `Rail` fully remounts per slot (DisplayPage.tsx's own `key` on `Rail`).
+  test("selecting a different slot resets 'More details' and the identify panel back to closed", async ({
     page,
     network,
   }) => {
@@ -289,21 +299,25 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // 2 slots, not 1 - clicking a grid position with no real project slot behind it (this
     // page's own click handler ignores those, since there's nothing there to select) would
     // leave the previous selection in place and falsely pass this test either way.
-    await importText(page, "2x my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "2x my search query");
 
     const slots = page.getByTestId("page-preview-slot");
     await slots.first().click();
-    await page
-      .getByRole("heading", { name: "Attributes", exact: true })
-      .click();
-    await expect(page.getByTestId("attribute-chip-Full Art")).toBeVisible();
+    await page.getByTestId("display-rail-more-details-toggle").click();
+    await page.getByTestId("display-identify-toggle").click();
+    await expect(
+      page.getByTestId("display-rail-more-details-body")
+    ).toBeVisible();
+    await expect(page.getByTestId("display-identify-body")).toBeVisible();
 
-    // Selecting the other real slot swaps the rail's whole subtree - Attributes should be back
-    // to collapsed, not still expanded from the last slot. Select Version (always open, E2/E3)
-    // still shows its candidate tile regardless.
+    // Selecting the other real slot swaps the rail's whole subtree - both disclosures should be
+    // back to collapsed, not still expanded from the last slot. Select Version (always open,
+    // E2/E3) still shows its candidate tile regardless.
     await slots.nth(1).click();
-    await expect(page.getByTestId("attribute-chip-Full Art")).not.toBeVisible();
+    await expect(
+      page.getByTestId("display-rail-more-details-body")
+    ).toBeHidden();
+    await expect(page.getByTestId("display-identify-body")).toBeHidden();
     await expect(
       page.getByTestId("display-rail-content").getByAltText(cardDocument1.name)
     ).toBeVisible();
@@ -315,8 +329,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByText("Showing: Fronts")).toBeVisible();
     await page.getByText("Showing: Fronts").click();
@@ -329,8 +342,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     const guidesToggle = page.getByLabel("Guides");
     await expect(guidesToggle).toBeChecked();
@@ -352,8 +364,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
 
@@ -386,8 +397,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     const settingsModal = await openSearchSettingsModal(page);
@@ -439,8 +449,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // A plain text query with no explicit back face falls back to the project cardback - the
     // fetchCardbacks.fulfilled listener (listenerMiddleware.ts) auto-selects the first cardback
     // in the list once cardbacksTwoResults resolves, so this starts on cardDocument1.
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     await page.getByText("Showing: Fronts").click();
@@ -477,8 +486,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     await page.getByTestId("display-export-menu-toggle").click();
@@ -491,7 +499,11 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     ).toBeVisible();
   });
 
-  test("the requested-printing badge shows the plain style for a resolved, non-degraded printing-specific import", async ({
+  // Rail-delegacy round (rev #2/RD7, SPEC-rail-delegacy.md) - `RequestedPrintingBadge` now
+  // mounts in the rail-head with `showOnlyOnMismatch`: a resolved, non-degraded printing-specific
+  // import (requested == resolved) shows NOTHING here any more - the canonical printing id
+  // already lives once, in the D14 band - instead of the old always-shown "plain style" badge.
+  test("the rail-head shows no mismatch flag for a resolved, non-degraded printing-specific import (the id already lives once, in D14)", async ({
     page,
     network,
   }) => {
@@ -503,18 +515,20 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 Lightning Bolt (2ED) 162");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 Lightning Bolt (2ED) 162");
     await page.getByTestId("page-preview-slot").first().click();
 
-    const badge = page.getByTestId("requested-printing-badge");
-    await expect(badge).toBeVisible();
-    await expect(badge).toContainText("2ED 162");
-    await expect(badge).toHaveAttribute("data-degraded", "false");
-    await expect(badge).not.toHaveAttribute("title");
+    await expect(page.getByTestId("requested-printing-badge")).toHaveCount(0);
+    // D14 shows the same "2ED · 162" identity instead - deduped, not silently dropped.
+    await expect(page.getByTestId("display-confidence-element")).toContainText(
+      "2ED"
+    );
   });
 
-  test("the requested-printing badge switches to a distinct degraded style - verified via actual computed styles, not just class names - when the backend reports the printing filter as degraded", async ({
+  // Rail-delegacy round (rev #2/RD7) - a genuine mismatch (the backend degraded the printing
+  // filter, so the resolved card differs from what was requested) still shows the flag, now as
+  // the single `.mismatch` warning-coloured style (not a "plain vs. degraded" two-look badge).
+  test("the rail-head shows the mismatch flag - verified via actual computed styles, not just class names - when the resolved printing differs from what was requested", async ({
     page,
     network,
   }) => {
@@ -526,21 +540,22 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 my search query (XYZ) 999");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 my search query (XYZ) 999");
     await page.getByTestId("page-preview-slot").first().click();
 
     const badge = page.getByTestId("requested-printing-badge");
     await expect(badge).toBeVisible();
     await expect(badge).toContainText("XYZ 999");
     await expect(badge).toHaveAttribute("data-degraded", "true");
-    await expect(badge).toHaveAttribute("title", /closest available match/);
-    await expect(badge.locator("i.bi-exclamation-triangle-fill")).toBeVisible();
+    await expect(badge).toHaveAttribute(
+      "title",
+      "Requested printing differs from the resolved printing"
+    );
 
     // Bootswatch's Superhero theme hardcodes some component colors past the CSS-variable layer
     // (the theming caveat from PR #91) - reading getComputedStyle is the only way to actually
     // confirm the browser renders a distinct, visibly-warning color here, rather than trusting
-    // that the bg-warning class "should" look right from its definition alone.
+    // that the class name "should" look right from its definition alone.
     const backgroundColor = await badge.evaluate(
       (element) => getComputedStyle(element).backgroundColor
     );
@@ -574,8 +589,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 8 (xyz) 001");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 8 (xyz) 001");
     await page.getByTestId("page-preview-slot").first().click();
 
     const d14 = page.getByTestId("display-confidence-element");
@@ -636,8 +650,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 13");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 13");
     await page.getByTestId("page-preview-slot").first().click();
 
     const d14 = page.getByTestId("display-confidence-element");
@@ -675,8 +688,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 1\n1 card 2\n1 card 3");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 1\n1 card 2\n1 card 3");
     await page.getByTestId("page-preview-slot").first().click();
 
     const accordion = page.getByTestId("display-sources-accordion");
@@ -731,6 +743,57 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(page.getByTestId("display-sources-pin-chip-0")).toBeVisible();
   });
 
+  // SPEC-display-left-rail.md §E.3/owner answer #5 (2026-07-23) - the pin is deliberately
+  // device-local `localStorage` (`getLocalStoragePinnedSourcePks`/`setLocalStoragePinnedSourcePks`,
+  // common/cookies.ts) until #353's account-tied backend lands; this is the "survives a real
+  // reload" half PDFGenerator.spec.ts's own bleed-override persistence test already establishes
+  // the pattern for in this codebase.
+  test("a pinned source persists to localStorage and survives a reload, independent of the (non-persisting) in-memory project", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsThreeResults,
+      sourceDocumentsThreeResults,
+      searchResultsThreeResults,
+      tagConsensusTwoUnresolvedTags,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1 card 1\n1 card 2\n1 card 3");
+    await page.getByTestId("page-preview-slot").first().click();
+
+    await page.getByTestId("display-sources-summary-label").click();
+    await page.getByTestId("display-sources-pin-1").click();
+    await expect(page.getByTestId("display-sources-pin-chip-1")).toContainText(
+      "Source 2"
+    );
+
+    await expect
+      .poll(() =>
+        page.evaluate((key) => localStorage.getItem(key), PinnedSourcesKey)
+      )
+      .toBe(JSON.stringify([1]));
+
+    // A fresh navigation rather than page.reload() - see PDFGenerator.spec.ts's own identical
+    // comment for why. The in-memory project doesn't itself persist across reload today, so this
+    // re-imports the same three cards from scratch; the point is that the PIN survives even
+    // though the project (and thus SourcesAccordion's own remount) doesn't carry any React state
+    // forward - only localStorage does.
+    await page.goto("/editor?server=http://127.0.0.1:8000", {
+      waitUntil: "domcontentloaded",
+    });
+    await importTextOnEditorLanding(page, "1 card 1\n1 card 2\n1 card 3");
+    await page.getByTestId("page-preview-slot").first().click();
+
+    // No click on the pin needed this time - it's sourced from localStorage on mount
+    // (`useState(() => new Set(getLocalStoragePinnedSourcePks()))`, SourcesAccordion.tsx), and the
+    // pinned strip is visible even before the accordion is ever expanded.
+    await expect(page.getByTestId("display-sources-pin-chip-1")).toContainText(
+      "Source 2"
+    );
+  });
+
   test("a slot with no resolved image shows its query text on the sheet instead of a blank hole (item 1, owner's hands-on review)", async ({
     page,
     network,
@@ -742,8 +805,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "an unfindable card");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "an unfindable card");
 
     const sheetSlot = page.getByTestId("page-preview-slot").first();
     await expect(sheetSlot.locator("img")).toHaveCount(0);
@@ -761,8 +823,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + Borderless
     // margins + 3.175mm bleed + D18's spacing now lands the spec's own 4x2 (8/sheet) grid. 18
     // slots at 8-per-sheet chunks into 3 sheets: 8, 8, 2.
-    await importText(page, "18x my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "18x my search query");
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     const sheetWrappers = page.getByTestId("display-sheet-wrapper");
@@ -801,47 +862,17 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
   // Proposal H pane migration, left-panel unification (issue #164) - the four rail sections that
   // were stubs before this pass: Attributes, Print Options, Artist, Slot Actions.
-
-  test("the Attributes section casts a real tag vote when a chip is tapped", async ({
-    page,
-    network,
-  }) => {
-    let submittedTagName: string | undefined;
-    network.use(
-      cardDocumentsThreeResults,
-      sourceDocumentsOneResult,
-      searchResultsThreeResults,
-      tagConsensusTwoUnresolvedTags,
-      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
-        const body = (await request.json()) as { tagName: string };
-        submittedTagName = body.tagName;
-        return HttpResponse.json(
-          {
-            tagName: body.tagName,
-            resolvedPolarity: 1,
-            netPolarity: 1,
-            tally: [{ polarity: 1, count: 1 }],
-          },
-          { status: 200 }
-        );
-      }),
-      ...defaultHandlers
-    );
-    await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
-    await page.getByTestId("page-preview-slot").first().click();
-    await page
-      .getByRole("heading", { name: "Attributes", exact: true })
-      .click();
-
-    const chip = page.getByTestId("attribute-chip-Full Art");
-    await expect(chip).toHaveAttribute("data-chip-state", "untouched");
-    await chip.click();
-
-    await expect(chip).toHaveAttribute("data-chip-state", "positive");
-    await expect.poll(() => submittedTagName).toBe("Full Art");
-  });
+  //
+  // DROPPED (rail-delegacy round, RD1/O1, SPEC-rail-delegacy.md): "the Attributes section casts a
+  // real tag vote when a chip is tapped" - AttributesSection.tsx (the standalone `.achip`
+  // explicit-vote fieldset this test drove via `useTagVoting`/`submitTagVote`) is SCRAPPED
+  // outright, not relocated - the funnel's own Border/Frame/Treatment chips (already covered by
+  // DisplayLeftRailFidelity.spec.ts and SelectVersionSection.spec.ts) are the one surviving chip
+  // surface, and they are FILTER-then-IMPLICIT-vote-on-pick, never a direct `submitTagVote` tap.
+  // Explicit attribute voting now lives ONLY in the D14 identify follow-up's
+  // `AttributeVotingPanel` (rendered by `PrintingTagsBlock`, mounted here as the identify panel's
+  // body) - that component keeps its own pre-existing coverage elsewhere (it is unforked, unmoved
+  // logic), so no new test is owed for it by this rewrite.
 
   test("the Print Options section shows a bleed override select for an eligible (Google Drive) card", async ({
     page,
@@ -855,13 +886,11 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 8 (xyz) 001");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 8 (xyz) 001");
     await page.getByTestId("page-preview-slot").first().click();
-    await page
-      .getByRole("heading", { name: "Print Options", exact: true })
-      .click();
 
+    // Rail-delegacy round (item 7/RD5) - Print Options is unconditionally visible inside the
+    // bottom control stack now, no accordion header to expand first.
     const select = page.getByTestId(
       `bleed-override-select-${cardDocument8.identifier}`
     );
@@ -884,8 +913,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 8 (xyz) 001");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 8 (xyz) 001");
     await page.getByTestId("page-preview-slot").first().click();
 
     // Plain (non-linked) credit line names the artist.
@@ -898,8 +926,13 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     // The support link itself now visibly names its destination and reads as a real button
     // (btn-outline-primary btn-sm), not a bare orange hotlink - the artist's own name moved to
-    // the plain credit line above.
-    const link = page.getByTestId("artist-support-link");
+    // the plain credit line above. Rail-delegacy round - scoped to the promoted `.artist-line`
+    // specifically: the "More details" disclosure's `CardMetaTable` also renders its own
+    // Canonical Artist row with the same `artist-support-link` testid (a second, legitimate
+    // mount of the same shared component, not a duplicate bug - see CardMetaTable.tsx).
+    const link = page
+      .getByTestId("display-artist-section")
+      .getByTestId("artist-support-link");
     await expect(link).toBeVisible();
     await expect(link).toContainText("Support on MTG Artist Connection");
     await expect(link).toHaveClass(/btn-outline-primary/);
@@ -918,12 +951,11 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // 2 slots, not 1 - deleting the only slot in the project would make it empty and swap the
     // whole page to the empty-state view (a different, already-covered case) rather than
     // leaving the sheet showing one fewer filled slot, which is what this test actually checks.
-    await importText(page, "2x my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "2x my search query");
     await page.getByTestId("page-preview-slot").first().click();
-    await page
-      .getByRole("heading", { name: "Slot Actions", exact: true })
-      .click();
+    // Rail-delegacy round (item 7/RD5), editor-polish item 4 (REV RD5) - Slot Actions is
+    // unconditionally visible in the rail head's own compact icon row now (no accordion header
+    // to expand first, and no longer part of the bottom control stack at all).
 
     await expect(
       page.getByTestId("page-preview-slot").locator("img")
@@ -945,8 +977,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "2x my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "2x my search query");
 
     const slot = page.getByTestId("page-preview-slot").first();
     await expect(
@@ -980,8 +1011,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     // The rail starts idle (no slot selected yet).
     await expect(page.getByTestId("display-rail-idle")).toBeVisible();
@@ -996,6 +1026,53 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("card-slot-context-menu")).not.toBeVisible();
+  });
+
+  // EP6/item 6/E24 (SPEC-editor-polish.md §D.8 `.slot-flip`, N) - the sheet's own reserved
+  // top-right corner flip button: gated to filled cells (same "nothing to act on" reasoning as
+  // the cue's own gate), doesn't open the rail or the context menu, and swaps that ONE slot's
+  // own rendered image without touching any other slot or the project's selection state.
+  test("the sheet's ⟲ flip button swaps only that slot's own rendered face, without opening the rail or the context menu", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    // 2 slots, not 1 - same precedent as the Slot Actions Delete test above: need a SECOND,
+    // untouched filled slot to prove the flip is scoped to the one it was clicked on.
+    await importTextOnEditorLanding(page, "2x my search query");
+    await expect(page.getByTestId("display-rail-idle")).toBeVisible();
+
+    const slots = page.getByTestId("page-preview-slot");
+    const firstSlot = slots.first();
+    const secondSlot = slots.nth(1);
+    const firstSrcBefore = await firstSlot.locator("img").getAttribute("src");
+    const secondSrcBefore = await secondSlot.locator("img").getAttribute("src");
+
+    const flip = firstSlot.getByTestId("page-preview-slot-flip");
+    await flip.click();
+
+    // Neither the rail nor the context menu opened - the flip click is scoped to itself
+    // (stopPropagation), same discipline as the cue.
+    await expect(page.getByTestId("display-rail-idle")).toBeVisible();
+    await expect(page.getByTestId("card-slot-context-menu")).toHaveCount(0);
+
+    // This fixture's own slots carry no distinct back art (front-only text import) - flipping
+    // swaps the slot to its own genuinely-empty back face, so the front <img> disappears from
+    // THAT slot; the untouched second slot's own front image is unaffected either way.
+    await expect(firstSlot.locator("img")).toHaveCount(0);
+    await expect(secondSlot.locator("img")).toHaveAttribute(
+      "src",
+      secondSrcBefore ?? ""
+    );
+    expect(firstSrcBefore).not.toBeNull();
+
+    // Flipping back restores the original front image.
+    await firstSlot.getByTestId("page-preview-slot-flip").click();
+    await expect(firstSlot.locator("img")).toHaveAttribute(
+      "src",
+      firstSrcBefore ?? ""
+    );
   });
 
   // Issue #267 (design doc ADDENDUM D12/F9/F10, owner's locked comment on #267) - the one
@@ -1029,8 +1106,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await loadPageWithDefaultBackend(page);
     // One slot to start - the project already has cardDocument1 (the first of
     // searchResultsThreeResults' three identifiers) selected for it.
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     await expect(
@@ -1109,8 +1185,7 @@ test.describe("DisplayPage - wide desktop viewport (issue #287)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     const sheetRegion = page.getByTestId("display-sheet-region");
@@ -1215,6 +1290,45 @@ test.describe("DisplayPage - phone viewport (issue #266)", () => {
     await expect(
       page.getByRole("dialog", { name: "Card details and art selection" })
     ).toHaveCount(0);
+  });
+
+  // Rail-delegacy round (§A phone reachability hard requirement, SPEC-rail-delegacy.md) - the
+  // WHOLE rail (rail-head -> D14 -> identify panel -> artist -> Sources -> Select Version ->
+  // bottom control stack) lives in the ONE `overflow-y:auto` Offcanvas.Body container and must be
+  // reachable by scrolling the 72vh bottom sheet all the way down - the exact regression the
+  // spec's own §A note flags (`.lrail`'s inline `flex:0 0 380px` misread as a HEIGHT inside the
+  // drawer's column flow, capping the sheet before it could reach the control stack).
+  test("the bottom control stack (Print options / Report) is reachable by scrolling the 72vh bottom sheet at phone width, and the relocated Slot Actions row (rail head, EP4) is reachable too", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page, "display");
+    await expect(page.getByTestId("display-empty-state")).toBeVisible();
+    await page
+      .getByRole("textbox", { name: "import-text" })
+      .fill("my search query");
+    await page.getByRole("button", { name: "import-text-submit" }).click();
+    await expect(page.getByTestId("display-page")).toBeVisible();
+
+    await page.getByTestId("page-preview-slot").first().click();
+    await expect(page.getByTestId("display-rail")).toBeInViewport();
+
+    // EP4 (SPEC-editor-polish.md §D.7, REV RD5) - Slot Actions relocated to the rail head's own
+    // compact icon row; it's no longer part of the bottom control stack at all.
+    await expect(
+      page
+        .getByTestId("display-rail-header")
+        .getByTestId("display-slot-actions-section")
+    ).toBeVisible();
+
+    const controlStack = page.getByTestId("display-control-stack");
+    await controlStack.scrollIntoViewIfNeeded();
+    await expect(controlStack).toBeVisible();
+    await expect(
+      controlStack.getByTestId("display-slot-actions-section")
+    ).toHaveCount(0);
+    await expect(controlStack.getByTestId("report-card-button")).toBeVisible();
   });
 
   // D17 (docs/proposals/proposal-h-display-layout-spec.md ADDENDUM) - the floating "n/M" sheet-

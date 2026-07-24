@@ -188,6 +188,7 @@ from django.db.models import Min
 from django.utils import timezone
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
+from cardpicker.local_calculate_verdicts import known_set_codes
 from cardpicker.models import CanonicalCard, Card, ImageEvidence, PilotRunLedger
 from cardpicker.pilot_run_lifecycle import (
     add_dry_run_guard_arguments,
@@ -338,6 +339,7 @@ def _compute_one_card(
     run_id: str,
     profile: bool = False,
     short_circuit: Optional[bool] = None,
+    known_set_codes: Optional[frozenset[str]] = None,
 ) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Module-level (picklable) compute-only work unit for the process pool - takes plain,
     already-fetched data (never a `Card`/`Image` instance re-fetched or re-decoded elsewhere), and
@@ -362,7 +364,14 @@ def _compute_one_card(
     command's own `--no-shortcircuit` escape hatch. The fourth return value, `short_circuited`, is
     `result.short_circuited` verbatim - a per-card diagnostic count `_CohortStats` aggregates into
     the run's own final summary line (never persisted onto `ImageEvidence`), which is how the
-    197k-card remainder run itself produces the plan's own "open verification gap" measurement."""
+    197k-card remainder run itself produces the plan's own "open verification gap" measurement.
+
+    `known_set_codes` (2026-07-23, issue #370's own recorded follow-up): the SET-CODE LEXICON GATE
+    `local_calculate_verdicts.known_set_codes()` produces, built ONCE by `handle()` below (one DB
+    query in the parent process, not per-card) and forwarded straight through - see
+    `compute_card_evidence`'s own docstring for the escalation-loop acceptance criterion this
+    controls. Picklable (a plain `frozenset[str]`), so passing it into each `compute_pool.submit`
+    call below costs one IPC serialization per card, not a query."""
     from cardpicker.image_evidence import compute_card_evidence, persist_evidence
 
     wall_started_at = time.monotonic() if profile else None
@@ -377,7 +386,13 @@ def _compute_one_card(
 
     profile_dict: Optional[dict[str, float]] = {} if profile else None
     result = compute_card_evidence(
-        card_id, content_hash, image, fetch_latency_ms, profile=profile_dict, short_circuit=short_circuit
+        card_id,
+        content_hash,
+        image,
+        fetch_latency_ms,
+        profile=profile_dict,
+        short_circuit=short_circuit,
+        known_set_codes=known_set_codes,
     )
     if not dry_run:
         persist_evidence(result, run_id=run_id)
@@ -480,6 +495,7 @@ def _run_cohort(
     profile_file: Any = None,
     short_circuit: Optional[bool] = None,
     max_rss_mb: Optional[float] = None,
+    known_set_codes: Optional[frozenset[str]] = None,
 ) -> tuple[int, int, bool, int, bool]:
     """
     The decoupled fetch/compute driver itself. Two concurrent executors:
@@ -519,6 +535,10 @@ def _run_cohort(
 
     `max_rss_mb` (2026-07-22): forwarded to `_CohortStats` - see its own docstring for the
     checkpoint-and-stop mechanism this drives.
+
+    `known_set_codes` (2026-07-23, issue #370's own recorded follow-up): built ONCE by `handle()`
+    below and forwarded to every `_compute_one_card` submission - see that function's own
+    docstring and `compute_card_evidence`'s own docstring for the mechanism this controls.
 
     Returns `(completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit)` - the same
     three figures the old single-loop design printed in its final summary line, plus the
@@ -592,6 +612,7 @@ def _run_cohort(
                     run_id,
                     profile,
                     short_circuit,
+                    known_set_codes,
                 )
                 pending[compute_future] = fetch_result.card_id
             _submit_more_fetch()
@@ -824,8 +845,17 @@ class Command(BaseCommand):
                 )
 
                 # Step 2: resume filter - cards whose ImageEvidence row already has every manifest key.
+                # .iterator() (2026-07-24 IO audit finding 4): without it, Django caches the FULL
+                # result set (every ImageEvidence row's extractor_versions JSON blob) in memory
+                # before this loop can even start, instead of streaming via server-side cursor -
+                # matching Step 1's own rank_rows.iterator() just above, and worth being
+                # deliberate about given this exact command's own OOM history (see module
+                # docstring's "PARENT-PROCESS MEMORY LEAK" section) and that ImageEvidence is the
+                # fastest-growing table in this pipeline.
                 already_done_ids: set[int] = set()
-                for card_id, extractor_versions in ImageEvidence.objects.values_list("card_id", "extractor_versions"):
+                for card_id, extractor_versions in ImageEvidence.objects.values_list(
+                    "card_id", "extractor_versions"
+                ).iterator():
                     if MANIFEST_EXTRACTOR_KEYS.issubset(extractor_versions.keys()):
                         already_done_ids.add(card_id)
                 if already_done_ids:
@@ -868,6 +898,14 @@ class Command(BaseCommand):
                     self.stdout.write("Nothing to do.")
                 return
 
+            # Set-code lexicon (2026-07-23, issue #370's own recorded follow-up): built ONCE here
+            # (one DB query in the parent process, before the pool forks) and threaded through to
+            # every compute worker via `_run_cohort`/`_compute_one_card` - see
+            # `compute_card_evidence`'s own docstring for the escalation-loop acceptance criterion
+            # this feeds. Same "query once, pass through explicitly" convention step 1/2 above
+            # already use for name_rank/already_done_ids.
+            lexicon = known_set_codes()
+
             # Close the parent's own DB connection(s) before forking the compute pool - belt-and-
             # braces alongside each compute worker's own _init_worker close_all() call, so the
             # connection this command's own step 1/2/3 queries above used is never inherited by any
@@ -891,6 +929,7 @@ class Command(BaseCommand):
                     profile_file=profile_file,
                     short_circuit=short_circuit,
                     max_rss_mb=max_rss_mb,
+                    known_set_codes=lexicon,
                 )
             finally:
                 if profile_file is not None:

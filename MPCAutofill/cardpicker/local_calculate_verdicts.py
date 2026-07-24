@@ -198,15 +198,20 @@ trade is a large net soundness improvement, paid for by asking a human to type "
 low-confidence machine vote used to assert (weight `PRINTING_TAG_MACHINE_WEIGHT`, never enough to
 resolve consensus alone regardless).
 
-NOT APPLIED to `cardpicker.local_identify_printing_tags`'s own live-pilot OCR engine
-(`OCR_ANONYMOUS_ID="local-ocr-v1"`, `run_ocr_for_card`/`_compute_card`), which casts an
-`is_no_match=True` vote from the identical `"parsed-but-no-match"` outcome at its own call site -
-same underlying defect, deliberately left unfixed here: that engine fetches and processes a live
-image per card (a materially larger, higher-risk surface than this module's own zero-fetch,
-already-persisted-`ImageEvidence` design), no live-proven case was found against it specifically,
-and it sits outside this task's own explicit "join-key calculator" scope. `known_set_codes()`
-below is written so that engine's own selection loop could reuse it directly in a focused
-follow-up - flagged, not silently left inconsistent.
+APPLIED (2026-07-23, issue #370's own recorded follow-up - the deferred item this paragraph used
+to flag) to `cardpicker.local_identify_printing_tags`'s own live-pilot OCR engine too
+(`OCR_ANONYMOUS_ID="local-ocr-v1"`, `run_ocr_for_card`/`_compute_card`), which used to cast an
+`is_no_match=True` vote from the identical `"parsed-but-no-match"` outcome at its own call site
+with no lexicon check - same underlying defect this module's own gate above fixes.
+`run_ocr_for_card` now takes an explicit `known_set_codes` argument (this exact `known_set_codes()`
+helper's output, built once per `run_pilot` invocation and threaded through via
+`functools.partial`, a deferred import since this module already imports FROM
+`local_identify_printing_tags` - see that function's own docstring for the full mechanism) and
+demotes a `parsed-but-no-match` outcome whose `set_code` is out-of-lexicon to a distinct
+`"unknown-set-code"` skip (abstain, no vote) instead - the exact same semantics this module's own
+gate applies, reproduced at that engine's own call site rather than shared code, since the two
+engines' surrounding control flow (this module's stored-evidence read vs. that engine's live
+per-variant loop) differ enough that sharing the branch itself would obscure more than it saves.
 
 TWO FURTHER CHEAP ADDITIONS (this PR, built 2026-07-20, owner decision on issue #220):
 

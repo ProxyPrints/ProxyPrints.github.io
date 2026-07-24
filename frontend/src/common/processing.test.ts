@@ -6,6 +6,7 @@ import {
   Token,
 } from "@/common/constants";
 import {
+  extractDriveIdBracketToken,
   parseCSVFileAsLines,
   processLine,
   processQuery,
@@ -468,6 +469,82 @@ test("a line specifying the selected image ID for both faces is processed correc
       selected: false,
     },
   ]);
+});
+
+describe("foreign-order resilience Phase 1 - [mpc:<id>] bracket token (issue #324)", () => {
+  const driveId = "1FItgPw7VK_Tbv6dMiqdy5zd-jAoEC9mn";
+
+  test("extractDriveIdBracketToken strips a valid token and returns the ID", () => {
+    expect(extractDriveIdBracketToken(`Kharn [mpc:${driveId}]`)).toEqual([
+      "Kharn",
+      driveId,
+    ]);
+  });
+
+  test("extractDriveIdBracketToken leaves text unchanged when there's no token", () => {
+    expect(extractDriveIdBracketToken("Kharn")).toEqual(["Kharn", undefined]);
+  });
+
+  test("extractDriveIdBracketToken leaves text unchanged when the bracketed contents don't look like a real Drive file ID", () => {
+    expect(extractDriveIdBracketToken("Kharn [mpc:too-short]")).toEqual([
+      "Kharn [mpc:too-short]",
+      undefined,
+    ]);
+  });
+
+  test("the owner's exact reported repro line registers a selected image", () => {
+    // Symptom (a) from issue #324's high-priority promotion comment: this exact line was
+    // reported as not registering at all.
+    expect(processLine(`1x Kharn [mpc:${driveId}]`, dfcPairs, false)).toEqual([
+      1,
+      {
+        query: { cardType: Card, query: "kharn" },
+        selectedImage: driveId,
+        selected: false,
+      },
+      null,
+    ]);
+  });
+
+  test("a bracket token on the back face is processed correctly", () => {
+    expect(
+      processLine(
+        `2x front card${FaceSeparator}back card [mpc:${driveId}]`,
+        dfcPairs,
+        false
+      )
+    ).toEqual([
+      2,
+      {
+        query: { cardType: Card, query: "front card" },
+        selectedImage: undefined,
+        selected: false,
+      },
+      {
+        query: { cardType: Card, query: "back card" },
+        selectedImage: driveId,
+        selected: false,
+      },
+    ]);
+  });
+
+  test("a bracket token takes precedence over a trailing @id for the same face", () => {
+    expect(
+      processLine(
+        `opt${SelectedImageSeparator}legacyid [mpc:${driveId}]`,
+        dfcPairs,
+        false
+      )
+    ).toEqual([
+      1,
+      {
+        query: { cardType: Card, query: "opt" },
+        selectedImage: driveId,
+        selected: false,
+      },
+      null,
+    ]);
+  });
 });
 
 describe("file path-like identifier handling", () => {

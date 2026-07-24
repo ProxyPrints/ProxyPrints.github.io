@@ -14,24 +14,24 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  expectCardGridSlotState,
-  importText,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDetailedView,
 } from "./test-utils";
 
-const openDetailedView = async (page: any, cardName: string) => {
-  await page.getByAltText(cardName).click();
-  await expect(page.getByText("Card Details")).toBeVisible();
-};
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page -
+// ReportCardPanel lives inside CardDetailedViewModal's own "Report" region (ReportBlock,
+// CardDetailedViewBody.tsx), reached the same way the rest of this cluster reaches the modal - see
+// openDetailedView's own module comment (test-utils.ts) for the Browse-mode route and the "Card
+// details" text-collision fix.
 
 const setUpCardAndOpenModal = async (page: any) => {
   await loadPageWithDefaultBackend(page);
-  await importText(
+  await importTextOnEditorLanding(
     page,
     `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
   );
-  await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
-  await openDetailedView(page, cardDocument1.name);
+  await openDetailedView(page, "my search query", cardDocument1.identifier);
 };
 
 test.describe("report card flow", () => {

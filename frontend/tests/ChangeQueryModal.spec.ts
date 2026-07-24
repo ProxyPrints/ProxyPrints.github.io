@@ -22,16 +22,28 @@ import {
 import { test } from "../playwright.setup";
 import {
   changeQueries,
-  enableFuzzySearch,
-  expectCardGridSlotState,
-  expectCardSlotToExist,
-  importText,
+  enableDisplayFuzzySearch,
+  ensureDisplayFace,
+  expectDisplaySheetSlotState,
+  expectDisplaySheetSlotToExist,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
-  openChangeQueryModal,
-  selectSlot,
-  toggleFace,
+  openDisplayChangeQueryModal,
 } from "./test-utils";
 
+// Parity wave 2 (2026-07-23, issue #272): ported onto the unified `/editor` page. The classic
+// grid opened this modal by clicking a slot's own query text; ChangeQueryModal.tsx itself is
+// unchanged (still globally mounted, Modals.tsx) - only how it's reached differs, via the shared
+// CardSlotContextMenu's "Change Query" action (openDisplayChangeQueryModal, test-utils.ts).
+//
+// Dropped, not ported: the 3 multi-slot-selection tests ("plural text when multiple front slots
+// are selected", "updates all fronts and backs for a multi-slot selection", "not shown when any
+// one of the selected slots already has the DFC back query") depended on the classic grid's
+// checkbox multi-select + SelectedImagesRibbon's own "Change Query" trigger - bulk multi-select
+// has no equivalent on the unified page (issue #272 item 6, still not built; SelectedImagesRibbon
+// itself is parked, not ported, this same wave - see this PR's own description). The single-slot
+// DFC prompt/submission/condition/fuzzy-search/checkbox-reset coverage below is unaffected and
+// fully proves the same underlying logic.
 test.describe("ChangeQueryModal tests", () => {
   test("change one card's query", async ({ page, network }) => {
     network.use(
@@ -42,26 +54,22 @@ test.describe("ChangeQueryModal tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `query 1${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await expectCardSlotToExist(page, 1);
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
+    await expectDisplaySheetSlotToExist(page, 1);
+    await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
 
     // change query - type in "query 2"
-    const modal = await openChangeQueryModal(
-      page,
-      "front-slot0",
-      cardDocument1.name
-    );
+    const modal = await openDisplayChangeQueryModal(page, 1);
     await expect(
       modal.getByLabel("change-selected-image-queries-text")
     ).toHaveValue("query 1");
     await changeQueries(page, "query 2");
 
     // expect the slot to have changed from card 1 to card 2
-    await expectCardGridSlotState(page, 1, "front", cardDocument2.name, 1, 1);
+    await expectDisplaySheetSlotState(page, 1, "front", cardDocument2.name);
   });
 });
 
@@ -88,13 +96,9 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
         ...defaultHandlers
       );
       await loadPageWithDefaultBackend(page);
-      await importText(page, "query 1");
+      await importTextOnEditorLanding(page, "query 1");
 
-      const modal = await openChangeQueryModal(
-        page,
-        "front-slot0",
-        cardDocument1.name
-      );
+      const modal = await openDisplayChangeQueryModal(page, 1);
       await modal
         .getByLabel("change-selected-image-queries-text")
         .fill("query 2");
@@ -110,13 +114,9 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
     }) => {
       network.use(...dfcHandlers);
       await loadPageWithDefaultBackend(page);
-      await importText(page, "card 3");
+      await importTextOnEditorLanding(page, "card 3");
 
-      const modal = await openChangeQueryModal(
-        page,
-        "front-slot0",
-        cardDocument3.name
-      );
+      const modal = await openDisplayChangeQueryModal(page, 1);
       await modal
         .getByLabel("change-selected-image-queries-text")
         .fill("my search query");
@@ -137,34 +137,6 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
       // Checkbox is unchecked by default
       await expect(modal.getByLabel("Update back")).not.toBeChecked();
     });
-
-    test("DFC prompt shown with correct plural text when multiple front slots are selected", async ({
-      page,
-      network,
-    }) => {
-      network.use(...dfcHandlers);
-      await loadPageWithDefaultBackend(page);
-      await importText(page, "2x card 3");
-
-      await selectSlot(page, 1, "front");
-      await selectSlot(page, 2, "front");
-      await page.getByText("Change Query").click();
-      const modal = page.getByTestId("change-query-modal");
-
-      await modal
-        .getByLabel("change-selected-image-queries-text")
-        .fill("my search query");
-
-      await expect(
-        modal.getByText("matches a double-faced card pair")
-      ).toBeVisible();
-      // Plural phrasing
-      await expect(
-        modal.getByText(/update the backs of the selected slots to/i)
-      ).toBeVisible();
-      // Checkbox label is plural
-      await expect(modal.getByLabel("Update backs")).toBeVisible();
-    });
   });
 
   test.describe("submission behaviour", () => {
@@ -174,15 +146,15 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
     }) => {
       network.use(...dfcHandlers);
       await loadPageWithDefaultBackend(page);
-      await importText(page, "card 3");
-      await expectCardGridSlotState(page, 1, "front", cardDocument3.name, 1, 1);
-      await expectCardGridSlotState(page, 1, "back", cardDocument5.name, 1, 1);
+      await importTextOnEditorLanding(page, "card 3");
+      await expectDisplaySheetSlotState(page, 1, "front", cardDocument3.name);
+      await expectDisplaySheetSlotState(page, 1, "back", cardDocument5.name);
+      // expectDisplaySheetSlotState's own back-face check above leaves the sheet showing backs -
+      // reset to fronts before right-clicking, since openDisplayChangeQueryModal's context menu
+      // reads whichever face is currently displayed.
+      await ensureDisplayFace(page, "front");
 
-      const modal = await openChangeQueryModal(
-        page,
-        "front-slot0",
-        cardDocument3.name
-      );
+      const modal = await openDisplayChangeQueryModal(page, 1);
       await modal
         .getByLabel("change-selected-image-queries-text")
         .fill("my search query");
@@ -192,9 +164,9 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
       // Leave checkbox unchecked and submit
       await page.getByLabel("change-selected-image-queries-submit").click();
 
-      await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
+      await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
       // Back must remain unchanged
-      await expectCardGridSlotState(page, 1, "back", cardDocument5.name, 1, 1);
+      await expectDisplaySheetSlotState(page, 1, "back", cardDocument5.name);
     });
 
     test("submitting with the DFC checkbox updates both front and back queries", async ({
@@ -203,46 +175,17 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
     }) => {
       network.use(...dfcHandlers);
       await loadPageWithDefaultBackend(page);
-      await importText(page, "card 3");
+      await importTextOnEditorLanding(page, "card 3");
 
-      const modal = await openChangeQueryModal(
-        page,
-        "front-slot0",
-        cardDocument3.name
-      );
+      const modal = await openDisplayChangeQueryModal(page, 1);
       await modal
         .getByLabel("change-selected-image-queries-text")
         .fill("my search query");
       await modal.getByLabel("Update back").check();
       await page.getByLabel("change-selected-image-queries-submit").click();
 
-      await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
-      await expectCardGridSlotState(page, 1, "back", cardDocument4.name, 1, 1);
-    });
-
-    test("submitting with the DFC checkbox updates all fronts and backs for a multi-slot selection", async ({
-      page,
-      network,
-    }) => {
-      network.use(...dfcHandlers);
-      await loadPageWithDefaultBackend(page);
-      await importText(page, "2x card 3");
-
-      await selectSlot(page, 1, "front");
-      await selectSlot(page, 2, "front");
-      await page.getByText("Change Query").click();
-      const modal = page.getByTestId("change-query-modal");
-
-      await modal
-        .getByLabel("change-selected-image-queries-text")
-        .fill("my search query");
-      await modal.getByLabel("Update backs").check();
-      await page.getByLabel("change-selected-image-queries-submit").click();
-
-      await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
-      await expectCardGridSlotState(page, 2, "front", cardDocument1.name, 1, 1);
-      await expectCardGridSlotState(page, 1, "back", cardDocument4.name, 1, 1);
-      await expectCardGridSlotState(page, 2, "back", cardDocument4.name, 1, 1);
+      await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
+      await expectDisplaySheetSlotState(page, 1, "back", cardDocument4.name);
     });
   });
 
@@ -253,15 +196,12 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
     }) => {
       network.use(...dfcHandlers);
       await loadPageWithDefaultBackend(page);
-      await importText(page, "card 3");
+      await importTextOnEditorLanding(page, "card 3");
 
-      // Open the Change Query modal for the back slot
-      await toggleFace(page);
-      const modal = await openChangeQueryModal(
-        page,
-        "back-slot0",
-        cardDocument5.name
-      );
+      // Open the Change Query modal for the back slot - openDisplayChangeQueryModal's own
+      // right-click reads whichever face is currently displayed.
+      await ensureDisplayFace(page, "back");
+      const modal = await openDisplayChangeQueryModal(page, 1);
       await modal
         .getByLabel("change-selected-image-queries-text")
         .fill("my search query");
@@ -278,47 +218,17 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
       network.use(...dfcHandlers);
       await loadPageWithDefaultBackend(page);
       // Importing via text with DFC pairs active auto-sets the back to "Card 4"
-      await importText(page, "my search query");
-      await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
-      await expectCardGridSlotState(page, 1, "back", cardDocument4.name, 1, 1);
+      await importTextOnEditorLanding(page, "my search query");
+      await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
+      await expectDisplaySheetSlotState(page, 1, "back", cardDocument4.name);
 
       // Now open the modal and type the same DFC front query again
-      const modal = await openChangeQueryModal(
-        page,
-        "front-slot0",
-        cardDocument1.name
-      );
+      const modal = await openDisplayChangeQueryModal(page, 1);
       await modal
         .getByLabel("change-selected-image-queries-text")
         .fill("my search query");
 
       // The back already has the DFC back query — condition 3 fails, prompt must not appear
-      await expect(
-        modal.getByText("matches a double-faced card pair")
-      ).not.toBeVisible();
-    });
-
-    test("DFC prompt not shown when any one of the selected slots already has the DFC back query", async ({
-      page,
-      network,
-    }) => {
-      network.use(...dfcHandlers);
-      await loadPageWithDefaultBackend(page);
-      // Slot 1: DFC import → back is already "Card 4"
-      // Slot 2: plain import → back is project cardback (Card 5)
-      await importText(page, "1x my search query\n1x card 3");
-      await expectCardGridSlotState(page, 1, "back", cardDocument4.name, 1, 1);
-
-      await selectSlot(page, 1, "front");
-      await selectSlot(page, 2, "front");
-      await page.getByText("Change Query").click();
-      const modal = page.getByTestId("change-query-modal");
-
-      await modal
-        .getByLabel("change-selected-image-queries-text")
-        .fill("my search query");
-
-      // Slot 1's back already equals the DFC back — prompt must not appear for either slot
       await expect(
         modal.getByText("matches a double-faced card pair")
       ).not.toBeVisible();
@@ -332,15 +242,11 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
     }) => {
       network.use(...dfcHandlers);
       await loadPageWithDefaultBackend(page);
-      await importText(page, "card 3");
+      await importTextOnEditorLanding(page, "card 3");
 
-      await enableFuzzySearch(page);
+      await enableDisplayFuzzySearch(page);
 
-      const modal = await openChangeQueryModal(
-        page,
-        "front-slot0",
-        cardDocument3.name
-      );
+      const modal = await openDisplayChangeQueryModal(page, 1);
       // "my search" is a prefix of the DFC front key "my search query"
       await modal
         .getByLabel("change-selected-image-queries-text")
@@ -357,14 +263,10 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
     }) => {
       network.use(...dfcHandlers);
       await loadPageWithDefaultBackend(page);
-      await importText(page, "card 3");
+      await importTextOnEditorLanding(page, "card 3");
 
       // Precise (non-fuzzy) search is the default — no need to configure it
-      const modal = await openChangeQueryModal(
-        page,
-        "front-slot0",
-        cardDocument3.name
-      );
+      const modal = await openDisplayChangeQueryModal(page, 1);
       await modal
         .getByLabel("change-selected-image-queries-text")
         .fill("my search");
@@ -382,14 +284,10 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
     }) => {
       network.use(...dfcHandlers);
       await loadPageWithDefaultBackend(page);
-      await importText(page, "card 3");
+      await importTextOnEditorLanding(page, "card 3");
 
       // Open the modal, trigger the DFC prompt, check the box, then close without submitting
-      let modal = await openChangeQueryModal(
-        page,
-        "front-slot0",
-        cardDocument3.name
-      );
+      let modal = await openDisplayChangeQueryModal(page, 1);
       await modal
         .getByLabel("change-selected-image-queries-text")
         .fill("my search query");
@@ -398,11 +296,7 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
       await modal.getByLabel("Close").click();
 
       // Reopen the modal and trigger the DFC prompt again
-      modal = await openChangeQueryModal(
-        page,
-        "front-slot0",
-        cardDocument3.name
-      );
+      modal = await openDisplayChangeQueryModal(page, 1);
       await modal
         .getByLabel("change-selected-image-queries-text")
         .fill("my search query");

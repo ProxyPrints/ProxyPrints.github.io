@@ -1539,3 +1539,164 @@ occurrence**: before writing this off as "expected," reproduce
 deliberately (recreate the container, watch whether the session
 survives) and confirm which layer is actually responsible, then replace
 this entry's cause with the confirmed one.
+
+## Any `?server=...` link that also carries another query param or a URL fragment silently loses everything but `server` on load
+
+**Symptom**: visiting e.g. `/editor?server=http://host:8000&foo=bar#frag`
+(or any other page) ends up at plain `/editor` in the address bar once
+the page finishes mounting — not just `foo`/`frag` dropped, `server`
+itself vanishes too, along with a console warning: `Unknown key passed via urlObject into url.format: server`. Confirmed to reproduce on a
+**direct** page load with no redirect involved at all — this is not
+specific to any one route.
+
+**Cause**: `useBackendSetter.ts`'s own `?server=` clean-up step calls
+`router.replace({ server }, undefined, { shallow: true })` — passing a
+bare `{ server }` object with no `pathname` as the `url` argument.
+Next.js's `url.format` doesn't recognize `server` as a valid key on an
+object missing `pathname`/`query`, silently drops it, and the resulting
+URL is just the bare pathname. Reproduced during the Proposal H
+route-swap task (2026-07-23) while verifying `/display`'s new
+query-param-preserving redirect to `/editor` — the redirect itself
+(`pages/display.tsx`, reading `window.location.search`/`hash` directly)
+forwards params/fragment correctly on its own (verified with a
+`?server=`-free URL, which never triggers this code path); this bug
+fires independently, on `/editor` directly, once `useBackendSetter`'s
+effect runs.
+
+**Fix**: not fixed as part of the route-swap task (unrelated, pre-existing,
+and in practice harmless for real traffic — no code in the app builds a
+`/display` or `/editor` link with extra query params/a fragment today,
+per a repo-wide grep). The real fix is straightforward whenever someone
+picks it up: pass a proper `{ pathname: router.pathname, query: { ...router.query, server } }` shape (or drop the `shallow` URL-object
+call entirely in favor of `router.replace(router.asPath.split("?")[0] + buildQueryString(...))`) so existing query params and the fragment
+survive the same clean-up step.
+
+## `chunkErrorRecovery.spec.ts`'s `expect.poll(() => reloadRequests).toBe(1)` fails with "Received: 0" in CI, passes locally
+
+**Symptom**: one of the `chunkErrorRecovery.spec.ts` tests (the ones
+that dispatch a synthetic `ChunkLoadError` and expect exactly one
+intercepted reload request) times out at 0 reload requests on a CI
+shard - specifically shard 1/4, which is where this spec lands (verify
+with `npx playwright test --list --shard=1/4`) - including on a clean
+re-run, while passing reliably on a local machine run in isolation. No
+error is thrown anywhere in the test itself (`page.route()` registers
+fine, `page.evaluate()` dispatching the synthetic error completes
+fine) - the reload request simply never arrives. Two independent root
+causes were found across two rounds of this; both had to be fixed.
+
+**Cause #1** (PR #397): `useChunkErrorRecovery`'s guard
+(`chunkErrorRecovery.ts`'s `CHUNK_RELOAD_GUARD_KEY`, a real 10s
+sessionStorage-backed "only one reload per window" debounce, working
+exactly as designed) gets consumed by a **real** chunk hiccup before
+the test's own synthetic dispatch ever runs. CI's `playwright.config.ts`
+webServer runs `npm run dev` (not a prebuilt static export), and Next's
+dev server compiles pages on demand — the navbar's own "Editor" nav
+link (visible even while already on `/editor`) gets prefetched by
+`next/link`'s default viewport `IntersectionObserver` behaviour, which
+can trigger a second on-demand recompile of `pages/editor.js` mid-test
+(confirmed via a CI trace: an ~800ms second compile of that exact
+chunk, network-adjacent in time to the test's own dispatch). A slow/
+cold CI runner is more likely to still be mid-churn from that when the
+test body reaches its own dispatch, and any real transient chunk error
+during that churn legitimately consumes the guard first. This is a
+dev-server/test-harness artifact only — the deployed static export has
+no on-demand compilation or HMR at all, so it can't happen in
+production. Fixed by clearing the guard immediately before each test's
+own dispatch - but this alone wasn't sufficient (see cause #2).
+
+**Cause #2** (found after #397 merged, PR #395's CI run 30043836352):
+same symptom recurred on shard 1/4, all 3 attempts including retries.
+Two independent gaps remained: (a) #397 cleared the guard and
+dispatched the synthetic error as two _separate_ `page.evaluate()`
+round-trips, leaving a real (if narrow) window between them for the
+same class of dev-server chunk noise cause #1 already identified to
+land in; (b) `loadPageWithDefaultBackend()`'s own "Choose Art" click is
+a raw DOM click - Chromium dispatches it whether or not React has
+actually hydrated and `useChunkErrorRecovery`'s `useEffect` has run
+yet, so a successful click is not proof the recovery listener is live.
+Reproduced locally: this spec failed intermittently at
+`--workers=4` (parallel Playwright workers contending for CPU with the
+dev server's own on-demand compilation, closely matching CI's shard-1
+composition after PR #395 un-skipped 58 ported parity tests into the
+same 4 shards - see `git log` on `playwright.config.ts`, whose
+`fullyParallel`/`workers: undefined` settings predate this spec and
+were never the trigger) but passed reliably at `--workers=1`. A native
+DOM event dispatched before a listener is attached is simply lost, so
+this can't be fixed by polling for longer.
+
+**Fix**: (a) folds the guard-clear and the synthetic dispatch into ONE
+`page.evaluate()` call per test (`clearGuardAndDispatchChunkError(Error)`
+`AsRejection`) so nothing on the page's event loop can interleave
+between them. (b) adds `awaitHydrated()`, which retries clicking
+"Choose Art" (mirroring `test-utils.ts`'s own established
+`openAddCardsDropdown()` pattern for the identical symptom) until
+`ProjectEditor.tsx`'s "editor" tab content - specifically
+`CardGrid.tsx`'s "Your project is empty at the moment." empty-state
+text - actually becomes _visible_, which can only happen once
+`Tab.Container`'s `onSelect` handler has bound and fired, i.e. once the
+same hydration/effect-flush pass that mounts
+`useChunkErrorRecovery`'s own listeners has completed. This needed no
+extra network dispatch or navigation - two earlier attempts that DID
+add one (a page.route()-intercepted warm-up reload, and a real
+uncontrolled warm-up reload followed by re-navigating) were each
+independently found to destabilise the page even further under this
+same `--workers=4` stress (a `SecurityError: ... Access is denied for this document` on the aborted-navigation path, and a `Navigation ... is interrupted by another navigation` on the real-reload path - the
+self-referential "Editor" nav-link prefetch from cause #1 is a
+genuinely recurring background navigation under load, not a one-off,
+and collides with any _additional_ top-level navigation this file
+issues). The one test that specifically exercises the guard-suppression
+behaviour (two dispatches in one test) only clears the guard once,
+before the first dispatch, so the guard is still genuinely exercised
+for real on the second one. See `chunkErrorRecovery.spec.ts`'s own
+comments for the full trace-based diagnosis of all three rounds
+(root-caused against CI runs 30039392833 and 30043836352, both shard
+1/4, plus local repro at `--workers=4`/cold `.next` cache/CI=true).
+Verify any future fix here the same way: `--shard=1/4` (not the file in
+isolation) against a cold `.next` cache, since shard composition (not
+just raw worker count) drives how much dev-server contention this spec
+actually sees.
+
+## `local_calculate_verdicts` silently runs with an empty back-face lookup after an image rebuild (Scryfall cache lost)
+
+**Symptom**: `manage.py local_calculate_verdicts --write` runs
+cleanly, finishes `COMPLETED`, but back-face-only cards (e.g. a card
+uploaded under a DFC's second-face name) that should resolve via
+`_resolve_candidates_for_card`'s DFCPair fallback all come back
+`printing_pk=None`/no vote. Nothing errors or warns loudly - the only
+tell (if you go looking) is a per-card `logger.warning` from
+`_load_back_face_names` ("Scryfall bulk-data file not found... back-
+face lookup returning an empty set"), easy to miss in routine log
+output. Observed live: deploy-2 (2026-07-23) rebuilt the django/worker
+images, and the run that followed was silently degraded this way.
+
+**Cause**: `scryfall_cache/default_cards.json` (the Scryfall bulk-data
+cache `printing_metadata_import.py`/`mtg.py`'s
+`import_canonical_card_data` both read/refresh, ~558MB) lived as a
+plain file inside the django/worker container filesystem with no
+persistent volume mounted over it (`docker/docker-compose.prod.yml` had
+no `volumes:` entry for either service). Every `up --build` image
+rebuild throws away the old container filesystem, taking the cache with
+it. `get_back_face_names`/`is_back_face` (see their own docstrings)
+correctly treat a missing file as "no back faces known yet" - one
+warning, `frozenset()` returned, never a raise - which is the right
+behaviour for a per-card lookup, but left the whole `local_calculate_ verdicts` run silently degraded with no failure signal anywhere in its
+own `COMPLETED` ledger row or terminal summary.
+
+**Fix** (issue #402, two parts): (1) `scryfall_cache` is now a named,
+persistent Docker volume (`docker/docker-compose.prod.yml`, mirroring
+`postgres_data`/`elasticsearch_data`'s own pattern) mounted on BOTH the
+`django` service (manual `exec`-run commands) and the `worker` service
+(the weekly `import_canonical_card_data`/`update_dfcs` schedule that
+runs via its own `manage.py qcluster` process, per "Startup vs.
+scheduled catalog sync" above) - a rebuild no longer touches it.
+Compose changes only take effect at the NEXT deploy (`up --build -d`),
+not retroactively on already-running containers. (2)
+`printing_metadata_import.ensure_scryfall_cache_present()` is a new
+fail-loud guard, called at the very start of `local_calculate_verdicts`'s
+`Command.handle()` (before any card-by-card work) - it raises a
+`CommandError` naming the missing path if the cache file doesn't exist,
+distinct from `get_back_face_names`'s existing soft "empty set" path,
+unless `--allow-missing-scryfall-cache` is passed explicitly. This
+catches the failure mode structurally even if the volume mount is ever
+missed again (e.g. a fresh box rebuild that skips the compose file, or
+a manual `docker run` bypassing compose entirely).

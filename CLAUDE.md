@@ -200,6 +200,11 @@ external reader's orientation to the whole fork, see
 - [`docs/features/moderation.md`](docs/features/moderation.md) — Discord
   OAuth login, the `Moderators` group gate, sensitive-tag approval queue,
   card reports.
+- [`docs/features/theming.md`](docs/features/theming.md) — the 2026-07-24
+  theme-defaults pass: `_theme-tokens.scss` (the one canonical palette +
+  corner-radius token file), the derivation layering, the "born grey"
+  Bootstrap-default inventory it fixed, and its relationship to the
+  fidelity specs.
 - [`docs/features/local-file-source.md`](docs/features/local-file-source.md)
   — backend `LOCAL_FILE` catalog source type.
 - [`docs/features/card-dom-api.md`](docs/features/card-dom-api.md) —
@@ -218,6 +223,12 @@ external reader's orientation to the whole fork, see
   reusable, permission-triggered contextual consent toast (`useConsentToast`
   - `ConsentToast.tsx`), issue #204. No dependency on any consumer feature
     yet; issue #203 (client-side phash contribution) is the first planned one.
+- [`docs/features/foreign-order-resilience.md`](docs/features/foreign-order-resilience.md)
+  — issue #324 Phase 1 (shipped 2026-07-23): rendering "orphan" cards
+  (Drive file IDs the catalog has never indexed) from text (`[mpc:<id>]`
+  token) and XML import, direct-from-Google image fetch (never our own
+  CDN), the invalidation-listener root-cause fix, round-trip export, and
+  what's deferred to Phase 2.
 - [`docs/upstreaming/vote-system.md`](docs/upstreaming/vote-system.md) —
   cherry-pick extraction manifest for the vote system (companion to the
   Upstreaming workflow in `docs/infrastructure.md`); accurate through
@@ -269,15 +280,21 @@ external reader's orientation to the whole fork, see
   artifact 2 (knowledge-inventory sweep) status — all 3 MISSING
   constants decided, items 1–2's fix merged (PR #343) and deployed
   2026-07-23T01:33Z — plus the #347-amended fire sequence, now
-  **COMPLETE end to end (2026-07-23) — gate FIRED**: Bug-B whole-DB
-  reparse dry-run, B(i) write, B(ii)+B(iii) retraction, the Bug-A
-  forced-escalation sample, the 4c pilot dry-run, the owner sample
-  audit, the pilot `--write` (130,210 votes, DB-verified exact match to
-  the dry-run's prediction), and `consensus_recompute --apply` (49,206
-  tag transitions, printing 3→4 resolved) all DONE, and #340 root-cause
-  footprint sizing. Bug-A's full re-scan remains deferred post-pilot as
-  the one tracked open item. Single source of
-  truth for this
+  **COMPLETE end to end, gate FIRED, true completion 2026-07-24**:
+  Bug-B whole-DB reparse dry-run, B(i) write, B(ii)+B(iii) retraction,
+  the Bug-A forced-escalation sample, the 4c pilot dry-run, the owner
+  sample audit, the pilot `--write` (130,210 votes, DB-verified exact
+  match to the dry-run's prediction), `consensus_recompute --apply`
+  (49,206 tag transitions), plus five further 2026-07-24 corrective/
+  completion passes (lexicon-gate retraction, marker reparse,
+  artist-credit fill, calculator re-pass, a second `consensus_recompute`
+  closer) all DONE and #340 root-cause footprint sizing. Live
+  resolved-printing count is **3** (a provisional 4 was corrected back
+  by the second closer); all 218,345 cards remain
+  `artist_vote_status=unresolved` (single-machine-vote-below-threshold
+  finding); review queue is **134,370** cards. Bug-A's full re-scan
+  remains deferred post-pilot as the one tracked open item. Single
+  source of truth for this
   gate's status — don't restate gate status/decisions elsewhere, link
   here.
 - [`docs/documentation-process.md`](docs/documentation-process.md) — docs/

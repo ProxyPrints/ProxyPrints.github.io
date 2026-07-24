@@ -43,9 +43,15 @@ The methodology and the systems it governs.
   2026-07-22, now closed history per the 2026-07-23 new-data basis
   ruling) and artifact 2 status (all 3 MISSING constants decided, fix
   for 2 merged AND deployed 2026-07-23T01:33Z), the #347-amended fire
-  sequence — now **COMPLETE end to end, gate FIRED (2026-07-23)**: Bug-B
-  whole-DB reparse dry-run, the pilot dry-run and `--write` (130,210
-  votes), and `consensus_recompute --apply` all DONE (Bug-A's full
+  sequence — now **COMPLETE end to end, gate FIRED, true completion
+  2026-07-24**: Bug-B whole-DB reparse dry-run, the pilot dry-run and
+  `--write` (130,210 votes), `consensus_recompute --apply`, plus five
+  further 2026-07-24 corrective/completion passes (lexicon-gate
+  retraction, marker reparse, artist-credit fill, calculator re-pass, a
+  second `consensus_recompute` closer) all DONE — live resolved-printing
+  count is **3** (corrected from a provisional 4), all 218,345 cards
+  remain `artist_vote_status=unresolved` (single-machine-vote-below-
+  threshold finding), review queue is **134,370** cards (Bug-A's full
   re-scan deferred post-pilot is the one tracked open item) — and the
   #340 root-cause footprint sizing. Single source of
   truth for this gate's status — `theory.md`, `identification-pipeline.md`,
@@ -119,6 +125,15 @@ The methodology and the systems it governs.
   Sources accordion + pinned-favourite sources, the Select Version
   continuous grid, the artist support button, and the buttons-look-like-
   buttons audit.
+- [`features/theming.md`](features/theming.md) — the 2026-07-24
+  theme-defaults pass: `_theme-tokens.scss` (the one canonical palette +
+  corner-radius token file), the derivation layering that keeps every
+  Bootstrap variable override pointed at a token instead of a scattered
+  literal, the "born grey" Bootstrap-default inventory it fixed (Modal/
+  Dropdown/Popover/Toast/`Card.Header`/`Offcanvas`/table-head/the
+  form-select chevron), and its relationship to the fidelity specs
+  (`DisplayLeftRailFidelity.spec.ts` et al. assert some of these same
+  token values — retheming means updating both together).
 - [`features/search-operator-syntax.md`](features/search-operator-syntax.md)
   — Scryfall-style `artist:`/`border:`/`frame:`/`tag:`/`set:`/`lang:`
   search-operator syntax: the pure parser and the fork-coupled wiring seam.
@@ -136,6 +151,11 @@ The methodology and the systems it governs.
   bottom-corner accept/decline prompt shown only right before an action
   that needs it, per-permission-key session scoping, no dependency on any
   consumer feature yet.
+- [`features/foreign-order-resilience.md`](features/foreign-order-resilience.md)
+  — issue #324 Phase 1: rendering "orphan" cards (Drive file IDs the
+  catalog has never indexed) from text/XML import, direct-from-Google
+  fetch with tiered sizing, the invalidation-listener root-cause fix,
+  round-trip export, and what's deferred to Phase 2.
 
 ## Using it
 
@@ -179,6 +199,7 @@ One-word status per doc; see each file for the full survey/spec.
 | [`proposals/proposal-i-docs-as-site-source.md`](proposals/proposal-i-docs-as-site-source.md) — extends the docs/-to-wiki publish pipeline with a second target: rendered site pages + build-time JSON data extracts                                                                                                                                                                                                                                                                       | BUILDING |
 | [`proposals/proposal-i-readme-pipeline.md`](proposals/proposal-i-readme-pipeline.md) — folds `readme.md` into the same pipeline as a third (`readme`) emit mode: content merge map, owner GO decision, and what shipped                                                                                                                                                                                                                                                                   | SHIPPED  |
 | [`federation/public-export-v1.md`](federation/public-export-v1.md) — publish-first federation: signed verdict export consumable by mpc-autofill forks and the MIT-lineage proxy tools, no peer required                                                                                                                                                                                                                                                                                   | HOLD     |
+| [`proposals/stage-e-streaming.md`](proposals/stage-e-streaming.md) — Stage E streaming assembly design brief (issue #153): trigger/granularity/backpressure/consensus-recompute/gate/observability decisions, efficiency candidates checked against `theory.md`'s soundness bound, and the hardware envelope/federated-scalability analysis                                                                                                                                               | HOLD     |
 
 Not every shipped proposal-lettered feature has a survey doc here — some
 (e.g. Proposal A, Proposal D) went straight from idea to shipped PR without

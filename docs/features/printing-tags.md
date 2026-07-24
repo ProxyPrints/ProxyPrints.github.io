@@ -613,10 +613,17 @@ printings, artists, tags, and moderation from one screen.
   `SubmitTagVoteRequest` in `schema_types.ts`) is now sent by every vote
   call in the `/whatsthat` funnel (`"question-feed"`) and by Level 0's
   own vote (`"deckbuilder"`). `ArtistVotePicker.tsx` — shared between the
-  funnel and the card-detail-modal's `AttributeVotingPanel` — takes an
-  optional `voteSurface` prop rather than hardcoding it, same pattern as
+  funnel and every mount of `AttributeVotingPanel` (the card-detail-modal's,
+  `CardDetailedViewBody.tsx`, and — since the rail-delegacy round, PR
+  #413, 2026-07-24 — the `/editor` rail's own D14-anchored `IdentifyPanel`,
+  which wraps `PrintingTagPicker` + a conditional `AttributeVotingPanel`
+  verbatim, opened on demand rather than living in its own grey rail
+  accordion; see [`grid-selector.md`](grid-selector.md)'s RD1/RD4 note for
+  the sibling change to the funnel chips this same round shipped) — takes
+  an optional `voteSurface` prop rather than hardcoding it, same pattern as
   its existing `onRateLimited` prop: the funnel passes
-  `"question-feed"`, `AttributeVotingPanel` passes nothing (unchanged).
+  `"question-feed"`, every `AttributeVotingPanel` mount passes nothing
+  (unchanged).
   Every other voting surface (`PrintingTagPicker.tsx`, `TagVotePicker.tsx`,
   `ReportsPanel.tsx`) is untouched — `voteSurface` stays `undefined`
   there, not a guessed value. A fourth value, `"select-version"`, was

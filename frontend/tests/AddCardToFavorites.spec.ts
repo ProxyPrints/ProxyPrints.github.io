@@ -12,20 +12,17 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  expectCardGridSlotState,
-  importText,
+  closeDetailedView,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDetailedView,
 } from "./test-utils";
 
-const openDetailedView = async (page: any, cardName: string) => {
-  await page.getByAltText(cardName).click();
-  await expect(page.getByText("Card Details")).toBeVisible();
-};
-
-const closeDetailedView = async (page: any) => {
-  await page.getByTestId("detailed-view").getByLabel("Close").click();
-  await expect(page.getByText("Card Details")).not.toBeVisible();
-};
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page -
+// AddCardToFavorites (via CardDownloadFavorite) lives inside CardDetailedViewModal's own "Card
+// Details" region, reached the same way the rest of this cluster reaches the modal - see
+// openDetailedView's own module comment (test-utils.ts) for the Browse-mode route and the "Card
+// details" text-collision fix.
 
 test.describe("AddCardToFavorites tests", () => {
   test("renders Add to Favorites button when card is not a favorite", async ({
@@ -41,13 +38,12 @@ test.describe("AddCardToFavorites tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
 
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const button = page.getByRole("button", { name: /Add to Favorites/i });
     await expect(button).toBeVisible();
@@ -64,13 +60,12 @@ test.describe("AddCardToFavorites tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
 
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     // Initially shows "Add to Favorites"
     const button = page.getByRole("button", { name: /Add to Favorites/i });
@@ -106,13 +101,12 @@ test.describe("AddCardToFavorites tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
 
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     // First add to favorites
     const addButton = page.getByRole("button", { name: /Add to Favorites/i });
@@ -154,13 +148,12 @@ test.describe("AddCardToFavorites tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
 
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     // First click: Add to favorites
     await page.getByRole("button", { name: /Add to Favorites/i }).click();
@@ -194,14 +187,13 @@ test.describe("AddCardToFavorites tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
 
     // Open detailed view and add to favorites
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
     await page.getByRole("button", { name: /Add to Favorites/i }).click();
     await expect(
       page.getByRole("button", { name: /Remove from Favorites/i })
@@ -211,7 +203,7 @@ test.describe("AddCardToFavorites tests", () => {
     await closeDetailedView(page);
 
     // Reopen the detailed view
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     // Should still show as a favorite
     await expect(

@@ -52,14 +52,21 @@ import styled from "@emotion/styled";
 import React, { Ref, useEffect, useMemo, useRef, useState } from "react";
 import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
+import Collapse from "react-bootstrap/Collapse";
+import Form from "react-bootstrap/Form";
 import Row from "react-bootstrap/Row";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
+import { createPortal } from "react-dom";
 
 import { errorToNotification, isRateLimited } from "@/common/apiErrors";
-import { getOrCreateAnonymousId } from "@/common/cookies";
+import {
+  getLocalStoragePinnedSourcePks,
+  getOrCreateAnonymousId,
+} from "@/common/cookies";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
+import { Spinner } from "@/components/Spinner";
 import {
   ALL_ATTRIBUTE_CHIPS,
   AttributeChipDef,
@@ -73,6 +80,7 @@ import {
 } from "@/features/attributeChips/attributeChips";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
+import { useViewportTier } from "@/features/display/useViewportTier";
 import { GridSelectorFilters } from "@/features/gridSelector/GridSelectorFilters";
 import {
   groupSelectVersionCandidates,
@@ -81,6 +89,7 @@ import {
   SelectVersionReasonTagGroup,
 } from "@/features/gridSelector/selectVersionGrouping";
 import { GridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
+import { FilterSettings as FilterSettingsElement } from "@/features/searchSettings/FilterSettings";
 import { GenericErrorPage } from "@/features/ui/GenericErrorPage";
 import { APISubmitTagVote } from "@/store/api";
 import { selectCardDocumentsByIdentifiers } from "@/store/slices/cardDocumentsSlice";
@@ -436,11 +445,16 @@ const touchExpandTapArea = `
   }
 `;
 
-/** Filters disclosure toggle + "Clear filters" - bordered/outline buttons in the reference's own
- * shape family, just tightened to its padding/font-size. */
+/** Filters disclosure toggle - the corrected mockup's own `.btn-sm` binding row (owner ruling,
+ * 2026-07-23, superseding this file's earlier "the buttons are too big" shrink for THIS control
+ * specifically - real Bootstrap `sm` metrics, not the smaller invented values). This styled
+ * component has exactly one call site (the Filters toggle below) so the fix is already
+ * component-scoped - it does NOT touch `CompactToggleButton`/`CompactLinkButton`/`TreatmentChip`
+ * below, which bind to their OWN distinct, still-in-force spec rows ("Filter segment group .seg"
+ * 11px, "Treatment tri-state chip" 11px) - see each one's own doc comment. */
 const CompactButton = styled(Button)`
-  padding: 0.2rem 0.5rem;
-  font-size: 0.75rem;
+  padding: 4px 8px;
+  font-size: 14px;
   line-height: 1.2;
   ${touchExpandTapArea}
 `;
@@ -489,12 +503,113 @@ const TreatmentChip = styled.button<{ $state: ChipVoteState }>`
 `;
 
 /** A thin vertical rule separating Frame's segmented control from Treatment's chip row within
- * the one shared `.ufilter` block (§6's ASCII diagram). */
+ * the one shared `.ufilter` block (§6's ASCII diagram). O1 fix round (SPEC-display-left-rail.md
+ * §D.1, corrected 2026-07-23) - the mockup's own `.ufilter .divider{background:var(--divider)}`
+ * maps this to the normalized `#16202b` rail-boundary hairline, not the unthemed
+ * `rgba(0,0,0,.22)` this used to hardcode. */
 const UnifiedFilterDivider = styled.span`
   align-self: stretch;
   width: 1px;
-  background: rgba(0, 0, 0, 0.22);
+  background: #16202b;
   margin: 0 2px;
+`;
+
+/**
+ * Rail-delegacy round (RD4/O3, SPEC-rail-delegacy.md) - the desktop/tablet Filters float panel is
+ * rendered via `ReactDOM.createPortal(..., document.body)`, not a plain in-tree `position:fixed`
+ * node: `LeftRailOffcanvas` (DisplayPage.tsx) is `position:sticky` at the inline `lg`+ breakpoint,
+ * which unconditionally establishes its own stacking context (CSS spec - sticky positioning
+ * always does, regardless of its own `z-index`) - any `position:fixed` descendant's `z-index`
+ * would only be compared against ITS siblings inside that local context, not the page-level sheet
+ * region, so a plain fixed node stayed BEHIND the sheet's own card tiles (caught live: Playwright
+ * couldn't click through to the backdrop, the tile intercepted the click). A real portal escapes
+ * every ancestor stacking context entirely, matching the spec's own "frame-level Overlay, escaping
+ * the 380px rail column and the tablet drawer's own clipping" requirement literally, not just in
+ * effect. Every class name below duplicates the same tokens `RailRoot`'s own `.fpanel.inline`
+ * (phone, still in-tree) rule carries in DisplayPage.tsx - see `SPEC-rail-delegacy.md` §D.2, kept
+ * in lockstep the same way any other two-container "shared body" pairing in this codebase is.
+ */
+const FloatFiltersPortalRoot = styled.div`
+  .fscrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 1050;
+  }
+  .fpanel.float {
+    position: fixed;
+    left: 50%;
+    top: 64px;
+    transform: translateX(-50%);
+    width: 440px;
+    max-width: calc(100% - 32px);
+    max-height: calc(100% - 96px);
+    overflow-y: auto;
+    z-index: 1051;
+    background: #22303f;
+    border: 1px solid #7f8fa0;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.6);
+    padding: 0;
+  }
+  .fpanel.float .fpwrap {
+    padding: 12px;
+  }
+  .fptitle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: #4e5d6b;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    position: sticky;
+    top: 0;
+  }
+  .fptitle button {
+    background: transparent;
+    border: 1px solid rgba(235, 235, 235, 0.2);
+    color: #ebebeb;
+    padding: 2px 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .fset {
+    border: none;
+    margin: 0 0 9px;
+    padding: 0;
+  }
+  .fset:last-child {
+    margin-bottom: 0;
+  }
+  .fset > .lg {
+    display: block;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #8fa0b0;
+    margin-bottom: 4px;
+  }
+  .fsep {
+    height: 1px;
+    background: #16202b;
+    margin: 9px -8px;
+  }
+  .implicit-note {
+    font-size: 10px;
+    color: #8fa0b0;
+    margin-top: 7px;
+    display: flex;
+    gap: 5px;
+    align-items: flex-start;
+    line-height: 1.4;
+  }
+  .implicit-note .ic {
+    color: #5bc0de;
+    flex: 0 0 auto;
+  }
 `;
 
 //# endregion
@@ -507,10 +622,13 @@ const TileImageWrap = styled.div`
   position: relative;
 `;
 
+// Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - alpha
+// normalized `.9` -> `.92` matching the D.1 table's literal `rgba(...,.92)` for all three
+// variants ("Tile ✓ canonical tag"/"Tile Alt tag"/"Tile ? unknown tag").
 const CORNER_TAG_COLORS: Record<"canon" | "alt" | "unk", string> = {
-  canon: "rgba(92,184,92,.9)",
-  alt: "rgba(91,192,222,.9)",
-  unk: "rgba(120,135,150,.9)",
+  canon: "rgba(92,184,92,.92)",
+  alt: "rgba(91,192,222,.92)",
+  unk: "rgba(120,135,150,.92)",
 };
 
 /** Group-membership corner tag (canonical ✓ / non-canonical Alt / unknown ?) - replaces the old
@@ -520,7 +638,9 @@ const CornerTag = styled.span<{ $variant: "canon" | "alt" | "unk" }>`
   top: 0;
   left: 0;
   z-index: 1;
-  font-size: 0.5rem;
+  /* Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - was 0.5rem
+     (8px); the D.1 table's own binding value for every corner tag variant is 7px. */
+  font-size: 7px;
   font-weight: 800;
   letter-spacing: 0.03em;
   padding: 0 3px;
@@ -574,21 +694,69 @@ const ConfirmRibbonWrap = styled.div`
 
 /** Inline ghost tile - "+N more of this printing" (collapsed) / "Show fewer" (expanded), same
  * footprint as a real candidate tile so it flows in the SAME flex-wrap grid rather than a
- * full-width row breaking it (§7's hard requirement). A real `button`, per §8. */
+ * full-width row breaking it (§7's hard requirement). A real `button`, per §8.
+ *
+ * Editor-polish round (EP1, SPEC-editor-polish.md §D.4 `.vtile.ghost`) - the collapsed box now
+ * carries the first hidden copy's own thumbnail (dimmed) instead of a plain dashed empty box:
+ * `GhostThumb`/`GhostDim`/`GhostPlus`/`GhostCap` below render only when the caller supplies a
+ * `thumbnailUrl` (the "+N" expand ghost only - the "−" collapse ghost stays plain text, nothing
+ * to dim). Border REV per §D.4: `1px rgba(235,235,235,.15)` (was `1px dashed #abb6c2`). */
 const GhostTile = styled.button<{ $widthRem: number }>`
+  position: relative;
   width: ${(props) => props.$widthRem}rem;
   aspect-ratio: 63 / 88;
   flex: 0 0 auto;
+  overflow: hidden;
   background: transparent;
-  outline: 1px dashed #abb6c2;
+  outline: 1px solid rgba(235, 235, 235, 0.15);
   border: none;
   color: #abb6c2;
   font-size: 0.65rem;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  /* Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this is a
+     real button element (buttons-look-like-buttons audit, §8/#5), so without an explicit reset
+     it carries the browser's own UA-stylesheet button padding (roughly 1px 6px in Chromium)
+     instead of the flush zero padding the spec's ghost tile assumes (the mockup's own demo
+     markup used a plain span with role=button, which has no such UA default - not a real
+     discrepancy to preserve). */
+  padding: 0;
   ${touchExpandTapArea}
+`;
+
+const GhostThumb = styled.img`
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+`;
+
+/* EP1 - the dimming scrim over the hidden copy's own thumbnail, per §D.4's literal token. */
+const GhostDim = styled.div`
+  position: absolute;
+  inset: 0;
+  background: rgba(11, 21, 32, 0.62);
+`;
+
+const GhostPlus = styled.span`
+  position: relative;
+  font-size: 16px;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+`;
+
+const GhostCap = styled.span`
+  position: relative;
+  font-size: 7px;
+  color: #cdd6df;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 0 3px;
+  margin-top: 2px;
 `;
 
 //# endregion
@@ -993,6 +1161,84 @@ function SelectVersionTile({
 
 //# endregion
 
+//# region item 7 (EP7, SPEC-editor-polish.md §D.4/§F annex, amendment 2) - data-driven Sort
+//
+// REVISES RD2/O5: the backend-driven 6-option `SortByOptions` select (`search.sortBy`) is
+// replaced, on THIS surface only (the stacked/funnel layout - the sidebar/modal layout's own
+// `.sortsel` two paragraphs below is untouched), by a client-side comparator over fields the
+// response already carries (§F annex - no backend seam). Amendment 2 (owner, 2026-07-24) ruled
+// FIVE orderings ship now; "Community vote weight" (Q1) waits for the
+// `suggestedCanonicalCardConfidence` numeric seam to actually land - rendering nothing for it,
+// not a disabled placeholder, per the amendment's own explicit instruction. The amendment's own
+// parenthetical compresses "Name (A→Z)" / "Date added" into one "Name/Date" bucket - implemented
+// here as "Name (A→Z)" (the literal wording the ORIGINAL seven-item list uses for that bucket);
+// "Date added" is not a separate option this round - see this task's own PR body for the flagged
+// judgement call.
+type ClientSortKey =
+  | "default"
+  | "confirmation"
+  | "dpi"
+  | "size"
+  | "pinned"
+  | "name";
+
+const CLIENT_SORT_LABELS: Record<ClientSortKey, string> = {
+  default: "Default order",
+  confirmation: "Confirmation status",
+  dpi: "Resolution (DPI) high→low",
+  size: "File size low→high",
+  pinned: "Pinned sources first",
+  name: "Name (A→Z)",
+};
+
+/** Annex: "resolved → suggested → unknown" - lower rank sorts first. */
+function confirmationRank(card: CardDocument | undefined): number {
+  if (card == null) {
+    return 3;
+  }
+  if (card.canonicalCard != null) {
+    return 0;
+  }
+  if (card.suggestedCanonicalCard != null) {
+    return 1;
+  }
+  return 2;
+}
+
+function compareByClientSort(
+  key: ClientSortKey,
+  identifierA: string,
+  identifierB: string,
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
+  pinnedSourcePks: Set<number>
+): number {
+  const cardA = cardDocumentsByIdentifier[identifierA];
+  const cardB = cardDocumentsByIdentifier[identifierB];
+  switch (key) {
+    case "confirmation":
+      return confirmationRank(cardA) - confirmationRank(cardB);
+    case "dpi":
+      // high -> low
+      return (cardB?.dpi ?? 0) - (cardA?.dpi ?? 0);
+    case "size":
+      // low -> high
+      return (cardA?.size ?? Infinity) - (cardB?.size ?? Infinity);
+    case "pinned": {
+      const rankA =
+        cardA != null && pinnedSourcePks.has(cardA.sourceId) ? 0 : 1;
+      const rankB =
+        cardB != null && pinnedSourcePks.has(cardB.sourceId) ? 0 : 1;
+      return rankA - rankB;
+    }
+    case "name":
+      return (cardA?.name ?? "").localeCompare(cardB?.name ?? "");
+    default:
+      return 0;
+  }
+}
+
+//# endregion
+
 interface SelectVersionResultsProps {
   imageIdentifiers: Array<string>;
   selectedImage: string | undefined;
@@ -1028,6 +1274,11 @@ export function SelectVersionResults({
   voteLayer,
 }: SelectVersionResultsProps) {
   const getTagDisplayName = useTagDisplayName();
+  // Rail-delegacy round (RD4/O3, SPEC-rail-delegacy.md) - tier-conditional Filters panel
+  // placement: phone = in-rail Collapse; desktop/tablet = a fixed-positioned panel toward the
+  // viewport centre (stacked/rail layout only - the sidebar/modal layout's own GridSelectorFilters
+  // AutofillCollapse is untouched).
+  const viewportTier = useViewportTier();
   // Editor-completion package, E4/L9 (Bkg 4) - this component's one caller is the /display rail
   // (see this file's own module comment), which the redline pins to always-compressed tiles at
   // the dense/medium disclosure tiers; F1/D21 relaxes this to expanded (compressed=false) tiles
@@ -1050,6 +1301,9 @@ export function SelectVersionResults({
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(
     new Set()
   );
+  // EP7 - the stacked/funnel layout's own client-side Sort (see this file's own "item 7" region
+  // comment above). `"default"` leaves selectVersionGrouping.ts's own ordering untouched.
+  const [clientSort, setClientSort] = useState<ClientSortKey>("default");
   const [dismissedConfirmChipKeys, setDismissedConfirmChipKeys] = useState<
     Set<string>
   >(new Set());
@@ -1191,15 +1445,12 @@ export function SelectVersionResults({
     filteredIdentifiers.length
   );
 
-  // D21 - "many (>8)" auto-expands the advanced Filters disclosure once, the first time the
-  // tier becomes dense; a user who manually re-collapses it afterwards is respected (this effect
-  // only depends on `tier`, so it won't re-fire while `tier` stays "dense").
-  useEffect(() => {
-    if (layout === "stacked" && tier === "dense") {
-      search.setSettingsVisible(true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layout, tier]);
+  // Rail-delegacy round (RD4/O1, SPEC-rail-delegacy.md) - the D21 "auto-expand once dense" effect
+  // is RETIRED: the funnel's axis chips now live INSIDE the same one Filters panel as the
+  // advanced fieldsets (item 2/3/5 unified), which the mockup keeps closed by default at every
+  // survivor count - auto-forcing it open on a busy result set would fight that calm, fully
+  // user-toggled design. `search.settingsVisible` is still the one shared open/closed flag
+  // (renamed "Filters" in the UI, RD2/item 2), just never force-set here any more.
 
   // F3 - per-axis chip membership, computed over survivors filtered by every OTHER axis's active
   // chips (never the axis's own selection - otherwise picking Black would make White/Silver
@@ -1266,6 +1517,38 @@ export function SelectVersionResults({
       ),
     [filteredIdentifiers, cardDocumentsByIdentifier, requestedPrinting]
   );
+
+  // EP7 - re-orders the TOP-LEVEL groups only (each group's own representative/rest ordering,
+  // and the canonical -> non-canonical -> unknown section ordering itself, are untouched -
+  // selectVersionGrouping.ts stays the one source of truth for those); "default" is a no-op
+  // returning `groups` itself, so this costs nothing when Sort is left alone. Pinned-source
+  // membership is read directly from the same localStorage helper SourcesAccordion.tsx itself
+  // uses (`getLocalStoragePinnedSourcePks`) - re-read on every `clientSort` change, not reactive
+  // to a pin toggle elsewhere in the rail mid-render (a real, documented limitation - re-picking
+  // "Pinned sources first" from the dropdown refreshes it).
+  const clientSortedGroups = useMemo(() => {
+    if (clientSort === "default") {
+      return groups;
+    }
+    const pinnedSourcePks = new Set(getLocalStoragePinnedSourcePks());
+    const compare = (identifierA: string, identifierB: string) =>
+      compareByClientSort(
+        clientSort,
+        identifierA,
+        identifierB,
+        cardDocumentsByIdentifier,
+        pinnedSourcePks
+      );
+    return {
+      canonical: [...groups.canonical].sort((a, b) =>
+        compare(a.representative, b.representative)
+      ),
+      nonCanonical: [...groups.nonCanonical].sort((a, b) =>
+        compare(a.representative, b.representative)
+      ),
+      unknown: [...groups.unknown].sort(compare),
+    };
+  }, [groups, clientSort, cardDocumentsByIdentifier]);
 
   // F4 - the funnel's own pick handler: computes the implicit support set for the picked
   // candidate, forwards the pick unchanged to the caller (onSelectImage - the slot's image is
@@ -1376,11 +1659,16 @@ export function SelectVersionResults({
         label: string;
         ariaLabel: string;
         onClick: () => void;
+        /** EP1 (SPEC-editor-polish.md §D.4/E - "renders the first hidden copy's thumbnail,
+         * dimmed... with a centred +N and a 'more copies' caption") - set only on the "+N"
+         * expand ghost, never the "−" collapse one (nothing to preview there). */
+        thumbnailUrl?: string;
+        count?: number;
       };
 
   const continuousGridEntries: ContinuousGridEntry[] = [];
   if (layout === "stacked") {
-    groups.canonical.forEach((group) => {
+    clientSortedGroups.canonical.forEach((group) => {
       const label = `${group.expansionCode.toUpperCase()} ${
         group.collectorNumber
       }`;
@@ -1421,11 +1709,14 @@ export function SelectVersionResults({
           label: `+${group.rest.length}`,
           ariaLabel: `Show ${group.rest.length} more copies of ${label}`,
           onClick: () => toggleGroupExpanded(group.key),
+          thumbnailUrl:
+            cardDocumentsByIdentifier[group.rest[0]]?.smallThumbnailUrl,
+          count: group.rest.length,
         });
       }
     });
 
-    groups.nonCanonical.forEach((group) => {
+    clientSortedGroups.nonCanonical.forEach((group) => {
       const label = getTagDisplayName(group.tagName);
       const expanded = expandedGroupKeys.has(group.tagName);
       continuousGridEntries.push({
@@ -1459,11 +1750,14 @@ export function SelectVersionResults({
           label: `+${group.rest.length}`,
           ariaLabel: `Show ${group.rest.length} more ${label} copies`,
           onClick: () => toggleGroupExpanded(group.tagName),
+          thumbnailUrl:
+            cardDocumentsByIdentifier[group.rest[0]]?.smallThumbnailUrl,
+          count: group.rest.length,
         });
       }
     });
 
-    groups.unknown.forEach((identifier) => {
+    clientSortedGroups.unknown.forEach((identifier) => {
       const originalIndex = search.originalIndexMap.get(identifier);
       const label =
         originalIndex != null ? `Option ${originalIndex + 1}` : "Unknown";
@@ -1502,12 +1796,30 @@ export function SelectVersionResults({
           <GhostTile
             key={entry.key}
             type="button"
+            className="vtile ghost"
             $widthRem={tileWidthRem ?? 4.5}
             aria-label={entry.ariaLabel}
             onClick={entry.onClick}
             data-testid={`select-version-ghost-${entry.key}`}
           >
-            {entry.label}
+            {entry.thumbnailUrl != null ? (
+              <>
+                <GhostThumb
+                  src={entry.thumbnailUrl}
+                  alt=""
+                  aria-hidden="true"
+                />
+                <GhostDim aria-hidden="true" />
+                <GhostPlus
+                  data-testid={`select-version-ghost-plus-${entry.key}`}
+                >
+                  {entry.label}
+                </GhostPlus>
+                <GhostCap>more copies</GhostCap>
+              </>
+            ) : (
+              entry.label
+            )}
           </GhostTile>
         )
       )}
@@ -1626,8 +1938,16 @@ export function SelectVersionResults({
       setSourceSettings={search.setSourceSettings}
       projectFilter={search.projectFilter}
       // E4/X4 (Bkg 3/4) - only the stacked (rail) caller hides "View" (Group-by/Compressed);
-      // the sidebar (modal/browse) callers are unaffected.
-      hiddenSections={layout === "stacked" ? ["view"] : undefined}
+      // the sidebar (modal/browse) callers are unaffected. 2026-07-24 owner escalation:
+      // the rail also hides the stock sources table and attribute toggle bars - the rail's
+      // own SOURCES accordion and Treatment/Frame/Border chip fieldset are the designed
+      // versions of both (SPEC-display-left-rail.md), and rendering the stock duplicates
+      // beneath them was the "looks nothing like Quorra's spec" report.
+      hiddenSections={
+        layout === "stacked"
+          ? ["view", "filter-sources", "filter-attributes"]
+          : undefined
+      }
     />
   );
 
@@ -1682,53 +2002,124 @@ export function SelectVersionResults({
   );
 
   if (layout === "stacked") {
-    // F1 - only axes with >=1 visible chip actually render (FunnelAxisRow itself returns null
-    // otherwise); D21 - axes stay visible while narrowing is still useful (dense/medium tiers),
-    // collapsing to the head's active-pill summary at hero/none (nothing left worth partitioning
-    // at that point).
-    const showAxes = tier === "dense" || tier === "medium";
-    return (
-      <div data-testid="select-version-section" data-funnel-tier={tier}>
-        {/* A. funnel head - count, active-tag pills (always shown, any tier, so the user can
-            still see/clear a filter even once the axis rows themselves collapse), the Filters
-            disclosure toggle. */}
-        <div
-          className="d-flex align-items-center gap-2 flex-wrap mb-2"
-          data-testid="funnel-head"
+    // Rail-delegacy round (item 2/3/5, RD1/RD2/RD4, SPEC-rail-delegacy.md) - the funnel's own
+    // Border/Frame/Treatment chips are no longer a separate always-visible block above the grid;
+    // they're now ONE fieldset inside the SAME Filters panel as the advanced fieldsets (DPI/
+    // size/languages/tags/NSFW), all gated behind the ONE `svhead` "Filters" toggle
+    // (`search.settingsVisible`). `FunnelAxisRow` still self-hides an axis with no surviving
+    // chips (F3, unchanged).
+    const filterFieldsetsBody = (
+      <>
+        <fieldset
+          className="fset"
+          style={{ marginBottom: 0 }}
+          data-testid="funnel-unified-filter"
         >
-          <span className="text-muted small" data-testid="funnel-count">
-            {filteredIdentifiers.length.toLocaleString()} version
-            {filteredIdentifiers.length !== 1 ? "s" : ""}
-          </span>
-          {activeAttributeTags.size > 0 && (
-            <div
-              className="d-flex flex-wrap gap-1"
-              data-testid="funnel-active-pills"
-            >
-              {Array.from(activeAttributeTags).map((tagName) => (
-                <span
-                  key={tagName}
-                  role="button"
-                  className="badge rounded-pill text-bg-secondary"
-                  onClick={() => toggleAttributeTag(tagName)}
-                  data-testid={`funnel-active-pill-${tagName}`}
-                >
-                  {getTagDisplayName(tagName)} ×
-                </span>
-              ))}
+          <span className="lg">Filter versions</span>
+          <legend className="visually-hidden">
+            Border, frame, and treatment filters
+          </legend>
+          <FunnelAxisRow
+            axis={FUNNEL_AXES[0]}
+            activeTagNames={activeAttributeTags}
+            membershipByTagName={membershipByTagName}
+            onAxisChange={handleAxisChange}
+            getTagDisplayName={getTagDisplayName}
+            rowStyle={{ marginBottom: "5px" }}
+          />
+          <div
+            className="d-flex align-items-center flex-wrap"
+            style={{ gap: "6px" }}
+            data-testid="funnel-frame-treatment-row"
+          >
+            <FunnelAxisRow
+              axis={FUNNEL_AXES[1]}
+              activeTagNames={activeAttributeTags}
+              membershipByTagName={membershipByTagName}
+              onAxisChange={handleAxisChange}
+              getTagDisplayName={getTagDisplayName}
+            />
+            <UnifiedFilterDivider aria-hidden="true" />
+            <TreatmentChipRow
+              axis={FUNNEL_AXES[2]}
+              activeTagNames={activeAttributeTags}
+              excludedTagNames={excludedAttributeTags}
+              membershipByTagName={membershipByTagName}
+              onCycle={toggleTreatmentChip}
+              getTagDisplayName={getTagDisplayName}
+            />
+          </div>
+          {/* O1/RD1 - the implicit-vote awareness line, kept gated on >=1 active chip (unlike the
+              mockup's decorative always-on demo copy): `voteLayer.awarenessCopy` names the tags
+              actually at stake, which has nothing to describe with zero active chips. */}
+          {votesOn && voteLayer != null && activeAttributeTags.size > 0 && (
+            <div className="implicit-note" data-testid="funnel-awareness-line">
+              <span className="ic" aria-hidden="true">
+                ⓘ
+              </span>
+              <span>
+                {voteLayer.awarenessCopy(Array.from(activeAttributeTags))}
+              </span>
             </div>
           )}
+        </fieldset>
+        <div className="fsep" />
+        <FilterSettingsElement
+          filterSettings={search.filterSettings}
+          setFilterSettings={search.setFilterSettings}
+          minDPILowerBound={search.projectFilter?.minimumDPI}
+          maxDPIUpperBound={search.projectFilter?.maximumDPI}
+          maxSizeUpperBound={search.projectFilter?.maximumSize}
+          showBoilerplate={false}
+          showResolvedAttributeFilter={false}
+        />
+      </>
+    );
+
+    const closeFilters = () => search.setSettingsVisible(false);
+    const isPhoneTier = viewportTier === "phone";
+
+    return (
+      <div data-testid="select-version-section" data-funnel-tier={tier}>
+        {/* item 2 (RD2) - the SV header row: [N versions] [Sort ▾] [Filters ▾], replacing the
+            old always-visible count+pills bar. */}
+        <div className="svhead" data-testid="svhead">
+          <span data-testid="funnel-count">
+            <span className="n">
+              {filteredIdentifiers.length.toLocaleString()}
+            </span>{" "}
+            version
+            {filteredIdentifiers.length !== 1 ? "s" : ""}
+          </span>
+          <span style={{ flex: "1 1 auto" }} />
+          {/* EP7 (SPEC-editor-polish.md §D.4 `.sortsel`, REV RD2/O5, amendment 2) - the
+              backend-driven 6-option `SortByOptions` select is replaced, on this surface, by the
+              five client-side orderings (see this file's own "item 7" region comment above);
+              "Community vote weight" (Q1) renders nothing until the confidence-numeric seam
+              lands, per the amendment's explicit ruling. */}
+          <Form.Select
+            size="sm"
+            className="sortsel"
+            aria-label="Sort versions"
+            value={clientSort}
+            onChange={(event) =>
+              setClientSort(event.target.value as ClientSortKey)
+            }
+            data-testid="funnel-sort-select"
+          >
+            {(Object.keys(CLIENT_SORT_LABELS) as ClientSortKey[]).map((key) => (
+              <option key={key} value={key}>
+                {CLIENT_SORT_LABELS[key]}
+              </option>
+            ))}
+          </Form.Select>
           {/* Owner fix round (2026-07-23, SPEC-display-left-rail.md §8 "buttons-look-like-
-              buttons" audit) - the RULE WINS over the reference mockup's own underlined-text
-              treatment: this performs an action (expands/collapses the filter disclosure), so it
-              reads as a real button (`outline-light` - `outline-secondary`'s near-invisible on
-              this dark surface), not a link. This also AGREES with upstream, which already
-              renders GridSelectorFilters' own settings toggle as a Button - see the spec's own
-              upstream-divergence note for the "does NOT diverge" record. */}
+              buttons" audit) - a real button, not underlined text (this performs an action). */}
           <CompactButton
             variant="outline-light"
             size="sm"
-            className="ms-auto"
+            className="filtersbtn"
+            aria-expanded={search.settingsVisible}
             onClick={() => search.setSettingsVisible((v) => !v)}
             data-testid="funnel-filters-toggle"
           >
@@ -1741,93 +2132,65 @@ export function SelectVersionResults({
           </CompactButton>
         </div>
 
-        {/* B. Border (own exclusive row) + unified Frame+Treatment block (§6, addendum item 1 -
-            "i want the filters list unified, treatment and frame type can sit in one spot to
-            save space"). Border keeps its own row (owner named only Frame+Treatment to merge);
-            Frame (still an exclusive `FunnelAxisRow`) and Treatment (new tri-state chips) share
-            ONE bordered fieldset. Only axes with >=1 surviving candidate render at all (F3,
-            unchanged); D21 - axes stay visible at dense/medium tiers, collapse to the head's
-            active-pill summary at hero/none. */}
-        {showAxes && (
-          <fieldset
-            className="ufilter"
-            style={{
-              border: "1px solid rgba(0,0,0,.22)",
-              background: "#22303f",
-              padding: "6px 8px",
-              // CSS-fidelity pass (2026-07-23) - `mb-1` (0.25rem/4px) approximated the mockup's
-              // own literal `.ufilter{margin-bottom:6px}`; set directly, same rationale as the
-              // row gaps below.
-              marginBottom: "6px",
-            }}
-            data-testid="funnel-unified-filter"
-          >
-            <legend className="visually-hidden">
-              Frame and treatment filters
-            </legend>
-            <FunnelAxisRow
-              axis={FUNNEL_AXES[0]}
-              activeTagNames={activeAttributeTags}
-              membershipByTagName={membershipByTagName}
-              onAxisChange={handleAxisChange}
-              getTagDisplayName={getTagDisplayName}
-              // Border is the fieldset's first `.ufilter .row` - mockup:
-              // `.ufilter .row{margin-bottom:5px}` (not the last row, so the
-              // `.row:last-child{margin-bottom:0}` override doesn't apply to it).
-              rowStyle={{ marginBottom: "5px" }}
-            />
-            <div
-              className="d-flex align-items-center flex-wrap"
-              // CSS-fidelity pass (2026-07-23) - see FunnelAxisRow's own gap comment; this IS the
-              // fieldset's actual last `.ufilter .row` (mockup: `margin-bottom:0`, the default).
-              style={{ gap: "6px" }}
-              data-testid="funnel-frame-treatment-row"
-            >
-              <FunnelAxisRow
-                axis={FUNNEL_AXES[1]}
-                activeTagNames={activeAttributeTags}
-                membershipByTagName={membershipByTagName}
-                onAxisChange={handleAxisChange}
-                getTagDisplayName={getTagDisplayName}
-                // Nested inside this shared row (not a `.row` in its own right) - no margin of
-                // its own, matching FunnelAxisRow's own default.
-              />
-              <UnifiedFilterDivider aria-hidden="true" />
-              <TreatmentChipRow
-                axis={FUNNEL_AXES[2]}
-                activeTagNames={activeAttributeTags}
-                excludedTagNames={excludedAttributeTags}
-                membershipByTagName={membershipByTagName}
-                onCycle={toggleTreatmentChip}
-                getTagDisplayName={getTagDisplayName}
-              />
+        {/* item 2/3/5 (RD4/O3) - ONE shared fieldset body, rendered tier-conditionally: phone =
+            in-rail Collapse expanding IN PLACE (no overlay-over-overlay in the bottom-sheet);
+            desktop inline rail + tablet drawer = a panel portaled to `document.body` and fixed-
+            positioned toward the viewport centre - see `FloatFiltersPortalRoot`'s own comment for
+            why a plain in-tree `position:fixed` node isn't enough (LeftRailOffcanvas's own
+            `position:sticky` traps it inside a local stacking context). Only ONE of the two
+            containers is ever mounted for a given `viewportTier`, so the fieldsets' own state
+            (all lifted into `search`) can never drift between two simultaneously-rendered
+            copies. */}
+        {isPhoneTier ? (
+          <Collapse in={search.settingsVisible}>
+            <div>
+              <div
+                className="fpanel inline"
+                role="group"
+                aria-label="Version filters"
+                data-testid="filters-panel-inline"
+              >
+                {filterFieldsetsBody}
+              </div>
             </div>
-          </fieldset>
-        )}
-
-        {/* B'. advanced filters (E4, unchanged) - full-width, stacked, in the rail's own scroll
-            container. */}
-        {search.settingsVisible && (
-          <div className="sv-filters border-bottom mb-2 pb-2">
-            {filtersElement}
-          </div>
-        )}
-
-        {/* C. implicit-vote awareness line (F4a) - votes-on + >=1 active chip only. */}
-        {votesOn && voteLayer != null && activeAttributeTags.size > 0 && (
-          <AwarenessLine
-            className="small mb-2"
-            data-testid="funnel-awareness-line"
-          >
-            <span style={{ color: "#df6919", fontWeight: 700 }}>ⓘ</span>{" "}
-            {voteLayer.awarenessCopy(Array.from(activeAttributeTags))}
-          </AwarenessLine>
+          </Collapse>
+        ) : (
+          search.settingsVisible &&
+          typeof document !== "undefined" &&
+          createPortal(
+            <FloatFiltersPortalRoot>
+              <div
+                className="fscrim"
+                onClick={closeFilters}
+                data-testid="filters-panel-scrim"
+              />
+              <div
+                className="fpanel float"
+                role="group"
+                aria-label="Version filters"
+                data-testid="filters-panel-float"
+              >
+                <div className="fptitle">
+                  <span>Filters — refine versions</span>
+                  <button
+                    type="button"
+                    onClick={closeFilters}
+                    data-testid="filters-panel-close"
+                  >
+                    Close ✕
+                  </button>
+                </div>
+                <div className="fpwrap">{filterFieldsetsBody}</div>
+              </div>
+            </FloatFiltersPortalRoot>,
+            document.body
+          )
         )}
 
         {/* post-pick ack (F4c). */}
         {votesOn && justSupportedTags != null && (
           <AckLine
-            className="small mb-2"
+            className="small mb-2 mt-2"
             aria-live="polite"
             data-testid="funnel-support-ack"
           >
@@ -1836,8 +2199,16 @@ export function SelectVersionResults({
           </AckLine>
         )}
 
-        {/* D. survivors grid, count-proportional (F1/D21). */}
-        {tier === "none" ? (
+        {/* EP10 (SPEC-editor-polish.md §D.4 `.vloading`/`.spinner-border`) - the site's canonical
+            round spinner (`components/Spinner.tsx`, reused verbatim) replaces the grid entirely
+            while the filter/settings debounce is still pending - this surface previously showed
+            no loading affordance at all for that gap. */}
+        {search.displaySpinner ? (
+          <div className="vloading" data-testid="select-version-loading">
+            <Spinner size={2.6} />
+            <span>Loading versions…</span>
+          </div>
+        ) : tier === "none" ? (
           <div
             className="text-center text-muted small py-3"
             data-testid="funnel-empty-state"

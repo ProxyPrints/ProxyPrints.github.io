@@ -1,15 +1,25 @@
 /**
- * The display page rail's Slot Actions accordion section (Proposal H pane migration, left-panel
+ * The display page rail's Slot Actions section (Proposal H pane migration, left-panel
  * unification - docs/proposals/proposal-h-unified-display-page.md §5). Same action list
  * (getCardSlotMenuActions), same handlers, as CardSlot.tsx's own 3-dot dropdown/context menu -
  * "rendered as a plain action list inside the section body instead of a dropdown/context-menu
  * overlay," per the design doc's own component-mapping row for this section.
  *
+ * Editor-polish round (EP4, SPEC-editor-polish.md §D.1 `.slotacts-top .iact`, REV RD5) - gains
+ * an additive, optional `compact` prop: `32×30` icon-only buttons in a horizontal, wrapping row
+ * (rail-head placement, beside the subject image), instead of the full-width `outline-*` button
+ * column below (still the bottom `ControlStack`'s own look before this round - now retired
+ * entirely, since EP4 moves every caller of this component to `compact`). Same `menuActions`,
+ * same handlers, same per-action `data-testid`s either way - only the layout/size differs, so
+ * every existing "click `display-slot-action-delete`" test keeps working regardless of which
+ * variant is mounted.
+ *
  * diverges from upstream: upstream renders the CardSlotMenuActions list only as Dropdown.Items /
- * a context menu (CardSlotContextMenu.tsx); this rail renders the SAME action list as a stacked
- * outline-light/outline-danger button column instead. Behavior/actions are identical; only the
- * presentation diverges (SPEC-display-left-rail.md §8's buttons-look-like-buttons audit).
+ * a context menu (CardSlotContextMenu.tsx); this rail renders the SAME action list as a button
+ * row/column instead. Behavior/actions are identical; only the presentation diverges
+ * (SPEC-display-left-rail.md §8's buttons-look-like-buttons audit; SPEC-editor-polish.md §D.1).
  */
+import styled from "@emotion/styled";
 import React from "react";
 import Button from "react-bootstrap/Button";
 
@@ -24,6 +34,46 @@ import {
   duplicateSlot,
 } from "@/store/slices/projectSlice";
 
+// EP4 - the compact rail-head icon button: 32×30, 14px glyph, transparent/`#abb6c2`/1px
+// `#abb6c2`, danger variant `#f0a6a3`/1px `#d9534f`, hover fills solid. A plain `.danger`
+// CLASS, not a transient (`$`-prefixed) styled-component prop: emotion only auto-filters
+// `$`-prefixed props from reaching the DOM when `styled()` wraps a plain intrinsic tag
+// (`styled.button`) - wrapping another REACT COMPONENT (`styled(Button)`, as here) can't do
+// that filtering, since `Button` itself has no idea a `$`-prefixed prop needs stripping before
+// its own `...rest` spread onto the native `<button>` (confirmed live - the unfiltered version
+// of this component leaked a literal `$danger="true"` DOM attribute, a real React console
+// warning, not just a lint nit).
+const IconAction = styled(Button)`
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  background: transparent;
+  color: #abb6c2;
+  border: 1px solid #abb6c2;
+
+  &:hover:not(:disabled),
+  &:focus:not(:disabled) {
+    background: #abb6c2;
+    color: #111;
+  }
+
+  &.danger {
+    color: #f0a6a3;
+    border-color: #d9534f;
+  }
+
+  &.danger:hover:not(:disabled),
+  &.danger:focus:not(:disabled) {
+    background: #d9534f;
+    color: #fff;
+  }
+`;
+
 interface SlotActionsSectionProps {
   face: Faces;
   slot: number;
@@ -31,6 +81,10 @@ interface SlotActionsSectionProps {
   /** Called after Delete so the rail can drop back to its idle state - the just-deleted slot's
    * own selection reference would otherwise dangle, pointing at a slot that no longer exists. */
   onDeleted: () => void;
+  /** EP4 - `true` (the rail-head mount) renders the compact icon row; omitted/`false` (no
+   * remaining caller after this round, kept for the "additive, behaviour-preserving prop" rule)
+   * keeps the original full-width labelled button column. */
+  compact?: boolean;
 }
 
 export function SlotActionsSection({
@@ -38,6 +92,7 @@ export function SlotActionsSection({
   slot,
   searchQuery,
   onDeleted,
+  compact = false,
 }: SlotActionsSectionProps) {
   const dispatch = useAppDispatch();
 
@@ -74,6 +129,36 @@ export function SlotActionsSection({
       dispatch(bulkRemovePrintingFilter({ slots: [[face, slot]] })),
     showUnfilterPrinting: !!doesSearchQueryFilterOnPrinting(searchQuery),
   });
+
+  if (compact) {
+    // EP4 (§D.1 `.slotacts-top .iact`) - icon-only, 32×30, in a wrapping row beside the subject
+    // image; `aria-label` carries the action's own label text since there's no visible text
+    // here for it to come from.
+    return (
+      <div
+        className="d-flex flex-wrap slotacts-top"
+        style={{ gap: "6px", marginTop: "8px" }}
+        data-testid="display-slot-actions-section"
+      >
+        {menuActions.map((action) => (
+          <IconAction
+            key={action.key}
+            className={action.key === "delete" ? "iact danger" : "iact"}
+            size="sm"
+            onClick={action.onClick}
+            aria-label={action.label}
+            title={action.label}
+            data-testid={`display-slot-action-${action.key}`}
+          >
+            <i
+              className={`bi bi-${action.bootstrapIconName}`}
+              aria-hidden="true"
+            />
+          </IconAction>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div

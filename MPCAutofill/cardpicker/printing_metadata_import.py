@@ -12,6 +12,7 @@ from bulk_sync import bulk_sync
 from pydantic import BaseModel, ValidationError
 
 from django.conf import settings
+from django.core.management.base import CommandError
 
 from cardpicker.integrations.game.mtg import Scryfall
 from cardpicker.models import CanonicalCard, CanonicalPrintingMetadata
@@ -84,6 +85,45 @@ def _cache_path() -> Path:
 
 def _is_stale(path: Path) -> bool:
     return not path.exists() or time.time() - path.stat().st_mtime > 7 * 24 * 3600
+
+
+def ensure_scryfall_cache_present(default_cards_path: Path | None = None) -> None:
+    """
+    Fail-loud staleness guard (issue #402). The Scryfall bulk-data cache
+    (`scryfall_cache/default_cards.json`, ~558MB) lived as a plain file inside the django/worker
+    container filesystem with no persistent volume mounted over it - every image rebuild silently
+    destroyed it. Deploy-2 (2026-07-23) did exactly that, and `local_calculate_verdicts` went on
+    to run degraded: `get_back_face_names`/`is_back_face` (see their own docstrings) treat a
+    missing file as "no back faces known yet" - logging one warning and returning an empty
+    `frozenset()` - which is the right behaviour for THAT function (a per-card lookup has no
+    business raising), but left the whole run silently degraded with nothing loud enough to catch
+    in a routine log skim.
+
+    This is the loud counterpart: call it ONCE, at a long-running command's own start (see
+    `local_calculate_verdicts`'s `Command.handle()`), BEFORE any card-by-card work begins. Raises
+    `CommandError` immediately if the cache file does not exist. Callers that have deliberately
+    decided to accept the degraded (empty back-face lookup) mode - e.g. a fresh bootstrap that
+    hasn't run `import_scryfall_printing_metadata`/`import_canonical_card_data` yet - should catch
+    this by not calling the guard at all (an explicit `--allow-missing-scryfall-cache`-style flag
+    at the call site), rather than this function growing its own bypass flag.
+
+    Deliberately checks EXISTENCE only, not staleness - `_is_stale`'s 7-day weekly re-download
+    window is a completely separate, already-working concern
+    (`import_scryfall_printing_metadata`/`import_canonical_card_data` both already re-fetch a
+    stale-but-present file on their own next run); this guard only exists to catch the file being
+    GONE.
+    """
+    path = default_cards_path or _cache_path()
+    if not path.exists():
+        raise CommandError(
+            f"SCRYFALL CACHE MISSING: {path} does not exist. This is the persistent "
+            "scryfall_cache volume (docker/docker-compose.prod.yml) backing "
+            "get_back_face_names/is_back_face's back-face lookup - proceeding without it "
+            "silently degrades that lookup to an empty set (see printing_metadata_import."
+            "ensure_scryfall_cache_present's own docstring), not a loud failure. Populate it by "
+            "running import_scryfall_printing_metadata or import_canonical_card_data first, or "
+            "pass --allow-missing-scryfall-cache to explicitly accept the degraded mode."
+        )
 
 
 @section_timer(name="get default_cards bulk data URL")

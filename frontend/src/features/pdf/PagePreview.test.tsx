@@ -360,6 +360,71 @@ describe("PagePreview - bleed badge (Proposal B PR-3)", () => {
   });
 });
 
+describe("PagePreview - orphan badge (issue #324 follow-up)", () => {
+  it("renders the orphan badge with the given label when orphanLabel is set", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+            orphanLabel: "Your file",
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    expect(screen.getByTestId("orphan-badge")).toHaveTextContent("Your file");
+  });
+
+  it("renders no orphan badge when orphanLabel is omitted (a non-orphan card)", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    expect(screen.queryByTestId("orphan-badge")).not.toBeInTheDocument();
+  });
+
+  it("renders no orphan badge on a slot with no resolved imageUrl, even with orphanLabel set", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: undefined,
+            name: "Card 1",
+            orphanLabel: "Your file",
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+
+    expect(screen.queryByTestId("orphan-badge")).not.toBeInTheDocument();
+  });
+});
+
 // Sanity: the card constants this component relies on (via computeLayout) are the same ones
 // PDF.tsx itself uses, so a preview slot's box size always matches a generated PDF's.
 describe("PagePreview - card constants", () => {

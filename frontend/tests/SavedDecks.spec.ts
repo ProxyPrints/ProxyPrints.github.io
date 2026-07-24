@@ -21,7 +21,10 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "./test-utils";
+import {
+  importTextOnEditorLanding,
+  loadPageWithDefaultBackend,
+} from "./test-utils";
 
 const TEST_ITERATIONS = 100;
 const PASSPHRASE = "the real one";
@@ -37,23 +40,14 @@ const threeCardHandlers = [
 // browser behavior (WebCrypto is polyfilled in jest; here it's the real thing) and for the
 // nav-gated visibility this feature depends on.
 test.describe("saved decks", () => {
-  test("editor shows the Save action and breadcrumb once signed in", async ({
-    page,
-    network,
-  }) => {
-    network.use(
-      whoamiSignedInNotModerator,
-      noProfileHandler(),
-      ...defaultHandlers
-    );
-    await loadPageWithDefaultBackend(page, "editor");
-
-    await expect(page.getByTestId("saved-deck-breadcrumb")).toHaveText(
-      "Unsaved project"
-    );
-    // the project is empty at this point in loadPageWithDefaultBackend, so Save is disabled
-    await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
-  });
+  // Proposal H switchover (2026-07-23, issues #231/#272) removed this suite's original "editor
+  // shows the Save action and breadcrumb once signed in" test: /editor now serves the unified
+  // page, whose SavedDeckPanel toolbar (`display-toolbar`) only mounts once the project is
+  // non-empty (DisplayPage.tsx's own `isProjectEmpty` branch) - the classic editor's own
+  // always-mounted breadcrumb/Save button this test exercised on an empty project has no
+  // equivalent on an empty /editor landing anymore. The signed-in/anonymous Save-visibility
+  // coverage this test provided is superseded by "display toolbar shows/hides the Save action..."
+  // below, which already covers both auth states on a populated project.
 
   // Nav+footer redesign (2026-07-22, N5) - My Decks was cut from the nav entirely (it now lives
   // in the homepage panel's own CTA and the editor landing, not a top-bar link), regardless of
@@ -85,11 +79,12 @@ test.describe("saved decks", () => {
   });
 
   // Issue #165, Proposal G save integration into Proposal H's unified display page (docs/
-  // proposals/proposal-h-unified-display-page.md) - the exact same SavedDeckPanel the editor's
-  // right panel mounts, wired into /display's own toolbar (see DisplayPage.tsx's own comment for
-  // why this is a props-level reuse, not a fork). Reaches /display via the navbar link (client-
-  // side navigation), not page.goto("/display", ...) directly, so the cards imported on /editor
-  // survive into the new page - same precedent as DisplayPage.spec.ts's own tests.
+  // proposals/proposal-h-unified-display-page.md) - the exact same SavedDeckPanel the classic
+  // editor's right panel used to mount, wired into /editor's own toolbar (see DisplayPage.tsx's
+  // own comment for why this is a props-level reuse, not a fork). Populates the project via
+  // /editor's own inline empty-landing importer (post-switchover, 2026-07-23 - see
+  // importTextOnEditorLanding's own comment), not a nav-link hop between two different pages -
+  // /editor is both the entry point and the toolbar's home now.
   test("display toolbar shows the Save action and breadcrumb once signed in", async ({
     page,
     network,
@@ -100,8 +95,7 @@ test.describe("saved decks", () => {
       ...threeCardHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     await expect(
@@ -118,8 +112,7 @@ test.describe("saved decks", () => {
   }) => {
     network.use(...threeCardHandlers); // defaultHandlers includes whoamiAnonymous
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     await expect(

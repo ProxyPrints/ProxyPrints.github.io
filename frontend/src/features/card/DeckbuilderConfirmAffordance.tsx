@@ -138,6 +138,10 @@ export function DeckbuilderConfirmAffordance({
   const [submitting, setSubmitting] = useState<boolean>(false);
 
   const isUnconfirmedCanonicalImport =
+    // Foreign-order resilience Phase 1 (issue #324): orphans get no consensus surfaces - this
+    // affordance exists to collect printing-tag votes against a real, indexed card, which an
+    // orphan (by definition) isn't.
+    card?.isOrphan !== true &&
     searchQuery?.expansionCode != null &&
     getPrintingMatchLabel(
       searchQuery,

@@ -35,13 +35,18 @@ from the other without any extra plumbing:
 The **load** side (`MyDecksPage.tsx`'s "Open in editor") still always
 navigates to `/editor`, unchanged — that's the spec's own explicit binding
 text (§4: "an **'Open in editor'** action per row ... navigates to
-`/editor`"), not an oversight of this integration. A user working entirely
-on `/display` therefore still has to detour through `/editor` once to load
-a previously-saved deck (client-side nav between the two pages preserves
-the in-memory project — see `DisplayPage.tsx`'s own comment — so this is a
-one-time hop, not a full reload); giving `/display` its own load entry
-point is unbuilt, tracked as an open item on issue #165, not silently
-assumed out of scope.
+`/editor`"), not an oversight of this integration. Before the 2026-07-23
+Proposal H switchover (issues #231/#272 — `/editor` now serves the unified
+page directly, `/display` redirects there), this meant a detour through
+the classic grid page for a user working on `/display`; that detour no
+longer exists post-switchover, since `/editor` and the page a `/display`
+visitor was already on are now the same route. `DisplayPage.tsx`'s own
+`isProjectEmpty` landing (issue #268's `SavedDecksLandingPanel`) remains
+the more direct in-place load path for an empty project — the open item
+this paragraph used to describe (giving the unified page its own load
+entry point) is effectively resolved by the route swap for the navigation
+case, though the landing panel's own scope (only shown when the project is
+empty) is unchanged.
 
 ## The mental model
 

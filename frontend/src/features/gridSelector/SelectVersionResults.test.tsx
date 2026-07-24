@@ -91,7 +91,12 @@ function buildVoteLayer(
 function makeSearch(identifiers: string[]): GridSelectorSearch {
   const defaults = getDefaultSearchSettings({});
   return {
-    settingsVisible: false,
+    // Rail-delegacy round (RD4/O1, SPEC-rail-delegacy.md) - the funnel's own Border/Frame/
+    // Treatment chips now live INSIDE the one Filters panel (`search.settingsVisible`), not
+    // always rendered above the grid - every test in this file exercises those chips directly,
+    // so the fixture starts the panel open (in the real app this is one `funnel-filters-toggle`
+    // click away, exercised end-to-end in tests/SelectVersionSection.spec.ts instead).
+    settingsVisible: true,
     setSettingsVisible: jest.fn(),
     filterSettings: defaults.filterSettings,
     setFilterSettings: jest.fn(),
@@ -304,14 +309,15 @@ describe("SelectVersionResults funnel (funnel-spec.md F1-F7)", () => {
     const chip = screen.getByTestId("funnel-treatment-chip-Full Art");
     expect(chip).toHaveAttribute("data-chip-membership", "settled");
     await user.click(chip);
-    // Filtering down to Full Art narrows the survivor count to 1 (only fa-1 carries it), which
-    // collapses the axis rows per D21's hero tier - the ORIGINAL `chip` element is detached once
-    // that happens, so the active state is asserted via the head's persistent active-pill instead
-    // (F1's summary line, which survives the collapse) rather than re-querying the gone chip.
+    // Filtering down to Full Art narrows the survivor count to 1 (only fa-1 carries it). Rail-
+    // delegacy round (RD1/RD4) - the fieldset no longer collapses at the "hero" tier (D21's own
+    // pill-summary it used to collapse TO is retired along with the always-visible arrangement),
+    // so the chip stays in the DOM and its own `data-state` is still the right place to assert
+    // "still active."
     await waitFor(() =>
       expect(screen.getByTestId("funnel-count")).toHaveTextContent("1 version")
     );
-    expect(screen.getByTestId("funnel-active-pill-Full Art")).toBeVisible();
+    expect(chip).toHaveAttribute("data-state", "positive");
 
     const tile = screen.getByTestId("select-version-tile-fa-1");
     const card = tile.querySelector(".mpccard") as HTMLElement;

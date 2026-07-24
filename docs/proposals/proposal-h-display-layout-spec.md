@@ -1,7 +1,15 @@
 # /display responsive layout spec — issues #266 / #267 / #268
 
+> **Routing note (2026-07-23, Proposal H switchover):** this doc's "/display" shorthand
+> throughout refers to the unified page's DESIGN, not its live URL — the switchover this
+> file's own §A5 tracked as still-open is now done: the unified page (component unchanged)
+> now serves at **`/editor`**, and `/display` is a client-side redirect there. See §A5's
+> updated entry for the full routing history and `frontend/src/pages/editor.tsx`'s own
+> comment for the implementation.
+
 Design target for the unified display page (`frontend/src/features/display/DisplayPage.tsx`,
-route `frontend/src/pages/display.tsx`). Companion mockup: `display-mockup.html` (same
+route `frontend/src/pages/editor.tsx`, formerly `frontend/src/pages/display.tsx` prior to the
+2026-07-23 switchover noted above). Companion mockup: `display-mockup.html` (same
 directory; open standalone via file://, use its top demo strip to force any breakpoint's
 view at any window width) — synced (this PR) with the committed mockup under
 `docs/proposals/mockups/proposal-h/responsive-layout-2026-07-21.html`, which previously
@@ -1117,11 +1125,21 @@ with the historical marking:
   bulk selection should work across page boundaries in particular has no
   answer yet.
 - **Switchover / retire old routes** (the historical doc's migration
-  steps 5–6): flipping the default nav entry point to `/display` and
-  eventually retiring `/editor`'s grid-only view + the standalone PDF tab
-  is still not done — `/display` and `/editor` both remain live, reachable
-  routes today. Tracked here as the one still-open piece of that doc's
-  migration plan; no target date set.
+  steps 5–6): **DONE (2026-07-23), superseding the "still not done" status
+  this bullet originally carried.** Per an explicit owner directive that a
+  nav-label swap (PR #313, which pointed the "Editor" nav link at `/display`
+  while leaving the classic grid page live at `/editor`) fell short of the
+  intended switchover, the unified page (component unchanged) now serves
+  directly at **`/editor`**; `/display` is a client-side redirect there,
+  preserving query params/fragment. The classic grid `ProjectEditor` this
+  replaces is fully unrouted (its component files are left in-tree, not
+  deleted — that remains its own later cleanup decision, i.e. the doc's
+  migration step 6's "retiring" half is now only a code-deletion task, not
+  a routing one). See `frontend/src/pages/editor.tsx` and
+  `frontend/src/pages/display.tsx`'s own comments for the implementation,
+  and this switchover's own PR for the parity-gap tradeoffs it accepted
+  (issue #272's checklist was not fully closed at the time of this swap —
+  the owner's directive was to proceed regardless).
 
 Everything else in the historical doc — its original single-toolbar/
 single-rail layout (§2–§3), its component-mapping table (§5), and its

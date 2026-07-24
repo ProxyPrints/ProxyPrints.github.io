@@ -1,3 +1,5 @@
+import { expect } from "@playwright/test";
+
 import { S30, SelectedImageSeparator } from "@/common/constants";
 import {
   cardDocument1,
@@ -22,13 +24,30 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  expectCardbackSlotState,
-  expectCardGridSlotStates,
-  expectCardSlotToExist,
-  importText,
-  importXML,
+  expectDisplaySheetSlotStates,
+  expectDisplaySheetSlotToExist,
+  importTextOnEditorLanding,
+  importXMLFromToolbar,
+  importXMLOnEmptyLanding,
   loadPageWithDefaultBackend,
 } from "./test-utils";
+
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page.
+// 9 of these 10 tests import into an EMPTY project - DisplayPage's empty-project landing mounts
+// the same plain ImportXML component verbatim, inline inside a collapsed "Import a File or URL"
+// accordion (importXMLOnEmptyLanding, test-utils.ts). The remaining test ("into a non-empty
+// project") uses the populated toolbar's own "Add Cards" dropdown instead - the SAME classic
+// Import.tsx dropdown, unforked, just mounted in a different container (importXMLFromToolbar).
+// Per-slot assertions are ported via expectDisplaySheetSlotStates - see that helper's own comment
+// for why dropping the selectedImage/totalImages numeric checks is still a faithful port here
+// (every fixture card has its own distinct name).
+//
+// The classic grid's standalone "common cardback" preview tile (`expectCardbackSlotState`, this
+// file's own pre-port version called it both before AND after every import) has no landing-page
+// equivalent at all (there's no sheet, hence no cardback slot, until a project actually exists) -
+// dropped rather than faked; its post-import state is already covered by the `backs` array of the
+// relevant `expectDisplaySheetSlotStates` call in every test below that touches the project
+// cardback.
 
 test.describe("ImportXML", () => {
   test("importing one card by XML into an empty project", async ({
@@ -44,9 +63,7 @@ test.describe("ImportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
-
-    await importXML(
+    await importXMLOnEmptyLanding(
       page,
       `<order>
         <details>
@@ -67,26 +84,11 @@ test.describe("ImportXML", () => {
       </order>`
     );
 
-    await expectCardGridSlotStates(
+    await expectDisplaySheetSlotStates(
       page,
-      [
-        {
-          slot: 1,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 1,
-        },
-      ],
-      [
-        {
-          slot: 1,
-          name: cardDocument3.name,
-          selectedImage: 2,
-          totalImages: 2,
-        },
-      ]
+      [{ slot: 1, name: cardDocument1.name }],
+      [{ slot: 1, name: cardDocument3.name }]
     );
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
   });
 
   test("importing multiple instances of one card by XML into an empty project", async ({
@@ -102,9 +104,7 @@ test.describe("ImportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
-
-    await importXML(
+    await importXMLOnEmptyLanding(
       page,
       `<order>
         <details>
@@ -125,38 +125,17 @@ test.describe("ImportXML", () => {
       </order>`
     );
 
-    await expectCardGridSlotStates(
+    await expectDisplaySheetSlotStates(
       page,
       [
-        {
-          slot: 1,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 1,
-        },
-        {
-          slot: 2,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 1,
-        },
+        { slot: 1, name: cardDocument1.name },
+        { slot: 2, name: cardDocument1.name },
       ],
       [
-        {
-          slot: 1,
-          name: cardDocument2.name,
-          selectedImage: 1,
-          totalImages: 2,
-        },
-        {
-          slot: 2,
-          name: cardDocument2.name,
-          selectedImage: 1,
-          totalImages: 2,
-        },
+        { slot: 1, name: cardDocument2.name },
+        { slot: 2, name: cardDocument2.name },
       ]
     );
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
   });
 
   test("importing one specific card version by XML into an empty project", async ({
@@ -172,9 +151,7 @@ test.describe("ImportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
-
-    await importXML(
+    await importXMLOnEmptyLanding(
       page,
       `<order>
         <details>
@@ -195,26 +172,11 @@ test.describe("ImportXML", () => {
       </order>`
     );
 
-    await expectCardGridSlotStates(
+    await expectDisplaySheetSlotStates(
       page,
-      [
-        {
-          slot: 1,
-          name: cardDocument3.name,
-          selectedImage: 3,
-          totalImages: 3,
-        },
-      ],
-      [
-        {
-          slot: 1,
-          name: cardDocument2.name,
-          selectedImage: 1,
-          totalImages: 2,
-        },
-      ]
+      [{ slot: 1, name: cardDocument3.name }],
+      [{ slot: 1, name: cardDocument2.name }]
     );
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
   });
 
   test("importing one card of each type into an empty project", async ({
@@ -230,9 +192,7 @@ test.describe("ImportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
-
-    await importXML(
+    await importXMLOnEmptyLanding(
       page,
       `<order>
         <details>
@@ -265,50 +225,19 @@ test.describe("ImportXML", () => {
       </order>`
     );
 
-    await expectCardGridSlotStates(
+    await expectDisplaySheetSlotStates(
       page,
       [
-        {
-          slot: 1,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 1,
-        },
-        {
-          slot: 2,
-          name: cardDocument6.name,
-          selectedImage: 1,
-          totalImages: 1,
-        },
-        {
-          slot: 3,
-          name: cardDocument5.name,
-          selectedImage: 1,
-          totalImages: 1,
-        },
+        { slot: 1, name: cardDocument1.name },
+        { slot: 2, name: cardDocument6.name },
+        { slot: 3, name: cardDocument5.name },
       ],
       [
-        {
-          slot: 1,
-          name: cardDocument3.name,
-          selectedImage: 2,
-          totalImages: 2,
-        },
-        {
-          slot: 2,
-          name: cardDocument3.name,
-          selectedImage: 2,
-          totalImages: 2,
-        },
-        {
-          slot: 3,
-          name: cardDocument3.name,
-          selectedImage: 2,
-          totalImages: 2,
-        },
+        { slot: 1, name: cardDocument3.name },
+        { slot: 2, name: cardDocument3.name },
+        { slot: 3, name: cardDocument3.name },
       ]
     );
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
   });
 
   test("importing a more complex XML into an empty project", async ({
@@ -324,9 +253,7 @@ test.describe("ImportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
-
-    await importXML(
+    await importXMLOnEmptyLanding(
       page,
       `<order>
         <details>
@@ -361,50 +288,19 @@ test.describe("ImportXML", () => {
       </order>`
     );
 
-    await expectCardGridSlotStates(
+    await expectDisplaySheetSlotStates(
       page,
       [
-        {
-          slot: 1,
-          name: cardDocument3.name,
-          selectedImage: 3,
-          totalImages: 4,
-        },
-        {
-          slot: 2,
-          name: cardDocument3.name,
-          selectedImage: 3,
-          totalImages: 4,
-        },
-        {
-          slot: 3,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 4,
-        },
+        { slot: 1, name: cardDocument3.name },
+        { slot: 2, name: cardDocument3.name },
+        { slot: 3, name: cardDocument1.name },
       ],
       [
-        {
-          slot: 1,
-          name: cardDocument4.name,
-          selectedImage: 4,
-          totalImages: 4,
-        },
-        {
-          slot: 2,
-          name: cardDocument4.name,
-          selectedImage: 4,
-          totalImages: 4,
-        },
-        {
-          slot: 3,
-          name: cardDocument2.name,
-          selectedImage: 1,
-          totalImages: 2,
-        },
+        { slot: 1, name: cardDocument4.name },
+        { slot: 2, name: cardDocument4.name },
+        { slot: 3, name: cardDocument2.name },
       ]
     );
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
   });
 
   test("importing an XML with gaps into an empty project", async ({
@@ -420,9 +316,7 @@ test.describe("ImportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
-
-    await importXML(
+    await importXMLOnEmptyLanding(
       page,
       `<order>
         <details>
@@ -457,52 +351,21 @@ test.describe("ImportXML", () => {
       </order>`
     );
 
-    await expectCardSlotToExist(page, 1);
-    await expectCardGridSlotStates(
+    await expectDisplaySheetSlotToExist(page, 1);
+    await expectDisplaySheetSlotStates(
       page,
       [
-        {
-          slot: 1,
-          name: cardDocument3.name,
-          selectedImage: 3,
-          totalImages: 4,
-        },
-        {
-          slot: 2,
-          name: cardDocument3.name,
-          selectedImage: 3,
-          totalImages: 4,
-        },
-        {
-          slot: 4,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 4,
-        },
+        { slot: 1, name: cardDocument3.name },
+        { slot: 2, name: cardDocument3.name },
+        { slot: 4, name: cardDocument1.name },
       ],
       [
-        {
-          slot: 1,
-          name: cardDocument4.name,
-          selectedImage: 4,
-          totalImages: 4,
-        },
-        {
-          slot: 2,
-          name: cardDocument2.name,
-          selectedImage: 1,
-          totalImages: 2,
-        },
-        {
-          slot: 4,
-          name: cardDocument4.name,
-          selectedImage: 4,
-          totalImages: 4,
-        },
+        { slot: 1, name: cardDocument4.name },
+        { slot: 2, name: cardDocument2.name },
+        { slot: 4, name: cardDocument4.name },
       ]
     );
-    await expectCardSlotToExist(page, 3);
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
+    await expectDisplaySheetSlotToExist(page, 3);
   });
 
   test("importing a more complex XML into a non-empty project", async ({
@@ -518,33 +381,18 @@ test.describe("ImportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `1x my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await expectCardGridSlotStates(
+    await expectDisplaySheetSlotStates(
       page,
-      [
-        {
-          slot: 1,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 4,
-        },
-      ],
-      [
-        {
-          slot: 1,
-          name: cardDocument2.name,
-          selectedImage: 1,
-          totalImages: 2,
-        },
-      ]
+      [{ slot: 1, name: cardDocument1.name }],
+      [{ slot: 1, name: cardDocument2.name }]
     );
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
 
-    // import a few more cards
-    await importXML(
+    // import a few more cards via the populated toolbar's "Add Cards" dropdown
+    await importXMLFromToolbar(
       page,
       `<order>
         <details>
@@ -579,50 +427,19 @@ test.describe("ImportXML", () => {
       </order>`
     );
 
-    await expectCardGridSlotStates(
+    await expectDisplaySheetSlotStates(
       page,
       [
-        {
-          slot: 2,
-          name: cardDocument3.name,
-          selectedImage: 3,
-          totalImages: 4,
-        },
-        {
-          slot: 3,
-          name: cardDocument3.name,
-          selectedImage: 3,
-          totalImages: 4,
-        },
-        {
-          slot: 4,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 4,
-        },
+        { slot: 2, name: cardDocument3.name },
+        { slot: 3, name: cardDocument3.name },
+        { slot: 4, name: cardDocument1.name },
       ],
       [
-        {
-          slot: 2,
-          name: cardDocument4.name,
-          selectedImage: 4,
-          totalImages: 4,
-        },
-        {
-          slot: 3,
-          name: cardDocument4.name,
-          selectedImage: 4,
-          totalImages: 4,
-        },
-        {
-          slot: 4,
-          name: cardDocument3.name,
-          selectedImage: 2,
-          totalImages: 2,
-        },
+        { slot: 2, name: cardDocument4.name },
+        { slot: 3, name: cardDocument4.name },
+        { slot: 4, name: cardDocument3.name },
       ]
     );
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
   });
 
   test("import an XML and use its cardback", async ({ page, network }) => {
@@ -635,9 +452,7 @@ test.describe("ImportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
-
-    await importXML(
+    await importXMLOnEmptyLanding(
       page,
       `<order>
         <details>
@@ -659,26 +474,11 @@ test.describe("ImportXML", () => {
       true
     );
 
-    await expectCardGridSlotStates(
+    await expectDisplaySheetSlotStates(
       page,
-      [
-        {
-          slot: 1,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 1,
-        },
-      ],
-      [
-        {
-          slot: 1,
-          name: cardDocument3.name, // the cardback specified in XML
-          selectedImage: 2,
-          totalImages: 2,
-        },
-      ]
+      [{ slot: 1, name: cardDocument1.name }],
+      [{ slot: 1, name: cardDocument3.name }] // the cardback specified in XML
     );
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2); // the project cardback should not have changed
   });
 
   test("import an XML and use the project cardback", async ({
@@ -694,9 +494,7 @@ test.describe("ImportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2);
-
-    await importXML(
+    await importXMLOnEmptyLanding(
       page,
       `<order>
         <details>
@@ -718,25 +516,84 @@ test.describe("ImportXML", () => {
       false
     );
 
-    await expectCardGridSlotStates(
+    await expectDisplaySheetSlotStates(
       page,
-      [
-        {
-          slot: 1,
-          name: cardDocument1.name,
-          selectedImage: 1,
-          totalImages: 1,
-        },
-      ],
-      [
-        {
-          slot: 1,
-          name: cardDocument2.name, // the cardback configured for the project
-          selectedImage: 1,
-          totalImages: 2,
-        },
-      ]
+      [{ slot: 1, name: cardDocument1.name }],
+      [{ slot: 1, name: cardDocument2.name }] // the cardback configured for the project
     );
-    await expectCardbackSlotState(page, cardDocument2.name, 1, 2); // cardback should not have changed
+  });
+
+  // Foreign-order resilience Phase 1 follow-up (issue #324, owner-observed 2026-07-23): a BRAND
+  // NEW project (no cardback selected yet - here because the mocked catalog has zero indexed
+  // cardbacks at all, same as OrphanRendering.spec.ts's own repro) previously left the "Common
+  // Cardback" panel (CommonCardback.tsx, the classic editor's right panel) showing "Card not
+  // found" forever after an XML import, right next to a perfectly-rendered orphan back-face slot
+  // tile - even though the import's own <cardback> (an orphan Drive file ID here, but this fix
+  // applies identically to a real catalog cardback) was sitting right there unused. See
+  // ImportXML.tsx's own parseXMLFile comment for the fix (state.project.cardback is now
+  // initialised from the import when nothing was selected before it) and its own gate against
+  // regressing the "should not have changed" tests above (an EXISTING project cardback is never
+  // touched by a later import).
+  //
+  // The assertion below was rewritten (2026-07-23, following PR #398's PagePreview orphan-badge
+  // parity fix) to check the /editor sheet's own per-slot corner badge instead of the classic
+  // "Common Cardback" panel - DisplayPage has no equivalent persistent tile (only the
+  // CardbackToolbarButton picker, per this file's own header comment), so the fix's underlying
+  // behaviour (a BRAND NEW project's cardback initialises from the import, orphan or not) is now
+  // observed the same way OrphanRendering.spec.ts's own "b:null" case observes it: the sheet's
+  // `page-preview-slot`, toggled to its back face, showing both the resolved orphan image and the
+  // `orphan-badge` corner treatment (PagePreview.tsx's `orphanLabel`, same testid/text as
+  // Card.tsx's classic-editor badge). Same testid convention, same "Your file" text, kept
+  // consistent with OrphanRendering.spec.ts so the two files don't drift.
+  test("importing an XML into a brand new project with no cardback yet initialises the Common Cardback panel from the file's own <cardback> - even an orphan", async ({
+    page,
+    network,
+  }) => {
+    network.use(...defaultHandlers);
+    await loadPageWithDefaultBackend(page);
+
+    const orphanFrontId = "1FItgPw7VK_Tbv6dMiqdy5zd-jAoEC9mn";
+    const orphanBackId = "1LrVX0pUcye9n_0RtaDNVl2xPrQgn7CYf";
+
+    await importXMLOnEmptyLanding(
+      page,
+      `<order>
+        <details>
+          <quantity>1</quantity>
+          <stock>${S30}</stock>
+          <foil>false</foil>
+        </details>
+        <fronts>
+          <card>
+            <id>${orphanFrontId}</id>
+            <sourceType>google_drive</sourceType>
+            <slots>0</slots>
+            <name>Kharn.png</name>
+            <query>kharn</query>
+          </card>
+        </fronts>
+        <cardback>${orphanBackId}</cardback>
+      </order>`
+    );
+
+    const slot = page.getByTestId("page-preview-slot").first();
+    const frontImage = slot.locator("img");
+    await expect(frontImage).toHaveCount(1, { timeout: 45_000 });
+    await expect(frontImage).toHaveAttribute(
+      "src",
+      `https://lh4.googleusercontent.com/d/${orphanFrontId}=h800`
+    );
+
+    // The imported <cardback> (an orphan here) is this test's own point - toggle to the back
+    // face and confirm the project's cardback initialised from it, including the sheet's own
+    // orphan corner badge (see the comment above).
+    await page.getByRole("button", { name: /Showing: Fronts/ }).click();
+    const backImage = slot.locator("img");
+    await expect(backImage).toHaveCount(1, { timeout: 45_000 });
+    await expect(backImage).toHaveAttribute(
+      "src",
+      `https://lh4.googleusercontent.com/d/${orphanBackId}=h800`
+    );
+    await expect(slot.getByTestId("orphan-badge")).toHaveText("Your file");
   });
 });

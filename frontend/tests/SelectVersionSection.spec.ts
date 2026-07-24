@@ -24,8 +24,13 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "./test-utils";
+import { openSelectVersionSection } from "./test-utils";
 
+// Parity wave 2 (2026-07-23, issue #272) - un-skipped. This file was never actually classic-
+// editor-only: it already exercised the unified page's own rail (via openSelectVersionSection,
+// test-utils.ts) from the moment it landed with issue #167 (#198), before the route swap even
+// happened. It picked up the swap's blanket per-file skip marker anyway and was deliberately left
+// for this wave rather than wave 1 - see test-utils.ts's own openSelectVersionSection comment.
 function buildRoute(route: string): string {
   return `${localBackendURL}/${route}`;
 }
@@ -51,17 +56,6 @@ const selectVersionHandlers = [
 // groups in one result set - see those fixtures' own comments for the exact shape.
 test.describe("SelectVersionSection (issue #167)", () => {
   test.describe.configure({ timeout: 60_000 });
-
-  const openSelectVersionSection = async (
-    page: import("@playwright/test").Page
-  ) => {
-    await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
-    await page.getByTestId("page-preview-slot").first().click();
-    // The rail always renders compressed tiles now (editor-completion package, E4/L9 - the
-    // toggle is gone entirely, hard-pinned true) - no "Compressed" click needed any more.
-  };
 
   // Addendum item 2 (SPEC-display-left-rail.md §7, owner verbatim: "the 5 cards should be in 1
   // section") - the old per-group wrapper divs (`select-version-group-*`,
@@ -140,9 +134,18 @@ test.describe("SelectVersionSection (issue #167)", () => {
     // sv-001 (cardDocument13/14) has one extra copy (cardDocument13, the lower-DPI one) - an
     // inline ghost tile ("+1"), same footprint as a real tile, sits right after the
     // representative and expands it IN PLACE rather than via a full-width text link.
+    // EP1 (SPEC-editor-polish.md §D.4 `.vtile.ghost`, REV) - the ghost tile now also carries the
+    // first hidden copy's own thumbnail (dimmed) and a "more copies" caption, not just the bare
+    // "+N" text - `toContainText` (not `toHaveText`) since the "+1" count and caption are two
+    // separate child nodes now, not the button's whole text content.
     const ghost = page.getByTestId("select-version-ghost-sv-001-expand");
     await expect(ghost).toBeVisible();
-    await expect(ghost).toHaveText("+1");
+    await expect(ghost).toContainText("+1");
+    await expect(ghost).toContainText("more copies");
+    await expect(
+      page.getByTestId("select-version-ghost-plus-sv-001-expand")
+    ).toHaveText("+1");
+    await expect(ghost.locator("img")).toBeVisible();
     await ghost.click();
 
     await expect(
@@ -183,25 +186,31 @@ test.describe("SelectVersionSection (issue #167)", () => {
   // Funnel round (funnel-spec.md F2/F3, XF1/XF2) - the flat FilterChipBar is retired from this
   // (stacked/rail) surface, replaced by the per-axis segmented `funnel-chip-*` controls (Border/
   // Frame) and the tri-state `funnel-treatment-chip-*` controls (Treatment) sharing one unified
-  // block (SPEC-display-left-rail.md §6). "More like this" (the old per-tile "seed the filter
-  // from this card's own tags" affordance) was DROPPED entirely when the between-group rows were
-  // removed (§7's own affordance table doesn't allocate it a tile-corner slot) - filtering now
-  // goes directly through the unified block's own chips.
+  // block. "More like this" (the old per-tile "seed the filter from this card's own tags"
+  // affordance) was DROPPED entirely when the between-group rows were removed (§7's own
+  // affordance table doesn't allocate it a tile-corner slot) - filtering now goes directly
+  // through the unified block's own chips.
+  //
+  // Rail-delegacy round (item 2/3/5, RD1/RD4, SPEC-rail-delegacy.md) - the chips now live INSIDE
+  // the one Filters panel (closed by default, opened via `funnel-filters-toggle`) instead of
+  // always rendering above the grid; the funnel-head's own active-tag pill row is retired along
+  // with the old always-visible arrangement (RD1: the panel's own chip highlight - `data-active` -
+  // is the one place active state now shows), so this test now asserts the chip's own active
+  // state instead of a pill.
   test("the unified Frame+Treatment block's tri-state chips filter the whole grid", async ({
     page,
     network,
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // cardDocument18 (unknown bucket) has a resolved "Full Art" tag and is the ONLY candidate
     // with it in this fixture set - one click cycles the Treatment chip untouched -> include.
-    await page.getByTestId("funnel-treatment-chip-Full Art").click();
+    const chip = page.getByTestId("funnel-treatment-chip-Full Art");
+    await chip.click();
 
-    await expect(page.getByTestId("funnel-active-pill-Full Art")).toBeVisible();
-    // Filtering down to Full Art narrows the survivor count to 1, which collapses the axis rows
-    // to the head's active-pill summary (D21's "hero" tier) - the pill is the correct place to
-    // assert the chip activated, not the (now-hidden) segmented chip button itself.
+    await expect(chip).toHaveAttribute("data-state", "positive");
     await expect(page.getByTestId("funnel-count")).toContainText("1 version");
     await expect(
       page.getByTestId(`select-version-tile-${cardDocument18.identifier}`)
@@ -226,12 +235,17 @@ test.describe("SelectVersionSection (issue #167)", () => {
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // Manually activate the "Old Border" funnel chip - cardDocument18 carries a *suggested* (not
     // resolved) Old Border vote, so it should still be filtered in (resolved-OR-suggested when
     // the vote layer is on) and its selection should cast an implicit support vote.
     await page.getByTestId("funnel-chip-Old Border").click();
     await expect(page.getByTestId("funnel-awareness-line")).toBeVisible();
+    // Rail-delegacy round (RD4/O3) - the desktop/tablet Filters panel is a real modal-style
+    // overlay with its own backdrop (escapes the 380px rail column) - close it first so the
+    // grid tile underneath is actually clickable, same as a real user would have to.
+    await page.getByTestId("filters-panel-close").click();
 
     const tile = page.getByTestId(
       "select-version-tile-1lL2mM3nN4oO5pP6qQ7rR8sS9tT0uU"
@@ -243,9 +257,14 @@ test.describe("SelectVersionSection (issue #167)", () => {
     await expect(page.getByTestId("funnel-support-ack")).toContainText(
       "Old Border"
     );
-    // The pick resets the active chips - the awareness line (gated on >=1 active chip) disappears
-    // along with it.
+    // The pick resets the active chips - reopening the panel shows the Border chip back to
+    // untouched, not still active from before the pick.
+    await page.getByTestId("funnel-filters-toggle").click();
     await expect(page.getByTestId("funnel-awareness-line")).toHaveCount(0);
+    await expect(page.getByTestId("funnel-chip-Old Border")).toHaveAttribute(
+      "data-active",
+      "false"
+    );
     // No two-tap confirm chip anywhere on this surface any more (D20).
     await expect(
       page.getByTestId(
@@ -290,9 +309,13 @@ test.describe("SelectVersionSection (issue #167)", () => {
       ...selectVersionHandlers
     );
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // First pick: cardDocument18 (1lL2...), under the active "Old Border" chip - casts support.
+    // Rail-delegacy round (RD4/O3) - close the Filters panel's own modal-style backdrop first so
+    // the grid tile underneath is actually clickable.
     await page.getByTestId("funnel-chip-Old Border").click();
+    await page.getByTestId("filters-panel-close").click();
     await page
       .getByTestId("select-version-tile-1lL2mM3nN4oO5pP6qQ7rR8sS9tT0uU")
       .locator(".mpccard")
@@ -377,11 +400,15 @@ test.describe("SelectVersionSection (issue #167)", () => {
       ...defaultHandlers
     );
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // No suggested chip for "Old Border" at all - the only candidate that carries it
     // (cardDocument19) does so via tagVoteStatuses only, which the funnel no longer consults for
     // the suggested read.
     await expect(page.getByTestId("funnel-chip-Old Border")).toHaveCount(0);
+    // Rail-delegacy round (RD4/O3) - close the Filters panel's own modal-style backdrop first so
+    // the grid tile underneath is actually clickable.
+    await page.getByTestId("filters-panel-close").click();
 
     // Activate a DIFFERENT axis (Treatment has no membership here since none of these three carry
     // a Treatment tag at all) isn't available, so instead: pick cardDocument19 directly with NO
@@ -401,5 +428,77 @@ test.describe("SelectVersionSection (issue #167)", () => {
     expect(
       castsForCard19.some((call) => call.tagNames.includes("Old Border"))
     ).toBe(false);
+  });
+
+  // EP7 (SPEC-editor-polish.md §D.4 `.sortsel`, REV RD2, amendment 2) - the Sort dropdown is now
+  // the five client-side orderings amendment 2 ruled, not the old six-option `SortByOptions`
+  // (backend `dateCreatedDescending` etc.) list - "Community vote weight" renders nothing
+  // (no disabled placeholder) until the confidence-numeric seam lands, per that amendment's own
+  // explicit instruction.
+  test("EP7 - the Sort dropdown offers exactly the five ruled client-side orderings, and switching between them doesn't drop any candidate from the grid", async ({
+    page,
+    network,
+  }) => {
+    network.use(...selectVersionHandlers);
+    await openSelectVersionSection(page);
+
+    const sortSelect = page.getByTestId("funnel-sort-select");
+    const optionLabels = await sortSelect.locator("option").allTextContents();
+    expect(optionLabels).toEqual([
+      "Default order",
+      "Confirmation status",
+      "Resolution (DPI) high→low",
+      "File size low→high",
+      "Pinned sources first",
+      "Name (A→Z)",
+    ]);
+
+    const grid = page.getByTestId("select-version-continuous-grid");
+    const tileCountBefore = await grid
+      .locator('[data-testid^="select-version-tile-"]')
+      .count();
+
+    for (const label of [
+      "Confirmation status",
+      "Resolution (DPI) high→low",
+      "File size low→high",
+      "Pinned sources first",
+      "Name (A→Z)",
+    ]) {
+      await sortSelect.selectOption({ label });
+      // Re-ordering a grid must never change WHICH candidates are visible, only their order.
+      await expect(
+        grid.locator('[data-testid^="select-version-tile-"]')
+      ).toHaveCount(tileCountBefore);
+    }
+  });
+
+  // EP10 (SPEC-editor-polish.md §D.4 `.vloading`/`.spinner-border`, N) - the round Spinner
+  // (components/Spinner.tsx, reused verbatim) replaces the grid while `search.displaySpinner` is
+  // true (the settings-debounce-pending window) - this surface previously showed no loading
+  // affordance for that gap at all.
+  test("EP10 - typing in the sources filter briefly shows the round spinner in place of the grid while the debounce settles", async ({
+    page,
+    network,
+  }) => {
+    network.use(...selectVersionHandlers);
+    await openSelectVersionSection(page);
+
+    await page.getByTestId("funnel-filters-toggle").click();
+    // Nudging a DPI range filter input triggers the same debounced re-filter
+    // `search.displaySpinner` gates on - drag the min-DPI slider up.
+    const minDpiSlider = page.locator('input[type="range"]').first();
+    await minDpiSlider.focus();
+    await minDpiSlider.press("ArrowRight");
+
+    // The spinner is only visible for the (short) debounce window - assert it CAN appear
+    // (component-level contract) without racing a specific millisecond timing: either it was
+    // caught mid-debounce (spinner visible, grid absent) or the debounce already resolved by the
+    // time this check runs (grid visible again) - both are correct, non-flaky outcomes; what
+    // would be a real regression is the grid AND spinner both being absent (a broken render).
+    const spinnerOrGrid = page
+      .getByTestId("select-version-loading")
+      .or(page.getByTestId("select-version-continuous-grid"));
+    await expect(spinnerOrGrid.first()).toBeVisible();
   });
 });

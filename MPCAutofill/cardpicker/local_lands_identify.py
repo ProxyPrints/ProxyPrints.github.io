@@ -50,19 +50,58 @@ of the pool, not the whole thing - pass sample_size=None for a full-pool pass on
 cleared and a real run is authorized. land_pool_size and the pre-filter per-name candidate counts
 are always computed over the FULL pool regardless of sample_size (both are free DB-only queries,
 no reason to sample them).
+
+EVIDENCE-FIRST DATA SOURCE (issue #359, Phase 1 of the post-2026-07-23 sequencing): before this
+patch, EVERY selected card paid a real fetch + fresh OCR (step 1) even though Stage C's
+harvest-calculate pipeline (`image_evidence.py`) has, as of 2026-07-23, already extracted and
+persisted the exact same underlying signals (`ImageEvidence.collector_line_*`/`artist_ocr_*`) for
+the overwhelming majority of this pool (1,603/1,609 = 99.6% of the unresolved basic-land cohort
+specifically, per the issue's live sizing) - re-paying that cost is pure waste. This is a DATA-
+SOURCE swap only, never a logic change: steps 2-3 (`identify_land_printing`) are completely
+untouched, and step 1's outcome is reproduced via the SAME `local_ocr.validate_against_candidates`
+call `run_ocr_for_card` itself makes, just fed a `local_ocr.OcrParseResult` reconstructed from
+already-persisted fields instead of a freshly-OCR'd one - the identical technique
+`local_calculate_verdicts.calculate_join_key_verdict` already established for Stage D's own
+join-key calculator (see that function's own docstring: "reconstructs an OcrParseResult from
+Stage C's already-persisted fields... calls the EXISTING, unmodified validate_against_candidates").
+
+CURRENCY (same convention every other Stage C consumer in this codebase uses - see
+`local_calculate_verdicts.run_join_key_calculator`/`run_fallback_calculator`/
+`run_slow_path_calculator`, all three): an `ImageEvidence` row is CURRENT for a card only when its
+`content_hash` matches that card's own LIVE `content_phash` (an evidence row computed against a
+prior image upload is never trusted for a card whose upload has since changed) AND its
+`extractor_versions` carries both `collector_line_ocr` and `artist_ocr` keys (the two extractor
+groups this module actually consumes - both are always written together by
+`image_evidence.extract_card_evidence`'s single OCR-group block, so in practice checking either
+key alone would suffice, but both are checked so this stays correct even under a future partial-
+extractor-manifest write). See `_current_evidence_for_card`.
+
+Per-card branching (`run_lands_identify`'s own loop): a card WITH current evidence never touches
+`fetch_card_image`/`fetch_budget` at all - `_ocr_result_from_evidence` replaces `run_ocr_for_card`
+and `evidence.artist_ocr_name` (already `local_fallback.extract_artist_name`'s own tolerant parse,
+computed once by Stage C) replaces `detect_illus_anchor`, so zero network cost and zero tesseract
+calls are spent per evidence-backed card. A card WITHOUT current evidence falls back to the
+pre-existing live fetch + `run_ocr_for_card` + `detect_illus_anchor` path, unchanged, still gated
+by `fetch_budget`. `LandsIdentifyResult.evidence_backed` counts the former population separately
+from `fetch_attempted` (the latter counts only real network fetches, exactly as before this patch)
+so a report can show how much of a run's cost this patch actually avoided.
 """
 
 from dataclasses import dataclass, field
 from typing import Optional
 
-from cardpicker import local_phash
+from cardpicker import local_ocr, local_phash
 from cardpicker.image_cdn_fetch import fetch_card_image
 from cardpicker.local_fallback import detect_illus_anchor, match_artist
 from cardpicker.local_identify_printing_tags import (
     OCR_ANONYMOUS_ID,
+    OCR_CONFIDENCE_BOTH,
+    OCR_CONFIDENCE_COLLECTOR_ONLY,
     PHASH_MAX_CANDIDATES,
     CandidateNameIndex,
     CandidatePrinting,
+    EngineVote,
+    OcrCardResult,
     SelectedCard,
     _eligible_base_queryset,
     generate_run_id,
@@ -70,7 +109,9 @@ from cardpicker.local_identify_printing_tags import (
 )
 from cardpicker.models import (
     CanonicalCard,
+    Card,
     CardPrintingTag,
+    ImageEvidence,
     LandsAmbiguousResidue,
     VoteSource,
 )
@@ -140,6 +181,10 @@ class LandIdentifyOutcome:
     card_name: str
     candidate_count: int
     fetched: bool = False
+    # True when this card's outcome was produced entirely from a stored, current ImageEvidence
+    # row (issue #359's evidence-first data source) rather than a real fetch - mutually exclusive
+    # with `fetched` (never both True: an evidence-backed card never touches fetch_card_image).
+    evidence_backed: bool = False
     ocr_resolved_pk: Optional[int] = None
     artist_extracted: bool = False
     artist_matched_pks: Optional[frozenset[int]] = None
@@ -167,6 +212,11 @@ class LandsIdentifyResult:
     sampled: int = 0
     fetch_budget: int = 0
     fetch_attempted: int = 0
+    # Cards resolved via a stored, current ImageEvidence row (issue #359) - paid zero fetch/OCR
+    # cost, distinct from fetch_attempted (real network fetches only, unchanged meaning). Not
+    # bounded by fetch_budget - a DB-only read, same "free" category as land_pool_size/
+    # per_name_candidate_counts.
+    evidence_backed: int = 0
     ocr_resolved: int = 0
     artist_extracted: int = 0
     artist_extraction_failed: int = 0
@@ -174,6 +224,15 @@ class LandsIdentifyResult:
     tiebreak_votes: int = 0
     ambiguous_phash: int = 0
     votes_written: int = 0
+    # Votes this run computed but did NOT write because an identical (card, printing,
+    # anonymous_id) vote already existed (issue #408) - the OCR-resolved branch casts under
+    # OCR_ANONYMOUS_ID, an identity this module's own eligibility query (_land_pool_selected_cards,
+    # scoped to LANDS_ANONYMOUS_ID) never checks, so a card can legitimately still be in this
+    # module's pool while already carrying an OCR_ANONYMOUS_ID vote from an earlier pass/pilot
+    # run that happens to agree. Agreement with an existing vote is a no-op, not an error - counted
+    # here (not silently dropped) so the ledger stays honest about what this run actually computed
+    # vs. actually wrote. See _split_new_votes.
+    already_voted: int = 0
     # LandsAmbiguousResidue rows written (routing data, not votes) - counted separately from
     # votes_written since it's a distinct table with distinct semantics; see that model's
     # docstring. Always 0 in dry_run, same convention as votes_written.
@@ -273,6 +332,202 @@ def identify_land_printing(
     return match.candidate.pk, confidence, "", frozen_matched_pks, phash_distances
 
 
+def _split_new_votes(votes_batch: list[CardPrintingTag]) -> tuple[list[CardPrintingTag], int]:
+    """Issue #408: partitions `votes_batch` into (votes safe to `bulk_create`, count already
+    voted). A vote is "already voted" when its exact (card, printing, anonymous_id) triple already
+    exists as a non-no-match `CardPrintingTag` row - the same tuple `cardprintingtag_unique_
+    printing_vote` constrains, so this is a pre-write skip-if-exists guard rather than the
+    blanket `ignore_conflicts=True` `local_layout_class_cast.run_layout_class_cast` uses (that
+    guard is genuinely belt-and-suspenders there, since that module's own eligibility query
+    already excludes every card its identity has voted on - this module's OCR-resolved branch
+    votes under OCR_ANONYMOUS_ID, an identity `_land_pool_selected_cards`'s eligibility query
+    never checks, so this collision is expected in normal operation, not just a concurrent-run
+    race, and deserves an honest counted skip rather than a silent DB-level swallow).
+
+    One batched existence query (not one query per card) - filtered to just the card_ids/
+    anonymous_ids actually present in this batch, since a full-table scan would be wasteful for a
+    large batch."""
+    if not votes_batch:
+        return [], 0
+
+    existing_triples = set(
+        CardPrintingTag.objects.filter(
+            is_no_match=False,
+            card_id__in={vote.card_id for vote in votes_batch},
+            anonymous_id__in={vote.anonymous_id for vote in votes_batch},
+        ).values_list("card_id", "printing_id", "anonymous_id")
+    )
+    new_votes = [
+        vote for vote in votes_batch if (vote.card_id, vote.printing_id, vote.anonymous_id) not in existing_triples
+    ]
+    return new_votes, len(votes_batch) - len(new_votes)
+
+
+def _current_evidence_for_card(card: Card) -> Optional[ImageEvidence]:
+    """The module docstring's CURRENCY check - identical shape to `local_calculate_verdicts`'s
+    three own eligible-cards loops (`run_join_key_calculator`/`run_fallback_calculator`/
+    `run_slow_path_calculator`, all filter `ImageEvidence.objects.filter(card_id=..., content_hash
+    =card.content_phash)`): a row is only trusted for this card if its `content_hash` matches the
+    card's own LIVE `content_phash` (an evidence row from a prior image upload is never reused for
+    a card whose upload has since changed) and it actually carries both extractor groups this
+    module consumes. `card.content_phash is None` (no stable hash yet) always misses - same "no
+    stable hash yet to key a CURRENT ImageEvidence lookup against" case those three callers each
+    skip early for their own reasons. `.order_by("-updated_at").first()` picks the most recently
+    written row on the rare chance more than one somehow exists for the same (card, content_hash)
+    pair (the model's own unique constraint means this is normally exactly one or zero)."""
+    if card.content_phash is None:
+        return None
+    return (
+        ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)
+        .filter(extractor_versions__has_key="collector_line_ocr")
+        .filter(extractor_versions__has_key="artist_ocr")
+        .order_by("-updated_at")
+        .first()
+    )
+
+
+def _ocr_result_from_evidence(evidence: ImageEvidence, selected: SelectedCard) -> OcrCardResult:
+    """Step 1's evidence-first replacement for `run_ocr_for_card` (module docstring's "EVIDENCE-
+    FIRST DATA SOURCE" section) - reconstructs a `local_ocr.OcrParseResult` from Stage C's
+    already-persisted, already-parsed `collector_line_set_code`/`collector_line_collector_number`
+    fields (no re-fetch, no re-OCR) and calls the EXISTING, unmodified
+    `local_ocr.validate_against_candidates` - the same technique
+    `local_calculate_verdicts.calculate_join_key_verdict` already established for Stage D's own
+    join-key calculator. `raw_texts` is populated with the stored collector-line text alone (a
+    single already-selected reading, not every preprocessing variant a live pass would try) so a
+    caller falling through to the artist step still gets a real `raw_texts` list shape to work
+    with, though this module's own evidence-backed artist step never actually reads it (it reads
+    `evidence.artist_ocr_name` directly instead - see `run_lands_identify`)."""
+    parsed = local_ocr.OcrParseResult(
+        raw_text=evidence.collector_line_raw_text,
+        set_code=evidence.collector_line_set_code or None,
+        collector_number=evidence.collector_line_collector_number or None,
+    )
+    matched, reason = local_ocr.validate_against_candidates(parsed, selected.candidates)
+    if matched is not None:
+        confidence = OCR_CONFIDENCE_BOTH if parsed.set_code is not None else OCR_CONFIDENCE_COLLECTOR_ONLY
+        return OcrCardResult(
+            vote=EngineVote(
+                engine="ocr", printing_pk=matched.pk, confidence=confidence, detail=parsed.raw_text.strip()
+            ),
+            raw_texts=[evidence.collector_line_raw_text],
+            parsed_a_collector_number=parsed.collector_number is not None,
+        )
+    return OcrCardResult(
+        skip_reason=reason,
+        raw_texts=[evidence.collector_line_raw_text],
+        parsed_a_collector_number=parsed.collector_number is not None,
+    )
+
+
+def _process_land_card(
+    selected: SelectedCard,
+    ocr_result: OcrCardResult,
+    artist_name: Optional[str],
+    *,
+    evidence_backed: bool,
+    fetched: bool,
+    dry_run: bool,
+    run_id: str,
+    result: LandsIdentifyResult,
+    votes_batch: list[CardPrintingTag],
+    residue_batch: list[LandsAmbiguousResidue],
+) -> None:
+    """Steps 1 (already resolved via `ocr_result`) through 3 of the module docstring's pipeline,
+    given an already-computed `ocr_result`/`artist_name` pair - shared by BOTH the evidence-backed
+    and live-fetch-fallback branches of `run_lands_identify`'s own loop so the two data sources
+    are guaranteed to produce IDENTICAL outcomes for identical (ocr_result, artist_name) inputs
+    (issue #359's "behavior-neutral data-source swap" requirement) - this function has no idea
+    which branch called it. `evidence_backed`/`fetched` are purely descriptive (recorded onto the
+    outcome for reporting), never branched on internally."""
+    card = selected.card
+    if ocr_result.vote is not None:
+        result.ocr_resolved += 1
+        if not dry_run:
+            votes_batch.append(
+                CardPrintingTag(
+                    card_id=card.pk,
+                    printing_id=ocr_result.vote.printing_pk,
+                    is_no_match=False,
+                    anonymous_id=OCR_ANONYMOUS_ID,
+                    source=VoteSource.OCR,
+                    confidence=ocr_result.vote.confidence,
+                    run_id=run_id,
+                )
+            )
+        result.outcomes.append(
+            LandIdentifyOutcome(
+                card_id=card.pk,
+                card_name=card.name,
+                candidate_count=len(selected.candidates),
+                fetched=fetched,
+                evidence_backed=evidence_backed,
+                ocr_resolved_pk=ocr_result.vote.printing_pk,
+            )
+        )
+        return
+
+    if artist_name is not None:
+        result.artist_extracted += 1
+    else:
+        result.artist_extraction_failed += 1
+
+    printing_pk, confidence, skip_reason, artist_matched_pks, phash_distances = identify_land_printing(
+        selected, artist_name
+    )
+
+    if printing_pk is not None:
+        if confidence == LANDS_SINGLETON_CONFIDENCE:
+            result.singleton_votes += 1
+        else:
+            result.tiebreak_votes += 1
+        if not dry_run:
+            votes_batch.append(
+                CardPrintingTag(
+                    card_id=card.pk,
+                    printing_id=printing_pk,
+                    is_no_match=False,
+                    anonymous_id=LANDS_ANONYMOUS_ID,
+                    source=VoteSource.OCR,
+                    confidence=confidence,
+                    run_id=run_id,
+                )
+            )
+    elif skip_reason.startswith("phash-"):
+        result.ambiguous_phash += 1
+        # Routing data, not a vote (see LandsAmbiguousResidue's own docstring) - the artist
+        # match already paid the real narrowing cost; persist it so a future funnel surface
+        # can serve "which of these N?" instead of recomputing from the name's full pool.
+        if not dry_run and artist_name is not None and artist_matched_pks and phash_distances is not None:
+            residue_batch.append(
+                LandsAmbiguousResidue(
+                    card_id=card.pk,
+                    run_id=run_id,
+                    artist_name=artist_name,
+                    candidate_pks=sorted(artist_matched_pks),
+                    phash_distances={str(pk): distance for pk, distance in phash_distances.items()},
+                )
+            )
+
+    if artist_matched_pks is not None:
+        result.per_name_post_filter_candidate_counts.setdefault(card.name, []).append(len(artist_matched_pks))
+
+    result.outcomes.append(
+        LandIdentifyOutcome(
+            card_id=card.pk,
+            card_name=card.name,
+            candidate_count=len(selected.candidates),
+            fetched=fetched,
+            evidence_backed=evidence_backed,
+            artist_extracted=artist_name is not None,
+            artist_matched_pks=artist_matched_pks,
+            printing_pk=printing_pk,
+            confidence=confidence,
+            skip_reason=skip_reason,
+        )
+    )
+
+
 def run_lands_identify(
     run_id: Optional[str] = None,
     dry_run: bool = True,
@@ -280,11 +535,13 @@ def run_lands_identify(
     fetch_budget: int = 0,
     audit_sample_size: int = 20,
 ) -> LandsIdentifyResult:
-    """Orchestrator. See module docstring for the full pipeline and dry_run/sample_size
-    semantics. fetch_budget bounds real image fetches (shared CDN rate limiter) independent of
-    sample_size - pass fetch_budget=0 to get land_pool_size + per_name_candidate_counts (both
-    free) with zero network cost, useful for a first, instant read of pool shape before spending
-    any fetch budget on the artist-extraction-rate sample."""
+    """Orchestrator. See module docstring for the full pipeline, dry_run/sample_size semantics,
+    and the evidence-first data source (issue #359). fetch_budget bounds real image fetches
+    (shared CDN rate limiter) independent of sample_size - pass fetch_budget=0 to get
+    land_pool_size + per_name_candidate_counts (both free) with zero network cost, useful for a
+    first, instant read of pool shape before spending any fetch budget on the artist-extraction-
+    rate sample. fetch_budget only bounds the LIVE-FETCH FALLBACK branch - a card with current
+    stored evidence never touches it, regardless of how small fetch_budget is."""
     run_id = run_id or generate_run_id()
     index = CandidateNameIndex()
 
@@ -306,6 +563,32 @@ def run_lands_identify(
     residue_batch: list[LandsAmbiguousResidue] = []
     for selected in sampled_selected:
         card = selected.card
+
+        # EVIDENCE-FIRST (module docstring, issue #359): a card with a CURRENT ImageEvidence row
+        # never touches fetch_card_image/run_ocr_for_card/detect_illus_anchor at all - steps 1-2's
+        # signals are read straight off the already-persisted row instead.
+        evidence = _current_evidence_for_card(card)
+        if evidence is not None:
+            result.evidence_backed += 1
+            ocr_result = _ocr_result_from_evidence(evidence, selected)
+            artist_name = None if ocr_result.vote is not None else (evidence.artist_ocr_name or None)
+            _process_land_card(
+                selected,
+                ocr_result,
+                artist_name,
+                evidence_backed=True,
+                fetched=False,
+                dry_run=dry_run,
+                run_id=run_id,
+                result=result,
+                votes_batch=votes_batch,
+                residue_batch=residue_batch,
+            )
+            continue
+
+        # LIVE-FETCH FALLBACK (unchanged from before issue #359, except gated by fetch_budget
+        # only for cards actually reaching this branch - an evidence-backed card above never
+        # counts against it).
         if result.fetch_attempted >= fetch_budget:
             result.outcomes.append(
                 LandIdentifyOutcome(
@@ -332,94 +615,28 @@ def run_lands_identify(
             continue
 
         ocr_result = run_ocr_for_card(selected, image)
-        if ocr_result.vote is not None:
-            result.ocr_resolved += 1
-            if not dry_run:
-                votes_batch.append(
-                    CardPrintingTag(
-                        card_id=card.pk,
-                        printing_id=ocr_result.vote.printing_pk,
-                        is_no_match=False,
-                        anonymous_id=OCR_ANONYMOUS_ID,
-                        source=VoteSource.OCR,
-                        confidence=ocr_result.vote.confidence,
-                        run_id=run_id,
-                    )
-                )
-            result.outcomes.append(
-                LandIdentifyOutcome(
-                    card_id=card.pk,
-                    card_name=card.name,
-                    candidate_count=len(selected.candidates),
-                    fetched=True,
-                    ocr_resolved_pk=ocr_result.vote.printing_pk,
-                )
-            )
-            continue
+        artist_name = None
+        if ocr_result.vote is None:
+            _illus_anchor_fired, artist_name = detect_illus_anchor(image, ocr_result.raw_texts)
 
-        _illus_anchor_fired, artist_name = detect_illus_anchor(image, ocr_result.raw_texts)
-        if artist_name is not None:
-            result.artist_extracted += 1
-        else:
-            result.artist_extraction_failed += 1
-
-        printing_pk, confidence, skip_reason, artist_matched_pks, phash_distances = identify_land_printing(
-            selected, artist_name
-        )
-
-        if printing_pk is not None:
-            if confidence == LANDS_SINGLETON_CONFIDENCE:
-                result.singleton_votes += 1
-            else:
-                result.tiebreak_votes += 1
-            if not dry_run:
-                votes_batch.append(
-                    CardPrintingTag(
-                        card_id=card.pk,
-                        printing_id=printing_pk,
-                        is_no_match=False,
-                        anonymous_id=LANDS_ANONYMOUS_ID,
-                        source=VoteSource.OCR,
-                        confidence=confidence,
-                        run_id=run_id,
-                    )
-                )
-        elif skip_reason.startswith("phash-"):
-            result.ambiguous_phash += 1
-            # Routing data, not a vote (see LandsAmbiguousResidue's own docstring) - the artist
-            # match already paid the real narrowing cost; persist it so a future funnel surface
-            # can serve "which of these N?" instead of recomputing from the name's full pool.
-            if not dry_run and artist_name is not None and artist_matched_pks and phash_distances is not None:
-                residue_batch.append(
-                    LandsAmbiguousResidue(
-                        card_id=card.pk,
-                        run_id=run_id,
-                        artist_name=artist_name,
-                        candidate_pks=sorted(artist_matched_pks),
-                        phash_distances={str(pk): distance for pk, distance in phash_distances.items()},
-                    )
-                )
-
-        if artist_matched_pks is not None:
-            result.per_name_post_filter_candidate_counts.setdefault(card.name, []).append(len(artist_matched_pks))
-
-        result.outcomes.append(
-            LandIdentifyOutcome(
-                card_id=card.pk,
-                card_name=card.name,
-                candidate_count=len(selected.candidates),
-                fetched=True,
-                artist_extracted=artist_name is not None,
-                artist_matched_pks=artist_matched_pks,
-                printing_pk=printing_pk,
-                confidence=confidence,
-                skip_reason=skip_reason,
-            )
+        _process_land_card(
+            selected,
+            ocr_result,
+            artist_name,
+            evidence_backed=False,
+            fetched=True,
+            dry_run=dry_run,
+            run_id=run_id,
+            result=result,
+            votes_batch=votes_batch,
+            residue_batch=residue_batch,
         )
 
     if not dry_run and votes_batch:
-        CardPrintingTag.objects.bulk_create(votes_batch)
-        result.votes_written = len(votes_batch)
+        new_votes, result.already_voted = _split_new_votes(votes_batch)
+        if new_votes:
+            CardPrintingTag.objects.bulk_create(new_votes)
+        result.votes_written = len(new_votes)
 
     if not dry_run and residue_batch:
         LandsAmbiguousResidue.objects.bulk_create(residue_batch)

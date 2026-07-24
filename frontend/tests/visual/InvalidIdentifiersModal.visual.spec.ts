@@ -11,11 +11,16 @@ import {
 
 import { test } from "../../playwright.setup";
 import {
-  expectCardSlotToExist,
-  importText,
+  expectDisplaySheetSlotToExist,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
 } from "../test-utils";
 
+// Parity wave 2 (2026-07-23, issue #272): ported onto the unified `/editor` page.
+// InvalidIdentifiersModal.tsx itself is unchanged and unforked, globally mounted (Layout.tsx's
+// <Modals />) - reached the same way regardless of route, via InvalidIdentifiersStatus's own
+// "Review Invalid Cards" link (see InvalidIdentifiersStatus.spec.ts's own precedent, this same
+// wave). Only the slot-existence setup checks below needed adapting to the sheet.
 test.describe("InvalidIdentifiersModal visual tests", () => {
   test("invalid identifiers modal displays the appropriate data", async ({
     page,
@@ -29,13 +34,13 @@ test.describe("InvalidIdentifiersModal visual tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `2x query 1${SelectedImageSeparator}123\n1 query 2${FaceSeparator}query 3${SelectedImageSeparator}456`
     );
-    await expectCardSlotToExist(page, 1);
-    await expectCardSlotToExist(page, 2);
-    await expectCardSlotToExist(page, 3);
+    await expectDisplaySheetSlotToExist(page, 1);
+    await expectDisplaySheetSlotToExist(page, 2);
+    await expectDisplaySheetSlotToExist(page, 3);
 
     // Bring up the modal
     const alertText = page.getByText("Your project specified", {

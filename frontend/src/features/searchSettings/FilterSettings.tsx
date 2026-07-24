@@ -26,6 +26,11 @@ interface FilterSettingsProps {
   maxSizeUpperBound?: number;
   allowedLanguages?: Array<string>;
   showBoilerplate?: boolean;
+  /** The /display rail already renders the spec's Treatment/Frame/Border chip fieldset
+   * (SPEC-display-left-rail.md), so its embedding of this panel hides the duplicate
+   * stock attribute toggles. Every other caller (Search Settings modal, classic grid
+   * selector) leaves this true and is unchanged. */
+  showResolvedAttributeFilter?: boolean;
 }
 
 export function FilterSettings({
@@ -36,6 +41,7 @@ export function FilterSettings({
   maxSizeUpperBound,
   allowedLanguages,
   showBoilerplate = true,
+  showResolvedAttributeFilter = true,
 }: FilterSettingsProps) {
   return (
     <>
@@ -80,11 +86,15 @@ export function FilterSettings({
         filterSettings={filterSettings}
         setFilterSettings={setFilterSettings}
       />
-      <br />
-      <ResolvedAttributeFilter
-        filterSettings={filterSettings}
-        setFilterSettings={setFilterSettings}
-      />
+      {showResolvedAttributeFilter && (
+        <>
+          <br />
+          <ResolvedAttributeFilter
+            filterSettings={filterSettings}
+            setFilterSettings={setFilterSettings}
+          />
+        </>
+      )}
     </>
   );
 }

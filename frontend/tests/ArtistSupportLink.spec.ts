@@ -14,15 +14,18 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "./test-utils";
+import {
+  importTextOnEditorLanding,
+  loadPageWithDefaultBackend,
+  openDetailedView,
+} from "./test-utils";
 
-const openDetailedView = async (page: any, cardName: string) => {
-  await page.getByAltText(cardName).click();
-  await expect(page.getByText("Card Details")).toBeVisible();
-};
-
-// Artist Support Links v1, surface 1: the Card Detail Modal's "Canonical Aritst" row (see
-// docs/features/artist-support-links.md). Surface 2 (the /whatsthat post-answer moment) is
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page.
+// CardDetailedViewModal (the shared, unforked component this whole cluster exercises) is reached
+// via Browse mode - see openDetailedView's own module comment (test-utils.ts) for why that's the
+// one surface on this page that still opens it, and the "Card details" text-collision fix that
+// cluster needed. Its own "Canonical Aritst" table row is what this file's own assertions target
+// (docs/features/artist-support-links.md). Surface 2 (the /whatsthat post-answer moment) is
 // covered in QuestionFeed.spec.ts.
 test.describe("Artist Support Link - Card Detail Modal", () => {
   test("a known canonical artist renders as an Artist Support Link, built deterministically from their name", async ({
@@ -40,11 +43,11 @@ test.describe("Artist Support Link - Card Detail Modal", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const link = page.getByTestId("artist-support-link");
     await expect(link).toBeVisible();
@@ -74,11 +77,11 @@ test.describe("Artist Support Link - Card Detail Modal", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     await expect(page.getByTestId("artist-support-link")).toHaveCount(0);
     await expect(
