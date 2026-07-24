@@ -1,42 +1,16 @@
 import datetime as dt
 
-import pytest
-
 from cardpicker.printing_candidates import (
     find_candidates_by_name,
     get_ranked_printing_candidates,
     rank_candidates_by_confidence,
 )
 from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
     CardFactory,
-    SourceFactory,
 )
-
-# `factory.Sequence` counters are process-global, and some other test modules' snapshot
-# assertions hardcode exact sequence-derived values (e.g. "Artist 0"). Capture-and-restore
-# keeps this module's use of these shared factories invisible to the rest of the suite,
-# regardless of test collection order.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 class TestFindCandidatesByName:

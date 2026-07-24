@@ -12,7 +12,6 @@ it's pure local asset loading, no different in kind from the raw Pillow calls el
 this suite.
 """
 
-import pytest
 from PIL import Image, ImageDraw
 
 import cardpicker.local_ocr as local_ocr
@@ -43,27 +42,8 @@ from cardpicker.tests.factories import (
     CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
     CardFactory,
-    SourceFactory,
     TagFactory,
 )
-
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 class TestExtractArtistName:

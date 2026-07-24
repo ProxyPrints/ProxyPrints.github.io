@@ -1,39 +1,11 @@
-import pytest
-
 from cardpicker.models import Tag, TagAliasSuggestion, TagSuggestionStatus
 from cardpicker.search.sanitisation import fix_whitespace
 from cardpicker.tags import Tags
 from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
-    CardFactory,
-    SourceFactory,
     TagFactory,
 )
-
-# `factory.Sequence` counters are process-global, and some other test modules' snapshot
-# assertions hardcode exact sequence-derived values (e.g. "Artist 0"). Capture-and-restore
-# keeps this module's use of these shared factories invisible to the rest of the suite,
-# regardless of test collection order.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-    TagFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 class TestMatchTagFuzzy:

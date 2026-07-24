@@ -177,15 +177,24 @@ container.
 ## `factory.Sequence` counters are process-global for the whole test run
 
 Shared factories (`cardpicker/tests/factories.py`) increment a single
-sequence counter across every test file in a pytest session, and some
-snapshot assertions hardcode exact sequence-derived values (e.g. `"Artist 0"`) that depend on total call count up to that point — so a brand-new,
-otherwise-unrelated test file can silently break unrelated snapshots just
-by sorting earlier in collection order and using the same factory. Fix
-pattern: an autouse fixture local to the new test file(s) only that
-captures each shared factory's `next_sequence()` before the test body runs
-and calls `reset_sequence(n, force=True)` both immediately (undo the peek's
-own increment) and again in teardown, leaving zero net drift. Don't touch
-`conftest.py` or existing test files to fix this.
+sequence counter across every test file in a pytest session, and a
+snapshot assertion that hardcodes a sequence-derived value (e.g.
+`"Artist 0"`) depends on total call count up to that point — so a
+brand-new, otherwise-unrelated test file could silently break unrelated
+snapshots just by sorting earlier in collection order and using the same
+factory. Old fix pattern (retired 2026-07-23, see
+`docs/troubleshooting.md`'s "5-6 unrelated test snapshots break" entry
+for the full history): an autouse fixture local to every _new_ test file
+that captured/restored the shared factories around itself, so its own
+usage stayed invisible to the rest of the suite — fragile, forgotten
+repeatedly across three separate additions. **Current fix**: push the
+pin to the one module that actually asserts sequence-derived values
+(`test_views.py`) instead of every module that merely uses the shared
+factories — an autouse fixture there calls
+`Factory.reset_sequence(0, force=True)` on each shared factory before
+every one of its own tests, making its snapshots self-determined
+regardless of suite composition or collection order. No other test file
+needs to protect it anymore.
 
 ## Use `du -sh path/.[!.]* path/*`, not a bare `path/*` glob, when sizing what's actually large
 

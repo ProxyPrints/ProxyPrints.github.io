@@ -33,34 +33,12 @@ from cardpicker.models import (
 )
 from cardpicker.printing_consensus import resolve_and_persist_printing
 from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
     CardFactory,
     CardPrintingTagFactory,
     ImageEvidenceFactory,
-    SourceFactory,
 )
-
-# see test_local_calculate_verdicts.py's identical fixture for the full rationale -
-# factory.Sequence counters are process-global across the whole pytest run.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 def _evidence(card, **overrides):
