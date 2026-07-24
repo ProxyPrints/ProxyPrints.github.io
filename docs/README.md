@@ -241,3 +241,8 @@ system" + "Using it" + "Operating it" only).
   for the first one.
 - [`reports/`](reports/README.md) — the report-relay convention (see that
   directory's own README, which indexes every report currently merged).
+- [`proposals/mockups/`](proposals/mockups/README.md) — BINDING design
+  spec + companion static-HTML mockup bundles, one directory per round;
+  includes durability copies of specs recovered from session tmp storage
+  that committed code comments on open PR branches cite by filename (see
+  that directory's own README for why).

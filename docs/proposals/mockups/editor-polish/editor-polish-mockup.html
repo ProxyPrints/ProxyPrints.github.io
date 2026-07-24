@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ProxyPrints — unified /editor polish round (11 owner-settled items + slot-menu cue)</title>
+<style>
+/* ============================================================================
+   BINDING #302 THEME TOKENS — inherited VERBATIM from the corrected-bundle /
+   rail-delegacy rounds (grounded in shipped code, not approximated). Sources:
+     • bootswatch/dist/superhero/_variables.scss
+     • frontend/src/styles/styles.scss  (#302 T2–T7 overrides)
+     • frontend/src/features/display/DisplayPage.tsx  RailRoot styled-component
+     • frontend/src/features/display/ConfidenceElement.tsx  (D14 .d14/.seticon/.statepill)
+     • frontend/src/features/pdf/PagePreview.tsx  SlotMenuCue (20px, rgba(22,32,43,.85))
+     • frontend/src/features/card/DeckbuilderConfirmAffordance.tsx  ("Confirm?" pill idiom)
+     • frontend/src/components/Spinner.tsx  (.spinner-border round spinner)
+     • frontend/src/common/constants.ts  SortByOptions / ToggleButtonHeight = 38
+   THIS ROUND (owner-settled 2026-07-24): the eleven /editor polish items + the
+   ⋯ slot-menu cue. Elements marked .propose are new/revised and need knowing
+   sign-off on the look; REVISES tags name which prior RD/token they supersede.
+   ============================================================================ */
+:root{
+  --body:#0f2537;          /* $body-bg                                  — page bg */
+  --panel:#4e5d6c;         /* $secondary=$gray-600=$card-bg             — rail + card surface */
+  --card-header:#4e5d6b;   /* AutofillCollapse Card.Header (shipped grey) — RETIRED on Sources this round (item 3) */
+  --raised:#22303f;        /* $dark / $input-bg                         — rail-head, inputs, panels */
+  --conf:#2b3e50;          /* D14 confidence-band surface (shipped)     */
+  --text:#ebebeb;          /* $gray-100 / $body-color                   */
+  --muted:#8fa0b0;         /* $input-placeholder-color                  */
+  --light:#abb6c2;         /* $light                                    — neutral outline btn */
+  --primary:#df6919;       /* $primary=$orange (hover #be5915)          — accent */
+  --primary-hover:#be5915;
+  --success:#5cb85c;
+  --danger:#d9534f;
+  --warning:#ffc107;
+  --info:#5bc0de;
+  --input-border:#4e5d6c;
+  --divider:#16202b;
+  --list-border:rgba(0,0,0,.22);
+  --radius:0;
+  --radius-pill:10px;
+  --toggle-h:38px;         /* ToggleButtonHeight — inherited default */
+  --src-toggle-h:31px;     /* item 3: densified Sources toggle (REVISES the 38px source toggle) */
+  --annotate:#ffd76a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#08161f;color:var(--text);
+  font-family:Lato,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;font-size:16px;line-height:1.5}
+
+/* ---------- demo strip (forces Desktop/Tablet/Phone at any window width) ---------- */
+.demo{position:fixed;top:0;left:0;right:0;z-index:9000;display:flex;flex-wrap:wrap;
+  align-items:center;gap:6px;padding:7px 12px;background:#000;border-bottom:2px solid var(--primary);font-size:12px}
+.demo b{color:var(--primary);letter-spacing:.04em;text-transform:uppercase;font-size:10px}
+.demo .grp{display:flex;gap:3px;align-items:center;padding:0 7px;border-right:1px solid #333}
+.demo button{background:#22303f;color:var(--text);border:1px solid #46586a;padding:3px 8px;
+  cursor:pointer;font-size:11px;font-family:inherit;border-radius:0}
+.demo button.on{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:700}
+.demo button:focus-visible{outline:2px solid var(--annotate);outline-offset:1px}
+.demo .hint{color:var(--muted);font-size:11px;max-width:300px}
+
+.stage{padding-top:84px;min-height:100vh}
+.framewrap{overflow:hidden}
+.frame{transform-origin:top left;background:var(--body);position:relative}
+.frame-tag{position:absolute;top:6px;left:8px;z-index:50;color:var(--annotate);
+  font-family:"Courier New",monospace;font-size:12px;background:rgba(0,0,0,.5);padding:1px 7px}
+
+/* ============================ APP CHROME ============================ */
+.appbar{display:flex;align-items:center;gap:10px;height:52px;padding:0 12px;
+  background:var(--body);border-bottom:1px solid var(--divider);font-size:14px}
+.appbar .deck{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+/* item 2 (whole-page contrast): app-chrome action buttons — the screenshot's near-invisible
+   grey-on-dark "Add"/"Add card" ghosts get an explicit border + text colour so they READ. */
+.abtn{background:var(--raised);color:var(--text);border:1px solid #46586a;padding:5px 12px;
+  font-size:13px;font-family:inherit;cursor:pointer;border-radius:0;white-space:nowrap}
+.abtn:hover{border-color:var(--light)}
+.abtn.primary{background:transparent;border-color:var(--success);color:#8fe08f}
+.appbar .pill{margin-left:auto;background:rgba(0,0,0,.35);border:1px solid var(--divider);
+  padding:2px 10px;font-variant-numeric:tabular-nums;font-size:12px}
+.appbar .gear{width:34px;height:34px;display:flex;align-items:center;justify-content:center;
+  background:var(--panel);border:1px solid var(--divider);cursor:pointer}
+.body-cols{display:flex;align-items:stretch;min-height:520px}
+
+/* center sheet (three-region context; carries item-6 flip, cue, item-11 hidden state) */
+.center{flex:1;display:flex;flex-direction:column;align-items:center;padding:16px;gap:4px;
+  position:relative;overflow:auto;background:var(--body)}
+.npill{position:sticky;top:4px;align-self:flex-end;background:rgba(0,0,0,.5);
+  border:1px solid var(--divider);border-radius:20px;padding:2px 10px;font-size:11px;
+  font-variant-numeric:tabular-nums;pointer-events:none}
+.sheet{width:100%;max-width:520px;aspect-ratio:279.4/215.9;border:1px solid rgba(235,235,235,.18);
+  border-radius:7px;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);
+  column-gap:2px;row-gap:10px;padding:6px}
+.cell{aspect-ratio:63/88;background:repeating-linear-gradient(45deg,#33475a,#33475a 7px,#2b3c4d 7px,#2b3c4d 14px);
+  outline:1px solid rgba(255,255,255,.06);position:relative}
+.cell.sel{outline:2px solid var(--primary);outline-offset:-2px}
+.cell .cn{position:absolute;top:2px;left:2px;font-size:8px;color:#9fb0c0;font-family:monospace;z-index:1}
+/* empty slots hold no card -> NO cue, NO flip (cue gate, item cue) */
+.cell.empty{background:#182735;outline:1px dashed rgba(235,235,235,.14)}
+.cell.empty .cn{color:#4a5b6b}
+/* ⋯ SLOT-MENU CUE (item cue) — REVISES PagePreview SlotMenuCue (20px/rgba(.85)/13px):
+   bigger + higher-contrast so it reads over card art; rendered ONLY on filled cells. */
+.slot-cue{position:absolute;bottom:3px;right:3px;z-index:3;width:26px;height:26px;display:flex;
+  align-items:center;justify-content:center;background:rgba(11,21,32,.92);border:1.5px solid var(--light);
+  color:#fff;font-size:17px;line-height:1;border-radius:4px;cursor:pointer;padding:0;
+  box-shadow:0 1px 3px rgba(0,0,0,.5)}
+.cell.empty .slot-cue{display:none}
+.slot-cue:hover{background:var(--primary);border-color:var(--primary)}
+/* E24 per-slot flip (item 6) — the reserved top-right corner in PagePreview.tsx:618, now shipped */
+.slot-flip{position:absolute;top:3px;right:3px;z-index:3;width:26px;height:26px;display:flex;
+  align-items:center;justify-content:center;background:rgba(11,21,32,.92);border:1.5px solid var(--light);
+  color:#fff;font-size:14px;line-height:1;border-radius:4px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,.5)}
+.cell.empty .slot-flip{display:none}
+.slot-flip:hover{background:var(--info);border-color:var(--info);color:#062430}
+/* item 11: shared-deck orphan cell in the DENY-BY-DEFAULT (hidden) state */
+.cell.ext{position:relative}
+body[data-shared="hidden"] .cell.ext{background:#141f2b;outline:1px dashed #46586a}
+body[data-shared="hidden"] .cell.ext .cn{opacity:.4}
+body[data-shared="hidden"] .cell.ext .slot-cue,
+body[data-shared="hidden"] .cell.ext .slot-flip{display:none}
+.cell.ext .exthide{display:none;position:absolute;inset:4px;flex-direction:column;align-items:center;
+  justify-content:center;text-align:center;color:var(--muted);font-size:8px;line-height:1.25;gap:3px}
+body[data-shared="hidden"] .cell.ext .exthide{display:flex}
+.cell.ext .exthide .lk{font-size:15px}
+/* deck-level "external images hidden" banner over the sheet (item 11 denied resting state) */
+.extbanner{display:none;position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:20;
+  background:rgba(11,21,32,.95);border:1px solid var(--info);color:var(--text);font-size:11px;
+  padding:6px 10px;display:none;align-items:center;gap:8px;max-width:92%}
+body[data-shared="hidden"] .extbanner{display:flex}
+.extbanner .lk{color:var(--info)}
+
+/* right rail (three-region context only — out of scope) */
+.rrail{width:300px;background:var(--panel);border-left:1px solid var(--divider);padding:10px;
+  font-size:13px;flex:0 0 300px}
+.rrail h6{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 6px}
+.rrail .grp{background:var(--raised);border:1px solid var(--divider);padding:8px;margin-bottom:6px}
+.rrail .muted{color:var(--muted);font-size:12px}
+.rrail .foot{display:flex;gap:6px;margin-top:8px}
+
+/* ============================ LEFT RAIL (this round) ============================ */
+.lrail{width:380px;flex:0 0 380px;background:var(--panel);border-right:1px solid var(--divider);
+  display:flex;flex-direction:column;overflow:hidden}
+.drawer .lrail{flex:1 1 auto;width:100%;min-height:0;border-right:none}
+.lscroll{overflow-y:auto;display:flex;flex-direction:column;min-height:0}
+.drawer .lscroll{flex:1 1 auto}
+
+/* ---- (1) RAIL HEAD: subject image (LARGER) anchoring identity + face toggle + top slot actions ----
+   items 4/5/6 revise the rail-head: subject image grows to anchor a relocated compact Slot-Actions
+   row (item 4, kills full-width bottom buttons / RD5) + a per-slot Front/Back toggle (item 6). */
+.rhead{background:var(--raised);padding:8px 10px;border-bottom:1px solid var(--divider)}
+.rhead-row{display:flex;gap:10px;align-items:flex-start;position:relative}
+/* item 5 (REVISES RD8's 66px): subject image much larger — 116px wide, anchors the actions row */
+.subject{flex:0 0 116px;width:116px;aspect-ratio:63/88;position:relative;overflow:hidden;
+  border:1px solid rgba(235,235,235,.15);
+  background:repeating-linear-gradient(45deg,#33475a,#33475a 9px,#2b3c4d 9px,#2b3c4d 18px)}
+.subject .sjcap{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);
+  font-size:8px;text-align:center;color:#cdd6df;padding:1px 2px;font-family:monospace}
+/* item 6: subject shows the BACK face when the slot toggle is on Back */
+.subject .backart{display:none;position:absolute;inset:0;
+  background:repeating-linear-gradient(-45deg,#2a2320,#2a2320 9px,#1f1a17 9px,#1f1a17 18px);
+  align-items:center;justify-content:center;color:#a99;font-size:9px;text-align:center}
+body[data-face="back"] .subject .backart{display:flex}
+.subject.empty{background:transparent;border:1px dashed var(--light);display:flex;
+  align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:10px;padding:6px;line-height:1.3}
+body[data-subject="empty"] .subject.art{display:none}
+body[data-subject="art"] .subject.empty{display:none}
+.idcol{flex:1;min-width:0}
+.rhead .slot{font-weight:700;font-size:14px}
+.rhead .slot .face{font-weight:400;color:var(--muted);font-size:11px;text-transform:uppercase;margin-left:6px}
+body[data-face="back"] .rhead .slot .face::after{content:""}
+.rhead .name{font-size:15px;margin-top:1px}
+body[data-subject="empty"] .rhead .name.real{display:none}
+.rhead .name.none{display:none;color:var(--muted);font-style:italic}
+body[data-subject="empty"] .rhead .name.none{display:block}
+.rhead .mismatch{display:inline-block;margin-top:5px;background:var(--warning);color:#111;
+  padding:1px 7px;font-family:monospace;font-size:10px;border-radius:0}
+body[data-subject="empty"] .rhead .mismatch{display:none}
+/* item 6: per-slot Front/Back segmented toggle, right beside the subject image */
+.fbtoggle{display:inline-flex;margin-top:7px;border:1px solid #6b7d8e}
+.fbtoggle button{background:var(--raised);color:var(--muted);border:none;border-right:1px solid #6b7d8e;
+  padding:2px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit}
+.fbtoggle button:last-child{border-right:none}
+.fbtoggle button.on{background:var(--info);color:#062430}
+/* item 4 (REVISES RD5): Slot Actions relocate to the TOP as a COMPACT icon row — no full-width buttons */
+.slotacts-top{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.iact{width:32px;height:30px;display:inline-flex;align-items:center;justify-content:center;
+  background:transparent;border:1px solid var(--light);color:var(--light);font-size:14px;cursor:pointer;
+  border-radius:0;font-family:inherit;padding:0}
+.iact:hover{background:var(--light);color:#111}
+.iact.danger{border-color:var(--danger);color:#f0a6a3}
+.iact.danger:hover{background:var(--danger);color:#fff}
+.detmore{margin-top:8px;background:transparent;border:none;color:var(--muted);font-size:11px;
+  cursor:pointer;padding:0;display:inline-flex;align-items:center;gap:4px;font-family:inherit}
+.detmore:hover{color:var(--text)}
+.detmore .chev{transition:transform .2s;font-size:10px}
+body[data-details="open"] .detmore .chev{transform:rotate(90deg)}
+.detbody{display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--divider)}
+body[data-details="open"] .detbody{display:block}
+.mrow{display:flex;gap:8px;font-size:11px;line-height:1.6}
+.mrow .mk{color:var(--muted);flex:0 0 88px;text-transform:uppercase;letter-spacing:.03em;font-size:10px}
+.mrow .mv{color:var(--text)}
+.mrow .mv.mono{font-family:monospace}
+.detbody .copy{color:var(--info);cursor:pointer;text-decoration:underline dotted}
+.detbody .dtags{display:inline-flex;flex-wrap:wrap;gap:3px}
+.detbody .dtag{background:var(--panel);color:var(--text);border-radius:10px;padding:0 6px;font-size:9px}
+.detbody .dacts{display:flex;gap:6px;margin-top:8px}
+
+/* item 9: SCRYFALL COMPARE reveal — appears BESIDE the subject card, triggered by hovering/tapping
+   the D14 confirmed/%confidence pill (touch = tap-toggle). Anchored right of the subject image. */
+.compare{display:none;position:absolute;left:126px;top:0;z-index:40;width:150px;
+  background:#0b1520;border:1px solid var(--info);padding:5px;box-shadow:0 8px 22px rgba(0,0,0,.6)}
+body[data-compare="on"] .compare{display:block}
+.compare .cimg{aspect-ratio:63/88;background:repeating-linear-gradient(45deg,#2a3a49,#2a3a49 9px,#22303f 9px,#22303f 18px);
+  border:1px solid rgba(235,235,235,.15);display:flex;align-items:flex-end;justify-content:center;
+  color:var(--muted);font-size:9px;text-align:center;padding:3px}
+.compare .ccap{font-size:9px;color:var(--muted);margin-top:4px;line-height:1.3}
+.compare .ccap b{color:var(--info)}
+
+/* ---- (2) D14 CONFIDENCE ELEMENT — LOCKED (ConfidenceElement.tsx: #271 + owner answer #2) ---- */
+.d14{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0;
+  padding:8px 10px;background:var(--conf);border-bottom:1px solid var(--divider);font-size:12px}
+.seticon{position:relative;width:30px;height:30px;flex:0 0 30px;display:inline-flex;
+  align-items:center;justify-content:center;background:var(--panel);border:1px solid #7f8fa0;
+  border-radius:50%;cursor:pointer}
+.seticon svg{width:17px;height:17px;fill:var(--text)}
+.seticon:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.seticon .check{position:absolute;right:-3px;bottom:-3px;width:15px;height:15px;background:var(--success);
+  color:#fff;border:2px solid var(--conf);border-radius:50%;display:none;align-items:center;
+  justify-content:center;font-size:9px;font-weight:900}
+.seticon .score{position:absolute;right:-7px;bottom:-7px;background:var(--primary);color:#fff;
+  border:2px solid var(--conf);border-radius:10px;font-size:9px;font-weight:800;padding:1px 4px;
+  display:none;line-height:1;font-variant-numeric:tabular-nums}
+.d14 .idtext{font-size:12px;font-family:monospace}
+/* LOCKED pills (D14) — untouched by item 8/9 restyles */
+.d14 .statepill{padding:1px 8px;border:1px solid var(--panel);border-radius:var(--radius-pill);
+  font-size:11px;font-weight:700;cursor:default}
+.d14 .statepill.confirmed{border-color:#3f7a2f;color:#a7e08a}
+.d14 .statepill.suggested{border-color:var(--primary);color:#ffb27d}
+/* item 9: the pill is the compare trigger — cursor + subtle affordance only (look otherwise LOCKED) */
+.d14 .statepill.cmp{cursor:zoom-in}
+body[data-conf="confirmed"] .seticon .check{display:flex}
+body[data-conf="confirmed"] .statepill.suggested{display:none}
+body[data-conf="confirmed"] .d14 .notthis{opacity:.6}
+body[data-conf="suggested"] .seticon .score{display:block}
+body[data-conf="suggested"] .statepill.confirmed{display:none}
+
+/* item 8: WRONG-PRINTING affordances restyled to the pre-#413 DeckbuilderConfirmAffordance pill
+   idiom (rounded pill, tinted bg, clear intent) — REVISES the bland full-width grey .idtoggle and
+   the plain outline ✗. The LOCKED D14 statepills above are NOT touched. */
+.d14 .notthis{margin-left:auto;border-radius:var(--radius-pill);border:1px solid rgba(217,83,79,.55);
+  background:rgba(217,83,79,.12);color:#f0b3b1;font-size:11px;font-weight:600;padding:2px 10px;
+  line-height:1.1;cursor:pointer;font-family:inherit;white-space:nowrap}
+.d14 .notthis:hover{background:var(--danger);border-color:var(--danger);color:#fff}
+/* item 6: hangs off D14 (printing-tags voting surface) */
+.idhang{background:var(--conf);border-bottom:1px solid var(--divider);padding:0 10px 8px}
+.idtoggle{border-radius:var(--radius-pill);border:1px solid rgba(223,105,25,.55);
+  background:rgba(223,105,25,.12);color:#ffb27d;font-size:12px;font-weight:600;padding:3px 12px;
+  cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:6px;line-height:1.2}
+.idtoggle:hover{background:var(--primary);border-color:var(--primary);color:#fff}
+.idtoggle .chev{transition:transform .2s;font-size:10px}
+body[data-idpanel="open"] .idtoggle .chev{transform:rotate(90deg)}
+.idbody{display:none;margin-top:8px;background:var(--raised);border:1px solid var(--divider);padding:8px}
+body[data-idpanel="open"] .idbody{display:block}
+.idbody .cons{font-size:11px;color:var(--muted);margin-bottom:6px}
+.idbody .cons b{color:var(--text)}
+.idbody .idsearch{display:block;width:100%;background:var(--conf);color:var(--text);
+  border:1px solid var(--input-border);padding:5px 8px;font-size:12px;margin-bottom:8px;border-radius:0}
+.idbody .idsearch::placeholder{color:var(--muted)}
+.candgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.cand{aspect-ratio:63/88;border:1px solid #6b7d8e;background:repeating-linear-gradient(45deg,#33475a,#33475a 7px,#2b3c4d 7px,#2b3c4d 14px);
+  position:relative;cursor:pointer;display:flex;align-items:flex-end;justify-content:center;padding:2px}
+.cand.nomatch{background:#1b2836;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:9px}
+.cand.sel{border:2px solid var(--success)}
+.cand .cl{background:rgba(0,0,0,.65);font-size:7px;font-family:monospace;padding:0 2px;width:100%;text-align:center}
+.idbody .attrfollow{margin-top:8px;padding-top:8px;border-top:1px solid var(--divider);font-size:11px;color:var(--muted)}
+
+/* ---- (3) ARTIST support — shipped .artist-line bg #22303f ---- */
+.artist{background:var(--raised);padding:8px 10px;border-bottom:1px solid var(--divider)}
+.artist .by{font-size:13px;margin-bottom:6px}
+.artist .by .nm{color:var(--text);font-weight:600}
+
+/* ---- (4) SOURCES — item 3: DE-GREY + DENSIFY (REVISES the inherited inline Sources design) ----
+   The grey #4E5D6B header band + pins strip + ~70px rows are gone: dark #22303f throughout, ~31px
+   rows, a prominent filter input as the primary find path, and a capped/virtualized list for 254. */
+.sources{border-bottom:1px solid var(--divider)}
+.src-summary{display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;
+  background:var(--raised);user-select:none}  /* item 3: dark, NOT --card-header grey */
+.src-summary:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+.src-summary .lbl{font-size:12px;text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.src-summary .count{font-variant-numeric:tabular-nums;font-size:12px;color:var(--muted)}
+.src-summary .count b{color:var(--success)}
+.src-summary .chev{margin-left:auto;transition:transform .2s;font-size:12px}
+.sources.open .src-summary .chev{transform:rotate(90deg)}
+.src-pins{display:flex;flex-wrap:wrap;gap:4px;padding:0 10px 7px;background:var(--raised)} /* item 3: dark */
+.pinchip{font-size:11px;background:var(--conf);border:1px solid rgba(0,0,0,.22);padding:1px 7px;
+  display:inline-flex;gap:3px;align-items:center}
+.pinchip .star{color:var(--warning)}
+.src-body{padding:8px 10px;display:none;background:var(--raised)} /* item 3: dark, not --panel grey-ish */
+.sources.open .src-body{display:block}
+/* item 3: the filter input is the PRIMARY find path for 254 sources — made prominent */
+.src-body .filter{display:block;width:100%;background:var(--conf);color:var(--text);
+  border:1px solid var(--light);padding:7px 10px;font-size:14px;margin-bottom:8px;border-radius:0}
+.src-body .filter::placeholder{color:var(--muted)}
+.src-bulk{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.src-defaults{margin-bottom:8px}
+/* item 3: capped list — virtualized in the real build; caption states the cap/count */
+.src-cap{font-size:10px;color:var(--muted);margin-bottom:5px;display:flex;align-items:center;gap:6px}
+.src-list{max-height:186px;overflow-y:auto;border:1px solid var(--list-border);background:var(--conf)}
+/* item 3: DENSIFIED row — ~31px, not the ~70px screenshot rows */
+.src-row{display:flex;align-items:center;gap:8px;padding:2px 8px;height:34px;border-bottom:1px solid rgba(0,0,0,.22)}
+.src-row:last-child{border-bottom:none}
+.tgl{flex:0 0 auto;width:52px;height:var(--src-toggle-h);border:1px solid #6b7d8e;
+  display:inline-flex;font-size:10px;font-weight:700;cursor:pointer;user-select:none}
+.tgl span{flex:1;display:flex;align-items:center;justify-content:center}
+.tgl .on{background:var(--primary);color:#fff}
+.tgl .off{background:var(--panel);color:var(--muted)}
+.tgl[data-on="false"] .on{background:var(--panel);color:var(--muted)}
+.tgl[data-on="false"] .off{background:#3a4653;color:var(--text)}
+.tgl[data-on="true"] .off{background:var(--panel);color:var(--muted)}
+.src-row .snm{flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.src-row .pin{background:transparent;border:none;color:#5b6b7b;cursor:pointer;font-size:15px;
+  width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center}
+.src-row .pin.on{color:var(--warning)}
+.src-row .pin:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+
+/* ---- (5) SELECT VERSION — promoted, always open ---- */
+.sv{padding:8px 10px;border-bottom:1px solid var(--divider)}
+.sv h6.svtitle{margin:0;padding:8px 0 4px;font-weight:600;font-size:14px}
+.svhead{display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+.svhead .n{color:var(--text);font-weight:700}
+.svhead .grow{flex:1 1 auto}
+/* item 7: data-driven Sort (REVISES RD2/O5's date/name Form.Select) */
+.sortsel{background:var(--raised);color:var(--text);border:1px solid var(--input-border);
+  font-size:12px;padding:3px 6px;border-radius:0;font-family:inherit;max-width:172px}
+.vgrid{display:flex;flex-wrap:wrap;gap:6px}
+.vtile{width:72px;aspect-ratio:63/88;background:repeating-linear-gradient(45deg,#33475a,#33475a 7px,#2b3c4d 7px,#2b3c4d 14px);
+  outline:1px solid rgba(235,235,235,.15);position:relative}
+.vtile.sel{outline:2px solid var(--primary)}
+.vtile .vl{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);font-size:8px;
+  text-align:center;padding:1px;font-family:monospace}
+.vtile .corner{position:absolute;top:0;left:0;font-size:7px;font-weight:800;letter-spacing:.03em;
+  padding:0 3px;color:#fff;text-transform:uppercase}
+.vtile .corner.canon{background:rgba(92,184,92,.92)}
+.vtile .corner.alt{background:rgba(91,192,222,.92)}
+.vtile .corner.unk{background:rgba(120,135,150,.92)}
+.vtile .req{position:absolute;top:0;right:0;background:var(--primary);color:#fff;font-size:8px;padding:0 3px;font-weight:800}
+.vtile .confirm{position:absolute;top:0;right:0;width:0;height:0;border-top:16px solid var(--warning);
+  border-left:16px solid transparent;cursor:pointer}
+.vtile .confirm i{position:absolute;top:-15px;right:1px;color:#111;font-size:8px;font-weight:900;font-style:normal}
+/* item 1: GHOST "+N" tile REVISED — a real (dimmed) thumbnail of the first hidden copy + the count.
+   What's compressed: additional copies of the SAME identified printing. */
+.vtile.ghost{background:repeating-linear-gradient(45deg,#33475a,#33475a 7px,#2b3c4d 7px,#2b3c4d 14px);
+  outline:1px solid rgba(235,235,235,.15);cursor:pointer;overflow:hidden}
+.vtile.ghost .gdim{position:absolute;inset:0;background:rgba(11,21,32,.62)}
+.vtile.ghost .gplus{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:#fff;font-size:16px;font-weight:800;text-shadow:0 1px 3px rgba(0,0,0,.8)}
+.vtile.ghost .gcap{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);font-size:7px;
+  text-align:center;padding:1px;color:#cdd6df}
+
+/* item 10: LOADING — replace the loading BAR with the site's round Spinner.tsx (.spinner-border) */
+.vloading{display:none;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;min-height:140px;color:var(--muted);font-size:12px}
+body[data-loading="on"] .vloading{display:flex}
+body[data-loading="on"] .vgrid{display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner-border{display:inline-block;width:2.6em;height:2.6em;vertical-align:-.125em;
+  border:.25em solid var(--primary);border-right-color:transparent;border-radius:50%;
+  animation:spin .75s linear infinite}
+
+/* item 3 + 5: FILTERS PANEL — flat themed fieldsets (item 2 absorbs #413's unstyled residual:
+   every DPI/Size/Language/Tags/NSFW control is fully themed here, no bare browser widgets) */
+.filtersbtn{background:transparent;border:1px solid var(--light);color:var(--light);font-size:14px;
+  padding:4px 8px;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:5px}
+.filtersbtn:hover{background:var(--light);color:#111}
+.filtersbtn .chev{transition:transform .2s;font-size:10px}
+body[data-fpanel="open"] .filtersbtn .chev{transform:rotate(180deg)}
+.fpanel{background:var(--raised);border:1px solid var(--divider);padding:8px}
+.fpanel.inline{display:none;margin-bottom:8px}
+.fpanel.float{display:none;position:absolute;left:50%;top:64px;transform:translateX(-50%);
+  width:440px;max-width:calc(100% - 32px);max-height:calc(100% - 96px);overflow-y:auto;z-index:91;
+  border:1px solid #7f8fa0;box-shadow:0 12px 34px rgba(0,0,0,.6);padding:0}
+.fpanel.float .fpwrap{padding:12px}
+.fscrim{display:none;position:absolute;inset:0;background:rgba(0,0,0,.45);z-index:90}
+body[data-fpanel="open"] .frame[data-tier="phone"] .fpanel.inline{display:block}
+body[data-fpanel="open"] .frame[data-tier="desktop"] .fpanel.float,
+body[data-fpanel="open"] .frame[data-tier="tablet"] .fpanel.float{display:block}
+body[data-fpanel="open"] .frame[data-tier="desktop"] .fscrim,
+body[data-fpanel="open"] .frame[data-tier="tablet"] .fscrim{display:block}
+.fpanel.float .fptitle{display:flex;align-items:center;justify-content:space-between;
+  padding:8px 12px;background:var(--raised);border-bottom:1px solid var(--divider);font-size:12px;
+  font-weight:700;text-transform:uppercase;letter-spacing:.05em;position:sticky;top:0}
+.fpanel.float .fptitle button{background:transparent;border:1px solid rgba(235,235,235,.2);color:var(--text);
+  padding:2px 8px;cursor:pointer;font-family:inherit;font-size:12px}
+.fset{border:none;margin:0 0 9px;padding:0}
+.fset:last-child{margin-bottom:0}
+.fset > .lg{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px}
+.fset .frow{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.fset .frow + .frow{margin-top:5px}
+.fset .frl{font-size:10px;text-transform:uppercase;color:var(--muted);flex:0 0 46px}
+.tchip{font-size:11px;padding:2px 7px;border:1px solid #6b7d8e;background:transparent;color:var(--text);
+  cursor:pointer;display:inline-flex;gap:3px;align-items:center;font-family:inherit}
+.tchip:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+.tchip .st{font-weight:900;font-size:10px}
+.tchip[data-s="inc"]{border-color:var(--success);background:rgba(92,184,92,.22);color:#bfe6ad}
+.tchip[data-s="exc"]{border-color:var(--danger);background:rgba(217,83,79,.22);color:#f0b3b1;text-decoration:line-through}
+.tchip[data-s="neutral"] .st{color:var(--muted)}
+.tchip.suggested{border-style:dashed;border-color:var(--light)}
+.tchip .sg{margin-left:2px;color:var(--light);font-weight:700}
+.seg{display:inline-flex;border:1px solid var(--input-border)}
+.seg button{background:var(--raised);color:var(--text);border:none;border-right:1px solid var(--input-border);
+  padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit}
+.seg button:last-child{border-right:none}
+.seg button.on{background:var(--primary);color:#fff;font-weight:700}
+.seg button.suggested{border-style:dashed}
+.implicit-note{font-size:10px;color:var(--muted);margin-top:7px;display:flex;gap:5px;align-items:flex-start;line-height:1.4}
+.implicit-note .ic{color:var(--info);flex:0 0 auto}
+.fsep{height:1px;background:var(--divider);margin:9px -8px}
+.frange{display:flex;align-items:center;gap:8px;width:100%}
+.ftrack{flex:1;height:4px;background:#3a4653;position:relative;border-radius:2px}
+.ftrack .fill{position:absolute;left:20%;right:22%;top:0;bottom:0;background:var(--primary);border-radius:2px}
+.ftrack .knob{position:absolute;top:50%;width:12px;height:12px;background:var(--light);border:1px solid #fff;
+  border-radius:50%;transform:translate(-50%,-50%)}
+.frange .fval{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.ftree{display:flex;align-items:center;gap:6px;width:100%;background:var(--conf);border:1px solid var(--input-border);
+  padding:4px 8px;font-size:11px;color:var(--muted);cursor:pointer}
+.ftree .fchips{display:inline-flex;gap:3px;flex-wrap:wrap}
+.ftree .fchips .c{background:var(--panel);color:var(--text);padding:0 6px;border-radius:10px;font-size:9px}
+.ftree .fcar{margin-left:auto;color:var(--muted)}
+.fswitch{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text)}
+.swtrack{width:34px;height:18px;background:#3a4653;border-radius:10px;position:relative;cursor:pointer;flex:0 0 34px}
+.swtrack .swknob{position:absolute;top:2px;left:2px;width:14px;height:14px;background:var(--light);border-radius:50%;transition:.15s}
+.swtrack[data-on="true"]{background:var(--primary)}
+.swtrack[data-on="true"] .swknob{left:18px;background:#fff}
+
+/* ---- (7) CONTROL STACK at rail bottom — Print Options + Report ONLY now (Slot Actions moved to
+   the top per item 4/RD5 revision) ---- */
+.cstack{padding:8px 10px}
+.cs-group{margin-bottom:10px}
+.cs-legend{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px}
+.bleedsel{width:100%;background:var(--raised);color:var(--text);border:1px solid var(--input-border);
+  font-size:13px;padding:4px 8px;border-radius:0;font-family:inherit}
+.cs-hint{font-size:10px;color:var(--muted);margin-top:4px}
+.cs-foot{border-top:1px solid var(--divider);padding-top:8px}
+
+/* buttons — real Superhero .btn (FLAT radius 0); btn-sm = 14px / 4px 8px (inherited) */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;font-family:inherit;
+  font-size:16px;line-height:1.5;padding:6px 12px;border:1px solid transparent;border-radius:0;
+  cursor:pointer;text-decoration:none;white-space:nowrap;font-weight:400;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.15),0 1px 1px rgba(0,0,0,.075)}
+.btn:focus-visible{outline:2px solid var(--annotate);outline-offset:1px}
+.btn-sm{font-size:14px;padding:4px 8px}
+.btn-block{width:100%}
+.btn-primary{background:var(--primary);border-color:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+.btn-o-primary{background:transparent;border-color:var(--primary);color:var(--primary)}
+.btn-o-primary:hover{background:var(--primary);color:#fff}
+.btn-o-danger{background:transparent;border-color:var(--danger);color:var(--danger)}
+.btn-o-danger:hover{background:var(--danger);color:#fff}
+.btn-o-light{background:transparent;border-color:var(--light);color:var(--light)}
+.btn-o-light:hover{background:var(--light);color:#111}
+.btn-o-success{background:transparent;border-color:var(--success);color:var(--success)}
+.btn-o-info{background:transparent;border-color:var(--info);color:var(--info)}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+
+/* Report expands into reason chips (ReportCardPanel / ChipCard) */
+.reportpanel{display:none;margin-top:8px}
+body[data-report="open"] .reportpanel{display:block}
+body[data-report="open"] .reportbtn{display:none}
+.reportpanel .q{font-size:11px;color:var(--muted);margin-bottom:6px}
+.chipgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.rchip{background:var(--raised);border:1px solid var(--input-border);color:var(--text);font-size:11px;
+  padding:6px 4px;text-align:center;cursor:pointer}
+.rchip:hover{border-color:var(--danger);color:#f0b3b1}
+
+/* item 11: FOREIGN-ORDER CONSENT TOAST — built on useConsentToast/ConsentToast (react-bootstrap
+   Alert, role=alertdialog, bottom-end). Shown to a RECIPIENT of a shared deck with orphan Drive
+   IDs; deny-by-default (dismiss/Escape = decline, persisted for the session). */
+.consent{display:none;position:absolute;right:14px;bottom:14px;z-index:120;width:300px;max-width:calc(100% - 28px);
+  background:#0b1520;border:1px solid var(--info);border-left:4px solid var(--info);
+  padding:12px 14px;box-shadow:0 10px 30px rgba(0,0,0,.6)}
+body[data-shared="prompt"] .consent{display:block}
+.consent .ch{display:flex;align-items:flex-start;gap:8px;margin-bottom:6px}
+.consent .ct{font-size:13px;font-weight:700;flex:1}
+.consent .cx{background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:15px;line-height:1;padding:0}
+.consent .cm{font-size:11px;color:var(--light);line-height:1.45;margin-bottom:10px}
+.consent .cm b{color:var(--warning)}
+.consent .cbtns{display:flex;gap:8px}
+
+/* annotation callouts (mockup scaffolding, not part of the app) */
+.note{color:var(--annotate);font-size:11px;font-family:"Courier New",monospace;
+  padding:3px 10px;background:rgba(255,215,106,.06);border-left:2px solid var(--annotate)}
+.note.decided{color:#a7e08a;border-left-color:var(--success);background:rgba(92,184,92,.07)}
+.note.q{color:#8fd3ff;border-left-color:var(--info);background:rgba(91,192,222,.07)}
+.propose{display:inline-block;font-size:10px;color:#111;background:var(--annotate);
+  padding:0 5px;font-family:"Courier New",monospace;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+.revtag{display:inline-block;font-size:10px;color:#fff;background:#7a4bd0;
+  padding:0 5px;font-family:"Courier New",monospace;font-weight:700;text-transform:uppercase}
+
+/* item ledger strip (mockup meta, top of rail) */
+.ledger{background:#0b1520;border-bottom:2px solid var(--primary);padding:6px 10px;font-size:10px;
+  font-family:"Courier New",monospace;color:var(--muted);line-height:1.5}
+.ledger b{color:var(--primary);text-transform:uppercase;letter-spacing:.04em}
+.ledger .row{display:flex;gap:6px}
+.ledger .row .from{color:#c98;flex:0 0 120px}
+.ledger .row .to{color:#9fb0c0}
+
+/* drawer chrome for tablet/phone forced frames */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:80}
+.drawer{position:absolute;z-index:81;background:var(--panel);box-shadow:0 0 30px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column}
+.drawer.start{top:0;bottom:0;left:0;width:380px;border-right:1px solid var(--divider)}
+.drawer.bottom{left:0;right:0;bottom:0;height:72%;border-top-left-radius:14px;border-top-right-radius:14px}
+.drawer-grip{width:40px;height:4px;background:#6b7d8e;border-radius:2px;margin:8px auto 2px}
+.drawer-hd{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--divider)}
+.drawer-hd button{background:transparent;border:1px solid rgba(235,235,235,.15);color:var(--text);padding:2px 10px;cursor:pointer}
+@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important}}
+</style>
+</head>
+<body data-view="auto" data-conf="suggested" data-fpanel="closed" data-idpanel="closed" data-report="closed"
+      data-subject="art" data-details="closed" data-face="front" data-compare="off" data-loading="off" data-shared="off">
+
+<div class="demo">
+  <span class="grp"><b>View</b>
+    <button data-view="auto" class="on">Auto</button>
+    <button data-view="desktop">Desktop</button>
+    <button data-view="tablet">Tablet</button>
+    <button data-view="phone">Phone</button>
+  </span>
+  <span class="grp"><b>Subject</b>
+    <button data-subject="art" class="on">Art</button>
+    <button data-subject="empty">Empty</button>
+  </span>
+  <span class="grp"><b>Face (6)</b>
+    <button data-face="front" class="on">Front</button>
+    <button data-face="back">Back</button>
+  </span>
+  <span class="grp"><b>D14 (9)</b>
+    <button data-conf="suggested" class="on">%conf</button>
+    <button data-conf="confirmed">✓</button>
+  </span>
+  <span class="grp"><b>Compare (9)</b>
+    <button data-compare="off" class="on">Off</button>
+    <button data-compare="on">Beside</button>
+  </span>
+  <span class="grp"><b>Details</b>
+    <button data-details="closed" class="on">Closed</button>
+    <button data-details="open">Open</button>
+  </span>
+  <span class="grp"><b>Identify (8)</b>
+    <button data-idpanel="closed" class="on">Closed</button>
+    <button data-idpanel="open">Open</button>
+  </span>
+  <span class="grp"><b>Filters</b>
+    <button data-fpanel="closed" class="on">Closed</button>
+    <button data-fpanel="open">Open</button>
+  </span>
+  <span class="grp"><b>Grid (10)</b>
+    <button data-loading="off" class="on">Loaded</button>
+    <button data-loading="on">Loading</button>
+  </span>
+  <span class="grp"><b>Report</b>
+    <button data-report="closed" class="on">Btn</button>
+    <button data-report="open">Open</button>
+  </span>
+  <span class="grp"><b>Shared deck (11)</b>
+    <button data-shared="off" class="on">Owner</button>
+    <button data-shared="prompt">Consent</button>
+    <button data-shared="hidden">Denied</button>
+  </span>
+  <span class="hint">Unified /editor polish — 11 items + ⋯ cue. Frames transform-scaled to any width; review the full rail on a phone.</span>
+</div>
+
+<div class="stage" id="stage"></div>
+
+<script>
+function cyc(el){
+  const n={neutral:'inc',inc:'exc',exc:'neutral'}[el.getAttribute('data-s')];
+  el.setAttribute('data-s',n);
+  el.querySelector('.st').textContent={neutral:'·',inc:'+',exc:'−'}[n];
+}
+function setGlyph(){
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l3 6 6 .9-4.5 4.3 1 6.3L12 16.9 6.5 19.5l1-6.3L3 8.9 9 8z"/></svg>';
+}
+function closeFilters(){
+  document.body.setAttribute('data-fpanel','closed');
+  document.querySelectorAll('.demo button[data-fpanel]').forEach(x=>x.classList.toggle('on',x.dataset.fpanel==='closed'));
+}
+function toggleCompare(){
+  const on=document.body.getAttribute('data-compare')==='on';
+  document.body.setAttribute('data-compare',on?'off':'on');
+  document.querySelectorAll('.demo button[data-compare]').forEach(x=>x.classList.toggle('on',(x.dataset.compare==='on')!==on));
+}
+/* item 3 + 5 shared filter fieldsets — ONE chip surface (funnel chips ARE the implicit vote).
+   Item 2 note: every control here is explicitly themed (no bare browser widget = #413 residual absorbed). */
+function filterFieldsets(){
+  return `
+    <div class="fset">
+      <span class="lg">Filter versions</span>
+      <div class="frow"><span class="frl">Border</span>
+        <span class="seg"><button class="on">Any</button><button>Black</button><button>White</button><button>Silver</button></span>
+      </div>
+      <div class="frow"><span class="frl">Frame</span>
+        <span class="seg"><button class="on">Any</button><button>Old</button><button>Modern</button><button>Future</button></span>
+      </div>
+      <div class="frow"><span class="frl">Treatment</span>
+        <span class="tchip" data-s="neutral" role="button" tabindex="0" onclick="cyc(this)"><span class="st">·</span>Full Art</span>
+        <span class="tchip" data-s="inc" role="button" tabindex="0" onclick="cyc(this)"><span class="st">+</span>Borderless</span>
+        <span class="tchip suggested" data-s="neutral" role="button" tabindex="0" onclick="cyc(this)" title="Suggested filter tag — from suggestedFilterTagNames"><span class="st">·</span>Showcase<span class="sg">⌇</span></span>
+        <span class="tchip" data-s="exc" role="button" tabindex="0" onclick="cyc(this)"><span class="st">−</span>Extended</span>
+        <span class="tchip" data-s="neutral" role="button" tabindex="0" onclick="cyc(this)"><span class="st">·</span>Etched</span>
+      </div>
+      <div class="implicit-note"><span class="ic">ⓘ</span><span>Picking a version while filters are active adds a light,
+        capped community signal for those tags (implicit vote — never enough to decide alone). Dashed <b>⌇</b> chips
+        are machine/community <b>suggestions</b>, not confirmed.</span></div>
+    </div>
+    <div class="fsep"></div>
+    <div class="fset">
+      <span class="lg">Resolution (DPI)</span>
+      <div class="frange"><span class="fval">300</span>
+        <span class="ftrack"><span class="fill"></span><span class="knob" style="left:20%"></span><span class="knob" style="left:78%"></span></span>
+        <span class="fval">1200</span></div>
+    </div>
+    <div class="fset">
+      <span class="lg">Max file size</span>
+      <div class="frange"><span class="fval">0</span>
+        <span class="ftrack"><span class="fill" style="left:0;right:30%"></span><span class="knob" style="left:70%"></span></span>
+        <span class="fval">30 MB</span></div>
+    </div>
+    <div class="fset">
+      <span class="lg">Languages</span>
+      <div class="ftree"><span class="fchips"><span class="c">English</span><span class="c">Japanese</span></span><span class="fcar">▾</span></div>
+    </div>
+    <div class="fset">
+      <span class="lg">Tags</span>
+      <div class="ftree"><span style="color:var(--muted)">Any tag</span><span class="fcar">▾</span></div>
+    </div>
+    <div class="fset">
+      <span class="lg">Mature content</span>
+      <label class="fswitch"><span class="swtrack" data-on="false" role="switch" aria-checked="false"
+        onclick="this.setAttribute('data-on',this.getAttribute('data-on')==='true'?'false':'true');this.setAttribute('aria-checked',this.getAttribute('data-on'))"><span class="swknob"></span></span>
+        Show NSFW results</label>
+    </div>
+    <div class="note" style="margin:8px 0 0">Item 2: these DPI/Size/Language/Tags/NSFW controls were the #413
+      unstyled residual — now fully themed here (no bare browser widgets on the dark rail).</div>`;
+}
+
+function leftRail(){
+  return `
+  <div class="lrail"><div class="lscroll">
+
+    <div class="ledger">
+      <b>Unified /editor polish — 11 items + cue</b>
+      <div class="row"><span class="from">1 Ghost tile</span><span class="to">thumbnail of first hidden copy + "+N"</span></div>
+      <div class="row"><span class="from">3 Sources</span><span class="to">de-grey + 31px rows + cap/virtualize</span></div>
+      <div class="row"><span class="from">4/5/6 Rail head</span><span class="to">big subject + top slot-actions + Front/Back</span></div>
+      <div class="row"><span class="from">7 Sort</span><span class="to">data-driven (status/weight/DPI/size/pinned)</span></div>
+      <div class="row"><span class="from">8 Wrong printing</span><span class="to">restyled to pre-#413 pill idiom</span></div>
+      <div class="row"><span class="from">9 Compare</span><span class="to">hover/tap pill → Scryfall beside subject</span></div>
+      <div class="row"><span class="from">10 Loading</span><span class="to">round Spinner, not a bar</span></div>
+    </div>
+
+    <!-- (1) RAIL HEAD: items 4/5/6 -->
+    <div class="rhead" id="rhead">
+      <div class="rhead-row">
+        <div class="subject art" role="img" aria-label="Selected art: Lightning Bolt (2X2 117)">
+          <span class="sjcap" id="sjcap">front · selected art</span>
+          <span class="backart">back face<br>(Common Cardback)</span>
+        </div>
+        <div class="subject empty" aria-label="No art selected">No art<br>selected</div>
+        <div class="idcol">
+          <div class="slot">Slot 3 <span class="face" id="facelbl">Front</span></div>
+          <div class="name real">Lightning Bolt</div>
+          <div class="name none">No art selected yet</div>
+          <span class="mismatch" title="Requested printing differs from the resolved printing">requested ≠ shown: 2ED 161</span>
+          <!-- item 6: per-slot Front/Back toggle, right beside the subject image -->
+          <div class="fbtoggle" role="group" aria-label="Card face">
+            <button id="fbFront" class="on" aria-pressed="true"
+              onclick="setFace('front')">Front</button>
+            <button id="fbBack" aria-pressed="false"
+              onclick="setFace('back')">Back</button>
+          </div>
+          <!-- item 4 (REVISES RD5): compact Slot Actions at the TOP, no full-width buttons -->
+          <div class="slotacts-top" role="group" aria-label="Slot actions">
+            <button class="iact" title="Change query" aria-label="Change query">⇄</button>
+            <button class="iact" title="Duplicate slot" aria-label="Duplicate slot">⧉</button>
+            <button class="iact danger" title="Delete slot" aria-label="Delete slot">🗑</button>
+          </div>
+          <br>
+          <button class="detmore" aria-expanded="false"
+            onclick="document.body.setAttribute('data-details', document.body.getAttribute('data-details')==='open'?'closed':'open')">
+            More details <span class="chev">›</span>
+          </button>
+        </div>
+        <!-- item 9: Scryfall compare reveal appears BESIDE the subject image -->
+        <div class="compare" data-testid="display-compare-reveal">
+          <span class="cimg">Scryfall reference<br>2X2 · 117</span>
+          <span class="ccap"><b>Scryfall reference</b> — compare vs your selected art. Display-only, nothing stored (#271).</span>
+        </div>
+      </div>
+      <div class="detbody">
+        <div class="mrow"><span class="mk">Resolution</span><span class="mv mono">800 DPI</span></div>
+        <div class="mrow"><span class="mk">File size</span><span class="mv mono">18.4 MB</span></div>
+        <div class="mrow"><span class="mk">Source</span><span class="mv">Chilli's Cube</span></div>
+        <div class="mrow"><span class="mk">Source type</span><span class="mv">Google Drive</span></div>
+        <div class="mrow"><span class="mk">Class</span><span class="mv">Card</span></div>
+        <div class="mrow"><span class="mk">Identifier</span><span class="mv mono"><span class="copy">1aZ…q9 ⧉</span></span></div>
+        <div class="mrow"><span class="mk">Language</span><span class="mv">English</span></div>
+        <div class="mrow"><span class="mk">Tags</span><span class="mv"><span class="dtags"><span class="dtag">retro</span><span class="dtag">full-art</span></span></span></div>
+        <div class="mrow"><span class="mk">Created</span><span class="mv mono">2024-11-02</span></div>
+        <div class="mrow"><span class="mk">Modified</span><span class="mv mono">2024-11-05</span></div>
+        <div class="dacts">
+          <button class="btn btn-sm btn-o-light">☆ Favourite</button>
+          <button class="btn btn-sm btn-o-light">⤓ Download image</button>
+        </div>
+      </div>
+      <div class="note" style="margin-top:8px">Items 4/5/6: subject image <b>116px</b> <span class="revtag">rev RD8 (was 66)</span>
+        anchors a <b>compact top Slot-Actions row</b> <span class="revtag">rev RD5 (was full-width bottom)</span> +
+        a per-slot <b>Front/Back</b> toggle <span class="propose">item 6 new</span>. Metadata still lives only in More details (rev #1).</div>
+    </div>
+
+    <!-- (2) D14 CONFIDENCE ELEMENT — LOCKED -->
+    <div class="d14" data-testid="display-confidence-element">
+      <span class="seticon" tabindex="0" role="button" aria-label="Set symbol for 2X2 117">
+        ${setGlyph()}
+        <span class="check" aria-hidden="true">✓</span>
+        <span class="score" aria-hidden="true">92%</span>
+      </span>
+      <span class="idtext">2X2 · 117</span>
+      <!-- item 9: the pill is the compare trigger (hover on desktop, tap-toggle on touch); look LOCKED -->
+      <span class="statepill confirmed cmp" role="button" tabindex="0" aria-label="confirmed printing — hover or tap to compare"
+        onmouseenter="if(!matchMedia('(pointer:coarse)').matches)document.body.setAttribute('data-compare','on')"
+        onmouseleave="if(!matchMedia('(pointer:coarse)').matches)document.body.setAttribute('data-compare','off')"
+        onclick="toggleCompare()">Confirmed</span>
+      <span class="statepill suggested cmp" role="button" tabindex="0" aria-label="machine-suggested, 92 percent confidence — hover or tap to compare"
+        onmouseenter="if(!matchMedia('(pointer:coarse)').matches)document.body.setAttribute('data-compare','on')"
+        onmouseleave="if(!matchMedia('(pointer:coarse)').matches)document.body.setAttribute('data-compare','off')"
+        onclick="toggleCompare()">92% confident</span>
+      <button class="notthis" data-testid="display-confidence-not-this-printing"
+              aria-label="Vote: this is not printing 2X2 117">✗ not this printing</button>
+    </div>
+    <!-- (6/8) identify panel hangs off D14; item 8 restyles the toggle to the pre-#413 pill idiom -->
+    <div class="idhang">
+      <button class="idtoggle" aria-expanded="false"
+        onclick="document.body.setAttribute('data-idpanel', document.body.getAttribute('data-idpanel')==='open'?'closed':'open')">
+        🔍 Wrong printing? Search the right one <span class="chev">›</span>
+      </button>
+      <div class="idbody">
+        <div class="cons">Consensus: <b>Not yet resolved — contested</b> · 3 votes</div>
+        <input class="idsearch" placeholder="Search for a different card…" aria-label="Search printing candidates">
+        <div class="candgrid">
+          <span class="cand nomatch" role="button" tabindex="0">No<br>match</span>
+          <span class="cand sel"><span class="cl">2X2·117</span></span>
+          <span class="cand"><span class="cl">LEA·161</span></span>
+          <span class="cand"><span class="cl">M10·146</span></span>
+          <span class="cand"><span class="cl">A25·141</span></span>
+          <span class="cand"><span class="cl">CLB·176</span></span>
+          <span class="cand"><span class="cl">2ED·162</span></span>
+          <span class="cand"><span class="cl">3ED·161</span></span>
+        </div>
+        <div class="attrfollow">When the printing is unresolved, the AttributeVotingPanel follow-up renders
+          here (border/frame/treatment consensus for THIS image) — the ONE explicit vote surface.</div>
+      </div>
+    </div>
+    <div class="note decided">Item 8: the wrong-printing affordance is restyled to the pre-#413 DeckbuilderConfirmAffordance
+      pill idiom — a tinted, rounded, higher-contrast control (not the bland full-width grey bar). Item 9: hovering
+      (or tapping, on touch) the LOCKED Confirmed / "92% confident" pill reveals the Scryfall reference BESIDE the
+      subject image. The D14 pills themselves are untouched (owner-liked, D14 locked).</div>
+
+    <!-- (3) ARTIST -->
+    <div class="artist">
+      <div class="by">Art by <span class="nm">Christopher Rush</span></div>
+      <a class="btn btn-sm btn-o-primary" href="#" target="_blank" rel="noopener noreferrer"
+         title="via MTG Artist Connection" data-testid="artist-support-link">
+        Support on MTG Artist Connection
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8.636 3.5a.5.5 0 0 0-.5-.5H1.5A1.5 1.5 0 0 0 0 4.5v10A1.5 1.5 0 0 0 1.5 16h10a1.5 1.5 0 0 0 1.5-1.5V7.864a.5.5 0 0 0-1 0V14.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5h6.636a.5.5 0 0 0 .5-.5z"/><path d="M16 .5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1h3.793L6.146 9.146a.5.5 0 1 0 .708.708L15 1.707V5.5a.5.5 0 0 0 1 0z"/></svg>
+      </a>
+    </div>
+
+    <!-- (4b/3) SOURCES — de-greyed + densified -->
+    <div class="sources open" id="srcAcc">
+      <div class="src-summary" tabindex="0" role="button" aria-expanded="true" aria-controls="srcBody"
+           onclick="document.getElementById('srcAcc').classList.toggle('open')">
+        <span class="lbl">Sources</span>
+        <span class="count"><b>182</b> of 254 enabled</span>
+        <span class="chev">›</span>
+      </div>
+      <div class="src-pins">
+        <span class="pinchip"><span class="star">★</span> Chilli's Cube</span>
+        <span class="pinchip"><span class="star">★</span> MPCFill Community</span>
+      </div>
+      <div class="src-body" id="srcBody">
+        <input class="filter" placeholder="Filter 254 sources…" aria-label="Filter sources">
+        <div class="src-bulk">
+          <button class="btn btn-sm btn-o-light">Enable all</button>
+          <button class="btn btn-sm btn-o-light">Disable all</button>
+          <button class="btn btn-sm btn-o-light">Invert</button>
+        </div>
+        <div class="src-defaults">
+          <button class="btn btn-sm btn-o-success btn-block" disabled title="Account-tied preferred sources — issue #353">
+            ☆ Save these as my defaults <span class="propose">#353 seam</span>
+          </button>
+        </div>
+        <div class="src-cap"><span>Showing 10 of <b style="color:var(--text)">254</b> — filter to narrow</span></div>
+        <div class="src-list" id="srcList"></div>
+      </div>
+      <div class="note" style="margin:6px 10px 8px 0;margin-left:10px">Item 3 <span class="revtag">rev sources</span>:
+        grey <b>#4E5D6B</b> band killed (dark #22303F), rows <b>34px / toggle 31px</b> (was ~70px / 38px), prominent
+        filter, capped+virtualized list for 254 sources.</div>
+    </div>
+
+    <!-- (5) SELECT VERSION -->
+    <div class="sv">
+      <h6 class="svtitle">Select Version</h6>
+      <div class="svhead">
+        <span><span class="n">14</span> versions</span>
+        <span class="grow"></span>
+        <select class="sortsel" aria-label="Sort versions">
+          <option>Confirmation status</option>
+          <option>Community vote weight</option>
+          <option>Resolution (DPI) high→low</option>
+          <option>File size low→high</option>
+          <option>Pinned sources first</option>
+          <option>Name (A→Z)</option>
+          <option>Date added (newest)</option>
+        </select>
+        <button class="filtersbtn" aria-expanded="false"
+          onclick="document.body.setAttribute('data-fpanel', document.body.getAttribute('data-fpanel')==='open'?'closed':'open')">
+          Filters <span class="chev">▾</span>
+        </button>
+      </div>
+
+      <div class="fpanel inline" role="group" aria-label="Version filters"><div class="fpwrap">${filterFieldsets()}</div></div>
+
+      <!-- item 10: loading state uses the round Spinner (not a bar) -->
+      <div class="vloading" role="status" aria-live="polite">
+        <span class="spinner-border" aria-hidden="true"></span>
+        <span>Loading versions…</span>
+      </div>
+
+      <!-- ONE CONTINUOUS GRID with item-1 ghost tile -->
+      <div class="vgrid" role="list">
+        <span class="vtile sel" role="listitem" aria-label="requested printing 2X2 117"><span class="req">REQ</span><span class="vl">2X2·117</span></span>
+        <!-- item 1: ghost = dimmed thumbnail of the first hidden copy + "+N" -->
+        <span class="vtile ghost" role="button" tabindex="0" aria-label="Show 9 more copies of printing 2X2 117">
+          <span class="gdim"></span><span class="gplus">+9</span><span class="gcap">more copies</span></span>
+        <span class="vtile" role="listitem" aria-label="canonical printing LEA 161"><span class="corner canon">✓</span><span class="vl">LEA·161</span></span>
+        <span class="vtile" role="listitem" aria-label="canonical printing M10 146"><span class="corner canon">✓</span><span class="vl">M10·146</span></span>
+        <span class="vtile" role="listitem" aria-label="machine-suggested printing A25 141"><span class="confirm" role="button" tabindex="0" aria-label="Confirm suggested printing A25 141"><i>?</i></span><span class="vl">A25·141</span></span>
+        <span class="vtile" role="listitem" aria-label="alternate printing CLB 176"><span class="corner alt">Alt</span><span class="vl">CLB·176</span></span>
+        <span class="vtile" role="listitem" aria-label="alternate custom printing"><span class="corner alt">Alt</span><span class="vl">custom</span></span>
+        <span class="vtile" role="listitem" aria-label="unknown printing"><span class="corner unk">?</span><span class="vl">unknown</span></span>
+      </div>
+      <div class="note" style="margin-top:8px">Item 1: the ghost tile shows the first hidden copy's thumbnail + <b>+N</b>
+        (compressed = extra copies of the SAME identified printing). Item 7 <span class="revtag">rev RD2/O5</span>:
+        Sort is now data-driven — status / vote weight / DPI / size / pinned-source-first.</div>
+    </div>
+
+    <!-- (7) CONTROL STACK — Print Options + Report only (Slot Actions moved to top, item 4) -->
+    <div class="cstack">
+      <div class="cs-group">
+        <div class="cs-legend">Print options — bleed override</div>
+        <select class="bleedsel" aria-label="Bleed override">
+          <option>Auto (measured at export)</option>
+          <option>Force bleed</option>
+          <option>Force trimmed</option>
+        </select>
+        <div class="cs-hint">Google Drive / local-file sources only; else measured automatically.</div>
+      </div>
+      <div class="cs-foot">
+        <button class="btn btn-sm btn-o-danger btn-block reportbtn"
+          onclick="document.body.setAttribute('data-report','open')">⚑ Report this card</button>
+        <div class="reportpanel">
+          <div class="q">What's wrong with this card?</div>
+          <div class="chipgrid">
+            <span class="rchip" role="button" tabindex="0">NSFW</span>
+            <span class="rchip" role="button" tabindex="0">Low quality</span>
+            <span class="rchip" role="button" tabindex="0">Wrong card</span>
+            <span class="rchip" role="button" tabindex="0">Broken image</span>
+            <span class="rchip" role="button" tabindex="0">Other…</span>
+          </div>
+        </div>
+      </div>
+      <div class="note" style="margin-top:8px">Item 7 control stack now holds Print Options + Report only — Slot
+        Actions relocated to the rail head (item 4). No full-width Change/Duplicate/Delete stack here anymore.</div>
+    </div>
+
+  </div></div>`;
+}
+
+function center(){
+  // cell classes: filled cells carry cue+flip; empty cells carry neither; ext cells are shared-deck orphans
+  const cls=['','','sel','','ext','','empty','ext'];
+  let cells='';
+  for(let i=0;i<8;i++){
+    const c=cls[i];
+    const filled=c!=='empty';
+    cells+=`<span class="cell ${c}"><span class="cn">${i+1}</span>`+
+      (c==='ext'?`<span class="exthide"><span class="lk">🔒</span>External image<br>hidden</span>`:'')+
+      (filled?`<button class="slot-flip" aria-label="Flip to back">⟲</button>`+
+              `<button class="slot-cue" aria-label="Open card menu">⋯</button>`:'')+
+      `</span>`;
+  }
+  let sheets='';
+  for(let s=0;s<3;s++) sheets+=`<div class="sheet">${cells}</div>`;
+  return `<div class="center"><span class="npill">1 / 6</span>
+    <div class="extbanner"><span class="lk">🔒</span><span>2 external images hidden in this shared deck</span>
+      <button class="btn btn-sm btn-o-info" onclick="setShared('prompt')">Review</button></div>
+    ${sheets}</div>`;
+}
+function rightRail(){
+  return `<div class="rrail">
+    <h6>Print &amp; Settings</h6>
+    <div class="grp"><b style="font-size:12px">Page Setup</b><div class="muted">Letter · borderless · bleed 3.175mm</div></div>
+    <div class="grp"><b style="font-size:12px">Finish · Cardback · Colour</b><div class="muted">collapsed</div></div>
+    <div class="foot">
+      <button class="btn btn-primary" style="flex:1">Save Deck</button>
+      <button class="btn btn-primary" style="flex:1">Print / Export →</button>
+    </div>
+  </div>`;
+}
+/* item 11: the consent toast (bottom-right, react-bootstrap Alert idiom, role=alertdialog) */
+function consentToast(){
+  return `<div class="consent" role="alertdialog" aria-label="Load external images?" data-testid="foreign-order-consent">
+    <div class="ch"><span class="ct">Load external images?</span>
+      <button class="cx" aria-label="Keep hidden" onclick="setShared('hidden')">✕</button></div>
+    <div class="cm">This shared deck references <b>2 images</b> hosted on external Google Drive, not in our catalog.
+      Showing them fetches directly from Drive — <b>the file owner may see the request</b>. Nothing is stored by ProxyPrints.</div>
+    <div class="cbtns">
+      <button class="btn btn-sm btn-o-info" onclick="setShared('off')">Show images</button>
+      <button class="btn btn-sm btn-o-light" onclick="setShared('hidden')">Keep hidden</button>
+    </div>
+  </div>`;
+}
+
+/* ------------------------------------------------------------------ frame assembly */
+function floatPanel(){
+  return `<div class="fscrim" onclick="closeFilters()"></div>
+    <div class="fpanel float" role="group" aria-label="Version filters">
+      <div class="fptitle"><span>Filters — refine versions</span><button onclick="closeFilters()">Close ✕</button></div>
+      <div class="fpwrap">${filterFieldsets()}</div>
+    </div>`;
+}
+function desktopFrame(){
+  return `<div class="appbar"><span class="deck">Modern Burn</span>
+      <button class="abtn">Add card</button><button class="abtn primary">＋ Add Cards ▾</button>
+      <span class="pill">Sheet 1 / 6</span></div>
+    <div class="body-cols">${leftRail()}${center()}${rightRail()}</div>
+    ${floatPanel()}${consentToast()}`;
+}
+function tabletFrame(){
+  return `<div class="appbar"><span class="deck">Modern Burn</span>
+      <button class="abtn">Add card</button><button class="abtn primary">＋ Add ▾</button>
+      <span class="pill">1 / 6</span><span class="gear">⚙</span></div>
+    <div class="body-cols">${center()}</div>
+    <div class="scrim"></div>
+    <div class="drawer start">
+      <div class="drawer-hd"><span style="font-weight:700">Card details</span><button>Close ✕</button></div>
+      ${leftRail()}
+    </div>
+    ${floatPanel()}${consentToast()}`;
+}
+function phoneFrame(){
+  return `<div class="appbar"><span class="deck">Modern Burn</span>
+      <button class="abtn primary">＋ Add ▾</button>
+      <span class="pill">1 / 6</span><span class="gear">⚙</span></div>
+    <div class="body-cols">${center()}</div>
+    <div class="scrim"></div>
+    <div class="drawer bottom">
+      <div class="drawer-grip"></div>
+      <div class="drawer-hd"><span style="font-weight:700">Slot 3 · Front</span><button>Close ✕</button></div>
+      ${leftRail()}
+    </div>
+    ${consentToast()}`;
+}
+
+const W={desktop:1400,tablet:900,phone:390};
+const H={desktop:900,tablet:940,phone:860};
+
+function syncDemoOffset(){
+  const demo=document.querySelector('.demo');
+  document.getElementById('stage').style.paddingTop=(demo.offsetHeight+8)+'px';
+}
+function render(){
+  const view=document.body.getAttribute('data-view')||'auto';
+  const stage=document.getElementById('stage');
+  const avail=window.innerWidth;
+  syncDemoOffset();
+
+  function scaledFrame(tier,html){
+    const fw=W[tier], fh=H[tier];
+    const scale=Math.min(1, (avail-24)/fw);
+    return `<div class="framewrap" style="height:${Math.ceil(fh*scale)+18}px">
+      <div class="frame" data-tier="${tier}" style="width:${fw}px;height:${fh}px;transform:scale(${scale})">
+        <span class="frame-tag">${tier.toUpperCase()} — ${fw}px, scaled ${(scale*100).toFixed(0)}%</span>
+        ${html}
+      </div></div>`;
+  }
+  const build={desktop:desktopFrame,tablet:tabletFrame,phone:phoneFrame};
+
+  if(view==='auto'){
+    let tier = avail>=1200?'desktop':avail>=768?'tablet':'phone';
+    stage.innerHTML=`<div class="frame" data-tier="${tier}" style="width:100%;position:relative">
+      <span class="frame-tag">AUTO — ${avail}px → ${tier}</span>${build[tier]()}</div>`;
+  }else{
+    stage.innerHTML=scaledFrame(view,build[view]());
+  }
+  fillSources();
+  syncFace();
+}
+
+/* source list rows (item 3: 34px dense rows) */
+const SRC=[["Chilli's Cube",true,true],['MPCFill Community',true,true],['Nexus Proxies',true,false],
+  ['GoodGamery Scans',true,false],['Old School 93/94',false,false],['Retro Frame Vault',true,false],
+  ['Alt Art Collective',true,false],['Silver Border Depot',false,false],['Judge Foils Archive',true,false],
+  ['Textless Originals',false,false]];
+function srcRows(){
+  return SRC.map(([n,on,pin])=>`<div class="src-row">
+    <span class="tgl" data-on="${on}" role="switch" aria-checked="${on}" tabindex="0" aria-label="${n}"
+          onclick="this.setAttribute('data-on', this.getAttribute('data-on')==='true'?'false':'true')">
+      <span class="on">On</span><span class="off">Off</span></span>
+    <span class="snm">${n}</span>
+    <button class="pin${pin?' on':''}" aria-pressed="${pin}" aria-label="Pin ${n} as a favourite source">★</button>
+  </div>`).join('');
+}
+function fillSources(){ document.querySelectorAll('.src-list').forEach(el=>{el.innerHTML=srcRows();}); }
+
+/* item 6 face wiring */
+function setFace(f){
+  document.body.setAttribute('data-face',f);
+  document.querySelectorAll('.demo button[data-face]').forEach(x=>x.classList.toggle('on',x.dataset.face===f));
+  syncFace();
+}
+function syncFace(){
+  const f=document.body.getAttribute('data-face');
+  document.querySelectorAll('#fbFront').forEach(b=>{b.classList.toggle('on',f==='front');b.setAttribute('aria-pressed',f==='front');});
+  document.querySelectorAll('#fbBack').forEach(b=>{b.classList.toggle('on',f==='back');b.setAttribute('aria-pressed',f==='back');});
+  document.querySelectorAll('#facelbl').forEach(e=>e.textContent=f==='back'?'Back':'Front');
+  document.querySelectorAll('#sjcap').forEach(e=>e.textContent=(f==='back'?'back':'front')+' · selected art');
+}
+/* item 11 shared wiring */
+function setShared(s){
+  document.body.setAttribute('data-shared',s);
+  document.querySelectorAll('.demo button[data-shared]').forEach(x=>x.classList.toggle('on',x.dataset.shared===s));
+}
+
+/* demo strip wiring */
+document.querySelector('.demo').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  ['view','conf','fpanel','idpanel','report','subject','details','face','compare','loading','shared'].forEach(k=>{
+    if(b.dataset[k]!==undefined){
+      document.body.setAttribute('data-'+k,b.dataset[k]);
+      b.parentNode.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+      if(k==='view')render();
+      if(k==='face')syncFace();
+    }
+  });
+});
+window.addEventListener('resize',()=>{clearTimeout(window._t);window._t=setTimeout(render,120);});
+render();
+window.addEventListener('load',syncDemoOffset);
+</script>
+</body>
+</html>
