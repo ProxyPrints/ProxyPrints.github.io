@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ProxyPrints — cardback flow + PDF-wait experience (two owner-ruled packages)</title>
+<style>
+/* ============================================================================
+   BINDING #302 THEME TOKENS — inherited VERBATIM from the corrected-bundle /
+   rail-delegacy / editor-polish rounds (grounded in shipped code, not approximated):
+     • bootswatch/dist/superhero/_variables.scss  ($orange #df6919, $body-bg #0f2537,
+       $card-bg/$secondary $gray-600 #4e5d6c, $modal-content-bg $gray-600 #4e5d6c,
+       $modal-header-border rgba(0,0,0,.2), $border-radius 0)
+     • frontend/src/styles/styles.scss  (#302 T2–T7: $dark/$input-bg #22303f, text #ebebeb,
+       border #4e5d6c, placeholder #8fa0b0; NO $primary override)
+     • frontend/src/features/display/PrePrintSaveGate.tsx  (the flush→save→navigate gate)
+     • frontend/src/features/card/CommonCardback.tsx  (CommonCardback / CardbackToolbarButton /
+       GridSelectorModal; bulkReplaceSelectedImage + setSelectedCardback on pick)
+     • frontend/src/features/pdf/PDFGenerator.tsx  (imageFetchProgress {completed,total};
+       "Fetching images: N of ~M"; usePostExportContributionPrompt wiring)
+     • frontend/src/features/export/PostExportContributionPrompt.tsx  (<Alert variant="info">
+       → /whatsthat, once-per-session)
+     • frontend/src/features/questionFeed/QuestionFeed.tsx  (Level 1 YES/NOT SURE/NO/SKIP,
+       ThumbButton min-height floor, QuestionFeedCounts)
+   THIS ROUND (owner-ruled 2026-07-24): PACKAGE 1 cardback flow + PACKAGE 2 PDF-wait experience.
+   Elements marked .newthis are introduced this round and need knowing sign-off on the look.
+   ============================================================================ */
+:root{
+  --body:#0f2537;          /* $body-bg */
+  --panel:#4e5d6c;         /* $secondary=$card-bg=$modal-content-bg */
+  --raised:#22303f;        /* $dark / $input-bg — inputs, panels, rail-head */
+  --conf:#2b3e50;          /* D14 / secondary surface */
+  --text:#ebebeb;
+  --muted:#8fa0b0;
+  --light:#abb6c2;
+  --primary:#df6919;       /* $primary=$orange (hover #be5915) */
+  --primary-hover:#be5915;
+  --success:#5cb85c;
+  --danger:#d9534f;
+  --warning:#ffc107;
+  --info:#5bc0de;
+  --input-border:#4e5d6c;
+  --divider:#16202b;
+  --modal-border:rgba(0,0,0,.2);   /* $modal-header-border-color (real) */
+  --list-border:rgba(0,0,0,.22);
+  --radius:0;
+  --radius-pill:10px;
+  --annotate:#ffd76a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#08161f;color:var(--text);
+  font-family:Lato,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;font-size:16px;line-height:1.5}
+
+/* ---------- demo strip (forces Desktop/Tablet/Phone at any window width) ---------- */
+.demo{position:fixed;top:0;left:0;right:0;z-index:9000;display:flex;flex-wrap:wrap;
+  align-items:center;gap:6px;padding:7px 12px;background:#000;border-bottom:2px solid var(--primary);font-size:12px}
+.demo b{color:var(--primary);letter-spacing:.04em;text-transform:uppercase;font-size:10px}
+.demo .grp{display:flex;gap:3px;align-items:center;padding:0 7px;border-right:1px solid #333}
+.demo button{background:#22303f;color:var(--text);border:1px solid #46586a;padding:3px 8px;
+  cursor:pointer;font-size:11px;font-family:inherit;border-radius:0}
+.demo button.on{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:700}
+.demo button:focus-visible{outline:2px solid var(--annotate);outline-offset:1px}
+.demo .hint{color:var(--muted);font-size:11px;max-width:300px}
+
+.stage{padding-top:96px;min-height:100vh}
+.framewrap{overflow:hidden}
+.frame{transform-origin:top left;background:var(--body);position:relative;overflow:hidden}
+.frame-tag{position:absolute;top:6px;left:8px;z-index:60;color:var(--annotate);
+  font-family:"Courier New",monospace;font-size:12px;background:rgba(0,0,0,.5);padding:1px 7px}
+.page{position:absolute;inset:0;overflow:auto}
+
+/* new-this-round annotation chip */
+.nb{display:inline-block;background:rgba(255,215,106,.14);border:1px solid var(--annotate);
+  color:var(--annotate);font-size:9px;letter-spacing:.03em;text-transform:uppercase;
+  padding:0 5px;border-radius:0;font-family:"Courier New",monospace;vertical-align:middle}
+
+/* ============================ APP CHROME ============================ */
+.appbar{display:flex;align-items:center;gap:10px;height:52px;padding:0 12px;
+  background:var(--body);border-bottom:1px solid var(--divider);font-size:14px;position:relative;z-index:2}
+.appbar .deck{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.abtn{background:var(--raised);color:var(--text);border:1px solid #46586a;padding:5px 12px;
+  font-size:13px;font-family:inherit;cursor:pointer;border-radius:0;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.abtn:hover{border-color:var(--light)}
+.abtn.primary{background:transparent;border-color:var(--success);color:#8fe08f}
+/* CardbackToolbarButton (shipped: btn-sm outline-secondary + image icon) */
+.cbtoolbtn{background:transparent;border:1px solid var(--light);color:var(--light);padding:4px 10px;
+  font-size:13px;font-family:inherit;cursor:pointer;border-radius:0;display:inline-flex;align-items:center;gap:6px}
+.cbtoolbtn:hover{border-color:var(--text);color:var(--text)}
+.appbar .pill{margin-left:auto;background:rgba(0,0,0,.35);border:1px solid var(--divider);
+  padding:2px 10px;font-variant-numeric:tabular-nums;font-size:12px}
+.appbar .gear{width:34px;height:34px;display:flex;align-items:center;justify-content:center;
+  background:var(--panel);border:1px solid var(--divider);cursor:pointer}
+.body-cols{display:flex;align-items:stretch;min-height:460px}
+
+/* ---- editor three-region context (left rail / center sheet / right project rail) ---- */
+.lrail{width:340px;flex:0 0 340px;background:var(--panel);border-right:1px solid var(--divider);
+  display:flex;flex-direction:column}
+.lrail .lscroll{overflow-y:auto;padding:0}
+.rhead{background:var(--raised);color:var(--text);border-bottom:1px solid var(--divider);padding:8px 10px;display:flex;gap:10px}
+.rhead .subject{flex:0 0 80px;width:80px;aspect-ratio:63/88;border:1px solid rgba(235,235,235,.15);
+  background:linear-gradient(160deg,#3b2f6b,#20233f);position:relative;overflow:hidden}
+.rhead .subject .cap{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);color:#cdd6df;font-size:8px;text-align:center;padding:1px}
+.rhead .idcol{flex:1;min-width:0}
+.rhead .slot{font-size:14px;font-weight:700}
+.rhead .slot .face{font-weight:400;color:var(--muted);font-size:11px;text-transform:uppercase;margin-left:6px}
+.rhead .name{font-size:15px;margin-top:1px}
+.railsec{border-bottom:1px solid var(--divider);padding:8px 10px}
+.railsec .lg{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px}
+
+/* per-slot cardback control block on the rail (PACKAGE 1b — per-slot entry) */
+.slotback{display:flex;gap:9px;align-items:flex-start}
+.slotback .bthumb{flex:0 0 54px;width:54px;aspect-ratio:63/88;border:1px solid rgba(235,235,235,.15);
+  background:repeating-linear-gradient(45deg,#2a2320,#2a2320 6px,#1f1a17 6px,#1f1a17 12px);position:relative}
+.slotback .bthumb .cap{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);color:#a99;font-size:8px;text-align:center;padding:1px}
+.slotback .bmeta{flex:1;min-width:0}
+.slotback .bname{font-size:13px;color:var(--text)}
+.slotback .bsub{font-size:11px;color:var(--muted)}
+.slotback .bchoose{margin-top:6px;background:transparent;border:1px solid var(--light);color:var(--light);
+  font-size:13px;padding:4px 8px;cursor:pointer;border-radius:0;font-family:inherit}
+.slotback .bchoose:hover{border-color:var(--text);color:var(--text)}
+
+/* center sheet */
+.center{flex:1;display:flex;flex-direction:column;align-items:center;padding:16px;gap:6px;position:relative;background:var(--body)}
+.npill{align-self:flex-end;background:rgba(0,0,0,.5);border:1px solid var(--divider);border-radius:20px;
+  padding:2px 10px;font-size:11px;font-variant-numeric:tabular-nums}
+.sheet{width:100%;max-width:480px;aspect-ratio:279.4/215.9;border:1px solid rgba(235,235,235,.18);border-radius:7px;
+  display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);column-gap:2px;row-gap:10px;padding:6px}
+.cell{aspect-ratio:63/88;background:repeating-linear-gradient(45deg,#33475a,#33475a 7px,#2b3c4d 7px,#2b3c4d 14px);
+  outline:1px solid rgba(255,255,255,.06);position:relative}
+.cell.sel{outline:2px solid var(--primary);outline-offset:-2px}
+.cell .cn{position:absolute;top:2px;left:2px;font-size:8px;color:#9fb0c0;font-family:monospace}
+/* the deck's back faces (what the cardback drives) */
+.cell.backface{background:repeating-linear-gradient(45deg,#2a2320,#2a2320 7px,#1f1a17 7px,#1f1a17 14px)}
+.cell.backface.custom{background:linear-gradient(160deg,#0f3b2a,#123)}
+.cell .btag{position:absolute;bottom:2px;left:2px;font-size:7px;color:#cdd6df;background:rgba(0,0,0,.55);padding:0 3px}
+
+/* right project rail (three-region context) */
+.rrail{width:250px;background:var(--panel);border-left:1px solid var(--divider);padding:10px;font-size:13px;flex:0 0 250px}
+.rrail h6{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 6px}
+.rrail .cbcard{background:var(--raised);border:1px solid var(--divider);padding:8px}
+.rrail .cbcard .cbimg{width:100%;aspect-ratio:63/88;border:1px solid rgba(235,235,235,.15);
+  background:repeating-linear-gradient(45deg,#2a2320,#2a2320 8px,#1f1a17 8px,#1f1a17 16px);margin-bottom:6px;position:relative}
+.rrail .cbcard .cbimg .cap{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);color:#a99;font-size:9px;text-align:center;padding:1px}
+.rrail .finish{margin-top:12px}
+.finishbtn{width:100%;background:var(--primary);color:#fff;border:1px solid var(--primary);font-family:inherit;
+  font-size:14px;font-weight:700;padding:8px 12px;cursor:pointer;border-radius:0}
+.finishbtn:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+
+/* ============================ MODAL (gate + toolbar picker) ============================ */
+/* Real react-bootstrap Modal on Superhero: content bg $gray-600 #4e5d6c, header/footer border rgba(0,0,0,.2),
+   radius 0. Reproduced faithfully. */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:80}
+.mdialog{position:absolute;z-index:81;top:52px;left:50%;transform:translateX(-50%);width:500px;max-width:calc(100% - 24px);
+  background:var(--panel);color:var(--text);border:1px solid var(--modal-border);box-shadow:0 12px 40px rgba(0,0,0,.6)}
+.mdialog.wide{width:640px}
+.mhead{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--modal-border)}
+.mhead .mtitle{font-size:18px;font-weight:700}
+.mhead .mx{background:transparent;border:none;color:var(--text);font-size:20px;cursor:pointer;opacity:.7;line-height:1}
+.mhead .mx:hover{opacity:1}
+.mbody{padding:16px}
+.mbody p{margin:0 0 12px}
+.mfoot{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--modal-border);flex-wrap:wrap}
+.btn{font-family:inherit;font-size:14px;padding:6px 14px;cursor:pointer;border-radius:0;border:1px solid transparent}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+.btn.primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+.btn.ol-light{background:transparent;border-color:var(--light);color:var(--light)}
+.btn.ol-light:hover{border-color:var(--text);color:var(--text)}
+.btn.ol-secondary{background:transparent;border-color:#6b7d8e;color:var(--light)}
+.btn.sm{font-size:14px;padding:4px 8px}
+
+/* PACKAGE 1a — cardback reminder gate content */
+.cbremind{display:flex;gap:14px;align-items:flex-start}
+.cbremind .curback{flex:0 0 88px;width:88px;aspect-ratio:63/88;border:1px solid rgba(235,235,235,.15);
+  background:repeating-linear-gradient(45deg,#2a2320,#2a2320 9px,#1f1a17 9px,#1f1a17 18px);position:relative}
+.cbremind .curback .cap{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);color:#a99;font-size:9px;text-align:center;padding:1px}
+.cbremind .rtext{flex:1;min-width:0}
+.cbremind .rtext .sub{color:var(--muted);font-size:13px}
+.dfnote{margin-top:10px;font-size:12px;color:var(--muted);border-top:1px solid var(--divider);padding-top:8px}
+.dfnote .seam{color:var(--annotate)}
+
+/* toolbar/rail cardback GRID (GridSelectorModal look) */
+.cbgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px;max-height:230px;overflow-y:auto;
+  padding:4px;background:var(--raised);border:1px solid var(--divider)}
+.cbtile{aspect-ratio:63/88;border:1px solid rgba(235,235,235,.15);position:relative;cursor:pointer}
+.cbtile:nth-child(3n){background:repeating-linear-gradient(45deg,#2a2320,#2a2320 7px,#1f1a17 7px,#1f1a17 14px)}
+.cbtile:nth-child(3n+1){background:linear-gradient(160deg,#0f3b2a,#123)}
+.cbtile:nth-child(3n+2){background:linear-gradient(150deg,#3b2f6b,#20233f)}
+.cbtile.sel{outline:2px solid var(--primary);outline-offset:-2px;border-color:var(--primary)}
+.cbtile .lab{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);color:#cdd6df;font-size:8px;text-align:center;padding:1px}
+.cbtile .star{position:absolute;top:2px;right:3px;color:var(--warning);font-size:11px}
+
+/* PACKAGE 1b — apply-all / set-default prompt (INLINE, never a stacked modal) */
+.cbprompt{background:var(--raised);border:1px solid var(--divider);border-left:3px solid var(--primary);
+  padding:10px 12px;margin-top:12px}
+.cbprompt .ct{font-size:13px;font-weight:700;margin-bottom:2px;display:flex;align-items:center;gap:6px}
+.cbprompt .cintro{font-size:12px;color:var(--muted);margin-bottom:10px}
+.choice{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--divider)}
+.choice:first-of-type{border-top:none}
+.choice .cl{flex:1;min-width:0}
+.choice .cl .h{font-size:13px;color:var(--text)}
+.choice .cl .s{font-size:11px;color:var(--muted)}
+.choice .act{flex:0 0 auto}
+/* the two choices are visually DISTINCT: apply-all = primary-tinted, set-default = info-tinted */
+.applybtn{background:transparent;border:1px solid var(--primary);color:#ffb27d;font-family:inherit;font-size:13px;
+  padding:4px 10px;cursor:pointer;border-radius:0;white-space:nowrap}
+.applybtn:hover{background:var(--primary);color:#fff}
+.applybtn.done{border-color:var(--success);color:#8fe08f;pointer-events:none}
+.defbtn{background:transparent;border:1px solid var(--info);color:#8fd7ea;font-family:inherit;font-size:13px;
+  padding:4px 10px;cursor:pointer;border-radius:0;white-space:nowrap}
+.defbtn:hover{background:var(--info);color:#062430}
+.defbtn.done{border-color:var(--success);color:#8fe08f;pointer-events:none}
+.cbprompt .skip{margin-top:8px;text-align:right}
+.cbprompt .skip a{color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer}
+.cbprompt .trapnote{font-size:11px;color:var(--annotate);margin-top:8px;display:flex;gap:5px;align-items:flex-start}
+
+/* ============================ PRINT PAGE (PACKAGE 2) ============================ */
+.printpage{display:flex;gap:0;min-height:460px}
+.pcol-l{flex:0 0 320px;width:320px;background:var(--body);border-right:1px solid var(--divider);padding:14px;overflow-y:auto}
+.pcol-r{flex:1;background:var(--body);padding:14px;position:relative}
+.pcol-l h5{font-size:15px;margin:0 0 8px}
+.pcol-l p.lead{font-size:13px;color:var(--light);margin:0 0 10px}
+.setrow{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);border-bottom:1px solid var(--divider);padding:5px 0}
+.setrow b{color:var(--text);font-weight:600}
+.genbtn{width:100%;margin-top:12px;background:var(--primary);color:#fff;border:1px solid var(--primary);
+  font-family:inherit;font-size:15px;font-weight:700;padding:9px 12px;cursor:pointer;border-radius:0;display:flex;align-items:center;justify-content:center;gap:8px}
+.genbtn[disabled]{background:#7a4517;border-color:#7a4517;cursor:default}
+.genbtn2{width:100%;margin-top:8px;background:transparent;color:var(--primary);border:1px solid var(--primary);
+  font-family:inherit;font-size:14px;padding:7px 12px;cursor:pointer;border-radius:0}
+
+/* PACKAGE 2a — progress bar (Bootstrap ProgressBar; determinate fetch → indeterminate assemble → done) */
+.progressbox{margin-top:12px;background:var(--raised);border:1px solid var(--divider);padding:10px 12px}
+.progressbox .plabel{font-size:12px;color:var(--text);display:flex;justify-content:space-between;margin-bottom:6px}
+.progressbox .plabel .pfrac{font-variant-numeric:tabular-nums;color:var(--muted)}
+.progress{height:10px;background:var(--divider);overflow:hidden;border-radius:0}
+.progress .bar{height:100%;background:var(--primary);width:0;transition:width .3s}
+.progress .bar.done{background:var(--success);width:100%!important}
+/* indeterminate (assembly) — striped animated, honest "no exact %" */
+.progress .bar.indet{width:100%;background-image:linear-gradient(45deg,rgba(255,255,255,.18) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.18) 50%,rgba(255,255,255,.18) 75%,transparent 75%,transparent);
+  background-size:1rem 1rem;animation:barstripe 1s linear infinite}
+@keyframes barstripe{from{background-position:1rem 0}to{background-position:0 0}}
+.progressbox .psub{font-size:11px;color:var(--muted);margin-top:6px}
+.progressbox .psub.donec{color:#8fe08f}
+.seamtag{display:block;font-size:11px;color:var(--annotate);margin-top:6px}
+
+/* PACKAGE 2b — embedded What's That Card? game */
+.gameembed{border:1px solid var(--divider);background:var(--raised);height:100%;display:flex;flex-direction:column;min-height:420px}
+.gehead{background:var(--conf);border-bottom:1px solid var(--divider);padding:8px 12px;display:flex;align-items:center;gap:8px}
+.gehead .dot{width:8px;height:8px;border-radius:50%;background:var(--primary)}
+.gehead .h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.gehead .lz{margin-left:auto;font-size:10px;color:var(--muted);font-family:"Courier New",monospace}
+/* persistent build-status ribbon inside the embed (coexists with the game) */
+.geband{background:#0b1520;border-bottom:1px solid var(--divider);padding:6px 12px;font-size:11px;color:var(--text);display:flex;align-items:center;gap:8px}
+.geband .mini{flex:1;height:6px;background:var(--divider);overflow:hidden}
+.geband .mini .b{height:100%;background:var(--primary);width:47%}
+.geband.donec{color:#8fe08f}
+.geband.donec .mini .b{background:var(--success);width:100%}
+.gebody{flex:1;display:flex;flex-direction:column;align-items:center;padding:14px;gap:8px;overflow-y:auto}
+.gecount{font-size:11px;color:var(--muted)}
+.gecard{width:132px;aspect-ratio:63/88;border:1px solid rgba(235,235,235,.15);background:linear-gradient(160deg,#5a3d10,#241a0c);position:relative}
+.gecard .gname{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);color:#ebebeb;font-size:9px;text-align:center;padding:2px}
+.geq{font-size:14px;text-align:center;color:var(--text);max-width:320px}
+.geq .qn{color:var(--muted);font-size:12px}
+/* ThumbButton idiom (QuestionFeed): full-width, min-height floor ~44px, stacked */
+.gebtns{width:100%;max-width:340px;display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.tbtn{min-height:44px;display:flex;align-items:center;justify-content:center;font-family:inherit;font-size:15px;
+  font-weight:600;border-radius:0;cursor:pointer;background:transparent;border:1px solid}
+.tbtn.yes{border-color:var(--success);color:#8fe08f}
+.tbtn.yes:hover{background:var(--success);color:#062}
+.tbtn.notsure{border-color:var(--warning);color:#ffd76a}
+.tbtn.notsure:hover{background:var(--warning);color:#3a2c00}
+.tbtn.no{border-color:var(--danger);color:#f0b3b1}
+.tbtn.no:hover{background:var(--danger);color:#fff}
+.tbtn.skip{border-color:transparent;color:var(--warning);text-decoration:none;min-height:36px}
+.tbtn.skip:hover{text-decoration:underline}
+.gefoot{font-size:10px;color:var(--muted);text-align:center;padding:6px 12px;border-top:1px solid var(--divider)}
+
+/* PACKAGE 2b — outro = the shipped PostExportContributionPrompt (<Alert variant="info">, REAL BS5 info alert) */
+.outro{margin:14px;background:#cff4fc;border:1px solid #b6effb;color:#055160;padding:14px 16px;position:relative}
+.outro .ox{position:absolute;top:8px;right:10px;background:transparent;border:none;font-size:18px;color:#055160;cursor:pointer;opacity:.6}
+.outro .ox:hover{opacity:1}
+.outro p{margin:0 0 8px;font-size:14px;padding-right:16px}
+.outro a{color:#04414d;font-weight:700;text-decoration:underline;cursor:pointer}
+.outro .prov{font-size:11px;margin-top:8px;color:#08616f;opacity:.85}
+
+.spinner{width:1.15em;height:1.15em;border:.18em solid rgba(255,255,255,.4);border-right-color:transparent;border-radius:50%;
+  display:inline-block;animation:spin .75s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* phone forced frame: stack all three regions so EVERY surface is reachable by scrolling */
+.frame[data-tier="phone"] .body-cols{flex-direction:column;min-height:0}
+.frame[data-tier="phone"] .lrail{width:100%;flex:1 1 auto;border-right:none;border-bottom:1px solid var(--divider)}
+.frame[data-tier="phone"] .rrail{width:100%;flex:1 1 auto;border-left:none;border-top:1px solid var(--divider)}
+.frame[data-tier="phone"] .printpage{flex-direction:column}
+.frame[data-tier="phone"] .pcol-l,.frame[data-tier="phone"] .pcol-r{flex:1 1 auto;width:100%;border-right:none}
+.frame[data-tier="phone"] .pcol-l{border-bottom:1px solid var(--divider)}
+.frame[data-tier="phone"] .mdialog,.frame[data-tier="phone"] .mdialog.wide{
+  width:100%;max-width:100%;left:0;transform:none;top:auto;bottom:0;position:absolute;
+  border-top-left-radius:14px;border-top-right-radius:14px;max-height:80%;overflow-y:auto}
+.frame[data-tier="phone"] .gameembed{min-height:520px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body data-view="auto" data-scene="gate" data-gen="fetch">
+
+<div class="demo">
+  <span class="grp"><b>View</b>
+    <button data-view="auto" class="on">Auto</button>
+    <button data-view="desktop">Desktop</button>
+    <button data-view="tablet">Tablet</button>
+    <button data-view="phone">Phone</button>
+  </span>
+  <span class="grp"><b>Scene</b>
+    <button data-scene="gate" class="on">1a · no-cardback reminder</button>
+    <button data-scene="applyToolbar">1b · apply — toolbar</button>
+    <button data-scene="applyRail">1b · apply — rail</button>
+    <button data-scene="pdf">2 · PDF wait + game</button>
+  </span>
+  <span class="grp"><b>PDF phase (2a)</b>
+    <button data-gen="fetch" class="on">Fetching</button>
+    <button data-gen="assemble">Assembling</button>
+    <button data-gen="done">Done → outro</button>
+  </span>
+  <span class="hint">Two owner-ruled packages on the /editor → print flow. Frames transform-scaled to any width; review every surface on the phone frame.</span>
+</div>
+
+<div class="stage" id="stage"></div>
+
+<script>
+/* ---------------- shared editor backdrop (three-region context) ---------------- */
+function sheetCells(){
+  let html='';
+  const names=['1','2','3','4','5','6'];
+  for(let i=0;i<6;i++){
+    const custom = i===4; // one slot with a deliberately-different (custom) cardback
+    html+=`<div class="cell backface${custom?' custom':''}${i===2?' sel':''}">
+      <span class="cn">${names[i]}·B</span>
+      <span class="btag">${custom?'custom back':'deck back'}</span></div>`;
+  }
+  return html;
+}
+function editorBackdrop(){
+  return `<div class="appbar">
+      <span class="deck">Modern Burn</span>
+      <button class="abtn primary">＋ Add ▾</button>
+      <button class="cbtoolbtn" title="CardbackToolbarButton (shipped)"><span>🖼</span>Cardback</button>
+      <span class="pill">6 / 6</span><span class="gear">⚙</span></div>
+    <div class="body-cols">
+      <div class="lrail"><div class="lscroll">
+        <div class="rhead">
+          <div class="subject"><span class="cap">front · art</span></div>
+          <div class="idcol"><div class="slot">Slot 3<span class="face">Back</span></div>
+            <div class="name">Lightning Bolt</div></div>
+        </div>
+        <div class="railsec">
+          <div class="lg">Cardback (this slot) <span class="nb">1b rail</span></div>
+          ${slotbackBlock()}
+        </div>
+        <div class="railsec"><div class="lg">Select version</div>
+          <div style="font-size:12px;color:var(--muted)">grid · sort · filters …</div></div>
+      </div></div>
+      <div class="center">
+        <span class="npill">showing back faces</span>
+        <div class="sheet">${sheetCells()}</div>
+        <div style="font-size:11px;color:var(--muted)">Card backs are what the cardback drives · slot 5 has a custom back</div>
+      </div>
+      <div class="rrail">
+        <h6>Project cardback</h6>
+        <div class="cbcard">
+          <div class="cbimg"><span class="cap">Superhero (site default)</span></div>
+          <button class="cbtoolbtn" style="width:100%;justify-content:center" title="CommonCardback / CardbackToolbarButton">🖼 Change cardback</button>
+        </div>
+        <div class="finish"><button class="finishbtn">Print / Export →</button></div>
+      </div>
+    </div>`;
+}
+/* per-slot cardback block on the left rail (1b rail entry) */
+function slotbackBlock(){
+  return `<div class="slotback">
+      <div class="bthumb"><span class="cap">deck back</span></div>
+      <div class="bmeta">
+        <div class="bname">Deck default back</div>
+        <div class="bsub">follows project cardback</div>
+        <button class="bchoose" onclick="railPick()">Choose a different back…</button>
+      </div>
+    </div>
+    <div id="railPromptSlot"></div>`;
+}
+
+/* ---------------- PACKAGE 1a — cardback reminder gate ---------------- */
+function gateOverlay(){
+  return `<div class="scrim"></div>
+    <div class="mdialog" data-testid="pre-print-cardback-gate" role="dialog" aria-modal="true">
+      <div class="mhead"><span class="mtitle">Pick a cardback before printing?</span>
+        <button class="mx" title="Dismiss = cancel the print attempt (matches the sibling Save gate)">✕</button></div>
+      <div class="mbody">
+        <div class="cbremind">
+          <div class="curback"><span class="cap">Superhero · site default</span></div>
+          <div class="rtext">
+            <p>Your deck is still using the <b>site default cardback</b>. Most printers put a
+              back on every card — choosing your own is quick and easy to forget.</p>
+            <div class="rtext-sub" style="font-size:13px;color:var(--muted)">You can keep the default and continue — this only asks once per print.</div>
+          </div>
+        </div>
+        <div class="dfnote"><span class="nb">seam · 1c</span> The "site default" is the
+          <span class="seam">owner-drive cardback</span> (which source's cardback document ships as the
+          fallback is a backend/config seed — Annex A-1, not designed here).</div>
+      </div>
+      <div class="mfoot">
+        <button class="btn ol-light" onclick="gateUseDefault()">Use current &amp; continue</button>
+        <button class="btn primary" onclick="setScene('applyToolbar')">Choose a cardback</button>
+      </div>
+    </div>`;
+}
+function gateUseDefault(){ setScene('pdf'); setGen('fetch'); }
+
+/* ---------------- PACKAGE 1b — apply/default prompt (toolbar = project-wide) ---------------- */
+function applyToolbarOverlay(){
+  return `<div class="scrim"></div>
+    <div class="mdialog wide" data-testid="cardback-grid-selector" role="dialog" aria-modal="true">
+      <div class="mhead"><span class="mtitle">Select Cardback</span><button class="mx" onclick="setScene('gate')">✕</button></div>
+      <div class="mbody">
+        <div class="cbgrid" aria-label="cardbacks">
+          ${cbTiles(4)}
+        </div>
+        ${cbPrompt('toolbar')}
+      </div>
+      <div class="mfoot">
+        <button class="btn ol-secondary" onclick="setScene('pdf')">Done</button>
+      </div>
+    </div>`;
+}
+function cbTiles(sel){
+  let h='';
+  const labs=['Superhero','Retro','Alt-art','Judge','Textless','M-Frame','Borderless','Steampunk','Vintage'];
+  for(let i=0;i<9;i++){
+    h+=`<div class="cbtile${i===sel?' sel':''}" onclick="pickTile(this)">
+      ${i===0?'<span class="star" title="your default">★</span>':''}
+      <span class="lab">${labs[i]}</span></div>`;
+  }
+  return h;
+}
+/* the apply-all + set-default prompt body (shared by both entries; entry drives copy/defaults) */
+function cbPrompt(entry){
+  const perSlot = entry==='rail';
+  return `<div class="cbprompt" data-testid="cardback-apply-prompt">
+      <div class="ct">✓ Cardback selected <span class="nb">1b</span></div>
+      <div class="cintro">${perSlot
+        ? 'Applied to <b>Slot 3</b>’s back only. Two optional next steps — both independent, both skippable:'
+        : 'Set as this project’s cardback. Two optional next steps — both independent, both skippable:'}</div>
+      <div class="choice">
+        <div class="cl"><div class="h">Apply to all card backs in this deck</div>
+          <div class="s">${perSlot
+            ? '6 backs, incl. 1 with a custom back — opt-in, nothing changes unless you tap'
+            : 'also overrides the 1 card with a custom back (Annex OQ-1)'}</div></div>
+        <div class="act"><button class="applybtn" onclick="markDone(this,'Applied to all ✓')">Apply to all (6)</button></div>
+      </div>
+      <div class="choice">
+        <div class="cl"><div class="h">Set as my default cardback</div>
+          <div class="s">used for new projects &amp; new slots (Annex A-2)</div></div>
+        <div class="act"><button class="defbtn" onclick="markDone(this,'Default set ✓')">Set default</button></div>
+      </div>
+      ${perSlot
+        ? '<div class="trapnote"><span>⚠</span><span>Per-slot pick stays per-slot. “Apply to all” is never pre-checked — a single-slot choice can’t silently rewrite the deck (owner-ratified: no trap).</span></div>'
+        : '<div class="skip"><a onclick="dismissPrompt(this)">Not now</a></div>'}
+    </div>`;
+}
+function markDone(btn,label){ btn.classList.add('done'); btn.textContent=label; }
+function dismissPrompt(a){ const p=a.closest('.cbprompt'); if(p) p.style.display='none'; }
+function pickTile(t){ t.parentNode.querySelectorAll('.cbtile').forEach(x=>x.classList.remove('sel')); t.classList.add('sel'); }
+
+/* rail entry: choosing a back on the rail reveals the SAME prompt INLINE (no stacked modal) */
+function railPick(){
+  const host=document.getElementById('railPromptSlot');
+  if(host) host.innerHTML=cbPrompt('rail');
+}
+
+/* ---------------- PACKAGE 2 — print page (progress + game/outro) ---------------- */
+function printPage(){
+  const gen=document.body.getAttribute('data-gen');
+  const generating = gen==='fetch' || gen==='assemble';
+  return `<div class="printpage">
+    <div class="pcol-l">
+      <h5>Generate PDF</h5>
+      <p class="lead">A print-ready PDF is built in your browser — nothing is uploaded.</p>
+      <div class="setrow"><span>Page size</span><b>A4</b></div>
+      <div class="setrow"><span>Cards</span><b>Fronts + distinct backs</b></div>
+      <div class="setrow"><span>Card image DPI</span><b>600</b></div>
+      <div class="setrow"><span>Cut lines</span><b>On</b></div>
+      <button class="genbtn" ${generating?'disabled':''}>
+        ${generating?'<span class="spinner"></span>Generating…':'Generate PDF'}</button>
+      <button class="genbtn2">Save PDF to Google Drive</button>
+      ${progressBox()}
+    </div>
+    <div class="pcol-r">
+      ${gen==='done' ? outro() : gameEmbed()}
+    </div>
+  </div>`;
+}
+/* 2a — progress box: determinate fetch → indeterminate assemble → done */
+function progressBox(){
+  const gen=document.body.getAttribute('data-gen');
+  if(gen==='fetch'){
+    return `<div class="progressbox" data-testid="pdf-progress">
+      <div class="plabel"><span>Fetching images…</span><span class="pfrac">34 of ~72</span></div>
+      <div class="progress"><div class="bar" style="width:47%"></div></div>
+      <div class="psub">Full-resolution fetches are paced to the image CDN (≈3/s) — a large deck can take a few minutes.</div>
+      <span class="seamtag">seam 2a: real signal = imageFetchProgress&nbsp;{completed,total}; “total” approximate (undercounts duplicate cards) → shown as “~N”, never a false 100%.</span>
+    </div>`;
+  }
+  if(gen==='assemble'){
+    return `<div class="progressbox" data-testid="pdf-progress">
+      <div class="plabel"><span>Assembling PDF…</span><span class="pfrac">images done</span></div>
+      <div class="progress"><div class="bar indet"></div></div>
+      <div class="psub">Laying out pages &amp; encoding.</div>
+      <span class="seamtag">seam 2a: the @react-pdf/renderer assemble/encode phase exposes NO progress callback (only onImageProgress) → honest indeterminate bar. Determinate where available, indeterminate otherwise.</span>
+    </div>`;
+  }
+  return `<div class="progressbox" data-testid="pdf-progress">
+      <div class="plabel"><span>✓ PDF ready</span><span class="pfrac">cards.pdf</span></div>
+      <div class="progress"><div class="bar done"></div></div>
+      <div class="psub donec">Saved to your device.</div>
+    </div>`;
+}
+/* 2b — embedded What's That Card? game (reuses <QuestionFeed> verbatim; NO new voting mechanic) */
+function gameEmbed(){
+  const gen=document.body.getAttribute('data-gen');
+  const done = gen==='done';
+  return `<div class="gameembed" data-testid="pdf-wait-game">
+    <div class="gehead"><span class="dot"></span><span class="h">While your PDF builds — help identify a card?</span>
+      <span class="lz">lazy-loaded on generate · torn down on finish</span></div>
+    <div class="geband${done?' donec':''}">
+      ${done
+        ? '<span>✓ Your PDF is ready — saved to your device.</span>'
+        : '<span>Building your PDF…</span><span class="mini"><span class="b"></span></span><span>47%</span>'}
+    </div>
+    <div class="gebody">
+      <div class="gecount">12,431 cards still need a look</div>
+      <div class="gecard"><span class="gname">Lightning Bolt — is this the shown printing?</span></div>
+      <div class="geq"><b>Beta (LEB) · 161</b><br><span class="qn">Does the card above match this printing?</span></div>
+      <div class="gebtns">
+        <button class="tbtn yes">Yes, that’s it</button>
+        <button class="tbtn notsure">Not sure</button>
+        <button class="tbtn no">No, different printing</button>
+        <button class="tbtn skip">Skip this card</button>
+      </div>
+    </div>
+    <div class="gefoot">Each answer is submitted the instant you tap — leaving mid-card never loses a vote. Voting mechanics unchanged (docs/features/printing-tags.md).</div>
+  </div>`;
+}
+/* outro = the shipped PostExportContributionPrompt (<Alert variant="info"> → /whatsthat) */
+function outro(){
+  return `<div class="outro" data-testid="post-export-contribution-prompt">
+    <button class="ox">✕</button>
+    <p>Your PDF is ready. If you recognised one of these printings, a quick confirmation on
+      <b>What’s That Card?</b> helps keep the catalog accurate for the next person — one tap, never required.</p>
+    <a href="/whatsthat">Keep going on What’s That Card? →</a>
+    <div class="prov">Reused component: <b>PostExportContributionPrompt.tsx</b> — the game embed’s game is torn down on
+      finish and this alert takes its place (one nudge, not two; once per session).</div>
+  </div>`;
+}
+
+/* ---------------- frame assembly ---------------- */
+function sceneFrame(){
+  const scene=document.body.getAttribute('data-scene');
+  if(scene==='pdf'){
+    return `<div class="appbar"><span class="deck">Modern Burn</span>
+        <button class="abtn">← Back to editor</button>
+        <span class="pill">Print</span><span class="gear">⚙</span></div>
+      <div class="page-inner">${printPage()}</div>`;
+  }
+  // editor-backdrop scenes
+  let overlay='';
+  if(scene==='gate') overlay=gateOverlay();
+  else if(scene==='applyToolbar') overlay=applyToolbarOverlay();
+  return `${editorBackdrop()}${overlay}`;
+}
+
+const W={desktop:1400,tablet:920,phone:390};
+const H={desktop:820,tablet:1000,phone:1180};
+
+function syncDemoOffset(){
+  const demo=document.querySelector('.demo');
+  document.getElementById('stage').style.paddingTop=(demo.offsetHeight+10)+'px';
+}
+function render(){
+  const view=document.body.getAttribute('data-view')||'auto';
+  const scene=document.body.getAttribute('data-scene');
+  const stage=document.getElementById('stage');
+  const avail=window.innerWidth;
+  syncDemoOffset();
+
+  function tierHeight(tier){
+    // pdf + rail-apply scenes are taller on phone (stacked print page / inline prompt)
+    let h=H[tier];
+    if(tier==='phone' && scene==='pdf') h=1320;
+    if(tier==='phone' && scene==='applyRail') h=1180;
+    return h;
+  }
+  function scaledFrame(tier){
+    const fw=W[tier], fh=tierHeight(tier);
+    const scale=Math.min(1,(avail-24)/fw);
+    return `<div class="framewrap" style="height:${Math.ceil(fh*scale)+18}px">
+      <div class="frame" data-tier="${tier}" style="width:${fw}px;height:${fh}px;transform:scale(${scale})">
+        <span class="frame-tag">${tier.toUpperCase()} — ${fw}px, scaled ${(scale*100).toFixed(0)}%</span>
+        <div class="page">${sceneFrame()}</div>
+      </div></div>`;
+  }
+  if(view==='auto'){
+    let tier=avail>=1200?'desktop':avail>=768?'tablet':'phone';
+    stage.innerHTML=`<div class="frame" data-tier="${tier}" style="width:100%;min-height:${tierHeight(tier)}px;position:relative">
+      <span class="frame-tag">AUTO — ${avail}px → ${tier}</span><div class="page" style="position:relative">${sceneFrame()}</div></div>`;
+  }else{
+    stage.innerHTML=scaledFrame(view);
+  }
+  // rail-apply scene: pre-open the inline prompt so it's visible without a click
+  if(scene==='applyRail') railPick();
+}
+
+function setScene(s){
+  document.body.setAttribute('data-scene',s);
+  document.querySelectorAll('.demo button[data-scene]').forEach(x=>x.classList.toggle('on',x.dataset.scene===s));
+  render();
+}
+function setGen(g){
+  document.body.setAttribute('data-gen',g);
+  document.querySelectorAll('.demo button[data-gen]').forEach(x=>x.classList.toggle('on',x.dataset.gen===g));
+  render();
+}
+
+document.querySelector('.demo').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  if(b.dataset.view!==undefined){
+    document.body.setAttribute('data-view',b.dataset.view);
+    b.parentNode.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+    render();
+  } else if(b.dataset.scene!==undefined){ setScene(b.dataset.scene); }
+    else if(b.dataset.gen!==undefined){ setGen(b.dataset.gen); }
+});
+window.addEventListener('resize',()=>{clearTimeout(window._t);window._t=setTimeout(render,120);});
+render();
+window.addEventListener('load',syncDemoOffset);
+</script>
+</body>
+</html>

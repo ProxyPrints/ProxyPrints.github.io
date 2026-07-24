@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ProxyPrints — What's That Card? rebuild (Tokyo-11)</title>
+<style>
+/* ============================================================================
+   WTC (/whatsthat) REBUILD MOCKUP — 2026-07-24 — Quorra
+   Binding intent: layout AND look. Every colour below is the RULED Tokyo-11
+   token set (palette 11 = tokyoorange: orange #ff9e64 ACTION, purple #bb9af7
+   ACCENT/identity), extracted verbatim from the owner-ratified theme-options
+   round. WTC-identity tokens (the field, the mystery-reveal) are token-DERIVED
+   from --accent/--body and tagged (N) in the spec's token table.
+
+   Container-first + intrinsic-first (owner-ratified 2026-07-24, this page is the
+   first consumer): the hero is a @container; it folds continuously via flex-wrap
+   + clamp(); the candidate list is an auto-fill/minmax grid in container units
+   (cqi) — the three retired 768px horizontal-scrollers are GONE. One layout tree;
+   the only viewport breakpoint is a structural wordmark reorder, never sizing.
+
+   RENDER ROBUSTNESS: the demo strip is position:sticky (degrades to static, no
+   100vh, no fixed overlay). The default composite is STATIC HTML in the document
+   (#autoframe) so the full page renders and scrolls with JavaScript disabled;
+   JS only ENHANCES (the view-tier buttons re-scale a CLONE of the same markup).
+   ============================================================================ */
+
+/* ---------- RULED TOKEN SURFACE — Tokyo-11 (I = inherited from the base) ---------- */
+:root{
+  /* (I) 10 core swap-surface tokens + 2 derived — byte-identical to palette 11 */
+  --body:#1a1b26; --conf:#222234; --raised:#24283b; --panel:#2f3549;
+  --divider:#16161e; --text:#c0caf5; --muted:#8c94bf;
+  --primary:#ff9e64; --success:#9ece6a; --warning:#e0af68; --danger:#f7768e;
+  --btn-ink:#1a1b26;            /* (I, derived) primary-button text */
+  --accent:#bb9af7;            /* (I) orange acts, purple identifies */
+
+  /* Semi radius (owner ruling ★) */
+  --r-btn:6px; --r-input:6px; --r-card:8px; --r-pill:10px;
+
+  /* (N) WTC-IDENTITY tokens — token-DERIVED from --accent/--body/--conf.
+     These re-express the retired bespoke identity (blue #123a6b field,
+     starburst #4d8ddf, gold #f8d42b buttons) through the ruled accent. */
+  --wtc-field:            /* the hero backdrop: a near-flat body well with one
+                             subtle accent-tinted highlight where the reveal sits */
+    radial-gradient(125% 115% at 30% 34%,
+      color-mix(in srgb, var(--accent) 15%, var(--body)) 0%,
+      var(--body) 58%);
+  --wtc-mystery-face:     /* the "?" mystery card face before reveal */
+    linear-gradient(158deg,
+      color-mix(in srgb, var(--accent) 26%, var(--conf)),
+      color-mix(in srgb, var(--accent) 8%, var(--conf)));
+  --wtc-mystery-glyph: var(--accent);      /* the "?" mascot */
+  --wtc-reveal-glow: color-mix(in srgb, var(--accent) 55%, transparent);
+  --wtc-wordmark: var(--accent);           /* the wordmark identity colour */
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#05070c;color:var(--text);
+  font-family:Lato,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  font-size:16px;line-height:1.5}
+
+/* ============================ DEMO STRIP ============================ */
+.demo{position:sticky;top:0;z-index:9000;display:flex;flex-wrap:wrap;align-items:center;
+  gap:6px;padding:7px 12px;background:#000;border-bottom:2px solid var(--accent);font-size:12px}
+.demo b{color:var(--accent);letter-spacing:.04em;text-transform:uppercase;font-size:10px}
+.demo .grp{display:flex;gap:3px;align-items:center;padding:0 8px;border-right:1px solid #333;flex-wrap:wrap}
+.demo button{background:#22303f;color:#ebebeb;border:1px solid #46586a;padding:3px 9px;
+  cursor:pointer;font-size:11px;font-family:inherit;border-radius:0}
+.demo button.on{background:var(--accent);border-color:var(--accent);color:var(--btn-ink);font-weight:700}
+.demo button:focus-visible{outline:2px solid var(--warning);outline-offset:1px}
+.demo .hint{color:#8fa0b0;font-size:11px;max-width:340px}
+.demo .ruling{flex:1 1 100%;margin-top:5px;padding:5px 9px;background:rgba(187,154,247,.10);
+  border:1px solid var(--accent);border-radius:var(--r-btn);display:flex;gap:9px;align-items:baseline;
+  flex-wrap:wrap;line-height:1.35}
+.demo .ruling b{color:var(--accent);font-size:10px;letter-spacing:.05em;white-space:nowrap}
+.demo .ruling span{color:#cdd6df;font-size:11px;text-transform:none;letter-spacing:0}
+.demo .ruling strong{color:var(--warning)}
+
+/* stage + transform-scaled frame (robust pattern, no min-height:100vh) */
+.stage{padding:14px}
+.framewrap{overflow:hidden;margin:0 auto}
+.frame{transform-origin:top center;background:var(--body);position:relative;margin:0 auto;
+  border:1px solid #000;box-shadow:0 0 0 1px var(--divider)}
+.frame-tag{display:block;width:max-content;margin:0 auto 6px;color:var(--warning);
+  font-family:"Courier New",monospace;font-size:11px;background:rgba(0,0,0,.55);padding:1px 7px}
+
+/* ============================ APP CHROME ============================ */
+.appbar{display:flex;align-items:center;gap:12px;height:50px;padding:0 14px;
+  background:var(--body);border-bottom:1px solid var(--divider);font-size:14px}
+.appbar .brand{font-weight:800;letter-spacing:.01em}
+.appbar .brand b{color:var(--primary)}
+.appbar .nav{display:flex;gap:14px;color:var(--muted);font-size:13px}
+.appbar .nav a{color:var(--muted);text-decoration:none}
+.appbar .nav a.active{color:var(--text)}
+.appbar .spacer{margin-left:auto}
+.appbar .gear{width:32px;height:32px;display:flex;align-items:center;justify-content:center;
+  background:var(--raised);border:1px solid var(--divider);cursor:pointer;border-radius:var(--r-btn)}
+
+/* ============================ WTC PAGE ============================ */
+.wtc-field{background:var(--wtc-field);padding:14px 16px 22px}
+
+/* hero header: wordmark + quiet reward affordance */
+.wtc-head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;
+  flex-wrap:wrap;max-width:1180px;margin:0 auto 12px}
+.wordmark{margin:0;line-height:.98;font-weight:900;letter-spacing:-.015em;
+  color:var(--wtc-wordmark);
+  /* clamp() intrinsic type — no breakpoint drives this size */
+  font-size:clamp(26px,4.4cqi,44px);
+  text-shadow:0 0 22px color-mix(in srgb,var(--accent) 26%,transparent)}
+.wordmark .q{color:var(--primary)}   /* the "?" mascot echo — the one orange note in the title */
+.wordmark small{display:block;font-size:.34em;font-weight:600;letter-spacing:.02em;
+  color:var(--muted);text-shadow:none;margin-top:3px}
+/* quiet, non-gamified reward affordance: a muted resolved-count, NOT a score/streak */
+.solved{display:inline-flex;align-items:center;gap:8px;background:rgba(0,0,0,.28);
+  border:1px solid var(--divider);border-radius:var(--r-pill);padding:5px 12px;font-size:12px;color:var(--muted)}
+.solved b{color:var(--success);font-variant-numeric:tabular-nums}
+.solved .dots{display:inline-flex;gap:3px}
+.solved .dots i{width:6px;height:6px;border-radius:50%;background:var(--divider)}
+.solved .dots i.f{background:var(--success)}
+
+/* ---------- THE HERO: one @container, folds continuously ---------- */
+.wtc-hero{container-type:inline-size;container-name:hero;max-width:1180px;margin:0 auto;
+  display:flex;flex-wrap:wrap;gap:clamp(12px,2.2cqi,22px);align-items:start}
+.subject{flex:1 1 300px;min-width:0;max-width:clamp(240px,30cqi,340px)}
+.qpanel{flex:2.2 1 440px;min-width:0}
+/* structural reorder ONLY (allowed viewport use): on a genuinely narrow VIEWPORT the
+   wordmark sits above the fold as a compact single line — handled in the header, so the
+   hero itself needs no reorder; it just wraps subject over qpanel intrinsically. */
+
+/* subject card (the scanned image being identified) + its mystery-reveal identity */
+.subjcard{background:var(--raised);border:1px solid var(--divider);border-radius:var(--r-card);
+  overflow:hidden}
+.subjcard .art{aspect-ratio:63/88;position:relative;
+  /* bright stand-in for real card art so palette framing is judgeable */
+  background:
+    radial-gradient(80% 55% at 50% 30%, #ffd98a 0%, #e2622f 42%, #7a1f12 100%);
+  display:flex;align-items:flex-end}
+.subjcard .art .frameline{position:absolute;inset:6px;border:2px solid rgba(0,0,0,.35);border-radius:4px}
+.subjcard .art .title{position:relative;width:100%;background:linear-gradient(transparent,rgba(0,0,0,.72));
+  color:#fff;font-weight:700;font-size:clamp(13px,3.4cqi,17px);padding:22px 10px 8px;text-shadow:0 1px 2px #000}
+.subjcap{display:flex;align-items:center;gap:8px;padding:8px 11px;font-size:12px;color:var(--muted);
+  border-top:1px solid var(--divider);background:var(--conf)}
+.subjcap .glyph{width:18px;height:18px;flex:0 0 18px;display:inline-flex;align-items:center;
+  justify-content:center;color:var(--accent);font-weight:900}
+/* the mystery-reveal mini (illustrates the game-show reveal moment; labelled) */
+.mystery-mini{margin-top:9px;display:flex;align-items:center;gap:10px;font-size:11px;color:var(--muted)}
+.mystery-face{width:44px;height:61px;flex:0 0 44px;border-radius:6px;background:var(--wtc-mystery-face);
+  border:1px solid var(--divider);display:flex;align-items:center;justify-content:center;
+  color:var(--wtc-mystery-glyph);font-size:26px;font-weight:900;
+  box-shadow:0 0 16px var(--wtc-reveal-glow)}
+.mystery-mini .arrow{color:var(--accent);font-size:16px}
+
+/* ============================ QUESTION-PANEL SHARED ============================ */
+.qhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 12px}
+.qhead .prompt{font-size:clamp(17px,3.4cqi,22px);font-weight:800;color:var(--text);margin:0}
+.shapepill{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;
+  letter-spacing:.04em;text-transform:uppercase;padding:3px 10px;border-radius:var(--r-pill)}
+.shapepill.easy{color:var(--btn-ink);background:var(--success)}
+.shapepill.pick{color:var(--btn-ink);background:var(--accent)}
+.shapepill.neg{color:var(--btn-ink);background:var(--danger)}
+.shapepill.hard{color:var(--accent);background:transparent;border:1px dashed var(--accent)}
+.qhint{font-size:13px;color:var(--muted);margin:-6px 0 12px}
+
+/* buttons (editor Tokyo-11 idiom, min 44px thumb targets) */
+.btn{min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  font:inherit;font-size:15px;font-weight:600;padding:6px 16px;border-radius:var(--r-btn);
+  border:1px solid transparent;cursor:pointer;line-height:1.2;text-align:center}
+.btn.big{font-size:17px;font-weight:800;padding:10px 20px}
+.btn-primary{background:var(--primary);color:var(--btn-ink);border-color:var(--primary)}
+.btn-secondary{background:var(--raised);color:var(--text);border-color:var(--divider)}
+.btn-accent{background:var(--accent);color:var(--btn-ink);border-color:var(--accent);font-weight:800}
+.btn-ghost{background:transparent;color:var(--muted);border-color:transparent}
+.btn-danger{background:transparent;color:var(--danger);border-color:var(--danger)}
+.btn-block{width:100%}
+
+/* action rows fold intrinsically (auto-fit), never a horizontal scroller */
+.actstack{display:flex;flex-direction:column;gap:9px;margin-top:4px}
+.actgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(clamp(120px,34cqi,180px),1fr));
+  gap:9px;margin-top:10px}
+.actrow{display:flex;flex-wrap:wrap;gap:9px;margin-top:10px}
+
+/* ---------- SHAPE (a): CONFIRM — the 1-click hero (45,154 supply) ---------- */
+.suggested{display:flex;gap:13px;align-items:stretch;background:var(--conf);
+  border:1px solid var(--divider);border-radius:var(--r-card);padding:11px}
+.suggested .thumb{flex:0 0 clamp(70px,20cqi,104px);width:clamp(70px,20cqi,104px);aspect-ratio:63/88;
+  border-radius:6px;overflow:hidden;border:1px solid var(--divider);
+  background:radial-gradient(80% 55% at 50% 30%, #ffd98a 0%, #e2622f 42%, #7a1f12 100%)}
+.suggested .meta{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px}
+.suggested .meta .nm{font-size:clamp(16px,3.2cqi,19px);font-weight:800}
+.suggested .meta .set{font-size:13px;color:var(--muted);font-family:"Courier New",monospace}
+.confpill{align-self:flex-start;margin-top:4px;display:inline-flex;align-items:center;gap:6px;
+  font-size:11px;font-weight:700;color:var(--accent);border:1px solid var(--accent);
+  border-radius:var(--r-pill);padding:2px 9px}
+.confpill i{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+
+/* confirm-lands micro-feedback (quiet, token-derived; illustrated + labelled) */
+.landed{display:inline-flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;
+  color:var(--success);background:color-mix(in srgb,var(--success) 12%,transparent);
+  border:1px solid color-mix(in srgb,var(--success) 45%,transparent);border-radius:var(--r-pill);padding:5px 12px}
+
+/* ---------- SHAPE (b): SHORTLIST — candidate grid (auto-fill, container units) ---------- */
+.candgrid{display:grid;gap:clamp(7px,1.6cqi,11px);margin-top:4px;
+  grid-template-columns:repeat(auto-fill,minmax(clamp(78px,15cqi,116px),1fr))}
+.ctile{border:1px solid var(--divider);border-radius:var(--r-card);overflow:hidden;
+  background:var(--raised);cursor:pointer;padding:0;text-align:left}
+.ctile .cart{aspect-ratio:63/88;position:relative}
+.ctile .cart .fl{position:absolute;inset:5px;border:2px solid rgba(0,0,0,.30);border-radius:3px}
+.ctile .ccap{padding:5px 7px 6px;font-size:11px;line-height:1.25}
+.ctile .ccap .cn{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctile .ccap .cs{color:var(--muted);font-family:"Courier New",monospace;font-size:10px}
+.ctile.sel{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent)}
+.ctile:focus-visible{outline:2px solid var(--accent)}
+
+/* ---------- SHAPE (c): QUICK-NEGATIVE — danger-framed, clearly a different mode ---------- */
+.negwrap{border:1px solid var(--danger);border-radius:var(--r-card);
+  background:color-mix(in srgb,var(--danger) 8%,var(--conf));padding:13px}
+.negwrap .nh{display:flex;align-items:center;gap:9px;font-weight:800;font-size:clamp(15px,3cqi,18px);
+  color:var(--danger);margin-bottom:4px}
+.negwrap .ns{font-size:13px;color:var(--muted);margin-bottom:11px}
+.reasonchips{display:grid;grid-template-columns:repeat(auto-fill,minmax(clamp(130px,40cqi,190px),1fr));gap:8px}
+.rchip{min-height:44px;display:inline-flex;align-items:center;gap:8px;padding:6px 12px;font:inherit;
+  font-size:14px;cursor:pointer;background:transparent;color:var(--text);
+  border:1px solid var(--danger);border-radius:var(--r-btn);text-align:left}
+.rchip .rx{color:var(--danger);font-weight:900}
+
+/* ---------- SHAPE (d): OPEN-ENDED — clearly "harder", no reflex-tap target ---------- */
+.openwrap{border:1px dashed var(--accent);border-radius:var(--r-card);
+  background:color-mix(in srgb,var(--accent) 6%,var(--conf));padding:14px}
+.search{display:flex;align-items:center;gap:9px;background:var(--raised);border:1px solid var(--divider);
+  border-radius:var(--r-input);padding:0 12px;height:46px;margin-top:4px}
+.search input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font:inherit;font-size:15px}
+.search .mag{color:var(--muted)}
+.openhelp{font-size:13px;color:var(--muted);margin-top:11px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.openhelp a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 45%,transparent)}
+
+/* ---------- SHAPE (e1): ARTIST picker (re-themed autocomplete) ---------- */
+.pickgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(clamp(120px,34cqi,180px),1fr));
+  gap:8px;margin-top:11px}
+.pickbtn{min-height:44px;display:inline-flex;align-items:center;justify-content:center;padding:6px 12px;
+  font:inherit;font-size:14px;cursor:pointer;background:var(--raised);color:var(--text);
+  border:1px solid var(--divider);border-radius:var(--r-btn)}
+.pickbtn.unknown{border-color:var(--muted);color:var(--muted)}
+
+/* ---------- SHAPE (e2): TAG question ---------- */
+.tagq h6{margin:0 0 4px;font-size:clamp(17px,3.4cqi,21px);font-weight:800}
+.tagq h6 em{color:var(--accent);font-style:normal}
+
+/* ---------- FOLLOW-UP (Level 3): exclusion-group chips ---------- */
+.grouplbl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+  margin:12px 0 5px;font-weight:700}
+.chiprow{display:flex;gap:7px;flex-wrap:wrap}
+.chip{min-height:38px;display:inline-flex;align-items:center;gap:5px;padding:4px 12px;font:inherit;
+  font-size:13px;cursor:pointer;background:transparent;color:var(--text);
+  border:1px solid var(--muted);border-radius:var(--r-btn)}
+.chip .st{font-weight:900;font-size:11px}
+.chip.pos{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent)}
+.chip.neg{border-color:var(--danger);background:color-mix(in srgb,var(--danger) 16%,transparent);
+  color:var(--danger);text-decoration:line-through}
+.tog{min-height:38px;display:inline-flex;align-items:center;gap:6px;padding:4px 12px;font:inherit;
+  font-size:13px;cursor:pointer;background:transparent;color:var(--text);
+  border:1px solid var(--muted);border-radius:var(--r-btn)}
+.tog.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent)}
+.tog .box{width:14px;height:14px;border:1px solid currentColor;border-radius:3px;display:inline-flex;
+  align-items:center;justify-content:center;font-size:10px;font-weight:900}
+
+/* shape visibility toggle (all shapes live in the DOM; data-shape shows one) */
+.shape{display:none}
+body[data-shape="confirm"]   #autoframe .shape-confirm,
+body[data-shape="confirm"]   .frame[data-tier] .shape-confirm{display:block}
+body[data-shape="shortlist"] .shape-shortlist{display:block}
+body[data-shape="negative"]  .shape-negative{display:block}
+body[data-shape="open"]      .shape-open{display:block}
+body[data-shape="artist"]    .shape-artist{display:block}
+body[data-shape="tag"]       .shape-tag{display:block}
+body[data-shape="followup"]  .shape-followup{display:block}
+/* default (no-JS, no data-shape yet) shows confirm */
+body:not([data-shape]) .shape-confirm{display:block}
+
+/* subject caption swaps per shape (open-ended reveals a "no strong candidate" note) */
+.cap-default{display:inline}
+.cap-open{display:none}
+body[data-shape="open"] .cap-default{display:none}
+body[data-shape="open"] .cap-open{display:inline}
+
+/* ---------- CONTAINER-FIRST FOLD (the retired 768px anti-pattern's replacement) ----------
+   Components style against the HERO container, not the viewport. Below the fold width the
+   subject sits above the qpanel (flex-wrap already does this); we also relax the subject to
+   full width so the scanned card leads, then the question. No sizing lives in a media query. */
+@container hero (max-width: 560px){
+  /* subject folds to full width, but goes COMPACT-HORIZONTAL so the question stays
+     reachable near the top on a phone (no towering portrait card, no bounded-height hack) */
+  .subject{flex:1 1 100%;max-width:none}
+  .subjcard{display:flex;align-items:stretch}
+  .subjcard .art{flex:0 0 132px;width:132px}
+  .subjcard .subjcap{flex:1;border-top:none;border-left:1px solid var(--divider);
+    flex-direction:column;align-items:flex-start;justify-content:center;gap:4px}
+  .suggested{align-items:center}
+  .wtc-head{margin-bottom:8px}
+}
+@container hero (max-width: 380px){
+  .actgrid{grid-template-columns:1fr}   /* stack actions when the container is truly tiny */
+}
+/* the ONE viewport breakpoint permitted: structural reorder of the header (wordmark over
+   the reward pill on a narrow VIEWPORT), never a size change */
+@media (max-width:520px){
+  .wtc-head{flex-direction:column;align-items:flex-start;gap:8px}
+}
+
+/* legend (spec crib below the stage) */
+.legend{max-width:1180px;margin:22px auto 40px;padding:0 16px;color:var(--muted);font-size:13px}
+.legend h3{color:var(--text);font-size:15px;margin:20px 0 8px}
+.legend table{border-collapse:collapse;width:100%;font-size:12px;margin:8px 0}
+.legend th,.legend td{border:1px solid var(--divider);padding:5px 8px;text-align:left;vertical-align:top}
+.legend th{background:var(--conf);color:var(--text)}
+.legend code{font-family:"Courier New",monospace;color:var(--accent)}
+.legend .tag{font-family:"Courier New",monospace;font-weight:700}
+.legend .tag.I{color:var(--muted)} .legend .tag.N{color:var(--warning)}
+.sw{display:inline-flex;align-items:center;gap:6px;margin:0 12px 6px 0;font-size:11px}
+.sw i{width:26px;height:14px;border-radius:3px;border:1px solid rgba(255,255,255,.15);display:inline-block}
+</style>
+</head>
+<body data-shape="confirm" data-view="auto">
+
+<div class="demo">
+  <span class="grp"><b>Question shape</b>
+    <button data-shape="confirm" class="on">a · Confirm ★</button>
+    <button data-shape="shortlist">b · Shortlist</button>
+    <button data-shape="negative">c · Quick-negative</button>
+    <button data-shape="open">d · Open-ended</button>
+    <button data-shape="artist">e1 · Artist</button>
+    <button data-shape="tag">e2 · Tag</button>
+    <button data-shape="followup">L3 · Follow-up</button>
+  </span>
+  <span class="grp"><b>View</b>
+    <button data-view="auto" class="on">Auto</button>
+    <button data-view="desktop">Desktop</button>
+    <button data-view="tablet">Tablet</button>
+    <button data-view="phone">Phone</button>
+  </span>
+  <span class="hint">One layout tree, container-first. The hero is a @container; it folds by
+    flex-wrap + clamp() — no 768px dual layout, no horizontal scrollers. Tokyo-11 tokens
+    (orange acts, purple identifies), Semi radius. Card art = bright stand-ins.</span>
+  <div class="ruling"><b>RE-EXPRESSED IDENTITY</b>
+    <span>Retired: gold <strong>#f8d42b</strong> buttons, navy, starburst blue
+      <strong>#4d8ddf</strong>, deep-blue field <strong>#123a6b</strong>. The WTC personality
+      (wordmark, the mystery-reveal, the game feel) now rides the ruled accent purple
+      <strong>#bb9af7</strong>; orange <strong>#ff9e64</strong> is the confirm/action colour.</span>
+  </div>
+</div>
+
+<!-- STATIC composite (renders full + scrollable with JS disabled); JS clones+scales it for tiers -->
+<div class="stage" id="stage">
+  <span class="frame-tag">AUTO · fluid</span>
+  <div class="frame" id="autoframe" data-tier="auto" style="width:100%;max-width:1180px">
+
+    <div class="appbar">
+      <span class="brand">Proxy<b>Prints</b></span>
+      <span class="nav">
+        <a>Editor</a><a>Display</a><a class="active">What's That Card?</a>
+      </span>
+      <span class="spacer"></span>
+      <span class="gear">⚙</span>
+    </div>
+
+    <div class="wtc-field">
+      <div class="wtc-head">
+        <h1 class="wordmark">What's That Card<span class="q">?</span>
+          <small>Help tag which real-world printing each scanned image depicts</small></h1>
+        <span class="solved" title="quiet resolved-count — not a score or streak">
+          <span class="dots"><i class="f"></i><i class="f"></i><i class="f"></i><i></i></span>
+          <span><b>13</b> tagged this session</span>
+        </span>
+      </div>
+
+      <div class="wtc-hero">
+        <!-- SUBJECT: the scanned image being identified (constant across shapes) -->
+        <div class="subject">
+          <div class="subjcard">
+            <div class="art">
+              <div class="frameline"></div>
+              <div class="title">Lightning Bolt</div>
+            </div>
+            <div class="subjcap">
+              <span class="glyph">?</span>
+              <span class="cap-default">the scanned image you're identifying</span>
+              <span class="cap-open">no strong machine candidate for this one</span>
+            </div>
+          </div>
+          <div class="mystery-mini">
+            <span class="mystery-face">?</span>
+            <span class="arrow">→</span>
+            <span>reveal moment: the purple “?” card flips to the scan on load
+              (respects <code style="color:var(--accent)">prefers-reduced-motion</code>)</span>
+          </div>
+        </div>
+
+        <!-- QUESTION PANEL: swaps by data-shape -->
+        <div class="qpanel">
+
+          <!-- (a) CONFIRM — the 1-click hero -->
+          <div class="shape shape-confirm">
+            <div class="qhead">
+              <span class="shapepill easy">1-tap confirm</span>
+              <p class="prompt">Is this the printing?</p>
+            </div>
+            <div class="suggested">
+              <span class="thumb"></span>
+              <div class="meta">
+                <span class="nm">Lightning Bolt</span>
+                <span class="set">Limited Edition Beta · LEB · #161</span>
+                <span class="confpill"><i></i>strong machine match</span>
+              </div>
+            </div>
+            <div class="actstack">
+              <button class="btn btn-primary big btn-block">Yes — that's the one</button>
+              <div class="actgrid">
+                <button class="btn btn-secondary">Not sure</button>
+                <button class="btn btn-secondary">No, different printing</button>
+                <button class="btn btn-ghost">Skip</button>
+              </div>
+            </div>
+            <span class="landed">✓ Tagged — nice. Next card loading…
+              <span style="color:var(--muted)">(quiet confirm-lands feedback)</span></span>
+          </div>
+
+          <!-- (b) SHORTLIST — candidate pick -->
+          <div class="shape shape-shortlist">
+            <div class="qhead">
+              <span class="shapepill pick">pick one</span>
+              <p class="prompt">Which printing is this?</p>
+            </div>
+            <p class="qhint">Tap the exact match. Candidate list is narrowed at serve time
+              (survivor list, issue&nbsp;#433).</p>
+            <div class="candgrid">
+              <button class="ctile sel"><div class="cart" style="background:radial-gradient(80% 55% at 50% 30%,#ffd98a,#e2622f 42%,#7a1f12)"><div class="fl"></div></div><div class="ccap"><div class="cn">Beta</div><div class="cs">LEB·161</div></div></button>
+              <button class="ctile"><div class="cart" style="background:radial-gradient(80% 55% at 50% 30%,#ffe0a0,#d9542a 42%,#6d1c10)"><div class="fl"></div></div><div class="ccap"><div class="cn">Unlimited</div><div class="cs">2ED·161</div></div></button>
+              <button class="ctile"><div class="cart" style="background:radial-gradient(80% 55% at 50% 30%,#ffdd93,#c94e28 42%,#651a0f)"><div class="fl"></div></div><div class="ccap"><div class="cn">Revised</div><div class="cs">3ED·162</div></div></button>
+              <button class="ctile"><div class="cart" style="background:radial-gradient(80% 55% at 50% 30%,#ffe7ad,#cf5330 42%,#5f1a10)"><div class="fl"></div></div><div class="ccap"><div class="cn">4th Ed</div><div class="cs">4ED·205</div></div></button>
+              <button class="ctile"><div class="cart" style="background:radial-gradient(80% 55% at 50% 30%,#f7d089,#b9472a 42%,#571812)"><div class="fl"></div></div><div class="ccap"><div class="cn">Anthology</div><div class="cs">BRB·129</div></div></button>
+              <button class="ctile"><div class="cart" style="background:radial-gradient(80% 55% at 50% 30%,#ffdca0,#c0492c 42%,#5b1810)"><div class="fl"></div></div><div class="ccap"><div class="cn">M10</div><div class="cs">M10·146</div></div></button>
+            </div>
+            <div class="actrow">
+              <button class="btn btn-secondary">None of these</button>
+              <button class="btn btn-ghost">Skip</button>
+            </div>
+          </div>
+
+          <!-- (c) QUICK-NEGATIVE — danger-framed, different mode -->
+          <div class="shape shape-negative">
+            <div class="qhead">
+              <span class="shapepill neg">not a printing</span>
+              <p class="prompt">No real printing matches?</p>
+            </div>
+            <div class="negwrap">
+              <div class="nh">⚑ Mark why this isn't a catalogued printing</div>
+              <div class="ns">One tap files a classified negative — clearly a different action from confirming a match.</div>
+              <div class="reasonchips">
+                <button class="rchip"><span class="rx">×</span>Custom / alt art</button>
+                <button class="rchip"><span class="rx">×</span>Altered frame</button>
+                <button class="rchip"><span class="rx">×</span>Upscaled</button>
+                <button class="rchip"><span class="rx">×</span>AI art</button>
+                <button class="rchip"><span class="rx">×</span>No collector line</button>
+                <button class="rchip"><span class="rx">×</span>Non-English</button>
+              </div>
+            </div>
+            <div class="actrow">
+              <button class="btn btn-secondary">← Pick a printing instead</button>
+              <button class="btn btn-ghost">Skip</button>
+            </div>
+          </div>
+
+          <!-- (d) OPEN-ENDED — clearly harder, no reflex-tap target -->
+          <div class="shape shape-open">
+            <div class="qhead">
+              <span class="shapepill hard">◆ tricky one</span>
+              <p class="prompt">You tell us — which printing?</p>
+            </div>
+            <p class="qhint">No strong machine candidate. This is one of the harder ones —
+              take your time.</p>
+            <div class="openwrap">
+              <div class="search">
+                <span class="mag">⌕</span>
+                <input type="text" placeholder="Search printings (set, collector #, name)…" />
+              </div>
+              <div class="openhelp">
+                <span>Can't place it?</span>
+                <a>Mark unidentifiable</a>
+                <span style="color:var(--muted)">·</span>
+                <a>Skip</a>
+              </div>
+            </div>
+          </div>
+
+          <!-- (e1) ARTIST picker -->
+          <div class="shape shape-artist">
+            <div class="qhead">
+              <span class="shapepill pick">artist</span>
+              <p class="prompt">Who's the artist?</p>
+            </div>
+            <p class="qhint">OCR read “<em style="color:var(--accent);font-style:normal">C. Rush</em>”
+              — confirm or search.</p>
+            <div class="search">
+              <span class="mag">⌕</span>
+              <input type="text" placeholder="Search for an artist…" value="Christopher Rush" />
+            </div>
+            <div class="pickgrid">
+              <button class="pickbtn" style="border-color:var(--accent);color:var(--accent)">Christopher Rush</button>
+              <button class="pickbtn">Christopher Moeller</button>
+              <button class="pickbtn">Chris Rahn</button>
+              <button class="pickbtn unknown">Unknown artist</button>
+            </div>
+          </div>
+
+          <!-- (e2) TAG question -->
+          <div class="shape shape-tag">
+            <div class="qhead">
+              <span class="shapepill pick">attribute</span>
+            </div>
+            <div class="tagq">
+              <h6>Does <em>Borderless</em> apply to this card?</h6>
+              <p class="qhint" style="margin-top:6px">Single yes/no attribute — the near-threshold
+                “Borderless” pool (51,163 pairs) mostly resolves as a byproduct of a printing pick.</p>
+              <div class="actrow">
+                <button class="btn btn-primary">Apply</button>
+                <button class="btn btn-secondary">Not applicable</button>
+                <button class="btn btn-ghost">Skip</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- (L3) FOLLOW-UP — exclusion-group chips after a pick -->
+          <div class="shape shape-followup">
+            <div class="qhead">
+              <span class="shapepill easy">✓ matched · one more thing</span>
+              <p class="prompt">Confirm the attributes</p>
+            </div>
+            <p class="qhint">Auto-tagged from your pick; adjust only what's wrong, then continue.</p>
+
+            <div class="grouplbl">Border color</div>
+            <div class="chiprow">
+              <button class="chip pos"><span class="st">✓</span>Black Border</button>
+              <button class="chip neg"><span class="st">✕</span>White Border</button>
+              <button class="chip"><span class="st"></span>Silver Border</button>
+            </div>
+
+            <div class="grouplbl">Frame style</div>
+            <div class="chiprow">
+              <button class="chip pos"><span class="st">✓</span>Old Border</button>
+              <button class="chip"><span class="st"></span>Modern Border</button>
+              <button class="chip"><span class="st"></span>Future Frame</button>
+            </div>
+
+            <div class="grouplbl">Independent</div>
+            <div class="chiprow">
+              <button class="tog"><span class="box"></span>Full Art</button>
+              <button class="tog on"><span class="box">✓</span>Borderless</button>
+              <button class="tog"><span class="box"></span>Showcase</button>
+              <button class="tog"><span class="box"></span>Extended</button>
+            </div>
+
+            <div class="actrow">
+              <button class="btn btn-primary">Confirm &amp; continue</button>
+              <button class="btn btn-ghost">Skip</button>
+            </div>
+          </div>
+
+        </div><!-- /qpanel -->
+      </div><!-- /wtc-hero -->
+    </div><!-- /wtc-field -->
+  </div><!-- /frame -->
+</div><!-- /stage -->
+
+<div class="legend">
+  <div style="display:flex;flex-wrap:wrap;gap:4px">
+    <span class="sw"><i style="background:#1a1b26"></i>body</span>
+    <span class="sw"><i style="background:#222234"></i>conf</span>
+    <span class="sw"><i style="background:#24283b"></i>raised</span>
+    <span class="sw"><i style="background:#2f3549"></i>panel</span>
+    <span class="sw"><i style="background:#c0caf5"></i>text</span>
+    <span class="sw"><i style="background:#8c94bf"></i>muted</span>
+    <span class="sw"><i style="background:#ff9e64"></i>primary/action</span>
+    <span class="sw"><i style="background:#bb9af7"></i>accent/identity</span>
+    <span class="sw"><i style="background:#9ece6a"></i>success</span>
+    <span class="sw"><i style="background:#f7768e"></i>danger</span>
+    <span class="sw"><i style="background:#e0af68"></i>warning</span>
+  </div>
+  <h3>Question shapes → interaction contract (all shapes are in the DOM; the strip toggles which is shown)</h3>
+  <table>
+    <tr><th>Shape</th><th>Supply (data brief)</th><th>Preserved contract</th><th>Distinct so reflex doesn't bleed</th></tr>
+    <tr><td>a · Confirm</td><td>45,154 single-candidate</td><td>Level 1: Yes casts + auto-tags + advances; Not sure/No → Level 2; singleton No → isNoMatch+custom-art</td><td>one big card + one orange primary; the only shape with a reflexive path — paired with equal-weight No</td></tr>
+    <tr><td>b · Shortlist</td><td>1,156 multi + 54,797 ambiguous (serve-time narrow, #433)</td><td>Level 2: pick → submit + getAutoTagChips auto-casts; None-of-these → reason strip</td><td>grid of neutral tiles, NO primary — a real pick is required</td></tr>
+    <tr><td>c · Quick-negative</td><td>45,500 unknown-set/eliminated</td><td>one-tap classified negative (isNoMatch + reason tag) — the 6 seeded reason tags</td><td>danger-red framed, negative verb — visibly not a confirm</td></tr>
+    <tr><td>d · Open-ended</td><td>smallest slice (cold-start / no-evidence 32,838)</td><td>identify_printing with no shortlist; search/typeahead; mark unidentifiable</td><td>dashed accent “tricky one”, search field, no button to reflex-tap</td></tr>
+    <tr><td>e1 · Artist</td><td>artist family (13 near, byproduct)</td><td>ArtistVotePicker unforked — search + candidate buttons + Unknown</td><td>autocomplete idiom, not a discrete pick set</td></tr>
+    <tr><td>e2 · Tag</td><td>51,163 Borderless (mostly byproduct)</td><td>QueueTagQuestion unforked — Apply / Not applicable / Skip</td><td>single yes/no attribute question</td></tr>
+    <tr><td>L3 · Follow-up</td><td>open exclusion groups only</td><td>tri-state chips cast immediately; Confirm &amp; continue / Skip; no re-presentation</td><td>appears only after a pick; “one more thing” framing</td></tr>
+  </table>
+  <p style="margin-top:14px;font-size:12px">Full token table (I=inherited Tokyo-11 / N=new WTC-identity, token-derived),
+  question-shape → file:line mapping, features-accounted checklist, and the three annexes
+  (mix-logging seam, survivor_pks/#433 dependency, reveal/progress animation + reduced-motion)
+  ship in the binding spec alongside this mockup.</p>
+</div>
+
+<script>
+/* RENDER ROBUSTNESS: #autoframe is the static single source of truth (renders with no JS).
+   JS only ENHANCES — view-tier buttons re-scale a CLONE. Height/presence never depend on JS. */
+var stageEl=document.getElementById('stage');
+var AUTOFRAME=document.getElementById('autoframe');
+var COMPOSITE=AUTOFRAME?AUTOFRAME.innerHTML:'';
+var AUTO_HTML='<span class="frame-tag">AUTO · fluid</span>'+
+  '<div class="frame" id="autoframe" data-tier="auto" style="width:100%;max-width:1180px">'+COMPOSITE+'</div>';
+var TIERS={desktop:1180,tablet:800,phone:390};
+function render(){
+  var view=document.body.getAttribute('data-view');
+  if(view==='auto'){ stageEl.innerHTML=AUTO_HTML; return; }
+  var w=TIERS[view];
+  var avail=Math.min(document.documentElement.clientWidth-28,1180);
+  var scale=Math.min(1,avail/w);
+  stageEl.innerHTML='<span class="frame-tag">'+view.toUpperCase()+' · '+w+'px × '+scale.toFixed(2)+'</span>'+
+    '<div class="framewrap" style="width:'+(w*scale)+'px">'+
+    '<div class="frame" data-tier="'+view+'" style="width:'+w+'px;transform:scale('+scale+')">'+COMPOSITE+'</div></div>';
+  var fr=stageEl.querySelector('.frame'), fw=stageEl.querySelector('.framewrap');
+  requestAnimationFrame(function(){ if(fr&&fw) fw.style.height=(fr.offsetHeight*scale)+'px'; });
+}
+document.querySelector('.demo').addEventListener('click',function(e){
+  var b=e.target.closest('button'); if(!b) return;
+  ['shape','view'].forEach(function(k){
+    if(b.dataset[k]!==undefined){
+      document.body.setAttribute('data-'+k,b.dataset[k]);
+      document.querySelectorAll('.demo button[data-'+k+']').forEach(function(x){
+        x.classList.toggle('on',x.dataset[k]===b.dataset[k]);
+      });
+      if(k==='view') render();
+    }
+  });
+});
+/* default view is 'auto' and its markup is already static in the DOM — do not re-render on load */
+window.addEventListener('resize',function(){
+  if(document.body.getAttribute('data-view')!=='auto') render();
+});
+</script>
+</body>
+</html>
