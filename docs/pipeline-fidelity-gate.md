@@ -1065,7 +1065,11 @@ own, by design.
 1. **Bug-A full re-scan** of the 17,531-card blank-tier-1 pool, deferred
    to post-pilot per the owner ruling in §9(c) (recipe documented there
    and in §13, not re-derived here). Still the one tracked open item
-   carried forward past the fire.
+   carried forward past the fire. Owner-ratified sequencing (2026-07-24):
+   the remaining tail (issue #418) is Stage E streaming's shakedown
+   cohort — it does not get a further batch pass; see
+   [`docs/proposals/stage-e-streaming.md`](proposals/stage-e-streaming.md)
+   §6.
 2. **Moderation package sizing** is now **data-ready**: the review queue
    is a DB-verified, dedup'd **134,370** cards (`to-review` skips, see
    "Topline end-state" above) — sizing work for the moderation
