@@ -20,6 +20,7 @@ import {
 import { test } from "../playwright.setup";
 import {
   changeQueries,
+  ensureDisplayFace,
   expectDisplaySheetSlotState,
   expectDisplaySheetSlotToExist,
   expectDisplaySheetSlotToNotExist,
@@ -213,6 +214,57 @@ test.describe("CardSlot", () => {
       .click();
 
     await expectDisplaySheetSlotState(page, 1, "back", cardDocument2.name);
+  });
+
+  // Cluster-8 ruling (2026-07-24, issue #272 parked-spec port wave): CardbackToolbarButton's
+  // modal (the test directly above) is the project-wide canonical entry - picking there changes
+  // EVERY slot's default back. The rail's own per-slot Select Version section is the other
+  // supported entry, and is a genuine PER-SLOT OVERRIDE instead - both are supported, but they're
+  // not the same operation, and nothing before this test asserted the rail path leaves sibling
+  // slots (or the project-wide default itself) alone.
+  test("CardSlot's own rail Select Version section overrides just one slot's back, leaving the project-wide cardback (and sibling slots) untouched", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsThreeResults,
+      cardbacksTwoResults,
+      sourceDocumentsOneResult,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+
+    // Two members, both front-only queries - both backs default to the project cardback
+    // (cardDocument1, cardbacksTwoResults' first entry), same starting point as the toolbar test
+    // above.
+    await importTextOnEditorLanding(page, "2x my search query");
+    await expectDisplaySheetSlotState(page, 1, "back", cardDocument1.name);
+    await expectDisplaySheetSlotState(page, 2, "back", cardDocument1.name);
+
+    // Open slot 1's rail on its back face and pick the OTHER cardback candidate via Select
+    // Version - not the toolbar picker (openDisplayCardbackGridSelector above).
+    await ensureDisplayFace(page, "back");
+    await page.getByTestId("page-preview-slot").first().click();
+    await page
+      .getByTestId(`select-version-tile-${cardDocument2.identifier}`)
+      .locator(".mpccard")
+      .click();
+
+    // Slot 1's back changed...
+    await expectDisplaySheetSlotState(page, 1, "back", cardDocument2.name);
+    // ...but slot 2's back (still on the project-wide default) did not - a real per-slot
+    // override, not a second way to reach the same project-wide change.
+    await expectDisplaySheetSlotState(page, 2, "back", cardDocument1.name);
+
+    // Confirming from the OTHER direction too: the toolbar's own picker still shows the
+    // untouched project-wide default as selected (the glowing-border highlight class), not
+    // slot 1's override.
+    const gridSelector = await openDisplayCardbackGridSelector(page);
+    await expect(
+      gridSelector.locator(
+        `[data-card-identifier="${cardDocument1.identifier}"]`
+      )
+    ).toHaveClass(/mpccard-highlight/);
   });
 
   test("changing a card slot's query", async ({ page, network }) => {

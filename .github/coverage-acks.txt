@@ -21,3 +21,34 @@
 #   coverage-ack: frontend/tests/Foo.spec.ts::some describe > * — reason
 #
 # Lines starting with `#` and blank lines are ignored.
+
+# Proposal H parked-spec port wave (2026-07-24, issue #272) - owner-ruled drops (file deleted,
+# not just re-skipped). Full parity/upstreamability tables live in this wave's own PR body, not
+# duplicated here - one line per exception, per this file's own convention above.
+
+# Owner-ruled DROP: the aria-snapshot coverage of the classic grid's per-slot common-cardback
+# swatch has no unified-page replacement to port onto (CommonCardback.tsx's own editor mount is
+# classic-/editor-only, fully unrouted since the Proposal H swap) - the owner's replacement UX
+# (an export-time reminder) is a separate, not-yet-built design, tracked apart from this wave.
+coverage-ack: frontend/tests/visual/CommonCardback.visual.spec.ts::* — owner-ruled DROP, replacement UX is a separate not-yet-built design (see PR body)
+
+# Owner-ruled DROP: all 12 tests cover bulk multi-select editing (select N slots, then bulk
+# change-query/change-image/delete/select-similar/select-all) - a real, tracked capability gap on
+# the unified /editor page (issue #272 item 6, no bulk-select surface exists there at all today),
+# not a redundant or obsolete test. Same finding CardSlot.spec.ts's own wave-3 port comment
+# already documents independently.
+coverage-ack: frontend/tests/SelectedImagesRibbon.spec.ts::* — owner-ruled DROP, bulk multi-select has no unified-page equivalent yet (tracked gap, issue #272 item 6 - see PR body)
+
+# Owner-ruled DROP: all 4 tests assert CSS/testids (left-panel/right-panel/add-cards-panel,
+# OverflowCol's chainScroll overscroll-behavior-y) that only exist on the classic, fully-unrouted
+# grid layout. The unified page's own mobile fix (issue #266) is a bottom-sheet drawer, not
+# stacked-panel scroll chaining, and already has its own dedicated coverage in DisplayPage.spec.ts's
+# "phone viewport (issue #266)" describe block.
+coverage-ack: frontend/tests/ProjectEditorMobileScroll.spec.ts::* — owner-ruled DROP, subject CSS/testids only exist on the classic unrouted layout; #266's own mobile fix has separate coverage (see PR body)
+
+# Un-skip + re-home port of PostExportContributionPrompt.spec.ts (issue #166) onto /print's own
+# PDFGenerator mount - renamed off its stale "classic Print! tab" title (the classic grid is
+# fully unrouted; PDF generation lives solely on /print now) in the same change, same convention
+# PR #337 established for this file's title staleness pattern. The new title carries the
+# unchanged behavior forward (un-skipped, not removed) at a new, non-stale title.
+coverage-ack: frontend/tests/PostExportContributionPrompt.spec.ts::Post-export contribution prompt (issue #166) - classic Print! tab > also appears after a successful export from PDFGenerator.tsx's own classic tab — renamed + un-skipped in the same change, see the file's own new title

@@ -34,10 +34,14 @@ dismissible `Alert` shown once per session after a genuine "Generate
 PDF"/"Save PDF to Google Drive" success, linking to `/whatsthat`. One shared
 implementation (`frontend/src/features/export/ usePostExportContributionPrompt.ts` + `PostExportContributionPrompt.tsx`),
 mounted from `PDFGenerator.tsx` itself so every real caller of that
-component — this tab (reachable both via the classic editor's "Print!" tab
-and, since issue #275, standalone at `pages/print.tsx`), `PDFGeneratorModal.tsx`,
-`ProjectEditor.tsx` — gets it for free, rather than wiring it into
-`FinishedMyProject.tsx` separately. (Issue #275 also retired the unified
+component gets it for free, rather than wiring it into `FinishedMyProject.tsx`
+separately. This tab was reachable both via the classic editor's "Print!"
+tab and, since issue #275, standalone at `pages/print.tsx` — the later
+Proposal H route swap (2026-07-23, issues #231/#272) fully unrouted the
+classic grid `ProjectEditor.tsx` (component kept in-tree, deletion is a
+separate later decision), so `pages/print.tsx` is this tab's only live
+route today; `PDFGeneratorModal.tsx` remains a second, route-independent
+mount (via `Modals.tsx`). (Issue #275 also retired the unified
 `/display` page's OWN separate inline export pipeline and its own mount of
 this same prompt — PDF generation now lives solely here, reached from
 `/display`'s Finish footer via a pre-print save gate; see

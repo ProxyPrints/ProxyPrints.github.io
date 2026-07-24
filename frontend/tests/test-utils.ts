@@ -243,6 +243,37 @@ export const openSelectVersionSection = async (page: Page) => {
   // toggle is gone entirely, hard-pinned true) - no "Compressed" click needed any more.
 };
 
+// Parked-spec port wave (2026-07-24, issue #272; PDFGenerator/PagePreview/PostExportContribution-
+// Prompt specs). PDF generation now lives solely on the standalone /print route (D10,
+// pages/print.tsx) - the classic grid's own "Print!" tab this helper used to click through
+// (ProjectEditor.tsx's own PrintPanel) no longer exists anywhere reachable. The unified page's
+// Finish footer button is the one live entry point (mirrors UnsavedWorkGuard.spec.ts's and
+// DisplayFinishFooter.spec.ts's own precedent for this exact transition) - `whoamiAnonymous` is
+// part of `defaultHandlers`, so this always lands straight on /print with no pre-print save gate
+// to dismiss first. FinishedMyProject's default tab is "pringleprints", not "pdf"
+// (FinishedMyProject.tsx) - the PDF tab always needs an explicit click even though its own nav
+// item is already visible immediately.
+//
+// The click+waitForURL step is wrapped in a `toPass` retry (same resilience pattern
+// `openAddCardsDropdown` above already established for this suite) rather than a single
+// generous-timeout attempt - observed directly (2026-07-24, verifying this port at 4 parallel
+// workers) failing with a bare `net::ERR_ABORTED` on the FIRST attempt under worker contention
+// (three separate spec files - this one, PDFGenerator.spec.ts, PostExportContributionPrompt.spec.ts
+// - all racing to first-hit /print's cold on-demand dev-mode compile simultaneously, the same
+// characteristic DisplayFinishFooter.spec.ts's own `mode: "serial"` comment documents, just not
+// fully solved by that file-local fix once MULTIPLE files contend for the same route). A retried
+// click safely re-fires `router.push("/print")` if the first attempt's navigation never actually
+// landed - idempotent either way.
+export const navigateToPrintPDFTab = async (page: Page, query: string) => {
+  await loadPageWithDefaultBackend(page);
+  await importTextOnEditorLanding(page, query);
+  await expect(async () => {
+    await page.getByTestId("finish-footer-print-export").click();
+    await page.waitForURL(/\/print/, { timeout: 15_000 });
+  }).toPass({ timeout: 45_000 });
+  await page.getByRole("tab", { name: "PDF" }).click();
+};
+
 export async function expectCardSlotToExist(page: Page, slot: number) {
   await expect(page.getByTestId(`front-slot${slot - 1}`)).toContainText(
     `Slot ${slot}`

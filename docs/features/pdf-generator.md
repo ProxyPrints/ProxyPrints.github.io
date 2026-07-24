@@ -172,13 +172,17 @@ reached from `/display`'s Finish footer via a pre-print save gate; see
 Footer](../proposals/proposal-h-display-layout-spec.md#finish-footer-save-before-print)
 and [Print-Page
 Funnel](../proposals/proposal-h-display-layout-spec.md#print-page-funnel-destination)
-decisions), so
-this component's mounts are now: this tab, `PDFGeneratorModal.tsx`, and
-`ProjectEditor.tsx` — one implementation, not a forked second copy. See
-`docs/features/printing-tags.md`'s own entry for the full detail (why
-`/whatsthat` and not a new route, the `sessionStorage`-backed "never
-repeats within a session" rule) and `docs/features/print-export-page.md`
-for the classic "Print!" tab's side of this.
+decisions). The later Proposal H route swap (2026-07-23, issues #231/#272)
+fully unrouted the classic grid `ProjectEditor.tsx` as well (component kept
+in-tree, deletion is a separate later decision) — this component's only
+LIVE mounts today are `FinishedMyProject.tsx`'s PDF tab (reached solely via
+the standalone `/print` route, `pages/print.tsx`) and `PDFGeneratorModal.tsx`
+(mounted globally via `Modals.tsx`, route-independent); one implementation
+either way, not a forked second copy. See `docs/features/printing-tags.md`'s
+own entry for the full detail (why `/whatsthat` and not a new route, the
+`sessionStorage`-backed "never repeats within a session" rule) and
+`docs/features/print-export-page.md` for the classic "Print!" tab's own
+(now unrouted) history.
 
 ## Key files
 
@@ -202,8 +206,11 @@ for the classic "Print!" tab's side of this.
   bug 4 (preview warning, confirm-gated download/cancel, and a real-image
   success-path regression check)
 - `frontend/tests/PostExportContributionPrompt.spec.ts` — issue #166
-  coverage across both real export surfaces (`/display` and the classic
-  "Print!" tab)
+  coverage against this component's one remaining live mount, `/print`'s
+  PDF tab (re-homed there from the classic "Print!" tab in the 2026-07-24
+  parked-spec port wave, issue #272 — the second, `/display`-inline-export
+  surface this file used to also cover was already retired by issue #275,
+  above)
 
 ## Status
 
