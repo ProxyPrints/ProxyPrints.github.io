@@ -7,37 +7,7 @@ import pytest
 
 from cardpicker.local_cluster_consistency import find_cluster_printing_divergences
 from cardpicker.models import PrintingTagStatus
-from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
-    CanonicalCardFactory,
-    CanonicalExpansionFactory,
-    CardFactory,
-    SourceFactory,
-)
-
-# See test_local_lands_identify.py's identical fixture for the full rationale -
-# factory.Sequence counters are process-global across the whole pytest run. Includes every
-# factory CardFactory/CanonicalCardFactory transitively consume via SubFactory (source, artist,
-# expansion) - not just the two factories this file calls directly - per
-# docs/troubleshooting.md's "5-6 unrelated test snapshots break" entry, which calls out this
-# exact under-listing mistake as a recurring one.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
+from cardpicker.tests.factories import CanonicalCardFactory, CardFactory
 
 
 def _resolved_card(content_phash, printing):

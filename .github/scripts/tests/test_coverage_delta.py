@@ -310,7 +310,10 @@ class TestRealRepoSmoke(unittest.TestCase):
         manifest = cd.build_manifest_from_worktree(REPO_ROOT)
         self.assertGreater(len(manifest), 100)
         skipped_files = {e.file for e in manifest.values() if e.skip}
-        self.assertIn("frontend/tests/PDFGenerator.spec.ts", skipped_files)
+        # PDFGenerator.spec.ts/PagePreview.spec.ts/PostExportContributionPrompt.spec.ts were
+        # un-skipped by the 2026-07-24 parked-spec port wave (issue #272) - CardImageStates.spec.ts
+        # is still fully skipped pending its own port, so it's the fixture here now.
+        self.assertIn("frontend/tests/CardImageStates.spec.ts", skipped_files)
 
     def test_perf_dir_is_excluded(self):
         manifest = cd.build_manifest_from_worktree(REPO_ROOT)

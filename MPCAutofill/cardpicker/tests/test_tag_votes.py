@@ -21,34 +21,7 @@ from cardpicker.tag_consensus import (
     resolve_and_persist_tag_votes,
     resolve_tag,
 )
-from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
-    CanonicalCardFactory,
-    CanonicalExpansionFactory,
-    CardFactory,
-    CardTagVoteFactory,
-    SourceFactory,
-    TagFactory,
-)
-
-# see test_printing_consensus.py for why this capture-and-restore fixture exists
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
+from cardpicker.tests.factories import CardFactory, CardTagVoteFactory, TagFactory
 
 
 @pytest.fixture(autouse=True)

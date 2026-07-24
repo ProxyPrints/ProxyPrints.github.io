@@ -6,8 +6,6 @@ OCR-refetch path is mocked exactly like test_local_identify_printing_tags.py moc
 fetch_card_image/run_ocr_for_card.
 """
 
-import pytest
-
 import cardpicker.local_residual_classify as module
 from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID, FallbackOutcome
 from cardpicker.local_identify_printing_tags import (
@@ -40,34 +38,10 @@ from cardpicker.models import (
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
-    CanonicalExpansionFactory,
     CardArtistVoteFactory,
     CardFactory,
-    SourceFactory,
     TagFactory,
 )
-
-# see test_local_identify_printing_tags.py's identical fixture for the full rationale -
-# factory.Sequence counters are process-global across the whole pytest run, so a new test file
-# using these shared factories shifts snapshot-style assertions elsewhere (e.g.
-# test_views.py::TestGetTags) unless the sequence is captured/restored around this file's tests.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 class TestRecoverFrameMismatchPrintingViaPhash:

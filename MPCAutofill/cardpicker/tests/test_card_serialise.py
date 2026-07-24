@@ -26,35 +26,13 @@ from cardpicker.models import (
 )
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
     CanonicalCardFactory,
-    CanonicalExpansionFactory,
     CardFactory,
     CardPrintingTagFactory,
     CardTagVoteFactory,
     SourceFactory,
     TagFactory,
 )
-
-# see test_printing_consensus.py for why this capture-and-restore fixture exists
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-    TagFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 class TestSuggestedCanonicalCard:
@@ -497,11 +475,10 @@ class TestPostExploreSearchBulkPayload:
     Deliberately self-contained (own `SourceFactory`/`CardFactory` calls, own
     `search_index --rebuild` call) rather than reusing `test_views.py`'s shared
     `all_sources`/`all_cards`/`populated_database` fixtures or its `Cards`/`Sources` test
-    constants - this module's own `_preserve_shared_factory_sequences` autouse fixture (see
-    top of file) keeps these tests from perturbing that file's sequence-dependent snapshot
-    assertions, and no snapshot assertion is used here at all (explicit field assertions
-    only), per the "avoid --snapshot-update against a subset" trap documented in
-    docs/troubleshooting.md.
+    constants. `test_views.py`'s own snapshot assertions are pinned to a fixed factory-sequence
+    baseline per test (see that file's `_pin_shared_factory_sequences` fixture), so this module's
+    use of the same shared factories can't perturb them - and no snapshot assertion is used here
+    at all (explicit field assertions only) regardless.
     """
 
     @staticmethod

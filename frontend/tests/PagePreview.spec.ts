@@ -7,34 +7,37 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import {
-  importTextOnEditorLanding,
-  loadPageWithDefaultBackend,
-} from "./test-utils";
+import { navigateToPrintPDFTab } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
+// Parked-spec port wave (2026-07-24, issue #272). Re-homed onto the standalone /print route
+// (D10, pages/print.tsx) - see PDFGenerator.spec.ts's own module comment for the full rationale
+// (this file exercises the identical PDFGenerator.tsx mount, unchanged by the route swap).
+//
+// Ported selectively, not verbatim - deduped against the unified page's own sheet coverage
+// (DisplayPage.spec.ts/OrphanRendering.spec.ts, both dozens of `page-preview-slot` assertions
+// against the SAME PagePreview.tsx component, just mounted directly on /editor's sheet region
+// rather than behind the Print page's PDF tab). None of this file's 3 tests turned out to be a
+// true duplicate once checked against that existing coverage - all 3 ported as-is (see this PR's
+// own body for the full dedup table):
+//   - "shows the fast DOM preview by default..." asserts the `page-preview` CONTAINER testid,
+//     which neither DisplayPage.spec.ts nor OrphanRendering.spec.ts ever reference (both only
+//     ever assert against individual `page-preview-slot` children) - not a duplicate.
+//   - "toggling to exact preview switches to the pdf.js canvas render, and back" exercises
+//     `preview-mode-toggle`, which only exists on PDFGenerator.tsx's own mount - DisplayPage's
+//     sheet has no toggle at all (it's permanently in fast-preview mode). Print-page-only
+//     behavior, not portable elsewhere, not a duplicate.
+//   - "the fast preview reflows live when page margins change..." exercises the "Spacing &
+//     Margins" NumericField section, which is also PDFGenerator.tsx-only - DisplayPage has no
+//     margin controls of its own (grep-confirmed: "Spacing & Margins"/"page margin" only appear
+//     in PDFGenerator.tsx). Not a duplicate.
+//
+// Generous file-level timeout (not the 30s default) - navigateToPrintPDFTab's own retry against
+// /print's cold-compile race (test-utils.ts's own comment) needs headroom beyond a single 30s
+// test timeout to actually get a second attempt in, same precedent PDFGenerator.spec.ts uses.
+test.describe.configure({ timeout: 60_000 });
 
-const addCardAndOpenPDFTab = async (page: Page) => {
-  await loadPageWithDefaultBackend(page);
-  await importTextOnEditorLanding(page, "my search query");
-  await page.getByRole("tab", { name: "Print!" }).click();
-  await page.getByRole("tab", { name: "PDF" }).click();
-};
+const addCardAndOpenPDFTab = async (page: Page) =>
+  navigateToPrintPDFTab(page, "my search query");
 
 test.describe("PDFGenerator - fast page preview (Proposal A)", () => {
   test("shows the fast DOM preview by default, with a slot rendered and no spinner", async ({

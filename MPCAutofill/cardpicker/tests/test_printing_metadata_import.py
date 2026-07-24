@@ -3,8 +3,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from cardpicker.models import CanonicalPrintingMetadata
 from cardpicker.printing_metadata_import import (
     _load_back_face_names,
@@ -13,27 +11,9 @@ from cardpicker.printing_metadata_import import (
     is_back_face,
 )
 from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
     CanonicalCardFactory,
-    CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
 )
-
-# `factory.Sequence` counters are process-global, and some other test modules'
-# snapshot assertions hardcode exact sequence-derived values (e.g. "Artist 0").
-# Capture-and-restore keeps this module's use of these shared factories invisible
-# to the rest of the suite, regardless of test collection order.
-_SHARED_FACTORIES = [CanonicalArtistFactory, CanonicalExpansionFactory, CanonicalCardFactory]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 def _write_bulk_data_file(tmp_path: Path, records: list[dict[str, Any]]) -> Path:
