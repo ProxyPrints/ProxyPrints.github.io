@@ -16,10 +16,12 @@ proves ImageEvidence rows actually land, matching `_evidence()`'s own convention
 import io
 from typing import Any
 
+import psycopg2
 import pytest
 from PIL import Image
 
 from django.core.management import call_command
+from django.db import connection
 from django.test import override_settings
 
 from cardpicker import stage_e_dispatch
@@ -43,6 +45,7 @@ from cardpicker.operating_envelope import (
     check_envelope,
     current_trip,
 )
+from cardpicker.stage_e_concurrency import _LOCK_NAMESPACE
 from cardpicker.stage_e_dispatch import (
     _FetchOutcomeWindow,
     _select_micro_batch,
@@ -346,6 +349,71 @@ class TestEndToEndMicroBatch:
 
         assert outcome.status == "completed"
         assert outcome.stage_c_completed == 0
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+
+
+class TestConcurrencyCapIntegration:
+    """The concurrency-cap companion change (`cardpicker.stage_e_concurrency`), exercised through
+    the REAL, post-#448 `dispatch_micro_batch` body - not just the module-level unit coverage in
+    `test_stage_e_concurrency.py`. A raw, independent `psycopg2` connection holds every available
+    slot (standing in for another concurrent dispatch on a separate django-q worker process, the
+    same "genuinely separate session" discipline `test_stage_e_concurrency.py`'s own module
+    docstring establishes - Postgres session-level advisory locks are re-entrant within one
+    session, so simulating a second dispatcher via Django's own connection would be a false test)."""
+
+    def _raw_connection_holding_every_slot(self, cap: int) -> "psycopg2.extensions.connection":
+        connection.ensure_connection()
+        raw = psycopg2.connect(**connection.get_connection_params())
+        raw.autocommit = True
+        with raw.cursor() as cursor:
+            for slot in range(cap):
+                cursor.execute("SELECT pg_try_advisory_lock(%s, %s)", [_LOCK_NAMESPACE, slot])
+                (acquired,) = cursor.fetchone()
+                assert acquired is True, f"test setup failed to claim slot {slot}"
+        return raw
+
+    @STREAMING_ON
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    def test_dispatch_is_throttled_when_the_only_slot_is_already_held(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+
+        def _fail_if_called(card, dpi=None):
+            raise AssertionError("Stage C must never run once the concurrency cap has throttled")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        raw = self._raw_connection_holding_every_slot(cap=1)
+        try:
+            outcome = dispatch_micro_batch(card_ids=[card.pk])
+        finally:
+            raw.close()  # auto-releases the advisory lock, same crash-safety property tested above
+
+        assert outcome.status == "throttled-concurrency-cap"
+        # a throttled dispatch never partially starts, matching halted-open-trip/halted-new-trip's
+        # own convention - no ledger row, no evidence, no vote.
+        assert PilotRunLedger.objects.count() == 0
+        assert ImageEvidence.objects.count() == 0
+        assert CardPrintingTag.objects.count() == 0
+
+    @STREAMING_ON
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    def test_dispatch_proceeds_normally_once_the_slot_is_released(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        card = CardFactory(name="Some Card", content_phash=42)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _full_evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        raw = self._raw_connection_holding_every_slot(cap=1)
+        raw.close()  # released before dispatching - the cap must not still be considered "held"
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
         vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
         assert vote.printing_id == printing.pk
 
