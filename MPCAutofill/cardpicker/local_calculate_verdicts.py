@@ -978,7 +978,7 @@ def _split_new_printing_tag_votes(
     anonymous_id=anonymous_id)` was trusted alone as the idempotence mechanism, which holds for a
     single sequential invocation but not for two CONCURRENT ones.
 
-    ROOT CAUSE of the shakedown failure this guard fixes: `stage_e_dispatch.dispatch_micro_batch`
+    ROOT CAUSE of the vote-collision failure this guard fixes: `stage_e_dispatch.dispatch_micro_batch`
     is invoked from django-q2 async tasks (`Q_CLUSTER["workers"] = 8`, MPCAutofill/settings.py) and
     from the cron backstop sweep - two dispatches scoped to an overlapping card_ids set (e.g. an
     evidence-change signal re-firing while the backstop sweep's own backlog fill has already picked
@@ -987,26 +987,58 @@ def _split_new_printing_tag_votes(
     both then attempt to `bulk_create` a `CardPrintingTag` for it - the second `bulk_create` in the
     race hits `cardprintingtag_unique_no_match_vote` (is_no_match=True) or
     `cardprintingtag_unique_printing_vote` (is_no_match=False), aborting that WHOLE micro-batch's
-    write with an `IntegrityError`, per the four failed `PilotRunLedger` rows
-    (run_ids stage-e-stream-20260724T2144*) the shakedown sweep observed. BULK mode never hit this:
-    every existing `local_calculate_verdicts` invocation runs sequentially, one process, one
-    identity's eligibility exclude computed and consumed within a single query's lifetime - this
-    race is specific to Stage E's own concurrent PASSIVE-mode dispatch, the first caller ever to
-    make more than one of these calculators' write paths overlap in time.
+    write with an `IntegrityError`. The shakedown sweep observed exactly SEVEN failed `PilotRunLedger`
+    rows (run_ids stage-e-stream-20260724T2144*) alongside the one dispatch that won the race and
+    committed cleanly - seven losers plus one winner is eight total concurrent dispatches, exactly
+    `Q_CLUSTER["workers"] = 8`. BULK mode never hit this: every existing `local_calculate_verdicts`
+    invocation runs sequentially, one process, one identity's eligibility exclude computed and
+    consumed within a single query's lifetime - this race is specific to Stage E's own concurrent
+    PASSIVE-mode dispatch, the first caller ever to make more than one of these calculators' write
+    paths overlap in time.
+
+    A SEPARATE FAILURE THIS GUARD DOES NOT ADDRESS: the same shakedown run also opened envelope trip
+    `envtrip-20260724T214616-be6e5db9` (`bar=host_load`, observed load 11.85 against the 7.0 ceiling)
+    0.43s AFTER the winning vote landed - caused by all eight of those concurrent dispatches running
+    OCR/phash extraction at once against this host's 7 usable cores
+    (`docs/features/catalog-completion-plan.md` L1794/2248/2366's own hardware citation and 0.31x
+    concurrency finding). That is a HOST-RESOURCE-CONTENTION failure, not a vote-write correctness
+    one - fixing the vote collision (this function) does nothing to stop eight dispatches from
+    saturating a 7-core host again the moment streaming resumes. The trip itself still needs the
+    existing `resolve_envelope_trip` runbook (docs/features/stage-e-operations.md), and re-tripping
+    on resume is addressed by a companion change that caps concurrent `dispatch_micro_batch`
+    executions (`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`), not by anything in this function.
+
+    NOT AN ABSOLUTE GUARANTEE AGAINST THE INTEGRITYERROR - A RESIDUAL WINDOW REMAINS: this is a
+    check-then-insert guard, not an atomic one - the existence query above and the `bulk_create`
+    call below are two separate statements, so two dispatches can both pass the check in the same
+    narrow window and still both attempt to insert. This function alone narrows that window (from
+    "the whole eligibility-query-to-bulk_create span" down to "the query-to-insert span"); it does
+    not close it. The actual crash-proofing comes from `bulk_create(..., ignore_conflicts=True)` at
+    both call sites below - the same belt-and-suspenders precedent this codebase already established
+    for the identical (eligibility-query-plus-partial-unique-constraint) shape on `CardTagVote`
+    (`local_layout_class_cast.py:300`, `local_detect_ai_art.py:459`,
+    `local_identify_printing_tags.py:1246`). The pre-write count this function returns stays useful
+    as an OBSERVABILITY signal (`already_voted` - a healthy streaming deployment should see it
+    occasionally) even though it is no longer the sole safety mechanism.
 
     SKIP-AND-COUNT, NOT RETRACT-AND-RECAST: deliberately the OPPOSITE choice from
     `reparse_collector_evidence.reparse_and_retract`'s own retract-then-recast pattern, because the
     two scenarios are not the same shape. `reparse_collector_evidence` retracts a vote whose
     CONCLUSION has genuinely changed - a parser fix, a lexicon-gate correction, freshly re-extracted
-    evidence - so the old vote is objectively stale and superseding it is correct. A concurrent
-    race here produces no such change: both racing invocations read the SAME current `ImageEvidence`
-    row under the SAME code version and necessarily compute the SAME verdict (deterministic pure
-    functions - `calculate_join_key_verdict`/`calculate_fallback_verdict` take no non-reproducible
-    input). Retracting the winner to let the loser recast would be pure churn - it would even risk
-    flip-flopping `resolve_and_persist_printing`'s own per-touch consensus recompute if a third
-    dispatch raced in between the retract and the recast - with no correctness benefit at all, since
-    there is nothing to correct. The loser's own vote is simply redundant, exactly the shape PR
-    #411's `_split_new_votes` already established a skip-and-count answer for.
+    evidence - so the old vote is objectively stale and superseding it is correct. A concurrent race
+    here produces no such change GIVEN its own operating assumptions hold: both racing invocations
+    read the SAME current `ImageEvidence` row under the SAME code version, the SAME
+    `CandidateNameIndex`, and the SAME `known_set_codes()` lexicon, and therefore compute the SAME
+    verdict (deterministic pure functions - `calculate_join_key_verdict`/`calculate_fallback_verdict`
+    take no non-reproducible input). If any of those three inputs genuinely differs between the two
+    racing reads (a mid-race code deploy, or a re-extraction landing between them), the loser's
+    dropped vote is no longer provably redundant - `reparse_collector_evidence` remains the correct
+    remedy for that case, exactly as it already is for any other stale-conclusion scenario, and this
+    guard does not attempt to detect or handle it. Retracting the winner to let the loser recast on
+    every race - the alternative this function rejects - would be pure churn in the common case where
+    the assumptions above DO hold, and would even risk flip-flopping `resolve_and_persist_printing`'s
+    own per-touch consensus recompute if a third dispatch raced in between the retract and the
+    recast, for no correctness benefit in that common case.
 
     One batched existence query (not one query per card), scoped to just the card_ids/anonymous_ids
     actually present in this batch - same "wasteful full-table scan" avoidance
@@ -1127,10 +1159,13 @@ def run_join_key_calculator(
     if not dry_run:
         # Pre-write skip-if-exists guard (2026-07-24) - see _split_new_printing_tag_votes' own
         # docstring for the concurrent-dispatch collision this closes and why skip-and-count (not
-        # retract-and-recast) is the honest semantic here.
+        # retract-and-recast) is the honest semantic here. ignore_conflicts=True is the actual
+        # crash-proofing (the check above still leaves a narrow query-to-insert race window) -
+        # same belt-and-suspenders precedent as local_layout_class_cast.py:300/
+        # local_detect_ai_art.py:459/local_identify_printing_tags.py:1246 for CardTagVote.
         new_votes, result.already_voted = _split_new_printing_tag_votes(votes_batch)
         if new_votes:
-            CardPrintingTag.objects.bulk_create(new_votes)
+            CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)
         CardScanLog.objects.bulk_create(scan_log_batch)
         for touched_card in Card.objects.filter(pk__in=touched_card_ids):
             resolve_and_persist_printing(touched_card)
@@ -1443,10 +1478,11 @@ def run_fallback_calculator(
         # Same pre-write skip-if-exists guard as run_join_key_calculator - see
         # _split_new_printing_tag_votes' own docstring (this calculator writes CardPrintingTag
         # under its own STAGE_D_FALLBACK_ANONYMOUS_ID and is equally exposed to the concurrent-
-        # dispatch collision that fixes).
+        # dispatch collision that fixes). ignore_conflicts=True is the actual crash-proofing -
+        # same rationale as run_join_key_calculator's own identical call site.
         new_votes, result.already_voted = _split_new_printing_tag_votes(votes_batch)
         if new_votes:
-            CardPrintingTag.objects.bulk_create(new_votes)
+            CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)
         CardScanLog.objects.bulk_create(scan_log_batch)
         for touched_card in Card.objects.filter(pk__in=touched_card_ids):
             resolve_and_persist_printing(touched_card)

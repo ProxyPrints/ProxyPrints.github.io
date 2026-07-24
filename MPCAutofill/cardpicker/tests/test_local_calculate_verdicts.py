@@ -488,10 +488,12 @@ class TestSymbolPhashTiebreak:
 
 
 class TestSplitNewPrintingTagVotes:
-    """Direct unit coverage for the 2026-07-24 concurrent-dispatch collision guard
-    (trip envtrip-20260724T214616-be6e5db9), independent of either calculator's full
-    orchestration - mirrors test_local_lands_identify.py's own TestSplitNewVotes structure for
-    the sibling PR #411 guard."""
+    """Direct unit coverage for the 2026-07-24 concurrent-dispatch vote-collision guard (the
+    shakedown's failed run_ids stage-e-stream-20260724T2144*, a SEPARATE failure from that same
+    run's envtrip-20260724T214616-be6e5db9 host-load trip - see this guard's own docstring),
+    independent of either calculator's full orchestration - mirrors
+    test_local_lands_identify.py's own TestSplitNewVotes structure for the sibling PR #411
+    guard."""
 
     def test_empty_batch_returns_empty(self, db):
         assert _split_new_printing_tag_votes([]) == ([], 0)
@@ -725,6 +727,39 @@ class TestRunJoinKeyCalculator:
         assert result.already_voted == 1
         assert result.votes_written == 0
         assert result.no_match_votes_written == 0
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
+
+    def test_ignore_conflicts_survives_a_race_the_pre_write_check_itself_missed(self, db, monkeypatch):
+        """The pre-write guard above (`_split_new_printing_tag_votes`) is check-then-insert, not
+        atomic - a residual query-to-insert race window remains where a colliding vote could land
+        between the guard's own existence check and this calculator's `bulk_create` call. Proves
+        the SECOND line of defense (`bulk_create(..., ignore_conflicts=True)`) alone survives that
+        residual window, by monkeypatching the guard itself to (falsely) report the vote as new -
+        exactly what it would see if the collision landed a moment after its own read - while the
+        colliding row is already in the DB by the time `bulk_create` runs."""
+        import cardpicker.local_calculate_verdicts as module
+
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_collector_number="999")  # no candidate match -> is_no_match=True
+
+        real_split = module._split_new_printing_tag_votes
+
+        def _stale_split(votes_batch):
+            # Reports every vote as new (already_voted=0), then seeds the collision AFTER the
+            # guard's own "check" has already run - the exact residual window this test targets.
+            new_votes, _already_voted = real_split(votes_batch)
+            CardPrintingTag.objects.create(
+                card=card, printing=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+            )
+            return new_votes, 0
+
+        monkeypatch.setattr(module, "_split_new_printing_tag_votes", _stale_split)
+
+        run_join_key_calculator(dry_run=False)  # must not raise IntegrityError despite the stale guard
+
+        # exactly one vote survives - ignore_conflicts=True silently dropped the duplicate insert
+        # attempt, it did not raise and did not create a second row.
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
 
 

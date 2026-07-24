@@ -431,16 +431,19 @@ class TestKillSafetyResumeContract:
 
 
 class TestConcurrentDispatchVoteCollision:
-    """Regression for the Stage E Phase 2 shakedown's first live trip
-    (envtrip-20260724T214616-be6e5db9, failed run_ids stage-e-stream-20260724T2144*): two
-    CONCURRENT `dispatch_micro_batch` calls scoped to an overlapping card set (django-q2 runs 8
-    workers; the backstop sweep can also overlap an event trigger - see
+    """Regression for the VOTE-COLLISION half of the Stage E Phase 2 shakedown's first live
+    incident (failed run_ids stage-e-stream-20260724T2144*, seven losers + the one winner = eight
+    total concurrent dispatches, exactly Q_CLUSTER["workers"]=8) - see
     `local_calculate_verdicts._split_new_printing_tag_votes`' own docstring for the full
-    root-cause writeup) used to abort a WHOLE micro-batch with an `IntegrityError` the instant the
-    losing dispatch's own Stage D `bulk_create` raced a winner's. Reproduced here at the full
-    conveyor level (not just the calculator level `test_local_calculate_verdicts.py` covers) by
-    seeding the winner's vote directly and confirming the loser's own `dispatch_micro_batch` call
-    completes rather than raising."""
+    root-cause writeup, INCLUDING why this is a separate failure from the same run's
+    `envtrip-20260724T214616-be6e5db9` host-load envelope trip (a resource-contention problem this
+    change does not address - see that docstring's own "SEPARATE FAILURE" section). Two CONCURRENT
+    `dispatch_micro_batch` calls scoped to an overlapping card set (django-q2 runs 8 workers; the
+    backstop sweep can also overlap an event trigger) used to abort a WHOLE micro-batch with an
+    `IntegrityError` the instant the losing dispatch's own Stage D `bulk_create` raced a winner's.
+    Reproduced here at the full conveyor level (not just the calculator level
+    `test_local_calculate_verdicts.py` covers) by seeding the winner's vote directly and
+    confirming the loser's own `dispatch_micro_batch` call completes rather than raising."""
 
     @STREAMING_ON
     def test_a_losing_race_completes_instead_of_raising_integrity_error(
