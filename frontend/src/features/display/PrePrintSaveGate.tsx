@@ -24,6 +24,13 @@
  * attempt, not as an implicit Skip - the user stays on /display with nothing navigated and
  * nothing saved, which is the safer default for a modal that isn't itself a forced,
  * no-cancel-option safety net (unlike LoadSafetyModal, which never offers a plain dismiss).
+ *
+ * Cardback flow round (SPEC-cardback-pdfwait.md §C.1, `PKG1a`) - a NEW gate step
+ * (`useCardbackReminderGate`) now runs FIRST, before this file's own Save/Skip branch: the deck-
+ * completeness decision (does the export need a cardback?) precedes the persistence decision.
+ * Unlike this Save gate's own dismiss=cancel rule, the cardback reminder's own dismiss semantics
+ * are OWNER AMENDMENT 1 (dismiss = "use current & continue", not cancel) - the two gates are
+ * deliberately NOT symmetric; see that hook's own module comment for why.
  */
 import { useRouter } from "next/router";
 import React, { useState } from "react";
@@ -31,6 +38,7 @@ import Button from "react-bootstrap/Button";
 import Modal from "react-bootstrap/Modal";
 
 import { useAppSelector } from "@/common/types";
+import { useCardbackReminderGate } from "@/features/display/useCardbackReminderGate";
 import { selectIsCurrentProjectDirty } from "@/features/savedDecks/selectors";
 import { useSaveDeckFlow } from "@/features/savedDecks/useSaveDeckFlow";
 import { useGetWhoamiQuery } from "@/store/api";
@@ -64,6 +72,7 @@ export function usePrePrintSaveGate({
   const isAuthenticated = whoami.data?.authenticated === true;
   const isProjectDirty = useAppSelector(selectIsCurrentProjectDirty);
   const saveFlow = useSaveDeckFlow();
+  const cardbackReminderGate = useCardbackReminderGate();
 
   const [showPrompt, setShowPrompt] = useState(false);
 
@@ -71,12 +80,7 @@ export function usePrePrintSaveGate({
     router.push(PRINT_PAGE_ROUTE);
   };
 
-  const startPrintFlow = () => {
-    // D9(3)a - flush first, unconditionally, before any branch below. D9(2)'s pre-print
-    // promotion nudge rides the same moment.
-    flushDraftNow();
-    notifyPromoteDraftPrePrint();
-
+  const runSaveBranch = () => {
     if (isAuthenticated && isProjectDirty) {
       setShowPrompt(true);
     } else {
@@ -85,6 +89,18 @@ export function usePrePrintSaveGate({
       // nothing new to save either.
       proceedToPrint();
     }
+  };
+
+  const startPrintFlow = () => {
+    // D9(3)a - flush first, unconditionally, before any branch below. D9(2)'s pre-print
+    // promotion nudge rides the same moment.
+    flushDraftNow();
+    notifyPromoteDraftPrePrint();
+
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the deck-completeness decision runs
+    // BEFORE the persistence decision; `guard` is a no-op (calls `runSaveBranch` immediately) once
+    // a cardback has been explicitly chosen or the reminder's already been dismissed this session.
+    cardbackReminderGate.guard(runSaveBranch);
   };
 
   const handleSave = () => {
@@ -133,6 +149,7 @@ export function usePrePrintSaveGate({
         </Modal.Footer>
       </Modal>
       {saveFlow.element}
+      {cardbackReminderGate.element}
     </>
   );
 

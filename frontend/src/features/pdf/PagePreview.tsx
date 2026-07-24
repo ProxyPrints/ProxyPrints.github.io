@@ -177,6 +177,22 @@ const SlotFlipButton = styled.button`
   }
 `;
 
+// Cardback flow round (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3, N) - a small non-default-back
+// indicator dot within the flip button's existing footprint, whenever the slot's own back face
+// differs from the deck's default cardback. "No new color roles" (the amendment's own binding
+// constraint) - reuses the warning token (`#ffc107`) already in the #302 palette, not a new hue.
+const CustomCardbackDot = styled.span`
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffc107;
+  border: 1px solid #0b1520;
+  pointer-events: none;
+`;
+
 // E19 - the lime, rounded, corner-only cut guide: a small L-bracket (two legs) at each of a
 // card's four trim corners, replacing the full dashed-rectangle trim line the screenPresentation
 // sheet used to draw. Dimensions match the mockup's own rendered interpretation ("0.6mm stroke +
@@ -267,6 +283,11 @@ export interface PagePreviewSlotContent {
    * (front and/or back); `undefined`/`false` (a genuinely empty slot, nothing on either face)
    * renders no flip button, same as `onSlotFlip` simply being omitted. */
   flippable?: boolean;
+  /** Cardback flow round (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3, N) - true when this slot's
+   * own back face is a deliberately-different, custom cardback (not the deck's default) - drawn
+   * as a small indicator dot on the `⟲` flip button (same gating as the flip button itself: card-
+   * holding cells only). `undefined`/`false` renders no dot, same as before this round. */
+  hasCustomCardback?: boolean;
 }
 
 export interface PagePreviewProps {
@@ -714,7 +735,11 @@ function PagePreviewSlotEl({
       {onSlotFlip != null && content?.flippable === true && (
         <SlotFlipButton
           type="button"
-          aria-label="Preview the other face of this card"
+          aria-label={
+            content?.hasCustomCardback === true
+              ? "Preview the other face of this card (custom cardback)"
+              : "Preview the other face of this card"
+          }
           data-testid="page-preview-slot-flip"
           onClick={(event) => {
             event.stopPropagation();
@@ -722,6 +747,13 @@ function PagePreviewSlotEl({
           }}
         >
           ⟲
+          {content?.hasCustomCardback === true && (
+            <CustomCardbackDot
+              aria-label="Custom cardback"
+              title="Custom cardback"
+              data-testid="page-preview-slot-custom-cardback-indicator"
+            />
+          )}
         </SlotFlipButton>
       )}
     </div>

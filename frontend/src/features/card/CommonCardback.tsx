@@ -12,12 +12,21 @@ import { useAppDispatch, useAppSelector } from "@/common/types";
 import { wrapIndex } from "@/common/utils";
 import { RightPaddedIcon } from "@/components/icon";
 import { MemoizedEditorCard } from "@/features/card/Card";
+import {
+  countBackFacesAffectedByApplyAll,
+  resolveCustomBackSlotThumbnails,
+} from "@/features/card/cardbackApply";
+import { CardbackApplyPrompt } from "@/features/card/CardbackApplyPrompt";
+import { setUserDefaultCardback } from "@/features/card/cardbackDefaultPreference";
 import { CardFooter } from "@/features/card/CardFooter";
 import { GridSelectorModal } from "@/features/gridSelector/GridSelectorModal";
 import { selectCardbacks } from "@/store/slices/cardbackSlice";
+import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
+  applyCardbackToAllSlots,
   bulkReplaceSelectedImage,
   selectProjectCardback,
+  selectProjectMembers,
   setSelectedCardback,
 } from "@/store/slices/projectSlice";
 import { selectSearchSettings } from "@/store/slices/searchSettingsSlice";
@@ -42,8 +51,22 @@ export function CommonCardbackGridSelector({
 
   const dispatch = useAppDispatch();
   const projectCardback = useAppSelector(selectProjectCardback);
+  const projectMembers = useAppSelector(selectProjectMembers);
+  const cardDocumentsByIdentifier = useCardDocumentsByIdentifier();
   const filterCardbacks = useAppSelector(
     (state) => selectSearchSettings(state).searchTypeSettings.filterCardbacks
+  );
+
+  //# endregion
+
+  //# region state
+
+  // Cardback flow round (SPEC-cardback-pdfwait.md §C.2) - the toolbar entry is project-wide
+  // canonical: a pick already bulk-replaces every slot following the OLD project cardback, so the
+  // apply/default prompt renders inline in THIS SAME modal (never a second stacked one) once a
+  // pick has been made, rather than closing immediately - `closeOnSelect={false}` below.
+  const [lastPickedImage, setLastPickedImage] = useState<string | undefined>(
+    undefined
   );
 
   //# endregion
@@ -59,9 +82,44 @@ export function CommonCardbackGridSelector({
           face: Back,
         })
       );
-      dispatch(setSelectedCardback({ selectedImage: image }));
+    }
+    dispatch(setSelectedCardback({ selectedImage: image, explicit: true }));
+    setLastPickedImage(image);
+  };
+
+  const handleApplyAll = () => {
+    if (lastPickedImage != null) {
+      dispatch(applyCardbackToAllSlots({ selectedImage: lastPickedImage }));
     }
   };
+  const handleSetDefault = () => {
+    if (lastPickedImage != null) {
+      void setUserDefaultCardback(lastPickedImage);
+    }
+  };
+  const handleModalClose = (
+    event?: React.MouseEvent<HTMLButtonElement, MouseEvent>
+  ) => {
+    setLastPickedImage(undefined);
+    if (event != null) {
+      handleClose(event);
+    } else {
+      handleClose();
+    }
+  };
+
+  //# endregion
+
+  //# region computed constants
+
+  const customBackThumbnails =
+    lastPickedImage != null
+      ? resolveCustomBackSlotThumbnails(
+          projectMembers,
+          lastPickedImage,
+          cardDocumentsByIdentifier
+        )
+      : [];
 
   //# endregion
 
@@ -72,9 +130,25 @@ export function CommonCardbackGridSelector({
       imageIdentifiers={searchResults}
       selectedImage={projectCardback}
       show={show}
-      handleClose={handleClose}
+      handleClose={handleModalClose}
       onClick={setSelectedImageFromIdentifier}
       applySearchSettings={filterCardbacks}
+      closeOnSelect={false}
+      footerContent={
+        lastPickedImage != null && (
+          <CardbackApplyPrompt
+            entry="toolbar"
+            affectedCount={countBackFacesAffectedByApplyAll(
+              projectMembers,
+              lastPickedImage
+            )}
+            customBackThumbnails={customBackThumbnails}
+            onApplyAll={handleApplyAll}
+            onSetDefault={handleSetDefault}
+            onDismiss={() => setLastPickedImage(undefined)}
+          />
+        )
+      }
     />
   );
 }
@@ -121,6 +195,7 @@ export function CommonCardback({ selectedImage }: CommonCardbackProps) {
       dispatch(
         setSelectedCardback({
           selectedImage: image,
+          explicit: true,
         })
       );
     }
@@ -203,6 +278,11 @@ export function CardbackToolbarButton() {
         size="sm"
         variant="outline-secondary"
         onClick={handleShowGridSelector}
+        // Cardback flow round (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3) - a real testid, not
+        // just this button's own accessible name, since a sheet slot's "⟲" flip button can now
+        // ALSO carry "cardback" in its own aria-label (the custom-cardback indicator), which
+        // otherwise makes a name-based locator for this button ambiguous/fragile.
+        data-testid="cardback-toolbar-button"
       >
         <RightPaddedIcon bootstrapIconName="image" />
         Cardback

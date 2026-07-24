@@ -28,6 +28,16 @@ interface GridSelectorProps {
   searchq?: string;
   /** When false, ignore project-level search settings and use unconstrained defaults instead. */
   applySearchSettings?: boolean;
+  /** Cardback flow round (SPEC-cardback-pdfwait.md §C.2) - additive, default-unchanged: every
+   * existing caller keeps closing the modal the instant a card is picked. The cardback toolbar
+   * entry passes `false` so the apply-all/set-default prompt (§C.2) can render inline in this
+   * SAME modal, rather than opening a second stacked one (§C.2's own "never stacked" rule) - the
+   * modal only closes once the user explicitly dismisses it afterwards. */
+  closeOnSelect?: boolean;
+  /** Rendered inside `Modal.Body`, directly below the grid - the cardback apply/default prompt's
+   * own mount point (only meaningful alongside `closeOnSelect={false}`, where the modal stays
+   * open long enough for something to render here). */
+  footerContent?: React.ReactNode;
 }
 
 export function GridSelectorModal({
@@ -40,6 +50,8 @@ export function GridSelectorModal({
   onClick,
   searchq,
   applySearchSettings = true,
+  closeOnSelect = true,
+  footerContent,
 }: GridSelectorProps) {
   //# region queries and hooks
 
@@ -64,7 +76,9 @@ export function GridSelectorModal({
 
   const selectImage = (identifier: string) => {
     onClick(identifier);
-    handleClose();
+    if (closeOnSelect) {
+      handleClose();
+    }
   };
 
   //# endregion
@@ -115,6 +129,7 @@ export function GridSelectorModal({
           focusRef={focusRef}
           search={search}
         />
+        {footerContent}
       </Modal.Body>
       <Modal.Footer>
         <Button variant="secondary" onClick={handleClose}>

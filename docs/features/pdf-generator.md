@@ -105,10 +105,12 @@ not just Proposal B's bleed-normalized cards):
 - **Live progress**: a large export paced to 3 req/s can now take several minutes (honestly
   reported, not hidden) - `PDFProps.reportImageProgress` (mirroring the existing
   `reportImageFailure` pattern, threaded through `pdf.worker.ts` → comlink's `onImageProgress` →
-  `pdfRenderService` → `PDFGenerator.tsx`) drives a "Fetching images: N/M" indicator so the wait
-  reads as working, not hung. `total` is an approximation (unique card count, not slot count - a
-  duplicate card in the deck fetches once per slot, so `completed` can end up slightly ahead of
-  it), intentionally not presented as an exact fraction for that reason.
+  `pdfRenderService` → `PDFGenerator.tsx`) drives progress feedback so the wait reads as working,
+  not hung. `total` is an approximation (unique card count, not slot count - a duplicate card in
+  the deck fetches once per slot, so `completed` can end up slightly ahead of it), intentionally
+  not presented as an exact fraction for that reason. See "PDF-generation wait experience" below
+  for the current UI this drives (a real `ProgressBar`, not the bare text line this originally
+  shipped as).
 - **In-app confirm modal, not `window.confirm()`**: the incident's own screenshot showed
   Firefox's "allow notifications?" anti-spam chrome sitting next to the native confirm dialog -
   a browser can silently start auto-suppressing FUTURE `window.confirm()` calls on an origin once
@@ -139,6 +141,43 @@ Full spec + approval record: `docs/proposals/proposal-b-bleed-normalization.md`.
 `PDFCardImage`'s effective-dpi derivation (`imageDPI` when it's set and lower than `cardDocument.dpi`, else `cardDocument.dpi`) handles the case where a lower `imageDPI` setting makes the Worker serve a downscaled image - measurement always converts px→mm against the resolution of what was actually decoded, not assumed.
 
 **A real crash caught only by running `tests/PDFGenerator.spec.ts`, not by `tsc`/`jest`**: the first version skipped the old proportional rescale by setting `transform: "none"` when normalized. `@react-pdf/renderer`'s own stylesheet parser (`@react-pdf/stylesheet`) has a bug where any single-token transform value throws deep inside its internals (see `docs/lessons.md`'s entry for the exact mechanism) - and their custom reconciler doesn't propagate that as a rejection anywhere, so `pdf(...).toBlob()` just hangs forever with zero console/page error. All 3 download-path Playwright tests hung at their timeout; a stashed pre-Proposal-B baseline confirmed they pass cleanly with no other changes. Fixed by using `transform: undefined` (omitting the key) instead of `"none"` - all 4 tests pass afterward, matching baseline timing.
+
+## PDF-generation wait experience (SPEC-cardback-pdfwait.md §D, PKG2)
+
+`PDFGenerator.tsx` derives a `waitPhase` (`"idle" | "fetching" | "assembling" | "done"`) from the
+existing `isDownloading`/`isSavingToDrive` + `imageFetchProgress` state, rather than tracking it as
+independent state - fewer places that can drift out of sync. `imageFetchProgress == null` reads as
+`"fetching"` (nothing reported yet, not `"assembling"` - a real bug caught by this round's own
+Playwright coverage: treating the brief pre-first-callback window as null-means-assembling flashed
+"Assembling PDF…" before any fetch had actually started).
+
+- **2a - progress bar** (`PDFWaitPanel.tsx`'s `PDFProgressBox`, replaces the old bare
+  `pdf-image-fetch-progress` text line): a real Bootstrap `ProgressBar`, determinate
+  (`now={min(completed/total,1)*100}`, capped at 99% - never a false 100% before the phase
+  genuinely ends) while fetching, honest indeterminate (`animated striped`, `aria-busy`) while
+  assembling (no progress callback exists for `@react-pdf/renderer`'s own layout/encode phase -
+  Annex A-3/`PB1`: swap to determinate if a future render seam exposes one), and a green `done`
+  bar once the export genuinely succeeds.
+- **2b - embedded "What's That Card?" game** (`PDFWaitPanel.tsx`'s `PDFWaitGameEmbed`): the right
+  column (normally the live PDF preview) becomes a chrome frame around `<QuestionFeed>` rendered
+  **verbatim** (`next/dynamic({ssr:false})`, imported only once `isDownloading`/`isSavingToDrive`
+  flips true - never eagerly bundled while a user is still configuring the PDF, mirroring bug 1's
+  own lazy-WASM posture above) plus a persistent build-status ribbon. No forked component, no new
+  voting mechanic - the exact `/whatsthat` funnel (`docs/features/printing-tags.md`). Torn down
+  (unmounted) the instant generation finishes, replaced by the existing
+  `PostExportContributionPrompt` as the embed's own outro (context-aware "one nudge, not two" -
+  the standalone bottom-of-settings mount, described below, is suppressed whenever this outro is
+  already showing the same prompt in the right column).
+
+## Cardback reminder gate on the classic direct "Generate PDF"/"Save PDF to Google Drive" buttons
+
+A user can reach `/print` directly (bookmark, refresh, any entry that skips the editor's Finish
+footer/`usePrePrintSaveGate` entirely) - so `PDFGenerator.tsx`'s own Generate/Save-to-Drive click
+handlers wrap themselves in `useCardbackReminderGate` (`frontend/src/features/display/ useCardbackReminderGate.tsx`) independently of `PrePrintSaveGate.tsx`'s own composition of the
+same hook. Both call sites read the same per-project `sessionStorage` suppression key
+(`cardbackReminderSuppression.ts`), so passing through the reminder once (from either entry) is
+enough for the rest of that session - see `docs/features/printing-tags.md`'s neighbour,
+`SPEC-cardback-pdfwait.md` §C.1, for the gate's own full design.
 
 ## Post-export contribution prompt (issue #166)
 

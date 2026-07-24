@@ -846,6 +846,23 @@ export const openDisplayCardbackGridSelector = async (page: Page) => {
   return gridSelector;
 };
 
+// Cardback flow round (SPEC-cardback-pdfwait.md) - same isVisible()-guard gear-open pattern as
+// openDisplaySearchSettingsModal/openDisplayCardbackGridSelector above, factored out since the
+// Finish footer (FinishFooter.tsx, `finish-footer-print-export`) ALSO lives inside the same
+// `display-print-settings-rail` Offcanvas - below `xl`, reachable only via the gear button. Every
+// existing caller of `finish-footer-print-export` in this suite runs at the default (unset)
+// viewport, which resolves to devices["Desktop Chrome"]'s 1280x720 (above `xl`, rail already
+// inline - see openDisplaySearchSettingsModal's own comment on why playwright.config.ts's
+// `contextOptions.viewport` override is dead config) - this helper is for any caller that
+// deliberately narrows below `xl` (e.g. a phone-width `test.use({ viewport })` block).
+export const ensureDisplayRightRailOpen = async (page: Page) => {
+  const rail = page.getByTestId("display-print-settings-rail");
+  if (!(await rail.isVisible())) {
+    await page.getByTestId("display-gear-button").click();
+    await expect(rail).toBeVisible();
+  }
+};
+
 /**
  * Open a StyledDropdownTreeSelect and click an option by its exact label text.
  * The container should be the `.react-dropdown-tree-select` element (or a
