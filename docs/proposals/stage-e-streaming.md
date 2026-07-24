@@ -31,6 +31,25 @@ no streaming dispatch loop exists yet, and §3-§5 as a whole still need
 owner review before Phase 2 (the loop that actually consumes this
 primitive) is built.
 
+**Phase 2 built 2026-07-24** (the streaming dispatch loop itself, per the
+owner-approved implementation task for this brief's §3-§5 as specced) -
+`cardpicker/stage_e_dispatch.py` (the conveyor: default-off gate, the
+no-self-resume check against Phase 1's `current_trip`, a fresh
+`check_envelope` sample, micro-batch selection, sequential Stage C, scoped
+Stage D via the new `card_ids` parameter `local_calculate_verdicts.py`'s
+three calculator entry points gained, and the per-batch `PilotRunLedger`
+row), `cardpicker/stage_e_signals.py` (the event-driven card-create/
+evidence-change trigger, §3 decision (1)), and
+`manage.py stream_backstop_sweep` (the cron backstop, same decision). Ships
+**default-OFF** (`settings.STAGE_E_STREAMING_ENABLED = False`) - see
+[`docs/features/stage-e-operations.md`](../features/stage-e-operations.md)'s
+new "Phase 2" section for the full operator-facing detail (trigger, batching,
+observability, resume contract). **This does not lift the HOLD above either** -
+turning streaming on in production, the live host-level dispatcher-kill drill
+(§7(b)), the `CardScanLog` retention tripwire (§10(b)), and the Bug-A tail
+shakedown that measures the real micro-batch size (§10(c)) are all still
+open, tracked as "Phase 3" in the ops doc.
+
 **§10 update (2026-07-24, owner):** four of §9's open items are now
 ratified — the rate-control/authorization-envelope question (§9 item 1)
 and the `CardScanLog` retention question (§9 item 2) are RESOLVED, and

@@ -959,6 +959,20 @@ measurement" discipline (§9). If a labeled study of this effect (or a
 built mix-logging mechanism) lands later, this section is the place to
 fold it in — flagged here rather than left unlinked.
 
+**Mix-logging mechanism landed, 2026-07-24** (same day, a separate
+change): `cardpicker.question_feed`'s ≥51%-likely-resolve serving
+policy (docs/features/printing-tags.md's "Mix-composition policy" —
+itself owner-ratified from a read-only WTC vote-queue data brief, not
+from this section) writes one `QuestionFeedServedLog` row per served
+question (`anonymous_id`/`pool`/`question_type`/`origin_reason`/
+`served_at`) — the mix-logging mechanism this paragraph names as the
+prerequisite for a future labeled study. This still is NOT the labeled
+study itself (no agreement-rate/latency data has been analyzed against
+it yet), and it changes nothing about the argument above — the
+resolver remains unaffected either way. Noted here per this section's
+own "the place to fold it in" invitation, not asserting more than the
+log now existing.
+
 ---
 
 ## Status

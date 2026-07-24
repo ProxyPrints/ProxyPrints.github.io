@@ -373,7 +373,7 @@ owner-gated prod steps.
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 import imagehash
 
@@ -875,7 +875,9 @@ EXCLUDED_RESOLVED_TAGS = ["custom-art", "non-english"]
 
 
 def _eligible_cards_queryset(
-    anonymous_id: str, rescannable_skip_reasons: frozenset[str] = JOIN_KEY_RESCANNABLE_SKIP_REASONS
+    anonymous_id: str,
+    rescannable_skip_reasons: frozenset[str] = JOIN_KEY_RESCANNABLE_SKIP_REASONS,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> "QuerySet[Card]":
     """
     Mirrors `local_identify_printing_tags._eligible_base_queryset`'s shape (unresolved, no
@@ -888,6 +890,17 @@ def _eligible_cards_queryset(
     long time); `run_fallback_calculator` passes its own `FALLBACK_RESCANNABLE_SKIP_REASONS`
     instead, since the two calculators' own skip vocabularies mean different things by the same
     "transient, re-selectable" concept.
+
+    `card_ids` (2026-07-24, docs/proposals/stage-e-streaming.md §3 decision (4)/§10(c), Stage E
+    Phase 2): an OPTIONAL additional `.filter(pk__in=card_ids)` - purely a scope narrowing, exactly
+    the same shape `run_image_evidence_cohort.py`'s own pre-existing `--card-ids-file` flag already
+    applies to Stage C, extended here to Stage D. `None` (the default) is a no-op - every existing
+    BULK-mode caller (`run_join_key_calculator`/`run_fallback_calculator`/`run_slow_path_calculator`
+    with no `card_ids` argument, exactly as every one of today's management commands calls them)
+    sees byte-identical behaviour to before this parameter existed. Never changes WHICH cards among
+    those given are accepted or how - only narrows the pool a caller (Stage E's own streaming
+    micro-batch dispatcher, `cardpicker.stage_e_dispatch`) considers at all, so this is pure
+    dispatch-side scoping, not a change to any decode/accept-reject rule.
 
     Idempotence for a repeated multi-pass Stage D fire comes entirely from the stable, per-
     calculator `anonymous_id` exclusion above (`.exclude(printing_tags__anonymous_id=anonymous_id)`)
@@ -925,7 +938,7 @@ def _eligible_cards_queryset(
         .exclude(skip_reason__in=rescannable_skip_reasons)
         .values_list("card_id", flat=True)
     )
-    return (
+    queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
             canonical_card__isnull=True,
@@ -939,6 +952,9 @@ def _eligible_cards_queryset(
         .distinct()
         .select_related("source")
     )
+    if card_ids is not None:
+        queryset = queryset.filter(pk__in=card_ids)
+    return queryset
 
 
 def run_join_key_calculator(
@@ -947,6 +963,7 @@ def run_join_key_calculator(
     chunk_size: int = 500,
     audit_sample_size: int = 20,
     default_cards_path: Optional[Path] = None,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> JoinKeyCalculatorResult:
     """
     Batch runner over every currently-eligible card with a CURRENT `ImageEvidence` row (its
@@ -958,6 +975,10 @@ def run_join_key_calculator(
     straight through to `_resolve_candidates_for_card`'s own `is_back_face` call - `None` (the
     default, used in production) resolves to the real on-disk Scryfall cache; only ever overridden
     by a test.
+
+    `card_ids` (2026-07-24, Stage E Phase 2 - see `_eligible_cards_queryset`'s own docstring for
+    the full rationale): forwarded straight through as a pure scope narrowing. `None` (the
+    default) is every existing caller's own behaviour, unchanged.
     """
     run_id = run_id or generate_run_id()
     index = CandidateNameIndex()
@@ -969,7 +990,7 @@ def run_join_key_calculator(
     scan_log_batch: list[CardScanLog] = []
     touched_card_ids: list[int] = []
 
-    for card in _eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID).iterator(chunk_size=chunk_size):
+    for card in _eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID, card_ids=card_ids).iterator(chunk_size=chunk_size):
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 
@@ -1215,7 +1236,7 @@ class FallbackCalculatorResult:
     audit: list[dict[str, object]] = field(default_factory=list)
 
 
-def _fallback_eligible_cards_queryset() -> "QuerySet[Card]":
+def _fallback_eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
     """
     Cards the join-key calculator already concluded have no confident hit - the SAME population
     `_slow_path_eligible_cards_queryset` below selects from (a real `is_no_match` vote, or a
@@ -1223,6 +1244,9 @@ def _fallback_eligible_cards_queryset() -> "QuerySet[Card]":
     `STAGE_D_FALLBACK_ANONYMOUS_ID` hasn't already processed (scanned OR voted), via the shared
     `_eligible_cards_queryset` helper (idempotence mechanism only - see that function's own
     docstring for why a deduction-vote exclusion was considered and deliberately not added).
+
+    `card_ids` (2026-07-24, Stage E Phase 2): forwarded straight through to
+    `_eligible_cards_queryset` - see that function's own docstring for the full rationale.
     """
     join_key_no_match_card_ids = CardPrintingTag.objects.filter(
         anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
@@ -1231,7 +1255,7 @@ def _fallback_eligible_cards_queryset() -> "QuerySet[Card]":
         anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
     ).values_list("card_id", flat=True)
     return _eligible_cards_queryset(
-        STAGE_D_FALLBACK_ANONYMOUS_ID, rescannable_skip_reasons=FALLBACK_RESCANNABLE_SKIP_REASONS
+        STAGE_D_FALLBACK_ANONYMOUS_ID, rescannable_skip_reasons=FALLBACK_RESCANNABLE_SKIP_REASONS, card_ids=card_ids
     ).filter(Q(pk__in=join_key_no_match_card_ids) | Q(pk__in=join_key_no_hit_scanned_card_ids))
 
 
@@ -1241,6 +1265,7 @@ def run_fallback_calculator(
     chunk_size: int = 500,
     audit_sample_size: int = 20,
     default_cards_path: Optional[Path] = None,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> FallbackCalculatorResult:
     """
     Batch runner for PIECE 1 (module docstring) - mirrors `run_join_key_calculator`'s own shape
@@ -1251,7 +1276,8 @@ def run_fallback_calculator(
     Stage D's own "pass 2", the same relationship `local_fallback.py`'s own module docstring
     documents between the pilot's pass 1 (OCR/phash) and pass 2 (fallback). `default_cards_path` is
     threaded through to `_resolve_candidates_for_card` exactly as `run_join_key_calculator`'s own
-    parameter is.
+    parameter is. `card_ids` (2026-07-24, Stage E Phase 2) is forwarded straight through to
+    `_fallback_eligible_cards_queryset` - see `_eligible_cards_queryset`'s own docstring.
     """
     run_id = run_id or generate_run_id()
     index = CandidateNameIndex()
@@ -1261,7 +1287,7 @@ def run_fallback_calculator(
     scan_log_batch: list[CardScanLog] = []
     touched_card_ids: list[int] = []
 
-    for card in _fallback_eligible_cards_queryset().iterator(chunk_size=chunk_size):
+    for card in _fallback_eligible_cards_queryset(card_ids=card_ids).iterator(chunk_size=chunk_size):
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 
@@ -1458,7 +1484,7 @@ class SlowPathCalculatorResult:
     audit: list[dict[str, object]] = field(default_factory=list)
 
 
-def _slow_path_eligible_cards_queryset() -> "QuerySet[Card]":
+def _slow_path_eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
     """
     Cards the join-key calculator (JOIN_KEY_ANONYMOUS_ID) already concluded have no confident
     hit - either a real `is_no_match` vote, or a non-rescannable skip in
@@ -1477,6 +1503,9 @@ def _slow_path_eligible_cards_queryset() -> "QuerySet[Card]":
     (`no-evidence-types-used`/`eliminated`/`ambiguous`) is deliberately NOT excluded here - it
     still has no confident automated hit from either calculator and belongs in the review queue
     exactly as before this PR.
+
+    `card_ids` (2026-07-24, Stage E Phase 2): a pure scope narrowing, same convention as
+    `_eligible_cards_queryset`'s own `card_ids` parameter - see that function's own docstring.
     """
     join_key_no_match_card_ids = CardPrintingTag.objects.filter(
         anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
@@ -1490,7 +1519,7 @@ def _slow_path_eligible_cards_queryset() -> "QuerySet[Card]":
     fallback_voted_card_ids = CardPrintingTag.objects.filter(
         anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID, is_no_match=False
     ).values_list("card_id", flat=True)
-    return (
+    queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
             canonical_card__isnull=True,
@@ -1502,10 +1531,17 @@ def _slow_path_eligible_cards_queryset() -> "QuerySet[Card]":
         .distinct()
         .select_related("source")
     )
+    if card_ids is not None:
+        queryset = queryset.filter(pk__in=card_ids)
+    return queryset
 
 
 def run_slow_path_calculator(
-    run_id: Optional[str] = None, dry_run: bool = True, chunk_size: int = 500, audit_sample_size: int = 20
+    run_id: Optional[str] = None,
+    dry_run: bool = True,
+    chunk_size: int = 500,
+    audit_sample_size: int = 20,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> SlowPathCalculatorResult:
     """
     Batch runner over every card the join-key calculator already routed to no-hit (see
@@ -1515,14 +1551,15 @@ def run_slow_path_calculator(
     a reviewer) and writes a `CardScanLog(anonymous_id=SLOW_PATH_ANONYMOUS_ID,
     skip_reason=SLOW_PATH_TO_REVIEW_REASON)` durable routing marker. `dry_run=True` (the default,
     matching `run_join_key_calculator`'s own convention) computes and counts everything without
-    writing.
+    writing. `card_ids` (2026-07-24, Stage E Phase 2) is forwarded straight through to
+    `_slow_path_eligible_cards_queryset` - see `_eligible_cards_queryset`'s own docstring.
     """
     run_id = run_id or generate_run_id()
     result = SlowPathCalculatorResult(dry_run=dry_run, run_id=run_id)
 
     scan_log_batch: list[CardScanLog] = []
 
-    for card in _slow_path_eligible_cards_queryset().iterator(chunk_size=chunk_size):
+    for card in _slow_path_eligible_cards_queryset(card_ids=card_ids).iterator(chunk_size=chunk_size):
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 

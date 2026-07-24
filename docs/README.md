@@ -185,9 +185,11 @@ Deployment, incidents, and cross-session lessons.
   vs. local venv trust, worktree port collisions, ES mapping drift, and
   more).
 - [`features/stage-e-operations.md`](features/stage-e-operations.md) — the
-  Stage E Phase 1 envelope enforcement primitive: PASSIVE vs. BULK mode,
-  the four ratified pause bars, and the trip/resume runbook
-  (`resolve_envelope_trip --acknowledge-trip`). Companion to
+  Stage E Phase 1 envelope enforcement primitive (PASSIVE vs. BULK mode, the
+  four ratified pause bars, the trip/resume runbook via
+  `resolve_envelope_trip --acknowledge-trip`) and Phase 2 streaming dispatch
+  loop (event trigger, cron backstop, micro-batching, the streaming-run
+  ledger convention) — both **default-OFF**. Companion to
   [`proposals/stage-e-streaming.md`](proposals/stage-e-streaming.md), which
   remains the design authority.
 
@@ -239,3 +241,8 @@ system" + "Using it" + "Operating it" only).
   for the first one.
 - [`reports/`](reports/README.md) — the report-relay convention (see that
   directory's own README, which indexes every report currently merged).
+- [`proposals/mockups/`](proposals/mockups/README.md) — BINDING design
+  spec + companion static-HTML mockup bundles, one directory per round;
+  includes durability copies of specs recovered from session tmp storage
+  that committed code comments on open PR branches cite by filename (see
+  that directory's own README for why).

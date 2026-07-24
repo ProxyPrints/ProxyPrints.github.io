@@ -1398,6 +1398,49 @@ under-triggering only ever produces an unnecessary DENY, never a wrong
 ALLOW, and `cd`-chains are the pattern that actually occurred in
 production.
 
+**2026-07-24: extended to `Edit`/`Write`/`NotebookEdit`, closing the
+worktree-path trap at the tool layer.** Everything above in this entry
+covers `guard_master.py`'s `Bash`-matched rules only. Separately from
+those, `.claude/settings.json`'s PreToolUse matcher now also fires on
+`Edit`, `Write`, and `NotebookEdit`, and `guard_master.py` dispatches
+those three to `check_worktree_write_guard()` before falling through to
+the `Bash`-only logic. Motivation: four independent sessions
+accidentally edited the shared main checkout via absolute-path
+`Read`/`Edit`/`Write` calls on 2026-07-23/24 (all self-caught before
+landing anything) — the exact failure mode described in
+`docs/lessons.md`'s "Absolute paths to the repo root silently target
+the wrong checkout in a worktree session", but via a file tool instead
+of `git`/`gh` in `Bash`, so the existing rules never saw it.
+
+Mechanics: `worktree_main_checkout_root(cwd)` returns the path before
+`/.claude/worktrees/` in the session's cwd (None if the session isn't a
+worker worktree at all, in which case this rule is a no-op).
+`resolve_write_target(tool_input, cwd)` pulls the target path out of
+`tool_input["file_path"]` (`Edit`/`Write`) or `tool_input["notebook_path"]`
+(`NotebookEdit`), joining a relative value against `cwd` first.
+`targets_main_checkout(target, main_root)` is True only when the
+resolved target is under `main_root` but NOT under `main_root`'s own
+`.claude/worktrees/` subtree (so the session's own worktree, any other
+session's worktree, and anything outside the repo entirely — `/tmp`,
+the orchestration repo, the memory dir — all pass through untouched),
+with one deliberate exception: `WORKERS.md` and `journal/` (see the
+`docs/lessons.md` entry above) are excluded from the block, since a
+worker worktree session writing its own coordination row there is the
+documented, intentional workflow, not the trap.
+
+`Read` is deliberately never gated — blocking reads would break
+legitimate cross-referencing against the main checkout's on-disk state
+(e.g. diffing a worktree's change against what's on master), and a read
+can't silently land content on the wrong branch the way a write can.
+
+Regression coverage: `.claude/hooks/test_guard_master.py`'s
+`write_guard_cases` (end-to-end, via `run_hook_payload()`, against the
+real `tool_input` shapes each of the three tools sends) plus direct unit
+cases against the three helper functions above. This suite has no CI
+wiring (same as the pre-existing `Bash`-rule tests it extends) — it's a
+local dev-loop check, run manually with
+`python3 .claude/hooks/test_guard_master.py`.
+
 ## `DisplayPage.spec.ts`'s "floating sheet-position pill updates live while scrolling at phone width (D17)" fails intermittently with "2/3" instead of "3/3"
 
 **Symptom**: `tests/DisplayPage.spec.ts`'s sheet-position-pill test

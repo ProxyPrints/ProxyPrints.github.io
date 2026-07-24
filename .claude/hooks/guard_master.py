@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""PreToolUse gate: no automated session merges or pushes master directly.
+"""PreToolUse gate: no automated session merges or pushes master directly,
+and no worker worktree session editing the main checkout's files.
 
 Scope (owner decision 2026-07-19):
   - `gh pr merge` and `git merge` into master: blocked everywhere,
@@ -12,6 +13,29 @@ Scope (owner decision 2026-07-19):
     worktree checkout (cwd under .claude/worktrees/). The main
     checkout's interactive pushes to master stay untouched, per this
     repo's standing convention (see CLAUDE.md, Push policy).
+
+Scope added 2026-07-24 (worktree-path trap, see docs/lessons.md's
+"Absolute paths to the repo root silently target the wrong checkout in
+a worktree session"): `Edit`/`Write`/`NotebookEdit` calls are blocked
+when the session's cwd is under a worker worktree
+(.claude/worktrees/<name>/...) AND the tool's target path resolves to
+the main checkout root -- i.e. the repo path with the
+`.claude/worktrees/` subtree excluded. Four independent sessions on
+2026-07-23/24 accidentally edited the shared main checkout this way
+(all self-caught before landing anything). Read-only `Read` calls are
+deliberately NOT gated -- blocking reads would break legitimate
+cross-referencing against the main checkout (e.g. diffing against
+master's on-disk state), and a read can't silently land content on the
+wrong branch the way a write can. A path under the session's OWN
+worktree, under any OTHER worktree, or outside the repo entirely
+(/tmp, the orchestration repo, the memory dir) is unaffected -- only a
+target that resolves inside the repo root but outside
+`.claude/worktrees/` trips this rule. One deliberate exception:
+`WORKERS.md` and `journal/` are gitignored and, by established
+convention (CLAUDE.local.md's multi-worker protocol), live in the main
+checkout on purpose -- a worker worktree session writing its own
+coordination row there is expected behavior, not the trap (see
+`_MAIN_CHECKOUT_WRITE_EXCEPTIONS`).
 
 Both `current_branch(...) == "master"` checks above resolve branch state via
 `effective_dir()`, not the raw session cwd -- a session's registered cwd can
@@ -51,6 +75,23 @@ import sys
 import time
 
 MASTER_TOKENS = {"master", "origin/master", "HEAD:master", "refs/heads/master"}
+
+# Write-capable file-edit tools this guard also gates (2026-07-24). Read is
+# deliberately excluded -- see module docstring.
+WRITE_TOOLS = {"Edit", "Write", "NotebookEdit"}
+
+# The tool_input key each write tool carries its target path under.
+_FILE_PATH_KEYS = ("file_path", "notebook_path")
+
+_WORKTREES_MARKER = "/.claude/worktrees/"
+
+# WORKERS.md and journal/ are gitignored and, by established convention
+# (CLAUDE.local.md's multi-worker protocol; see docs/lessons.md's
+# "Absolute paths to the repo root silently target the wrong checkout in
+# a worktree session"), live in the main checkout on purpose -- a worker
+# worktree session is EXPECTED to write its own coordination row there.
+# These are the one deliberate exception to the trap this rule closes.
+_MAIN_CHECKOUT_WRITE_EXCEPTIONS = ("WORKERS.md", "journal/")
 
 
 def log_stub(rule, command, cwd):
@@ -212,17 +253,101 @@ def deny(reason):
     sys.exit(2)
 
 
+def worktree_main_checkout_root(cwd):
+    """Return the main checkout root if `cwd` is inside a worker worktree.
+
+    A worker worktree's cwd looks like
+    `<main-checkout-root>/.claude/worktrees/<name>/...`. This returns
+    `<main-checkout-root>` (normalized to forward slashes for comparison),
+    or None if `cwd` isn't under `.claude/worktrees/` at all -- i.e. this
+    is the main checkout's own session, which this rule never gates.
+    """
+    norm = cwd.replace(os.sep, "/")
+    idx = norm.find(_WORKTREES_MARKER)
+    if idx == -1:
+        return None
+    return norm[:idx] or "/"
+
+
+def resolve_write_target(tool_input, cwd):
+    """Pull the target path out of an Edit/Write/NotebookEdit tool_input.
+
+    Edit and Write carry it as `file_path`; NotebookEdit carries it as
+    `notebook_path`. A relative value (not expected from these tools in
+    practice, but handled defensively) is joined against `cwd` before
+    normalizing, same as a shell would resolve it. Returns None if
+    tool_input has neither key or the value isn't a non-empty string.
+    """
+    for key in _FILE_PATH_KEYS:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            if not os.path.isabs(value):
+                value = os.path.join(cwd, value)
+            return os.path.normpath(value).replace(os.sep, "/")
+    return None
+
+
+def targets_main_checkout(target_path, main_root):
+    """True if `target_path` resolves inside `main_root` but OUTSIDE any
+    `.claude/worktrees/` subtree of it (i.e. the shared main checkout's own
+    tracked files, not any worker worktree's copy -- own or another's).
+
+    False for anything outside `main_root` entirely (paths outside the
+    repo, e.g. /tmp, the orchestration repo, the memory dir, are never
+    gated by this rule), and False for the documented WORKERS.md/journal/
+    exceptions (see `_MAIN_CHECKOUT_WRITE_EXCEPTIONS`) -- those are
+    intentional main-checkout writes, not the trap this rule closes.
+    """
+    if target_path != main_root and not target_path.startswith(main_root + "/"):
+        return False
+    rel = target_path[len(main_root) :].lstrip("/")
+    if rel.startswith(".claude/worktrees/"):
+        return False
+    if rel in _MAIN_CHECKOUT_WRITE_EXCEPTIONS or any(
+        rel.startswith(exc) for exc in _MAIN_CHECKOUT_WRITE_EXCEPTIONS if exc.endswith("/")
+    ):
+        return False
+    return True
+
+
+def check_worktree_write_guard(tool_name, tool_input, cwd):
+    main_root = worktree_main_checkout_root(cwd)
+    if main_root is None:
+        return  # not a worker worktree session -- this rule doesn't apply
+
+    target = resolve_write_target(tool_input, cwd)
+    if target is None:
+        return  # no resolvable path in this tool_input -- nothing to judge
+
+    if not targets_main_checkout(target, main_root):
+        return
+
+    log_stub("write-main-checkout-from-worktree", f"{tool_name} {target}", cwd)
+    deny(
+        f"[guard_master] this is a worker worktree (.claude/worktrees/) -- "
+        f"edit your own worktree's copy, not the main checkout at "
+        f"{main_root} ({target}). Absolute main-checkout paths from a "
+        "worktree session silently edit the wrong branch."
+    )
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
     except Exception:
         sys.exit(0)  # malformed input: fail open, never block on a parse error
 
-    if payload.get("tool_name") != "Bash":
+    tool_name = payload.get("tool_name")
+    cwd = payload.get("cwd") or os.getcwd()
+
+    if tool_name in WRITE_TOOLS:
+        check_worktree_write_guard(tool_name, payload.get("tool_input") or {}, cwd)
+        sys.exit(0)
+
+    if tool_name != "Bash":
         sys.exit(0)
 
     command = (payload.get("tool_input") or {}).get("command") or ""
-    cwd = payload.get("cwd") or os.getcwd()
     in_worker_worktree = "/.claude/worktrees/" in cwd.replace(os.sep, "/")
 
     if re.search(r"(^|[;&|])\s*gh\s+pr\s+merge(\s|$)", command):
