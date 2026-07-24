@@ -47,6 +47,14 @@ services:
       - SESSION_COOKIE_SAMESITE=${SESSION_COOKIE_SAMESITE}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE}
       - CORS_ALLOW_CREDENTIALS=${CORS_ALLOW_CREDENTIALS}
+    volumes:
+      # scryfall_cache/default_cards.json (~558MB) is the Scryfall bulk-data cache that
+      # printing_metadata_import.py/mtg.py's import_canonical_card_data read - a plain
+      # container-filesystem file with no persistent volume was silently destroyed by every
+      # image rebuild (issue #402; deploy-2 2026-07-23 lost it and local_calculate_verdicts
+      # ran degraded with an empty back-face lookup, no error). Named volume mirrors
+      # postgres_data/elasticsearch_data below so a rebuild (`up --build`) no longer touches it.
+      - scryfall_cache:/MPCAutofill/MPCAutofill/scryfall_cache
   worker:
     image: mpcautofill_worker
     container_name: mpcautofill_worker
@@ -83,6 +91,12 @@ services:
       - SESSION_COOKIE_SAMESITE=${SESSION_COOKIE_SAMESITE}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE}
       - CORS_ALLOW_CREDENTIALS=${CORS_ALLOW_CREDENTIALS}
+    volumes:
+      # Same persistent scryfall_cache as the django service above (shared, same named
+      # volume) - the weekly import_canonical_card_data/update_dfcs schedule runs on THIS
+      # container via manage.py qcluster (see docs/infrastructure.md's "Startup vs.
+      # scheduled catalog sync"), so it reads/refreshes the same on-disk bulk-data cache.
+      - scryfall_cache:/MPCAutofill/MPCAutofill/scryfall_cache
 
   # nginx serving the frontend
   nginx:
@@ -124,3 +138,4 @@ services:
 volumes:
   postgres_data:
   elasticsearch_data:
+  scryfall_cache:
