@@ -16,36 +16,11 @@ from django.urls import reverse
 from cardpicker import views
 from cardpicker.models import PrintingTagStatus
 from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
     CardFactory,
-    SourceFactory,
 )
-
-# `factory.Sequence` counters are process-global across the whole pytest session - a fresh
-# test file using these shared factories shifts sequence-derived values (e.g. "Artist 0")
-# that other test files' snapshots hardcode, purely based on collection order. See
-# test_printing_consensus.py's identical fixture and docs/lessons.md for the full story.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-
 
 BASE_SEARCH_SETTINGS = {
     "searchTypeSettings": {"fuzzySearch": False, "filterCardbacks": False},

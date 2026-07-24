@@ -6,8 +6,6 @@ gated recompute would actually do in production, same convention as
 test_purge_machine_votes.py's own header comment.
 """
 
-import pytest
-
 from django.core.management import call_command
 
 from cardpicker.artist_consensus import resolve_and_persist_artist
@@ -27,33 +25,12 @@ from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
-    CanonicalExpansionFactory,
     CardArtistVoteFactory,
     CardFactory,
     CardPrintingTagFactory,
     CardTagVoteFactory,
-    SourceFactory,
     TagFactory,
 )
-
-# see test_printing_consensus.py for why this capture-and-restore fixture exists
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 class TestComputeConsensusImpactReportZeroWrites:

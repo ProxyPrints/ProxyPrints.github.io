@@ -12,19 +12,6 @@ from cardpicker.models import (
 )
 from cardpicker.tests.factories import CanonicalArtistFactory, CardFactory
 
-# see test_printing_consensus.py for why this capture-and-restore fixture exists
-_SHARED_FACTORIES = [CardFactory, CanonicalArtistFactory]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-
 
 @pytest.fixture(autouse=True)
 def _clear_rate_limit_cache():

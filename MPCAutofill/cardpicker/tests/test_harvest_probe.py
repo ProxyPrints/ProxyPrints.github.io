@@ -10,35 +10,7 @@ import pytest
 import cardpicker.harvest_probe as module
 from cardpicker.local_identify_printing_tags import EngineVote, OcrCardResult
 from cardpicker.models import CardPrintingTag
-from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
-    CanonicalCardFactory,
-    CanonicalExpansionFactory,
-    CardFactory,
-    SourceFactory,
-)
-
-# See test_local_lands_identify.py's identical fixture for the full rationale -
-# factory.Sequence counters are process-global across the whole pytest run. Includes every
-# factory CardFactory/CanonicalCardFactory transitively consume via SubFactory (source, artist,
-# expansion) - see docs/troubleshooting.md's "5-6 unrelated test snapshots break" entry.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
+from cardpicker.tests.factories import CanonicalCardFactory, CardFactory
 
 
 class FakeImage:

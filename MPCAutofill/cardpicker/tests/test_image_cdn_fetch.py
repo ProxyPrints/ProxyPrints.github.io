@@ -10,24 +10,7 @@ import pytest
 
 import cardpicker.image_cdn_fetch as module
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
-from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CardFactory,
-    SourceFactory,
-)
-
-_SHARED_FACTORIES = [CardFactory, SourceFactory, CanonicalArtistFactory, CanonicalExpansionFactory]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
+from cardpicker.tests.factories import CardFactory
 
 
 class TestFetchCardImageLockoutCarveOut:
