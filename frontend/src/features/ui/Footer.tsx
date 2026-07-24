@@ -17,7 +17,7 @@ import { BackendConfig } from "@/features/backend/BackendConfig";
 import { useGetBackendInfoQuery } from "@/store/api";
 
 const FooterRoot = styled.footer`
-  background-color: #22303f;
+  background-color: var(--theme-raised-bg);
   border-top: 1px solid #17222e;
   padding: 1.75rem 1.5rem 1.5rem;
   margin-top: 1.25rem;
@@ -86,7 +86,7 @@ const Tier2 = styled.div`
 `;
 
 const CreditText = styled.span`
-  color: #ebebeb;
+  color: var(--bs-body-color);
   font-size: 0.95rem;
 `;
 

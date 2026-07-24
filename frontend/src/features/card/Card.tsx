@@ -90,7 +90,7 @@ const ErrorPlaceholder = styled.div`
   align-items: center;
   justify-content: center;
   gap: 0.4rem;
-  background: #4e5d6c;
+  background: var(--bs-secondary);
   color: rgba(255, 255, 255, 0.75);
   text-align: center;
   padding: 0.5rem;
@@ -488,7 +488,7 @@ interface CardProportionWrapperProps {
 
 const CardProportionWrapperStyle = styled.div<{ $borderWidth?: number }>`
   z-index: 0;
-  background: #4e5d6c;
+  background: var(--bs-secondary);
   border: solid ${(props) => props.$borderWidth ?? 0}px black;
 `;
 

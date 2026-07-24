@@ -92,7 +92,7 @@ export function AutofillCollapse({
             // the two tokens are one hex digit apart by design, not by accident. Do not "fix"
             // this back to `#4e5d6c` again; see SPEC-display-left-rail.md §D.0 for the explicit
             // note distinguishing them.
-            backgroundColor: headerBackground ?? "#4E5D6B",
+            backgroundColor: headerBackground ?? "var(--theme-card-header-bg)",
             zIndex: zIndex + 1,
             cursor: "pointer",
             ...(headerPadding != null ? { padding: headerPadding } : {}),

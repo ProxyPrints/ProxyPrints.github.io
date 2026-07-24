@@ -47,11 +47,11 @@ import {
 
 // E20 - the anti-white-flash fill: sits behind both the slot itself and every <img> it renders,
 // so there's never a frame where an empty/loading slot or a still-decoding image shows white.
-const SCREEN_SLOT_BG = "#2B3E50";
+const SCREEN_SLOT_BG = "var(--theme-band-bg)";
 // E18 - deliberately distinct from the page's own pinline (rgba(235,235,235,.18), see this
 // component's screenPresentation page-border rule above) so the two never read as the same line.
 const SCREEN_SLOT_PINLINE = "rgba(143, 160, 176, 0.4)";
-const SCREEN_MUTED_TEXT = "#8fa0b0";
+const SCREEN_MUTED_TEXT = "var(--theme-muted)";
 const LIME_GUIDE_COLOR = "#8ae234";
 
 // E18 - the indeterminate loading sweep. `prefers-reduced-motion` gets a static bar at a fixed
@@ -69,7 +69,7 @@ const LoadingTrack = styled.div`
   top: calc(50% - 2px);
   height: 4px;
   border-radius: 2px;
-  background: #22303f;
+  background: var(--theme-raised-bg);
   overflow: hidden;
 `;
 
@@ -80,7 +80,7 @@ const LoadingSweep = styled.div`
   height: 4px;
   width: 35%;
   border-radius: 2px;
-  background: #df6919;
+  background: var(--bs-primary);
   animation: ${loadingSweep} 1.1s ease-in-out infinite;
 
   @media (prefers-reduced-motion: reduce) {
@@ -110,7 +110,7 @@ const SlotMenuCue = styled.button`
   align-items: center;
   justify-content: center;
   background: rgba(11, 21, 32, 0.92);
-  border: 1.5px solid #abb6c2;
+  border: 1.5px solid var(--theme-light);
   color: #fff;
   font-size: 17px;
   line-height: 1;
@@ -130,8 +130,8 @@ const SlotMenuCue = styled.button`
   }
 
   &:hover {
-    background: #df6919;
-    border-color: #df6919;
+    background: var(--bs-primary);
+    border-color: var(--bs-primary);
   }
 `;
 
@@ -151,7 +151,7 @@ const SlotFlipButton = styled.button`
   align-items: center;
   justify-content: center;
   background: rgba(11, 21, 32, 0.92);
-  border: 1.5px solid #abb6c2;
+  border: 1.5px solid var(--theme-light);
   color: #fff;
   font-size: 14px;
   line-height: 1;
@@ -171,9 +171,9 @@ const SlotFlipButton = styled.button`
   }
 
   &:hover {
-    background: #5bc0de;
-    border-color: #5bc0de;
-    color: #062430;
+    background: var(--bs-info);
+    border-color: var(--bs-info);
+    color: var(--theme-btn-ink);
   }
 `;
 
@@ -495,7 +495,9 @@ function PagePreviewSlotEl({
             ? `1px solid ${SCREEN_SLOT_PINLINE}`
             : undefined,
         cursor: onSlotClick != null ? "pointer" : undefined,
-        outline: isSelected ? "3px solid #df691a" : undefined,
+        // Tokyo-11 accent wiring (2026-07-24) - the study names "version/sheet selection
+        // outlines" as an accent surface; REV from primary/orange.
+        outline: isSelected ? "3px solid var(--theme-accent)" : undefined,
         outlineOffset: isSelected ? "-3px" : undefined,
       }}
     >
@@ -618,7 +620,7 @@ function PagePreviewSlotEl({
                     rel="noopener noreferrer"
                     data-testid="page-preview-find-card-link"
                     style={{
-                      color: "#df6919",
+                      color: "var(--bs-primary)",
                       fontSize: "2.2mm",
                       textDecoration: "underline",
                     }}

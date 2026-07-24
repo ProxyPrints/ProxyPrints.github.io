@@ -215,7 +215,7 @@ export function SourceSettings({
             fontSize: 14,
             // dark panel tokens per the approved /display theme - not Bootstrap's
             // grey "secondary" table variant (the pre-2026-07-24 look)
-            backgroundColor: "#22303f",
+            backgroundColor: "var(--theme-raised-bg)",
             border: "1px solid rgba(0,0,0,.22)",
           }}
         >

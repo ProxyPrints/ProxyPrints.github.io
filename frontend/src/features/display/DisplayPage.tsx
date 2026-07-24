@@ -1206,15 +1206,15 @@ const ActionBarSearchGroup = styled.div`
 // component-scoped-override discipline as `.rail-source-toggle`/`.cstack .form-select` above.
 const ToolbarRoot = styled.div`
   .btn-outline-secondary {
-    background: #22303f;
-    color: #ebebeb;
+    background: var(--theme-raised-bg);
+    color: var(--bs-body-color);
     border: 1px solid #46586a;
   }
   .btn-outline-secondary:hover,
   .btn-outline-secondary:focus {
-    background: #22303f;
-    color: #ebebeb;
-    border-color: #abb6c2;
+    background: var(--theme-raised-bg);
+    color: var(--bs-body-color);
+    border-color: var(--theme-light);
   }
 `;
 
@@ -1258,19 +1258,19 @@ const ToolbarRoot = styled.div`
 // `.sv{border-bottom:1px solid var(--divider)}`).
 const RailRoot = styled.div`
   .rail-head {
-    background: #22303f;
-    border-bottom: 1px solid #16202b;
+    background: var(--theme-raised-bg);
+    border-bottom: 1px solid var(--theme-divider);
     padding: 8px 10px;
   }
   .artist-line {
-    background: #22303f;
-    border-bottom: 1px solid #16202b;
+    background: var(--theme-raised-bg);
+    border-bottom: 1px solid var(--theme-divider);
   }
   .sources {
-    border-bottom: 1px solid #16202b;
+    border-bottom: 1px solid var(--theme-divider);
   }
   .select-version-wrapper {
-    border-bottom: 1px solid #16202b;
+    border-bottom: 1px solid var(--theme-divider);
   }
   .select-version-heading {
     margin: 0;
@@ -1293,8 +1293,8 @@ const RailRoot = styled.div`
     flex-wrap: wrap;
     margin: 0;
     padding: 8px 10px;
-    background: #2b3e50;
-    border-bottom: 1px solid #16202b;
+    background: var(--theme-band-bg);
+    border-bottom: 1px solid var(--theme-divider);
     font-size: 12px;
   }
   /* Deliberate radius exception (spec §0) - kept, not invented: the set icon's own circular
@@ -1308,14 +1308,14 @@ const RailRoot = styled.div`
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: #4e5d6c;
+    background: var(--bs-secondary);
     border: 1px solid #7f8fa0;
     border-radius: 50%;
     cursor: pointer;
   }
   .seticon .ss {
     font-size: 15px;
-    color: #ebebeb;
+    color: var(--bs-body-color);
   }
   .seticon .check {
     position: absolute;
@@ -1323,9 +1323,11 @@ const RailRoot = styled.div`
     bottom: -3px;
     width: 15px;
     height: 15px;
-    background: #5cb85c;
-    color: #fff;
-    border: 2px solid #2b3e50;
+    background: var(--bs-success);
+    /* Tokyo-11 ink flip: success is a light green (9.35:1 with dark ink vs. 1.83:1 with white) -
+       see styles.scss's own $color-contrast-dark note for the same reasoning applied to buttons. */
+    color: var(--theme-btn-ink);
+    border: 2px solid var(--theme-band-bg);
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -1333,13 +1335,17 @@ const RailRoot = styled.div`
     font-size: 9px;
     font-weight: 900;
   }
+  /* Tokyo-11 accent wiring (2026-07-24 owner ruling) - the D14 score badge is one of the
+     study's named accent surfaces ("D14 confidence pill family + score badge"), REV from
+     primary/orange. Ink flips to $theme-btn-ink for the same reason as .check above (white on
+     the light accent purple is 2.31:1; dark ink is 7.39:1, STRICT-AAA). */
   .seticon .score {
     position: absolute;
     right: -7px;
     bottom: -7px;
-    background: #df6919;
-    color: #fff;
-    border: 2px solid #2b3e50;
+    background: var(--theme-accent);
+    color: var(--theme-btn-ink);
+    border: 2px solid var(--theme-band-bg);
     border-radius: 10px;
     font-size: 9px;
     font-weight: 800;
@@ -1353,7 +1359,7 @@ const RailRoot = styled.div`
   }
   .d14 .statepill {
     padding: 1px 8px;
-    border: 1px solid #4e5d6c;
+    border: 1px solid var(--bs-secondary);
     border-radius: 10px;
     font-size: 11px;
     font-weight: 700;
@@ -1362,9 +1368,14 @@ const RailRoot = styled.div`
     border-color: #3f7a2f;
     color: #a7e08a;
   }
+  /* Tokyo-11 accent wiring - the "suggested" pill is the other half of the D14 confidence pill
+     family the study names as an accent surface (REV from primary/orange). Border+text both
+     use the raw accent token (not a tinted derivative) - the study verifies 6.74:1 on this same
+     band surface, "near-strict," legible on pill text (unlike Nord's failed 3.67:1 attempt at
+     the same idea - see _theme-tokens.scss's own $theme-accent comment). */
   .d14 .statepill.suggested {
-    border-color: #df6919;
-    color: #ffb27d;
+    border-color: var(--theme-accent);
+    color: var(--theme-accent);
   }
   .d14 .notthis {
     margin-left: auto;
@@ -1408,8 +1419,18 @@ const RailRoot = styled.div`
     font-size: 11px;
     font-weight: 700;
   }
+  /* Tokyo-11 accent wiring (2026-07-24) - the study names "selection/active chip + segmented +
+     toggle states" as an accent surface; this toggle's ON cell renders the library's own stock
+     btn-primary class (which now resolves to the orange action colour) - overridden here,
+     same component-scoped-selector discipline as the rest of this block, so ONLY the Sources
+     list toggle (not every other react-bootstrap-toggle mount sitewide) goes accent-purple. */
+  .rail-source-toggle .toggle-on {
+    background-color: var(--theme-accent) !important;
+    border-color: var(--theme-accent) !important;
+    color: var(--theme-btn-ink) !important;
+  }
   .rail-source-toggle .toggle-off {
-    color: #8fa0b0;
+    color: var(--theme-muted);
   }
   .rail-source-toggle .toggle-handle {
     display: none;
@@ -1435,19 +1456,19 @@ const RailRoot = styled.div`
     aspect-ratio: 63 / 88;
     position: relative;
     overflow: hidden;
-    border: 1px solid rgba(235, 235, 235, 0.15);
+    border: 1px solid rgba(var(--bs-body-color-rgb), 0.15);
   }
   .subject img {
     display: block;
   }
   .subject.empty {
     background: transparent;
-    border: 1px dashed #abb6c2;
+    border: 1px dashed var(--theme-light);
     display: flex;
     align-items: center;
     justify-content: center;
     text-align: center;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     font-size: 9px;
     padding: 4px;
     line-height: 1.3;
@@ -1476,7 +1497,7 @@ const RailRoot = styled.div`
   }
   .rail-head .slot .face {
     font-weight: 400;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     font-size: 11px;
     text-transform: uppercase;
     margin-left: 6px;
@@ -1486,7 +1507,7 @@ const RailRoot = styled.div`
     margin-top: 1px;
   }
   .rail-head .name.none {
-    color: #8fa0b0;
+    color: var(--theme-muted);
     font-style: italic;
   }
   /* EP6 (N) - the per-slot Front/Back segmented toggle, 'ToggleButtonGroup' restyled to the
@@ -1501,17 +1522,25 @@ const RailRoot = styled.div`
     font-size: 11px;
     font-weight: 700;
     padding: 2px 12px;
-    background: #22303f;
-    color: #8fa0b0;
+    /* WCAG/APCA audit fold-in (2026-07-24, PR #432's report; owner-ruled amendment to
+       SPEC-editor-polish.md's binding .fbtoggle row, 2026-07-24) - the authored 2px 12px
+       padding/11px font rendered a measured 51-55x23px target, 1px under WCAG 2.2 SC 2.5.8's
+       24px floor with no qualifying spacing exception. min-height (not more padding) closes
+       the gap without changing the segment's visual density. */
+    min-height: 24px;
+    background: var(--theme-raised-bg);
+    color: var(--theme-muted);
     border-color: #6b7d8e;
     border-radius: 0;
   }
+  /* Tokyo-11 accent wiring (2026-07-24) - the study explicitly names "Front/Back + source
+     toggles" as an accent surface, REV from the prior info/cyan active state. */
   .fbtoggle .btn.active,
   .fbtoggle .btn:focus,
   .fbtoggle .btn:hover {
-    background: #5bc0de;
-    color: #062430;
-    border-color: #5bc0de;
+    background: var(--theme-accent);
+    color: var(--theme-btn-ink);
+    border-color: var(--theme-accent);
     box-shadow: none;
   }
   /* EP4 (REV RD5, §D.1 '.slotacts-top .iact') - the compact icon row's OWN sizing lives in
@@ -1528,14 +1557,14 @@ const RailRoot = styled.div`
      '.idhang', both '#2b3e50') rather than the rail-head's own '#22303f', since it's still
      "about the currently-identified printing," the same subject D14 covers. */
   .detmore-wrap {
-    background: #2b3e50;
-    border-bottom: 1px solid #16202b;
+    background: var(--theme-band-bg);
+    border-bottom: 1px solid var(--theme-divider);
     padding: 8px 10px;
   }
   .detmore {
     background: transparent;
     border: none;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     font-size: 11px;
     cursor: pointer;
     padding: 0;
@@ -1545,12 +1574,12 @@ const RailRoot = styled.div`
     font-family: inherit;
   }
   .detmore:hover {
-    color: #ebebeb;
+    color: var(--bs-body-color);
   }
   .detbody {
     margin-top: 8px;
     padding-top: 8px;
-    border-top: 1px solid #16202b;
+    border-top: 1px solid var(--theme-divider);
     font-size: 11px;
   }
   /* EP9 (N, §D.1 '.compare') - the Scryfall reference reveal, anchored beside the 116px subject
@@ -1571,7 +1600,7 @@ const RailRoot = styled.div`
     z-index: 40;
     width: 150px;
     background: #0b1520;
-    border: 1px solid #5bc0de;
+    border: 1px solid var(--bs-info);
     box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6);
     padding: 5px;
     pointer-events: none;
@@ -1584,24 +1613,24 @@ const RailRoot = styled.div`
   }
   .compare .cap {
     font-size: 9px;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     margin-top: 4px;
   }
   .compare .cap b {
-    color: #5bc0de;
+    color: var(--bs-info);
     font-weight: 700;
   }
 
-  /* identify panel band (item 6) - hangs off D14, same surface (§2/#2b3e50) */
+  /* identify panel band (item 6) - hangs off D14, same surface (§2/band-bg) */
   .idhang {
-    background: #2b3e50;
-    border-bottom: 1px solid #16202b;
+    background: var(--theme-band-bg);
+    border-bottom: 1px solid var(--theme-divider);
     padding: 0 10px 8px;
   }
   .idtoggle {
     background: transparent;
     border: 1px solid #6b7d8e;
-    color: #abb6c2;
+    color: var(--theme-light);
     font-size: 12px;
     padding: 3px 8px;
     cursor: pointer;
@@ -1611,13 +1640,13 @@ const RailRoot = styled.div`
     gap: 6px;
   }
   .idtoggle:hover {
-    border-color: #abb6c2;
-    color: #ebebeb;
+    border-color: var(--theme-light);
+    color: var(--bs-body-color);
   }
   .idbody {
     margin-top: 8px;
-    background: #22303f;
-    border: 1px solid #16202b;
+    background: var(--theme-raised-bg);
+    border: 1px solid var(--theme-divider);
     padding: 8px;
   }
 
@@ -1628,18 +1657,18 @@ const RailRoot = styled.div`
     gap: 6px;
     margin-bottom: 6px;
     font-size: 12px;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     flex-wrap: wrap;
   }
   .svhead .n {
-    color: #ebebeb;
+    color: var(--bs-body-color);
     font-weight: 700;
   }
   /* EP7 (SPEC-editor-polish.md §D.4 '.sortsel', REV RD2) - 'max-width' 150px -> 172px. */
   .sortsel {
-    background: #22303f;
-    color: #ebebeb;
-    border: 1px solid #4e5d6c;
+    background: var(--theme-raised-bg);
+    color: var(--bs-body-color);
+    border: 1px solid var(--bs-secondary);
     font-size: 12px;
     padding: 3px 6px;
     border-radius: 0;
@@ -1653,19 +1682,19 @@ const RailRoot = styled.div`
     justify-content: center;
     gap: 10px;
     min-height: 140px;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     font-size: 12px;
   }
   /* EP10 - tints the site's canonical spinner '--primary' inside the rail only (component-
      scoped via this ancestor selector, same discipline as '.rail-source-toggle' above - it
      cannot reach a 'Spinner' mounted anywhere outside this styled-component's own DOM scope). */
   .vloading .spinner-border {
-    color: #df6919;
+    color: var(--bs-primary);
   }
   .filtersbtn {
     background: transparent;
-    border: 1px solid #abb6c2;
-    color: #abb6c2;
+    border: 1px solid var(--theme-light);
+    color: var(--theme-light);
     font-size: 14px;
     padding: 4px 8px;
     cursor: pointer;
@@ -1675,8 +1704,8 @@ const RailRoot = styled.div`
     gap: 5px;
   }
   .filtersbtn:hover {
-    background: #abb6c2;
-    color: #111;
+    background: var(--theme-light);
+    color: var(--theme-btn-ink);
   }
 
   /* Filters panel - one shared fieldset body, tier-conditional container (RD4/O3): phone = the
@@ -1686,8 +1715,8 @@ const RailRoot = styled.div`
      position:fixed node isn't enough here) - those two classes' rules travel WITH that portal
      component, duplicated in lockstep, not defined here. */
   .fpanel {
-    background: #22303f;
-    border: 1px solid #16202b;
+    background: var(--theme-raised-bg);
+    border: 1px solid var(--theme-divider);
     padding: 8px;
   }
   .fpanel.inline {
@@ -1706,17 +1735,17 @@ const RailRoot = styled.div`
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     margin-bottom: 4px;
   }
   .fsep {
     height: 1px;
-    background: #16202b;
+    background: var(--theme-divider);
     margin: 9px -8px;
   }
   .implicit-note {
     font-size: 10px;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     margin-top: 7px;
     display: flex;
     gap: 5px;
@@ -1724,7 +1753,7 @@ const RailRoot = styled.div`
     line-height: 1.4;
   }
   .implicit-note .ic {
-    color: #5bc0de;
+    color: var(--bs-info);
     flex: 0 0 auto;
   }
 
@@ -1739,15 +1768,15 @@ const RailRoot = styled.div`
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     margin-bottom: 5px;
   }
   /* Component-scoped override of PrintOptionsSection's own Form.Select (same non-fork discipline
      as .rail-source-toggle above - reused component, rail-scoped CSS only). */
   .cstack .form-select {
-    background: #22303f;
-    color: #ebebeb;
-    border: 1px solid #4e5d6c;
+    background: var(--theme-raised-bg);
+    color: var(--bs-body-color);
+    border: 1px solid var(--bs-secondary);
     font-size: 13px;
     padding: 4px 8px;
     width: 100%;
@@ -1755,11 +1784,11 @@ const RailRoot = styled.div`
   }
   .cstack p.text-muted {
     font-size: 10px;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     margin-top: 4px;
   }
   .cs-foot {
-    border-top: 1px solid #16202b;
+    border-top: 1px solid var(--theme-divider);
     padding-top: 8px;
   }
 `;
