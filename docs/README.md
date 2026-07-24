@@ -43,9 +43,15 @@ The methodology and the systems it governs.
   2026-07-22, now closed history per the 2026-07-23 new-data basis
   ruling) and artifact 2 status (all 3 MISSING constants decided, fix
   for 2 merged AND deployed 2026-07-23T01:33Z), the #347-amended fire
-  sequence — now **COMPLETE end to end, gate FIRED (2026-07-23)**: Bug-B
-  whole-DB reparse dry-run, the pilot dry-run and `--write` (130,210
-  votes), and `consensus_recompute --apply` all DONE (Bug-A's full
+  sequence — now **COMPLETE end to end, gate FIRED, true completion
+  2026-07-24**: Bug-B whole-DB reparse dry-run, the pilot dry-run and
+  `--write` (130,210 votes), `consensus_recompute --apply`, plus five
+  further 2026-07-24 corrective/completion passes (lexicon-gate
+  retraction, marker reparse, artist-credit fill, calculator re-pass, a
+  second `consensus_recompute` closer) all DONE — live resolved-printing
+  count is **3** (corrected from a provisional 4), all 218,345 cards
+  remain `artist_vote_status=unresolved` (single-machine-vote-below-
+  threshold finding), review queue is **134,370** cards (Bug-A's full
   re-scan deferred post-pilot is the one tracked open item) — and the
   #340 root-cause footprint sizing. Single source of
   truth for this gate's status — `theory.md`, `identification-pipeline.md`,
