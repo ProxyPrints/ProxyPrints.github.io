@@ -11,20 +11,24 @@ import {
 import { test } from "../playwright.setup";
 import { importText, loadPageWithDefaultBackend } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
+// Parity wave 2 investigation (2026-07-23, issue #272) - confirmed still a genuine gap, not just a
+// route-swap casualty: this file's `card-image-error-placeholder`/`card-image-slow-load-hint`
+// testids only exist in `Card.tsx` (grep confirms - src/features/card/Card.tsx). The unified
+// page's sheet slots are NOT Card.tsx mounts - they're `PagePreview.tsx`'s own
+// `page-preview-slot`, which already has its own project-level `loading`/`failed` states (no
+// candidate resolved yet, or none found at all - see DisplaySlotStates.spec.ts's own coverage of
+// those) but a plain, unwrapped `<img loading="lazy" src={imageUrl}>` for the "a candidate IS
+// resolved, but its own image fetch 404s or hangs" case this file tests - no onError placeholder
+// swap, no slow-load hint timer, at all. Porting this coverage isn't a test-authoring exercise (no
+// existing DisplayPage surface to point it at) - it would mean adding real new
+// fetch-failure/slow-load handling to PagePreview.tsx first, which is out of this wave's "port
+// existing coverage" scope. Left skipped, not silently dropped - worth a real issue of its own if
+// the owner wants sheet-level image-fetch-failure UX built (distinct from #272's tracked gaps,
+// none of which mention this specifically).
 test.beforeEach(async ({}, testInfo) => {
   testInfo.skip(
     true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
+    "Issue #272 wave 2 (2026-07-23): PagePreview.tsx's sheet slots have no error-fetch/slow-load handling to port this onto - a genuine, confirmed gap, not a route-swap casualty. See this file's own header comment."
   );
 });
 

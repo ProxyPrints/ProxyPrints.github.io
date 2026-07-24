@@ -11,28 +11,16 @@ import {
 
 import { test } from "../../playwright.setup";
 import {
-  expectCardSlotToExist,
+  expectDisplaySheetSlotToExist,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
 } from "../test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
-
+// Parity wave 2 (2026-07-23, issue #272): ported onto the unified `/editor` page.
+// InvalidIdentifiersModal.tsx itself is unchanged and unforked, globally mounted (Layout.tsx's
+// <Modals />) - reached the same way regardless of route, via InvalidIdentifiersStatus's own
+// "Review Invalid Cards" link (see InvalidIdentifiersStatus.spec.ts's own precedent, this same
+// wave). Only the slot-existence setup checks below needed adapting to the sheet.
 test.describe("InvalidIdentifiersModal visual tests", () => {
   test("invalid identifiers modal displays the appropriate data", async ({
     page,
@@ -50,9 +38,9 @@ test.describe("InvalidIdentifiersModal visual tests", () => {
       page,
       `2x query 1${SelectedImageSeparator}123\n1 query 2${FaceSeparator}query 3${SelectedImageSeparator}456`
     );
-    await expectCardSlotToExist(page, 1);
-    await expectCardSlotToExist(page, 2);
-    await expectCardSlotToExist(page, 3);
+    await expectDisplaySheetSlotToExist(page, 1);
+    await expectDisplaySheetSlotToExist(page, 2);
+    await expectDisplaySheetSlotToExist(page, 3);
 
     // Bring up the modal
     const alertText = page.getByText("Your project specified", {

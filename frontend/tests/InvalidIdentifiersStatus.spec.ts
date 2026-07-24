@@ -17,30 +17,20 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  changeQuery,
-  expectCardGridSlotState,
-  expectCardSlotToExist,
-  importText,
+  changeQueries,
+  expectDisplaySheetSlotState,
+  expectDisplaySheetSlotToExist,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDisplayChangeQueryModal,
 } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
-
+// Parity wave 2 (2026-07-23, issue #272): ported onto the unified `/editor` page.
+// InvalidIdentifiersStatus.tsx itself is unchanged and unforked - DisplayPage.tsx's own comment
+// (issue #267 D13): "mounted unmodified in both the populated-state action bar and the
+// empty-project DeckInputLanding" - only the RIGHT-RAIL Status row (a separate, still-unbuilt
+// placement - issue #272 item 2's own remaining scope) is missing; the landing/search-bar half
+// this file exercises already works today.
 test.describe("InvalidIdentifiersStatus tests", () => {
   const testCases = [
     {
@@ -74,9 +64,9 @@ test.describe("InvalidIdentifiersStatus tests", () => {
       );
       await loadPageWithDefaultBackend(page);
 
-      await importText(page, query);
-      await expectCardSlotToExist(page, 1);
-      await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
+      await importTextOnEditorLanding(page, query);
+      await expectDisplaySheetSlotToExist(page, 1);
+      await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
 
       if (problematicImageCount > 0) {
         const warningText = await page
@@ -107,17 +97,18 @@ test.describe("InvalidIdentifiersStatus tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `query 1${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await expectCardSlotToExist(page, 1);
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
+    await expectDisplaySheetSlotToExist(page, 1);
+    await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
 
     // change query - type in "query 2"
-    await changeQuery(page, "front-slot0", cardDocument1.name, "query 2");
+    await openDisplayChangeQueryModal(page, 1);
+    await changeQueries(page, "query 2");
     // expect the slot to have changed from card 1 to card 2
-    await expectCardGridSlotState(page, 1, "front", cardDocument2.name, 1, 1);
+    await expectDisplaySheetSlotState(page, 1, "front", cardDocument2.name);
 
     // expect the invalid card warning to *not* have been raised
     await expect(

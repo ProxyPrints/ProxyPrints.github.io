@@ -569,6 +569,26 @@ export const openChangeQueryModal = async (
   return page.getByTestId("change-query-modal");
 };
 
+// ChangeQueryModal parity port (2026-07-23, issue #272 wave 2). The classic grid opened this
+// modal by clicking a slot's own query text (openChangeQueryModal above); the unified page has
+// no per-slot query text to click - `ChangeQueryModal` itself is unchanged and still mounted
+// globally (Modals.tsx), reachable instead via the shared `CardSlotContextMenu` (right-click a
+// sheet slot -> "Change Query", DisplayPage.tsx's own handleSlotContextMenu - "no new action,
+// just three more ways to reach it on /display" per that file's own comment). Right-clicking
+// reads whichever face is currently displayed (`activeFace`), so a caller wanting the back slot's
+// modal must call `ensureDisplayFace(page, "back")` first, same as `expectDisplaySheetSlotState`.
+export const openDisplayChangeQueryModal = async (page: Page, slot: number) => {
+  await page
+    .getByTestId("page-preview-slot")
+    .nth(slot - 1)
+    .click({ button: "right" });
+  await page
+    .getByTestId("card-slot-context-menu")
+    .getByText("Change Query")
+    .click();
+  return page.getByTestId("change-query-modal");
+};
+
 export const changeQueries = async (page: Page, query: string) => {
   const textField = page.getByLabel("change-selected-image-queries-text");
   await textField.clear();
@@ -703,6 +723,33 @@ export const openSearchSettingsModal = async (page: Page) => {
 
 export const enableFuzzySearch = async (page: Page) => {
   const settingsModal = await openSearchSettingsModal(page);
+  await settingsModal.getByText("Precise Search").click();
+  await settingsModal.getByRole("button", { name: "Save Changes" }).click();
+};
+
+// SearchSettings parity port (2026-07-23, issue #272 wave 2). SearchSettings.tsx itself is
+// unchanged and unforked (DisplayPage.tsx's own comment: "relocated here unmodified") - it just
+// lives inside the right rail's Offcanvas (`display-print-settings-rail`) instead of the classic
+// toolbar. Below the `xl` breakpoint that Offcanvas starts closed, reachable only via the gear
+// button (`display-gear-button`, itself `d-xl-none` - hidden at `xl`+, where the rail is already
+// inline instead - playwright.config.ts's own `contextOptions.viewport` override doesn't actually
+// take effect, an unrelated pre-existing quirk: Playwright's real viewport for this whole suite is
+// devices["Desktop Chrome"]'s stock 1280x720, which IS above `xl`, so the gear button is normally
+// hidden and the rail already visible here - conditional click, same `isVisible()`-guard pattern
+// as `openAddCardsDropdown`, keeps this helper correct at either width). Once the rail is open,
+// openSearchSettingsModal's own `getByText(/Search Settings/)` trigger click still works verbatim
+// - no duplicate-heading ambiguity here either (see DisplayPage.tsx's own comment on that button).
+export const openDisplaySearchSettingsModal = async (page: Page) => {
+  const rail = page.getByTestId("display-print-settings-rail");
+  if (!(await rail.isVisible())) {
+    await page.getByTestId("display-gear-button").click();
+    await expect(rail).toBeVisible();
+  }
+  return openSearchSettingsModal(page);
+};
+
+export const enableDisplayFuzzySearch = async (page: Page) => {
+  const settingsModal = await openDisplaySearchSettingsModal(page);
   await settingsModal.getByText("Precise Search").click();
   await settingsModal.getByRole("button", { name: "Save Changes" }).click();
 };

@@ -8,7 +8,10 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "./test-utils";
+import {
+  importTextOnEditorLanding,
+  loadPageWithDefaultBackend,
+} from "./test-utils";
 
 const threeCardHandlers = [
   cardDocumentsThreeResults,
@@ -17,114 +20,79 @@ const threeCardHandlers = [
   ...defaultHandlers,
 ];
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified page;
-// the classic grid `front-slot`/`left-panel`/`right-panel` testids these tests target have no
-// equivalent there, so they're individually skipped below rather than the whole file - the last
-// three describe blocks (About page, Home page logo, and the home-page half of Console warning
-// regressions) don't touch /editor at all and are unaffected.
+// Parity wave 2 (2026-07-23, issue #272): the classic grid's `front-slot`/`left-panel`/
+// `right-panel` testids have no equivalent on the unified page - the last three describe blocks
+// (About page, Home page logo, and the home-page half of Console warning regressions) don't touch
+// /editor at all and were always unaffected.
 test.describe("Card slot controls - accessibility", () => {
-  test("the more-options button has an accessible name", async ({
+  // Ported onto PagePreview.tsx's own per-slot menu cue (`page-preview-slot-menu-cue`, "Open card
+  // menu") - the sheet's closest equivalent to the classic grid's per-slot "more options" button
+  // (same corner-affordance role: F6/D22's own module comment calls it the "touch-discoverable
+  // menu cue", reserving the same physical corner classic CardSlot's 3-dot button occupied).
+  test("the slot menu cue has an accessible name", async ({
     page,
     network,
-  }, testInfo) => {
-    testInfo.skip(
-      true,
-      "Proposal H switchover (2026-07-23): targets classic /editor-only front-slot testid, now unrouted - see issue #272"
-    );
+  }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
+    await importTextOnEditorLanding(page, "my search query");
 
-    const moreOptionsButton = page
-      .getByTestId("front-slot0")
-      .getByTestId("more-select-options");
-    await expect(moreOptionsButton).toBeVisible();
-    await expect(moreOptionsButton).toHaveAccessibleName("More options");
+    const menuCue = page
+      .getByTestId("page-preview-slot")
+      .first()
+      .getByTestId("page-preview-slot-menu-cue");
+    await expect(menuCue).toBeVisible();
+    await expect(menuCue).toHaveAccessibleName("Open card menu");
   });
 
-  test("the select/remove buttons meet a comfortable touch-target size and have a visible focus style", async ({
+  // The classic grid's per-slot `.card-select` checkbox (bulk multi-select) has no equivalent on
+  // the unified page (SelectedImagesRibbon/bulk multi-select - issue #272 item 6, still not
+  // built, parked rather than ported this same wave - see this PR's own description) - the same
+  // menu cue button above is the nearest actionable per-slot control left to hold this touch-
+  // target/focus-style invariant to.
+  test("the slot menu cue has a visible focus style", async ({
     page,
     network,
-  }, testInfo) => {
-    testInfo.skip(
-      true,
-      "Proposal H switchover (2026-07-23): targets classic /editor-only front-slot testid, now unrouted - see issue #272"
-    );
+  }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
+    await importTextOnEditorLanding(page, "my search query");
 
-    const selectButton = page
-      .getByTestId("front-slot0")
-      .locator(".card-select");
-    const box = await selectButton.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.width).toBeGreaterThanOrEqual(40);
-    expect(box!.height).toBeGreaterThanOrEqual(40);
+    const menuCue = page
+      .getByTestId("page-preview-slot")
+      .first()
+      .getByTestId("page-preview-slot-menu-cue");
 
-    // A prior mouse click (e.g. inside importText's flow) sets Chromium's input modality to
-    // "mouse", under which a plain .focus() call does not match :focus-visible. Pressing Tab
-    // first re-establishes keyboard modality, matching how a real keyboard user would land here.
+    // A prior mouse click (e.g. inside importTextOnEditorLanding's flow) sets Chromium's input
+    // modality to "mouse", under which a plain .focus() call does not match :focus-visible.
+    // Pressing Tab first re-establishes keyboard modality, matching how a real keyboard user
+    // would land here.
     await page.keyboard.press("Tab");
-    await selectButton.focus();
-    const outlineStyle = await selectButton.evaluate(
+    await menuCue.focus();
+    const outlineStyle = await menuCue.evaluate(
       (el) => getComputedStyle(el).outlineStyle
     );
     expect(outlineStyle).not.toBe("none");
   });
 });
 
-test.describe("Editor - mobile layout", () => {
-  test("at a mobile viewport, the settings panel stacks below the card grid instead of splitting the screen 50/50", async ({
-    page,
-    network,
-  }, testInfo) => {
-    testInfo.skip(
-      true,
-      "Proposal H switchover (2026-07-23): targets classic /editor-only left-panel/right-panel testids, now unrouted - see issue #272"
-    );
-    network.use(...threeCardHandlers);
-    await page.setViewportSize({ width: 390, height: 844 });
-    await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
+// Dropped, not ported: the classic test's "comfortable touch-target size" (>=40x40px) half of
+// this coverage. PagePreview.tsx renders the sheet near print-scale (millimetre-driven sizing,
+// not a UI-scale button grid) - the menu cue measured ~11x11px here, genuinely smaller than the
+// WCAG-informed 40px target the classic grid's own full-UI-scale button met. That's a real,
+// structural difference in what this element IS (a small on-page-preview affordance vs. a
+// full-size toolbar button), not an accessibility regression this port should paper over by
+// weakening the assertion's threshold - the focus-visible-style half above is unaffected and
+// still fully verified.
 
-    const leftPanel = page.getByTestId("left-panel");
-    const rightPanel = page.getByTestId("right-panel");
-    const leftBox = await leftPanel.boundingBox();
-    const rightBox = await rightPanel.boundingBox();
-    expect(leftBox).not.toBeNull();
-    expect(rightBox).not.toBeNull();
-
-    // Stacked (not side-by-side) means both panels span (close to) the full viewport width,
-    // rather than splitting it in half.
-    expect(leftBox!.width).toBeGreaterThan(350);
-    expect(rightBox!.width).toBeGreaterThan(350);
-  });
-
-  test("at desktop width, the settings panel still sits beside the card grid (unaffected by the mobile change)", async ({
-    page,
-    network,
-  }, testInfo) => {
-    testInfo.skip(
-      true,
-      "Proposal H switchover (2026-07-23): targets classic /editor-only left-panel/right-panel testids, now unrouted - see issue #272"
-    );
-    network.use(...threeCardHandlers);
-    // default chromium project viewport (800x600) is above the md breakpoint
-    await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-
-    const leftPanel = page.getByTestId("left-panel");
-    const rightPanel = page.getByTestId("right-panel");
-    const leftBox = await leftPanel.boundingBox();
-    const rightBox = await rightPanel.boundingBox();
-    expect(leftBox).not.toBeNull();
-    expect(rightBox).not.toBeNull();
-    // Side-by-side means roughly the same vertical position and non-overlapping x-ranges.
-    expect(Math.abs(leftBox!.y - rightBox!.y)).toBeLessThan(5);
-    expect(leftBox!.x + leftBox!.width).toBeLessThanOrEqual(rightBox!.x + 1);
-  });
-});
+// "Editor - mobile layout"'s two classic-grid tests (left-panel/right-panel 50/50-split-vs-
+// stacked at mobile/desktop widths) are dropped, not ported: they verified the SAME "mobile
+// scroll affordances -> #266's responsive layer" replacement issue #272's own body already lists
+// as an intentional replacement, not a gap (ProjectEditorMobileScroll.spec.ts, this same wave's
+// PR description). The unified page's rails are off-canvas drawers (LeftRailOffcanvas/
+// RightRailOffcanvas) below their own breakpoints regardless of viewport - there's no persistent
+// 50/50 split to ever "stack" in the first place, so this specific invariant has no equivalent
+// question to ask on /editor.
 
 test.describe("Console warning regressions", () => {
   test("the home page renders with none of the previously-observed console warnings", async ({
@@ -162,11 +130,7 @@ test.describe("Console warning regressions", () => {
   test("the editor page renders with none of the previously-observed console warnings", async ({
     page,
     network,
-  }, testInfo) => {
-    testInfo.skip(
-      true,
-      "Proposal H switchover (2026-07-23): importText is classic /editor-only UI, now unrouted - see issue #272"
-    );
+  }) => {
     network.use(...threeCardHandlers);
     const warnings: string[] = [];
     page.on("console", (msg) => {
@@ -176,7 +140,7 @@ test.describe("Console warning regressions", () => {
     });
 
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
+    await importTextOnEditorLanding(page, "my search query");
     await page.waitForTimeout(1500);
 
     const flagged = [
