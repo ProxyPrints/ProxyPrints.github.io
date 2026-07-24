@@ -10,6 +10,7 @@ import {
   sourceDocument1,
 } from "@/common/test-constants";
 import {
+  cardbacksThreeResults,
   cardDocumentsThreeResults,
   defaultHandlers,
   searchResultsThreeResults,
@@ -18,32 +19,21 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  expectCardGridSlotState,
-  importText,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
-  openCardSlotGridSelector,
+  openDisplayCardbackGridSelector,
 } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
-
-// Shared by both suites below (identical across their source files).
+// Parity wave 3 (2026-07-24, issue #272) - un-skipped and ported onto the unified `/editor` page,
+// same retarget as GridSelectorModal.spec.ts (see that file's own header comment and
+// openDisplayCardbackGridSelector's comment in test-utils.ts for the full rationale): the only
+// surviving GridSelectorModal.tsx mount post-route-swap is CardbackToolbarButton's project-wide
+// cardback picker, reachable only once the project is non-empty - every test below runs one plain
+// import first purely to populate the project before the right rail/gear button/Cardback trigger
+// exist at all (DisplayPage.tsx's own `isProjectEmpty` early-return).
 const threeCardHandlers = [
   cardDocumentsThreeResults,
+  cardbacksThreeResults,
   sourceDocumentsOneResult,
   searchResultsThreeResults,
   ...defaultHandlers,
@@ -56,8 +46,8 @@ test.describe("GridSelectorModal - keyboard navigation", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 3);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     const targetCard = gridSelector.locator(
       `[data-card-identifier="${cardDocument2.identifier}"]`
@@ -67,7 +57,6 @@ test.describe("GridSelectorModal - keyboard navigation", () => {
     await page.keyboard.press("Enter");
 
     await expect(gridSelector).not.toBeVisible();
-    await expectCardGridSlotState(page, 1, "front", cardDocument2.name, 2, 3);
   });
 });
 
@@ -111,6 +100,14 @@ test.describe("GridSelectorModal - large grid keyboard-focus perf", () => {
       http.post(`${localBackendURL}/2/cards/`, () =>
         HttpResponse.json({ results }, { status: 200 })
       ),
+      // The cardback picker's own endpoint - simpler than the classic cluster's
+      // `3/editorSearch/` hash-key wrapping, since `2/cardbacks` returns the identifier list
+      // directly.
+      http.post(`${localBackendURL}/2/cardbacks`, () =>
+        HttpResponse.json({ cardbacks: identifiers }, { status: 200 })
+      ),
+      // A plain, cheap import used only to populate the project (see this file's own module
+      // comment) - one throwaway result, unrelated to the 150-card cardback set above.
       http.post(`${localBackendURL}/3/editorSearch/`, () =>
         HttpResponse.json(
           {
@@ -118,7 +115,7 @@ test.describe("GridSelectorModal - large grid keyboard-focus perf", () => {
               [computeSearchQueryHashKey({
                 query: "my search query",
                 cardType: CardType.Card,
-              })]: identifiers,
+              })]: [cardDocument1.identifier],
             },
           },
           { status: 200 }
@@ -128,16 +125,11 @@ test.describe("GridSelectorModal - large grid keyboard-focus perf", () => {
       ...defaultHandlers
     );
 
-    const start = Date.now();
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(
-      page,
-      1,
-      "front",
-      1,
-      CARD_COUNT
-    );
+    await importTextOnEditorLanding(page, "my search query");
+
+    const start = Date.now();
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     // Index 15 is within CardsGroupedTogether's `initialVisible={visualIndex < 20}` window,
     // so this doesn't depend on fighting the grid's own scroll-triggered virtualization -
@@ -152,8 +144,10 @@ test.describe("GridSelectorModal - large grid keyboard-focus perf", () => {
 
     // Generous bound - this isn't a tight perf budget, just a regression guard against the
     // keyboard-focus change accidentally making a large grid noticeably janky (e.g. an
-    // O(n) re-render triggered per focus event). Covers the whole flow (search, open modal,
-    // render 150 cards, focus one) since that's the realistic cost a user actually pays.
+    // O(n) re-render triggered per focus event). Covers opening the picker, rendering 150
+    // cards, and focusing one - the timer starts AFTER the throwaway import above (unlike the
+    // classic cluster's version) so it measures the same "open a big grid, focus a card" cost
+    // without folding in this port's own extra populate-the-project step.
     expect(elapsedMs).toBeLessThan(15_000);
   });
 });
@@ -165,8 +159,8 @@ test.describe("GridSelectorModal - autofocus", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 3);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     // Jump to Version is collapsed by default (viewSettingsSlice's initial state) - the old
     // code tried to focus its input regardless, which silently failed since a collapsed
@@ -182,9 +176,9 @@ test.describe("GridSelectorModal - autofocus", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
+    await importTextOnEditorLanding(page, "my search query");
 
-    let gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 3);
+    let gridSelector = await openDisplayCardbackGridSelector(page);
     await gridSelector
       .getByRole("heading", { name: "Jump to Version" })
       .click();
@@ -198,7 +192,7 @@ test.describe("GridSelectorModal - autofocus", () => {
 
     // Reopen - jumpToVersionVisible is Redux state, not reset by closing the modal, so this
     // second open should find the section already expanded and genuinely focus the input.
-    gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 3);
+    gridSelector = await openDisplayCardbackGridSelector(page);
     await expect(
       gridSelector.getByPlaceholder("1", { exact: true })
     ).toBeFocused();
@@ -213,8 +207,8 @@ test.describe("GridSelectorModal - mobile filters default", () => {
     network.use(...threeCardHandlers);
     await page.setViewportSize({ width: 390, height: 844 });
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 3);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     await expect(gridSelector.getByText("Group By")).not.toBeVisible();
     await expect(
@@ -238,8 +232,8 @@ test.describe("GridSelectorModal - mobile filters default", () => {
     network.use(...threeCardHandlers);
     // default chromium project viewport (800x600) is above the sm breakpoint
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 3);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     await expect(gridSelector.getByText("Group By")).toBeVisible();
   });

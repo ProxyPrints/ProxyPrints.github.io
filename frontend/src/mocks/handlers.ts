@@ -322,6 +322,78 @@ export const cardbacksServerError = http.post(buildRoute("2/cardbacks/"), () =>
   HttpResponse.json(createError("2/cardbacks"), { status: 500 })
 );
 
+// GridSelectorModal parity port (2026-07-24, issue #272 wave 3). GridSelectorModal.tsx's only
+// surviving mount post-route-swap is CardbackToolbarButton's project-wide cardback picker
+// (CommonCardback.tsx) - it's fed by the `2/cardbacks` identifier list, not a search query, so
+// the classic per-slot cluster's own `2/cards/` + `3/editorSearch/` fixture pairs (below) need a
+// `2/cardbacks` counterpart naming the same identifiers to reuse unchanged for this wave's ported
+// tests. The modal itself doesn't care what a given identifier's underlying CardDocument's own
+// name/art actually depicts (see GridSelectorModal.tsx: a bare `imageIdentifiers` array + `onClick`
+// callback) - reusing `cardDocumentsThreeResults`' cast as "cardbacks" here is cosmetic only,
+// already an established pattern (see cardbacksTwoResults/cardbacksOneResult above, both cast
+// plain search-result cardDocument1/2 as cardbacks the same way).
+export const cardbacksThreeResults = http.post(buildRoute("2/cardbacks"), () =>
+  HttpResponse.json(
+    {
+      cardbacks: [
+        cardDocument1.identifier,
+        cardDocument2.identifier,
+        cardDocument3.identifier,
+      ],
+    },
+    { status: 200 }
+  )
+);
+
+// Matches cardDocumentsFourResults' identifier set - used by CardSlot.visual.spec.ts's grid-
+// selector aria-snapshot pair, re-anchored onto the cardback picker this wave.
+export const cardbacksFourResults = http.post(buildRoute("2/cardbacks"), () =>
+  HttpResponse.json(
+    {
+      cardbacks: [
+        cardDocument1.identifier,
+        cardDocument2.identifier,
+        cardDocument3.identifier,
+        cardDocument4.identifier,
+      ],
+    },
+    { status: 200 }
+  )
+);
+
+// Matches cardDocumentsTwoSources' identifier set (card1+card2 from source1, card7 from source2)
+// - used by GridSelectorModal.spec.ts's source-filter test.
+export const cardbacksTwoSources = http.post(buildRoute("2/cardbacks"), () =>
+  HttpResponse.json(
+    {
+      cardbacks: [
+        cardDocument1.identifier,
+        cardDocument2.identifier,
+        cardDocument7.identifier,
+      ],
+    },
+    { status: 200 }
+  )
+);
+
+// Matches cardDocumentsWithCanonicalCards' identifier set - used by GridSelectorModal.spec.ts's
+// CanonicalCardFilter/Printing-grouping tests.
+export const cardbacksWithCanonicalCards = http.post(
+  buildRoute("2/cardbacks"),
+  () =>
+    HttpResponse.json(
+      {
+        cardbacks: [
+          cardDocument8.identifier,
+          cardDocument9.identifier,
+          cardDocument10.identifier,
+          cardDocument11.identifier,
+        ],
+      },
+      { status: 200 }
+    )
+);
+
 //# endregion
 
 //# region search results

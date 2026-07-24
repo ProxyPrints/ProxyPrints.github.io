@@ -589,6 +589,37 @@ export const openDisplayChangeQueryModal = async (page: Page, slot: number) => {
   return page.getByTestId("change-query-modal");
 };
 
+// CardSlot cluster parity port (2026-07-24, issue #272 wave 3). Right-clicking a sheet slot opens
+// the same `card-slot-context-menu` `openDisplayChangeQueryModal` above already reaches - this is
+// the generic form, for callers that want to pick a DIFFERENT menu item (Delete/Duplicate) rather
+// than always clicking "Change Query".
+export const openDisplaySlotContextMenu = async (page: Page, slot: number) => {
+  await page
+    .getByTestId("page-preview-slot")
+    .nth(slot - 1)
+    .click({ button: "right" });
+  const menu = page.getByTestId("card-slot-context-menu");
+  await expect(menu).toBeVisible();
+  return menu;
+};
+
+// The sheet slot's own visible "..." menu cue (`page-preview-slot-menu-cue`, aria-label "Open
+// card menu", PagePreview.tsx's D22) is the direct equivalent of the classic grid's 3-dot
+// `more-select-options` button - both open the identical `card-slot-context-menu`
+// (CardSlotMenuActions.ts's shared action list, "one menu, two triggers"). Distinct from
+// openDisplaySlotContextMenu above (right-click) only in which trigger fires it - the resulting
+// menu and its items are the same either way.
+export const openDisplaySlotMenu = async (page: Page, slot: number) => {
+  await page
+    .getByTestId("page-preview-slot")
+    .nth(slot - 1)
+    .getByTestId("page-preview-slot-menu-cue")
+    .click();
+  const menu = page.getByTestId("card-slot-context-menu");
+  await expect(menu).toBeVisible();
+  return menu;
+};
+
 export const changeQueries = async (page: Page, query: string) => {
   const textField = page.getByLabel("change-selected-image-queries-text");
   await textField.clear();
@@ -752,6 +783,36 @@ export const enableDisplayFuzzySearch = async (page: Page) => {
   const settingsModal = await openDisplaySearchSettingsModal(page);
   await settingsModal.getByText("Precise Search").click();
   await settingsModal.getByRole("button", { name: "Save Changes" }).click();
+};
+
+// GridSelectorModal parity port (2026-07-24, issue #272 wave 3). The classic grid opened
+// GridSelectorModal.tsx per-SLOT, fed by that slot's own search results (openCardSlotGridSelector
+// below). Per-slot picking on the unified page goes through the rail's own Select Version section
+// instead (SelectVersionSection.spec.ts's own coverage) - a materially different component with no
+// grouping/filters-sidebar/Jump-to-Version UI of its own. The ONE GridSelectorModal instance still
+// reachable on this page is CardbackToolbarButton's project-wide cardback picker
+// (CommonCardback.tsx's `MemoizedCommonCardbackGridSelector`, testid `cardback-grid-selector`,
+// title "Select Cardback") - GridSelectorModal.tsx itself is entirely generic (a bare
+// `imageIdentifiers` array + `onClick` callback, doesn't care what the identifiers represent), so
+// every grouping/filter/keyboard/autofocus/mobile-viewport behavior this modal exposes is
+// identical regardless of which caller's identifiers feed it - this is the full-fidelity instance
+// this wave's GridSelectorModal.spec.ts/GridSelectorModalVariants.spec.ts clusters port onto.
+// Requires the right rail open first (same isVisible()-guard pattern as
+// openDisplaySearchSettingsModal). Also requires a NON-empty project already: DisplayPage.tsx's
+// own `if (isProjectEmpty) return <DeckInputLanding ... />` early-return means the toolbar/gear
+// button/right rail (and this button inside it) don't exist at all until at least one project
+// member does - callers must run an import (e.g. importTextOnEditorLanding) first, the same
+// precondition openDisplaySearchSettingsModal's own callers already carry.
+export const openDisplayCardbackGridSelector = async (page: Page) => {
+  const rail = page.getByTestId("display-print-settings-rail");
+  if (!(await rail.isVisible())) {
+    await page.getByTestId("display-gear-button").click();
+    await expect(rail).toBeVisible();
+  }
+  await rail.getByRole("button", { name: /Cardback/ }).click();
+  const gridSelector = page.getByTestId("cardback-grid-selector");
+  await expect(gridSelector).toBeVisible();
+  return gridSelector;
 };
 
 /**

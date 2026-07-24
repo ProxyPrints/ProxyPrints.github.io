@@ -6,6 +6,22 @@ matched image for a card slot, seeing them all at once in a grid
 image-loading/error states, since those apply to every card render
 across the app, not just inside this modal.
 
+**Post-route-swap reachability (2026-07-24, issue #272 parity wave 3):**
+per-slot picking on the unified `/editor` page goes entirely through the
+rail's own Select Version section below (a different component,
+`SelectVersionResults.tsx` — no modal, no grouping/filters-sidebar/Jump-to-
+Version UI of its own). `GridSelectorModal.tsx` itself has exactly one
+surviving mount post-swap: `CardbackToolbarButton`/`CommonCardback.tsx`'s
+project-wide cardback picker (testid `cardback-grid-selector`, title
+"Select Cardback"), reachable from the right rail's Cardback button once
+the project is non-empty. It's otherwise unchanged and fully generic (a
+bare `imageIdentifiers` array + `onClick` callback) — every grouping/
+filter/keyboard/mobile-viewport behavior below applies identically
+regardless of which caller's identifiers feed it. `GridSelectorModal.spec.ts`/
+`GridSelectorModalVariants.spec.ts`/`CardSlot.visual.spec.ts`'s own two
+grid-selector snapshot tests were re-ported onto this cardback mount in
+that wave — see `openDisplayCardbackGridSelector` (`frontend/tests/ test-utils.ts`) for the helper and its own comment for the full rationale.
+
 ## Frontend-polish UX pass (PR-B, 2026-07-17)
 
 Presentation/interaction fixes from the frontend-polish package's
@@ -480,17 +496,28 @@ described above.
   half of PR #325's backend contract)
 - `frontend/src/features/card/Card.tsx` (+ new `Card.test.tsx`),
   `CardSlot.tsx`
-- Tests: `frontend/tests/GridSelectorModalVariants.spec.ts` (keyboard nav
-  - a large-grid focus-perf check, autofocus fallback, mobile filters
-    default — merged from the former `GridSelectorModalAccessibility.spec.ts`
-    and `GridSelectorModalMobile.spec.ts`), `frontend/tests/CardImageStates.spec.ts`
-    (error placeholder + slow-load hint), `frontend/tests/SelectVersionSection.spec.ts`
-    (grouping/ordering, moment (a)/(b)/(c) behavior on the sidebar layout — issue
-    #167 — plus the funnel's implicit-cast/reset/ack and retract-on-reselect
-    end-to-end flows), `frontend/src/features/gridSelector/SelectVersionResults.test.tsx`
-    (axis exclusivity, membership-driven axis rendering, disclosure tiers,
-    SUGGESTED-chip rendering, F5 votes-off completeness), `frontend/tests/ DisplayPage.spec.ts` (F6: right-click + the `⋯` cue opening the shared
-    context menu on the center sheet)
+- Tests: `frontend/tests/GridSelectorModal.spec.ts` (23 tests) +
+  `GridSelectorModalVariants.spec.ts` (7 tests: keyboard nav, a large-grid
+  focus-perf check, autofocus fallback, mobile filters default — merged
+  from the former `GridSelectorModalAccessibility.spec.ts` and
+  `GridSelectorModalMobile.spec.ts`) — parity wave 3 (2026-07-24, issue
+  #272) ported both onto the cardback mount (see the "Post-route-swap
+  reachability" note above); `frontend/tests/CardSlot.spec.ts` (15 of 25
+  tests ported the same wave — delete/duplicate/change-query/context-menu/
+  auto-select coverage against the sheet's own slots, `page-preview-slot` +
+  `page-preview-slot-menu-cue`; see this doc's own "Known gaps" for what
+  wasn't ported) and its `visual/CardSlot.visual.spec.ts` companion (2 of 6
+  aria-snapshot tests ported, retargeted onto the cardback mount, regex-
+  tolerant on a handful of pre-existing third-party icon-font/tree-select
+  rendering leaves — see that file's own module comment),
+  `frontend/tests/CardImageStates.spec.ts`
+  (error placeholder + slow-load hint), `frontend/tests/SelectVersionSection.spec.ts`
+  (grouping/ordering, moment (a)/(b)/(c) behavior on the sidebar layout — issue
+  #167 — plus the funnel's implicit-cast/reset/ack and retract-on-reselect
+  end-to-end flows), `frontend/src/features/gridSelector/SelectVersionResults.test.tsx`
+  (axis exclusivity, membership-driven axis rendering, disclosure tiers,
+  SUGGESTED-chip rendering, F5 votes-off completeness), `frontend/tests/ DisplayPage.spec.ts` (F6: right-click + the `⋯` cue opening the shared
+  context menu on the center sheet)
 
 ## Known gaps
 
@@ -509,3 +536,18 @@ described above.
   caller specifically; `GridSelectorModal.tsx`'s own sidebar layout is
   unchanged, so this is a rail-only fix, not a change to the shared
   column-breakpoint default itself).
+- **Per-slot next/prev image-cycling has no unified-page equivalent**
+  (found 2026-07-24, issue #272 parity wave 3). The classic grid's inline
+  ❯/❮ arrows (`CardSlot.tsx`) let a user cycle a slot's selected image one
+  step at a time, with wrap-around; the sheet's Select Version section is
+  a browse-and-click surface only — no "next"/"previous" concept at all.
+  `CardSlot.spec.ts`'s 3 cycling tests were dropped, not ported, for this
+  reason (see that file's own module comment). Not tracked against any
+  numbered gap in issue #272's own checklist — a new finding, flagged for
+  the owner alongside this same wave's `card-dom-api.md` gap below.
+- **`docs/features/card-dom-api.md`'s DOM API contract (`data-card-*`/
+  `mpc:card-selected`) is unimplemented on the sheet's own placed-card
+  slots** (found 2026-07-24, same wave) — see that doc's own "Known gap"
+  entry for the full detail; cross-referenced here since the dropped test
+  that surfaced it ("selecting an image in a CardSlot via the grid
+  selector") lives in this feature's own `CardSlot.spec.ts`.
