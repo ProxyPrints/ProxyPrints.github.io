@@ -291,9 +291,13 @@ class TestPilotRunLedger:
             "lockout_hit": False,
             "rss_limit_hit": False,
             "elapsed_s": ledger.counters["elapsed_s"],  # timing - only its presence/type matters
+            # peak_rss_mb (2026-07-24, stage-e-streaming.md §3 decision (6)) - a real /proc read on
+            # this (Linux, containerized) test host, so only its presence/type matters here too.
+            "peak_rss_mb": ledger.counters["peak_rss_mb"],
             "scope": ledger.counters["scope"],  # opaque hash - see TestDryRunGuard below
         }
         assert isinstance(ledger.counters["elapsed_s"], float)
+        assert ledger.counters["peak_rss_mb"] is None or isinstance(ledger.counters["peak_rss_mb"], float)
 
     @pytest.mark.django_db(transaction=True)
     def test_dry_run_flag_is_recorded_on_the_ledger(
@@ -391,8 +395,10 @@ class TestPilotRunLedger:
             "short_circuited": 0,
             "lockout_hit": False,
             "rss_limit_hit": False,
+            "peak_rss_mb": ledger.counters["peak_rss_mb"],  # opaque - see TestPilotRunLedger above
             "scope": ledger.counters["scope"],  # opaque hash - see TestDryRunGuard below
         }
+        assert ledger.counters["peak_rss_mb"] is None or isinstance(ledger.counters["peak_rss_mb"], float)
 
     @pytest.mark.django_db(transaction=True)
     def test_max_rss_mb_exceeded_marks_ledger_completed_not_failed(
@@ -463,6 +469,14 @@ class TestPilotRunLedger:
         # counters (cohort_size etc.) were ever computed, since the crash hit before _run_cohort
         # returned.
         assert "cohort_size" not in (ledger.counters or {})
+        # 2026-07-24 (stage-e-streaming.md §3 decision (6), the "empty-failed-row" gap -
+        # mark_ledger_failed's own docstring): a died-before-first-flush run still leaves an
+        # honest, triage-able failure_reason alongside whatever creation-time counters (scope)
+        # already existed - never an empty/silent dict.
+        assert ledger.counters is not None
+        assert "RuntimeError" in ledger.counters["failure_reason"]
+        assert "boom - simulated mid-run crash" in ledger.counters["failure_reason"]
+        assert ledger.counters["scope"]  # creation-time scope metadata survives the merge
 
 
 class TestFetchOneCard:
@@ -763,7 +777,14 @@ class TestRunCohortProfileOutput:
         monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_with_profile)
 
         profile_file = io.StringIO()
-        completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit = cohort_command._run_cohort(
+        (
+            completed,
+            fetch_failures,
+            lockout_hit,
+            short_circuited,
+            rss_limit_hit,
+            _peak_rss_mb,
+        ) = cohort_command._run_cohort(
             cohort_ids=[1, 2, 3],
             fetch_threads=2,
             workers=1,

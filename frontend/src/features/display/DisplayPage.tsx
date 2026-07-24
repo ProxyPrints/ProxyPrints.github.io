@@ -265,6 +265,7 @@ import {
   buildScryfallReferenceUrl,
 } from "@/features/display/scryfallReference";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
+import { SlotCardbackControl } from "@/features/display/SlotCardbackControl";
 import { SourcesAccordion } from "@/features/display/SourcesAccordion";
 import {
   ProjectDraftSummary,
@@ -1850,6 +1851,9 @@ const Rail = ({
       : undefined
   );
   const query = projectMember?.query;
+  // Cardback flow round (SPEC-cardback-pdfwait.md §C.2) - the deck's own project cardback,
+  // needed by SlotCardbackControl below to tell "follows the deck" from "custom for this slot".
+  const projectCardback = useAppSelector(selectProjectCardback);
 
   // EP6 - the OTHER face's own ProjectMember (Front/Back are separate slots in this app's data
   // model, not two sides of one card - see RailHeader's own module comment). Always computed
@@ -1912,6 +1916,12 @@ const Rail = ({
         }
       : null;
 
+  // Cardback flow round (SPEC-cardback-pdfwait.md §C.2, `PKG1b` rail entry) - the slot's own back
+  // face, regardless of which face is currently selected for editing (`selectedSlotRef.face` can
+  // be either Front or Back - the cardback control always concerns the Back one specifically).
+  const backProjectMember =
+    selectedSlotRef.face === Back ? projectMember : otherProjectMember;
+
   return (
     <RailRoot data-testid="display-rail-content">
       <RailHeader
@@ -1927,6 +1937,25 @@ const Rail = ({
         compareOpen={compareOpen}
         comparePrinting={comparePrinting}
       />
+      <div className="railsec">
+        <div
+          className="lg"
+          style={{
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            color: "#8fa0b0",
+            marginBottom: 5,
+          }}
+        >
+          Cardback (this slot)
+        </div>
+        <SlotCardbackControl
+          slot={selectedSlotRef.slot}
+          backImage={backProjectMember?.selectedImage}
+          projectCardback={projectCardback}
+        />
+      </div>
       {/* E2 (#2/#3) - the promoted, always-visible zone: D14 confidence element + "More details"
           (amendment 1) + the identify panel that hangs off it (item 6) + artist support line,
           none of which are collapsible accordion sections (D3). Fix round
@@ -2326,6 +2355,14 @@ export function DisplayPage() {
             flippable:
               entry.member.front?.selectedImage != null ||
               entry.member.back?.selectedImage != null,
+            // Cardback flow round (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3) - same gating as
+            // `flippable` itself (card-holding cells only): a real back selection that differs
+            // from the deck's own project cardback. `projectCardback == null` (nothing chosen
+            // yet at all) means there is nothing to be "different" FROM.
+            hasCustomCardback:
+              projectCardback != null &&
+              entry.member.back?.selectedImage != null &&
+              entry.member.back.selectedImage !== projectCardback,
           };
           return content;
         }),
@@ -2336,6 +2373,7 @@ export function DisplayPage() {
       cardDocumentsByIdentifier,
       searchResultsLoading,
       flippedPreviewSlots,
+      projectCardback,
     ]
   );
 

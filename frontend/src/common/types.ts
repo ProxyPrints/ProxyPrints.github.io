@@ -163,6 +163,17 @@ export type Project = {
    * exactly; an entry is only ever present for a non-"auto" choice - see projectSlice's
    * `setManualOverride`. */
   manualOverrides: { [identifier: string]: ManualOverride };
+  /** Cardback flow round (SPEC-cardback-pdfwait.md §C.1, Annex A-1) - whether the user has ever
+   * explicitly chosen a project cardback this project (toolbar/rail "Apply to all"/the reminder
+   * gate's own "Choose a cardback" all count - anything that dispatches `setSelectedCardback`
+   * with a real image), as distinct from `cardback` simply being non-null. Null-ness alone can't
+   * carry this distinction once a real site-default seed exists (Annex A-1's own note: "a
+   * default always resolves a non-null projectCardback"); today, with no seed wired up yet, this
+   * collapses to "has `cardback` ever been set", but the flag is tracked as its own field so the
+   * `usePrePrintSaveGate`/reminder-gate fire condition (`ridingUntouchedDefault`) doesn't need to
+   * change again once Annex A-1's seed lands. Optional (not every existing `Project`-shaped
+   * fixture/test object sets it) - `undefined` reads as `false` everywhere this is consulted. */
+  cardbackExplicitlySet?: boolean;
 };
 
 export interface DFCPairs {

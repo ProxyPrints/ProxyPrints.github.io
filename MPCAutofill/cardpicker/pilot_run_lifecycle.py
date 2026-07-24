@@ -35,6 +35,19 @@ retract_stage_d_by_run_id, run_image_evidence_cohort, consensus_recompute). Thre
    flag pair, so every command's own `--help` text carries identical wording rather than five
    near-duplicate copies.
 
+4. `mark_ledger_failed` - the shared FAILED-transition rail (docs/proposals/stage-e-streaming.md
+   §3 decision (6)/§10, the "empty-failed-row gap" this brief's own live-DB verification pass
+   found: `PilotRunLedger` id 71, `run_id=rescan-wave1-20260724`, persisted `status=failed` with
+   an empty `counters` dict and no error detail - untriage-able at the granularity a streaming
+   daemon issuing many small jobs per hour needs). Every one of the five commands this module's
+   own docstring names (local_calculate_verdicts, reparse_collector_evidence,
+   retract_stage_d_by_run_id, run_image_evidence_cohort, consensus_recompute) previously
+   duplicated the exact same `except Exception: if ledger.status == RUNNING: ... FAILED ...`
+   five-line block with no `failure_reason` recorded anywhere - collapsed here into one call site,
+   and extended to always attach `counters["failure_reason"]` (the exception's type + message) to
+   whatever counters already existed (e.g. `scope`) at the moment of failure, so a run that dies
+   before its first flush still leaves an honest, triage-able row rather than a silent blank one.
+
 SCOPE COMPATIBILITY is intentionally NOT one-size-fits-all: `command` name match is the mandatory
 floor (a `reparse_collector_evidence` dry-run can never satisfy `retract_stage_d_by_run_id`'s own
 guard - they're always filtered by `command=` first), and each command computes its OWN `scope`
@@ -208,3 +221,42 @@ def merge_counters(existing: Optional[dict[str, Any]], extra: dict[str, Any]) ->
     merged = dict(existing or {})
     merged.update(extra)
     return merged
+
+
+# Truncated so one enormous exception message/traceback repr can never make a ledger row's own
+# counters JSON payload unreasonably large - a triage-relevant identifying prefix survives either
+# way, and the full traceback is already in the command's own stderr/logs.
+_FAILURE_REASON_MAX_LEN = 2000
+
+
+def mark_ledger_failed(ledger: PilotRunLedger, exc: BaseException) -> None:
+    """
+    Shared FAILED-transition rail (module docstring point 4, docs/proposals/stage-e-streaming.md
+    §3 decision (6)/§10(a-d)'s cited observability gap) - call this from a command's own
+    `except Exception as exc:` handler, in place of the five-line "only a still-RUNNING row gets
+    marked FAILED" block every long-running pilot command previously duplicated.
+
+    A no-op (returns without writing) when `ledger.status` is not RUNNING - matching every
+    existing call site's own reasoning: a run this invocation already marked COMPLETED (e.g. the
+    counters-before-output pattern, `resilient_terminal_output`'s own module docstring point 1)
+    must never be overwritten by a LATER exception (a severed stdout on the terminal summary
+    print, if `resilient_terminal_output` didn't already swallow it) - the run genuinely
+    completed, and its ledger row should keep saying so.
+
+    Otherwise: sets status=FAILED, finished_at=now, and merges
+    `counters["failure_reason"] = "<ExceptionType>: <message>"` (truncated, see
+    `_FAILURE_REASON_MAX_LEN`) onto whatever counters already existed at creation time (`scope`,
+    `skip_dryrun_check_used`) via `merge_counters` - never clobbering them. This is the fix for
+    the "empty-failed-row" gap: a run that crashes before its first flush/completion save
+    previously left a FAILED row with no error detail at all (PilotRunLedger id 71,
+    `run_id=rescan-wave1-20260724`, see this module's own docstring) - now every FAILED row
+    carries at least a triage-able reason string, even when nothing else about the run's own
+    counters was ever computed.
+    """
+    if ledger.status != PilotRunLedger.Status.RUNNING:
+        return
+    reason = f"{type(exc).__name__}: {exc}"[:_FAILURE_REASON_MAX_LEN]
+    ledger.status = PilotRunLedger.Status.FAILED
+    ledger.finished_at = timezone.now()
+    ledger.counters = merge_counters(ledger.counters, {"failure_reason": reason})
+    ledger.save(update_fields=["status", "finished_at", "counters"])

@@ -36,6 +36,7 @@ const initialState: Project = {
   cardback: null,
   mostRecentlySelectedSlot: null,
   manualOverrides: {},
+  cardbackExplicitlySet: false,
 };
 
 export const projectSlice = createAppSlice({
@@ -142,9 +143,50 @@ export const projectSlice = createAppSlice({
     },
     setSelectedCardback: (
       state,
-      action: PayloadAction<{ selectedImage: string | null }>
+      action: PayloadAction<{
+        selectedImage: string | null;
+        /** Cardback flow round (SPEC-cardback-pdfwait.md §C.1, Annex A-1) - true only when a
+         * real user action chose this image (the toolbar/rail pickers, the reminder gate's own
+         * "Choose a cardback", an XML import's own opted-in `useXMLCardback`). `listenerMiddleware
+         * .ts`'s own auto-seed-a-cardback-once-the-catalog-loads effect deliberately omits this
+         * (defaults `false`) - that's a passive fallback landing in an empty `cardback` slot, not
+         * a user "choosing" anything, so it must NOT flip `cardbackExplicitlySet` or the reminder
+         * gate would never fire for a brand-new project. */
+        explicit?: boolean;
+      }>
     ) => {
       state.cardback = action.payload.selectedImage;
+      // Any real, explicit pick flips this permanently true for the project's lifetime (never
+      // reset back to false by a later clear) - "never chose" only describes a project that has
+      // NEVER dispatched this reducer with `explicit: true`.
+      if (action.payload.selectedImage != null && action.payload.explicit) {
+        state.cardbackExplicitlySet = true;
+      }
+    },
+    /**
+     * Cardback flow round (SPEC-cardback-pdfwait.md §C.2, OWNER AMENDMENT 2/OQ-B) - the
+     * toolbar/project-wide "Apply to all card backs" action. Unlike `bulkReplaceSelectedImage`
+     * (which only touches slots CURRENTLY carrying the old project cardback), this overrides
+     * EVERY slot's back face unconditionally - including ones a user deliberately gave a
+     * different, custom back - per the owner's override-with-count ruling. Never fires on its
+     * own; only ever dispatched from the apply-all prompt's own explicit, never-pre-checked
+     * button.
+     */
+    applyCardbackToAllSlots: (
+      state,
+      action: PayloadAction<{ selectedImage: string }>
+    ) => {
+      for (const member of state.members) {
+        if (member[Back] == null) {
+          member[Back] = {
+            query: { query: null, cardType: Cardback },
+            selectedImage: action.payload.selectedImage,
+            selected: false,
+          };
+        } else {
+          member[Back]!.selectedImage = action.payload.selectedImage;
+        }
+      }
     },
     /**
      * ProjectMaxSize (612 cards at time of writing) is primarily enforced at this layer.
@@ -380,6 +422,8 @@ export const projectSlice = createAppSlice({
       state.cardback = action.payload.cardback;
       state.manualOverrides = action.payload.manualOverrides;
       state.mostRecentlySelectedSlot = null;
+      state.cardbackExplicitlySet =
+        action.payload.cardbackExplicitlySet ?? action.payload.cardback != null;
     },
   },
 });
@@ -390,6 +434,7 @@ export const {
   setQueries,
   clearQueries,
   setSelectedCardback,
+  applyCardbackToAllSlots,
   addMembers,
   toggleMemberSelection,
   expandSelection,
@@ -643,6 +688,20 @@ export const selectAnySelectedImagesFilteredOnPrinting = createSelector(
 
 export const selectProjectCardback = (state: RootState): string | undefined =>
   state.project.cardback ?? undefined;
+
+/** Cardback flow round (SPEC-cardback-pdfwait.md §C.1, Annex A-1) - see the `Project` type's own
+ * `cardbackExplicitlySet` field comment for what this does and doesn't distinguish today. */
+export const selectIsCardbackExplicitlySet = (state: RootState): boolean =>
+  state.project.cardbackExplicitlySet ?? false;
+
+/** Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate's own fire condition:
+ * true only while the project cardback is still whatever it started as AND the user has never
+ * explicitly picked one this project (Annex A-1's "chose the default" vs. "never chose" split -
+ * see `cardbackExplicitlySet`'s own comment for why null-ness alone can't carry this once a real
+ * site-default seed exists). */
+export const selectIsRidingUntouchedDefaultCardback = (
+  state: RootState
+): boolean => !selectIsCardbackExplicitlySet(state);
 
 export const selectManualOverrides = (
   state: RootState

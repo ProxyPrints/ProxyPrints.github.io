@@ -260,7 +260,12 @@ export function ImportXML({ onImportComplete }: ImportXMLProps) {
     // useXMLCardback only ever governed each backless front's OWN per-slot fallback, never this
     // project-wide setting) which this fix must not regress.
     if (useXMLCardback && cardback != null && projectCardback == null) {
-      dispatch(setSelectedCardback({ selectedImage: cardback }));
+      // Cardback flow round (SPEC-cardback-pdfwait.md Annex A-1) - a deliberate opt-in
+      // (useXMLCardback), so this counts as an explicit choice for the reminder-gate's own
+      // "never chose" tracking, same as a real toolbar/rail pick.
+      dispatch(
+        setSelectedCardback({ selectedImage: cardback, explicit: true })
+      );
     }
 
     if (

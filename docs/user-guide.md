@@ -136,10 +136,38 @@ cloud-download counter beside it (nav+footer redesign, 2026-07-22 - this
 used to sit in the top navbar; it now lives next to the exports it counts,
 here and again on the Print page). Your project is
 also quietly backed up to this browser as you work — a small "Draft
-backed up locally" note under the buttons confirms it — and pressing
-**Print / Export →** while signed in with unsaved changes offers to save
-your deck first, since the print/PDF step can use a lot of your
-browser's memory and you don't want to lose your work if it struggles.
+backed up locally" note under the buttons confirms it.
+
+Pressing **Print / Export →** first checks whether your deck is still
+riding the site's default cardback and, if so, asks once: **Choose a
+cardback** (opens the same picker described below) or **Use current &
+continue** — dismissing the prompt any other way (✕, Esc, clicking
+outside it) is treated the same as **Use current & continue**, not as a
+cancel, so it never blocks you from printing. It only asks once per
+print session either way. Only after that does it (while signed in with
+unsaved changes) offer to save your deck first, since the print/PDF step
+can use a lot of your browser's memory and you don't want to lose your
+work if it struggles.
+
+**Choosing a cardback**: the toolbar's **Cardback** button picks one for
+the whole project — the picker also offers to **Apply to all card
+backs** (this also overwrites any individual slot you'd already given a
+different, custom back — the count and thumbnails make that explicit
+before you tap it) and to **Set as my default cardback** for future
+projects, both optional and never pre-selected for you. Picking a back
+for a single card instead (the slot's own "Choose a different back…"
+control) never touches any other slot unless you separately opt in to
+its own "Apply to all" — and a slot with a custom back gets a small dot
+on its own flip (⟲) icon on the print sheet, so you can spot which cards
+diverge from the deck default at a glance.
+
+**While your PDF builds**, the Print page shows a real progress bar
+(fetching your images, then laying out/encoding the file) and, beside
+it, an embedded round of **What's That Card?** so waiting on a big
+export isn't dead time — answering (or skipping) a card there is
+optional and never blocks the export. Once the PDF is ready, the game
+is replaced by a one-time nudge pointing you at the full **What's That
+Card?** page if you'd like to keep going.
 
 ## Saving and re-using a project
 

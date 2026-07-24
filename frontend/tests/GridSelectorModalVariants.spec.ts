@@ -40,7 +40,7 @@ const threeCardHandlers = [
 ];
 
 test.describe("GridSelectorModal - keyboard navigation", () => {
-  test("Tab reaches a result card and Enter selects it, same as a click would", async ({
+  test("Tab reaches a result card and Enter selects it, same as a click would (cardback flow round: the modal now stays open with the apply/default prompt)", async ({
     page,
     network,
   }) => {
@@ -56,7 +56,12 @@ test.describe("GridSelectorModal - keyboard navigation", () => {
     await expect(targetCard).toBeFocused();
     await page.keyboard.press("Enter");
 
-    await expect(gridSelector).not.toBeVisible();
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.2) - the toolbar entry's pick no longer
+    // auto-closes the modal (the apply-all/set-default prompt renders inline in this SAME modal
+    // instead), so a keyboard-driven select is confirmed the same way a click-driven one now is.
+    await expect(
+      gridSelector.getByTestId("cardback-apply-prompt")
+    ).toBeVisible();
   });
 });
 

@@ -165,6 +165,17 @@ docstrings require every caller to treat it - this command sets a stop flag (a `
 see point 2 above) the moment one is observed in the fetch stage and lets already in-flight work
 drain, rather than continuing to submit new fetch work into a destination that has already locked
 us out.
+
+**LEDGER RSS OBSERVABILITY (2026-07-24, docs/proposals/stage-e-streaming.md §3 decision (6)/§1)**:
+this command's own `_get_rss_mb` (2026-07-22) already logged RSS to stdout on every progress line,
+but never durably - the brief's own live-`PilotRunLedger` verification pass found the task brief's
+"flat ~190MB RSS" wave-1 claim unverifiable against anything, since nothing recorded RSS onto a
+ledger row. `_CohortStats.peak_rss_mb` now tracks the running max of the same samples the progress
+line already takes (no extra `/proc` reads), and `handle()` writes it onto
+`ledger.counters["peak_rss_mb"]` alongside the run's other completion counters, closing that gap
+for this command. `PilotRunLedger.counters` (a `JSONField`) is extended, not migrated - per the
+brief's own recommendation to prefer the existing free-form counters convention over a schema
+change where the data fits.
 """
 
 import json
@@ -194,6 +205,7 @@ from cardpicker.pilot_run_lifecycle import (
     add_dry_run_guard_arguments,
     enforce_dry_run_precondition,
     initial_counters,
+    mark_ledger_failed,
     merge_counters,
     resilient_terminal_output,
     scope_hash,
@@ -441,6 +453,14 @@ class _CohortStats:
         # data rather than only the 20k-cohort's retrospective estimate.
         self.short_circuited = 0
         self.rss_limit_hit = False
+        # peak parent-process RSS observed across this run's own progress-line samples (2026-07-24,
+        # docs/proposals/stage-e-streaming.md §3 decision (6)/§1's own "this is a real observability
+        # gap" finding - the "flat ~190MB RSS" claim in wave-1's task brief could not be verified
+        # against PilotRunLedger.counters because nothing recorded it durably). Sampled at the same
+        # PROGRESS_EVERY cadence _get_rss_mb already logs at below - no extra /proc reads, just a
+        # running max of a value already being read. None until the first sample lands (mirrors
+        # _get_rss_mb's own "None means unavailable/not yet known" convention).
+        self.peak_rss_mb: Optional[float] = None
         self._run_start = time.monotonic()
 
     def record(self, outcome: str, short_circuited: bool = False) -> None:
@@ -461,6 +481,9 @@ class _CohortStats:
         if completed % PROGRESS_EVERY == 0 or completed == self._total:
             rate = completed / elapsed if elapsed > 0 else 0.0
             rss_mb = _get_rss_mb()
+            if rss_mb is not None:
+                with self._lock:
+                    self.peak_rss_mb = rss_mb if self.peak_rss_mb is None else max(self.peak_rss_mb, rss_mb)
             rss_display = f"{rss_mb:.0f}" if rss_mb is not None else "?"
             self._stdout_write(
                 f"[{completed}/{self._total}] elapsed={elapsed:.0f}s rate={rate:.3f}/s "
@@ -496,7 +519,7 @@ def _run_cohort(
     short_circuit: Optional[bool] = None,
     max_rss_mb: Optional[float] = None,
     known_set_codes: Optional[frozenset[str]] = None,
-) -> tuple[int, int, bool, int, bool]:
+) -> tuple[int, int, bool, int, bool, Optional[float]]:
     """
     The decoupled fetch/compute driver itself. Two concurrent executors:
 
@@ -540,10 +563,12 @@ def _run_cohort(
     below and forwarded to every `_compute_one_card` submission - see that function's own
     docstring and `compute_card_evidence`'s own docstring for the mechanism this controls.
 
-    Returns `(completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit)` - the same
-    three figures the old single-loop design printed in its final summary line, plus the
-    short-circuit counter (item 1's own "count it during the real run" ask) and the new RSS-limit
-    flag.
+    Returns `(completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit, peak_rss_mb)`
+    - the same three figures the old single-loop design printed in its final summary line, plus the
+    short-circuit counter (item 1's own "count it during the real run" ask), the RSS-limit flag, and
+    (2026-07-24, docs/proposals/stage-e-streaming.md §3 decision (6)) the peak parent-process RSS
+    sampled across the run - `_CohortStats.peak_rss_mb`'s own final value, `None` iff `/proc/self/
+    status` was never readable for the whole run (matches `_get_rss_mb`'s own convention).
     """
     stop_event = threading.Event()
     stats = _CohortStats(total=len(cohort_ids), stdout_write=stdout_write, stop_event=stop_event, max_rss_mb=max_rss_mb)
@@ -620,7 +645,14 @@ def _run_cohort(
         while pending:
             _drain_one_pending()
 
-    return stats.completed, stats.fetch_failures, stop_event.is_set(), stats.short_circuited, stats.rss_limit_hit
+    return (
+        stats.completed,
+        stats.fetch_failures,
+        stop_event.is_set(),
+        stats.short_circuited,
+        stats.rss_limit_hit,
+        stats.peak_rss_mb,
+    )
 
 
 class Command(BaseCommand):
@@ -891,6 +923,11 @@ class Command(BaseCommand):
                         "short_circuited": 0,
                         "lockout_hit": False,
                         "rss_limit_hit": False,
+                        # 2026-07-24 (stage-e-streaming.md §3 decision (6)): a single point sample -
+                        # there was no batch to sample a peak across, but recording SOMETHING here
+                        # keeps this counters shape uniform with the real-cohort path below rather
+                        # than silently omitting the key for the empty case.
+                        "peak_rss_mb": _get_rss_mb(),
                     },
                 )
                 ledger.save(update_fields=["status", "finished_at", "counters"])
@@ -917,7 +954,7 @@ class Command(BaseCommand):
 
             run_start = time.monotonic()
             try:
-                completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit = _run_cohort(
+                completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit, peak_rss_mb = _run_cohort(
                     cohort_ids=cohort_ids,
                     fetch_threads=fetch_threads,
                     workers=workers,
@@ -938,6 +975,13 @@ class Command(BaseCommand):
             elapsed = time.monotonic() - run_start
             rate = completed / elapsed if elapsed > 0 else 0.0
             final_rss_mb = _get_rss_mb()
+            # A tiny cohort (fewer cards than PROGRESS_EVERY) never trips _CohortStats.record's own
+            # sampling cadence, so peak_rss_mb could still be None even though _get_rss_mb itself
+            # works fine on this host - fold in this post-run sample too, so "no peak recorded" only
+            # ever means "/proc/self/status was genuinely unreadable for this whole run", matching
+            # _get_rss_mb's own documented None convention, not "the cohort happened to be small".
+            if final_rss_mb is not None:
+                peak_rss_mb = final_rss_mb if peak_rss_mb is None else max(peak_rss_mb, final_rss_mb)
 
             # Counters-before-output (production incident 2026-07-23, see
             # cardpicker.pilot_run_lifecycle's own module docstring point 1): the ledger row is
@@ -959,6 +1003,7 @@ class Command(BaseCommand):
                     "lockout_hit": lockout_hit,
                     "rss_limit_hit": rss_limit_hit,
                     "elapsed_s": round(elapsed, 1),
+                    "peak_rss_mb": peak_rss_mb,
                 },
             )
             ledger.save(update_fields=["status", "finished_at", "counters"])
@@ -968,7 +1013,8 @@ class Command(BaseCommand):
                     f"DONE run_id={run_id} completed={completed}/{len(cohort_ids)} elapsed={elapsed:.0f}s "
                     f"rate={rate:.3f}/s fetch_failures={fetch_failures} lockout_hit={lockout_hit} "
                     f"short_circuited={short_circuited} rss_limit_hit={rss_limit_hit} "
-                    f"rss_mb={f'{final_rss_mb:.0f}' if final_rss_mb is not None else '?'}"
+                    f"rss_mb={f'{final_rss_mb:.0f}' if final_rss_mb is not None else '?'} "
+                    f"peak_rss_mb={f'{peak_rss_mb:.0f}' if peak_rss_mb is not None else '?'}"
                 )
 
             if rss_limit_hit:
@@ -981,14 +1027,16 @@ class Command(BaseCommand):
                     f"completed={completed}/{len(cohort_ids)}; re-invoke the same command to resume "
                     "(the resume filter skips everything already fully processed)."
                 )
-        except Exception:
-            # Only a genuine mid-run failure (an exception raised while the ledger row is still
-            # RUNNING) gets marked FAILED here - the --max-rss-mb CommandError above already moved
-            # the row to COMPLETED with its counters filled in before raising, so this is a no-op
-            # for that path (matching local_calculate_verdicts's own try/except FAILED convention,
-            # scoped to not overwrite a completion this run genuinely reached).
-            if ledger.status == PilotRunLedger.Status.RUNNING:
-                ledger.status = PilotRunLedger.Status.FAILED
-                ledger.finished_at = timezone.now()
-                ledger.save(update_fields=["status", "finished_at"])
+        except Exception as exc:
+            # Shared FAILED-transition rail (cardpicker.pilot_run_lifecycle.mark_ledger_failed,
+            # docs/proposals/stage-e-streaming.md §3 decision (6)/§10) - a no-op for a genuine
+            # mid-run failure ONLY when the ledger row is still RUNNING; the --max-rss-mb
+            # CommandError above already moved the row to COMPLETED with its counters filled in
+            # before raising, so this call is a no-op for that path (matching
+            # local_calculate_verdicts's own convention, scoped to not overwrite a completion this
+            # run genuinely reached). When it DOES apply, records a triage-able
+            # counters["failure_reason"] alongside FAILED, closing the "empty-failed-row" gap
+            # (PilotRunLedger id 71, `run_id=rescan-wave1-20260724`) mark_ledger_failed's own
+            # docstring cites.
+            mark_ledger_failed(ledger, exc)
             raise
