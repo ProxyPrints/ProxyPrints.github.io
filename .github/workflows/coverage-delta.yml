@@ -1,0 +1,60 @@
+name: Playwright coverage delta
+
+# Issue #415, incident #389: the /editor route swap (PR #389, 2026-07-23)
+# skipped ~190 Playwright tests in one commit and CI stayed green - nothing
+# checked test INVENTORY across a diff, only whether the tests that still
+# ran still passed. This is a pure static-source check (no browser, no
+# `npm ci` - stdlib Python 3 only): parses frontend/tests/**/*.spec.ts test
+# titles + skip state at head and at the PR's merge-base
+# (.github/scripts/coverage_delta.py), and fails when a title present at
+# base is gone or newly skipped at head - UNLESS .github/coverage-acks.txt
+# carries a matching "coverage-ack: <id/glob> — <reason>" line (same
+# tether-discipline shape as docs_lint.py's ALLOWLIST). New tests and
+# un-skipping are always fine and never flagged.
+#
+# Runs on every pull_request (no path filter): the gate's whole reason for
+# existing is to catch a test-inventory change that's easy to miss amid an
+# otherwise-unrelated-looking diff, so gating its own trigger behind a path
+# filter would reintroduce the exact class of blind spot it's meant to
+# close. It's pure stdlib Python with no install step, so the always-run
+# cost is low.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage-delta-rules:
+    name: coverage_delta.py parser + diff unit tests
+    # Fixture + real-repo tests for the parser and diff/ack logic - proves
+    # the rules themselves behave, independent of any particular PR's diff.
+    # Mirrors docs-lint.yml's "lint" / "docs-lint-rules" job split.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run coverage_delta.py unit tests
+        run: python3 .github/scripts/tests/test_coverage_delta.py
+
+  coverage-delta:
+    name: Coverage delta vs. base ref
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so `git merge-base` can find the PR's actual base
+          # commit regardless of default shallow-clone depth.
+          fetch-depth: 0
+      - name: Run coverage-delta gate
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$PR_BASE_SHA" ]; then
+            python3 .github/scripts/coverage_delta.py --base "$PR_BASE_SHA"
+          else
+            # workflow_dispatch or any non-PR trigger - fall back to the
+            # script's own default (origin/master).
+            python3 .github/scripts/coverage_delta.py
+          fi
