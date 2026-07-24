@@ -89,6 +89,13 @@ PRINTING_TAG_IMPLICIT_WEIGHT = env.float("PRINTING_TAG_IMPLICIT_WEIGHT", default
 # ratified 2026-07-22 vote-weight scenario matrix, decision D5/S3). See
 # cardpicker.vote_consensus.resolve_weighted_consensus's own docstring for the full mechanism.
 PRINTING_TAG_IMPLICIT_CAP = env.float("PRINTING_TAG_IMPLICIT_CAP", default=1.0)
+# Floor share of served `2/questionFeed/` questions that must come from the "likely-resolve"
+# pool (a question one more agreeing human vote would actually resolve, per the real
+# `resolve_weighted_consensus` - see cardpicker.question_feed.is_likely_resolve_printing) when
+# that pool has supply, per the 2026-07-24 data brief's owner-ratified prioritization ruling.
+# Selection-layer only - this setting is never read by vote_consensus.py and changes no vote's
+# weight/threshold/gate. See docs/features/printing-tags.md's "Unified question feed" section.
+QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO = env.float("QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO", default=0.51)
 # django-ratelimit rate string (see cardpicker.views.post_submit_printing_tag), keyed by the
 # client-generated anonymous ID (IP as a fallback if that header is somehow missing). Shared
 # across printing-tag/artist-vote/tag-vote submission (_printing_tag_rate_limit_key/_rate are
