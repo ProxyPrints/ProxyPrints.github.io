@@ -223,9 +223,12 @@ test.describe("PDFGenerator - export image-fetch progress (rate-limit fix)", () 
         await expect(page.getByTestId("pdf-image-fetch-progress")).toBeVisible({
           timeout: 15_000,
         });
+        // PDF-generation wait experience round (SPEC-cardback-pdfwait.md §D.1, PKG2a) - the old
+        // bare "Fetching images: N/M" text line is now a real Bootstrap ProgressBar's own label
+        // (PDFWaitPanel.tsx's PDFProgressBox); same testid, new copy.
         await expect(
           page.getByTestId("pdf-image-fetch-progress")
-        ).toContainText("Fetching images:");
+        ).toContainText("Fetching images");
       })(),
     ]);
     expect(download.suggestedFilename()).toBe("cards.pdf");

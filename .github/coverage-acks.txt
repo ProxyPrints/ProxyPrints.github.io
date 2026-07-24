@@ -52,3 +52,11 @@ coverage-ack: frontend/tests/ProjectEditorMobileScroll.spec.ts::* — owner-rule
 # PR #337 established for this file's title staleness pattern. The new title carries the
 # unchanged behavior forward (un-skipped, not removed) at a new, non-stale title.
 coverage-ack: frontend/tests/PostExportContributionPrompt.spec.ts::Post-export contribution prompt (issue #166) - classic Print! tab > also appears after a successful export from PDFGenerator.tsx's own classic tab — renamed + un-skipped in the same change, see the file's own new title
+
+# Cardback flow round (SPEC-cardback-pdfwait.md §C.2) - the toolbar cardback picker no longer
+# auto-closes on select (the apply-all/set-default prompt renders inline instead), so these 3
+# titles changed to describe the new stays-open behaviour; the underlying selection coverage is
+# preserved, not dropped - see this PR's own body for the full before/after.
+coverage-ack: frontend/tests/GridSelectorModal.spec.ts::GridSelectorModal – JumpToVersion > submitting a valid option number selects that card and closes the modal — cardback flow round (SPEC-cardback-pdfwait.md §C.2): the toolbar cardback picker no longer auto-closes on select (the apply-all/set-default prompt renders inline instead), so the title changed to describe the new behaviour; the underlying selection coverage is preserved, not dropped.
+coverage-ack: frontend/tests/GridSelectorModal.spec.ts::GridSelectorModal – JumpToVersion > submitting a valid identifier selects that card and closes the modal — same rename as the sibling "option number" test above, same reason.
+coverage-ack: frontend/tests/GridSelectorModalVariants.spec.ts::GridSelectorModal - keyboard navigation > Tab reaches a result card and Enter selects it, same as a click would — cardback flow round (SPEC-cardback-pdfwait.md §C.2): same auto-close-removed rename as GridSelectorModal.spec.ts's JumpToVersion tests.
