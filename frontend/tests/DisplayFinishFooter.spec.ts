@@ -16,7 +16,10 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "./test-utils";
+import {
+  importTextOnEditorLanding,
+  loadPageWithDefaultBackend,
+} from "./test-utils";
 
 // Issue #275 (proposal-h-display-layout-spec.md ADDENDUM D9/D10) - the /display Finish footer
 // (FinishFooter.tsx: co-equal "Save Deck"/"Print / Export ->", the draft-backed-up note) and its
@@ -37,14 +40,28 @@ const oneCardHandlers = [
   ...defaultHandlers,
 ];
 
+// Proposal H switchover (2026-07-23, issues #231/#272) - /editor is the unified page directly now
+// (post-swap), so this helper populates it via the editor landing's own inline importer rather
+// than hopping here from a separate classic /editor page via a nav-link click.
 const goToDisplay = async (page: Page) => {
   await loadPageWithDefaultBackend(page);
-  await importText(page, "my search query");
-  await page.getByRole("link", { name: "Editor" }).click();
+  await importTextOnEditorLanding(page, "my search query");
   await expect(page.getByTestId("display-page")).toBeVisible();
 };
 
 test.describe("/display Finish footer (issue #275)", () => {
+  // Same dev-mode on-demand-compile cost DisplayPage.spec.ts's own describe.configure documents
+  // for a brand-new route's first hit (this file transitively pulls in /print's own
+  // FinishedMyProject -> PDFGenerator -> @react-pdf/renderer chain) - observed here directly
+  // (2026-07-23, while verifying the Proposal H route swap) as flaky `net::ERR_ABORTED`/timeout
+  // failures on the `/print` navigation under PARALLEL workers racing to cold-compile the same
+  // route simultaneously on this dev server; a `--workers=1` rerun passed every time (first hit
+  // pays the compile cost once, every later test in the file is fast). `mode: "serial"` avoids
+  // the race outright by construction, matching that empirical finding, rather than just hoping a
+  // longer timeout wins the race. Pre-existing dev-mode characteristic, not a swap regression -
+  // /print itself is untouched routing.
+  test.describe.configure({ mode: "serial", timeout: 60_000 });
+
   test("anonymous: shows a sign-in link in place of Save Deck, and Print / Export navigates straight to the Print page", async ({
     page,
     network,
@@ -62,7 +79,9 @@ test.describe("/display Finish footer (issue #275)", () => {
 
     // No save gate for an anonymous session (D9(3): "authenticated AND dirty" gates the prompt) -
     // straight through to the Print page.
-    await expect(page).toHaveURL(/\/print/);
+    // Explicit generous timeout, not the default assertion timeout - see this describe block's
+    // own comment on /print's cold on-demand-compile cost.
+    await page.waitForURL(/\/print/, { timeout: 30_000 });
     await expect(page.getByRole("tab", { name: "PDF" })).toBeVisible();
   });
 
@@ -131,7 +150,9 @@ test.describe("/display Finish footer (issue #275)", () => {
 
     // Persistence resolves -> THEN navigation - D9(3)c, "saving gates PDF; PDF never gates
     // saving" the other way around.
-    await expect(page).toHaveURL(/\/print/);
+    // Explicit generous timeout, not the default assertion timeout - see this describe block's
+    // own comment on /print's cold on-demand-compile cost.
+    await page.waitForURL(/\/print/, { timeout: 30_000 });
     await expect(page.getByRole("tab", { name: "PDF" })).toBeVisible();
     expect(saveDeckRequests).toHaveLength(1);
   });
@@ -163,7 +184,9 @@ test.describe("/display Finish footer (issue #275)", () => {
     await expect(gate).toBeVisible();
     await gate.getByTestId("pre-print-save-gate-skip").click();
 
-    await expect(page).toHaveURL(/\/print/);
+    // Explicit generous timeout, not the default assertion timeout - see this describe block's
+    // own comment on /print's cold on-demand-compile cost.
+    await page.waitForURL(/\/print/, { timeout: 30_000 });
     expect(saveDeckCalls).toBe(0);
   });
 });

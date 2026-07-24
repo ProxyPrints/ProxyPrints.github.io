@@ -32,7 +32,7 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  importText,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
   openSearchSettingsModal,
 } from "./test-utils";
@@ -158,8 +158,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     await expect(
@@ -180,8 +179,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await page.getByTestId("page-preview-slot").first().click();
 
@@ -211,8 +209,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     const sheetSlot = page.getByTestId("page-preview-slot").first();
     await sheetSlot.click();
@@ -236,8 +233,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
     await page.getByTestId("page-preview-slot").first().click();
 
     const candidateCard = page
@@ -271,8 +267,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
     await page.getByTestId("page-preview-slot").first().click();
 
     await page
@@ -290,8 +285,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // 2 slots, not 1 - clicking a grid position with no real project slot behind it (this
     // page's own click handler ignores those, since there's nothing there to select) would
     // leave the previous selection in place and falsely pass this test either way.
-    await importText(page, "2x my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "2x my search query");
 
     const slots = page.getByTestId("page-preview-slot");
     await slots.first().click();
@@ -316,8 +310,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByText("Showing: Fronts")).toBeVisible();
     await page.getByText("Showing: Fronts").click();
@@ -330,8 +323,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     const guidesToggle = page.getByLabel("Guides");
     await expect(guidesToggle).toBeChecked();
@@ -353,8 +345,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
 
@@ -387,8 +378,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     const settingsModal = await openSearchSettingsModal(page);
@@ -440,8 +430,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // A plain text query with no explicit back face falls back to the project cardback - the
     // fetchCardbacks.fulfilled listener (listenerMiddleware.ts) auto-selects the first cardback
     // in the list once cardbacksTwoResults resolves, so this starts on cardDocument1.
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     await page.getByText("Showing: Fronts").click();
@@ -478,8 +467,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
     await page.getByTestId("display-export-menu-toggle").click();
@@ -504,8 +492,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 Lightning Bolt (2ED) 162");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 Lightning Bolt (2ED) 162");
     await page.getByTestId("page-preview-slot").first().click();
 
     const badge = page.getByTestId("requested-printing-badge");
@@ -527,8 +514,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 my search query (XYZ) 999");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 my search query (XYZ) 999");
     await page.getByTestId("page-preview-slot").first().click();
 
     const badge = page.getByTestId("requested-printing-badge");
@@ -575,8 +561,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 8 (xyz) 001");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 8 (xyz) 001");
     await page.getByTestId("page-preview-slot").first().click();
 
     const d14 = page.getByTestId("display-confidence-element");
@@ -637,8 +622,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 13");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 13");
     await page.getByTestId("page-preview-slot").first().click();
 
     const d14 = page.getByTestId("display-confidence-element");
@@ -676,8 +660,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 1\n1 card 2\n1 card 3");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 1\n1 card 2\n1 card 3");
     await page.getByTestId("page-preview-slot").first().click();
 
     const accordion = page.getByTestId("display-sources-accordion");
@@ -749,8 +732,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 1\n1 card 2\n1 card 3");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 1\n1 card 2\n1 card 3");
     await page.getByTestId("page-preview-slot").first().click();
 
     await page.getByTestId("display-sources-summary-label").click();
@@ -773,9 +755,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.goto("/editor?server=http://127.0.0.1:8000", {
       waitUntil: "domcontentloaded",
     });
-    await page.getByText("Choose Art").click();
-    await importText(page, "1 card 1\n1 card 2\n1 card 3");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 1\n1 card 2\n1 card 3");
     await page.getByTestId("page-preview-slot").first().click();
 
     // No click on the pin needed this time - it's sourced from localStorage on mount
@@ -797,8 +777,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "an unfindable card");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "an unfindable card");
 
     const sheetSlot = page.getByTestId("page-preview-slot").first();
     await expect(sheetSlot.locator("img")).toHaveCount(0);
@@ -816,8 +795,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + Borderless
     // margins + 3.175mm bleed + D18's spacing now lands the spec's own 4x2 (8/sheet) grid. 18
     // slots at 8-per-sheet chunks into 3 sheets: 8, 8, 2.
-    await importText(page, "18x my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "18x my search query");
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     const sheetWrappers = page.getByTestId("display-sheet-wrapper");
@@ -883,8 +861,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
     await page.getByTestId("page-preview-slot").first().click();
     await page
       .getByRole("heading", { name: "Attributes", exact: true })
@@ -910,8 +887,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 8 (xyz) 001");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 8 (xyz) 001");
     await page.getByTestId("page-preview-slot").first().click();
     await page
       .getByRole("heading", { name: "Print Options", exact: true })
@@ -939,8 +915,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 8 (xyz) 001");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 8 (xyz) 001");
     await page.getByTestId("page-preview-slot").first().click();
 
     // Plain (non-linked) credit line names the artist.
@@ -973,8 +948,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // 2 slots, not 1 - deleting the only slot in the project would make it empty and swap the
     // whole page to the empty-state view (a different, already-covered case) rather than
     // leaving the sheet showing one fewer filled slot, which is what this test actually checks.
-    await importText(page, "2x my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "2x my search query");
     await page.getByTestId("page-preview-slot").first().click();
     await page
       .getByRole("heading", { name: "Slot Actions", exact: true })
@@ -1000,8 +974,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "2x my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "2x my search query");
 
     const slot = page.getByTestId("page-preview-slot").first();
     await expect(
@@ -1035,8 +1008,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     // The rail starts idle (no slot selected yet).
     await expect(page.getByTestId("display-rail-idle")).toBeVisible();
@@ -1084,8 +1056,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await loadPageWithDefaultBackend(page);
     // One slot to start - the project already has cardDocument1 (the first of
     // searchResultsThreeResults' three identifiers) selected for it.
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     await expect(
@@ -1164,8 +1135,7 @@ test.describe("DisplayPage - wide desktop viewport (issue #287)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-page")).toBeVisible();
     const sheetRegion = page.getByTestId("display-sheet-region");

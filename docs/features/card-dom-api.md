@@ -55,3 +55,19 @@ Documented in `frontend/docs/dom-api.md`. Test coverage in
 `QuestionFeed*.spec.ts` suite (unified vote queue, successor to the old
 standalone `PrintingTagQueue.tsx` this API originally shipped against)
 — real Playwright runs against the mocked backend, not just typecheck.
+
+**Known gap: unimplemented on the unified `/editor` page's sheet.**
+`Card.tsx`/`CardSlot.tsx`/`CardDetailedViewModal.tsx` (plus the non-slot
+`orphanCard.ts` helper) are the only callers of `getCardDataAttributes`/
+`getCardSelectedEventDetail`/`CardSelectedEventName` — none of them render
+the _placed_ card for a project slot on the unified page.
+`PagePreview.tsx` (the sheet's own per-slot renderer,
+`frontend/src/features/pdf/PagePreview.tsx`) renders a plain, unwrapped
+`<img>` with no `data-card-*` attributes and dispatches no
+`mpc:card-selected` event at all. Any external tooling built against this
+contract (userscripts, browser extensions) that read a project's placed
+cards off the classic grid gets nothing on the unified page. The one
+classic test exercising this ("selecting an image in a CardSlot via the
+grid selector") was dropped in the issue #272 wave-3 port rather than
+weakened; wiring `PagePreview.tsx`'s slot `<img>` into
+`getCardDataAttributes` is a contained, mechanical fix once prioritized.

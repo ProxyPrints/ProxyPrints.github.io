@@ -107,23 +107,23 @@ export default function ProjectNavbar() {
           <Navbar.Toggle aria-controls="basic-navbar-nav" />
           <BoldCollapse id="basic-navbar-nav">
             <LeftNav className="me-auto">
-              {/* N1/N2 - the nav's five-surface reduction: "Editor" now names the unified
-                  /display page (the old /editor stays URL-reachable but leaves the nav
-                  entirely - its own in-page toggle back to the classic editor is a separate
-                  later task). Kept behind the same isUnifiedDisplayPageEnabled() flag the old
-                  "Display (beta)" link carried (in addition to anyBackendConfigured) - the
-                  nav-redesign spec's own table only lists anyBackendConfigured, but dropping
-                  the flag here would leave NO editing surface reachable from the nav at all
-                  while NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED is off (the old classic-editor
-                  Nav.Link this replaces is gone), since /display itself still 404s behind that
-                  same flag (see pages/display.tsx). Flip that flag before/alongside this
-                  shipping for real if it isn't on already. */}
+              {/* N1/N2 - the nav's five-surface reduction: "Editor" points at /editor, which now
+                  serves the unified sheet+rail page (Proposal H switchover, 2026-07-23, issues
+                  #231/#272) - the classic grid editor this replaces has left routing entirely
+                  (unreachable by URL, not just delisted from the nav; see pages/editor.tsx's own
+                  comment for the full swap rationale and pages/display.tsx for the redirect that
+                  now covers the old /display URL). Kept behind the same isUnifiedDisplayPageEnabled()
+                  flag the old "Display (beta)" link carried (in addition to anyBackendConfigured) -
+                  dropping the flag here would leave NO editing surface reachable from the nav at
+                  all while NEXT_PUBLIC_UNIFIED_DISPLAY_ENABLED is off, since /editor itself now
+                  404s behind that same flag with no classic fallback left (confirmed "true" in the
+                  production deploy variable since 2026-07-18). */}
               {anyBackendConfigured && isUnifiedDisplayPageEnabled() && (
                 <Nav.Link
                   as={Link}
-                  href="/display"
-                  active={router.route === "/display"}
-                  eventKey="/display"
+                  href="/editor"
+                  active={router.route === "/editor"}
+                  eventKey="/editor"
                 >
                   Editor
                 </Nav.Link>

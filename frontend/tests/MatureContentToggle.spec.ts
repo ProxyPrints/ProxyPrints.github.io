@@ -12,21 +12,26 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  expectCardGridSlotState,
-  importText,
+  expectDisplaySheetSlotState,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
   openSearchSettingsModal,
 } from "./test-utils";
+
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page -
+// the Search Settings modal (openSearchSettingsModal) is the same self-contained, unforked
+// component DisplayPage.tsx's own toolbar mounts (see DisplayPage.spec.ts's own precedent test),
+// reachable directly with no other DOM changes needed.
 
 // saving search settings only re-triggers a search when the project has queries to re-run,
 // so each test imports one card first
 const loadPageWithOneCard = async (page: any) => {
   await loadPageWithDefaultBackend(page);
-  await importText(
+  await importTextOnEditorLanding(
     page,
     `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
   );
-  await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
+  await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
 };
 
 test.describe("show mature content toggle", () => {

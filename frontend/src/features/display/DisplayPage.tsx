@@ -219,6 +219,7 @@ import Row from "react-bootstrap/Row";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 
+import { isRecoveryReloadInFlight } from "@/common/chunkErrorRecovery";
 import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { doesSearchQueryFilterOnPrinting } from "@/common/processing";
@@ -1387,6 +1388,28 @@ export function DisplayPage() {
     flushDraftNow: draftBackup.flushDraftNow,
     notifyPromoteDraftPrePrint: draftBackup.notifyPromoteDraftPrePrint,
   });
+
+  // Proposal H switchover (2026-07-23, issues #231/#272) - ported verbatim from
+  // `ProjectEditor.tsx`'s own beforeunload guard, which this page replaces. That guard lived only
+  // in the classic component's function body, never extracted to a shared hook, so it did NOT
+  // "naturally inherit" onto this page the way most reused instruments did - without this block,
+  // the unrouted classic page taking the beforeunload warning with it would have been a silent,
+  // real safety-net regression (closing/reloading a tab with unsaved cards would warn no one).
+  // Must NOT fire for the app's own chunk-load-error recovery reload (chunkErrorRecovery.ts) -
+  // see ProjectEditor.tsx's own comment (still present there, component unrouted but left
+  // in-tree) for the full diagnosis this mirrors.
+  useEffect(() => {
+    const handler = (event: BeforeUnloadEvent) => {
+      if (!isProjectEmpty && !isRecoveryReloadInFlight()) {
+        event.preventDefault();
+        return false;
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => {
+      window.removeEventListener("beforeunload", handler);
+    };
+  }, [isProjectEmpty]);
 
   const [settings, setSettings] = useState<DisplaySheetSettings>(
     DEFAULT_SHEET_SETTINGS

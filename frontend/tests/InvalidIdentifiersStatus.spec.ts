@@ -17,13 +17,20 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  changeQuery,
-  expectCardGridSlotState,
-  expectCardSlotToExist,
-  importText,
+  changeQueries,
+  expectDisplaySheetSlotState,
+  expectDisplaySheetSlotToExist,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDisplayChangeQueryModal,
 } from "./test-utils";
 
+// Parity wave 2 (2026-07-23, issue #272): ported onto the unified `/editor` page.
+// InvalidIdentifiersStatus.tsx itself is unchanged and unforked - DisplayPage.tsx's own comment
+// (issue #267 D13): "mounted unmodified in both the populated-state action bar and the
+// empty-project DeckInputLanding" - only the RIGHT-RAIL Status row (a separate, still-unbuilt
+// placement - issue #272 item 2's own remaining scope) is missing; the landing/search-bar half
+// this file exercises already works today.
 test.describe("InvalidIdentifiersStatus tests", () => {
   const testCases = [
     {
@@ -57,9 +64,9 @@ test.describe("InvalidIdentifiersStatus tests", () => {
       );
       await loadPageWithDefaultBackend(page);
 
-      await importText(page, query);
-      await expectCardSlotToExist(page, 1);
-      await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
+      await importTextOnEditorLanding(page, query);
+      await expectDisplaySheetSlotToExist(page, 1);
+      await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
 
       if (problematicImageCount > 0) {
         const warningText = await page
@@ -90,17 +97,18 @@ test.describe("InvalidIdentifiersStatus tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `query 1${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await expectCardSlotToExist(page, 1);
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
+    await expectDisplaySheetSlotToExist(page, 1);
+    await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
 
     // change query - type in "query 2"
-    await changeQuery(page, "front-slot0", cardDocument1.name, "query 2");
+    await openDisplayChangeQueryModal(page, 1);
+    await changeQueries(page, "query 2");
     // expect the slot to have changed from card 1 to card 2
-    await expectCardGridSlotState(page, 1, "front", cardDocument2.name, 1, 1);
+    await expectDisplaySheetSlotState(page, 1, "front", cardDocument2.name);
 
     // expect the invalid card warning to *not* have been raised
     await expect(

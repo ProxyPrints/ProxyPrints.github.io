@@ -10,10 +10,12 @@ it. See [`documentation-process.md`](documentation-process.md).
 How to search the catalog, read search results, and pick a printing for
 a slot in your decklist.
 
-The **Editor** page (the redesigned `/display` route - nav+footer redesign,
-2026-07-22, renamed the nav link from "Display (beta)" to plain "Editor";
-the classic `/editor` page is still reachable directly by URL but no longer
-has a nav link of its own) search bar is dual-mode: an **Add / Browse**
+The **Editor** page (the unified sheet+rail page, now served directly at
+the `/editor` route as of the 2026-07-23 Proposal H switchover — the
+2026-07-22 nav+footer redesign had only renamed the nav link to "Editor"
+while it still pointed at a separate `/display` route; `/display` now
+redirects to `/editor`, and the classic grid editor this replaces is no
+longer reachable by any URL) search bar is dual-mode: an **Add / Browse**
 toggle next to the input switches between adding cards to your project
 (the usual decklist-line paste/search box) and browsing the whole
 catalog without touching your project — browsing renders a grid of
@@ -150,8 +152,8 @@ landing screen, the homepage's own CTA, or `/myDecks` directly).
 
 ## Saved decks, export, and the standalone decrypt tool
 
-Signed in with Discord? The classic editor and the Editor page's Save
-button persists your deck to your account, and the **My Decks** page lists
+Signed in with Discord? The Editor page's Save button persists your deck
+to your account, and the **My Decks** page lists
 everything you've saved, decrypted right there in your browser — the
 server only ever stores encrypted, opaque bytes it can't read.
 

@@ -26,13 +26,18 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "./test-utils";
+import {
+  importTextOnEditorLanding,
+  loadPageWithDefaultBackend,
+  openDetailedView,
+} from "./test-utils";
 
-// Shared by all three picker suites below (identical across their source files).
-const openDetailedView = async (page: any, cardName: string) => {
-  await page.getByAltText(cardName).click();
-  await expect(page.getByText("Card Details")).toBeVisible();
-};
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page.
+// Shared by all three picker suites below (identical across their source files) - the pickers
+// themselves live inside CardDetailedViewModal's own "Printing Tags" region (PrintingTagsBlock,
+// CardDetailedViewBody.tsx), reached the same way the rest of this cluster reaches the modal - see
+// openDetailedView's own module comment (test-utils.ts) for the Browse-mode route and the "Card
+// details" text-collision fix.
 
 test.describe("ArtistVotePicker tests", () => {
   test("shows the attribute-voting panel once printing consensus is unresolved, listing candidate artists", async ({
@@ -53,11 +58,11 @@ test.describe("ArtistVotePicker tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     // longer than the default 5s: showing this panel is gated behind a chain of fetches
     // (printing consensus resolves -> CardDetailedViewModal re-renders -> the panel mounts
@@ -91,11 +96,11 @@ test.describe("ArtistVotePicker tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const artistPicker = page.getByTestId("artist-vote-picker");
     await expect(artistPicker.getByText("Not yet resolved")).toBeVisible();
@@ -130,11 +135,11 @@ test.describe("TagVotePicker tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const tagPicker = page.getByTestId("tag-vote-picker");
     await expect(tagPicker.getByText("Borderless")).toBeVisible();
@@ -160,11 +165,11 @@ test.describe("TagVotePicker tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const tagPicker = page.getByTestId("tag-vote-picker");
     // "Borderless" has displayName "Frameless Border" set - shown instead of the raw name
@@ -195,11 +200,11 @@ test.describe("TagVotePicker tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const tagPicker = page.getByTestId("tag-vote-picker");
     await tagPicker.getByText("Borderless").click();
@@ -226,11 +231,11 @@ test.describe("PrintingTagPicker tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     await expect(
       page.getByTestId("detailed-view").getByText("What's That Card?")
@@ -304,11 +309,11 @@ test.describe("PrintingTagPicker tests", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(
+    await importTextOnEditorLanding(
       page,
       `my search query${SelectedImageSeparator}${cardDocument1.identifier}`
     );
-    await openDetailedView(page, cardDocument1.name);
+    await openDetailedView(page, "my search query", cardDocument1.identifier);
 
     const picker = page.getByTestId("printing-tag-picker");
     await expect(page.getByText("Not yet resolved")).toBeVisible();

@@ -26,6 +26,11 @@ import {
 import { test } from "../playwright.setup";
 import { openSelectVersionSection } from "./test-utils";
 
+// Parity wave 2 (2026-07-23, issue #272) - un-skipped. This file was never actually classic-
+// editor-only: it already exercised the unified page's own rail (via openSelectVersionSection,
+// test-utils.ts) from the moment it landed with issue #167 (#198), before the route swap even
+// happened. It picked up the swap's blanket per-file skip marker anyway and was deliberately left
+// for this wave rather than wave 1 - see test-utils.ts's own openSelectVersionSection comment.
 function buildRoute(route: string): string {
   return `${localBackendURL}/${route}`;
 }

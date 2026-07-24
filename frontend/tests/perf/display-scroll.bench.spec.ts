@@ -32,7 +32,10 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../../playwright.setup";
-import { importText, loadPageWithDefaultBackend } from "../test-utils";
+import {
+  importTextOnEditorLanding,
+  loadPageWithDefaultBackend,
+} from "../test-utils";
 
 const threeCardHandlers = [
   cardDocumentsThreeResults,
@@ -57,8 +60,7 @@ test(`Item 3 benchmark: ${CARD_COUNT}-card deck scroll fps/heap/jank under ${CPU
 }) => {
   network.use(...threeCardHandlers);
   await loadPageWithDefaultBackend(page);
-  await importText(page, `${CARD_COUNT}x my search query`);
-  await page.getByRole("link", { name: "Editor" }).click();
+  await importTextOnEditorLanding(page, `${CARD_COUNT}x my search query`);
   await expect(page.getByTestId("display-page")).toBeVisible();
 
   const sheetWrappers = page.getByTestId("display-sheet-wrapper");

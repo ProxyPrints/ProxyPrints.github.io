@@ -11,12 +11,16 @@ import {
 
 import { test } from "../../playwright.setup";
 import {
-  expectCardGridSlotState,
-  importText,
+  expectDisplaySheetSlotState,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
-  openSearchSettingsModal,
+  openDisplaySearchSettingsModal,
 } from "../test-utils";
 
+// Parity wave 2 (2026-07-23, issue #272): ported onto the unified `/editor` page.
+// SearchSettings.tsx itself is unchanged and unforked (DisplayPage.tsx's own comment: "the same
+// self-contained trigger-button-plus-modal ProjectEditor.tsx already mounts, relocated here
+// unmodified") - only how it's reached differs (openDisplaySearchSettingsModal, test-utils.ts).
 test.describe("SearchSettings visual tests", () => {
   test("search settings modal structure", async ({ page, network }) => {
     network.use(
@@ -29,10 +33,10 @@ test.describe("SearchSettings visual tests", () => {
     await loadPageWithDefaultBackend(page);
 
     // Wait for sources to be fetched by importing a card
-    await importText(page, "my search query");
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
+    await importTextOnEditorLanding(page, "my search query");
+    await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
 
-    const searchSettings = await openSearchSettingsModal(page);
+    const searchSettings = await openDisplaySearchSettingsModal(page);
     await expect(searchSettings.getByText(sourceDocument1.name)).toBeVisible();
 
     // Wait until all spinners have finished loading

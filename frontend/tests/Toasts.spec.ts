@@ -19,12 +19,21 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  getAddCardsMenu,
   getErrorToast,
-  importText,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
-  openImportTextModal,
 } from "./test-utils";
+
+// Parity wave 2 (2026-07-23, issue #272): the 3 tests below (DFCPairs/importSites/sampleCards)
+// used openImportTextModal/getAddCardsMenu to OPEN the classic grid's "Add Cards" dropdown, which
+// has no equivalent on the unified page - but that click was only ever a means to mount
+// ImportText.tsx/ImportURL.tsx, whose own `useGetDFCPairsQuery`/`useGetSampleCardsQuery`/
+// `useGetImportSitesQuery` hooks fire the instant those components mount, not on any particular
+// click. DisplayPage's empty-project landing (`loadPageWithDefaultBackend`'s default "editor" -
+// see DisplayPage.tsx's own `ImportColumns`) mounts `ImportText` AND `ImportURL` unconditionally
+// (the URL accordion tab is `defaultActiveKey="url"`, open from the start) - so all three fetches
+// already fire on plain page load, same as the already-unskipped `/2/cards`/`/2/sources` tests
+// right above them. No interaction step needed at all - `interactionFn: null`, like those.
 
 test.describe("error reporting toasts", () => {
   async function assertErrorToast(
@@ -68,7 +77,7 @@ test.describe("error reporting toasts", () => {
         searchResultsServerError,
       ],
       async () => {
-        await importText(page, "mountain");
+        await importTextOnEditorLanding(page, "mountain");
       }
     );
   });
@@ -115,10 +124,7 @@ test.describe("error reporting toasts", () => {
         searchResultsOneResult,
         dfcPairsServerError,
       ],
-      async () => {
-        // DFC pairs are loaded when an importer is opened
-        await openImportTextModal(page);
-      }
+      null
     );
   });
 
@@ -149,10 +155,7 @@ test.describe("error reporting toasts", () => {
         searchResultsOneResult,
         importSitesServerError,
       ],
-      async () => {
-        const addCardsMenu = getAddCardsMenu(page);
-        await addCardsMenu.click();
-      }
+      null
     );
   });
 
@@ -168,10 +171,7 @@ test.describe("error reporting toasts", () => {
         searchResultsOneResult,
         sampleCardsServerError,
       ],
-      async () => {
-        // Sample cards are loaded when the text importer is opened
-        await openImportTextModal(page);
-      }
+      null
     );
   });
 

@@ -18,13 +18,23 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  downloadXML,
-  expectCardbackSlotState,
-  expectCardGridSlotState,
-  importText,
+  downloadXMLFromDisplayToolbar,
+  expectDisplaySheetSlotStates,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
   normaliseString,
 } from "./test-utils";
+
+// Proposal H parity port (2026-07-23, issue #272 wave 1): ported onto the unified /editor page -
+// downloadXML itself is unchanged (ExportXML.tsx/downloadXML.test.ts already cover its own
+// internals); only the trigger changed - see downloadXMLFromDisplayToolbar's own module comment
+// (test-utils.ts). Per-slot setup assertions ported via expectDisplaySheetSlotStates - see that
+// helper's own comment for why dropping the selectedImage/totalImages numeric checks doesn't
+// weaken the name check every test here actually depends on. The classic grid's standalone
+// "common cardback" preview tile (`expectCardbackSlotState`) has no equivalent on this page - not
+// ported; the cardback IS part of the exported XML (unlike the decklist export), but that's
+// already asserted against the downloaded file content itself below, independent of any preview
+// widget.
 
 test.describe("ExportXML", () => {
   test("the XML representation of a simple project with no custom backs", async ({
@@ -40,12 +50,17 @@ test.describe("ExportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(page, "query 1\nquery 2");
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
-    await expectCardGridSlotState(page, 2, "front", cardDocument2.name, 1, 1);
-    await expectCardbackSlotState(page, cardDocument5.name, 1, 1);
+    await importTextOnEditorLanding(page, "query 1\nquery 2");
+    await expectDisplaySheetSlotStates(
+      page,
+      [
+        { slot: 1, name: cardDocument1.name },
+        { slot: 2, name: cardDocument2.name },
+      ],
+      []
+    );
 
-    const [content, filename] = await downloadXML(page);
+    const [content, filename] = await downloadXMLFromDisplayToolbar(page);
 
     expect(normaliseString(content)).toBe(
       normaliseString(
@@ -91,13 +106,20 @@ test.describe("ExportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(page, `query 1\nquery 2${FaceSeparator}t:query 6`);
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
-    await expectCardGridSlotState(page, 2, "front", cardDocument2.name, 1, 1);
-    await expectCardGridSlotState(page, 2, "back", cardDocument6.name, 1, 1);
-    await expectCardbackSlotState(page, cardDocument5.name, 1, 1);
+    await importTextOnEditorLanding(
+      page,
+      `query 1\nquery 2${FaceSeparator}t:query 6`
+    );
+    await expectDisplaySheetSlotStates(
+      page,
+      [
+        { slot: 1, name: cardDocument1.name },
+        { slot: 2, name: cardDocument2.name },
+      ],
+      [{ slot: 2, name: cardDocument6.name }]
+    );
 
-    const [content, filename] = await downloadXML(page);
+    const [content, filename] = await downloadXMLFromDisplayToolbar(page);
 
     expect(normaliseString(content)).toBe(
       normaliseString(
@@ -152,14 +174,21 @@ test.describe("ExportXML", () => {
     );
     await loadPageWithDefaultBackend(page);
 
-    await importText(page, `2x query 1\nquery 2${FaceSeparator}query 1`);
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
-    await expectCardGridSlotState(page, 2, "front", cardDocument1.name, 1, 1);
-    await expectCardGridSlotState(page, 3, "front", cardDocument2.name, 1, 1);
-    await expectCardGridSlotState(page, 3, "back", cardDocument1.name, 1, 1);
-    await expectCardbackSlotState(page, cardDocument5.name, 1, 1);
+    await importTextOnEditorLanding(
+      page,
+      `2x query 1\nquery 2${FaceSeparator}query 1`
+    );
+    await expectDisplaySheetSlotStates(
+      page,
+      [
+        { slot: 1, name: cardDocument1.name },
+        { slot: 2, name: cardDocument1.name },
+        { slot: 3, name: cardDocument2.name },
+      ],
+      [{ slot: 3, name: cardDocument1.name }]
+    );
 
-    const [content, filename] = await downloadXML(page);
+    const [content, filename] = await downloadXMLFromDisplayToolbar(page);
 
     expect(normaliseString(content)).toBe(
       normaliseString(

@@ -27,8 +27,11 @@ require("bootstrap-icons/font/bootstrap-icons.css");
  * `FinishedMyProject.tsx` itself is UNCHANGED; this file only gives it a standalone route so the
  * Finish footer's "Print / Export →" button (FinishFooter.tsx, via PrePrintSaveGate.tsx) has
  * somewhere to client-side-navigate to (D9's pre-print persist step runs BEFORE this navigation,
- * never after). The classic /editor "Print!" tab keeps mounting the same component unchanged too
- * (ProjectEditor.tsx's own `PrintPanel`) - both /display and /editor now funnel here.
+ * never after). Originally, the classic /editor "Print!" tab (ProjectEditor.tsx's own
+ * `PrintPanel`) mounted the same component too, so both /display and /editor funneled here; the
+ * Proposal H route swap (2026-07-23, issues #231/#272) unrouted that classic page entirely, so
+ * this route's only live entry point today is the unified editor's own Finish footer (mounted at
+ * /editor - see pages/editor.tsx).
  *
  * Deliberately NOT built here (D10's own owner addendum, explicitly out of THIS issue's scope per
  * the task that shipped this file): the tab REORDER (owner order: PDF · MakePlayingCards ·
@@ -52,7 +55,7 @@ function PrintPageOrDefault() {
     return (
       <div className="p-4 text-center" data-testid="print-page-empty-state">
         <p>Your project is empty - there&apos;s nothing to print yet.</p>
-        <Link href="/display">Head to Display to add some cards</Link>
+        <Link href="/editor">Head to the editor to add some cards</Link>
       </div>
     );
   }
