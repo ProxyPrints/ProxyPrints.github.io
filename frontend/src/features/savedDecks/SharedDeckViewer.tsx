@@ -66,7 +66,7 @@ const HiddenOrphanBadge = styled.span`
   align-items: center;
   gap: 6px;
   background: #141f2b;
-  color: #8fa0b0;
+  color: var(--theme-muted);
   font-size: 11px;
   border: 1px dashed #46586a;
   padding: 4px 8px;
@@ -79,8 +79,8 @@ const ExtBanner = styled.div`
   align-items: center;
   gap: 8px;
   background: rgba(11, 21, 32, 0.95);
-  color: #ebebeb;
-  border: 1px solid #5bc0de;
+  color: var(--bs-body-color);
+  border: 1px solid var(--bs-info);
   font-size: 11px;
   padding: 8px 10px;
   margin-bottom: 10px;
@@ -89,7 +89,7 @@ const ExtBanner = styled.div`
 const ExtBannerLink = styled.button`
   background: transparent;
   border: none;
-  color: #5bc0de;
+  color: var(--bs-info);
   text-decoration: underline;
   cursor: pointer;
   padding: 0;

@@ -174,8 +174,8 @@ export function SourcesAccordion() {
         headerPadding="7px 10px"
         // EP3 (SPEC-editor-polish.md §D.3) - de-greys the shared component's own `#4E5D6B`
         // default for this ONE caller only (see AutofillCollapse.tsx's own comment).
-        headerBackground="#22303f"
-        bodyBackground="#22303f"
+        headerBackground="var(--theme-raised-bg)"
+        bodyBackground="var(--theme-raised-bg)"
         title={
           <div className="d-flex flex-column flex-grow-1">
             <div className="d-flex align-items-center gap-2">
@@ -238,9 +238,9 @@ export function SourcesAccordion() {
             style={{
               fontSize: "14px",
               padding: "6px 10px",
-              background: "#2b3e50",
-              color: "#ebebeb",
-              border: "1px solid #abb6c2",
+              background: "var(--theme-band-bg)",
+              color: "var(--bs-body-color)",
+              border: "1px solid var(--theme-light)",
             }}
             data-testid="display-sources-filter"
           />
@@ -297,14 +297,16 @@ export function SourcesAccordion() {
             <div
               style={{
                 fontSize: "10px",
-                color: "#8fa0b0",
+                color: "var(--theme-muted)",
                 marginBottom: "5px",
               }}
               data-testid="display-sources-cap-caption"
             >
               Showing{" "}
-              <span style={{ color: "#ebebeb" }}>{visibleRows.length}</span> of{" "}
-              {matchingRows.length} — filter to narrow
+              <span style={{ color: "var(--bs-body-color)" }}>
+                {visibleRows.length}
+              </span>{" "}
+              of {matchingRows.length} — filter to narrow
             </div>
           )}
           <div
@@ -318,7 +320,7 @@ export function SourcesAccordion() {
               maxHeight: 190,
               overflowY: "auto",
               border: "1px solid rgba(0,0,0,.22)",
-              background: "#2b3e50",
+              background: "var(--theme-band-bg)",
             }}
             data-testid="display-sources-list"
           >
@@ -375,7 +377,7 @@ export function SourcesAccordion() {
                   />
                   <span
                     className="flex-grow-1 text-truncate"
-                    style={{ fontSize: "12px", color: "#ebebeb" }}
+                    style={{ fontSize: "12px", color: "var(--bs-body-color)" }}
                   >
                     {sourceDocument.name}
                   </span>
@@ -387,7 +389,7 @@ export function SourcesAccordion() {
                       minWidth: 30,
                       minHeight: 30,
                       fontSize: "15px",
-                      color: pinned ? "#ffc107" : "#5b6b7b",
+                      color: pinned ? "var(--bs-warning)" : "#5b6b7b",
                     }}
                     aria-pressed={pinned}
                     aria-label={`Pin ${sourceDocument.name} as a favourite source`}

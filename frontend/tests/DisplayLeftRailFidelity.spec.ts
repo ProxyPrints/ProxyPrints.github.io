@@ -18,6 +18,7 @@ import { test } from "../playwright.setup";
 import {
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDisplayChangeQueryModal,
   openSelectVersionSection,
 } from "./test-utils";
 
@@ -52,6 +53,13 @@ import {
  * never class names or inline-style source text - the same discipline this guard has followed
  * since PR #352's own regression (several density-table values documented as "done" while the
  * actual CSS still fell through to a Bootstrap/global default).
+ *
+ * Tokyo-11 re-theme (2026-07-24, owner ruling - see docs/features/theming.md): every colour
+ * literal below was re-derived from the OLD #302 palette to the new Tokyo-11 values in
+ * `frontend/src/styles/_theme-tokens.scss` - each changed assertion carries its own "Tokyo-11"
+ * inline comment noting the old->new hex pair it now asserts. Corner radii are UNCHANGED here -
+ * this file's only radius assertion (the D14 `.notthis` pill, `10px`) is the separate
+ * `$theme-radius-pill` token, not touched by the Semi-radius `$theme-radius-base`/`-card` swap.
  */
 
 test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", () => {
@@ -76,26 +84,29 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await openSelectVersionSection(page);
     await expect(page.getByTestId("display-rail-content")).toBeVisible();
 
-    // `.rail-head` (§D.1, inherited verbatim) - padding:8px 10px, #16202b hairline.
+    // `.rail-head` (§D.1, inherited verbatim) - padding:8px 10px, divider hairline. Tokyo-11:
+    // $theme-divider #16202b -> #16161e, rgb(22, 32, 43) -> rgb(22, 22, 30).
     await expect(page.getByTestId("display-rail-header")).toHaveCSS(
       "padding",
       "8px 10px"
     );
     await expect(page.getByTestId("display-rail-header")).toHaveCSS(
       "border-bottom",
-      "1px solid rgb(22, 32, 43)"
+      "1px solid rgb(22, 22, 30)"
     );
 
     // Rev #3 (RD8), EP5 (SPEC-editor-polish.md §D.1 `.subject`, REV - `66px` -> `116px`) - the
-    // subject-card preview, aspect 63/88, `1px rgba(235,235,235,.15)` border (unchanged by EP5).
-    // This fixture's slot has a real selected image, so the ART variant renders (not the dashed
-    // empty state).
+    // subject-card preview, aspect 63/88, a text-tinted `.15`-alpha border (unchanged shape by
+    // EP5). Tokyo-11: this border is `rgba(var(--bs-body-color-rgb),.15)`, so it moved with
+    // $theme-text #ebebeb -> #c0caf5, rgba(235, 235, 235, .15) -> rgba(192, 202, 245, .15). This
+    // fixture's slot has a real selected image, so the ART variant renders (not the dashed empty
+    // state).
     const subject = page.getByTestId("display-rail-subject");
     await expect(subject).toBeVisible();
     await expect(subject).toHaveCSS("width", "116px");
     await expect(subject).toHaveCSS(
       "border",
-      "1px solid rgba(235, 235, 235, 0.15)"
+      "1px solid rgba(192, 202, 245, 0.15)"
     );
 
     // `.idcol .slot`/`.name` (§D.1, inherited) - 14px/700 + face 11px uppercase; name 15px.
@@ -119,9 +130,10 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await moreDetailsToggle.click();
     const detailsBody = page.getByTestId("display-rail-more-details-body");
     await expect(detailsBody).toBeVisible();
+    // Tokyo-11: $theme-divider #16202b -> #16161e, rgb(22, 32, 43) -> rgb(22, 22, 30).
     await expect(detailsBody).toHaveCSS(
       "border-top",
-      "1px solid rgb(22, 32, 43)"
+      "1px solid rgb(22, 22, 30)"
     );
     // RD7 - the canonical printing id is NOT repeated in "More details" (it lives once in D14) -
     // the metadata table still carries the OTHER Card Details rows (e.g. a Language row).
@@ -129,10 +141,11 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
 
     // D14 confidence band `.d14` (§D.1, inherited, LOCKED) - unchanged by this round; the
     // canonical printing id ("2X2 · 117"-shaped `.idtext`) lives here, exactly once in the rail.
+    // Tokyo-11: $theme-band-bg #2b3e50 -> #222234, rgb(43, 62, 80) -> rgb(34, 34, 52).
     const d14 = page.getByTestId("display-confidence-element");
     await expect(d14).toBeVisible();
     await expect(d14).toHaveCSS("padding", "8px 10px");
-    await expect(d14).toHaveCSS("background-color", "rgb(43, 62, 80)");
+    await expect(d14).toHaveCSS("background-color", "rgb(34, 34, 52)");
 
     // `.artist-line` (§D.1, inherited) - unchanged.
     const artistLine = page.getByTestId("display-artist-section").locator("..");
@@ -195,14 +208,16 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
       .click({ position: { x: 5, y: 5 } });
     await expect(page.getByTestId("filters-panel-float")).toHaveCount(0);
 
-    // Machine-diff-precedent tile styling (§D.1, inherited) - unchanged by this round.
+    // Machine-diff-precedent tile styling (§D.1, inherited) - unchanged by this round except
+    // colour. Tokyo-11: $theme-success #5cb85c -> #9ece6a, rgba(92, 184, 92, .92) ->
+    // rgba(158, 206, 106, .92).
     const canonCornerTag = page.getByTestId(
       `select-version-tile-corner-${cardDocument15.identifier}`
     );
     await expect(canonCornerTag).toHaveCSS("font-size", "7px");
     await expect(canonCornerTag).toHaveCSS(
       "background-color",
-      "rgba(92, 184, 92, 0.92)"
+      "rgba(158, 206, 106, 0.92)"
     );
     const altCornerTag = page.getByTestId(
       `select-version-tile-corner-${cardDocument16.identifier}`
@@ -219,12 +234,13 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await expect(page.getByTestId("display-rail-content")).toBeVisible();
 
     // Item 6 (RD - "hangs off D14") - `.idhang`/`.idtoggle`/`.idbody` (§D.2): same surface colour
-    // as D14 (`#2b3e50`), starts closed, PrintingTagsBlock mounts only once opened.
+    // as D14 ($theme-band-bg), starts closed, PrintingTagsBlock mounts only once opened.
+    // Tokyo-11: #2b3e50 -> #222234, rgb(43, 62, 80) -> rgb(34, 34, 52).
     const identifyPanel = page.getByTestId("display-identify-panel");
     await expect(identifyPanel).toBeVisible();
     await expect(identifyPanel).toHaveCSS(
       "background-color",
-      "rgb(43, 62, 80)"
+      "rgb(34, 34, 52)"
     );
     const identifyToggle = page.getByTestId("display-identify-toggle");
     await expect(identifyToggle).toHaveCSS("font-size", "12px");
@@ -233,7 +249,8 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await identifyToggle.click();
     const identifyBody = page.getByTestId("display-identify-body");
     await expect(identifyBody).toBeVisible();
-    await expect(identifyBody).toHaveCSS("background-color", "rgb(34, 48, 63)");
+    // Tokyo-11: $theme-raised-bg #22303f -> #24283b, rgb(34, 48, 63) -> rgb(36, 40, 59).
+    await expect(identifyBody).toHaveCSS("background-color", "rgb(36, 40, 59)");
     // PrintingTagsBlock (reused verbatim, item 6/RD1) - the real "What's That Card?" heading.
     await expect(identifyBody).toContainText("What's That Card?");
 
@@ -273,10 +290,11 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await expect(controlStack.getByTestId("report-card-panel")).toBeVisible();
 
     // Sources accordion (§D.1, inherited, unchanged) - NOT one of the nine removed sections
-    // (owner answer #3) - still resolves its own literal values.
+    // (owner answer #3) - still resolves its own literal values. Tokyo-11: $theme-divider
+    // #16202b -> #16161e, rgb(22, 32, 43) -> rgb(22, 22, 30).
     await expect(page.getByTestId("display-sources-accordion")).toHaveCSS(
       "border-bottom",
-      "1px solid rgb(22, 32, 43)"
+      "1px solid rgb(22, 22, 30)"
     );
     await page
       .getByTestId("display-sources-accordion")
@@ -288,18 +306,20 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await expect(bulkRow).toHaveCSS("gap", "6px");
     await expect(bulkRow).toHaveCSS("margin-bottom", "6px");
     // EP3 (SPEC-editor-polish.md §D.3, de-grey pass) - the accordion's OWN header/body go
-    // `#22303f` (asserted below via `display-sources-accordion`'s own background), while the
-    // `.src-list` surface one step further in is `#2b3e50` - see SourcesAccordion.tsx's own
-    // module comment for the exact token breakdown this two-tone reflects.
+    // $theme-raised-bg (asserted below via `display-sources-accordion`'s own background), while
+    // the `.src-list` surface one step further in is $theme-band-bg - see SourcesAccordion.tsx's
+    // own module comment for the exact token breakdown this two-tone reflects. Tokyo-11:
+    // $theme-band-bg #2b3e50 -> #222234, rgb(43, 62, 80) -> rgb(34, 34, 52).
     const sourcesList = page.getByTestId("display-sources-list");
     await expect(sourcesList).toHaveCSS(
       "border",
       "1px solid rgba(0, 0, 0, 0.22)"
     );
-    await expect(sourcesList).toHaveCSS("background-color", "rgb(43, 62, 80)");
+    await expect(sourcesList).toHaveCSS("background-color", "rgb(34, 34, 52)");
+    // Tokyo-11: $theme-raised-bg #22303f -> #24283b, rgb(34, 48, 63) -> rgb(36, 40, 59).
     await expect(
       page.getByTestId("display-sources-accordion").locator(".card-header")
-    ).toHaveCSS("background-color", "rgb(34, 48, 63)");
+    ).toHaveCSS("background-color", "rgb(36, 40, 59)");
   });
 
   // RD8/rev #3 - the subject-card preview's dashed empty state, and RD7's own dedup guarantee
@@ -321,9 +341,12 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await expect(page.getByTestId("display-rail-subject")).toHaveCount(0);
     const emptySubject = page.getByTestId("display-rail-subject-empty");
     await expect(emptySubject).toBeVisible();
+    // Tokyo-11: $theme-light is no longer an audited study token, aliased to $theme-text this
+    // round (see _theme-tokens.scss's own comment) - #abb6c2 -> #c0caf5, rgb(171, 182, 194) ->
+    // rgb(192, 202, 245).
     await expect(emptySubject).toHaveCSS(
       "border",
-      "1px dashed rgb(171, 182, 194)"
+      "1px dashed rgb(192, 202, 245)"
     );
     await expect(emptySubject).toContainText("No art");
 
@@ -445,6 +468,18 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
       .locator(".idtext")
       .textContent();
 
+    // WCAG/APCA audit fold-in (2026-07-24, PR #432's report; owner-ruled amendment to
+    // SPEC-editor-polish.md §D.1's `.fbtoggle` row) - `min-height:24px` closes the WCAG 2.2
+    // SC 2.5.8 target-size gap (measured 51-55x23px stock). Per issue #434's own lesson, this
+    // asserts the REAL rendered `boundingBox()` of the visible `<label class="btn">` (what a
+    // user actually taps), not the authored CSS `min-height` value and not the hidden
+    // `role=radio` input the click below targets - a scaled ancestor could make those diverge.
+    const frontToggleLabel = page
+      .locator(".fbtoggle")
+      .getByText("Front", { exact: true });
+    const frontBox = await frontToggleLabel.boundingBox();
+    expect(frontBox?.height ?? 0).toBeGreaterThanOrEqual(24);
+
     // `.click()` on the role=radio locator targets the (visually-hidden, `.btn-check`) input
     // itself, which Bootstrap's own toggle-button CSS covers with its sibling `<label>` by
     // design - `force: true` bypasses Playwright's actionability wait for that expected overlap
@@ -528,10 +563,13 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
     await openSelectVersionSection(page);
 
     const notThis = page.getByTestId("display-confidence-not-this-printing");
+    // Pill radius is $theme-radius-pill (10px, unchanged by the Semi-radius pass - see this
+    // file's own header note).
     await expect(notThis).toHaveCSS("border-radius", "10px");
+    // Tokyo-11: $theme-danger #d9534f -> #f7768e, rgba(217, 83, 79, .12) -> rgba(247, 118, 142, .12).
     await expect(notThis).toHaveCSS(
       "background-color",
-      "rgba(217, 83, 79, 0.12)"
+      "rgba(247, 118, 142, 0.12)"
     );
   });
 
@@ -574,5 +612,120 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
     expect(d14Pos).toBeGreaterThan(-1);
     expect(moreDetailsPos).toBeGreaterThan(d14Pos);
     expect(identifyPos).toBeGreaterThan(moreDetailsPos);
+  });
+});
+
+// Tokyo-11 AAA contrast policy (owner-ruled 2026-07-24 - see docs/features/theming.md's "AAA
+// contrast policy" section): a permanent guard against a future token edit silently regressing
+// the two pairings the theme-options study specifically verified - body text on the panel
+// surface (strict-AAA-normal, 7:1) and the button ink on the primary action colour (also
+// strict-AAA here, 8.40:1 - though the *policy* floor for button/pill text is only AAA-large,
+// 4.5:1, see $theme-danger's own token-file note for the one variant that only clears that lower
+// bar). Reads the ACTUAL rendered `--bs-*`/`--theme-*` custom properties (not hardcoded hex), so
+// this keeps passing under any future re-theme that preserves the AAA ruling, and would fail
+// loudly if one didn't.
+test.describe("Tokyo-11 AAA contrast policy - permanent guard", () => {
+  // Same fixture set the main describe block above uses (openSelectVersionSection/
+  // openDisplayChangeQueryModal need a resolvable slot) - redeclared locally since this is a
+  // separate `describe`, not nested inside the other one's own scope.
+  const railFidelityHandlers = [
+    cardDocumentsSelectVersionMixedResults,
+    sourceDocumentsOneResult,
+    searchResultsSelectVersionMixedResults,
+    tagConsensusTwoUnresolvedTags,
+    submitTagVoteResolvesToApply,
+    castImplicitVoteSuccess,
+    retractImplicitVoteSuccess,
+    ...defaultHandlers,
+  ];
+
+  test("body text on the panel surface, and button ink on the primary action colour, both clear strict-AAA-normal (7:1)", async ({
+    page,
+    network,
+  }) => {
+    network.use(...defaultHandlers);
+    await loadPageWithDefaultBackend(page);
+
+    const ratios = await page.evaluate(() => {
+      function srgbToLin(c: number) {
+        const cs = c / 255;
+        return cs <= 0.04045 ? cs / 12.92 : Math.pow((cs + 0.055) / 1.055, 2.4);
+      }
+      // CSS custom properties are unparsed token streams, not resolved colour values - unlike a
+      // real element's own resolved `color`/`background-color` (always normalized to `rgb()` by
+      // `getComputedStyle`), reading `--bs-*`/`--theme-*` directly off `:root` returns whatever
+      // literal text the token file emitted (hex here) - this parses either form.
+      function luminance(colour: string) {
+        let r: number, g: number, b: number;
+        if (colour.startsWith("#")) {
+          const hex = colour.slice(1);
+          r = parseInt(hex.slice(0, 2), 16);
+          g = parseInt(hex.slice(2, 4), 16);
+          b = parseInt(hex.slice(4, 6), 16);
+        } else {
+          const match = colour.match(/\d+(\.\d+)?/g);
+          if (match == null || match.length < 3) {
+            throw new Error(`unparseable colour: ${colour}`);
+          }
+          [r, g, b] = match.map(Number);
+        }
+        return (
+          0.2126 * srgbToLin(r) + 0.7152 * srgbToLin(g) + 0.0722 * srgbToLin(b)
+        );
+      }
+      function contrast(a: string, b: string) {
+        const l1 = luminance(a);
+        const l2 = luminance(b);
+        const lighter = Math.max(l1, l2);
+        const darker = Math.min(l1, l2);
+        return (lighter + 0.05) / (darker + 0.05);
+      }
+      const root = getComputedStyle(document.documentElement);
+      const panel = root.getPropertyValue("--bs-secondary").trim();
+      const text = root.getPropertyValue("--bs-body-color").trim();
+      const primary = root.getPropertyValue("--bs-primary").trim();
+      const btnInk = root.getPropertyValue("--theme-btn-ink").trim();
+      const focusRing = root.getPropertyValue("--bs-focus-ring-color").trim();
+      return {
+        textOnPanel: contrast(text, panel),
+        inkOnPrimary: contrast(btnInk, primary),
+        // Non-text UI-component contrast (WCAG 2.2 SC 1.4.11/2.4.11) against panel - the
+        // TOUGHEST of this theme's three surfaces (body/raised/panel), so this is the binding
+        // worst case.
+        focusRingOnPanel: contrast(focusRing, panel),
+      };
+    });
+
+    // Study-verified: 7.54:1 (text-on-panel) and 8.40:1 (ink-on-primary) - asserting >= 7 (the
+    // strict-AAA-normal floor) rather than the exact ratio keeps this guard from being brittle
+    // against a future WITHIN-POLICY token nudge, while still catching any regression below the
+    // bar itself.
+    expect(ratios.textOnPanel).toBeGreaterThanOrEqual(7);
+    expect(ratios.inkOnPrimary).toBeGreaterThanOrEqual(7);
+    // WCAG/APCA audit fold-in (2026-07-24, PR #432's report) - the focus ring's own non-text
+    // contrast floor is 3:1 (not the 7:1 text bar above); Tokyo-11's opaque accent ring measures
+    // 5.26:1 against panel (verified 2026-07-24), comfortably clear.
+    expect(ratios.focusRingOnPanel).toBeGreaterThanOrEqual(3);
+  });
+
+  // WCAG/APCA audit fold-in (2026-07-24, PR #432's report) - `.btn-close` (modal/offcanvas/toast
+  // dismiss x) target size, WCAG 2.2 SC 2.5.8 (>=24x24 CSS px). Reads the REAL rendered
+  // `boundingBox()` (issue #434's own lesson: authored CSS isn't proof of the rendered size),
+  // on `ChangeQueryModal` - one of the ~15 sitewide mounts, chosen only because this spec file
+  // already has a reachable, real Modal fixture; the fix itself is theme-layer
+  // ($btn-close-width in styles.scss), so it applies identically to every other mount too.
+  test("the modal dismiss (×) button clears the WCAG 2.2 24x24 target-size floor", async ({
+    page,
+    network,
+  }) => {
+    network.use(...railFidelityHandlers);
+    await openSelectVersionSection(page);
+
+    const modal = await openDisplayChangeQueryModal(page, 1);
+    await expect(modal).toBeVisible();
+    const closeButton = modal.locator(".btn-close");
+    const box = await closeButton.boundingBox();
+    expect(box?.width ?? 0).toBeGreaterThanOrEqual(24);
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(24);
   });
 });

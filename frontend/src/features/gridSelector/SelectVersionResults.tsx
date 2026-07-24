@@ -391,12 +391,13 @@ const FUNNEL_TIER_TILE_WIDTH_REM: Record<
   hero: 7,
 };
 
-// F3 - dashed accent border + trailing glyph for a SUGGESTED chip; solid/plain otherwise. Reuses
-// the theme accent (`#df6919`) already used everywhere else in the funnel, matching the mockup's
-// reference styling (funnel-mockup.html's `.seg.suggested`).
+// F3 - dashed accent border + trailing glyph for a SUGGESTED chip; solid/plain otherwise. Tokyo-11
+// (2026-07-24): reuses `$theme-accent`, not `$theme-primary` -- the study names "selection/active
+// chip" as an accent surface, and this chip's own "suggested" semantics match the D14 suggested
+// pill's identical REV (see DisplayPage.tsx's `.d14 .statepill.suggested`).
 const FUNNEL_SUGGESTED_STYLE: React.CSSProperties = {
   borderStyle: "dashed",
-  borderColor: "#df6919",
+  borderColor: "var(--theme-accent)",
 };
 
 const AckLine = styled.div`
@@ -404,7 +405,7 @@ const AckLine = styled.div`
 `;
 
 const AwarenessLine = styled.div`
-  border-left: 2px solid #df6919;
+  border-left: 2px solid var(--bs-primary);
   padding-left: 0.5rem;
   color: #aab7c4;
 `;
@@ -489,16 +490,16 @@ const TreatmentChip = styled.button<{ $state: ChipVoteState }>`
   padding: 0.15rem 0.4rem;
   border: 1px solid #6b7d8e;
   background: transparent;
-  color: #ebebeb;
+  color: var(--bs-body-color);
   display: inline-flex;
   gap: 3px;
   align-items: center;
   ${touchExpandTapArea}
   ${(props) =>
     props.$state === "positive"
-      ? "border-color:#5cb85c;background:rgba(92,184,92,.22);color:#bfe6ad;"
+      ? "border-color:var(--bs-success);background:rgba(var(--bs-success-rgb),.22);color:#bfe6ad;"
       : props.$state === "negative"
-      ? "border-color:#d9534f;background:rgba(217,83,79,.22);color:#f0b3b1;text-decoration:line-through;"
+      ? "border-color:var(--bs-danger);background:rgba(var(--bs-danger-rgb),.22);color:#f0b3b1;text-decoration:line-through;"
       : ""}
 `;
 
@@ -510,7 +511,7 @@ const TreatmentChip = styled.button<{ $state: ChipVoteState }>`
 const UnifiedFilterDivider = styled.span`
   align-self: stretch;
   width: 1px;
-  background: #16202b;
+  background: var(--theme-divider);
   margin: 0 2px;
 `;
 
@@ -546,7 +547,7 @@ const FloatFiltersPortalRoot = styled.div`
     max-height: calc(100% - 96px);
     overflow-y: auto;
     z-index: 1051;
-    background: #22303f;
+    background: var(--theme-raised-bg);
     border: 1px solid #7f8fa0;
     box-shadow: 0 12px 34px rgba(0, 0, 0, 0.6);
     padding: 0;
@@ -559,7 +560,7 @@ const FloatFiltersPortalRoot = styled.div`
     align-items: center;
     justify-content: space-between;
     padding: 8px 12px;
-    background: #4e5d6b;
+    background: var(--theme-card-header-bg);
     font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
@@ -569,8 +570,8 @@ const FloatFiltersPortalRoot = styled.div`
   }
   .fptitle button {
     background: transparent;
-    border: 1px solid rgba(235, 235, 235, 0.2);
-    color: #ebebeb;
+    border: 1px solid rgba(var(--bs-body-color-rgb), 0.2);
+    color: var(--bs-body-color);
     padding: 2px 8px;
     cursor: pointer;
     font-family: inherit;
@@ -589,17 +590,17 @@ const FloatFiltersPortalRoot = styled.div`
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     margin-bottom: 4px;
   }
   .fsep {
     height: 1px;
-    background: #16202b;
+    background: var(--theme-divider);
     margin: 9px -8px;
   }
   .implicit-note {
     font-size: 10px;
-    color: #8fa0b0;
+    color: var(--theme-muted);
     margin-top: 7px;
     display: flex;
     gap: 5px;
@@ -607,7 +608,7 @@ const FloatFiltersPortalRoot = styled.div`
     line-height: 1.4;
   }
   .implicit-note .ic {
-    color: #5bc0de;
+    color: var(--bs-info);
     flex: 0 0 auto;
   }
 `;
@@ -626,8 +627,8 @@ const TileImageWrap = styled.div`
 // normalized `.9` -> `.92` matching the D.1 table's literal `rgba(...,.92)` for all three
 // variants ("Tile ✓ canonical tag"/"Tile Alt tag"/"Tile ? unknown tag").
 const CORNER_TAG_COLORS: Record<"canon" | "alt" | "unk", string> = {
-  canon: "rgba(92,184,92,.92)",
-  alt: "rgba(91,192,222,.92)",
+  canon: "rgba(var(--bs-success-rgb),.92)",
+  alt: "rgba(var(--bs-info-rgb),.92)",
   unk: "rgba(120,135,150,.92)",
 };
 
@@ -657,8 +658,8 @@ const ReqBadge = styled.span`
   top: 0;
   right: 0;
   z-index: 1;
-  background: #df6919;
-  color: #fff;
+  background: var(--bs-primary);
+  color: var(--theme-btn-ink);
   font-size: 0.5rem;
   font-weight: 800;
   padding: 0 3px;
@@ -666,14 +667,15 @@ const ReqBadge = styled.span`
 
 /** F3's "survived only via a suggested/unconfirmed tag" signal - used to be a standalone
  * "⌇ suggested" text row under the tile; folded into a small corner marker instead (bottom-left,
- * the one corner `CornerTag`/`ReqBadge`/the confirm ribbon below don't already use). */
+ * the one corner `CornerTag`/`ReqBadge`/the confirm ribbon below don't already use). Tokyo-11:
+ * accent, matching the "suggested" semantics FUNNEL_SUGGESTED_STYLE/D14's suggested pill share. */
 const SuggestedMarker = styled.span`
   position: absolute;
   bottom: 0;
   left: 0;
   z-index: 1;
   font-size: 0.55rem;
-  color: #df6919;
+  color: var(--theme-accent);
   background: rgba(0, 0, 0, 0.55);
   padding: 0 3px;
 `;
@@ -708,9 +710,9 @@ const GhostTile = styled.button<{ $widthRem: number }>`
   flex: 0 0 auto;
   overflow: hidden;
   background: transparent;
-  outline: 1px solid rgba(235, 235, 235, 0.15);
+  outline: 1px solid rgba(var(--bs-body-color-rgb), 0.15);
   border: none;
-  color: #abb6c2;
+  color: var(--theme-light);
   font-size: 0.65rem;
   display: flex;
   flex-direction: column;
@@ -1126,7 +1128,7 @@ function SelectVersionTile({
       {!stacked && showSuggestedBadge && (
         <div
           className="text-center small"
-          style={{ color: "#df6919" }}
+          style={{ color: "var(--theme-accent)" }}
           data-testid={`select-version-suggested-badge-${identifier}`}
         >
           ⌇ suggested
