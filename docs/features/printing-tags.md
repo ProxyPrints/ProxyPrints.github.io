@@ -329,8 +329,10 @@ printings, artists, tags, and moderation from one screen.
 
 ## Frontend architecture
 
-**SUPERSEDED (WTC rebuild, 2026-07-24, `SPEC-wtc-rebuild.md`, owner rulings on that spec's
-three open questions)** — `/whatsthat`'s visual/layout tree was rebuilt from scratch onto the
+**SUPERSEDED (WTC rebuild, 2026-07-24,
+[`docs/proposals/mockups/wtc-rebuild/SPEC-wtc-rebuild.md`](../proposals/mockups/wtc-rebuild/SPEC-wtc-rebuild.md),
+owner rulings on that spec's three open questions — see PR #446)** — `/whatsthat`'s
+visual/layout tree was rebuilt from scratch onto the
 Tokyo-11 theme's ruled token layer (page-private `--wtc-*` tokens derived from `--accent`/
 `--body`/`--conf`, defined in `whatsthat.tsx`'s `WtcTokenScope`), replacing the bespoke gold/
 navy/starburst-blue/deep-blue-field identity the many "quiz-reveal hero" (issue #305) bullets
