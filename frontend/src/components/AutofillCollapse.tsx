@@ -1,8 +1,27 @@
+import styled from "@emotion/styled";
 import React, { ReactElement } from "react";
 import Card from "react-bootstrap/Card";
 import Collapse from "react-bootstrap/Collapse";
 import Container from "react-bootstrap/Container";
 import Stack from "react-bootstrap/Stack";
+
+// WCAG 2.2 audit (2026-07-24, REDUCED MOTION finding) - this chevron's rotate transition used to
+// be a plain inline `style={{ transition: "all 0.25s 0s" }}`, which - unlike every other animated
+// surface in the codebase (PagePreview.tsx's loading sweep, printingTags/cardPanel.tsx,
+// WhatsThatWords.tsx, all of which carry an explicit `@media (prefers-reduced-motion: reduce)`
+// override) - never checked `prefers-reduced-motion` at all. A plain inline style can't express a
+// media query, so the transition is lifted into this tiny styled component instead (same
+// className/DOM shape, only the `style` prop's `transition` moves here) - the disclosure still
+// works identically for a reduced-motion user, it just snaps instead of animating over 0.25s,
+// matching this codebase's own established pattern for every other transition/animation.
+const ChevronIcon = styled.h5`
+  color: white;
+  transition: all 0.25s 0s;
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+`;
 
 interface AutofillCollapseProps {
   expanded: boolean;
@@ -104,11 +123,10 @@ export function AutofillCollapse({
               <h6 className="text-primary prevent-select">{subtitle}</h6>
             )}
             <button className="ms-auto bg-transparent border-0">
-              <h5
+              <ChevronIcon
                 className={`bi bi-chevron-left rotate-${
                   expanded ? "" : "neg"
                 }90`}
-                style={{ transition: "all 0.25s 0s", color: "white" }}
               />
             </button>
           </Stack>
