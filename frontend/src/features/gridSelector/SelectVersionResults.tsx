@@ -436,11 +436,16 @@ const touchExpandTapArea = `
   }
 `;
 
-/** Filters disclosure toggle + "Clear filters" - bordered/outline buttons in the reference's own
- * shape family, just tightened to its padding/font-size. */
+/** Filters disclosure toggle - the corrected mockup's own `.btn-sm` binding row (owner ruling,
+ * 2026-07-23, superseding this file's earlier "the buttons are too big" shrink for THIS control
+ * specifically - real Bootstrap `sm` metrics, not the smaller invented values). This styled
+ * component has exactly one call site (the Filters toggle below) so the fix is already
+ * component-scoped - it does NOT touch `CompactToggleButton`/`CompactLinkButton`/`TreatmentChip`
+ * below, which bind to their OWN distinct, still-in-force spec rows ("Filter segment group .seg"
+ * 11px, "Treatment tri-state chip" 11px) - see each one's own doc comment. */
 const CompactButton = styled(Button)`
-  padding: 0.2rem 0.5rem;
-  font-size: 0.75rem;
+  padding: 4px 8px;
+  font-size: 14px;
   line-height: 1.2;
   ${touchExpandTapArea}
 `;
@@ -489,11 +494,14 @@ const TreatmentChip = styled.button<{ $state: ChipVoteState }>`
 `;
 
 /** A thin vertical rule separating Frame's segmented control from Treatment's chip row within
- * the one shared `.ufilter` block (§6's ASCII diagram). */
+ * the one shared `.ufilter` block (§6's ASCII diagram). O1 fix round (SPEC-display-left-rail.md
+ * §D.1, corrected 2026-07-23) - the mockup's own `.ufilter .divider{background:var(--divider)}`
+ * maps this to the normalized `#16202b` rail-boundary hairline, not the unthemed
+ * `rgba(0,0,0,.22)` this used to hardcode. */
 const UnifiedFilterDivider = styled.span`
   align-self: stretch;
   width: 1px;
-  background: rgba(0, 0, 0, 0.22);
+  background: #16202b;
   margin: 0 2px;
 `;
 
@@ -507,10 +515,13 @@ const TileImageWrap = styled.div`
   position: relative;
 `;
 
+// Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - alpha
+// normalized `.9` -> `.92` matching the D.1 table's literal `rgba(...,.92)` for all three
+// variants ("Tile ✓ canonical tag"/"Tile Alt tag"/"Tile ? unknown tag").
 const CORNER_TAG_COLORS: Record<"canon" | "alt" | "unk", string> = {
-  canon: "rgba(92,184,92,.9)",
-  alt: "rgba(91,192,222,.9)",
-  unk: "rgba(120,135,150,.9)",
+  canon: "rgba(92,184,92,.92)",
+  alt: "rgba(91,192,222,.92)",
+  unk: "rgba(120,135,150,.92)",
 };
 
 /** Group-membership corner tag (canonical ✓ / non-canonical Alt / unknown ?) - replaces the old
@@ -520,7 +531,9 @@ const CornerTag = styled.span<{ $variant: "canon" | "alt" | "unk" }>`
   top: 0;
   left: 0;
   z-index: 1;
-  font-size: 0.5rem;
+  /* Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - was 0.5rem
+     (8px); the D.1 table's own binding value for every corner tag variant is 7px. */
+  font-size: 7px;
   font-weight: 800;
   letter-spacing: 0.03em;
   padding: 0 3px;
@@ -588,6 +601,13 @@ const GhostTile = styled.button<{ $widthRem: number }>`
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  /* Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this is a
+     real button element (buttons-look-like-buttons audit, §8/#5), so without an explicit reset
+     it carries the browser's own UA-stylesheet button padding (roughly 1px 6px in Chromium)
+     instead of the flush zero padding the spec's ghost tile assumes (the mockup's own demo
+     markup used a plain span with role=button, which has no such UA default - not a real
+     discrepancy to preserve). */
+  padding: 0;
   ${touchExpandTapArea}
 `;
 
@@ -1752,7 +1772,10 @@ export function SelectVersionResults({
           <fieldset
             className="ufilter"
             style={{
-              border: "1px solid rgba(0,0,0,.22)",
+              // O1 fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23,
+              // owner-approved) - normalized to the `#16202b` rail-boundary hairline (was the
+              // unthemed `rgba(0,0,0,.22)`), same value every other rail block boundary now uses.
+              border: "1px solid #16202b",
               background: "#22303f",
               padding: "6px 8px",
               // CSS-fidelity pass (2026-07-23) - `mb-1` (0.25rem/4px) approximated the mockup's
