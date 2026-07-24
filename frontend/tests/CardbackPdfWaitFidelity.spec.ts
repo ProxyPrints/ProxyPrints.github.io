@@ -94,11 +94,18 @@ for (const viewport of [
       const gate = page.getByTestId("pre-print-cardback-gate");
       await expect(gate).toBeVisible();
 
-      // E.1 `.mdialog` (real react-bootstrap Modal on Superhero) - content bg $gray-600 #4e5d6c.
+      // E.1 `.mdialog` (real react-bootstrap Modal) - the spec's own table cites the stock
+      // Superhero `$modal-content-bg` ($gray-600 #4e5d6c), but PR #425's theme-defaults pass
+      // (landed the same day, separately) re-routed EVERY Modal's content bg to
+      // `$theme-raised-bg` (#22303f) sitewide - a base-theme move this spec's own binding token
+      // couldn't have anticipated, not a regression introduced here. Asserting the CURRENT real
+      // shared value (`_theme-tokens.scss`'s `$modal-content-bg: $theme-raised-bg`) - this file's
+      // own Modal instances (the reminder gate, the cardback grid selector) are unforked,
+      // sitewide Bootstrap chrome, not something this round overrides.
       const modalContent = page.locator(".modal-content").first();
       await expect(modalContent).toHaveCSS(
         "background-color",
-        "rgb(78, 93, 108)"
+        "rgb(34, 48, 63)"
       );
 
       // E.1 `.mfoot` primary button - $primary #df6919.

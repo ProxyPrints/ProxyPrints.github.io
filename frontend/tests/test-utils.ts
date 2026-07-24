@@ -269,6 +269,14 @@ export const navigateToPrintPDFTab = async (page: Page, query: string) => {
   await importTextOnEditorLanding(page, query);
   await expect(async () => {
     await page.getByTestId("finish-footer-print-export").click();
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still riding the
+    // untouched default cardback, so the reminder gate fires before navigation; "Use current &
+    // continue" proceeds (and suppresses the gate for the rest of this retry loop's session, so a
+    // `toPass` retry never re-shows it).
+    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+    if (await cardbackGate.isVisible().catch(() => false)) {
+      await cardbackGate.getByTestId("cardback-gate-use-current").click();
+    }
     await page.waitForURL(/\/print/, { timeout: 15_000 });
   }).toPass({ timeout: 45_000 });
   await page.getByRole("tab", { name: "PDF" }).click();
