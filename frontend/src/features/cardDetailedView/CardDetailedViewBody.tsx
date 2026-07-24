@@ -65,9 +65,20 @@ export function CardIdentifierCopy({ identifier }: CardIdentifierCopyProps) {
 
 interface CardMetaTableProps {
   cardDocument: CardDocument;
+  /** Rail-delegacy round (rev #2/RD7, SPEC-rail-delegacy.md) - additive, optional. `false` drops
+   * the "Canonical Card" row (the printing set/collector identifier) from this table entirely -
+   * the /display rail's "More details" disclosure passes this, since the same identifier already
+   * lives ONCE, always-visible, in the D14 confidence band (`ConfidenceElement.tsx`); repeating it
+   * here would be exactly the "static second copy" RD7 rules out. `undefined`/`true` (every other
+   * caller - the classic card-detail modal, CardDetailedViewBody's own default composition)
+   * preserves today's behavior unchanged - that surface has no D14 band of its own. */
+  showCanonicalCard?: boolean;
 }
 
-export function CardMetaTable({ cardDocument }: CardMetaTableProps) {
+export function CardMetaTable({
+  cardDocument,
+  showCanonicalCard = true,
+}: CardMetaTableProps) {
   const getLanguagesQuery = useGetLanguagesQuery();
   const getTagDisplayName = useTagDisplayName();
   const languageNameByCode = Object.fromEntries(
@@ -117,20 +128,24 @@ export function CardMetaTable({ cardDocument }: CardMetaTableProps) {
         ["Date Created", cardDocument.dateCreated],
         ["Date Modified", cardDocument.dateModified],
         ["File Size", imageSizeToMBString(cardDocument.size, 2)],
-        [
-          "Canonical Card",
-          cardDocument.canonicalCard ? (
-            <>
-              <SetIcon
-                expansionCode={cardDocument.canonicalCard.expansionCode}
-              />{" "}
-              {cardDocument.canonicalCard.expansionCode.toUpperCase()}{" "}
-              {cardDocument.canonicalCard.collectorNumber}
-            </>
-          ) : (
-            "Unknown"
-          ),
-        ],
+        ...(showCanonicalCard
+          ? [
+              [
+                "Canonical Card",
+                cardDocument.canonicalCard ? (
+                  <>
+                    <SetIcon
+                      expansionCode={cardDocument.canonicalCard.expansionCode}
+                    />{" "}
+                    {cardDocument.canonicalCard.expansionCode.toUpperCase()}{" "}
+                    {cardDocument.canonicalCard.collectorNumber}
+                  </>
+                ) : (
+                  "Unknown"
+                ),
+              ],
+            ]
+          : []),
         [
           "Canonical Aritst",
           cardDocument.canonicalArtist != null ? (
