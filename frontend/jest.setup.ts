@@ -29,6 +29,16 @@ configureReact({ asyncUtilTimeout: 10_000 });
 configureDom({ asyncUtilTimeout: 10_000 });
 
 // retrieved from https://stackoverflow.com/a/68539103/13021511
+// Rail-delegacy round (SPEC-rail-delegacy.md) - `addEventListener`/`removeEventListener` added
+// alongside the deprecated `addListener`/`removeListener` pair this polyfill already carried:
+// `useViewportTier.ts` (display/useViewportTier.ts) calls the modern
+// `MediaQueryList.addEventListener("change", ...)` form, which real browsers and jsdom's own
+// native `matchMedia` both support - this polyfill hadn't caught up, so any component mounting
+// that hook under Jest (SelectVersionResults.tsx, this round) threw
+// "mql.addEventListener is not a function" the moment its effect ran. `matches: false` still
+// resolves every tier query to false, which `useViewportTier.ts`'s own fallback chain reads as
+// "desktop" - unchanged behavior for every existing caller, just no longer a hard crash for a new
+// one.
 global.matchMedia =
   global.matchMedia ||
   function () {
@@ -36,6 +46,8 @@ global.matchMedia =
       matches: false,
       addListener: function () {},
       removeListener: function () {},
+      addEventListener: function () {},
+      removeEventListener: function () {},
     };
   };
 

@@ -407,13 +407,15 @@ test.describe("ImportText", () => {
     // pre-port) is rendered by Card.tsx's small-thumbnail CardImage path only - PagePreview's
     // sheet slots (this page's own image render, see this file's module comment) don't mount that
     // component, so there's no equivalent element to check here. The unified page's own signal for
-    // this same condition (a resolved, non-degraded printing-specific import) is the rail's
-    // `requested-printing-badge`, already covered end-to-end by DisplayPage.spec.ts's "the
-    // requested-printing badge shows the plain style..." test - not duplicated here.
+    // this same condition (a resolved, non-degraded printing-specific import) used to be a static
+    // "plain style" `requested-printing-badge` on the rail-head, but rail-delegacy's RD7
+    // (SPEC-rail-delegacy.md §F item 4/§H O2) retired that: the badge now renders ONLY as a
+    // requested≠resolved mismatch flag, never a static second copy of an identity the D14
+    // confidence band already shows once - so a correctly-resolved import like this one renders
+    // no badge at all. That's covered end-to-end by DisplayPage.spec.ts's "the rail-head shows no
+    // mismatch flag for a resolved, non-degraded printing-specific import (the id already lives
+    // once, in D14)" test - not duplicated here.
     await page.getByTestId("page-preview-slot").first().click();
-    await expect(page.getByTestId("requested-printing-badge")).toHaveAttribute(
-      "data-degraded",
-      "false"
-    );
+    await expect(page.getByTestId("requested-printing-badge")).toHaveCount(0);
   });
 });

@@ -177,25 +177,31 @@ test.describe("SelectVersionSection (issue #167)", () => {
   // Funnel round (funnel-spec.md F2/F3, XF1/XF2) - the flat FilterChipBar is retired from this
   // (stacked/rail) surface, replaced by the per-axis segmented `funnel-chip-*` controls (Border/
   // Frame) and the tri-state `funnel-treatment-chip-*` controls (Treatment) sharing one unified
-  // block (SPEC-display-left-rail.md §6). "More like this" (the old per-tile "seed the filter
-  // from this card's own tags" affordance) was DROPPED entirely when the between-group rows were
-  // removed (§7's own affordance table doesn't allocate it a tile-corner slot) - filtering now
-  // goes directly through the unified block's own chips.
+  // block. "More like this" (the old per-tile "seed the filter from this card's own tags"
+  // affordance) was DROPPED entirely when the between-group rows were removed (§7's own
+  // affordance table doesn't allocate it a tile-corner slot) - filtering now goes directly
+  // through the unified block's own chips.
+  //
+  // Rail-delegacy round (item 2/3/5, RD1/RD4, SPEC-rail-delegacy.md) - the chips now live INSIDE
+  // the one Filters panel (closed by default, opened via `funnel-filters-toggle`) instead of
+  // always rendering above the grid; the funnel-head's own active-tag pill row is retired along
+  // with the old always-visible arrangement (RD1: the panel's own chip highlight - `data-active` -
+  // is the one place active state now shows), so this test now asserts the chip's own active
+  // state instead of a pill.
   test("the unified Frame+Treatment block's tri-state chips filter the whole grid", async ({
     page,
     network,
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // cardDocument18 (unknown bucket) has a resolved "Full Art" tag and is the ONLY candidate
     // with it in this fixture set - one click cycles the Treatment chip untouched -> include.
-    await page.getByTestId("funnel-treatment-chip-Full Art").click();
+    const chip = page.getByTestId("funnel-treatment-chip-Full Art");
+    await chip.click();
 
-    await expect(page.getByTestId("funnel-active-pill-Full Art")).toBeVisible();
-    // Filtering down to Full Art narrows the survivor count to 1, which collapses the axis rows
-    // to the head's active-pill summary (D21's "hero" tier) - the pill is the correct place to
-    // assert the chip activated, not the (now-hidden) segmented chip button itself.
+    await expect(chip).toHaveAttribute("data-state", "positive");
     await expect(page.getByTestId("funnel-count")).toContainText("1 version");
     await expect(
       page.getByTestId(`select-version-tile-${cardDocument18.identifier}`)
@@ -220,12 +226,17 @@ test.describe("SelectVersionSection (issue #167)", () => {
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // Manually activate the "Old Border" funnel chip - cardDocument18 carries a *suggested* (not
     // resolved) Old Border vote, so it should still be filtered in (resolved-OR-suggested when
     // the vote layer is on) and its selection should cast an implicit support vote.
     await page.getByTestId("funnel-chip-Old Border").click();
     await expect(page.getByTestId("funnel-awareness-line")).toBeVisible();
+    // Rail-delegacy round (RD4/O3) - the desktop/tablet Filters panel is a real modal-style
+    // overlay with its own backdrop (escapes the 380px rail column) - close it first so the
+    // grid tile underneath is actually clickable, same as a real user would have to.
+    await page.getByTestId("filters-panel-close").click();
 
     const tile = page.getByTestId(
       "select-version-tile-1lL2mM3nN4oO5pP6qQ7rR8sS9tT0uU"
@@ -237,9 +248,14 @@ test.describe("SelectVersionSection (issue #167)", () => {
     await expect(page.getByTestId("funnel-support-ack")).toContainText(
       "Old Border"
     );
-    // The pick resets the active chips - the awareness line (gated on >=1 active chip) disappears
-    // along with it.
+    // The pick resets the active chips - reopening the panel shows the Border chip back to
+    // untouched, not still active from before the pick.
+    await page.getByTestId("funnel-filters-toggle").click();
     await expect(page.getByTestId("funnel-awareness-line")).toHaveCount(0);
+    await expect(page.getByTestId("funnel-chip-Old Border")).toHaveAttribute(
+      "data-active",
+      "false"
+    );
     // No two-tap confirm chip anywhere on this surface any more (D20).
     await expect(
       page.getByTestId(
@@ -284,9 +300,13 @@ test.describe("SelectVersionSection (issue #167)", () => {
       ...selectVersionHandlers
     );
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // First pick: cardDocument18 (1lL2...), under the active "Old Border" chip - casts support.
+    // Rail-delegacy round (RD4/O3) - close the Filters panel's own modal-style backdrop first so
+    // the grid tile underneath is actually clickable.
     await page.getByTestId("funnel-chip-Old Border").click();
+    await page.getByTestId("filters-panel-close").click();
     await page
       .getByTestId("select-version-tile-1lL2mM3nN4oO5pP6qQ7rR8sS9tT0uU")
       .locator(".mpccard")
@@ -371,11 +391,15 @@ test.describe("SelectVersionSection (issue #167)", () => {
       ...defaultHandlers
     );
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // No suggested chip for "Old Border" at all - the only candidate that carries it
     // (cardDocument19) does so via tagVoteStatuses only, which the funnel no longer consults for
     // the suggested read.
     await expect(page.getByTestId("funnel-chip-Old Border")).toHaveCount(0);
+    // Rail-delegacy round (RD4/O3) - close the Filters panel's own modal-style backdrop first so
+    // the grid tile underneath is actually clickable.
+    await page.getByTestId("filters-panel-close").click();
 
     // Activate a DIFFERENT axis (Treatment has no membership here since none of these three carry
     // a Treatment tag at all) isn't available, so instead: pick cardDocument19 directly with NO

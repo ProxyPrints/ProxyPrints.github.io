@@ -17,9 +17,21 @@ import { selectIsSearchQueryDegraded } from "@/store/slices/searchResultsSlice";
 
 interface RequestedPrintingBadgeProps {
   query: SearchQuery | undefined;
+  /** Rail-delegacy round (SPEC-rail-delegacy.md §C/RD7) - additive, optional pair. When
+   * `showOnlyOnMismatch` is true, the badge renders ONLY when `resolvedPrinting` (the card's
+   * `canonicalCard` ?? `suggestedCanonicalCard`) is missing or names a different printing than
+   * `query` requested - a genuine mismatch worth flagging, never a static second copy of an
+   * identity the D14 confidence band already shows once. `undefined`/`false` (every existing
+   * caller - CardSlot.tsx) preserves today's always-show-when-requested behavior untouched. */
+  showOnlyOnMismatch?: boolean;
+  resolvedPrinting?: { expansionCode: string; collectorNumber: string } | null;
 }
 
-export function RequestedPrintingBadge({ query }: RequestedPrintingBadgeProps) {
+export function RequestedPrintingBadge({
+  query,
+  showOnlyOnMismatch = false,
+  resolvedPrinting = null,
+}: RequestedPrintingBadgeProps) {
   // Called unconditionally on every render of this component regardless of whether the badge
   // ends up rendering anything - satisfies the rules-of-hooks the same way DisplayPage.tsx's own
   // Rail component previously had to (see its own comment on why this selector runs ahead of any
@@ -39,9 +51,46 @@ export function RequestedPrintingBadge({ query }: RequestedPrintingBadgeProps) {
     return null;
   }
 
+  const isMismatch =
+    resolvedPrinting == null ||
+    resolvedPrinting.expansionCode.toLowerCase() !==
+      query.expansionCode.toLowerCase() ||
+    (query.collectorNumber != null &&
+      resolvedPrinting.collectorNumber !== query.collectorNumber);
+
+  if (showOnlyOnMismatch && !isMismatch) {
+    return null;
+  }
+
   const printingBadge = `${query.expansionCode.toUpperCase()}${
     query.collectorNumber ? " " + query.collectorNumber : ""
   }`;
+
+  // The rail-delegacy round's `.mismatch` flag (SPEC-rail-delegacy.md §D.2) is a single warning-
+  // coloured style, not the two-state plain/degraded badge look every other caller keeps - see
+  // that table's `.rhead .mismatch` row (`10px` mono, `#ffc107`/`#111`, `padding:1px 7px`).
+  if (showOnlyOnMismatch) {
+    return (
+      <span
+        className="mismatch"
+        style={{
+          display: "inline-block",
+          marginTop: "5px",
+          background: "#ffc107",
+          color: "#111",
+          fontFamily: "monospace",
+          fontSize: "10px",
+          padding: "1px 7px",
+          borderRadius: 0,
+        }}
+        data-testid="requested-printing-badge"
+        data-degraded={isDegraded}
+        title="Requested printing differs from the resolved printing"
+      >
+        requested ≠ shown: {printingBadge}
+      </span>
+    );
+  }
 
   return (
     <span

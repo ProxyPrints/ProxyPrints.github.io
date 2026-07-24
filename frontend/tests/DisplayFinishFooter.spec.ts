@@ -207,10 +207,11 @@ test.describe("/display local draft auto-backup + restore nudge (issue #275)", (
       .getByTestId("finish-footer-draft-note")
       .waitFor({ timeout: 5_000 });
 
+    // Rail-delegacy round (SPEC-rail-delegacy.md §F item 7/RD5) - Slot Actions is unconditionally
+    // visible inside the bottom control stack now, no accordion header to expand first (same
+    // pattern as DisplayPage.spec.ts's "the Slot Actions section's Delete removes the slot..."
+    // test - the old grey `AutofillCollapse` heading click this test used to need is gone).
     await page.getByTestId("page-preview-slot").first().click();
-    await page
-      .getByRole("heading", { name: "Slot Actions", exact: true })
-      .click();
     await page.getByTestId("display-slot-action-delete").click();
 
     await expect(page.getByTestId("display-empty-state")).toBeVisible();
