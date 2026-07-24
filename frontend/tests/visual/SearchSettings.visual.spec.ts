@@ -11,29 +11,16 @@ import {
 
 import { test } from "../../playwright.setup";
 import {
-  expectCardGridSlotState,
-  importText,
+  expectDisplaySheetSlotState,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
-  openSearchSettingsModal,
+  openDisplaySearchSettingsModal,
 } from "../test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
-
+// Parity wave 2 (2026-07-23, issue #272): ported onto the unified `/editor` page.
+// SearchSettings.tsx itself is unchanged and unforked (DisplayPage.tsx's own comment: "the same
+// self-contained trigger-button-plus-modal ProjectEditor.tsx already mounts, relocated here
+// unmodified") - only how it's reached differs (openDisplaySearchSettingsModal, test-utils.ts).
 test.describe("SearchSettings visual tests", () => {
   test("search settings modal structure", async ({ page, network }) => {
     network.use(
@@ -46,10 +33,10 @@ test.describe("SearchSettings visual tests", () => {
     await loadPageWithDefaultBackend(page);
 
     // Wait for sources to be fetched by importing a card
-    await importText(page, "my search query");
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 1);
+    await importTextOnEditorLanding(page, "my search query");
+    await expectDisplaySheetSlotState(page, 1, "front", cardDocument1.name);
 
-    const searchSettings = await openSearchSettingsModal(page);
+    const searchSettings = await openDisplaySearchSettingsModal(page);
     await expect(searchSettings.getByText(sourceDocument1.name)).toBeVisible();
 
     // Wait until all spinners have finished loading

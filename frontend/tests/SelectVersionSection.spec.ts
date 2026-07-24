@@ -26,23 +26,11 @@ import {
 import { test } from "../playwright.setup";
 import { openSelectVersionSection } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
-
+// Parity wave 2 (2026-07-23, issue #272) - un-skipped. This file was never actually classic-
+// editor-only: it already exercised the unified page's own rail (via openSelectVersionSection,
+// test-utils.ts) from the moment it landed with issue #167 (#198), before the route swap even
+// happened. It picked up the swap's blanket per-file skip marker anyway and was deliberately left
+// for this wave rather than wave 1 - see test-utils.ts's own openSelectVersionSection comment.
 function buildRoute(route: string): string {
   return `${localBackendURL}/${route}`;
 }
