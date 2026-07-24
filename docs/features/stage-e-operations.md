@@ -238,10 +238,14 @@ per-batch dry-run leg — see `stage-e-streaming.md` §3 decision (5)), and
 `counters` carrying `trigger_reason` (`"card-create"`/`"evidence-change"`/
 `"backstop-sweep"`/`"backstop-sweep-stage-d"`), `batch_size`,
 `stage_c_completed`, `stage_c_fetch_failures`, `stage_d_join_key_votes`,
-`stage_d_fallback_votes`, `stage_d_slow_path_routed`, `elapsed_s`,
-`peak_rss_mb` (via the same `process_metrics.get_process_rss_mb` Phase 1
-wired in), and `lockout_trip_id` (non-null only when a Google lockout tripped
-mid-batch). A halted call (`disabled`/`halted-open-trip`/`halted-new-trip`)
+`stage_d_join_key_already_voted`, `stage_d_fallback_votes`,
+`stage_d_fallback_already_voted` (2026-07-24 — a losing race against a
+concurrent overlapping dispatch, see "Resume contract, extended to a
+streamed micro-batch" below; non-zero occasionally is healthy, not a bug),
+`stage_d_slow_path_routed`, `elapsed_s`, `peak_rss_mb` (via the same
+`process_metrics.get_process_rss_mb` Phase 1 wired in), and `lockout_trip_id`
+(non-null only when a Google lockout tripped mid-batch). A halted call
+(`disabled`/`halted-open-trip`/`halted-new-trip`)
 writes NO ledger row at all — a halted dispatch never partially starts, so
 there's nothing to record beyond the `EnvelopeTrip` row `check_envelope`
 itself already persists. A crashed batch (any other exception) is marked
@@ -253,19 +257,81 @@ no new failure-handling mechanism.
 
 Each card's own `persist_evidence` call is its own transaction — a crash
 mid-batch leaves every already-persisted card durably written and nothing
-partially written for the card the crash interrupted. A re-invocation over
-the same (or an overlapping) card-id set is idempotent: Stage C's resume
-filter skips cards already fully processed, and Stage D's own
-anonymous_id-exclusion eligibility queries skip cards already voted on — the
-same "truthful ledger, idempotent re-entry, zero manual cleanup" property the
-batch kill-test (`scripts/ops/crash_drill.sh`) already proves for BULK mode,
-now covered for the streamed path by `cardpicker/tests/test_stage_e_dispatch.py`'s
-`TestKillSafetyResumeContract` (a mid-batch exception, a truthful `FAILED`
-ledger row, and an idempotent re-invocation, at unit-test granularity). The
-LIVE, host-level dispatcher-kill drill `stage-e-streaming.md` §7(b) specs
-(killing the dispatcher PROCESS itself, not a simulated exception) is still
-open — see that section for why it's sequenced into the phase-3 shakedown,
-not this change.
+partially written for the card the crash interrupted. A **sequential**
+re-invocation over the same (or an overlapping) card-id set is idempotent:
+Stage C's resume filter skips cards already fully processed, and Stage D's
+own anonymous_id-exclusion eligibility queries skip cards already voted on —
+the same "truthful ledger, idempotent re-entry, zero manual cleanup" property
+the batch kill-test (`scripts/ops/crash_drill.sh`) already proves for BULK
+mode, now covered for the streamed path by
+`cardpicker/tests/test_stage_e_dispatch.py`'s `TestKillSafetyResumeContract`
+(a mid-batch exception, a truthful `FAILED` ledger row, and an idempotent
+re-invocation, at unit-test granularity).
+
+**Correction (2026-07-24, trip `envtrip-20260724T214616-be6e5db9`): a
+CONCURRENT overlapping re-invocation is not automatically a cheap no-op the
+way a sequential one is — an earlier version of this page overstated the
+eligibility exclude alone as sufficient.** django-q2 runs 8 workers
+(`Q_CLUSTER["workers"]`), and the cron backstop sweep can overlap an
+event-driven dispatch too — two dispatches scoped to the same card can both
+pass `run_join_key_calculator`'s/`run_fallback_calculator`'s own eligibility
+check before either commits, both compute the same verdict, and race to
+write the same `(card, anonymous_id)` vote. The shakedown's first live run
+hit exactly this: **seven** failed `PilotRunLedger` rows (run_ids
+`stage-e-stream-20260724T2144*`) plus the one dispatch that won the race and
+committed cleanly — seven losers plus one winner is eight total concurrent
+dispatches, exactly `Q_CLUSTER["workers"] = 8`. Each loser's `bulk_create`
+raised `IntegrityError` and aborted its whole micro-batch. Fixed with a
+pre-write skip-if-exists guard on both calculators
+(`local_calculate_verdicts._split_new_printing_tag_votes` — see that
+function's own docstring for why skip-and-count, not retract-and-recast, is
+the honest semantic here, GIVEN both racing reads see the same evidence
+under the same code version and lexicon — `reparse_collector_evidence`
+remains the correct remedy if that assumption doesn't hold, e.g. a
+mid-race code deploy or re-extraction) plus `bulk_create(..., ignore_conflicts=True)` — the pre-write check alone still leaves a narrow
+query-to-insert race window, so `ignore_conflicts=True` (the same
+belt-and-suspenders precedent already used for `CardTagVote` elsewhere in
+this codebase) is the actual crash-proofing, not the check. A losing race is
+now a counted no-op (`already_voted` on the calculator result,
+`stage_d_join_key_already_voted`/`stage_d_fallback_already_voted` on the
+micro-batch's own `PilotRunLedger` counters) — real compute still ran for
+the loser (evidence lookup, candidate resolution, verdict calculation), it
+just doesn't write or crash. `run_slow_path_calculator` needs no equivalent
+guard — it writes only `CardScanLog` rows, which carry no DB uniqueness
+constraint (append-only by design; see that model's own docstring), so a
+race there produces at most a harmless duplicate routing-marker row, not an
+error. The LIVE, host-level dispatcher-kill drill `stage-e-streaming.md`
+§7(b) specs (killing the dispatcher PROCESS itself, not a simulated
+exception) is still open — see that section for why it's sequenced into the
+phase-3 shakedown, not this change.
+
+**A second, SEPARATE failure the same shakedown run hit — not fixed by the
+above.** The same eight concurrent dispatches also tripped the envelope
+itself: `envtrip-20260724T214616-be6e5db9` is `bar=host_load`, observed load
+`11.85` against the `7.0` ceiling, tripped 0.43s AFTER the winning vote
+landed — caused by all eight dispatches running OCR/phash extraction at once
+against this host's 7 usable cores
+(`docs/features/catalog-completion-plan.md` L1794/2248/2366's own hardware
+citation and 0.31x concurrency finding), not by anything about how the vote
+write path behaves. Fixing the vote collision does nothing to stop eight
+concurrent dispatches from saturating the host and re-tripping the load bar
+the instant streaming resumes — that trip still needs the ordinary
+"Runbook: investigating and clearing a trip" steps above, and re-tripping on
+resume is what the companion `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`
+concurrency cap (a separate change) exists to prevent, not this page's own
+vote-collision fix.
+
+**Runbook addition: do not run a BULK-mode write command while PASSIVE
+streaming is enabled.** `run_image_evidence_cohort`/`local_calculate_verdicts`/`reparse_collector_evidence`/etc. are entirely outside
+`operating_envelope`'s own bars (see "The envelope model" above — BULK mode
+was never in scope for that primitive) and outside any per-worker
+concurrency cap this page or its companion change adds — they run at their
+own configured concurrency regardless of what PASSIVE streaming is doing at
+the same time. Running one alongside an active streaming deployment adds
+uncontrolled load the envelope has no visibility into and no ability to
+throttle, which is exactly the class of resource contention that produced
+the host-load trip above. Land a BULK write cleanly, or explicitly pause
+PASSIVE streaming for its duration, rather than running both at once.
 
 ## Phase 3 (not yet built)
 

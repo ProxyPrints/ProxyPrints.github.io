@@ -175,6 +175,14 @@ class DispatchOutcome:
     stage_d_join_key_votes: int = 0
     stage_d_fallback_votes: int = 0
     stage_d_slow_path_routed: int = 0
+    # A concurrent overlapping dispatch (this worker racing another django-q worker, or the
+    # backstop sweep racing an event trigger - local_calculate_verdicts._split_new_printing_tag_
+    # votes' own docstring has the full incident) skipped a vote this batch computed because
+    # another dispatch had already cast it for the same (card, anonymous_id) first. Counted, not
+    # silently dropped - a healthy streaming deployment should see this occasionally, not never
+    # (zero forever would suggest the guard itself is dead code, not that races don't happen).
+    stage_d_join_key_already_voted: int = 0
+    stage_d_fallback_already_voted: int = 0
     trip_id: Optional[str] = None
 
 
@@ -326,12 +334,40 @@ def _run_stage_d(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) ->
     evidence and never needed Stage C at all this dispatch) - each calculator's own eligibility
     query simply finds nothing to do for a card with no current evidence (a "no-evidence" named
     skip, not an error), so this is always safe to call.
+
+    CONCURRENT-DISPATCH VOTE COLLISION (2026-07-24, shakedown run tripping envelope trip
+    envtrip-20260724T214616-be6e5db9): this is the FIRST caller ever to invoke
+    `run_join_key_calculator`/`run_fallback_calculator` concurrently (django-q2 runs
+    `Q_CLUSTER["workers"] = 8`, and the cron backstop sweep can overlap an event-driven dispatch
+    too) - two dispatches scoped to the same card can both pass that calculator's own eligibility
+    check before either commits, race to `bulk_create` the same (card, anonymous_id) vote, and the
+    loser used to hit an `IntegrityError` that aborted its WHOLE micro-batch (seven of the eight
+    concurrent dispatches that run hit this; see `local_calculate_verdicts._split_new_printing_tag_
+    votes`' own docstring for the exact incident numbers). Both calculators now carry their own
+    pre-write skip-if-exists guard PLUS `bulk_create(..., ignore_conflicts=True)` as the actual
+    crash-proofing (the pre-write check alone still leaves a narrow race window - see that
+    function's own docstring) - a losing race is now a counted no-op (`already_voted`, surfaced on
+    `DispatchOutcome`/this batch's own `PilotRunLedger` row), not a guaranteed-impossible one, but
+    no longer a crash either way. `run_slow_path_calculator` was checked too and needs no
+    equivalent guard - it writes only `CardScanLog` rows, which carry no DB uniqueness constraint
+    at all (see that calculator's own docstring).
+
+    THIS DOES NOT ADDRESS THE HOST-LOAD ENVELOPE TRIP the same shakedown run also hit
+    (`envtrip-20260724T214616-be6e5db9`, `bar=host_load`, 11.85 observed against the 7.0 ceiling,
+    tripped 0.43s after the winning vote landed) - that trip is HOST RESOURCE CONTENTION from eight
+    concurrent OCR/phash dispatches on this box's 7 usable cores, a completely separate failure mode
+    from the vote-write race this function's own guard closes. Fixing the vote collision does not
+    stop eight concurrent dispatches from re-tripping the load bar the moment streaming resumes -
+    see `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (companion change) for the actual fix to that,
+    and `docs/features/stage-e-operations.md`'s runbook for acknowledging the open trip itself.
     """
     join_key_result = run_join_key_calculator(run_id=run_id, dry_run=False, card_ids=batch_ids)
     outcome.stage_d_join_key_votes = join_key_result.votes_written + join_key_result.no_match_votes_written
+    outcome.stage_d_join_key_already_voted = join_key_result.already_voted
 
     fallback_result = run_fallback_calculator(run_id=run_id, dry_run=False, card_ids=batch_ids)
     outcome.stage_d_fallback_votes = fallback_result.votes_written
+    outcome.stage_d_fallback_already_voted = fallback_result.already_voted
 
     slow_path_result = run_slow_path_calculator(run_id=run_id, dry_run=False, card_ids=batch_ids)
     outcome.stage_d_slow_path_routed = slow_path_result.routed_written
@@ -431,7 +467,9 @@ def dispatch_micro_batch(
                 "stage_c_completed": outcome.stage_c_completed,
                 "stage_c_fetch_failures": outcome.stage_c_fetch_failures,
                 "stage_d_join_key_votes": outcome.stage_d_join_key_votes,
+                "stage_d_join_key_already_voted": outcome.stage_d_join_key_already_voted,
                 "stage_d_fallback_votes": outcome.stage_d_fallback_votes,
+                "stage_d_fallback_already_voted": outcome.stage_d_fallback_already_voted,
                 "stage_d_slow_path_routed": outcome.stage_d_slow_path_routed,
                 "peak_rss_mb": peak_rss_mb,
                 "lockout_trip_id": lockout_trip.trip_id if lockout_trip is not None else None,

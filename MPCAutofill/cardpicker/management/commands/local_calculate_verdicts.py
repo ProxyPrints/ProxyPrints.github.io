@@ -123,6 +123,12 @@ class Command(BaseCommand):
                 f"[join-key] considered={result.cards_considered} "
                 f"votes={'written=' + str(result.votes_written) if not dry_run else 'would_cast=' + str(result.votes_would_cast)} "
                 f"no_match_votes={'written=' + str(result.no_match_votes_written) if not dry_run else 'would_cast=' + str(result.no_match_votes_would_cast)} "
+                # already_voted (2026-07-24, the Stage E concurrent-dispatch collision guard -
+                # see local_calculate_verdicts._split_new_printing_tag_votes' own docstring):
+                # always 0 for this sequential BULK-mode command in practice, printed anyway for
+                # the same observability parity local_lands_identify's own command established
+                # (PR #411) - a nonzero value here would itself be a signal worth investigating.
+                f"already_voted={result.already_voted} "
                 f"skip_counts={dict(result.skip_counts)}"
             )
             for entry in result.audit[:10]:
@@ -161,6 +167,7 @@ class Command(BaseCommand):
             print(
                 f"[fallback] considered={fallback_result.cards_considered} "
                 f"votes={'written=' + str(fallback_result.votes_written) if not dry_run else 'would_cast=' + str(fallback_result.votes_would_cast)} "
+                f"already_voted={fallback_result.already_voted} "
                 f"skip_counts={dict(fallback_result.skip_counts)}"
             )
             for entry in fallback_result.audit[:10]:
