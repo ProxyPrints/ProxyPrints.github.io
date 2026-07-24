@@ -927,7 +927,12 @@ def persist_evidence(result: ExtractionResult, run_id: Optional[str] = None) -> 
 
     Also writes a `CardScanLog` row for every entry in `result.skip_reasons` (the
     reconciliation ledger's "named skip" leg - see module docstring), tagged
-    `anonymous_id=<extractor name>` so it correlates back to `extractor_versions`' own keys.
+    `anonymous_id=<extractor name>` so it correlates back to `extractor_versions`' own keys. Rows
+    are collected into one `bulk_create()` rather than a per-reason `.create()` call, matching
+    every other CardScanLog writer in this codebase (local_calculate_verdicts.py,
+    local_identify_printing_tags.py, local_residual_classify.py, local_layout_class_cast.py,
+    local_detect_ai_art.py, local_lands_identify.py) - this was the one outlier (2026-07-24 IO
+    audit, finding 3).
     """
 
     if result.content_hash is None:
@@ -941,10 +946,11 @@ def persist_evidence(result: ExtractionResult, run_id: Optional[str] = None) -> 
     evidence.run_id = run_id
     evidence.save()
 
-    for extractor_name, skip_reason in result.skip_reasons.items():
-        CardScanLog.objects.create(
-            card_id=result.card_id, anonymous_id=extractor_name, skip_reason=skip_reason, run_id=run_id
-        )
+    scan_log_batch = [
+        CardScanLog(card_id=result.card_id, anonymous_id=extractor_name, skip_reason=skip_reason, run_id=run_id)
+        for extractor_name, skip_reason in result.skip_reasons.items()
+    ]
+    CardScanLog.objects.bulk_create(scan_log_batch)
 
     return evidence
 

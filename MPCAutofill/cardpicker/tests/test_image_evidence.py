@@ -1678,6 +1678,41 @@ class TestPersistEvidence:
 
         assert CardScanLog.objects.count() == 0
 
+    def test_multiple_skip_reasons_are_written_in_a_single_bulk_create(self, db, monkeypatch):
+        # 2026-07-24 IO audit finding 3: persist_evidence must batch every skip-reason row into
+        # one bulk_create(), not one CardScanLog.objects.create() call per reason, matching every
+        # other CardScanLog writer in the codebase.
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={},
+            extractor_versions={"fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION},
+            skip_reasons={
+                "fetch_health": "fetch_failed",
+                "geometry_bleed": "fetch_failed",
+                "layout_class": "fetch_failed",
+                "collector_line_ocr": "no-text",
+                "artist_ocr": "no-text",
+            },
+        )
+
+        bulk_create_calls: list[int] = []
+        original_bulk_create = CardScanLog.objects.bulk_create
+
+        def counting_bulk_create(objs, *args, **kwargs):
+            objs = list(objs)
+            bulk_create_calls.append(len(objs))
+            return original_bulk_create(objs, *args, **kwargs)
+
+        monkeypatch.setattr(CardScanLog.objects, "bulk_create", counting_bulk_create)
+
+        persist_evidence(result, run_id="run-1")
+
+        # exactly one bulk_create call, carrying all 5 rows - not 5 individual .create() calls.
+        assert bulk_create_calls == [5]
+        assert CardScanLog.objects.filter(card=card, run_id="run-1").count() == 5
+
 
 class TestBuildReconciliationReport:
     def test_all_voted(self, db):
