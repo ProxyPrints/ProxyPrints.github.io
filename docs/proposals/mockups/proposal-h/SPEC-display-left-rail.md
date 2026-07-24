@@ -183,6 +183,15 @@ Colours are the §D.0 #302 tokens.
 
 ### D.0 Palette tokens (all inherited — `styles.scss` #302 + Superhero)
 
+> **SUPERSEDED (2026-07-24, owner ruling — "Tokyo-11" re-theme).** The
+> table below is the #302 palette this section originally shipped with; it
+> is kept verbatim here as a historical record of what shipped at the time
+> this spec's other rows (sizing/spacing/I-N markers) were written and
+> verified against. It no longer reflects the site's actual colours. The
+> live, binding palette is [`docs/features/theming.md`](../../../features/theming.md)
+> — edit `_theme-tokens.scss` there, not this table, for any future
+> retheme.
+
 | Token            | Value              | Token              | Value                 |
 | ---------------- | ------------------ | ------------------ | --------------------- |
 | body bg          | `#0f2537`          | primary (hover)    | `#df6919` (`#be5915`) |

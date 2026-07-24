@@ -41,7 +41,7 @@ const CurBackThumbnail = styled.div<{ $url: string | undefined }>`
   flex: 0 0 88px;
   width: 88px;
   aspect-ratio: 63 / 88;
-  border: 1px solid rgba(235, 235, 235, 0.15);
+  border: 1px solid rgba(var(--bs-body-color-rgb), 0.15);
   position: relative;
   background-color: #2a2320;
   background-image: ${(props) =>
@@ -71,12 +71,12 @@ const ReminderBody = styled.div`
 const SeamNote = styled.div`
   margin-top: 10px;
   font-size: 12px;
-  color: #8fa0b0;
-  border-top: 1px solid #16202b;
+  color: var(--theme-muted);
+  border-top: 1px solid var(--theme-divider);
   padding-top: 8px;
 
   .seam {
-    color: #ffd76a;
+    color: var(--bs-warning);
   }
 `;
 
@@ -113,7 +113,7 @@ function CardbackReminderGateModal({
               printers put a back on every card - choosing your own is quick and
               easy to forget.
             </p>
-            <div style={{ fontSize: 13, color: "#8fa0b0" }}>
+            <div style={{ fontSize: 13, color: "var(--theme-muted)" }}>
               You can keep the default and continue - this only asks once per
               print.
             </div>

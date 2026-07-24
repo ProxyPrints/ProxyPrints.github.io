@@ -117,14 +117,15 @@ const Avatar = styled.span`
   height: 30px;
   border-radius: 50%;
   background-color: var(--bs-primary);
-  color: #fff;
+  /* Tokyo-11 ink flip - primary is now light (2.03:1 with white vs. 8.40:1 with dark ink). */
+  color: var(--theme-btn-ink);
   font-weight: 700;
   font-size: 0.9rem;
   flex: 0 0 auto;
 `;
 
 const UserMenuMenu = styled(Dropdown.Menu)`
-  background-color: #4e5d6c;
+  background-color: var(--bs-secondary);
 `;
 
 export function AuthWidget() {

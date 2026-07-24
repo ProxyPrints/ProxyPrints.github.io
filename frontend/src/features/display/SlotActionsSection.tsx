@@ -53,24 +53,25 @@ const IconAction = styled(Button)`
   font-size: 14px;
   line-height: 1;
   background: transparent;
-  color: #abb6c2;
-  border: 1px solid #abb6c2;
+  color: var(--theme-light);
+  border: 1px solid var(--theme-light);
 
   &:hover:not(:disabled),
   &:focus:not(:disabled) {
-    background: #abb6c2;
-    color: #111;
+    background: var(--theme-light);
+    color: var(--theme-btn-ink);
   }
 
   &.danger {
     color: #f0a6a3;
-    border-color: #d9534f;
+    border-color: var(--bs-danger);
   }
 
   &.danger:hover:not(:disabled),
   &.danger:focus:not(:disabled) {
-    background: #d9534f;
-    color: #fff;
+    background: var(--bs-danger);
+    /* Tokyo-11 ink flip - danger is light, dark ink reads far better (6.46:1 vs. 2.65:1). */
+    color: var(--theme-btn-ink);
   }
 `;
 

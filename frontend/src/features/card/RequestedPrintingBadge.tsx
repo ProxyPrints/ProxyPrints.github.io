@@ -76,8 +76,8 @@ export function RequestedPrintingBadge({
         style={{
           display: "inline-block",
           marginTop: "5px",
-          background: "#ffc107",
-          color: "#111",
+          background: "var(--bs-warning)",
+          color: "var(--theme-btn-ink)",
           fontFamily: "monospace",
           fontSize: "10px",
           padding: "1px 7px",

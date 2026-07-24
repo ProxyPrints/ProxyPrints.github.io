@@ -1,62 +1,198 @@
-// Canonical ProxyPrints theme palette (2026-07-24 theme-defaults pass).
+// Canonical ProxyPrints theme palette -- "Tokyo-11" (2026-07-24 re-theme, owner ruling).
 //
-// ONE source of truth for the site's dark-chrome / orange-accent theme. Every Bootstrap
-// variable override in styles.scss derives FROM these variables -- never from a literal hex
-// scattered across styles.scss or a component file. Retheming the site later should mean
-// editing THIS file only; see docs/features/theming.md for the full contract (including its
-// relationship to the fidelity specs, which assert some of these exact values).
+// ONE source of truth for the site's palette, corner-radius, spacing, and type tokens. Every
+// Bootstrap variable override in styles.scss derives FROM these variables -- never from a
+// literal hex/px scattered across styles.scss or a component file. Retheming the site later
+// should mean editing THIS file only; see docs/features/theming.md for the full contract
+// (including its relationship to the fidelity specs, which assert some of these exact values,
+// and the runtime CSS-custom-property bridge this file also emits for styled-components/inline
+// styles that can't reach a SCSS variable directly).
 //
-// Values are the SPEC-display-left-rail.md §D.0 binding palette (itself the issue #302
-// palette), reproduced verbatim -- do not hand-tune a value here without updating that spec's
-// own table (and vice versa); they are meant to coincide exactly.
+// SOURCE OF TRUTH (supersedes the #302/SPEC-display-left-rail.md §D.0 palette this file
+// previously reproduced verbatim): the theme-options palette-exploration study (12 candidate
+// palettes under a strict-AAA contrast bar) and the owner's 2026-07-24 ruling on it -- palette
+// 11 "Tokyo x orange-action + purple-accent" ("tokyoorange"), Semi corner radius. Do not hand-
+// tune a value here without a fresh owner ruling; SPEC-display-left-rail.md's own §D.0 table
+// carries a pointer to this file rather than being kept in sync line-by-line (its sizing/spacing
+// rows are untouched by this pass and remain authoritative).
+//
+// PROVENANCE: palette derived from Tokyo Night (MIT, © 2018-present Enkia -- LICENSE.txt in
+// enkia/tokyo-night-vscode-theme reads "The MIT License (MIT)") -- color values only, no code.
+// The $theme-info swap below (not part of the study's own 10-token "Tokyo" set; see that
+// variable's own comment) is drawn from the same upstream Tokyo Night palette's cyan swatch,
+// same license/provenance.
 
-// Base surfaces, darkest to most-raised
-$theme-body-bg: #0f2537; // §D.0 "body bg" -- page background, the darkest layer
-$theme-raised-bg: #22303f; // §D.0 "raised/input bg" -- floating chrome one step off the page:
-// rail-head/artist-line, the Sources list + filter inputs, and (this pass) the Bootstrap
-// defaults for Modal/Dropdown/Popover/Toast/ListGroup/Offcanvas/table-head/table-dark
-$theme-panel-bg: #4e5d6c; // §D.0 "panel/card/2ndry" -- Superhero's native $secondary/$gray-600.
-// NOT a bug to fix: this is the approved token for Card bodies (incl. AutofillCollapse's
-// "demoted body"), the D14 seticon, and secondary buttons/badges. See
-// docs/features/theming.md's "what's grey on purpose" note before ever routing this away.
-$theme-card-header-bg: #4e5d6b; // §D.0 "card-header" -- one hex digit off $theme-panel-bg, BY
-// DESIGN (owner ruling, 2026-07-23; see SPEC-display-left-rail.md §D.0's own note on this
-// exact pair). Do not "fix" this to equal $theme-panel-bg.
-$theme-band-bg: #2b3e50; // §D.0 "D14 band" -- the D14 confidence-strip token
+// ============================================================================================
+// COLOUR -- base surfaces, darkest to most-raised
+// ============================================================================================
+$theme-body-bg: #1a1b26; // page background, the darkest layer
+$theme-raised-bg: #24283b; // floating chrome one step off the page: rail-head/artist-line, the
+// Sources list + filter inputs, and the Bootstrap defaults for Modal/Dropdown/Popover/Toast/
+// ListGroup/Offcanvas/table-head/table-dark
+$theme-panel-bg: #2f3549; // Card bodies (incl. AutofillCollapse's "demoted body"), the D14
+// seticon, and secondary buttons/badges ($secondary is routed here in styles.scss -- see "what's
+// grey on purpose" in docs/features/theming.md, literally true again now that Superhero's own
+// $gray-600 no longer matches this palette at all)
+$theme-card-header-bg: #2f3548; // one hex digit off $theme-panel-bg, mechanically preserving the
+// established "deliberately distinct, not a typo" pattern from the #302 palette (owner ruling,
+// 2026-07-23) -- the study never separately audited a card-header swatch, so this round keeps
+// the SAME relationship (last hex digit -1) rather than inventing an unruled value or silently
+// collapsing the two tokens together
+$theme-band-bg: #222234; // the D14 confidence-strip token ("conf" in the study)
+$theme-input-border: $theme-panel-bg; // was its own literal, coincidentally equal to panel-bg
+// under #302 too -- written as a reference now so the two can never drift apart by accident
 
 // Dividers
-$theme-divider: #16202b; // §D.0 divider colour -- every rail block boundary (O1)
+$theme-divider: #16161e; // every rail block boundary (O1)
 
 // Text
-$theme-text: #ebebeb; // §D.0 "text"
-$theme-muted: #8fa0b0; // §D.0 "muted"
-$theme-light: #abb6c2; // §D.0 "light" -- btn-outline-light family, form-select indicator
+$theme-text: #c0caf5; // body text -- clears strict-AAA-normal 7:1 against both raised (9.02:1)
+// and panel (7.54:1), verified 2026-07-24 (see docs/features/theming.md Verification)
+$theme-muted: #a3aad0; // muted text/placeholder. WCAG/APCA remediation (2026-07-24, folded in
+// from the PR #432 WCAG/APCA audit): the study's own #8c94bf measured APCA Lc 44.1 on body --
+// adequate only for large/bold text, but this token backs 10-13px legends/captions sitewide (the
+// audit's finding). Lightened to clear the small-text bracket rather than split into a second
+// "-strong" token, since most call sites ARE small captions and a single token is simpler to keep
+// in sync; APCA itself isn't computable in this environment (no APCA library available), so this
+// was verified via the WCAG proxy instead -- WCAG contrast lifted from 5.78/4.93/4.11
+// (body/raised/panel) to 7.50/6.39/5.34, i.e. now clears strict-AAA-normal on body, comes within
+// a hair of it on raised, and clears AA-normal (4.5) with real margin even on panel, the toughest
+// surface. See docs/features/theming.md's APCA-advisory-policy note for why WCAG stood in here.
+$theme-light: $theme-text; // NOT an audited study token (the study's 10-token set has no "light"
+// tier). #302's $theme-light sat between text and muted for outline-light buttons/the
+// form-select chevron; reusing $theme-muted risked reading too dim for small icon glyphs
+// (SlotActionsSection's 14px icon buttons), so this round aliases it to $theme-text instead --
+// safe (9.02/7.54:1, same numbers as body text) and avoids inventing an unruled hex. Revisit if
+// a future study round audits a real "light" tier.
 
-// Accent / status (Superhero-native values, reproduced here so no override site derives from
-// a bare literal outside this file)
-$theme-primary: #df6919; // §D.0 primary
-$theme-primary-hover: #be5915; // §D.0 primary (hover)
-$theme-success: #5cb85c; // §D.0 success
-$theme-danger: #d9534f; // §D.0 danger
-$theme-warning: #ffc107; // §D.0 warning
-$theme-info: #5bc0de; // §D.0 info
+// Accent / status (Tokyo-11 study values)
+$theme-primary: #ff9e64; // action colour -- every button; ink flips to $theme-btn-ink below
+// (8.40:1 STRICT-AAA on the button, study-verified)
+$theme-primary-hover: rgb(
+  round(red(darken($theme-primary, 8%))),
+  round(green(darken($theme-primary, 8%))),
+  round(blue(darken($theme-primary, 8%)))
+); // #302 hand-picked a literal hover shade (#be5915); this round derives it with Sass's own
+// darken() instead so a future re-theme's hover state never needs a second manually-computed hex
+// -- visually equivalent hover treatment, one less literal to maintain. Wrapped in round() so the
+// emitted `--theme-primary-hover` custom property is a clean integer rgb() triplet, not
+// darken()'s raw fractional-channel output.
+$theme-success: #9ece6a; // 9.35:1 ink #1a1b26 -- STRICT-AAA
+$theme-danger: #f7768e; // 6.46:1 ink #1a1b26 -- AAA-LARGE only (see $theme-btn-ink's own note:
+// this is the one button variant the mandated single ink token can't lift past 7:1; white ink
+// would be far worse at 2.65:1)
+$theme-warning: #e0af68; // 8.55:1 ink #1a1b26 -- STRICT-AAA
+$theme-info: #7dcfff; // NOT one of the study's 10 audited tokens (the mockup's token set omits
+// "info" entirely). This fork's existing #302 "info" role is really a handful of small cyan
+// link-styled text spots (DisplayPage identify-panel links, SharedDeckViewer share link, the
+// filters-panel implicit-vote note icon) -- small text, so routing it to $theme-accent would
+// violate the accent contract's own "never small paragraph text" rule (accent only clears
+// 6.74:1, below strict-normal 7:1). Tokyo Night's own MIT-licensed cyan swatch (#7dcfff) clears
+// STRICT-AAA-normal on both raised (8.49:1) and panel (7.09:1) -- verified 2026-07-24 -- so it
+// keeps the pre-existing "info/link" role at the same contrast bar as everything else in this
+// pass, without touching the accent token's reserved surfaces.
+$theme-btn-ink: #1a1b26; // "btn-ink" in the study -- the ONE dark ink used across every
+// $theme-colors button variant (wired via $color-contrast-dark in styles.scss), replacing the
+// #302 palette's white button text. See $theme-danger's own note for the one variant that can't
+// reach strict-7:1 with this ink.
+$theme-accent: #bb9af7; // additive, UI-role-only token (study's palette-11 "accent"): D14
+// confidence pill + score badge, selection/active chip + segmented + toggle states, version/
+// sheet selection outlines, hover states on those same surfaces. NEVER small paragraph text --
+// 6.74:1 on the D14 band surface is below strict-normal 7:1, "near-strict" per the study, legible
+// on bold pill text/borders/outlines but not prose. Bootstrap's global $link-color is
+// deliberately NOT routed here (stays on $primary/orange, matching the pre-existing convention
+// several components already use `var(--bs-primary)` for link-styled text) -- see
+// docs/features/theming.md's "accent scope boundary" note.
 
-// Structural
-$theme-input-border: #4e5d6c; // §D.0 "input border"
+// ============================================================================================
+// CORNER RADII -- "Semi" tier (2026-07-24 Tokyo-11 ruling; was "Flat" under the #302 palette)
+// ============================================================================================
+$theme-radius-none: 0; // no rounding, ever -- kept distinct from -base so a future -base bump
+// can't accidentally round something that must stay square-cornered
+$theme-radius-sm: 6px; // Bootstrap's `-sm` tier (small buttons/inputs) -- was 0
+$theme-radius-base: 6px; // the sitewide default tier (buttons/inputs/the generic `-lg` fallback)
+// -- was 0
+$theme-radius-card: 8px; // NEW this round -- cards/modals/popovers/dropdowns (wired to
+// $border-radius-lg, which those components' own SCSS defaults from) get their own, slightly
+// larger tier; buttons/inputs stay on $theme-radius-base (6px) even at their own `-lg` variants,
+// per the study's exact "6px buttons/inputs, 8px cards, 10px pills" table
+$theme-radius-pill: 10px; // our OWN "status-pill" component convention (D14 statepill, etc) --
+// unchanged by this round. Deliberately NOT wired into Bootstrap's own $border-radius-pill (that
+// variable defaults to 50rem/true-stadium and already backs a real, unrelated pill usage -- e.g.
+// SearchSettings' `<Badge pill>` -- wiring it to 10px would visibly reshape that badge). See
+// docs/features/theming.md's "two different pills" note before ever changing this.
 
-// Corner radii (2026-07-24, owner extension to the theme-defaults pass). Four semantic tiers,
-// wired into Bootstrap's own radius variables in styles.scss so a future radius ruling (e.g. the
-// "semi-rounded buttons" option the owner is weighing) is a token edit here, not a hunt through
-// component literals. Defaulted to the CURRENT shipped values -- flat 0 everywhere Bootstrap/
-// Superhero already renders flat (§D.0 "radius: 0 (flat)"), plus the existing 10px status-pill
-// literal (§D.0 "status-pill radius") -- so introducing these tokens changes zero rendered
-// pixels this round.
-$theme-radius-none: 0; // no rounding, ever (kept distinct from -base so a future -base bump
-// doesn't accidentally round something that must stay square-cornered)
-$theme-radius-sm: 0; // §D.0 "radius" -- Bootstrap's `-sm` tier (small buttons/inputs)
-$theme-radius-base: 0; // §D.0 "radius" -- the sitewide default tier (buttons/cards/inputs/`-lg`)
-$theme-radius-pill: 10px; // §D.0 "status-pill radius" -- our OWN component convention (D14
-// statepill, etc). Deliberately NOT wired into Bootstrap's own $border-radius-pill (that
-// variable defaults to 50rem/true-stadium and already backs a real, unrelated pill usage --
-// e.g. SearchSettings' `<Badge pill>` -- wiring it to 10px would visibly reshape that badge).
-// See docs/features/theming.md's "two different pills" note before ever changing this.
+// ============================================================================================
+// SPACING SCALE -- 4/8-based (2026-07-24 owner extension). FUTURE-SPECS-ONLY: this scale
+// governs new spec rounds going forward; it does NOT retroactively re-space any shipped surface
+// (several existing paddings/gaps are off-scale, e.g. the D14 band's `8px 10px` -- 10px isn't on
+// this ladder -- see docs/features/theming.md's own off-scale table for the known examples and
+// their owning spec rows). Existing surfaces migrate onto these tokens opportunistically, the
+// next time their own spec is touched for an unrelated reason -- never as a bulk re-space pass.
+// ============================================================================================
+$theme-space-1: 4px;
+$theme-space-2: 8px;
+$theme-space-3: 12px;
+$theme-space-4: 16px;
+$theme-space-5: 24px;
+$theme-space-6: 32px;
+
+// ============================================================================================
+// TYPE RAMP -- small scale (2026-07-24 owner extension), same future-specs-only rule as the
+// spacing scale above. Several existing rail/editor microtype sizes already happen to land on
+// these exact steps (10/11/12/13/14/15px all appear verbatim across DisplayPage.tsx/
+// SelectVersionResults.tsx today) -- that's pre-existing coincidence, not this pass re-specing
+// anything; no component was changed to make that true.
+// ============================================================================================
+$theme-font-2xs: 10px;
+$theme-font-xs: 11px;
+$theme-font-sm: 12px;
+$theme-font-md: 13px;
+$theme-font-base: 14px;
+$theme-font-lg: 15px;
+$theme-font-xl: 18px;
+
+// ============================================================================================
+// RUNTIME CSS-CUSTOM-PROPERTY BRIDGE (2026-07-24). Every $theme-* SCSS variable above is a
+// compile-time-only value -- invisible to styled-components/emotion template literals and inline
+// `style={}` props, which is why so many component files had drifted onto hand-copied hex
+// literals instead of referencing this file. This block re-exposes the tokens as `:root` CSS
+// custom properties, but ONLY the ones Bootstrap's own `_root.scss` doesn't already emit --
+// `$body-bg`/`$body-color`/`$primary`/`$secondary`/`$success`/`$info`/`$warning`/`$danger` are
+// all assigned FROM tokens in styles.scss, so Bootstrap already generates `--bs-body-bg`,
+// `--bs-body-color` (+ `-rgb`), `--bs-primary` (+ `-rgb`), `--bs-secondary` (+ `-rgb`, this IS
+// $theme-panel-bg), `--bs-success`/`--bs-danger`/`--bs-warning`/`--bs-info` (+ `-rgb`) for free --
+// duplicating those here would be a SECOND source of truth for the same value, exactly the
+// divergence risk this bridge exists to avoid. Component code should reach for `var(--bs-*)`
+// for any of those roles (see docs/features/theming.md's runtime-var-contract section for the
+// full call-site convention) and `var(--theme-*)` below only for tokens with no Bootstrap
+// equivalent at all. `-rgb` triplets are provided for the two tokens actually consumed inside an
+// `rgba(var(--x-rgb), alpha)` call site (translucent tints/borders) -- everything else needing an
+// rgb triplet (text, primary, success, danger) already has one at `--bs-body-color-rgb`/
+// `--bs-primary-rgb`/`--bs-success-rgb`/`--bs-danger-rgb`. This file still imports nothing from
+// Bootstrap/Bootswatch -- it emits plain CSS, not Bootstrap-flavoured CSS.
+:root {
+  --theme-raised-bg: #{$theme-raised-bg};
+  --theme-card-header-bg: #{$theme-card-header-bg};
+  --theme-band-bg: #{$theme-band-bg};
+  --theme-divider: #{$theme-divider};
+  --theme-muted: #{$theme-muted};
+  --theme-light: #{$theme-light};
+  --theme-primary-hover: #{$theme-primary-hover}; // no Bootstrap-emitted hover custom property
+  // exists for a manually-set $primary (button hover shades are computed per-component, not
+  // globally) -- this is the one $theme-colors-adjacent value still needed here
+  --theme-btn-ink: #{$theme-btn-ink};
+  --theme-accent: #{$theme-accent};
+  // prettier-ignore
+  --theme-accent-rgb: #{red($theme-accent)}, #{green($theme-accent)}, #{blue($theme-accent)};
+  --theme-radius-sm: #{$theme-radius-sm};
+  --theme-radius-base: #{$theme-radius-base};
+  --theme-radius-card: #{$theme-radius-card};
+  --theme-radius-pill: #{$theme-radius-pill};
+  --theme-space-1: #{$theme-space-1};
+  --theme-space-2: #{$theme-space-2};
+  --theme-space-3: #{$theme-space-3};
+  --theme-space-4: #{$theme-space-4};
+  --theme-space-5: #{$theme-space-5};
+  --theme-space-6: #{$theme-space-6};
+}

@@ -300,13 +300,74 @@ printings, artists, tags, and moderation from one screen.
 - **Unified question feed**: `GET 2/questionFeed/` replaces the old
   printing/artist/tag/moderation tab switcher with one typed, prioritized
   stream (`confirm_suggestion` → contested pairs → `moderation` → fresh
-  unresolved; "dumb ranked union," no cross-tier scoring). Full rationale
-  in `journal/2026-07-14-queue-question-feed-design.md` (gitignored,
-  local-only). **Known v1 property, not a bug**: at current volume a
-  voter only sees tier-1 (`confirm_suggestion`) questions until all
-  ~28k are exhausted — an interleaved/weighted union is the likely v2
+  unresolved; "dumb ranked union," no cross-tier scoring, with one
+  deliberate exception — the mix-composition policy immediately below).
+  Full rationale in `journal/2026-07-14-queue-question-feed-design.md`
+  (gitignored, local-only). **Known v1 property, not a bug**: at current
+  volume a voter only sees tier-1 (`confirm_suggestion`) questions until
+  all ~28k are exhausted — an interleaved/weighted union is the likely v2
   fix, out of scope for v1. Every tier excludes `(card, tag)` pairs the
   requesting `anonymous_id` already voted on.
+- **Mix-composition policy** (2026-07-24, `cardpicker/question_feed.py`,
+  owner-ratified per the WTC vote-queue data brief's OWNER ADDENDUM —
+  that brief was a read-only diagnostic session with no committed doc of
+  its own, so its raw finding isn't independently citable; the durable
+  soundness citation is [`theory.md`](../theory.md) §10 "Streaming and
+  continuous operation," which names this exact served-mix/human-vote-
+  quality surface and explicitly invites folding in a mix-logging
+  mechanism once one lands — this policy, and its `QuestionFeedServedLog`
+  below, is that mechanism, noted in place in §10's own text): the feed
+  serves ≥`settings.QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO` (default
+  `0.51`) of a session's questions from the **LIKELY-RESOLVE pool** —
+  printing questions one more agreeing human vote would actually resolve
+  under the real resolver — whenever that pool has supply for the
+  requesting voter, falling back to the three-tier ranked union otherwise.
+  **Classification** (`question_feed.is_likely_resolve_printing`): finds
+  a card's current highest-weighted printing outcome group, adds one
+  hypothetical `VoteSource.USER`-weight vote to that group, and re-runs
+  the real `vote_consensus.resolve_weighted_consensus` (never a
+  reimplementation of its weight/threshold arithmetic) to check whether
+  that group now wins — the same exact-code simulation approach the data
+  brief used to derive its 46,310-card LIKELY-RESOLVE SUPPLY figure
+  (45,154 single-candidate + 1,156 multi-candidate near-threshold cards).
+  Compute-per-serve, no caching layer: `_likely_resolve_printing_card`
+  pre-filters to cards carrying ≥1 `CardPrintingTag` row (~97k of 218k at
+  the brief's snapshot, not the full unresolved population) then scans in
+  `date_created` order via `.iterator()` until the first match — the same
+  bounded "scan in priority order, stop at first hit" shape tier 1 already
+  uses, accepted as a v1 cost like tier 1's own starvation-risk property
+  above, not solved with a materialized index. **Remainder ordering**:
+  within tier 4, cards whose latest Stage D join-key/fallback
+  `CardScanLog.skip_reason` is a "quick-negative" reason
+  (`question_feed.QUICK_NEGATIVE_SKIP_REASONS` —
+  `unknown-set-code`/`eliminated`/`border-mismatch`/`frame-mismatch`) are
+  now prioritized (as a secondary tiebreak, after the pre-existing
+  `-vote_count` "closest to resolving" ordering, never ahead of it) over
+  the harder/open-ended remainder — `"ambiguous"` is deliberately
+  excluded from that set despite being nominally answerable, since the
+  brief ranks it as blocked on the `CardScanLog.survivor_pks` gap (see
+  that field's own docstring), not free supply today. **Soundness**: this
+  is a selection-layer policy only — it makes zero change to
+  `vote_consensus.resolve_weighted_consensus`'s weights,
+  `PRINTING_TAG_MIN_VOTES`/`MIN_SHARE` thresholds, or the D1/D4
+  human-backed-priority mechanisms (see that function's own docstring);
+  `is_likely_resolve_printing` only ever calls it, never reimplements it.
+  The brief's own SOUNDNESS NOTE flags a presentation-bias risk this
+  policy doesn't eliminate on its own: serving a mix skewed hard toward
+  machine-agreeing "easy" questions could habituate reflexive
+  confirmation, eroding the vote-weight model's independence assumption
+  even though no vote's weight ever changes — the same failure _category_
+  (a UI's own suggestion signal contaminating what looks like independent
+  confirmation) the implicit-vote weight's exclusion from suggestedness
+  and IMPLICIT's human-backed exclusion already guard against elsewhere.
+  **Mix logging**: every served item (either pool) is recorded in
+  `QuestionFeedServedLog` (`anonymous_id`, `pool`, `question_type`,
+  `origin_reason`, `served_at`) — the bias-conditioning record the
+  SOUNDNESS NOTE calls for, so a future audit can correlate click
+  latency/agreement-rate against a session's easy-question exposure;
+  `question_feed._served_mix_ratio` reads it back as two cheap indexed
+  `COUNT`s, never a per-row scan. Append-only, same convention as
+  `CardScanLog` — never read by any consensus computation.
 - **Remaining-work count**: `get_remaining_estimate()` returns
   `QuestionFeedCounts` (`schemas/schemas/QuestionFeedCounts.json`), not a
   single number. `total` is a `.distinct().count()` union across

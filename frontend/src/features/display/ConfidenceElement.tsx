@@ -74,15 +74,17 @@ const NotThisPrintingButton = styled(Button)`
   font-weight: 600;
   line-height: 1.4;
   border-radius: 10px;
-  background: rgba(217, 83, 79, 0.12);
+  background: rgba(var(--bs-danger-rgb), 0.12);
   color: #f0b3b1;
-  border: 1px solid rgba(217, 83, 79, 0.55);
+  border: 1px solid rgba(var(--bs-danger-rgb), 0.55);
 
   &:hover:not(:disabled),
   &:focus:not(:disabled) {
-    background: #d9534f;
-    color: #fff;
-    border-color: #d9534f;
+    background: var(--bs-danger);
+    /* Tokyo-11 ink flip: danger is a light red (6.46:1 with dark ink vs. 2.65:1 with white) -
+       see styles.scss's own $color-contrast-dark note. */
+    color: var(--theme-btn-ink);
+    border-color: var(--bs-danger);
   }
 
   &[data-confirmed="true"] {

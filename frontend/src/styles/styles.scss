@@ -1,11 +1,11 @@
-// Sitewide theme (2026-07-21, issue #302; re-platformed onto _theme-tokens.scss by the
-// 2026-07-24 theme-defaults pass -- see docs/features/theming.md): dark chrome +
-// Superhero-native orange accent. No $primary override -> Superhero's native
-// $primary:$orange (#df6919) returns. $body-bg intentionally NOT overridden
-// (owner decision, T2 AMENDED): Superhero's native #0f2537 is kept because
-// it holds orange link text at 4.61:1 contrast (AA), vs. 3.24:1 (fails AA)
-// on the lighter #2b3e50 the theme mockup used ($theme-body-bg below is that same value,
-// named for clarity -- not a second, independent decision).
+// Sitewide theme -- "Tokyo-11" (2026-07-24 re-theme, owner ruling; re-platformed onto
+// _theme-tokens.scss by the 2026-07-24 theme-defaults pass -- see docs/features/theming.md).
+// Dark Tokyo Night chrome + a warm orange action colour + a purple accent layer. Every
+// $theme-colors entry Superhero/Bootstrap would otherwise default is now explicitly assigned
+// from a token below -- under the #302 palette several of these ($primary/$success/$danger/
+// $warning/$secondary/$body-bg) happened to already equal Superhero's own stock values, so no
+// override was needed; Tokyo-11 diverges from every one of them, so this pass adds the
+// assignments this file was implicitly relying on Superhero's defaults for.
 @import "theme-tokens";
 
 $dark: $theme-raised-bg; // T3  (was #20374c)
@@ -13,6 +13,92 @@ $input-bg: $theme-raised-bg; // T4  (was $white)
 $input-color: $theme-text; // T5  (was $gray-900)
 $input-border-color: $theme-input-border; // T6  (was transparent)
 $input-placeholder-color: $theme-muted; // T7  (was $gray-500)
+
+// Tokyo-11 (2026-07-24): $theme-colors overrides. Superhero's own _variables.scss sets
+// $primary/$secondary/$success/$info/$warning/$danger/$body-bg/$body-color as plain hardcoded
+// literals (not derived from any token this file controls), so every one of them needs an
+// explicit override here now that the palette no longer coincides with Superhero's stock values.
+// Bootstrap's own root.scss (imported below, via the Superhero/Bootstrap core chain) emits each
+// of these as a `--bs-*` CSS custom property automatically -- e.g. `--bs-primary`, `--bs-body-bg`
+// -- so this block IS the "Bootstrap runtime-variable bridge": every `var(--bs-*)` consumer
+// (Navbar.tsx/Footer.tsx/AuthWidget.tsx's existing `var(--bs-primary)` links, react-bootstrap's
+// own component internals) picks up Tokyo-11 with no further wiring. Scope note: this bridges
+// the EXISTING `--bs-*` surface Bootstrap 5.3 already emits from these variables -- it is not a
+// wholesale migration of every component onto `var()`; component-local styled-components/inline
+// styles still compile to literal values unless they explicitly reference `var(--bs-*)` or
+// `var(--theme-*)` (the parallel bridge _theme-tokens.scss emits for the tokens Bootstrap has no
+// equivalent for, e.g. $theme-accent/$theme-band-bg/$theme-divider). Any surface where the
+// compiled literal and a same-named runtime var could ever diverge is flagged in
+// docs/features/theming.md's runtime-var-contract section rather than blanket-converted here.
+$body-bg: $theme-body-bg;
+$body-color: $theme-text;
+$primary: $theme-primary;
+$secondary: $theme-panel-bg; // was Superhero's own $gray-600 default -- see "what's grey on
+// purpose" in docs/features/theming.md; this keeps that same approved role, just re-pointed at
+// the Tokyo-11 panel token instead of Superhero's stock grey (which no longer resembles this
+// palette at all)
+$success: $theme-success;
+$danger: $theme-danger;
+$warning: $theme-warning;
+$info: $theme-info;
+
+// Tokyo-11 button-ink flip (2026-07-24, AAA remediation): Superhero sets
+// `$min-contrast-ratio: 1.6` (deliberately low, so white button text survives against a
+// medium-brightness orange). Every Tokyo-11 $theme-colors entry above is LIGHT (an inverted
+// palette vs. #302's mid-tone orange), so white text now fails hard (2.0-2.7:1) on all four --
+// dark ink is correct on every one of them. $color-contrast-dark is pointed at $theme-btn-ink
+// (not Bootstrap core's own #000 default) so the button ink matches the study's own audited
+// token/numbers (8.40/9.35/8.55/6.46:1 for primary/success/warning/danger respectively -- see
+// _theme-tokens.scss's $theme-danger comment for why that one variant can't clear strict-7:1
+// with this ink; pure black would, but at the cost of a second, inconsistent ink shade). Raising
+// $min-contrast-ratio to 4.5 (Bootstrap core's own default, just restoring it from Superhero's
+// 1.6 override) is enough to make Bootstrap's `color-contrast()` deterministically pick the dark
+// ink over white for all four -- every one of the four dark-ink ratios clears 4.5, every white-ink
+// ratio fails it, so there's no ambiguous case landing on some other fallback colour.
+$color-contrast-dark: $theme-btn-ink;
+$min-contrast-ratio: 4.5;
+
+// WCAG/APCA audit fold-in (2026-07-24, PR #432's report, folded into this pass): Bootstrap's
+// default focus ring is `rgba($primary, .25)` -- a 25%-alpha box-shadow that the audit measured
+// at 1.18-1.56:1 non-text contrast against every one of this theme's dark surfaces (body/raised/
+// panel), well under the 3:1 WCAG 2.2 non-text-contrast floor a focus indicator needs (2.4.11/
+// 2.4.7). Two changes, both flowing through Bootstrap's single `$focus-ring-*` variable family
+// (which every focus-visible surface sitewide already derives from -- `$input-btn-focus-*`/
+// `$btn-focus-*`/`$input-focus-*`/`$form-select-focus-box-shadow`/`$nav-link-focus-box-shadow`/
+// `$pagination-focus-box-shadow`/`$accordion-button-focus-box-shadow`/`$btn-close-focus-shadow`
+// all default FROM `$focus-ring-box-shadow`, so overriding the three inputs below is a single,
+// global fix, not a per-component hunt):
+//   1. `$focus-ring-color: $theme-accent` -- accent purple, not `$primary`, so the focus ring
+//      reads as a distinct UI-signal colour from the action colour (consistent with accent's own
+//      "UI-role" contract elsewhere in this file).
+//   2. `$focus-ring-opacity: 1` -- fully OPAQUE, not translucent. A translucent ring's real
+//      contrast against a given background depends on what's UNDER it (the exact failure mode the
+//      audit measured); making it opaque means the ring's contrast is simply accent-vs-background,
+//      computed once and verified sitewide: accent #bb9af7 measures 7.39:1 on body, 6.30:1 on
+//      raised, 5.26:1 on panel -- every one comfortably clears the 3:1 floor with real margin
+//      (verified 2026-07-24, see docs/features/theming.md Verification).
+// `$focus-ring-width` bumped 0.25rem (4px, Bootstrap default) -> 2px so the ring reads as a
+// deliberate outline rather than a soft glow, per the audit's own suggested treatment.
+$focus-ring-width: 2px;
+$focus-ring-opacity: 1;
+$focus-ring-color: $theme-accent;
+
+// WCAG/APCA audit fold-in (2026-07-24, PR #432's report) - two `.btn-close` (modal/offcanvas/
+// toast dismiss ×) fixes, both theme-layer so they apply to every one of the ~15 mounts sitewide
+// without touching each call site:
+//   1. Target size (WCAG 2.5.8, >=24x24 CSS px) - Bootstrap's stock `$btn-close-width: 1em`
+//      (16px) + `.25em` padding each side measured 21x21 in the audit, under the 24px floor.
+//      Bumped to a flat 25px (comfortably >=24 after any subpixel rounding, not just exactly at
+//      the boundary) - self-verified via a real `boundingBox()` read, see the fidelity spec.
+//   2. Colour (`$btn-close-color`) - stock default is `$black` (a dark-on-light SVG, via the
+//      `fill:#{$btn-close-color}` data-URI Bootstrap core generates from this variable), never
+//      overridden by Superhero, so every close × sitewide was rendering a near-invisible dark
+//      glyph against this theme's dark modal/offcanvas/toast headers - Superhero's own dark
+//      surfaces have ALWAYS had this bug, this pass is the first to route it to a token.
+//      `$theme-text` (light) makes the glyph visible with no per-caller "white" variant class
+//      needed.
+$btn-close-width: 25px;
+$btn-close-color: $theme-text;
 
 // Theme-defaults pass (2026-07-24): components that never opt into our own tokens were "born
 // grey" -- Superhero's stock $gray-600 (#4e5d6c) bleeding through Bootstrap's own component
@@ -35,23 +121,21 @@ $table-dark-bg: $theme-raised-bg;
 // select-arrow chevron was rendering almost invisibly against our dark $input-bg.
 $form-select-indicator-color: $theme-light;
 
-// Corner radii (2026-07-24, owner extension to the theme-defaults pass): wire Bootstrap's own
-// radius variables to the token tiers in _theme-tokens.scss instead of leaving them on
-// Superhero's own literals / the implicit CSS-var cascade some of these already inherit through.
-// Every value below is identical to what already ships (0 -- Superhero's own $border-radius/
-// -sm/-lg are already 0; $btn-/$card-/$input-border-radius* already inherit 0 from those via
-// Bootstrap core's var(--bs-border-radius) default), so this changes zero rendered pixels -- it
-// only makes the coupling explicit so a future radius ruling (e.g. semi-rounded buttons, which
-// the owner is weighing separately from this pass) is a token edit, not a component hunt.
-// $border-radius-pill deliberately NOT touched here -- see _theme-tokens.scss's own note on why
-// $theme-radius-pill isn't wired to it.
+// Corner radii (2026-07-24 Tokyo-11 ruling, "Semi"): wire Bootstrap's own radius variables to
+// the token tiers in _theme-tokens.scss instead of leaving them on Superhero's own literals.
+// Buttons/inputs are 6px ($theme-radius-base/-sm, at every Bootstrap size tier including -lg --
+// the study's table doesn't grow buttons past 6px for a -lg variant); cards/modals/popovers/
+// dropdowns are 8px ($theme-radius-card, wired to $border-radius-lg since those components'
+// own SCSS defaults their own radius FROM $border-radius-lg); pills stay their own separate
+// $theme-radius-pill (10px, unchanged -- see that token's own note on why it's not wired to
+// Bootstrap's $border-radius-pill).
 $border-radius: $theme-radius-base;
 $border-radius-sm: $theme-radius-sm;
-$border-radius-lg: $theme-radius-base;
+$border-radius-lg: $theme-radius-card;
 $btn-border-radius: $theme-radius-base;
 $btn-border-radius-sm: $theme-radius-sm;
 $btn-border-radius-lg: $theme-radius-base;
-$card-border-radius: $theme-radius-base;
+$card-border-radius: $theme-radius-card;
 $input-border-radius: $theme-radius-base;
 $input-border-radius-sm: $theme-radius-sm;
 $input-border-radius-lg: $theme-radius-base;
