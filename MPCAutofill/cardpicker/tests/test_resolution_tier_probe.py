@@ -9,32 +9,7 @@ import pytest
 
 import cardpicker.resolution_tier_probe as module
 from cardpicker.local_identify_printing_tags import EngineVote, OcrCardResult
-from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
-    CanonicalCardFactory,
-    CanonicalExpansionFactory,
-    CardFactory,
-    SourceFactory,
-)
-
-# See test_harvest_probe.py's identical fixture for the full rationale.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
+from cardpicker.tests.factories import CanonicalCardFactory, CardFactory
 
 
 class TestRunResolutionTierProbe:

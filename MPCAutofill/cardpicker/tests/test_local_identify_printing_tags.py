@@ -74,25 +74,6 @@ from cardpicker.tests.factories import (
     TagFactory,
 )
 
-# see test_deductive_backfill.py's identical fixture for the full rationale
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-
 
 class TestSelection:
     def test_excludes_resolved_cards(self, db):

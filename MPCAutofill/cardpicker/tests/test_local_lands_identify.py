@@ -5,8 +5,6 @@ phash engine. No network calls: fetch_card_image/run_ocr_for_card/detect_illus_a
 mocked exactly like test_local_residual_classify.py mocks the same functions.
 """
 
-import pytest
-
 import cardpicker.local_lands_identify as module
 from cardpicker.local_identify_printing_tags import (
     OCR_ANONYMOUS_ID,
@@ -29,30 +27,8 @@ from cardpicker.models import CardPrintingTag, CardScanLog, LandsAmbiguousResidu
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
-    CanonicalExpansionFactory,
     CardFactory,
-    SourceFactory,
 )
-
-# See test_local_identify_printing_tags.py's identical fixture for the full rationale -
-# factory.Sequence counters are process-global across the whole pytest run.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 class TestIsLandsTarget:

@@ -7,28 +7,11 @@ The same URL is already parsed from the weekly bulk-data import into
 cover the local-first/REST-fallback ordering that change adds.
 """
 
-import pytest
-
 import cardpicker.local_phash as module
 from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
     CanonicalCardFactory,
-    CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
 )
-
-# See test_harvest_probe.py's identical fixture for the full rationale.
-_SHARED_FACTORIES = [CanonicalArtistFactory, CanonicalExpansionFactory, CanonicalCardFactory]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 class TestLocalArtCropUrl:

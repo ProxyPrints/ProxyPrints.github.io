@@ -6,8 +6,6 @@ confirmed live in vote_consensus._SOURCE_WEIGHTS) rather than overriding them, s
 arithmetic in these tests matches what a real purge would actually do in production.
 """
 
-import pytest
-
 from django.core.management import call_command
 
 from cardpicker.management.commands.purge_machine_votes import (
@@ -29,30 +27,7 @@ from cardpicker.tests.factories import (
     CardArtistVoteFactory,
     CardFactory,
     CardPrintingTagFactory,
-    SourceFactory,
 )
-
-# see test_printing_consensus.py for why this capture-and-restore fixture exists - this file's
-# own CanonicalArtistFactory/CanonicalCardFactory/etc. calls would otherwise shift the shared
-# sequence counters that unrelated snapshot tests elsewhere (e.g. test_views.py) hardcode exact
-# values for.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 class TestPurgeRun:

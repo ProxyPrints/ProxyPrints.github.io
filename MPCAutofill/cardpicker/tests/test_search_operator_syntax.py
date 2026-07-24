@@ -22,30 +22,7 @@ from cardpicker.tests.factories import (
     CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
     CardFactory,
-    SourceFactory,
 )
-
-# `factory.Sequence` counters are process-global across the whole pytest session - a fresh test
-# file using these shared factories shifts sequence-derived values that other test files'
-# snapshots hardcode, purely based on collection order. See
-# test_printing_consumption_views.py's identical fixture and docs/lessons.md for the full story.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 def search_settings_for(source_pk: int, **filter_overrides) -> dict:

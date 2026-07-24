@@ -73,14 +73,12 @@ from cardpicker.models import (
     VoteSource,
 )
 from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
     CardFactory,
     DFCPairFactory,
     ImageEvidenceFactory,
-    SourceFactory,
 )
 from cardpicker.utils import twos_complement
 
@@ -98,28 +96,6 @@ def _dfc_record(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {"id": str(uuid.uuid4()), "layout": "transform"}
     base.update(overrides)
     return base
-
-
-# see test_local_identify_printing_tags.py's identical fixture for the full rationale -
-# factory.Sequence counters are process-global across the whole pytest run.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-    DFCPairFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 def _hash_of(expansion_code: str) -> int:

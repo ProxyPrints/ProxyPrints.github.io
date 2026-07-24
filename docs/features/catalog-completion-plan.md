@@ -2733,6 +2733,18 @@ likely extends Part 1's existing `PilotRunLedger` rather than a new
 model. Applies to the shared runner, so Stage C golden runs and the
 fidelity replay inherit it for free.
 
+Piece (1)'s acceptance test now exists as a re-runnable script,
+`scripts/ops/crash_drill.sh` — kill-and-restart at an arbitrary
+mid-batch point, a truthful interrupted-run ledger, and a fully
+idempotent recovery with zero manual cleanup, exercised against the
+live daemon. It first passed in production on 2026-07-23 (kill at
+105/1000 committed, `DRILL-PASS 2026-07-23T18:31:39Z`). The script's
+one edit-point per run is its seeded cohort (currently a 1,000-card
+slice of the blank-collector-text pool, chosen because the
+fetch-failed pool the drill originally targeted had collapsed to ~10
+cards, too small to host a reliable kill window) — swap that query
+when the current cohort stops being representative or large enough.
+
 ---
 
 ## Part 5 — Residual classification (existing tags only)

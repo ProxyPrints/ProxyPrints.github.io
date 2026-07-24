@@ -93,14 +93,7 @@ from cardpicker.local_fallback import (
 from cardpicker.local_ocr import DEFAULT_CROP_BOX, LEGAL_LINE_CROP_BOX
 from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import CardScanLog, ImageEvidence
-from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CardFactory,
-    SourceFactory,
-)
-
-_SHARED_FACTORIES = [CardFactory, SourceFactory, CanonicalArtistFactory, CanonicalExpansionFactory]
+from cardpicker.tests.factories import CardFactory
 
 
 @dataclass(frozen=True)
@@ -202,16 +195,6 @@ def _build_card_image(
         if text:
             draw.text((box[0] + 5, box[1] + 10), text, fill="white")
     return img
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 class TestExtractCardEvidence:

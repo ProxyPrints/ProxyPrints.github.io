@@ -39,71 +39,56 @@ not just a local re-run — that CI is actually clean afterward.
 import chain (`update_database → local_phash → imagehash/pytesseract`,
 `journal/2026-07-16-hash-at-ingest.md`).
 
-## 5-6 unrelated test snapshots break after adding one new test file
+## 5-6 unrelated test snapshots break after adding one new test file (RETIRED 2026-07-23)
 
-**Symptom**: a brand-new test file (using an existing shared factory) is
-added, and several _other_, seemingly-unrelated tests start failing —
-often `test_views.py::TestGetTags::*` or similar snapshot-style
+**This whole class of bug is now structurally impossible** — see "Root
+fix" below. Kept as history because the root cause (`factory.Sequence`
+counters being process-global) is a generically useful fact about
+`factory_boy`, and because the old symptom text is still what you'd grep
+for if you hit something snapshot-related in this suite.
+
+**Old symptom**: a brand-new test file (using an existing shared factory)
+was added, and several _other_, seemingly-unrelated tests started
+failing — often `test_views.py::TestGetTags::*` or similar snapshot-style
 assertions with a hardcoded value like `"Artist 0"`.
 
 **Cause**: `factory.Sequence` counters in `cardpicker/tests/factories.py`
-are process-global for the whole pytest run. A snapshot assertion that
-hardcodes a sequence-derived value implicitly depends on total call count
-up to that point in collection order — a new test file using the same
-shared factory shifts that count.
+are process-global for the whole pytest run. `test_views.py` is the only
+module in the suite whose assertions embed a sequence-derived value (via
+`__snapshots__/test_views.ambr`, reached through
+`brainstorm_canonical_card`'s default `CanonicalCardFactory`/
+`CanonicalArtistFactory` SubFactory chain) — so that value implicitly
+depended on total call count up to that point in collection order, and
+_any_ other file using the same shared factories could shift it.
 
-**Fix**: an autouse fixture local to the new test file(s) only, that
-captures each shared factory's `next_sequence()` before the test body
-runs and calls `reset_sequence(n, force=True)` both immediately (undo the
-peek's own increment) and again in teardown — zero net drift. Don't touch
-`conftest.py` or existing test files.
+**Old fix (retired)**: an autouse fixture local to every _new_ test file
+that captured each shared factory's `next_sequence()` before the test
+body ran and called `reset_sequence(n, force=True)` both immediately and
+again in teardown, keeping that file's own usage invisible to the rest of
+the suite. This recurred 3 times after being documented ([[lessons.md]])
+because each new file had to independently rediscover which factories
+count as "shared" (deductive-backfill work, then again in
+`test_purge_machine_votes.py`), and needed a special-cased, `request.node.name`-gated variant (`test_views.py`'s old
+`_preserve_shared_factory_sequences_for_insulated_tests`) for the case of
+a single new _test_ inside an existing file, since a same-scope
+`populated_database`-consuming test shifted every later test in the same
+file.
 
-**Recurred 3 times after being documented** ([[lessons.md]]) because each
-new test file has to independently rediscover which factories count as
-"shared": deductive-backfill work (had to add `SourceFactory`/
-`CanonicalArtistFactory` to the list), and again in
-`test_purge_machine_votes.py` (catalog-completion work). When adding a
-test file that uses any factory from `cardpicker/tests/factories.py`,
-apply this pattern preemptively rather than waiting to see which
-snapshots break.
-
-**Variant: a new TEST inside an EXISTING file, not a new file** (E-2,
-`test_views.py`, `d7e4653c`) — the same drift, different trigger. Adding
-one new test to `TestPostEditorSearchResults` (which uses the class's own
-function-scoped `populated_database` autouse fixture, same as every other
-test in the class) shifted `TestGetSampleCards`/`TestNewCardsFirstPages`/
-`TestNewCardsPage`/`TestPostExploreSearchResults` downstream in the same
-file - going from N to N+1 tests using a sequence-consuming fixture
-permanently shifts everything after it, file-wide autouse isn't an option
-here (it would reset the ambient count for ~200 _other_, correctly-passing
-tests in the same file that depend on it). The fix has to be scoped to
-just the one new test, which is non-trivial: a same-scope fixture the test
-merely _requests_ instantiates too late to see the pre-existing-fixture
-"before" value, because same-scope autouse fixtures always instantiate
-first. Resolution: a **module-level autouse fixture, gated on
-`request.node.name`** - inert (immediate no-op `yield`) for every test
-except the one named test, so it wins fixture-ordering priority (module-
-level autouse beats class-level autouse at the same nominal scope) while
-having zero effect on the rest of the file. See
-`test_views.py::_preserve_shared_factory_sequences_for_insulated_tests`.
-
-**Variant: `--snapshot-update` run against a single file diverges from a
-full-suite run** (issue #184's card-payload work). Running
-`pytest cardpicker/tests/test_views.py --snapshot-update` in isolation
-(to bake in new, purely-additive fields) updated 17 snapshots as expected
-— but 6 of those 17 also changed unrelated `Artist N`/etc. sequence-derived
-values, because CI (`.github/actions/test-backend/action.yml`) invokes
-`pytest .` from `MPCAutofill/`, collecting **every** test file in one
-process — several files earlier in collection order consume shared-factory
-sequence numbers before `test_views.py` ever runs, and a single-file
-invocation skips all of that consumption. **Fix**: always run
-`--snapshot-update` against the same scope CI actually uses (`pytest .`
-from `MPCAutofill/`, or at minimum every file that shares
-`cardpicker/tests/factories.py`'s factories), never a single test file in
-isolation — then diff the updated `.ambr` file and confirm it's purely
-additive (only the new keys you actually added) before trusting it, since
-a same-file-only update can silently bake in wrong sequence-derived values
-for tests you didn't otherwise touch.
+**Root fix**: the burden was on the wrong side. Instead of every module
+that merely _uses_ the shared factories protecting the one module that
+_asserts_ on their exact values, `test_views.py` now pins those factories
+to a fixed baseline (`Factory.reset_sequence(0, force=True)`) before every
+one of its own tests (`_pin_shared_factory_sequences`, module-level
+autouse). Its snapshots are now self-determined regardless of suite
+composition, collection order, or how many tests ran before it — no other
+file in `cardpicker/tests/` needs to know `test_views.py` exists, and the
+old capture/restore fixture + `_SHARED_FACTORIES` list was deleted from
+all 31 other files that carried it. This also retired the `--snapshot-update` single-file-vs-full-suite divergence variant that used to
+apply here (updating `test_views.ambr` in isolation used to bake in wrong
+values because a full-suite run consumed sequence numbers a single-file
+run didn't) — since the pin always resets to the same baseline regardless
+of what ran before, `pytest cardpicker/tests/test_views.py --snapshot-update` and a full-suite `--snapshot-update` now produce
+identical output, both scopes work.
 
 ## Seeding rows via a data migration breaks tests that assert a table is empty/complete
 

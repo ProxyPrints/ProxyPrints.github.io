@@ -1,5 +1,3 @@
-import pytest
-
 from cardpicker.deductive_backfill import (
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
     run_backfill,
@@ -10,36 +8,12 @@ from cardpicker.deductive_backfill import (
 from cardpicker.models import PrintingTagStatus, VoteSource
 from cardpicker.printing_consensus import resolve_printing
 from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
     CardFactory,
     CardPrintingTagFactory,
-    SourceFactory,
 )
-
-# `factory.Sequence` counters are process-global - see test_printing_consensus.py's identical
-# fixture for the full rationale. Mirrored here since this module uses the same shared factories
-# - including SourceFactory/CanonicalArtistFactory, consumed indirectly via CardFactory.source
-# and CanonicalCardFactory.artist SubFactories, not just the ones referenced by name above.
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 def _unique_printing(name: str, printings_count: int = 1, **kwargs) -> "CanonicalCardFactory":

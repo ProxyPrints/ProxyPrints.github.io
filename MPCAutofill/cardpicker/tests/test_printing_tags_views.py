@@ -6,33 +6,11 @@ from django.urls import reverse
 from cardpicker import views
 from cardpicker.models import CardPrintingTag, PrintingTagStatus, VoteSource
 from cardpicker.tests.factories import (
-    CanonicalArtistFactory,
     CanonicalCardFactory,
-    CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
     CardFactory,
     CardPrintingTagFactory,
-    SourceFactory,
 )
-
-# see test_printing_consensus.py for why this capture-and-restore fixture exists
-_SHARED_FACTORIES = [
-    CardFactory,
-    SourceFactory,
-    CanonicalArtistFactory,
-    CanonicalExpansionFactory,
-    CanonicalCardFactory,
-]
-
-
-@pytest.fixture(autouse=True)
-def _preserve_shared_factory_sequences():
-    before = {f: f._meta.next_sequence() for f in _SHARED_FACTORIES}
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
-    yield
-    for f, n in before.items():
-        f.reset_sequence(n, force=True)
 
 
 @pytest.fixture(autouse=True)
