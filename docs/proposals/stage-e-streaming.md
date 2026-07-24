@@ -19,6 +19,13 @@ and [#278](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/278)
 (AI-art-detector rescan-on-evidence-change — this brief's second
 consumer, §7).
 
+**§10 update (2026-07-24, owner):** four of §9's open items are now
+ratified — the rate-control/authorization-envelope question (§9 item 1)
+and the `CardScanLog` retention question (§9 item 2) are RESOLVED, and
+the micro-batch-size and 2026-07-24-IO-audit points are sharpened. See
+§10 for the full ratification text; the overall HOLD status above is
+unchanged by it.
+
 ---
 
 ## 0. What Stage E actually has to satisfy
@@ -729,12 +736,16 @@ work" but "does this preserve every property §4 checked against
 1. **§3 decision (5)'s standing authorization envelope** (bounds for
    cards/hour, max fetch-failure rate, max RSS before auto-pause) needs
    an explicit owner ruling on its numeric bounds before implementation
-   — this brief proposes the mechanism, not the numbers.
+   — this brief proposes the mechanism, not the numbers. **RESOLVED
+   2026-07-24 — see §10(a)**: replaced with a two-mode (PASSIVE/BULK)
+   split rather than a single cards/hour figure.
 2. **§5's `CardScanLog` retention/pruning policy** under continuous
    evidence-change re-entry is flagged, not decided — the append-only
    design rationale argues against naive deletion, but no retention
    policy exists today and streaming will grow this table faster than
-   the current batch cadence does.
+   the current batch cadence does. **RESOLVED 2026-07-24 — see
+   §10(b)**: a 10M-row/5GB tripwire, pruned via a dry-run-gated
+   management command.
 3. **§4 item 1's per-tier attribution counter** should land before any
    escalation-tier reordering is attempted — sequencing note, not an
    open question, but worth stating so the reordering isn't attempted
@@ -744,5 +755,112 @@ work" but "does this preserve every property §4 checked against
    snapshot vs. the pipeline-fidelity-gate.md's later, larger
    17,531-card pool) — not a design decision, a data freshness note.
 5. **PR #405's merge status** — this brief treats the crash-drill script
-   as pending, not yet on `master`; §7's kill-test extension should be
-   sequenced after it lands.
+   as pending, not yet on `master` (still open, unmerged, as of
+   2026-07-24); §7's kill-test extension should be sequenced after it
+   lands.
+
+## 10. Ratified amendments (2026-07-24, owner)
+
+The owner ratified two of §9's open items outright and sharpened two
+further points this brief had otherwise left to design-time judgment.
+**The brief's overall HOLD status is unchanged by this section** — §3-§5's
+implementation still needs its own owner review before it's built; what's
+resolved here is four specific open questions within it, not the HOLD
+itself.
+
+### (a) Two-mode operation replaces §9 item 1's cards/hour ceiling
+
+**Ratified: no fixed cards/hour ceiling, in either mode.** §3 decision
+(5) proposed a standing authorization envelope with numeric bounds
+including a max-cards/hour figure; the owner's ruling replaces that
+single number with an operating-mode split instead:
+
+- **PASSIVE mode** — continuous operation against submitted drives and
+  newly-created cards (the steady-state trigger §3 decision (1) already
+  specs). Load-governed, not rate-governed: no artificial cards/hour cap
+  at all. Dispatch is bounded entirely by live bars, matching §3
+  decision (3)'s "derive rate control from live host load" recommendation
+  with the actual numbers now attached:
+  - pause dispatch above host load average **7.0** (the existing
+    escalation threshold, §3 decision (3)/§1, reused unchanged);
+  - RSS ceiling **512MB per worker**;
+  - fetch-failure rate **>1% over a rolling 500-card window**;
+  - **instant pause** on any Google lockout signal (the existing
+    `lockout_hit` bar, §1, reused unchanged);
+  - **resume requires a fresh owner action** in every case above — no
+    self-resume, matching #373's `--skip-dryrun-check` posture (an
+    override is allowed, but never silent/automatic).
+- **BULK mode** — backfill work, unchanged from today's discipline:
+  polled per-batch at max throughput, gated by `pilot_run_lifecycle.py`'s
+  forced dry-run-before-write check (#373), one human poll per batch —
+  exactly the operating pattern every fire-sequence pass in
+  [`docs/pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md) already
+  used, not revised by this ratification.
+
+§3 decision (5)'s mechanism (the daemon self-enforces bounds, halts
+out-of-envelope, requires fresh owner action to resume) stands
+unchanged; only the numeric shape of the envelope was open, and is now
+closed for PASSIVE mode. §9 item 1 is **RESOLVED**.
+
+### (b) `CardScanLog` retention tripwire (§9 item 2)
+
+**Ratified: stays append-only under normal operation** — §5's own
+"durable audit trail" rationale against naive deletion is unchanged —
+**but a concrete tripwire now exists** instead of an open-ended "flagged,
+not decided":
+
+- **Trigger**: 10M rows OR 5GB table size, whichever comes first (live
+  size at the time of writing: 2,090,159 rows / 451MB, §5 — comfortably
+  under both bars today; no immediate action needed).
+- **Prune rule**: keep latest-per-`(card, anonymous_id)` plus every row
+  under 12 months old; anything older AND superseded by a later row for
+  the same pair becomes eligible for deletion.
+- **Mechanism**: a new management command, gated by the same
+  dry-run-then-poll discipline every other pilot command uses (#373's
+  forced dry-run-before-write pattern) — never a bare delete.
+
+§9 item 2 is **RESOLVED**.
+
+### (c) Micro-batch size is measured, not chosen (§3 decision (2))
+
+**Ratified: no pre-chosen constant.** §3 decision (2)'s own text already
+hedged this ("roughly 10-100 cards per batch, tuned against live host
+load per decision (3) rather than fixed here") — the owner's ruling makes
+that non-negotiable: the actual batch size ships as a **measured output**
+of §7's kill-test/tail-shakedown instrumentation (the ~6,535-card Bug-A
+tail, issue #418, §6 item 1), not a value decided in this brief or
+hand-picked at implementation time. Whoever builds §7's shakedown
+instruments batch wall-clock cost directly against live host load and
+derives the size from that data; this brief's 10-100 range is a sizing
+sanity check on the result, not the answer.
+
+### (d) 2026-07-24 IO audit outcomes feed §4
+
+Two follow-ups to §4's efficiency candidates, from the same-day IO/
+throughput audit of the Stage C pipeline:
+
+- **PR [#424](https://github.com/ProxyPrints/ProxyPrints.github.io/pull/424)**
+  ("Fix three small IO findings from the 2026-07-24 audit"), merged:
+  `requests.Session` reuse per `_DestinationLimiter` (~80-90ms/request
+  eliminated once warmed, ~4-5% of pipeline wall-clock net of
+  `GOOGLE_IMAGE`'s pacing governor), `CardScanLog.bulk_create()`
+  replacing per-row `.create()` calls in `persist_evidence` (matching
+  every other calculator's existing `bulk_create` convention), and a
+  missing `.iterator()` on `run_image_evidence_cohort`'s resume-filter
+  query (flagged against that exact command's own documented
+  2026-07-22 parent-process OOM history, §1). All three land as §4's
+  efficiency work continuing into the streaming build, not new
+  candidates for this brief to re-evaluate.
+- **Issue [#423](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/423)**
+  ("tesserocr A/B spike"), open: replacing per-call `pytesseract`
+  process spawn (~98ms fixed floor inside every ~195-205ms OCR call,
+  paid up to 8x/card under escalation) with a persistent in-process
+  `tesserocr` binding, estimated at 20-25% of total per-card wall-clock
+  — the single largest efficiency candidate identified against §1's
+  measured envelope, gated on an ARM64 wheel-availability check and a
+  byte-identical A/B parity spike before any code change (a PROTECTED
+  CORE substrate-swap under an unchanged public API, per
+  [`docs/upstreaming/license-provenance.md`](../upstreaming/license-provenance.md)'s
+  absorption discipline). Not yet built; tracked as the audit's largest
+  open finding, not folded into §4's numbered list above since it needs
+  its own spike before a recommendation can be made either way.

@@ -35,7 +35,18 @@ from 4 to 3** (the closer flipped one card `resolved→unresolved` after
 §14's original snapshot was taken) and folds in a real, verified
 finding that all 218,345 cards remain `artist_vote_status=unresolved`
 despite the artist-fill pass (see §14's "Artist-consensus finding").
-See "Chain" below for where each number's provenance sits.
+**§15 (new, 2026-07-24)** records a separate, later arc — the wave-1
+Bug-A blank-tier-1 re-scan (10,437 cards) carried through re-scan,
+reparse retraction, a full-pool lands write, a wave-1-scoped Stage D
+write, and a closing `consensus_recompute` dry-run that found zero
+transitions — closing that slice of the Bug-A tail; the remaining
+~6,535-card tail is routed to Stage E streaming's shakedown cohort
+instead of a further batch pass (§14's "What remains open" item 1, §15).
+§14's own Operational notes were also updated the same pass to record
+issue #402's fix (PR #412) going live via deploy-3, and "What remains
+open" item 2 (moderation) now reflects an owner ruling to defer package
+sizing pending further passes. See "Chain" below for where each number's
+provenance sits.
 
 ## 1. Gate definition
 
@@ -1043,13 +1054,29 @@ own, by design.
 ### Operational notes
 
 - **Scryfall cache lost on every container rebuild** — [issue #402](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/402),
-  discovered 2026-07-23 after a deploy: `MPCAutofill/scryfall_cache/default_cards.json`
-  (~2GB) lives inside the django container filesystem, not on a mounted
-  volume, so a rebuild silently deletes it. `local_calculate_verdicts`
+  discovered 2026-07-23 after deploy-2 rebuilt the django/worker images
+  (see `docs/troubleshooting.md`'s "`local_calculate_verdicts` silently
+  runs with an empty back-face lookup after an image rebuild" entry for
+  the full symptom/cause writeup): `MPCAutofill/scryfall_cache/default_cards.json`
+  (~2GB, later measured ~558MB compressed — see that troubleshooting
+  entry) lived inside the django container filesystem, not on a mounted
+  volume, so a rebuild silently deleted it; `local_calculate_verdicts`
   ran with an empty back-face lookup as a result (degraded, not
-  crashed — easy to miss). Fix (mount the cache dir, or fail loud on
-  staleness) is tracked in the issue, not yet applied as of this
-  section.
+  crashed — easy to miss). **Fix shipped**: PR
+  [#412](https://github.com/ProxyPrints/ProxyPrints.github.io/pull/412)
+  ("Persist scryfall_cache volume and fail loud on a missing cache",
+  merged 2026-07-24T09:07:13Z) makes `scryfall_cache` a named, persistent
+  Docker volume mounted on both the `django` and `worker` services, plus
+  a fail-loud `ensure_scryfall_cache_present()` guard at the start of
+  `local_calculate_verdicts.Command.handle()` (raises rather than
+  degrading silently, unless `--allow-missing-scryfall-cache` is passed
+  explicitly) — went live via **deploy-3** (2026-07-24), the deploy
+  following the one (deploy-2, 2026-07-23) that originally lost the
+  cache. This closes the gap this note previously left open; not yet
+  independently re-verified live in this pass (no fresh cache-presence
+  check was run while writing this section) — flagged as
+  documentation-sourced, not re-confirmed, should that distinction
+  matter to a future reader.
 - **Border-tag seeding (7 created)** — the `seed_attribute_tags`
   management command (backing the `local_layout_class_cast` border-vote
   caster, issue #369/PR #375) was run to seed the attribute-chip
@@ -1058,19 +1085,67 @@ own, by design.
   live: `Tag` ids 24–30 are exactly this set, sequential, with nothing
   else in that id range. Idempotent (`seed_attribute_tags` is safe to
   re-run) — mentioned here as a one-time prerequisite step, not a vote
-  or catalog-state change.
+  or catalog-state change. `local_layout_class_cast` itself went on to
+  cast 216,811 `CardTagVote` rows against this taxonomy (the "borderless
+  cast," cited in §15's pass 5 for why that pass's tag-pairs count is so
+  much larger than this section's own 61,330/61,334 figures).
 
 ### What remains open
 
-1. **Bug-A full re-scan** of the 17,531-card blank-tier-1 pool, deferred
-   to post-pilot per the owner ruling in §9(c) (recipe documented there
-   and in §13, not re-derived here). Still the one tracked open item
-   carried forward past the fire. Owner-ratified sequencing (2026-07-24):
-   the remaining tail (issue #418) is Stage E streaming's shakedown
-   cohort — it does not get a further batch pass; see
+1. **Bug-A full re-scan** of the 17,531-card blank-tier-1 pool. **Wave-1
+   (10,437 cards, the top 4 sources) is now CLOSED (2026-07-24) — see
+   §15** for the full re-scan → reparse → lands → Stage D → closing-
+   recompute arc, DB-verified end to end with zero consensus transitions
+   resulting. **Only the remaining ~6,535-card tail (16,972 − 10,437,
+   issue #418) stays open**, and per the owner-ratified sequencing
+   (2026-07-24) it does **not** get a further batch pass — it is routed
+   to Stage E streaming's shakedown cohort instead; see
    [`docs/proposals/stage-e-streaming.md`](proposals/stage-e-streaming.md)
-   §6.
-2. **Moderation package sizing** is now **data-ready**: the review queue
-   is a DB-verified, dedup'd **134,370** cards (`to-review` skips, see
-   "Topline end-state" above) — sizing work for the moderation
-   package can use this figure directly rather than re-deriving it.
+   §6/§7 (issues [#153](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/153)/[#418](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/418)).
+2. **Moderation package sizing: DEFERRED (owner ruling, 2026-07-24),
+   pending further passes.** At ruling time, the raw (non-dedup'd) union
+   of review-eligible cards across engines was **167,045 (76% of the
+   218,345-card catalog)** — a materially larger and noisier number than
+   this section's own dedup'd **134,370** `to-review`-skip figure (see
+   "Topline end-state" above), and the owner declined to size or build
+   the moderation package against either number while wave-1/Bug-A
+   closure (§15), the artist-consensus gap (see above), and the other
+   passes still in flight keep moving the underlying counts. The
+   134,370 dedup'd figure remains available as a working number
+   whenever this is picked back up — not re-derived here, just not
+   acted on yet.
+
+## 15. Wave-1 Bug-A arc closure (2026-07-24)
+
+The 10,437-card wave-1 cohort — the top 4 sources of the 16,972-card
+Bug-A blank-tier-1 pool (§9(c)/§13), the same cohort
+[`docs/proposals/stage-e-streaming.md`](proposals/stage-e-streaming.md)
+§6 item 1 names as its own owner-ratified sequencing basis and §1
+already measured for Stage C throughput (`PilotRunLedger` ids 70/75,
+`rescan-wave1-dry-20260724`/`rescan-wave1b-20260724`) — was carried
+through to a full, closed arc the same day: re-scan → reparse retraction
+→ a full-pool lands pass → a wave-1-scoped Stage D vote → a closing
+`consensus_recompute` dry-run confirming zero transitions. Every figure
+below is DB-verified, keyed by `run_id`, in the same condensed-table
+style as §14's per-pass table.
+
+| #   | pass                      | run_id                   |                                       rows | notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --- | ------------------------- | ------------------------ | -----------------------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | Wave-1 re-scan (Stage C)  | `rescan-wave1b-20260724` |                             10,437 fetched | 3,282 (31%) recovered a parsed collector number, of which 2,526 further resolved a set code; 1,898 separately recovered an artist name via the artist-OCR channel. Throughput/resource detail already recorded in `stage-e-streaming.md` §1 (`PilotRunLedger` id 75, 3.351 cards/s, 3,115.1s) — this row adds the extraction-yield detail that brief didn't carry.                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 2   | Reparse write             | `20260724T125238`        |                          3,243 retractions | `reparse_collector_evidence --write` over the wave-1 cohort's newly-recovered evidence, retracting stale no-match/skip state superseded by the fresh parse — the same mechanism as the earlier Bug-B write (§9(b)/§13), scoped to wave-1 here.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 3   | Lands full-pool write     | `20260724T125355`        | 2,701 new votes; 7,831 already-voted skips | `local_lands_identify --write`, full eligible pool (not wave-1-scoped): 2,701 new votes cast, 7,831 honest no-op skips (PR #411's vote-collision skip-if-exists guard — a card already carrying a vote from the same `anonymous_id`, not a duplicate/error). Forced dry-run-before-write gate (#373) checked and passed ahead of this write.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 4   | Wave-1 Stage D write      | `20260724T133819`        |                                  919 votes | `local_calculate_verdicts --write` scoped to the wave-1 cohort: 5 genuine matches + 914 no-match — closing the loop on exactly the cohort re-scanned in pass 1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 5   | Closing recompute dry-run | `20260724T142039`        |                              0 transitions | `consensus_recompute` dry-run: printing 97,212 pairs checked / 0 transitions, artist 7,130 pairs / 0 transitions, tag 226,974 pairs / 0 transitions. Tag pairs jumped from §14's 61,330/61,334 (the 2026-07-23/24 closer, still the live figure in "Topline end-state" above) to 226,974 here — consistent with the borderless-attribute cast (216,811 `CardTagVote` rows, verified earlier — see the "Border-tag seeding" operational note above) having landed a large new `(card, tag)` pair population in the interim, not a data-integrity concern. **No `--apply` run was needed** — the wave-1 votes/retractions above changed no card's resolved status on their own, consistent with the vote-weight gate's own "no machine tipping" rule (§3 item 3 / `theory.md` §4/§7a). Arc closed. |
+
+**Wave-1 topline**: of the 10,437-card cohort, 5 cards resolved a
+genuine new printing match via wave-1's own Stage D pass (pass 4);
+2,701 additional cards (full-pool scoped, not exclusive to wave-1)
+received a lands-identity vote from the same re-scanned evidence
+(pass 3); the closing recompute (pass 5) confirms none of this moved
+any card's resolved/no_match status. The wave-1 slice of the Bug-A tail
+is **closed** — only the remaining ~6,535-card tail (16,972 − 10,437) is
+still open, and per the owner-ratified 2026-07-24 sequencing (see "What
+remains open" item 1 above) it does not get a further batch pass: it is
+routed to Stage E streaming's shakedown cohort
+([`docs/proposals/stage-e-streaming.md`](proposals/stage-e-streaming.md)
+§6/§7, issues [#153](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/153)/[#418](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/418)).
