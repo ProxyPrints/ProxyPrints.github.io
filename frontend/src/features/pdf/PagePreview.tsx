@@ -180,7 +180,8 @@ const SlotFlipButton = styled.button`
 // Cardback flow round (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3, N) - a small non-default-back
 // indicator dot within the flip button's existing footprint, whenever the slot's own back face
 // differs from the deck's default cardback. "No new color roles" (the amendment's own binding
-// constraint) - reuses the warning token (`#ffc107`) already in the #302 palette, not a new hue.
+// constraint) - reuses the warning token ($theme-warning; Tokyo-11: #ffc107 -> #e0af68), not a
+// new hue.
 const CustomCardbackDot = styled.span`
   position: absolute;
   top: -2px;
@@ -188,7 +189,7 @@ const CustomCardbackDot = styled.span`
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #ffc107;
+  background: var(--bs-warning);
   border: 1px solid #0b1520;
   pointer-events: none;
 `;
