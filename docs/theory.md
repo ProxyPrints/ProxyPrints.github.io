@@ -705,25 +705,37 @@ any future soundness claim about this chain. Full detail and the fire
 sequence this basis change feeds into:
 [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §8–§9.
 
-### 7d. Full-catalog fire outcome (2026-07-23) — the soundness design empirically confirmed at scale
+### 7d. Full-catalog fire outcome (2026-07-23/24) — the soundness design empirically confirmed at scale
 
 The §9 fire sequence completed end to end 2026-07-23: the pilot's
 full-eligible-pool `--write` cast **130,210** machine votes across both
 channels (join-key 100,500 — 39,253 match / 61,247 no_match; fallback
 29,710 match, its first production execution), followed strictly last
 by `consensus_recompute --apply`. Against that ~130k-vote input, the
-human-backed gate materialized **exactly one additional resolved
-printing** (3 → 4) — every other card either stayed unresolved (pending
-further evidence/votes) or, where the machine channels abstained
-(no-match/skip), correctly cast no resolving signal at all. This is the
-same conservative-abstention asymmetry §7c already established at
-41,586-card replay scale (zero of 373 unexplained divergences was a
-wrong-printing commitment) now observed at full-catalog production
-scale with real writes, not a replay: a large volume of machine votes
-does not translate into a large volume of resolutions unless the
-gate's own consensus threshold is actually met card-by-card. Full
-numbers, the write's DB-verification against the dry-run's prediction,
-and the `consensus_recompute` outcome:
+human-backed gate initially materialized **exactly one additional
+resolved printing** (3 → 4) — every other card either stayed unresolved
+(pending further evidence/votes) or, where the machine channels
+abstained (no-match/skip), correctly cast no resolving signal at all.
+**A second `consensus_recompute` closer pass the following night
+(2026-07-24) then flipped that same card back** (`resolved→unresolved`),
+so the live resolved count today is **3** — unchanged in aggregate from
+before the fire despite ~130k intervening machine votes and two
+consensus recomputes, an even sharper illustration of the same point:
+a large volume of machine votes does not translate into net new
+resolutions unless the gate's own consensus threshold is actually met
+card-by-card, and stays met. This is the same conservative-abstention
+asymmetry §7c already established at 41,586-card replay scale (zero of
+373 unexplained divergences was a wrong-printing commitment) now
+observed at full-catalog production scale with real writes, not a
+replay. A further finding from the same 2026-07-24 measurement: despite
+131,020 artist-credit evidence fields filled and 7,130 `CardArtistVote`
+pairs checked by the closer, **zero cards resolved on artist** — every
+checked pair carries only a single machine vote, below the
+owner-ratified vote-weight resolution threshold (see
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §14's
+"Artist-consensus finding"). Full numbers, the write's DB-verification
+against the dry-run's prediction, and both `consensus_recompute`
+outcomes:
 [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §14 and
 [`data/2026-07-23-pilot-write-and-recompute.md`](data/2026-07-23-pilot-write-and-recompute.md).
 Not a new calibrated `εᵢ` — a corroborating data point at the scale

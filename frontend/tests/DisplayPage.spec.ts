@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 import { http, HttpResponse } from "msw";
 
+import { PinnedSourcesKey } from "@/common/constants";
 import { computeSearchQueryHashKey } from "@/common/processing";
 import { CardType } from "@/common/schema_types";
 import {
@@ -712,6 +713,60 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.getByTestId("display-sources-summary-label").click();
     await expect(page.getByTestId("display-sources-filter")).toBeHidden();
     await expect(page.getByTestId("display-sources-pin-chip-0")).toBeVisible();
+  });
+
+  // SPEC-display-left-rail.md §E.3/owner answer #5 (2026-07-23) - the pin is deliberately
+  // device-local `localStorage` (`getLocalStoragePinnedSourcePks`/`setLocalStoragePinnedSourcePks`,
+  // common/cookies.ts) until #353's account-tied backend lands; this is the "survives a real
+  // reload" half PDFGenerator.spec.ts's own bleed-override persistence test already establishes
+  // the pattern for in this codebase.
+  test("a pinned source persists to localStorage and survives a reload, independent of the (non-persisting) in-memory project", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsThreeResults,
+      sourceDocumentsThreeResults,
+      searchResultsThreeResults,
+      tagConsensusTwoUnresolvedTags,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+    await importText(page, "1 card 1\n1 card 2\n1 card 3");
+    await page.getByRole("link", { name: "Editor" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+
+    await page.getByTestId("display-sources-summary-label").click();
+    await page.getByTestId("display-sources-pin-1").click();
+    await expect(page.getByTestId("display-sources-pin-chip-1")).toContainText(
+      "Source 2"
+    );
+
+    await expect
+      .poll(() =>
+        page.evaluate((key) => localStorage.getItem(key), PinnedSourcesKey)
+      )
+      .toBe(JSON.stringify([1]));
+
+    // A fresh navigation rather than page.reload() - see PDFGenerator.spec.ts's own identical
+    // comment for why. The in-memory project doesn't itself persist across reload today, so this
+    // re-imports the same three cards from scratch; the point is that the PIN survives even
+    // though the project (and thus SourcesAccordion's own remount) doesn't carry any React state
+    // forward - only localStorage does.
+    await page.goto("/editor?server=http://127.0.0.1:8000", {
+      waitUntil: "domcontentloaded",
+    });
+    await page.getByText("Choose Art").click();
+    await importText(page, "1 card 1\n1 card 2\n1 card 3");
+    await page.getByRole("link", { name: "Editor" }).click();
+    await page.getByTestId("page-preview-slot").first().click();
+
+    // No click on the pin needed this time - it's sourced from localStorage on mount
+    // (`useState(() => new Set(getLocalStoragePinnedSourcePks()))`, SourcesAccordion.tsx), and the
+    // pinned strip is visible even before the accordion is ever expanded.
+    await expect(page.getByTestId("display-sources-pin-chip-1")).toContainText(
+      "Source 2"
+    );
   });
 
   test("a slot with no resolved image shows its query text on the sheet instead of a blank hole (item 1, owner's hands-on review)", async ({
