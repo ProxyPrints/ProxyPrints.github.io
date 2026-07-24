@@ -12,28 +12,11 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import {
-  importTextOnEditorLanding,
-  loadPageWithDefaultBackend,
-} from "./test-utils";
+import { navigateToPrintPDFTab } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
-
+// Parked-spec port wave (2026-07-24, issue #272). Re-homed onto the standalone /print route
+// (D10, pages/print.tsx) - see PDFGenerator.spec.ts's own module comment for the full rationale.
+//
 // Issue #166 - the post-export contribution prompt. Mounted from PDFGenerator.tsx (so the
 // classic "Print!" tab / Print page gets it). It used to ALSO be mounted from DisplayPage.tsx's
 // own inline export (Proposal H, item 2) - issue #275 removed that inline pipeline entirely (PDF
@@ -74,16 +57,18 @@ const oneCardHandlers = [
   ...defaultHandlers,
 ];
 
-test.describe("Post-export contribution prompt (issue #166) - classic Print! tab", () => {
-  test("also appears after a successful export from PDFGenerator.tsx's own classic tab", async ({
+// Generous file-level timeout (not the 30s default) - navigateToPrintPDFTab's own retry against
+// /print's cold-compile race (test-utils.ts's own comment) needs headroom beyond a single 30s
+// test timeout to actually get a second attempt in, same precedent PDFGenerator.spec.ts uses.
+test.describe.configure({ timeout: 60_000 });
+
+test.describe("Post-export contribution prompt (issue #166) - /print PDF tab", () => {
+  test("appears after a successful export from PDFGenerator.tsx's own /print mount", async ({
     page,
     network,
   }) => {
     network.use(imageBucketSuccess, imageWorkerSuccess, ...oneCardHandlers);
-    await loadPageWithDefaultBackend(page);
-    await importTextOnEditorLanding(page, "my search query");
-    await page.getByRole("tab", { name: "Print!" }).click();
-    await page.getByRole("tab", { name: "PDF" }).click();
+    await navigateToPrintPDFTab(page, "my search query");
 
     const prompt = page.getByTestId("post-export-contribution-prompt");
     await expect(prompt).not.toBeVisible();

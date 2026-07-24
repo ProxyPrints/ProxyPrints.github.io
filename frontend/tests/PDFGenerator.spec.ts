@@ -15,27 +15,15 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
-import {
-  importTextOnEditorLanding,
-  loadPageWithDefaultBackend,
-} from "./test-utils";
+import { navigateToPrintPDFTab } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
+// Parked-spec port wave (2026-07-24, issue #272). Re-homed onto the standalone /print route
+// (D10, pages/print.tsx) - PDFGenerator.tsx itself is completely unchanged by the Proposal H
+// route swap (its only live mount moved from the classic grid's "Print!" tab to /print's
+// FinishedMyProject, both the same unforked component), so every assertion below (testids,
+// modal/toast copy, localStorage key, timing) is unchanged from the pre-swap version of this
+// file - only the navigation helper (navigateToPrintPDFTab, test-utils.ts) differs.
+test.describe.configure({ timeout: 60_000 });
 
 // Matches the domains configured via NEXT_PUBLIC_IMAGE_WORKER_URL /
 // NEXT_PUBLIC_IMAGE_BUCKET_URL in playwright.config.ts's webServer env.
@@ -75,12 +63,8 @@ const imageBucketSuccess = http.get(
     })
 );
 
-const addCardAndOpenPDFTab = async (page: Page) => {
-  await loadPageWithDefaultBackend(page);
-  await importTextOnEditorLanding(page, "my search query");
-  await page.getByRole("tab", { name: "Print!" }).click();
-  await page.getByRole("tab", { name: "PDF" }).click();
-};
+const addCardAndOpenPDFTab = async (page: Page) =>
+  navigateToPrintPDFTab(page, "my search query");
 
 test.describe("PDFGenerator - card image fetch failures", () => {
   test("warns in the live preview when a card image fails to fetch", async ({
@@ -289,16 +273,12 @@ test.describe("PDFGenerator - manual bleed override (Proposal B PR-2)", () => {
       .toBe(JSON.stringify({ [cardDocument1.identifier]: "force-bleed" }));
 
     // A fresh navigation rather than page.reload() - reload() alone was observed to hang past
-    // the test timeout in this app; waiting for "domcontentloaded" rather than the default
-    // "load" avoids a second hang, both unrelated to anything this PR touches (this app's
+    // the test timeout in this app, unrelated to anything this PR touches (this app's
     // webworkers appear not to settle a second "load" event cleanly within one Playwright page).
-    await page.goto("/editor?server=http://127.0.0.1:8000", {
-      waitUntil: "domcontentloaded",
-    });
-    await page.getByText("Choose Art").click();
-    await importTextOnEditorLanding(page, "my search query");
-    await page.getByRole("tab", { name: "Print!" }).click();
-    await page.getByRole("tab", { name: "PDF" }).click();
+    // The project itself doesn't persist across this reload (only the standalone localStorage
+    // override does), so the whole navigateToPrintPDFTab journey - including re-importing - runs
+    // again from scratch, same as every other test in this file.
+    await navigateToPrintPDFTab(page, "my search query");
     await page.getByText("Bleed Overrides").click();
 
     await expect(
