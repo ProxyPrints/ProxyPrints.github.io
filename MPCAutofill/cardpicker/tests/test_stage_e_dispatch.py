@@ -35,6 +35,7 @@ from cardpicker.models import (
     ImageEvidence,
     PilotRunLedger,
     PrintingTagStatus,
+    VoteSource,
 )
 from cardpicker.operating_envelope import (
     FETCH_FAILURE_WINDOW,
@@ -427,6 +428,54 @@ class TestKillSafetyResumeContract:
         assert resumed_ledger.status == PilotRunLedger.Status.COMPLETED
         # only the two cards the crashed run never reached needed real Stage C work this time.
         assert resumed_ledger.counters["stage_c_completed"] == 2
+
+
+class TestConcurrentDispatchVoteCollision:
+    """Regression for the Stage E Phase 2 shakedown's first live trip
+    (envtrip-20260724T214616-be6e5db9, failed run_ids stage-e-stream-20260724T2144*): two
+    CONCURRENT `dispatch_micro_batch` calls scoped to an overlapping card set (django-q2 runs 8
+    workers; the backstop sweep can also overlap an event trigger - see
+    `local_calculate_verdicts._split_new_printing_tag_votes`' own docstring for the full
+    root-cause writeup) used to abort a WHOLE micro-batch with an `IntegrityError` the instant the
+    losing dispatch's own Stage D `bulk_create` raced a winner's. Reproduced here at the full
+    conveyor level (not just the calculator level `test_local_calculate_verdicts.py` covers) by
+    seeding the winner's vote directly and confirming the loser's own `dispatch_micro_batch` call
+    completes rather than raising."""
+
+    @STREAMING_ON
+    def test_a_losing_race_completes_instead_of_raising_integrity_error(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import cardpicker.local_calculate_verdicts as local_calculate_verdicts_module
+
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _full_evidence(card, collector_line_collector_number="999")  # doesn't match "158" -> is_no_match=True
+        monkeypatch.setattr(
+            local_calculate_verdicts_module,
+            "_eligible_cards_queryset",
+            lambda *args, **kwargs: local_calculate_verdicts_module.Card.objects.filter(pk=card.pk),
+        )
+
+        # the WINNER of the race: another (concurrent, not modeled here) dispatch's own vote
+        # already landed for this exact (card, anonymous_id) pair.
+        CardPrintingTag.objects.create(
+            card=card,
+            printing=None,
+            is_no_match=True,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+        )
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])  # must not raise IntegrityError
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_join_key_already_voted == 1
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
+
+        ledger = PilotRunLedger.objects.get(run_id=outcome.run_id)
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.counters["stage_d_join_key_already_voted"] == 1
 
 
 class TestBackstopSweep:

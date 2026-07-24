@@ -47,6 +47,7 @@ from cardpicker.local_calculate_verdicts import (
     _eligible_cards_queryset,
     _filter_by_symbol_phash,
     _resolve_candidates_for_card,
+    _split_new_printing_tag_votes,
     _symbol_phash_tiebreak,
     calculate_fallback_verdict,
     calculate_join_key_verdict,
@@ -486,6 +487,95 @@ class TestSymbolPhashTiebreak:
         assert winner is not None and winner.pk == 1
 
 
+class TestSplitNewPrintingTagVotes:
+    """Direct unit coverage for the 2026-07-24 concurrent-dispatch collision guard
+    (trip envtrip-20260724T214616-be6e5db9), independent of either calculator's full
+    orchestration - mirrors test_local_lands_identify.py's own TestSplitNewVotes structure for
+    the sibling PR #411 guard."""
+
+    def test_empty_batch_returns_empty(self, db):
+        assert _split_new_printing_tag_votes([]) == ([], 0)
+
+    def test_no_pre_existing_vote_keeps_everything(self, db):
+        card = CardFactory(name="Some Card")
+        vote = CardPrintingTag(card_id=card.pk, printing_id=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+
+        new_votes, already_voted = _split_new_printing_tag_votes([vote])
+
+        assert new_votes == [vote]
+        assert already_voted == 0
+
+    def test_an_existing_no_match_vote_for_the_same_identity_is_skipped(self, db):
+        card = CardFactory(name="Some Card")
+        CardPrintingTag.objects.create(
+            card=card, printing=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+        vote = CardPrintingTag(card_id=card.pk, printing_id=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+
+        new_votes, already_voted = _split_new_printing_tag_votes([vote])
+
+        assert new_votes == []
+        assert already_voted == 1
+
+    def test_an_existing_match_vote_for_the_same_identity_is_skipped_even_with_a_different_printing(self, db):
+        """The invariant this guard enforces is 'at most one vote per (card, anonymous_id)',
+        matching _eligible_cards_queryset's own exclude - not 'at most one vote per (card,
+        printing, anonymous_id)', which is all the DB's own cardprintingtag_unique_printing_vote
+        constraint alone would check."""
+        card = CardFactory(name="Some Card")
+        printing_a = CanonicalCardFactory(name="Some Card")
+        printing_b = CanonicalCardFactory(name="Some Card")
+        CardPrintingTag.objects.create(
+            card=card, printing=printing_a, is_no_match=False, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+        vote = CardPrintingTag(
+            card_id=card.pk, printing_id=printing_b.pk, is_no_match=False, anonymous_id=JOIN_KEY_ANONYMOUS_ID
+        )
+
+        new_votes, already_voted = _split_new_printing_tag_votes([vote])
+
+        assert new_votes == []
+        assert already_voted == 1
+
+    def test_an_existing_vote_under_a_different_identity_is_not_a_collision(self, db):
+        card = CardFactory(name="Some Card")
+        CardPrintingTag.objects.create(
+            card=card,
+            printing=None,
+            is_no_match=True,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+        )
+        vote = CardPrintingTag(card_id=card.pk, printing_id=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+
+        new_votes, already_voted = _split_new_printing_tag_votes([vote])
+
+        assert new_votes == [vote]
+        assert already_voted == 0
+
+    def test_mixed_batch_skips_only_the_colliding_vote(self, db):
+        collided_card = CardFactory(name="Some Card")
+        clean_card = CardFactory(name="Some Card")
+        CardPrintingTag.objects.create(
+            card=collided_card,
+            printing=None,
+            is_no_match=True,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+        )
+        colliding_vote = CardPrintingTag(
+            card_id=collided_card.pk, printing_id=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID
+        )
+        clean_vote = CardPrintingTag(
+            card_id=clean_card.pk, printing_id=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID
+        )
+
+        new_votes, already_voted = _split_new_printing_tag_votes([colliding_vote, clean_vote])
+
+        assert new_votes == [clean_vote]
+        assert already_voted == 1
+
+
 class TestRunJoinKeyCalculator:
     def test_dry_run_counts_without_writing(self, db):
         card = CardFactory(name="Some Card", content_phash=42)
@@ -606,6 +696,36 @@ class TestRunJoinKeyCalculator:
         assert result.votes_written == 1
         vote = CardPrintingTag.objects.get(card=card)
         assert vote.printing_id == printing.pk
+
+    def test_concurrent_dispatch_collision_is_skipped_not_crashed(self, db, monkeypatch):
+        """Regression for the Stage E Phase 2 shakedown's first live trip
+        (envtrip-20260724T214616-be6e5db9, failed run_ids stage-e-stream-20260724T2144*) - see
+        _split_new_printing_tag_votes' own docstring for the full root-cause writeup. Reproduces
+        the exact TOCTOU a concurrent streamed re-entry hits: this card was genuinely eligible
+        when ITS OWN eligibility read ran (no vote existed yet), but another, concurrent
+        dispatch's own write landed before this invocation reached its own bulk_create -
+        simulated here by monkeypatching the eligibility read to stay stale (representing the
+        already-consumed queryset a real concurrent caller would have) while a colliding vote is
+        seeded directly, reproducing the literal production key
+        (JOIN_KEY_ANONYMOUS_ID, is_no_match=True)."""
+        import cardpicker.local_calculate_verdicts as module
+
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_collector_number="999")  # no candidate match -> is_no_match=True
+        monkeypatch.setattr(module, "_eligible_cards_queryset", lambda *args, **kwargs: Card.objects.filter(pk=card.pk))
+
+        # the WINNER of the race: a vote already landed for this exact (card, anonymous_id) pair.
+        CardPrintingTag.objects.create(
+            card=card, printing=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+
+        result = run_join_key_calculator(dry_run=False)  # must not raise IntegrityError
+
+        assert result.already_voted == 1
+        assert result.votes_written == 0
+        assert result.no_match_votes_written == 0
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
 
 
 class TestEligibleCardsQueryset:
@@ -1547,6 +1667,33 @@ class TestRunFallbackCalculator:
 
         assert result.cards_considered == 0
         assert result.skip_counts.get(FALLBACK_NO_EVIDENCE_SKIP_REASON) == 1
+
+    def test_concurrent_dispatch_collision_is_skipped_not_crashed(self, db, monkeypatch):
+        """Same shakedown regression as TestRunJoinKeyCalculator's own version of this test - this
+        calculator writes CardPrintingTag under its own STAGE_D_FALLBACK_ANONYMOUS_ID identity too
+        and is equally exposed to the concurrent-dispatch collision
+        _split_new_printing_tag_votes' own docstring writes up."""
+        import cardpicker.local_calculate_verdicts as module
+
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+        card, _ = self._no_hit_card(layout_class="black")
+        monkeypatch.setattr(module, "_eligible_cards_queryset", lambda *args, **kwargs: Card.objects.filter(pk=card.pk))
+
+        # the WINNER of the race: a vote already landed for this exact (card, anonymous_id) pair.
+        CardPrintingTag.objects.create(
+            card=card,
+            printing=printing,
+            is_no_match=False,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+        )
+
+        result = run_fallback_calculator(dry_run=False)  # must not raise IntegrityError
+
+        assert result.already_voted == 1
+        assert result.votes_written == 0
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 1
 
 
 class TestFallbackSlowPathInteraction:
