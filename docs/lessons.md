@@ -120,6 +120,18 @@ checkout** specifically, so their absolute main-checkout paths are
 correct on purpose — the trap is specifically for git-tracked files that
 need to land on the worktree's branch.
 
+**2026-07-24: closed at the tool layer.** Four independent sessions hit
+this exact trap via `Read`/`Edit`/`Write` (not `Bash`) on 2026-07-23/24
+alone, all self-caught before landing anything. `guard_master.py`'s
+PreToolUse hook now also matches `Edit`/`Write`/`NotebookEdit` calls and
+blocks any absolute target path that resolves inside the main checkout
+root but outside `.claude/worktrees/` from a worker worktree session —
+same `WORKERS.md`/`journal/` exception preserved, `Read` deliberately
+left ungated (see `.claude/hooks/guard_master.py`'s module docstring and
+`docs/troubleshooting.md`'s `guard_master.py` entry for the mechanics).
+The advice above (always use relative/`pwd`-derived paths) still holds
+as the primary defense — the hook is the backstop, not a replacement.
+
 ## Swap in a debug color to disambiguate same-colored overlapping elements
 
 A pixel/computed-color check at one sample point can be genuinely ambiguous

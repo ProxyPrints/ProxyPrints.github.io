@@ -34,6 +34,13 @@ adjacent with no intervening flag) -- accepted as safe, since
 under-triggering only ever produces an unnecessary DENY, never a wrong
 ALLOW.
 
+2026-07-24: added coverage for the `Edit`/`Write`/`NotebookEdit`
+worktree-path-trap guard (see the module docstring's "Scope added
+2026-07-24" section) -- both end-to-end `run_hook_payload()` cases
+against the actual tool_input shapes those three tools send, and direct
+unit cases against `worktree_main_checkout_root()` / `resolve_write_target()`
+/ `targets_main_checkout()`.
+
 On the "does this survive bypassPermissions / --dangerously-skip-permissions"
 requirement: Claude Code's own hook contract guarantees a PreToolUse
 hook's exit-2 decision applies in every permission mode, including
@@ -79,6 +86,13 @@ def make_repo(root, name, branch, under_worktree=False):
 def run_hook(tool_name, command, cwd):
     payload = json.dumps({"tool_name": tool_name, "tool_input": {"command": command}, "cwd": cwd})
     result = subprocess.run([sys.executable, HOOK], input=payload, capture_output=True, text=True, timeout=10)
+    return result.returncode, result.stderr.strip()
+
+
+def run_hook_payload(payload):
+    result = subprocess.run(
+        [sys.executable, HOOK], input=json.dumps(payload), capture_output=True, text=True, timeout=10
+    )
     return result.returncode, result.stderr.strip()
 
 
@@ -256,6 +270,128 @@ def main():
                 failures += 1
                 print(f"         expected deny={expect_deny}, got deny={denied}, stderr={stderr!r}")
 
+        # End-to-end coverage for the 2026-07-24 Edit/Write/NotebookEdit
+        # worktree-path-trap guard, against the actual tool_input shapes
+        # those three tools send (file_path for Edit/Write, notebook_path
+        # for NotebookEdit).
+        worker_task_subdir = os.path.join(worker_task, "sub", "dir")
+        os.makedirs(worker_task_subdir, exist_ok=True)
+        other_worktree_target = os.path.join(worker_feature, "f.txt")
+        main_checkout_target = os.path.join(main_master, "f.txt")
+        own_worktree_target = os.path.join(worker_task, "f.txt")
+        # Deliberately a sibling of `root`, not under it -- stands in for
+        # /tmp, the orchestration repo, or the memory dir: genuinely
+        # outside the repo entirely, not just outside the main checkout.
+        outside_repo_target = os.path.join(tempfile.gettempdir(), "guard_master_test_outside_repo_notes.txt")
+
+        write_guard_cases = [
+            # (label, payload, expect_deny)
+            (
+                "Edit targets main checkout, worker cwd -> DENY",
+                {"tool_name": "Edit", "cwd": worker_task, "tool_input": {"file_path": main_checkout_target}},
+                True,
+            ),
+            (
+                "Write targets main checkout, worker cwd -> DENY",
+                {
+                    "tool_name": "Write",
+                    "cwd": worker_task,
+                    "tool_input": {"file_path": main_checkout_target, "content": "x"},
+                },
+                True,
+            ),
+            (
+                "NotebookEdit targets main checkout via notebook_path, worker cwd -> DENY",
+                {
+                    "tool_name": "NotebookEdit",
+                    "cwd": worker_task,
+                    "tool_input": {"notebook_path": main_checkout_target.replace(".txt", ".ipynb")},
+                },
+                True,
+            ),
+            (
+                "Edit targets main checkout, cwd nested deep inside the worker worktree -> DENY "
+                "(main-root resolution isn't sensitive to how deep cwd is under .claude/worktrees/)",
+                {"tool_name": "Edit", "cwd": worker_task_subdir, "tool_input": {"file_path": main_checkout_target}},
+                True,
+            ),
+            (
+                "Edit targets the session's OWN worktree copy -> ALLOW",
+                {"tool_name": "Edit", "cwd": worker_task, "tool_input": {"file_path": own_worktree_target}},
+                False,
+            ),
+            (
+                "Edit targets a DIFFERENT worker worktree's copy -> ALLOW "
+                "(only main-checkout-outside-any-worktree is gated)",
+                {"tool_name": "Edit", "cwd": worker_task, "tool_input": {"file_path": other_worktree_target}},
+                False,
+            ),
+            (
+                "Edit targets a path entirely outside the repo (e.g. /tmp) -> ALLOW",
+                {"tool_name": "Edit", "cwd": worker_task, "tool_input": {"file_path": outside_repo_target}},
+                False,
+            ),
+            (
+                "Edit targets the main checkout, but session cwd IS the main checkout (not a worktree) -> ALLOW "
+                "(rule only applies to worker worktree sessions)",
+                {"tool_name": "Edit", "cwd": main_master, "tool_input": {"file_path": main_checkout_target}},
+                False,
+            ),
+            (
+                "Edit with a relative file_path from a worker cwd -> ALLOW (resolves under cwd, inside the worktree)",
+                {"tool_name": "Edit", "cwd": worker_task, "tool_input": {"file_path": "f.txt"}},
+                False,
+            ),
+            (
+                "Read targets the main checkout, worker cwd -> ALLOW (read-only calls are never gated)",
+                {"tool_name": "Read", "cwd": worker_task, "tool_input": {"file_path": main_checkout_target}},
+                False,
+            ),
+            (
+                # NOTE: relative to `root` (this fixture's `main_root`, since
+                # `worker_task` = root/.claude/worktrees/worker-task), not
+                # `main_master` (which is just an unrelated sibling repo used
+                # by the other cases above) -- see worktree_main_checkout_root().
+                "Edit targets main-root WORKERS.md, worker cwd -> ALLOW "
+                "(documented multi-worker coordination exception)",
+                {
+                    "tool_name": "Edit",
+                    "cwd": worker_task,
+                    "tool_input": {"file_path": os.path.join(root, "WORKERS.md")},
+                },
+                False,
+            ),
+            (
+                "Edit targets a file under main-root journal/, worker cwd -> ALLOW " "(documented journal/ exception)",
+                {
+                    "tool_name": "Edit",
+                    "cwd": worker_task,
+                    "tool_input": {"file_path": os.path.join(root, "journal", "2026-07-24-notes.md")},
+                },
+                False,
+            ),
+            (
+                "Edit targets a file merely NAMED like the journal/ exception "
+                "(journal-archive/notes.md) -> DENY (no false-negative prefix match)",
+                {
+                    "tool_name": "Edit",
+                    "cwd": worker_task,
+                    "tool_input": {"file_path": os.path.join(root, "journal-archive", "notes.md")},
+                },
+                True,
+            ),
+        ]
+
+        for label, payload, expect_deny in write_guard_cases:
+            code, stderr = run_hook_payload(payload)
+            denied = code == 2
+            ok = denied == expect_deny
+            status = "PASS" if ok else "FAIL"
+            print(f"[{status}] {label} (exit={code})")
+            if not ok:
+                failures += 1
+                print(f"         expected deny={expect_deny}, got deny={denied}, stderr={stderr!r}")
+
         # Direct unit coverage for effective_dir(), covering the cd-chain
         # walk and its boundaries (see module docstring / effective_dir()'s
         # own docstring for what changed 2026-07-22 and why).
@@ -349,6 +485,75 @@ def main():
             ok = os.path.realpath(got) == os.path.realpath(expected)
             status = "PASS" if ok else "FAIL"
             print(f"[{status}] effective_dir: {label}")
+            if not ok:
+                failures += 1
+                print(f"         expected {expected!r}, got {got!r}")
+
+        # Direct unit coverage for the worktree-write-guard helpers
+        # (worktree_main_checkout_root / resolve_write_target /
+        # targets_main_checkout), independent of the end-to-end cases above.
+        norm = lambda p: p.replace(os.sep, "/")  # noqa: E731
+        worktree_helper_cases = [
+            (
+                "worktree_main_checkout_root: worker cwd -> the dir before .claude/worktrees/",
+                gm.worktree_main_checkout_root(worker_task),
+                norm(root),
+            ),
+            (
+                "worktree_main_checkout_root: main checkout cwd (no .claude/worktrees/ in path) -> None",
+                gm.worktree_main_checkout_root(main_master),
+                None,
+            ),
+            (
+                "resolve_write_target: absolute file_path passes through normalized",
+                gm.resolve_write_target({"file_path": main_checkout_target}, worker_task),
+                norm(os.path.normpath(main_checkout_target)),
+            ),
+            (
+                "resolve_write_target: notebook_path key is also recognized",
+                gm.resolve_write_target({"notebook_path": "/a/b.ipynb"}, worker_task),
+                "/a/b.ipynb",
+            ),
+            (
+                "resolve_write_target: relative file_path resolves against cwd",
+                gm.resolve_write_target({"file_path": "f.txt"}, worker_task),
+                norm(os.path.normpath(os.path.join(worker_task, "f.txt"))),
+            ),
+            (
+                "resolve_write_target: neither key present -> None",
+                gm.resolve_write_target({"content": "x"}, worker_task),
+                None,
+            ),
+        ]
+        for label, got, expected in worktree_helper_cases:
+            ok = got == expected
+            status = "PASS" if ok else "FAIL"
+            print(f"[{status}] {label}")
+            if not ok:
+                failures += 1
+                print(f"         expected {expected!r}, got {got!r}")
+
+        targets_main_checkout_cases = [
+            (
+                "targets_main_checkout: path under main root, not under .claude/worktrees/ -> True",
+                gm.targets_main_checkout(norm(main_checkout_target), norm(root)),
+                True,
+            ),
+            (
+                "targets_main_checkout: path under main root's .claude/worktrees/ subtree -> False",
+                gm.targets_main_checkout(norm(own_worktree_target), norm(root)),
+                False,
+            ),
+            (
+                "targets_main_checkout: path outside main root entirely -> False",
+                gm.targets_main_checkout(norm(outside_repo_target), norm(root)),
+                False,
+            ),
+        ]
+        for label, got, expected in targets_main_checkout_cases:
+            ok = got == expected
+            status = "PASS" if ok else "FAIL"
+            print(f"[{status}] {label}")
             if not ok:
                 failures += 1
                 print(f"         expected {expected!r}, got {got!r}")
