@@ -1,8 +1,12 @@
 import { expect } from "@playwright/test";
 
+import { FaceSeparator } from "@/common/constants";
 import { sourceDocument1, sourceDocument2 } from "@/common/test-constants";
 import { cardDocument1, cardDocument2 } from "@/common/test-constants";
 import {
+  cardbacksThreeResults,
+  cardbacksTwoSources,
+  cardbacksWithCanonicalCards,
   cardDocumentsThreeResults,
   cardDocumentsTwoSources,
   cardDocumentsWithCanonicalCards,
@@ -16,41 +20,40 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  expectCardGridSlotState,
-  importText,
+  expectDisplaySheetSlotState,
+  importTextOnEditorLanding,
   loadPageWithDefaultBackend,
-  openCardSlotGridSelector,
+  openDisplayCardbackGridSelector,
   selectDropdownOption,
 } from "./test-utils";
 
-// Proposal H switchover (2026-07-23, issues #231/#272) - /editor now serves the unified
-// sheet+rail page (`DisplayPage.tsx`); the classic grid `ProjectEditor` this file's own setup
-// depends on (via testids/interaction patterns like `front-slot`/`back-slot`/`common-cardback`/
-// the "Add Cards" right-panel dropdown/the classic "Print!" tab, or a component with no rendered
-// equivalent on the new page yet - see issue #272's own tracked parity gaps) is fully unrouted,
-// not just delisted from the nav. Skipped here rather than deleted (component files themselves
-// are untouched, per this swap's own scope) or silently left red - porting this coverage to
-// DisplayPage's DOM is real, non-mechanical work tracked against #272, not done as part of the
-// route swap itself (the owner's directive was to proceed with the swap regardless of the
-// checklist's open items).
-test.beforeEach(async ({}, testInfo) => {
-  testInfo.skip(
-    true,
-    "Proposal H switchover (2026-07-23): tests classic /editor-only UI, now unrouted - see issue #272"
-  );
-});
-
+// Parity wave 3 (2026-07-24, issue #272) - un-skipped and ported onto the unified `/editor` page.
+// GridSelectorModal.tsx's only surviving mount post-route-swap is CardbackToolbarButton's
+// project-wide cardback picker (`openDisplayCardbackGridSelector`, test-utils.ts) - see that
+// helper's own comment for why this is the right, full-fidelity retarget (the modal itself is
+// entirely generic; every grouping/filter/keyboard/mobile-viewport behavior below is identical
+// regardless of which caller's identifiers feed it). Fixtures below reuse the exact same
+// cardDocument sets the classic per-slot cluster used (cardDocumentsThreeResults/
+// cardDocumentsTwoSources/cardDocumentsWithCanonicalCards), just ALSO fetched via `2/cardbacks`
+// (new handlers, mocks/handlers.ts) - the `3/editorSearch/`-backed search-result fixtures stay,
+// since the right rail (and the "Cardback" button inside it) only exist once the project is
+// non-empty (DisplayPage.tsx's own `isProjectEmpty` early-return) - every test below runs one
+// plain import first purely to populate the project, regardless of whether it cares what that
+// import's own front-face card turns out to be. The modal's own title text differs ("Select
+// Cardback" vs. "Select Version") - every `getByText("Select Version — N results")` assertion
+// below is updated to match.
 const threeCardSetup = {
   handlers: () => [
     cardDocumentsThreeResults,
+    cardbacksThreeResults,
     sourceDocumentsOneResult,
     searchResultsThreeResults,
     ...defaultHandlers,
   ],
-  /** Open the grid selector for slot 1 front; 3 results in total. */
   openGridSelector: async (page: any) => {
-    await importText(page, "my search query");
-    return openCardSlotGridSelector(page, 1, "front", 1, 3);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "my search query");
+    return openDisplayCardbackGridSelector(page);
   },
 };
 
@@ -64,7 +67,6 @@ test.describe("GridSelectorModal – FacetBy / grouping", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
 
     // No source heading visible while grouped together (FacetBy = None)
@@ -94,7 +96,6 @@ test.describe("GridSelectorModal – FacetBy / grouping", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
 
     const groupByDropdown = gridSelector
@@ -120,7 +121,6 @@ test.describe("GridSelectorModal – FacetBy / grouping", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
 
     const groupByDropdown = gridSelector
@@ -148,13 +148,14 @@ test.describe("GridSelectorModal – FacetBy / grouping", () => {
   }) => {
     network.use(
       cardDocumentsWithCanonicalCards,
+      cardbacksWithCanonicalCards,
       sourceDocumentsOneResult,
       searchResultsWithCanonicalCards,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 4);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     const groupByDropdown = gridSelector
       .locator(".react-dropdown-tree-select")
@@ -173,11 +174,10 @@ test.describe("GridSelectorModal – FacetBy / grouping", () => {
 test.describe("GridSelectorModal – modal title", () => {
   test("title shows the correct result count", async ({ page, network }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
 
     await expect(
-      gridSelector.getByText("Select Version — 3 results")
+      gridSelector.getByText("Select Cardback — 3 results")
     ).toBeVisible();
   });
 
@@ -188,13 +188,14 @@ test.describe("GridSelectorModal – modal title", () => {
     // Use the artist filter to narrow 4 cards down to 1 (card10 only: Alpha Artist, ABC Set)
     network.use(
       cardDocumentsWithCanonicalCards,
+      cardbacksWithCanonicalCards,
       sourceDocumentsOneResult,
       searchResultsWithCanonicalCards,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 4);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     // Filter by "ABC Set" expansion to get a single result (card10)
     const printingDropdown = gridSelector
@@ -204,7 +205,7 @@ test.describe("GridSelectorModal – modal title", () => {
     await printingDropdown.getByText("[ABC] 001").click();
 
     await expect(
-      gridSelector.getByText("Select Version — 1 result")
+      gridSelector.getByText("Select Cardback — 1 result")
     ).toBeVisible({ timeout: 5000 });
   });
 });
@@ -215,7 +216,6 @@ test.describe("GridSelectorModal – filters sidebar", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
 
     // Sidebar is visible by default
@@ -237,7 +237,6 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
 
     const submitBtn = gridSelector.getByLabel("jump-to-version-submit");
@@ -254,7 +253,6 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
     await gridSelector
       .getByRole("heading", { name: "Jump to Version" })
@@ -270,7 +268,6 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
     await gridSelector
       .getByRole("heading", { name: "Jump to Version" })
@@ -291,7 +288,6 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
     await gridSelector
       .getByRole("heading", { name: "Jump to Version" })
@@ -309,7 +305,6 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
     await gridSelector
       .getByRole("heading", { name: "Jump to Version" })
@@ -330,7 +325,6 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
     await gridSelector
       .getByRole("heading", { name: "Jump to Version" })
@@ -358,10 +352,13 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
   }) => {
     network.use(...threeCardSetup.handlers());
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 3);
+    // Front-only query - the back face falls back to the project's shared cardback (default:
+    // the first cardbacks-endpoint result, cardDocument1), the same pattern CardSlot.spec.ts's
+    // own "defaults to project cardback" test uses to observe a cardback selection.
+    await importTextOnEditorLanding(page, `my search query${FaceSeparator}`);
+    await expectDisplaySheetSlotState(page, 1, "back", cardDocument1.name);
 
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 3);
+    const gridSelector = await openDisplayCardbackGridSelector(page);
     await gridSelector
       .getByRole("heading", { name: "Jump to Version" })
       .click();
@@ -369,7 +366,7 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
     await gridSelector.getByLabel("jump-to-version-submit").click();
 
     await expect(gridSelector).not.toBeVisible();
-    await expectCardGridSlotState(page, 1, "front", cardDocument2.name, 2, 3);
+    await expectDisplaySheetSlotState(page, 1, "back", cardDocument2.name);
   });
 
   test("submitting a valid identifier selects that card and closes the modal", async ({
@@ -378,10 +375,10 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
   }) => {
     network.use(...threeCardSetup.handlers());
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    await expectCardGridSlotState(page, 1, "front", cardDocument1.name, 1, 3);
+    await importTextOnEditorLanding(page, `my search query${FaceSeparator}`);
+    await expectDisplaySheetSlotState(page, 1, "back", cardDocument1.name);
 
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 3);
+    const gridSelector = await openDisplayCardbackGridSelector(page);
     await gridSelector
       .getByRole("heading", { name: "Jump to Version" })
       .click();
@@ -391,7 +388,7 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
     await gridSelector.getByLabel("jump-to-version-submit").click();
 
     await expect(gridSelector).not.toBeVisible();
-    await expectCardGridSlotState(page, 1, "front", cardDocument2.name, 2, 3);
+    await expectDisplaySheetSlotState(page, 1, "back", cardDocument2.name);
   });
 });
 
@@ -401,7 +398,6 @@ test.describe("GridSelectorModal – no-results state", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
 
     // Disable all sources — all three cards are from source1
@@ -426,15 +422,16 @@ test.describe("GridSelectorModal – source filter", () => {
     // 3 results: card1+card2 from source1, card7 from source2
     network.use(
       cardDocumentsTwoSources,
+      cardbacksTwoSources,
       sourceDocumentsTwoResults,
       searchResultsTwoSources,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 3);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
     await expect(
-      gridSelector.getByText("Select Version — 3 results")
+      gridSelector.getByText("Select Cardback — 3 results")
     ).toBeVisible();
 
     // Disable source2 via its row in the Contributors table
@@ -444,7 +441,7 @@ test.describe("GridSelectorModal – source filter", () => {
     await source2Row.getByText("On").click();
 
     await expect(
-      gridSelector.getByText("Select Version — 2 results")
+      gridSelector.getByText("Select Cardback — 2 results")
     ).toBeVisible({ timeout: 5000 });
   });
 });
@@ -455,7 +452,6 @@ test.describe("GridSelectorModal – settings lifecycle", () => {
     network,
   }) => {
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
 
     // Disable all drives so that no results are shown
@@ -474,15 +470,9 @@ test.describe("GridSelectorModal – settings lifecycle", () => {
     await expect(gridSelector).not.toBeVisible();
 
     // Reopen — settings should have been reset, all 3 results should appear again
-    const gridSelector2 = await openCardSlotGridSelector(
-      page,
-      1,
-      "front",
-      1,
-      3
-    );
+    const gridSelector2 = await openDisplayCardbackGridSelector(page);
     await expect(
-      gridSelector2.getByText("Select Version — 3 results")
+      gridSelector2.getByText("Select Cardback — 3 results")
     ).toBeVisible({ timeout: 5000 });
   });
 });
@@ -495,7 +485,6 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
     // card1-3 have no canonicalCard field — neither the printing filter nor
     // artist filter renders when all cards lack canonical card data.
     network.use(...threeCardSetup.handlers());
-    await loadPageWithDefaultBackend(page);
     const gridSelector = await threeCardSetup.openGridSelector(page);
 
     // Neither filter renders when there are no named canonical card entries
@@ -513,13 +502,14 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
   }) => {
     network.use(
       cardDocumentsWithCanonicalCards,
+      cardbacksWithCanonicalCards,
       sourceDocumentsOneResult,
       searchResultsWithCanonicalCards,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 4);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     // Artist and printing dropdowns are present (no "Canonical Card" heading in new UI)
     await expect(gridSelector.getByTestId("artist-filter")).toBeVisible();
@@ -540,13 +530,14 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
     // card8 (Alpha, xyz/001), card9 (Beta, xyz/002), card10 (Alpha, abc/001), card11 (null → Unknown)
     network.use(
       cardDocumentsWithCanonicalCards,
+      cardbacksWithCanonicalCards,
       sourceDocumentsOneResult,
       searchResultsWithCanonicalCards,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 4);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     const artistDropdown = gridSelector
       .getByTestId("artist-filter")
@@ -555,7 +546,7 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
 
     // Alpha Artist appears on card8 and card10 → 2 results
     await expect(
-      gridSelector.getByText("Select Version — 2 results")
+      gridSelector.getByText("Select Cardback — 2 results")
     ).toBeVisible({ timeout: 5000 });
   });
 
@@ -568,13 +559,14 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
     // expansion), so "all of XYZ Set" means selecting both of its rows individually.
     network.use(
       cardDocumentsWithCanonicalCards,
+      cardbacksWithCanonicalCards,
       sourceDocumentsOneResult,
       searchResultsWithCanonicalCards,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 4);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     const printingDropdown = gridSelector
       .getByTestId("printing-filter")
@@ -585,7 +577,7 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
 
     // card8 and card9 are in XYZ Set → 2 results
     await expect(
-      gridSelector.getByText("Select Version — 2 results")
+      gridSelector.getByText("Select Cardback — 2 results")
     ).toBeVisible({ timeout: 5000 });
   });
 
@@ -595,13 +587,14 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
   }) => {
     network.use(
       cardDocumentsWithCanonicalCards,
+      cardbacksWithCanonicalCards,
       sourceDocumentsOneResult,
       searchResultsWithCanonicalCards,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "my search query");
-    const gridSelector = await openCardSlotGridSelector(page, 1, "front", 1, 4);
+    await importTextOnEditorLanding(page, "my search query");
+    const gridSelector = await openDisplayCardbackGridSelector(page);
 
     // The printing filter is a flat list, so selecting a specific collector number is a
     // single click - no tree to expand first.
@@ -613,7 +606,7 @@ test.describe("GridSelectorModal – CanonicalCardFilter", () => {
 
     // Only card8 (xyz/001) should match → 1 result
     await expect(
-      gridSelector.getByText("Select Version — 1 result")
+      gridSelector.getByText("Select Cardback — 1 result")
     ).toBeVisible({ timeout: 5000 });
   });
 });
