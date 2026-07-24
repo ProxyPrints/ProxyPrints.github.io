@@ -1,0 +1,23 @@
+# Coverage-delta gate ack file (issue #415, incident #389).
+#
+# .github/scripts/coverage_delta.py fails a PR when a Playwright test title
+# present at the merge-base is either absent at head or went from active to
+# skipped, UNLESS this file carries a matching line. Same tether-discipline
+# shape as docs_lint.py's in-file ALLOWLIST: mechanical check, human-written
+# escape hatch, one line per exception, reason required.
+#
+# Format (append, never edit/remove someone else's line without checking
+# with them first - these are a permanent record of a deliberate call, not
+# a scratchpad):
+#
+#   coverage-ack: <test id or glob> — <reason>
+#
+# <test id> is `<path/to/File.spec.ts>::<full title>` (nested
+# test.describe() titles joined with " > ", matching coverage_delta.py's
+# own manifest key). A glob (`*`, `?`, `[...]`) is fine for "this whole
+# file" or "this whole describe block" - e.g.:
+#
+#   coverage-ack: frontend/tests/Foo.spec.ts::* — reason
+#   coverage-ack: frontend/tests/Foo.spec.ts::some describe > * — reason
+#
+# Lines starting with `#` and blank lines are ignored.
