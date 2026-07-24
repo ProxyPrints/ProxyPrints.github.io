@@ -732,8 +732,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
-    await importText(page, "1 card 1\n1 card 2\n1 card 3");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 1\n1 card 2\n1 card 3");
     await page.getByTestId("page-preview-slot").first().click();
 
     await page.getByTestId("display-sources-summary-label").click();
@@ -756,9 +755,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await page.goto("/editor?server=http://127.0.0.1:8000", {
       waitUntil: "domcontentloaded",
     });
-    await page.getByText("Choose Art").click();
-    await importText(page, "1 card 1\n1 card 2\n1 card 3");
-    await page.getByRole("link", { name: "Editor" }).click();
+    await importTextOnEditorLanding(page, "1 card 1\n1 card 2\n1 card 3");
     await page.getByTestId("page-preview-slot").first().click();
 
     // No click on the pin needed this time - it's sourced from localStorage on mount
