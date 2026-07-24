@@ -1,8 +1,9 @@
 """
 Stage B split fetch limiter tests (docs/features/catalog-completion-plan.md, "Harvest-calculate
-pipeline" section). No network - `requests.get` is monkeypatched throughout via
-`cardpicker.harvest_fetch_limiter.requests.get`, matching this file's own module-under-test
-convention rather than reaching into `image_cdn_fetch`/`local_phash`'s call sites.
+pipeline" section). No network - each destination's shared `requests.Session.get` is monkeypatched
+per-test (via `get_limiter(config).session`), matching `rate_limited_get`'s own call site (one
+Session per destination limiter, reused across calls - 2026-07-24 IO audit finding 2) rather than
+reaching into `image_cdn_fetch`/`local_phash`'s call sites.
 """
 
 import threading
@@ -10,6 +11,7 @@ import time
 from typing import Any
 
 import pytest
+import requests
 
 from cardpicker.harvest_fetch_limiter import (
     GOOGLE_IMAGE,
@@ -152,35 +154,30 @@ class TestDestinationLimiterBackoff:
 
 class TestRateLimitedGet:
     def test_lockout_status_raises_and_locks_out_the_limiter(self, monkeypatch):
-        import cardpicker.harvest_fetch_limiter as module
-
-        monkeypatch.setattr(module.requests, "get", lambda url, **kwargs: _FakeResponse(status_code=403))
         config = DestinationLimiterConfig(
             name="test-rlg-lockout", rate_per_sec=1000, max_concurrency=10, lockout_status_codes=frozenset({403})
         )
+        limiter = get_limiter(config)
+        monkeypatch.setattr(limiter.session, "get", lambda url, **kwargs: _FakeResponse(status_code=403))
 
         with pytest.raises(GoogleFetchLockoutError):
             rate_limited_get(config, "https://example.test/image.jpg")
 
-        assert get_limiter(config).locked_out is True
+        assert limiter.locked_out is True
 
     def test_backoff_status_does_not_raise_but_escalates(self, monkeypatch):
-        import cardpicker.harvest_fetch_limiter as module
-
-        monkeypatch.setattr(module.requests, "get", lambda url, **kwargs: _FakeResponse(status_code=429))
         config = DestinationLimiterConfig(
             name="test-rlg-backoff", rate_per_sec=1000, max_concurrency=10, backoff_status_codes=frozenset({429})
         )
+        limiter = get_limiter(config)
+        monkeypatch.setattr(limiter.session, "get", lambda url, **kwargs: _FakeResponse(status_code=429))
 
         response = rate_limited_get(config, "https://example.test/image.jpg")
 
         assert response.status_code == 429
-        assert get_limiter(config).backoff_multiplier == 2.0
+        assert limiter.backoff_multiplier == 2.0
 
     def test_ordinary_status_neither_raises_nor_escalates(self, monkeypatch):
-        import cardpicker.harvest_fetch_limiter as module
-
-        monkeypatch.setattr(module.requests, "get", lambda url, **kwargs: _FakeResponse(status_code=200))
         config = DestinationLimiterConfig(
             name="test-rlg-ok",
             rate_per_sec=1000,
@@ -188,28 +185,67 @@ class TestRateLimitedGet:
             lockout_status_codes=frozenset({403}),
             backoff_status_codes=frozenset({429}),
         )
+        limiter = get_limiter(config)
+        monkeypatch.setattr(limiter.session, "get", lambda url, **kwargs: _FakeResponse(status_code=200))
 
         rate_limited_get(config, "https://example.test/image.jpg")
 
-        limiter = get_limiter(config)
         assert limiter.locked_out is False
         assert limiter.backoff_multiplier == 1.0
 
-    def test_forwards_kwargs_to_requests_get(self, monkeypatch):
+    def test_forwards_kwargs_to_session_get(self, monkeypatch):
         received_kwargs: dict[str, Any] = {}
 
         def fake_get(url: str, **kwargs: Any) -> _FakeResponse:
             received_kwargs.update(kwargs)
             return _FakeResponse(status_code=200)
 
-        import cardpicker.harvest_fetch_limiter as module
-
-        monkeypatch.setattr(module.requests, "get", fake_get)
         config = DestinationLimiterConfig(name="test-rlg-kwargs", rate_per_sec=1000, max_concurrency=10)
+        limiter = get_limiter(config)
+        monkeypatch.setattr(limiter.session, "get", fake_get)
 
         rate_limited_get(config, "https://example.test/image.jpg", timeout=15, headers={"X": "Y"})
 
         assert received_kwargs == {"timeout": 15, "headers": {"X": "Y"}}
+
+    def test_reuses_the_same_session_across_calls(self, monkeypatch):
+        # 2026-07-24 IO audit finding 2: rate_limited_get must not construct a fresh
+        # requests.Session (and tear down its connection pool) per call - it should reuse the
+        # one Session bound to the destination's limiter, so keep-alive connections persist
+        # across the ~200k+ fetches a full harvest issues to the same host.
+        config = DestinationLimiterConfig(name="test-rlg-session-reuse", rate_per_sec=1000, max_concurrency=10)
+        limiter = get_limiter(config)
+        sessions_seen = []
+
+        def fake_get(url: str, **kwargs: Any) -> _FakeResponse:
+            sessions_seen.append(limiter.session)
+            return _FakeResponse(status_code=200)
+
+        monkeypatch.setattr(limiter.session, "get", fake_get)
+
+        rate_limited_get(config, "https://example.test/image.jpg")
+        rate_limited_get(config, "https://example.test/image.jpg")
+
+        assert len(sessions_seen) == 2
+        assert sessions_seen[0] is sessions_seen[1]
+
+
+class TestDestinationSession:
+    def test_each_limiter_gets_a_real_session(self):
+        config = DestinationLimiterConfig(name="test-session-instance", rate_per_sec=1000, max_concurrency=10)
+
+        assert isinstance(get_limiter(config).session, requests.Session)
+
+    def test_different_destinations_have_independent_sessions(self):
+        config_a = DestinationLimiterConfig(name="test-session-a", rate_per_sec=1000, max_concurrency=10)
+        config_b = DestinationLimiterConfig(name="test-session-b", rate_per_sec=1000, max_concurrency=10)
+
+        assert get_limiter(config_a).session is not get_limiter(config_b).session
+
+    def test_same_destination_reuses_the_same_session_instance(self):
+        config = DestinationLimiterConfig(name="test-session-singleton", rate_per_sec=1000, max_concurrency=10)
+
+        assert get_limiter(config).session is get_limiter(config).session
 
 
 class TestCurrentRate:
