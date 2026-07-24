@@ -329,6 +329,33 @@ printings, artists, tags, and moderation from one screen.
 
 ## Frontend architecture
 
+**SUPERSEDED (WTC rebuild, 2026-07-24, `SPEC-wtc-rebuild.md`, owner rulings on that spec's
+three open questions)** — `/whatsthat`'s visual/layout tree was rebuilt from scratch onto the
+Tokyo-11 theme's ruled token layer (page-private `--wtc-*` tokens derived from `--accent`/
+`--body`/`--conf`, defined in `whatsthat.tsx`'s `WtcTokenScope`), replacing the bespoke gold/
+navy/starburst-blue/deep-blue-field identity the many "quiz-reveal hero" (issue #305) bullets
+below describe. The old dual-layout mechanism (`HeroGrid`'s 768px `grid-template-areas` swap,
+`MobileButtonRow`/`MobileCandidateScroller`/`MobileChipRow`'s horizontal scrollers,
+`Level2NarrowGrid`'s narrow-only 2x2 action grid, `WideWordmark`/`NarrowWordmark`'s CSS-display
+fork) is retired in favour of ONE `@container`-driven hero (`WtcHero`/`Subject`/`QPanel` in
+`QuestionFeed.tsx`) that folds continuously via flex-wrap + `clamp()` + `auto-fill`/`auto-fit`
+grids — no viewport breakpoint drives sizing (container-first policy, WTC = first consumer).
+Also retired: `BurstSvg`/`HoverBurst`/`useStarburstFrame` (the starburst animation, owner
+ruling — the token-derived `--wtc-reveal-glow` field glow replaces it; reveal reads through the
+mystery-card flip only), `CardPulseWrapper`/the sliced WHAT'S/THAT/CARD? pop sequence
+(`WhatsThatWords.tsx` is now a plain, static, single-tree `<h1>`), the `PageColumn`
+`100dvh`-bounded hero + "portrait static top block" hack (the page is an ordinary scrolling
+document now). Added: the quiet "N tagged this session" affordance (the only reward surface —
+no streak/score/confetti) and the seven question-shapes-as-visually-distinct-modes framing
+(confirm/shortlist/quick-negative/open-ended/artist/tag/follow-up) `SPEC-wtc-rebuild.md`
+section 2 defines. The interaction contract (Level 1/2/3 flows, `getAutoTagChips`, no-re-
+presentation, the singleton-NO terminal vote, per-item state reset, the rate-limit banner) is
+unchanged — every bullet below describing THAT contract (not the retired visual mechanism) is
+still accurate. The detailed "quiz-reveal hero"/starburst/gold-button narrative below is kept
+for history (this doc's own established convention — see the `cardPanel.tsx` bullet's own prior
+"SUPERSEDED" marker two bullets down) but no longer describes the current rendering; read it as
+"how we got here," not "what's live."
+
 - `frontend/src/pages/whatsthat.tsx` (renamed from `printingQueue.tsx`) +
   `QuestionFeed.tsx` render the single unified feed; the old standalone
   `PrintingTagQueue.tsx`/`GenericVoteQueue.tsx`/`ModerationQueue.tsx` tab
@@ -1452,9 +1479,13 @@ printings, artists, tags, and moderation from one screen.
   `cardpicker/question_feed.py`, `cardpicker/attribute_tags.py` +
   `seed_attribute_tags` management command.
 - Frontend: `frontend/src/features/printingTags/`
-  (`PrintingTagPicker.tsx`, `starburstShape.ts`, `cardPanel.tsx`),
-  `frontend/src/features/questionFeed/WhatsThatWords.tsx` (quiz-reveal
-  hero's sliced-word teaser, issue #305),
+  (`PrintingTagPicker.tsx`, `starburstShape.ts` — kept only for its
+  `STARBURST_OUTER_COLOR` constant, `ChipCard.tsx`'s default/pre-rebuild
+  frame; `cardPanel.tsx` — WTC-rebuild-retinted, `BurstSvg`/`HoverBurst`/
+  `useStarburstFrame`/`CardPulseWrapper` deleted),
+  `frontend/src/features/questionFeed/WhatsThatWords.tsx` (WTC rebuild:
+  now a plain, static, token-coloured `<h1>` wordmark — no more sliced-
+  word pop sequence),
   `frontend/src/features/filters/ResolvedAttributeFilter.tsx`,
   `frontend/src/common/processing.ts::getPrintingMatchLabel`,
   `frontend/src/features/attributeVoting/` (`ChipCard.tsx`,

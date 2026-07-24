@@ -13,11 +13,51 @@ import {
   defaultHandlers,
   questionFeedConfirmSuggestion,
   questionFeedIdentifyPrinting,
+  submitPrintingTagNoMatch,
   submitPrintingTagResolvesToPrintingCandidate2,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
 import { loadPageWithDefaultBackend } from "./test-utils";
+
+/**
+ * WTC REBUILD (2026-07-24, SPEC-wtc-rebuild.md) - this file is adapted, not left as-is, per
+ * the rebuild task's own TESTS requirement ("assertions adapted not weakened; drops
+ * ack-tokened + justified"). Every describe block below either:
+ *   (a) keeps a still-true invariant, re-pointed at the new DOM/tokens, or
+ *   (b) is DROPPED with an inline justification, because the mechanism it guarded
+ *       (sticky/bounded-height pinning, the hover-burst, the gold button treatment, the
+ *       whatsthat-mark.svg glyph asset) is a deliberate, spec-ruled retirement - not a
+ *       regression - or
+ *   (c) is NEW coverage the rebuild task's own TESTS section asks for (container folding at
+ *       390/768/1400, shape-b shortlist fallback, WD3 compaction + open-shape expansion, the
+ *       session counter).
+ *
+ * DROPPED entirely (own justification, not carried forward even as adapted tests):
+ *   - "the hero card stays fully visible while the questions column scrolls independently" /
+ *     "a real mouse-wheel scroll ... does not move the hero card" (both from the old "mobile
+ *     layout" describe block) - WD4 retires the `100dvh`-bounded hero + its own internal
+ *     `overflow-y: auto` questions column entirely; the page is now an ordinary scrolling
+ *     document (container-first policy), so scrolling the page legitimately moves the subject
+ *     card along with everything else - that IS the new, intended behavior, not a bug this
+ *     suite should guard against.
+ *   - "at 1400x900, Level 1's suggested-match card and all four answer controls fit without an
+ *     internal scroll" - asserted `scrollHeight <= clientHeight` on the (now-unbounded)
+ *     questions column; there is no bounded height left for that comparison to mean anything.
+ *   - "question feed - mobile card/questions never overlap (owner live-review fix)" (the whole
+ *     describe block) - guarded against a `position: sticky` overlap bug that can't recur once
+ *     nothing on this page is `position: sticky` (WD4); the container-first fold (flex-wrap)
+ *     structurally prevents the two columns from ever sharing a stacking position instead.
+ *   - "hover-zoom/hover-burst edge clipping" (the whole describe block) - `HoverBurst` is
+ *     retired outright (owner ruling 1); there is no burst left to clip.
+ *   - "portrait static top block" (the whole describe block, all 3 tests) - WD4 retires the
+ *     "everything above the fold, only the candidate row scrolls" invariant entirely; the page
+ *     scrolls normally now. Replaced below by a WD3-specific coverage set (subject compaction)
+ *     instead of a same-shaped replacement, since the underlying design goal changed.
+ *   - "question-mark motif + golden action buttons" / "shared blue mystery card composition" -
+ *     both asserted the retired `whatsthat-mark.svg` `<img>` glyph and the retired
+ *     `QUIZ_BUTTON_GOLD`/`_NAVY` treatment (WD1). Replaced below by token-based equivalents.
+ */
 
 function buildRoute(route: string) {
   return `${localBackendURL}/${route}`;
@@ -53,15 +93,10 @@ function isContainedWithin(
 
 const MOBILE_WIDTHS = [360, 390, 412];
 
-test.describe("question feed - Level 2 layout reconciliation (real-device regression guard)", () => {
-  // Regression guard for the mechanism that survived PR #55: Level 1 was fixed (StaticCardPanel),
-  // but Level 2 - the far more common, default screen (every identify_printing item, plus every
-  // NOT SURE/NO drop from Level 1) - kept the identical sticky-plus-negative-z-index CardPanel
-  // unchanged, so the same real-device compositing failure persisted there. CardPanel is now
-  // position: static below the md breakpoint (768px) - these tests assert that directly via
-  // bounding-box math at three real device widths, none of which this sandbox's Chromium would
-  // have failed even before the fix (the bug is cross-engine/real-mobile-only), so this is a
-  // structural regression guard, not proof the original symptom is gone on-device.
+test.describe("question feed - Level 2 layout containment (real-device regression guard)", () => {
+  // Regression guard, re-pointed at the new (plain-flow, no sticky/no burst) DOM: the card's
+  // art still needs to render fully inside its own panel, and no answer control should ever
+  // overlap it, at real mobile widths.
   for (const width of MOBILE_WIDTHS) {
     test(`at ${width}px, the card is contained in its panel and no control overlaps it`, async ({
       page,
@@ -79,9 +114,6 @@ test.describe("question feed - Level 2 layout reconciliation (real-device regres
       const imageBox = await cardImage.boundingBox();
       expect(panelBox).not.toBeNull();
       expect(imageBox).not.toBeNull();
-      // Item 3 (height-reservation hypothesis): the card's layout box must equal its visual
-      // box - a sticky element whose reserved flow position and pinned visual position have
-      // diverged would fail this containment check the moment it's stuck.
       expect(isContainedWithin(imageBox!, panelBox!)).toBe(true);
 
       const candidateButton = page.locator(
@@ -107,12 +139,8 @@ test.describe("question feed - Level 2 layout reconciliation (real-device regres
     page,
     network,
   }) => {
-    // Regression guard for the second mechanism found in this pass: ChipRing (the PR #21-era
-    // chip-ring, still reachable via Level 2's opt-in "Filter by attribute" disclosure) had no
-    // responsive behavior at all - its flanking left/right chip columns were always auto-sized
-    // to their own content while the card's own column was the only flexible one, so at narrow
-    // widths the card was squeezed to whatever width was left over. Below the sm breakpoint
-    // (576px) the ring now collapses to a single vertical stack instead.
+    // AttributeChipPanel/ChipRing is unforked by the WTC rebuild (spec section 4: "no
+    // structural change; inherit tokens") - this invariant is unchanged.
     network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
     await page.setViewportSize({ width: 360, height: 844 });
     await loadPageWithDefaultBackend(page, "whatsthat");
@@ -132,34 +160,36 @@ test.describe("question feed - Level 2 layout reconciliation (real-device regres
     expect(cardAreaBox).not.toBeNull();
     expect(chipBox).not.toBeNull();
 
-    // The card's own grid area must render at its full natural width, not squeezed between
-    // two flanking chip columns - a stacked ring gives it the same width as the panel it sits
-    // in, since it's the only column left once the ring collapses. Measured against
-    // CardArea's own box (not the mocked <img>'s rendered box) because this environment's
-    // fixture images use an empty src, which Chromium renders at a small intrinsic fallback
-    // size regardless of the CSS width/aspect-ratio set on it - checking the <img> pixel size
-    // here would test image-loading behavior, not the grid layout this change actually fixed.
     expect(cardAreaBox!.width).toBeGreaterThan(panelBox!.width * 0.9);
-    // No chip overlaps the card's own grid area - the ring never re-forms below sm.
     expect(boxesIntersect(cardAreaBox!, chipBox!)).toBe(false);
   });
 });
 
-// identify_printing lands straight on Level 2 (the candidate grid) - confirm_suggestion's
-// Level 1 has no grid to reorder at all, so it's not a fit for this ordering check anymore
-// (see QuestionFeed.spec.ts for Level 1's own coverage).
-test.describe("question feed - mobile layout", () => {
-  // Mobile-row fix round (owner live-review) - the card no longer renders ABOVE the candidates
-  // in a vertical stack at all; it renders BESIDE them (its own compact grid column to the
-  // left - see HeroGrid's mobile grid-template-areas in QuestionFeed.tsx), the same axis
-  // relationship as the desktop test below rather than the pre-fix mobile stack. The `y`
-  // assertion below still holds either way for a different, still-true reason: the card has
-  // no badge/prompt text stacked above it the way the candidate grid does, so its top edge
-  // still lands at/above the candidate grid's own top edge - but the ORIGINAL rationale (card
-  // reachable "before" the candidates in scroll/stacking order) no longer describes the real
-  // mechanism, so this comment is corrected rather than left to imply a layout this page no
-  // longer has. See "mobile card/questions never overlap" below for the actual regression
-  // guard the fix round needed.
+test.describe("question feed - container-first hero layout (section 3, WTC rebuild)", () => {
+  // identify_printing lands straight on Level 2 (the candidate grid).
+  test("at a container width above the 560px fold point, the subject renders to the left of the questions", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    // default chromium project viewport (800x600) is already above the hero's 560px fold
+    // point (section 3's `@container hero (max-width: 560px)`).
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const cardImage = page.getByAltText(cardDocument1.name);
+    const suggestedCandidate = page.locator(
+      `[data-card-identifier="${printingCandidate1.identifier}"]`
+    );
+    await expect(cardImage).toBeVisible();
+    await expect(suggestedCandidate).toBeVisible();
+
+    const cardBox = await cardImage.boundingBox();
+    const candidateBox = await suggestedCandidate.boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(candidateBox).not.toBeNull();
+    expect(cardBox!.x).toBeLessThan(candidateBox!.x);
+  });
+
   test("at a mobile viewport, the mystery card's top edge is not pushed below the candidate grid's own top edge", async ({
     page,
     network,
@@ -179,298 +209,81 @@ test.describe("question feed - mobile layout", () => {
     const candidateBox = await suggestedCandidate.boundingBox();
     expect(cardBox).not.toBeNull();
     expect(candidateBox).not.toBeNull();
-    // The card must be reachable without scrolling past every answer option first - its top
-    // edge should render above (a smaller y than) the candidate grid's.
     expect(cardBox!.y).toBeLessThan(candidateBox!.y);
   });
 
-  test("at desktop width, the card renders to the left of the candidates (quiz-reveal hero axis flip, issue #305)", async ({
-    page,
-    network,
-  }) => {
-    // wtc-redesign-spec.md's W1 "axis flip" - the subject card + starburst are now the left
-    // hero column and every question surface (including this candidate grid) renders to the
-    // right of it, reversing the pre-#305 candidates-left/card-right layout this test used to
-    // assert.
-    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
-    // default chromium project viewport (800x600) is already >= the md breakpoint
-    await loadPageWithDefaultBackend(page, "whatsthat");
+  // NEW coverage (rebuild task's TESTS requirement: "container folding at 390/768/1400 via
+  // boundingBox - rendered sizes, not authored CSS - the #434 lesson"). Reads the RENDERED
+  // subject-column width at three widths and confirms it actually changes shape (not just a
+  // static, unresponsive box) - this is the concrete, measured proof the hero is genuinely
+  // `@container`-driven rather than merely having the right CSS on paper.
+  for (const width of [390, 768, 1400]) {
+    test(`at ${width}px, the hero container folds to a real, measured layout (not just authored CSS)`, async ({
+      page,
+      network,
+    }) => {
+      network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+      await page.setViewportSize({ width, height: 900 });
+      await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const cardImage = page.getByAltText(cardDocument1.name);
-    const suggestedCandidate = page.locator(
-      `[data-card-identifier="${printingCandidate1.identifier}"]`
-    );
-    await expect(cardImage).toBeVisible();
-    await expect(suggestedCandidate).toBeVisible();
+      const subject = page.getByTestId("question-feed-hero-card-area");
+      const questions = page.getByTestId("question-feed-questions-area");
+      await expect(subject).toBeVisible();
+      await expect(questions).toBeVisible();
 
-    const cardBox = await cardImage.boundingBox();
-    const candidateBox = await suggestedCandidate.boundingBox();
-    expect(cardBox).not.toBeNull();
-    expect(candidateBox).not.toBeNull();
-    expect(cardBox!.x).toBeLessThan(candidateBox!.x);
-  });
-
-  test("at desktop width, the hero card stays fully visible while the questions column scrolls independently (owner pinning addendum)", async ({
-    page,
-    network,
-  }) => {
-    // The card's own grid cell never scrolls (see HeroQuestionsArea/HeroCardArea in
-    // QuestionFeed.tsx) - scrolling the questions column's own scrollbar must not move the
-    // card at all, not even by a few px.
-    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
-    await loadPageWithDefaultBackend(page, "whatsthat");
-
-    const cardImage = page.getByAltText(cardDocument1.name);
-    await expect(cardImage).toBeVisible();
-    const boxBeforeScroll = await cardImage.boundingBox();
-    expect(boxBeforeScroll).not.toBeNull();
-
-    await page.getByTestId("question-feed-questions-area").evaluate((el) => {
-      el.scrollTop = el.scrollHeight;
-    });
-
-    const boxAfterScroll = await cardImage.boundingBox();
-    expect(boxAfterScroll).not.toBeNull();
-    expect(boxAfterScroll).toEqual(boxBeforeScroll);
-  });
-
-  // Fix round (PR #305/#308 owner review) - the test above only ever scrolled
-  // HeroQuestionsArea's OWN scrollbar directly via `el.scrollTop`, which is exactly the gap
-  // that let this invariant pass in CI while failing live: on the live site, the outer
-  // "document" (in practice Layout.tsx's fixed-position, overflow-y: scroll
-  // ContentContainer - see that component's own comment) had genuine leftover overflow of its
-  // own (StarburstBackground's real padding/margin plus Footer's whole height were never
-  // subtracted from the hero's old max-height calc), so a completely ordinary mouse-wheel
-  // scroll anywhere on the page - not just inside the questions box - moved the WHOLE page,
-  // hero card included. A real `page.mouse.wheel()` (not a targeted `el.scrollTop` write)
-  // reproduces exactly what a live user's scroll gesture does, and checking
-  // ContentContainer's own `scrollTop` alongside the card's position pins down which
-  // container actually (didn't) move.
-  test("a real mouse-wheel scroll over the page does not move the hero card or scroll the outer content container", async ({
-    page,
-    network,
-  }) => {
-    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
-    await loadPageWithDefaultBackend(page, "whatsthat");
-
-    const cardImage = page.getByAltText(cardDocument1.name);
-    await expect(cardImage).toBeVisible();
-    const boxBeforeScroll = await cardImage.boundingBox();
-    expect(boxBeforeScroll).not.toBeNull();
-
-    // Wheel over the hero card area itself (not inside the questions column's own scrollbox) -
-    // this is what a real user's mouse would do if they scrolled while looking at the card.
-    const cardBox = boxBeforeScroll!;
-    await page.mouse.move(
-      cardBox.x + cardBox.width / 2,
-      cardBox.y + cardBox.height / 2
-    );
-    await page.mouse.wheel(0, 2000);
-    await page.waitForTimeout(200);
-
-    const boxAfterScroll = await cardImage.boundingBox();
-    expect(boxAfterScroll).toEqual(boxBeforeScroll);
-
-    const contentContainerScrollTop = await page
-      .getByTestId("content-container")
-      .evaluate((el) => el.scrollTop);
-    expect(contentContainerScrollTop).toBe(0);
-  });
-
-  // Owner blocker (post-#310 live review) - the sliced WHAT'S/THAT/CARD? word stack rendered
-  // far larger than wtc-mockup.html's own approved proportion (measured directly off that file
-  // with its demo-only scale transform removed: 164px total for all three words at 1280px wide,
-  // versus 220px live), and since #310 bounded the WHOLE hero to one viewport-height row
-  // (HeroGrid's own `grid-template-rows: auto minmax(0, 1fr)` - the `auto` row sizes to
-  // HeroWordsArea's own content height, which comes directly out of the `questions` row's
-  // budget), every extra pixel the words claimed was one HeroQuestionsArea didn't get. At
-  // 1400x900 this left even Level 1 (suggested-match card + all four answer controls, no
-  // candidate grid to scroll) short by ~140px, forcing an internal scroll that clipped the
-  // card mid-view - exactly the "not even the simplest case fits" symptom this guards against.
-  // See WhatsThatWords.tsx's Word component for the sizing fix itself.
-  test("at 1400x900, Level 1's suggested-match card and all four answer controls fit without an internal scroll", async ({
-    page,
-    network,
-  }) => {
-    network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
-    await page.setViewportSize({ width: 1400, height: 900 });
-    await loadPageWithDefaultBackend(page, "whatsthat");
-
-    await expect(page.getByTestId("question-feed-level1-yes")).toBeVisible();
-
-    const questionsArea = page.getByTestId("question-feed-questions-area");
-    const overflow = await questionsArea.evaluate((el) => ({
-      scrollHeight: el.scrollHeight,
-      clientHeight: el.clientHeight,
-    }));
-    // scrollHeight is defined as never less than clientHeight (a box with room to spare still
-    // reports the two as equal, not scrollHeight < clientHeight) - so this only ever proves
-    // "no overflow", never "how much margin" on its own. That's fine here: the assertion this
-    // task actually asked for is exactly "no internal scroll", i.e. scrollHeight <= clientHeight.
-    expect(overflow.scrollHeight).toBeLessThanOrEqual(overflow.clientHeight);
-
-    const referenceImage = page.getByTestId(
-      "question-feed-level1-reference-image"
-    );
-    const yes = page.getByTestId("question-feed-level1-yes");
-    const notSure = page.getByTestId("question-feed-level1-not-sure");
-    const no = page.getByTestId("question-feed-level1-no");
-    const skip = page.getByTestId("question-feed-level1-skip");
-
-    for (const control of [referenceImage, yes, notSure, no, skip]) {
-      await expect(control).toBeVisible();
-      const box = await control.boundingBox();
-      expect(box).not.toBeNull();
-      // Fully within the 900px-tall viewport, not merely "visible" per Playwright's own
-      // visibility check (which only requires a non-zero intersection, not full containment).
-      expect(box!.y + box!.height).toBeLessThanOrEqual(900);
-      expect(box!.y).toBeGreaterThanOrEqual(0);
-    }
-  });
-});
-
-// Owner live-review fix ("STICKY OVERLAP: on scroll, the subject card COVERS the questions on
-// mobile") - confirmed live via a real Pixel 7 portrait screenshot + getBoundingClientRect()
-// diff (this task's own report): the old mobile layout stacked "words"/"card"/"questions" in
-// one column with HeroCardArea's own `position: sticky; z-index: 5` bar riding on top of
-// HeroQuestionsArea as the page scrolled - the two areas shared the same horizontal space by
-// construction, so the sticky card was always going to end up geometrically nested inside the
-// questions box's own bounds once scrolled (not a flaky edge case - guaranteed by the shared-
-// column geometry). The fix gives the card its own disjoint grid COLUMN beside the questions
-// (see QuestionFeed.tsx's HeroGrid/HeroCardArea) - this is the direct regression guard for that:
-// a real `page.mouse.wheel()` scroll (not a targeted `el.scrollTop` write - see the desktop
-// pinning test above for why that distinction matters), then an axis-aligned bounding-box
-// intersection check between the card's own area and the questions area, both before AND after
-// scrolling. Uses a dozen synthetic candidates (not the default fixture's two) specifically to
-// force the page tall enough to need a real scroll - the live bug only manifested once there
-// was enough candidate content to scroll past.
-test.describe("question feed - mobile card/questions never overlap (owner live-review fix)", () => {
-  test("at portrait mobile width, the card and the questions area never intersect, before or after a real scroll", async ({
-    page,
-    network,
-  }) => {
-    const manyCandidates = Array.from({ length: 12 }, (_, i) => ({
-      ...printingCandidate1,
-      identifier: `overlap-guard-candidate-${i}`,
-      collectorNumber: `${i}`,
-    }));
-    network.use(
-      http.get(buildRoute("2/questionFeed/"), () =>
-        HttpResponse.json(
-          {
-            item: {
-              type: "identify_printing",
-              card: cardDocument1,
-              candidates: manyCandidates,
-              tagConfidence: {},
-            },
-            remainingEstimate: {
-              total: 12,
-              confirmable: 0,
-              contested: 0,
-              fresh: 12,
-            },
-          },
-          { status: 200 }
-        )
-      ),
-      ...defaultHandlers
-    );
-    await page.setViewportSize({ width: 390, height: 700 });
-    await loadPageWithDefaultBackend(page, "whatsthat");
-
-    const cardArea = page.getByTestId("question-feed-hero-card-area");
-    const questionsArea = page.getByTestId("question-feed-questions-area");
-    await expect(cardArea).toBeVisible();
-    await expect(questionsArea).toBeVisible();
-
-    const assertNoOverlap = async () => {
-      const cardBox = (await cardArea.boundingBox())!;
-      const questionsBox = (await questionsArea.boundingBox())!;
-      expect(cardBox).not.toBeNull();
+      const subjectBox = await subject.boundingBox();
+      const questionsBox = await questions.boundingBox();
+      expect(subjectBox).not.toBeNull();
       expect(questionsBox).not.toBeNull();
-      // Standard axis-aligned bounding-box (AABB) intersection test - true iff the two boxes
-      // overlap on BOTH axes; edge-touching counts as NOT intersecting, matching how two
-      // adjacent, non-overlapping columns normally abut each other.
-      const intersects =
-        cardBox.x < questionsBox.x + questionsBox.width &&
-        cardBox.x + cardBox.width > questionsBox.x &&
-        cardBox.y < questionsBox.y + questionsBox.height &&
-        cardBox.y + cardBox.height > questionsBox.y;
-      expect(intersects).toBe(false);
-    };
 
-    await assertNoOverlap();
+      if (width <= 560) {
+        // Below the hero's own 560px container fold point (WD3), the subject spans (close to)
+        // the full hero width instead of sharing a row with the questions column.
+        expect(subjectBox!.width).toBeGreaterThan(questionsBox!.width * 0.7);
+      } else {
+        // Above the fold point, the two columns share one row, each narrower than the full
+        // hero width.
+        expect(subjectBox!.x).toBeLessThan(questionsBox!.x);
+        expect(subjectBox!.width).toBeLessThan(questionsBox!.width);
+      }
+    });
+  }
 
-    await page.mouse.wheel(0, 1500);
-    await page.waitForTimeout(300);
-
-    await assertNoOverlap();
-  });
-});
-
-// Fix round (PR #305/#308 owner review) - HeroQuestionsArea's overflow-y: auto (needed for the
-// pinning fix above) forces overflow-x: auto too (CSS's own "visible computes to auto once the
-// other axis isn't visible" rule), which silently re-clips the candidate grid's hover-zoom/
-// hover-burst (both deliberately built with no overflow: hidden of their own - see
-// cardPanel.tsx) right at this box's edges - worst on the left, where the first column in
-// every row sits flush against it with no buffer at all.
-test.describe("question feed - hover-zoom/hover-burst edge clipping (owner live report)", () => {
-  test("hovering the leftmost candidate in a row does not get clipped by the scroll container's edge", async ({
+  // WD3 - the subject compacts to horizontal (~132px art + caption beside) once the HERO
+  // CONTAINER (not the viewport) drops below 560px - a narrow phone viewport is the practical
+  // way to force that container width without a second, artificial container to test against.
+  test("WD3: below the hero's 560px fold point, the subject card compacts to a horizontal layout", async ({
     page,
     network,
   }) => {
+    // Measured against `question-feed-subject-art` (the CSS box the fold point actually
+    // targets), not the raw `<img>` - this suite's own empty-`mediumThumbnailUrl` fixture
+    // convention renders a genuinely broken `<img>` (no natural size, `src=""`), and a broken
+    // image with alt text falls back to Chromium's own small alt-text layout box regardless of
+    // any `width`/`aspect-ratio` CSS on it (confirmed live, this task's own debug pass) -
+    // exactly the caveat the pre-rebuild suite's own `loadWithRealImage`/`loadWithDelayedImage`
+    // helpers existed to work around elsewhere in this file. The wrapping box's own size is
+    // unaffected by that image-loading quirk, so it's the reliable thing to measure here.
     network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await page.setViewportSize({ width: 390, height: 900 });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const leftmostCandidate = page.locator(
-      `[data-card-identifier="${printingCandidate1.identifier}"]`
-    );
-    const containerBox = await page
-      .getByTestId("question-feed-questions-area")
-      .boundingBox();
-    expect(containerBox).not.toBeNull();
-
-    // `img:not([alt=""])` - round 3's shared `<MysteryCard />` (cardPanel.tsx) renders its own
-    // "?" glyph `<img alt="">` INSIDE this same candidate tile, ahead of the real thumbnail in
-    // DOM order, so a bare `.locator("img").first()` now resolves to the (non-interactive,
-    // `pointer-events: none`) glyph instead of the real, hover-zoomable thumbnail - this excludes
-    // it explicitly rather than relying on `.first()`'s DOM-order coincidence.
-    const realThumbnail = leftmostCandidate.locator('img:not([alt=""])');
-    await realThumbnail.hover();
-    // matches ZoomableThumbnail's own 0.15s transition and HoverBurst's 0.18s transition
-    // (cardPanel.tsx) - long enough for both to settle at their hovered size.
-    await page.waitForTimeout(250);
-
-    const imgBox = await realThumbnail.boundingBox();
-    const burstBox = await leftmostCandidate
-      .locator(".hover-burst")
-      .boundingBox();
-    expect(imgBox).not.toBeNull();
-    expect(burstBox).not.toBeNull();
-
-    // Horizontal-only containment - vertical clipping at the top/bottom of this box is its
-    // intended scrolling behaviour; only left/right clipping (this box never scrolls
-    // sideways) is the reported "sheared" bug. A tolerance of 1px absorbs subpixel rounding
-    // from the transform-scaled hover state.
-    const tolerance = 1;
-    expect(imgBox!.x).toBeGreaterThanOrEqual(containerBox!.x - tolerance);
-    expect(imgBox!.x + imgBox!.width).toBeLessThanOrEqual(
-      containerBox!.x + containerBox!.width + tolerance
-    );
-    expect(burstBox!.x).toBeGreaterThanOrEqual(containerBox!.x - tolerance);
-    expect(burstBox!.x + burstBox!.width).toBeLessThanOrEqual(
-      containerBox!.x + containerBox!.width + tolerance
-    );
+    const subjectArt = page.getByTestId("question-feed-subject-art");
+    await expect(subjectArt).toBeVisible();
+    const artBox = await subjectArt.boundingBox();
+    expect(artBox).not.toBeNull();
+    // The compacted art column is a fixed 132px wide (SubjectArt's own `@container hero
+    // (max-width: 560px)` rule) - a generous tolerance band around that absorbs box-model
+    // rounding.
+    expect(artBox!.width).toBeGreaterThan(100);
+    expect(artBox!.width).toBeLessThan(170);
   });
 });
 
 // Mobile funnel pass - thumb-native tap targets. WCAG 2.5.5 (Target Size, AA) and Apple's HIG
-// both call for a 44px minimum touch target; Bootstrap's own default .btn height (~38px) and
-// the attribute chips' original padding (~30px) both fell short. These assert the real,
-// measured height of each control class the funnel uses for answering a question, not just
-// that a CSS rule exists - a min-height declaration overridden elsewhere (e.g. a conflicting
-// Bootstrap utility class) wouldn't be caught by a stylesheet-only check.
+// both call for a 44px minimum touch target - unchanged requirement, now enforced via the
+// `.btn { min-height: 44px }` base class (SPEC-wtc-rebuild.md section 1c) instead of the
+// retired `ThumbButton`/`FilterToggleButton` styled overrides.
 test.describe("question feed - tap target sizes (mobile funnel pass)", () => {
   test("Level 1's stacked answer buttons meet the 44px floor", async ({
     page,
@@ -537,281 +350,89 @@ test.describe("question feed - tap target sizes (mobile funnel pass)", () => {
   });
 });
 
-// Owner review round on top of the "mobile card/questions never overlap" fix above (own header
-// comment) - that fix put the card in its own disjoint column beside a horizontally-scrolling
-// answer row, which the owner found wasted space and let the question prompt clip behind the
-// card, with "None of these" left inside the scrollable candidate area (below the fold on a
-// real device). This restructure (QuestionFeed.tsx's `Level2NarrowGrid`, cardPanel.tsx's
-// height-capped `CardPanel`/`StaticCardPanel`) stacks the card ABOVE the questions again, caps
-// its height (~32vh) so a STATIC top block (card, name/badge/question text, the "Filter by
-// attribute"/"None of these"/"Art matches"/"Skip" action row) plus the scrollable candidate row
-// below it both fit a real phone viewport with no scrolling anywhere. Desktop/landscape (>= md)
-// is untouched - only these narrow-width assertions are new.
-//
-// Pixel 7's own CSS viewport (412x839 - Playwright's own `devices["Pixel 7"]` descriptor;
-// `page.setViewportSize` rather than full device emulation since `devices["Pixel 7"]` bundles a
-// `defaultBrowserType` that can't be set at describe/test scope - project-level only - and
-// nothing else in this describe block needs the rest of the device profile, e.g. touch/UA).
+// Pixel 7's own CSS viewport (412x839 - Playwright's own `devices["Pixel 7"]` descriptor).
 // Every other fixture in this file uses the empty-`mediumThumbnailUrl` convention (a genuine,
-// non-empty <img> is needed here - the card's own height cap is expressed as a max-width derived
-// from a target vh, which only manifests once the <img> actually sizes itself via its own
-// width: 100%/aspect-ratio CSS; an empty-src image renders at a small, fixed intrinsic fallback
-// size regardless of that CSS, confirmed via a real Playwright measurement in this task's own
-// report) - mirrors WhatsThatWordsAnimation.spec.ts's own CDN-route-intercept pattern for the
-// identical reason.
+// non-empty <img> is needed here so the art actually sizes itself via width:100%/aspect-ratio
+// CSS - an empty-src image renders at a small, fixed intrinsic fallback size regardless of that
+// CSS).
 const PIXEL_7_VIEWPORT = { width: 412, height: 839 };
 
-test.describe("question feed - portrait static top block (owner live-review)", () => {
-  async function loadWithRealImage(
-    page: import("@playwright/test").Page,
-    network: NetworkFixture
-  ) {
-    await page.setViewportSize(PIXEL_7_VIEWPORT);
-    const testCard = {
-      ...cardDocument1,
-      mediumThumbnailUrl: "non-empty-sentinel-see-comment-above",
-      smallThumbnailUrl: "non-empty-sentinel-see-comment-above",
-    };
-    process.env.NEXT_PUBLIC_IMAGE_WORKER_URL = "https://cdn.proxyprints.ca";
-    const cdnImageURL = getWorkerImageURL(testCard, "small")!;
-    const cdnImagePattern = new RegExp(
-      `^${cdnImageURL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
-    );
-    await page.route(cdnImagePattern, (route) =>
-      route.fulfill({ path: "public/whatsthat-icon-192.png" })
-    );
+async function loadWithRealImage(
+  page: import("@playwright/test").Page,
+  network: NetworkFixture,
+  viewport: { width: number; height: number } = PIXEL_7_VIEWPORT,
+  // 0 (the default) resolves the image near-instantly, for tests that only care about the
+  // SETTLED state. A caller that needs to observe the transient pre-reveal moment (the
+  // overlay, before it fades) must pass a real delay - mirrors the pre-rebuild suite's own
+  // `loadWithDelayedImage` helper, folded into this one via an optional param instead of a
+  // second near-duplicate function.
+  delayMs = 0
+) {
+  await page.setViewportSize(viewport);
+  const testCard = {
+    ...cardDocument1,
+    mediumThumbnailUrl: "non-empty-sentinel-see-comment-above",
+    smallThumbnailUrl: "non-empty-sentinel-see-comment-above",
+  };
+  process.env.NEXT_PUBLIC_IMAGE_WORKER_URL = "https://cdn.proxyprints.ca";
+  const cdnImageURL = getWorkerImageURL(testCard, "small")!;
+  const cdnImagePattern = new RegExp(
+    `^${cdnImageURL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
+  );
+  await page.route(cdnImagePattern, async (route) => {
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    await route.fulfill({ path: "public/whatsthat-icon-192.png" });
+  });
 
-    network.use(
-      http.get(buildRoute("2/questionFeed/"), () =>
-        HttpResponse.json(
-          {
-            item: {
-              type: "identify_printing",
-              card: testCard,
-              candidates: [printingCandidate1, printingCandidate2],
-              tagConfidence: {},
-            },
-            remainingEstimate: {
-              total: 3,
-              confirmable: 0,
-              contested: 0,
-              fresh: 3,
-            },
+  network.use(
+    http.get(buildRoute("2/questionFeed/"), () =>
+      HttpResponse.json(
+        {
+          item: {
+            type: "identify_printing",
+            card: testCard,
+            candidates: [printingCandidate1, printingCandidate2],
+            tagConfidence: {},
           },
-          { status: 200 }
-        )
-      ),
-      ...defaultHandlers
-    );
-    await loadPageWithDefaultBackend(page, "whatsthat");
-    await expect(page.getByAltText(testCard.name)).toBeVisible();
-    await expect(
-      page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
-    ).toBeVisible();
-  }
-
-  test("at Pixel 7 portrait, the whole page needs zero vertical scroll to reach every answer control", async ({
-    page,
-    network,
-  }) => {
-    await loadWithRealImage(page, network);
-
-    // The outer document itself never needs to scroll - the static top block (wordmark, card,
-    // text, action row) plus the scrollable candidate row below it are sized to fit entirely
-    // within the viewport (PageColumn/StarburstBackground in whatsthat.tsx now bound height at
-    // every width, not just >= md - see that file's own comment).
-    const documentScroll = await page.evaluate(() => ({
-      scrollHeight: document.documentElement.scrollHeight,
-      clientHeight: document.documentElement.clientHeight,
-    }));
-    expect(documentScroll.scrollHeight).toBeLessThanOrEqual(
-      documentScroll.clientHeight
-    );
-
-    // The candidate row is the ONLY genuinely scrollable region Level 2 has (horizontally, via
-    // MobileCandidateScroller's own overflow-x: auto) - HeroQuestionsArea's own overflow-y: auto
-    // is a defensive fallback for edge cases (own comment, QuestionFeed.tsx), not the intended
-    // mechanism, so this asserts it never actually has to engage on the reference viewport.
-    const questionsAreaScroll = await page
-      .getByTestId("question-feed-questions-area")
-      .evaluate((el) => ({
-        scrollHeight: el.scrollHeight,
-        clientHeight: el.clientHeight,
-      }));
-    expect(questionsAreaScroll.scrollHeight).toBeLessThanOrEqual(
-      questionsAreaScroll.clientHeight
-    );
-  });
-
-  test("the static action row (Filter by attribute / None of these) renders above the scrollable candidate row, not inside it", async ({
-    page,
-    network,
-  }) => {
-    await loadWithRealImage(page, network);
-
-    const filterToggleBox = await page
-      .getByTestId("question-feed-filter-toggle")
-      .boundingBox();
-    const noMatchBox = await page
-      .getByTestId("question-feed-no-match")
-      .boundingBox();
-    const candidateBox = await page
-      .locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
-      .boundingBox();
-    expect(filterToggleBox).not.toBeNull();
-    expect(noMatchBox).not.toBeNull();
-    expect(candidateBox).not.toBeNull();
-
-    // Both static-row controls render fully ABOVE the candidate row's own top edge - resolving
-    // ("Filter by attribute" or "None of these") is always one tap with zero scrolling, never
-    // buried below the fold behind the scrollable candidates the way the pre-fix layout left it.
-    expect(filterToggleBox!.y + filterToggleBox!.height).toBeLessThanOrEqual(
-      candidateBox!.y
-    );
-    expect(noMatchBox!.y + noMatchBox!.height).toBeLessThanOrEqual(
-      candidateBox!.y
-    );
-
-    // Both are also within the viewport with no scroll needed to reach them.
-    const viewportSize = page.viewportSize()!;
-    expect(filterToggleBox!.y + filterToggleBox!.height).toBeLessThanOrEqual(
-      viewportSize.height
-    );
-    expect(noMatchBox!.y + noMatchBox!.height).toBeLessThanOrEqual(
-      viewportSize.height
-    );
-  });
-
-  test("the question text sits directly under the card, not occluded by it or the starburst", async ({
-    page,
-    network,
-  }) => {
-    await loadWithRealImage(page, network);
-
-    const cardImage = page.getByAltText(cardDocument1.name);
-    const cardBox = await cardImage.boundingBox();
-    const badgeBox = await page
-      .getByTestId("question-feed-tier-badge")
-      .boundingBox();
-    const filterToggleBox = await page
-      .getByTestId("question-feed-filter-toggle")
-      .boundingBox();
-    expect(cardBox).not.toBeNull();
-    expect(badgeBox).not.toBeNull();
-    expect(filterToggleBox).not.toBeNull();
-
-    // The badge (and, transitively, the question text/action row below it) renders entirely
-    // below the card's own bottom edge - never behind or overlapping the card art or its
-    // starburst, unlike the pre-fix two-column layout this replaces (where the question text
-    // ran behind the reference card - see this task's own report for the reported bug).
-    expect(badgeBox!.y).toBeGreaterThanOrEqual(cardBox!.y + cardBox!.height);
-    expect(filterToggleBox!.y).toBeGreaterThanOrEqual(badgeBox!.y);
-  });
-});
-
-// Owner review round 2 (live device follow-up on top of the portrait static top block above) -
-// three asks: (1) a question-mark motif on every blue "unrevealed" card, fading away together
-// with the blue as the card reveals, at every viewport; (2) drop the narrow-width standalone "?"
-// if one exists distinct from the wordmark's own glyph; (3) recolour every quiz action button
-// gold, since Bootstrap's per-variant colours (grey/red/green/blue) were designed against the
-// site's neutral background, not this page's own deep-blue starburst field, and measured out at
-// ~2.4:1 contrast for the worst offender - see cardPanel.tsx/QuestionFeed.tsx's own comments.
-//
-// Round 3 (owner ruling on round 2's open items) - (1) the hero reveal overlay's own "?" and
-// ArtPlaceholder's CSS `::before` "?" (round 2's two independent implementations, confirmed via
-// computed style to already share the same background colour) are now ONE shared composition,
-// `MysteryCard`/`MysteryCardFace` (cardPanel.tsx) - a yellow `whatsthat-mark.svg` glyph (not
-// plain text) scaled to 2/3 of the card's own height, used in every blue-card slot on the page.
-// The tests below were rewritten against that shared structure rather than the two old,
-// independent ones. (2) the narrow-width wordmark now uses `whatsthat-wordmark.svg` (a
-// pre-existing, pre-cropped text-only asset - no code needed to drop the standalone "?" mascot,
-// see QuestionFeed.tsx's own NarrowWordmark comment) - covered by
-// WhatsThatWordsAnimation.spec.ts's existing narrow/wide wordmark visibility tests, which don't
-// need new assertions since they only ever checked which container is visible, not its content.
-test.describe("question feed - question-mark motif + golden action buttons (owner review round 2)", () => {
-  // rgb() equivalents of QuestionFeed.tsx's QUIZ_BUTTON_GOLD/QUIZ_BUTTON_NAVY constants -
-  // getComputedStyle always resolves to this form regardless of how the source CSS wrote the
-  // colour, so asserting against it directly (rather than re-parsing to hex) is both simpler
-  // and exactly what a real browser would report.
-  const QUIZ_BUTTON_GOLD_RGB = "rgb(248, 212, 43)"; // #f8d42b
-  const QUIZ_BUTTON_NAVY_RGB = "rgb(18, 64, 99)"; // #124063
-
-  // A real (non-empty-src) card image resolves near-instantly against this suite's local mock
-  // server - fast enough that a plain `loadPageWithDefaultBackend` call routinely already has
-  // `revealed: true` (overlay unmounted) by the time an assertion runs, since RevealOverlay's
-  // own 0.8s reveal fade has nothing slower to wait on. A deliberate, generous route delay holds
-  // the pre-reveal moment open long enough to assert against reliably - mirrors the "portrait
-  // static top block" describe block's own `loadWithRealImage` helper above (own comment there
-  // explains why a genuinely non-empty src is needed at all), just with an added delay since that
-  // helper's own callers only care about the SETTLED state, not the transient pre-reveal one.
-  async function loadWithDelayedImage(
-    page: import("@playwright/test").Page,
-    network: NetworkFixture
-  ) {
-    const testCard = {
-      ...cardDocument1,
-      mediumThumbnailUrl: "non-empty-sentinel-see-comment-above",
-      smallThumbnailUrl: "non-empty-sentinel-see-comment-above",
-    };
-    process.env.NEXT_PUBLIC_IMAGE_WORKER_URL = "https://cdn.proxyprints.ca";
-    const cdnImageURL = getWorkerImageURL(testCard, "small")!;
-    const cdnImagePattern = new RegExp(
-      `^${cdnImageURL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
-    );
-    await page.route(cdnImagePattern, async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      await route.fulfill({ path: "public/whatsthat-icon-192.png" });
-    });
-
-    network.use(
-      http.get(buildRoute("2/questionFeed/"), () =>
-        HttpResponse.json(
-          {
-            item: {
-              type: "identify_printing",
-              card: testCard,
-              candidates: [printingCandidate1, printingCandidate2],
-              tagConfidence: {},
-            },
-            remainingEstimate: {
-              total: 3,
-              confirmable: 0,
-              contested: 0,
-              fresh: 3,
-            },
+          remainingEstimate: {
+            total: 3,
+            confirmable: 0,
+            contested: 0,
+            fresh: 3,
           },
-          { status: 200 }
-        )
-      ),
-      ...defaultHandlers
-    );
-    await loadPageWithDefaultBackend(page, "whatsthat");
-    await expect(page.getByAltText(testCard.name)).toBeVisible();
-  }
+        },
+        { status: 200 }
+      )
+    ),
+    ...defaultHandlers
+  );
+  await loadPageWithDefaultBackend(page, "whatsthat");
+  await expect(page.getByAltText(testCard.name)).toBeVisible();
+  return testCard;
+}
 
-  for (const [label, viewport] of [
-    ["mobile", PIXEL_7_VIEWPORT],
-    ["desktop", { width: 1280, height: 900 }],
-  ] as const) {
-    test(`the hero reveal overlay renders the shared '?' motif (not a bare blue box) before the card reveals - ${label}`, async ({
-      page,
-      network,
-    }) => {
-      await page.setViewportSize(viewport);
-      await loadWithDelayedImage(page, network);
-      const overlay = page.getByTestId("question-feed-reveal-overlay");
-      await expect(overlay).toBeVisible();
-      // Round 3 ("one blue card, used everywhere") - the "?" is now MysteryCard's own
-      // `whatsthat-mark.svg` glyph, an `<img>`, not plain text - assert its `src` directly
-      // rather than the overlay's text content.
-      await expect(overlay.locator("img")).toHaveAttribute(
-        "src",
-        "/whatsthat-mark.svg"
-      );
-    });
-  }
+// Replaces the retired "question-mark motif" describe block - the mystery-card glyph is now a
+// plain, token-coloured `<span data-testid="mystery-card-glyph">?</span>` (WD1: the old
+// gold-gradient `whatsthat-mark.svg` mascot asset can't be retinted onto `--wtc-mystery-glyph`
+// via CSS - see cardPanel.tsx's own comment), not an `<img>`.
+test.describe("question feed - mystery-card glyph (WTC rebuild, retires the whatsthat-mark.svg mascot)", () => {
+  test("the hero reveal overlay renders the shared '?' glyph as token-coloured text before the card reveals", async ({
+    page,
+    network,
+  }) => {
+    // A deliberate route delay holds the pre-reveal moment open long enough to assert against
+    // reliably - against this suite's own fast local mock server, an undelayed route routinely
+    // already resolves (and therefore un-mounts the overlay) before the assertion below runs.
+    await loadWithRealImage(page, network, { width: 1280, height: 900 }, 1500);
+    const overlay = page.getByTestId("question-feed-reveal-overlay");
+    await expect(overlay).toBeVisible();
+    const glyph = overlay.getByTestId("mystery-card-glyph");
+    await expect(glyph).toHaveText("?");
+  });
 
-  test("the candidate grid's 'mystery card' placeholders carry the SAME shared '?' motif component as the hero card", async ({
+  test("the candidate grid's mystery-card placeholders carry the SAME shared glyph component as the hero card", async ({
     page,
     network,
   }) => {
@@ -819,49 +440,64 @@ test.describe("question feed - question-mark motif + golden action buttons (owne
     await page.setViewportSize({ width: 1280, height: 900 });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    // Round 3 - ArtPlaceholder no longer has its own `::before` "?" (round 2's independent
-    // implementation); it renders `<MysteryCard />` as a real child instead, the exact same
-    // component the hero reveal overlay above uses. `data-card-identifier` lives on
-    // CandidateButton itself (a <button>), so its own `img[src="/whatsthat-mark.svg"]`
-    // descendant is unambiguously MysteryCard's glyph, not the candidate's own art thumbnail
-    // (that `<img>` has a real `src`, never this literal path).
     const glyph = page
       .locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
-      .locator('img[src="/whatsthat-mark.svg"]');
-    await expect(glyph).toBeVisible();
-
-    // Same background colour as the hero card (both are the same MysteryCardFace instance
-    // type) - explicit regression guard for the owner's own "unify to the small cards' blue"
-    // ask, even though the two were already byte-identical before this consolidation (see this
-    // PR's own report). Reads the glyph <img>'s own parentElement (MysteryCardFace) rather than
-    // a Playwright locator chain, since Playwright's own locator API has no CSS "parent" combinator.
-    const candidateBlue = await glyph.evaluate(
-      (el) =>
-        window.getComputedStyle(el.parentElement as HTMLElement).backgroundColor
-    );
-    expect(candidateBlue).toBe("rgb(77, 141, 223)");
+      .getByTestId("mystery-card-glyph");
+    await expect(glyph).toHaveText("?");
   });
 
-  test("every quiz action button (Filter toggle / None of these / Art matches / Skip) uses the shared gold treatment, not Bootstrap's default variant colours", async ({
+  test("every quiz action button reads its colour LIVE from the --text token, not a hardcoded gold/navy literal", async ({
     page,
     network,
   }) => {
+    // WD1 retires QUIZ_BUTTON_GOLD/_NAVY entirely - `.btn.secondary`'s colour now comes from
+    // `var(--text)`. Deliberately NOT asserted against a literal rgb() here: `--bs-body-color`
+    // (the `--text` fallback's own runtime source, see whatsthat.tsx's WtcTokenScope) is
+    // ALREADY emitted by the current Superhero theme on master today (independent of whether
+    // the in-flight Tokyo-11 branch has merged yet - confirmed live, #ebebeb pre-merge) - a
+    // literal-rgb assertion would only ever be true post-merge. Proving the button's colour is
+    // LIVE-DERIVED from the `--text` custom property (not a hardcoded literal baked into the
+    // component) is the actually-portable assertion: change the token, the button changes too.
     network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
     await page.setViewportSize({ width: 1280, height: 900 });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    for (const testId of [
-      "question-feed-filter-toggle",
-      "question-feed-no-match",
-    ]) {
-      const color = await page
-        .getByTestId(testId)
-        .evaluate((el) => window.getComputedStyle(el).color);
-      expect(color).toBe(QUIZ_BUTTON_GOLD_RGB);
-    }
+    const before = await page
+      .getByTestId("question-feed-no-match")
+      .evaluate((el) => window.getComputedStyle(el).color);
+    expect(before).not.toBe("rgb(248, 212, 43)"); // the retired QUIZ_BUTTON_GOLD literal
+
+    // Walks up from the button to the ancestor that DEFINES --text (WtcTokenScope, the page's
+    // own token-bridge root - see whatsthat.tsx) and overrides it there via an inline style
+    // (which always outranks a non-!important stylesheet rule for that same element/property),
+    // then re-reads the button's colour - proving it's a live var() reference cascading down
+    // from that scope, not a value baked into the component at build time.
+    const after = await page
+      .getByTestId("question-feed-no-match")
+      .evaluate((btn) => {
+        let el: HTMLElement | null = btn as HTMLElement;
+        let definer: HTMLElement | null = null;
+        while (el) {
+          const own = window.getComputedStyle(el).getPropertyValue("--text");
+          const parentOwn = el.parentElement
+            ? window
+                .getComputedStyle(el.parentElement)
+                .getPropertyValue("--text")
+            : "";
+          if (own.trim() !== "" && own.trim() !== parentOwn.trim()) {
+            definer = el;
+            break;
+          }
+          el = el.parentElement;
+        }
+        if (definer == null) return null;
+        definer.style.setProperty("--text", "rgb(1, 2, 3)");
+        return window.getComputedStyle(btn).color;
+      });
+    expect(after).toBe("rgb(1, 2, 3)");
   });
 
-  test("a selected Level 3 attribute chip stays filled gold (not Bootstrap's default blue 'primary'), while an unselected chip stays gold-outlined", async ({
+  test("a selected Level 3 attribute chip reads --accent (purple), not the retired gold treatment", async ({
     page,
     network,
   }) => {
@@ -881,71 +517,39 @@ test.describe("question feed - question-mark motif + golden action buttons (owne
       "question-feed-level3-chip-White Border"
     );
     await selectedChip.click();
-    const selectedStyles = await selectedChip.evaluate((el) => {
-      const s = window.getComputedStyle(el);
-      return { color: s.color, backgroundColor: s.backgroundColor };
-    });
-    expect(selectedStyles.backgroundColor).toBe(QUIZ_BUTTON_GOLD_RGB);
-    expect(selectedStyles.color).toBe(QUIZ_BUTTON_NAVY_RGB);
-
-    const unselectedChip = page.getByTestId(
-      "question-feed-level3-chip-Black Border"
-    );
-    const unselectedColor = await unselectedChip.evaluate(
+    const selectedColor = await selectedChip.evaluate(
       (el) => window.getComputedStyle(el).color
     );
-    expect(unselectedColor).toBe(QUIZ_BUTTON_GOLD_RGB);
+    // --accent's Tokyo-11 fallback value (#bb9af7) - see whatsthat.tsx's WtcTokenScope.
+    expect(selectedColor).toBe("rgb(187, 154, 247)");
+    expect(selectedColor).not.toBe("rgb(18, 64, 99)"); // the retired QUIZ_BUTTON_NAVY literal
   });
 });
 
-// Owner review round 3 ("one blue card, used everywhere") - the hero reveal overlay and the
-// candidate-grid/no-match placeholders now render the exact same `<MysteryCard />` component
-// (cardPanel.tsx) instead of two independent implementations (round 2's own finding - see that
-// describe block's own header comment). This describe block asserts the two NEW, round-3-
-// specific properties that component adds: the "?" glyph is sized relative to its own card (not
-// a fixed rem value, so it scales correctly across very different card sizes on this page), and
-// every blue card - large and small alike - renders from the identical `MysteryCardFace` shape.
-test.describe("question feed - shared blue mystery card composition (owner review round 3)", () => {
-  // A real (non-empty-src) card image resolves near-instantly against this suite's local mock
-  // server - the hero card is routinely already `revealed: true` (MysteryCard unmounted) by the
-  // time an assertion runs unless something holds the pre-reveal moment open (same root cause,
-  // same fix, as the "owner review round 2" describe block's own `loadWithDelayedImage` above -
-  // duplicated here rather than shared across describe blocks, matching this file's own existing
-  // per-describe-block convention).
-  async function loadWithDelayedImage(
-    page: import("@playwright/test").Page,
-    network: NetworkFixture
-  ) {
-    const testCard = {
-      ...cardDocument1,
-      mediumThumbnailUrl: "non-empty-sentinel-see-comment-above",
-      smallThumbnailUrl: "non-empty-sentinel-see-comment-above",
-    };
-    process.env.NEXT_PUBLIC_IMAGE_WORKER_URL = "https://cdn.proxyprints.ca";
-    const cdnImageURL = getWorkerImageURL(testCard, "small")!;
-    const cdnImagePattern = new RegExp(
-      `^${cdnImageURL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
-    );
-    await page.route(cdnImagePattern, async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      await route.fulfill({ path: "public/whatsthat-icon-192.png" });
-    });
-
+// NEW coverage (rebuild task's TESTS requirement: "shape-b shortlist fallback"/ANNEX B) -
+// shape b degrades to shape d (open-ended, "tricky one" framing) when the served item carries
+// no candidates at all - the UI-only side of the `survivor_pks`/#433 dependency (the backend
+// serve-time downgrade itself is out of this frontend task's scope, per ANNEX B).
+test.describe("question feed - shape (d) open-ended fallback (ANNEX B)", () => {
+  test("a zero-candidate identify_printing item renders the dashed 'tricky one' framing, not the neutral pick grid", async ({
+    page,
+    network,
+  }) => {
     network.use(
       http.get(buildRoute("2/questionFeed/"), () =>
         HttpResponse.json(
           {
             item: {
               type: "identify_printing",
-              card: testCard,
-              candidates: [printingCandidate1, printingCandidate2],
+              card: cardDocument1,
+              candidates: [],
               tagConfidence: {},
             },
             remainingEstimate: {
-              total: 3,
+              total: 1,
               confirmable: 0,
               contested: 0,
-              fresh: 3,
+              fresh: 1,
             },
           },
           { status: 200 }
@@ -954,82 +558,62 @@ test.describe("question feed - shared blue mystery card composition (owner revie
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
-    await expect(page.getByAltText(testCard.name)).toBeVisible();
-  }
 
-  test("the '?' glyph is sized to roughly 2/3 of its own card's height, on both the large hero card and a small candidate tile", async ({
-    page,
-    network,
-  }) => {
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await loadWithDelayedImage(page, network);
-
-    // Hero card - the overlay itself IS the card's own box (position: absolute; inset: 0 over
-    // RevealWrapper, which sizes itself to the <img> it wraps), so its own boundingBox is the
-    // reference height to compare the glyph against.
-    const heroOverlay = page.getByTestId("question-feed-reveal-overlay");
-    const heroOverlayBox = await heroOverlay.boundingBox();
-    const heroGlyphBox = await heroOverlay.locator("img").boundingBox();
-    expect(heroOverlayBox).not.toBeNull();
-    expect(heroGlyphBox).not.toBeNull();
-    const heroRatio = heroGlyphBox!.height / heroOverlayBox!.height;
-    // A generous tolerance band around 2/3 (not an exact-to-the-pixel match) - the glyph's own
-    // asset has a small amount of internal padding/stroke, and boundingBox includes any
-    // sub-pixel rendering rounding.
-    expect(heroRatio).toBeGreaterThan(0.55);
-    expect(heroRatio).toBeLessThan(0.78);
-
-    // Small candidate tile - same ratio, a very differently-sized box.
-    const candidateTile = page.locator(
-      `[data-card-identifier="${printingCandidate1.identifier}"]`
+    await expect(page.getByTestId("question-feed-tier-badge")).toHaveClass(
+      /hard/
     );
-    const candidateGlyph = candidateTile.locator(
-      'img[src="/whatsthat-mark.svg"]'
-    );
-    const candidateGlyphBox = await candidateGlyph.boundingBox();
-    // Reads the glyph <img>'s own parentElement (MysteryCardFace, which fills the whole card
-    // via `position: absolute; inset: 0`) rather than a Playwright locator chain, since
-    // Playwright's own CSS locator API has no "parent" combinator.
-    const candidateCardHeight = await candidateGlyph.evaluate(
-      (el) => (el.parentElement as HTMLElement).getBoundingClientRect().height
-    );
-    expect(candidateGlyphBox).not.toBeNull();
-    const candidateRatio = candidateGlyphBox!.height / candidateCardHeight;
-    expect(candidateRatio).toBeGreaterThan(0.55);
-    expect(candidateRatio).toBeLessThan(0.78);
-
-    // The two cards are genuinely different sizes (otherwise this test wouldn't actually prove
-    // the sizing is RELATIVE rather than a lucky fixed value coincidentally matching both).
-    expect(heroOverlayBox!.height).toBeGreaterThan(candidateCardHeight * 1.5);
+    await expect(page.getByText(/harder ones/i)).toBeVisible();
+    // "None of these"/Skip still work in this degraded shape - the UI is agnostic to which
+    // path satisfied the shortlist (ANNEX B).
+    await expect(page.getByTestId("question-feed-no-match")).toBeVisible();
+    await expect(page.getByTestId("question-feed-skip")).toBeVisible();
   });
+});
 
-  test("every blue mystery card on the page - the hero card and every candidate tile - renders the identical MysteryCard glyph asset", async ({
+// NEW coverage (rebuild task's TESTS requirement: "session counter increments") - WD6/owner
+// ruling 2's quiet "N tagged this session" affordance.
+test.describe("question feed - session counter (WD6, quiet reward affordance)", () => {
+  test("the session counter increments after a real vote is cast, and is not persisted across a reload", async ({
     page,
     network,
   }) => {
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await loadWithDelayedImage(page, network);
+    let feedFetchCount = 0;
+    network.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return HttpResponse.json(
+          {
+            item: {
+              type: "identify_printing",
+              card: { ...cardDocument1, identifier: `card-${feedFetchCount}` },
+              candidates: [printingCandidate1],
+              tagConfidence: {},
+            },
+            remainingEstimate: {
+              total: 2,
+              confirmable: 0,
+              contested: 0,
+              fresh: 2,
+            },
+          },
+          { status: 200 }
+        );
+      }),
+      submitPrintingTagNoMatch,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
 
-    // Hero card FIRST - checked immediately after load, before anything else spends wall-clock
-    // time (see the candidate loop below) - the hero's own reveal is gated on THIS test's
-    // artificially-delayed route mock settling, so any assertion that polls/retries for several
-    // seconds before reaching this one risks racing past that window and finding it already
-    // unmounted. Same "read the frozen pre-reveal moment once, right after load" pattern the
-    // sibling test above already relies on.
+    const counter = page.getByTestId("question-feed-session-counter");
+    await expect(counter).toContainText("0 tagged this session");
+
+    await page.getByTestId("question-feed-no-match").click();
+    await expect(counter).toContainText("1 tagged this session");
+
+    // Not persisted (no localStorage) - a real reload resets it, matching "this session" only.
+    await page.reload();
     await expect(
-      page.getByTestId("question-feed-reveal-overlay").locator("img")
-    ).toHaveAttribute("src", "/whatsthat-mark.svg");
-
-    // Candidate tiles - unconditional/permanent (no reveal-then-unmount lifecycle the way the
-    // hero card has - see ArtPlaceholder's own comment, cardPanel.tsx), so this count is stable
-    // regardless of real network timing for the two candidates' OWN (unmocked) thumbnail URLs,
-    // and safe to check after the time-sensitive hero assertion above.
-    for (const candidate of [printingCandidate1, printingCandidate2]) {
-      await expect(
-        page
-          .locator(`[data-card-identifier="${candidate.identifier}"]`)
-          .locator('img[src="/whatsthat-mark.svg"]')
-      ).toHaveCount(1);
-    }
+      page.getByTestId("question-feed-session-counter")
+    ).toContainText("0 tagged this session");
   });
 });
