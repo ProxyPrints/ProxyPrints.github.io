@@ -224,6 +224,15 @@ class LandsIdentifyResult:
     tiebreak_votes: int = 0
     ambiguous_phash: int = 0
     votes_written: int = 0
+    # Votes this run computed but did NOT write because an identical (card, printing,
+    # anonymous_id) vote already existed (issue #408) - the OCR-resolved branch casts under
+    # OCR_ANONYMOUS_ID, an identity this module's own eligibility query (_land_pool_selected_cards,
+    # scoped to LANDS_ANONYMOUS_ID) never checks, so a card can legitimately still be in this
+    # module's pool while already carrying an OCR_ANONYMOUS_ID vote from an earlier pass/pilot
+    # run that happens to agree. Agreement with an existing vote is a no-op, not an error - counted
+    # here (not silently dropped) so the ledger stays honest about what this run actually computed
+    # vs. actually wrote. See _split_new_votes.
+    already_voted: int = 0
     # LandsAmbiguousResidue rows written (routing data, not votes) - counted separately from
     # votes_written since it's a distinct table with distinct semantics; see that model's
     # docstring. Always 0 in dry_run, same convention as votes_written.
@@ -321,6 +330,37 @@ def identify_land_printing(
 
     confidence = LANDS_SINGLETON_CONFIDENCE if len(frozen_matched_pks) == 1 else LANDS_TIEBREAK_CONFIDENCE
     return match.candidate.pk, confidence, "", frozen_matched_pks, phash_distances
+
+
+def _split_new_votes(votes_batch: list[CardPrintingTag]) -> tuple[list[CardPrintingTag], int]:
+    """Issue #408: partitions `votes_batch` into (votes safe to `bulk_create`, count already
+    voted). A vote is "already voted" when its exact (card, printing, anonymous_id) triple already
+    exists as a non-no-match `CardPrintingTag` row - the same tuple `cardprintingtag_unique_
+    printing_vote` constrains, so this is a pre-write skip-if-exists guard rather than the
+    blanket `ignore_conflicts=True` `local_layout_class_cast.run_layout_class_cast` uses (that
+    guard is genuinely belt-and-suspenders there, since that module's own eligibility query
+    already excludes every card its identity has voted on - this module's OCR-resolved branch
+    votes under OCR_ANONYMOUS_ID, an identity `_land_pool_selected_cards`'s eligibility query
+    never checks, so this collision is expected in normal operation, not just a concurrent-run
+    race, and deserves an honest counted skip rather than a silent DB-level swallow).
+
+    One batched existence query (not one query per card) - filtered to just the card_ids/
+    anonymous_ids actually present in this batch, since a full-table scan would be wasteful for a
+    large batch."""
+    if not votes_batch:
+        return [], 0
+
+    existing_triples = set(
+        CardPrintingTag.objects.filter(
+            is_no_match=False,
+            card_id__in={vote.card_id for vote in votes_batch},
+            anonymous_id__in={vote.anonymous_id for vote in votes_batch},
+        ).values_list("card_id", "printing_id", "anonymous_id")
+    )
+    new_votes = [
+        vote for vote in votes_batch if (vote.card_id, vote.printing_id, vote.anonymous_id) not in existing_triples
+    ]
+    return new_votes, len(votes_batch) - len(new_votes)
 
 
 def _current_evidence_for_card(card: Card) -> Optional[ImageEvidence]:
@@ -593,8 +633,10 @@ def run_lands_identify(
         )
 
     if not dry_run and votes_batch:
-        CardPrintingTag.objects.bulk_create(votes_batch)
-        result.votes_written = len(votes_batch)
+        new_votes, result.already_voted = _split_new_votes(votes_batch)
+        if new_votes:
+            CardPrintingTag.objects.bulk_create(new_votes)
+        result.votes_written = len(new_votes)
 
     if not dry_run and residue_batch:
         LandsAmbiguousResidue.objects.bulk_create(residue_batch)

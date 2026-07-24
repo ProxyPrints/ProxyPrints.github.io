@@ -674,6 +674,32 @@ ledger-counters rails (`cardpicker.pilot_run_lifecycle`, issues #345/#373's
 convention) in the same change, since a cheap evidence-backed dry-run now
 makes that guard's cheap-preview rationale hold here for the first time.
 
+**Write-path collision guard + dry-run would-cast fix (issues #408/#407,
+2026-07-24):** the first `--write` run after the evidence-first patch above
+(`run_id=20260724T021229-15c88eba`) hit an `IntegrityError` on
+`cardprintingtag_unique_printing_vote` (`card_id=57, printing_id=87811, anonymous_id=local-ocr-v1`) and rolled back with zero rows landed. Root
+cause: the OCR-resolved branch (step 1) casts votes under `OCR_ANONYMOUS_ID`
+(`local-ocr-v1`), an identity `_land_pool_selected_cards`'s own eligibility
+query never checks (it's scoped to `LANDS_ANONYMOUS_ID` alone) - so a card
+can legitimately still be selected into this pool while an earlier pass/
+pilot run already cast an identical `(card, printing, OCR_ANONYMOUS_ID)`
+vote, and `bulk_create` has no guard against that. Fixed with an explicit
+pre-write skip-if-exists (`_split_new_votes`) rather than a blanket
+`ignore_conflicts=True` - a batched existence query partitions the batch
+into (safe to write, already-voted), the latter counted in a new
+`LandsIdentifyResult.already_voted`/ledger counter rather than silently
+dropped, so the run survives the collision and everything else in the
+batch still commits. Same PR also fixed the dry-run terminal summary
+(issue #407), which printed `total_votes=would_cast=0` unconditionally
+(reusing `votes_written`, the write-gated counter, always 0 in dry-run)
+even on runs whose ledger counters recorded a real prediction (e.g.
+`ocr_resolved=102+singleton=7+tiebreak=4=113/300` on runs
+`20260724T013302`/`20260724T014701`) - now prints the real
+`ocr_resolved+singleton_votes+tiebreak_votes` breakdown in dry-run mode,
+matching `local_calculate_verdicts`'s own `would_cast=` convention. The
+authorized lands write this unblocks has not been re-run as part of this
+fix - code + tests only.
+
 ---
 
 ## Harvest-calculate pipeline (Stages A–F, supersedes Part 4's remaining write run)
