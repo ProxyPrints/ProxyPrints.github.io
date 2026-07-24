@@ -424,3 +424,22 @@ Q_CLUSTER = {
     "label": "Django Q2",
     "orm": "default",
 }
+
+# Stage E Phase 2 - streaming dispatch loop (docs/proposals/stage-e-streaming.md §3, docs/features/
+# stage-e-operations.md's "Phase 2" section). Default OFF, exactly matching this phase's own
+# NOT-IN-SCOPE line ("actually enabling the trigger in prod settings ... turning it on is the
+# phase-3 shakedown's polled owner action") - the event-driven card-create/evidence-change signal
+# receivers (cardpicker/stage_e_signals.py) and the cron backstop sweep
+# (management/commands/stream_backstop_sweep.py) are both wired unconditionally, but every one of
+# them checks this flag first and is a no-op while it's False. Flipping it to True is the ONLY
+# action phase 3 needs to take to go live - no redeploy of this module required.
+STAGE_E_STREAMING_ENABLED = env.bool("STAGE_E_STREAMING_ENABLED", default=False)
+
+# Micro-batch size (docs/proposals/stage-e-streaming.md §3 decision (2), sharpened by §10(c)): NOT
+# a value this brief or this change invents precision for - §10(c) ratifies that the real number
+# ships as a MEASURED OUTPUT of the Bug-A tail shakedown's own instrumentation (phase 3, not yet
+# run). This default is a placeholder sized to the brief's own "roughly 10-100 cards per batch"
+# sanity range (§3 decision (2)) - a mid-range, conservative starting point pending that
+# measurement, not a considered answer. Tunable without a code change (env var) precisely so the
+# shakedown can adjust it without a redeploy.
+STAGE_E_MICRO_BATCH_SIZE = env.int("STAGE_E_MICRO_BATCH_SIZE", default=25)

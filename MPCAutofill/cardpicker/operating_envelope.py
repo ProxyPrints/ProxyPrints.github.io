@@ -42,7 +42,7 @@ without a matching prior dry run.
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from django.db.models import Q
 from django.utils import timezone
@@ -79,7 +79,7 @@ class EnvelopeSignals:
     google_lockout: bool = False
 
 
-def _bar_breach(signals: EnvelopeSignals) -> Optional[tuple[str, dict]]:
+def _bar_breach(signals: EnvelopeSignals) -> Optional[tuple[str, dict[str, Any]]]:
     """
     Returns `(bar, detail)` for the FIRST bar breached, checked in the priority order the brief
     itself implies (§10(a) lists the instant lockout pause distinctly from the other three's
