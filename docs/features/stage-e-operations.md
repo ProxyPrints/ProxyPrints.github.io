@@ -274,7 +274,28 @@ connection-death was the deciding factor over a DB-row counter). No new
 migration, no new infrastructure. A throttled dispatch returns
 `status="throttled-concurrency-cap"` and writes no ledger row, the same
 "halted dispatch never partially starts" convention `halted-open-trip`/
-`halted-new-trip` already established.
+`halted-new-trip` already established. `_slot_count()` floors
+`STAGE_E_MAX_CONCURRENT_DISPATCHES` at `1` — a misconfigured `0` or negative
+value clamps to `1` slot (with a `logger.warning`) rather than silently
+throttling every dispatch forever with no error and no envelope trip to
+surface it.
+
+**Event-dispatch drop semantics**: `Q_CLUSTER["max_attempts"] = 1`
+(`MPCAutofill/settings.py`) means an event-driven `async_task` that returns
+`throttled-concurrency-cap` is recorded SUCCESSFUL by django-q2 — it never
+retries, so the touched card is silently deferred to the backstop sweep
+(below) rather than lost outright. This is by design, not a gap: the sweep
+is the one path that re-tries a card the event trigger dropped this way.
+
+**Backstop sweep behavior on throttle**: `stream_backstop_sweep` treats
+`throttled-concurrency-cap` as a STOP condition, exactly like an envelope
+halt — it does not count the throttled attempt toward `batches_dispatched`
+and does not loop back into `dispatch_micro_batch` with no backoff; the
+next scheduled sweep invocation picks up where this one stopped. The
+sweep's summary output reports `stopped_reason=throttled-concurrency-cap`
+when this happens, so an operator can see the sweep did nothing this run
+rather than reading a `batches_dispatched=0`-with-no-explanation line as
+"backlog was just empty."
 
 **Runbook implication**: `STAGE_E_MAX_CONCURRENT_DISPATCHES` is the first
 tuning knob to raise once real shakedown data shows headroom below the

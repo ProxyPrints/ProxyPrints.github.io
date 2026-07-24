@@ -585,3 +585,44 @@ class TestBackstopSweep:
 
         assert EnvelopeTrip.objects.filter(bar=EnvelopeTrip.Bar.HOST_LOAD).count() == 1
         assert PilotRunLedger.objects.count() == 0  # halted before any batch ledger row was written
+
+    @STREAMING_ON
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    def test_sweep_stops_on_a_throttled_concurrency_cap_without_looping(
+        self, db: Any, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Tron gate defect fix: pre-fix, "throttled-concurrency-cap" matched neither
+        `_HALT_STATUSES` nor "empty" and fell through to `batches_dispatched += 1` with an immediate
+        re-entry into `dispatch_micro_batch` - a hot, backoff-free loop up to `--max-batches`,
+        precisely when the host is already saturated, reporting a success-shaped
+        `batches_dispatched=N` for a sweep that did nothing. Mirrors
+        `TestConcurrencyCapIntegration`'s own "genuinely separate session" discipline (that class's
+        own docstring) - a raw, independent `psycopg2` connection holds the only slot, standing in
+        for another concurrent dispatch (a django-q worker, or the event trigger racing this same
+        sweep) - reusing the SAME session for both would be a false test (re-entrant advisory
+        locks, this file's own `stage_e_concurrency` test module docstring)."""
+        CardFactory(name="Some Card", content_phash=42)
+
+        connection.ensure_connection()
+        raw = psycopg2.connect(**connection.get_connection_params())
+        raw.autocommit = True
+        with raw.cursor() as cursor:
+            cursor.execute("SELECT pg_try_advisory_lock(%s, %s)", [_LOCK_NAMESPACE, 0])
+            (acquired,) = cursor.fetchone()
+            assert acquired is True, "test setup failed to claim the only slot"
+        try:
+            call_command("stream_backstop_sweep", "--max-batches", "5")
+        finally:
+            raw.close()  # auto-releases the advisory lock, same crash-safety property tested above
+
+        output = capsys.readouterr().out
+        assert "sweep stopped: dispatch slots saturated (throttled-concurrency-cap)" in output
+        # exactly one occurrence - proves the loop actually STOPPED on the first throttled outcome
+        # rather than re-entering dispatch_micro_batch up to --max-batches=5 with no backoff.
+        assert output.count("sweep stopped: dispatch slots saturated") == 1
+        assert "batches_dispatched=0" in output
+        assert "stopped_reason=throttled-concurrency-cap" in output
+        # no ledger row - the throttled attempt never started real work, matching a halt's own
+        # convention (TestConcurrencyCapIntegration's own assertion for dispatch_micro_batch
+        # directly).
+        assert PilotRunLedger.objects.count() == 0

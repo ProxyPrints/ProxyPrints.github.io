@@ -87,7 +87,22 @@ _LOCK_NAMESPACE = 0x53746745  # "StgE" read as hex digits, chosen for exactly th
 
 
 def _slot_count() -> int:
-    return getattr(settings, "STAGE_E_MAX_CONCURRENT_DISPATCHES", 2)
+    """
+    Floors at 1 - `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` set to 0 or negative (a plausible ops
+    typo, e.g. meant to disable Stage E via a different flag entirely) would otherwise make
+    `_try_acquire_slot`'s own `range(_slot_count())` empty, so every call returns `None` - dispatches
+    throttle FOREVER with no error, no envelope trip, and no visible signal beyond an ever-growing
+    Stage C/D backlog. A `logger.warning` on clamp makes that typo visible instead of silent.
+    """
+    configured = getattr(settings, "STAGE_E_MAX_CONCURRENT_DISPATCHES", 2)
+    if configured < 1:
+        logger.warning(
+            "stage_e_concurrency: STAGE_E_MAX_CONCURRENT_DISPATCHES=%s is below the floor of 1 - "
+            "clamping to 1 slot instead of throttling every dispatch forever",
+            configured,
+        )
+        return 1
+    return configured
 
 
 def _try_acquire_slot() -> Optional[int]:

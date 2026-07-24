@@ -150,6 +150,23 @@ class TestTryAcquireSlot:
     def test_default_cap_is_two(self, db: Any) -> None:
         assert stage_e_concurrency._slot_count() == 2
 
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=0)
+    def test_a_zero_configured_cap_floors_to_one_and_warns(self, db: Any, caplog: Any) -> None:
+        """STAGE_E_MAX_CONCURRENT_DISPATCHES=0 (a plausible ops typo) must not silently throttle
+        every dispatch forever - `_try_acquire_slot`'s own `range(_slot_count())` would otherwise be
+        empty, so no slot could ever be acquired, with no error and no envelope trip to surface it.
+        The floor makes at least one slot available; the warning makes the typo itself visible."""
+        with caplog.at_level("WARNING", logger="cardpicker.stage_e_concurrency"):
+            assert stage_e_concurrency._slot_count() == 1
+        assert "STAGE_E_MAX_CONCURRENT_DISPATCHES" in caplog.text
+        assert "clamping to 1" in caplog.text
+
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=-3)
+    def test_a_negative_configured_cap_also_floors_to_one_and_warns(self, db: Any, caplog: Any) -> None:
+        with caplog.at_level("WARNING", logger="cardpicker.stage_e_concurrency"):
+            assert stage_e_concurrency._slot_count() == 1
+        assert "clamping to 1" in caplog.text
+
 
 class TestTryAcquireDispatchSlot:
     @CAP_2
