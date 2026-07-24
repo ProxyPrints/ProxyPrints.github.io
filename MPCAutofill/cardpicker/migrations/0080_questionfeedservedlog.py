@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("cardpicker", "0078_pilotrunledger_counters"),
+        ("cardpicker", "0079_envelopetrip"),
     ]
 
     operations = [

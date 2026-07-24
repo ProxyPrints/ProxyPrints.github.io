@@ -21,9 +21,12 @@ moved out to a dedicated Moderation tab (`POST 2/moderationQueue/` in views.py, 
 this module) so ordinary tagging and report review are separate, switchable views instead of
 one hijacking the other. See docs/features/moderation.md.
 
-Mix composition policy (2026-07-24, owner-ratified per the WTC vote-queue data brief - fenced
-report tail, item "OWNER ADDENDUM"; full citation in docs/features/printing-tags.md's "Unified
-question feed" section): serve >=`settings.QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO` (default
+Mix composition policy (2026-07-24, owner-ratified per the WTC vote-queue data brief's OWNER
+ADDENDUM; soundness citation now `docs/theory.md` §10 "Streaming and continuous operation" -
+that section names this exact served-mix/human-vote-quality surface and its own "the place to
+fold it in" invitation once a mix-logging mechanism landed, which this change is; full citation
+in docs/features/printing-tags.md's "Unified question feed" section): serve
+>=`settings.QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO` (default
 0.51) of a session's questions from the LIKELY-RESOLVE pool - a printing question one more
 agreeing human vote would actually resolve under the real resolver, per
 `is_likely_resolve_printing` below - whenever that pool still has supply for this voter,

@@ -311,10 +311,12 @@ printings, artists, tags, and moderation from one screen.
 - **Mix-composition policy** (2026-07-24, `cardpicker/question_feed.py`,
   owner-ratified per the WTC vote-queue data brief's OWNER ADDENDUM —
   that brief was a read-only diagnostic session with no committed doc of
-  its own; cited here by its session transcript path,
-  `/tmp/claude-1001/-home-ubuntu-ProxyPrints-github-io/e893dbef-a798-47a3-9479-8c95170d3c47/tasks/a42091a50f00d5417.output`'s
-  fenced report tail — `docs/theory.md` has no streaming/selection note
-  yet to cite instead; update this citation once one lands): the feed
+  its own, so its raw finding isn't independently citable; the durable
+  soundness citation is [`theory.md`](../theory.md) §10 "Streaming and
+  continuous operation," which names this exact served-mix/human-vote-
+  quality surface and explicitly invites folding in a mix-logging
+  mechanism once one lands — this policy, and its `QuestionFeedServedLog`
+  below, is that mechanism, noted in place in §10's own text): the feed
   serves ≥`settings.QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO` (default
   `0.51`) of a session's questions from the **LIKELY-RESOLVE pool** —
   printing questions one more agreeing human vote would actually resolve
