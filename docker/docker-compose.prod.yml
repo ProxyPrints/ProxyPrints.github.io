@@ -37,6 +37,9 @@ services:
       - CSRF_TRUSTED_ORIGINS=https://api.proxyprints.ca
       - CORS_ALLOWED_ORIGINS=https://proxyprints.github.io,https://proxyprints.ca
       - SITE_NAME=ProxyPrints
+      # Stage E streaming activation (docs/features/stage-e-operations.md) - reads
+      # docker/.env; default False = dormant. Phase-3 activation flips the .env value.
+      - STAGE_E_STREAMING_ENABLED=${STAGE_E_STREAMING_ENABLED:-False}
       # Discord OAuth (moderation layer, docs/features/moderation.md) - docker/.env alone
       # does NOT inject arbitrary variables into the container; only vars explicitly listed
       # here (via ${...} interpolation) actually reach the process. This block was missing
@@ -81,6 +84,9 @@ services:
       - CSRF_TRUSTED_ORIGINS=https://api.proxyprints.ca
       - CORS_ALLOWED_ORIGINS=https://proxyprints.github.io,https://proxyprints.ca
       - SITE_NAME=ProxyPrints
+      # Stage E streaming activation (docs/features/stage-e-operations.md) - reads
+      # docker/.env; default False = dormant. Phase-3 activation flips the .env value.
+      - STAGE_E_STREAMING_ENABLED=${STAGE_E_STREAMING_ENABLED:-False}
       # Discord OAuth (moderation layer, docs/features/moderation.md) - docker/.env alone
       # does NOT inject arbitrary variables into the container; only vars explicitly listed
       # here (via ${...} interpolation) actually reach the process. This block was missing
