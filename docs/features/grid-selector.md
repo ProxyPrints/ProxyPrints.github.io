@@ -199,6 +199,30 @@ not actually wired anywhere today) is byte-for-byte unchanged** — it
 still renders the flat `FilterChipBar` and the two-tap `ConfirmChip`
 described above.
 
+**Superseded for the real `/editor` rail caller by rail-delegacy's RD1/RD4
+(PR #413, 2026-07-24)** — the paragraph above still describes the funnel's
+own internal ordering correctly, but the "Filters disclosure" it opens
+into is no longer an always-rendered accordion inline in that same
+top-to-bottom column. RD1 (`SPEC-rail-delegacy.md`, owner-approved)
+scrapped the separate `.achip` explicit-vote fieldset (`AttributesSection.tsx`,
+formerly its own grey rail accordion) outright and made the funnel's own
+Border/Frame/Treatment chips the ONE chip surface; RD4 then relocated
+those chips — plus the DPI/Size/Language/Tags/NSFW fieldsets — into one
+shared, user-toggled **Filters panel**, tier-conditional in
+`SelectVersionResults.tsx`: phone renders it in-rail (`.fpanel.inline`,
+a plain `Collapse`), desktop/tablet renders it as a floating panel
+(`.fpanel.float` + a scrim) via `ReactDOM.createPortal(..., document.body)`
+— a plain in-tree `position:fixed` node wasn't enough because the rail's
+own `LeftRailOffcanvas` traps descendant z-index inside a local stacking
+context (caught live via a blocked Playwright click before the portal
+fix). Net effect: the funnel chips are no longer always-visible above the
+grid on the rail caller — they render only once the Filters toggle is
+open, same as the DPI/Size/etc. fieldsets they now share a panel with.
+This is scoped to the rail (`layout="stacked"`) caller only; the
+`layout="sidebar"` branch above is unaffected, and the sidebar/modal
+`GridSelectorFilters` component this doc's earlier sections describe is
+a completely separate code path, also unaffected.
+
 - <a id="funnel-chips-positive-or-off"></a>**Per-axis segmented chips are
   positive-or-off (two-state) for Border/Frame, not the QuestionFeed's
   tri-state** (locked 2026-07-22, PR #329; formerly labeled _D23_ in this

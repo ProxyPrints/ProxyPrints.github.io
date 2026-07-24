@@ -1,14 +1,61 @@
-// Sitewide theme (2026-07-21, issue #302): dark chrome + Superhero-native
-// orange accent. No $primary override -> Superhero's native
+// Sitewide theme (2026-07-21, issue #302; re-platformed onto _theme-tokens.scss by the
+// 2026-07-24 theme-defaults pass -- see docs/features/theming.md): dark chrome +
+// Superhero-native orange accent. No $primary override -> Superhero's native
 // $primary:$orange (#df6919) returns. $body-bg intentionally NOT overridden
 // (owner decision, T2 AMENDED): Superhero's native #0f2537 is kept because
 // it holds orange link text at 4.61:1 contrast (AA), vs. 3.24:1 (fails AA)
-// on the lighter #2b3e50 the theme mockup used.
-$dark: #22303f; // T3  (was #20374c)
-$input-bg: #22303f; // T4  (was $white)
-$input-color: #ebebeb; // T5  (was $gray-900)
-$input-border-color: #4e5d6c; // T6  (was transparent)
-$input-placeholder-color: #8fa0b0; // T7  (was $gray-500)
+// on the lighter #2b3e50 the theme mockup used ($theme-body-bg below is that same value,
+// named for clarity -- not a second, independent decision).
+@import "theme-tokens";
+
+$dark: $theme-raised-bg; // T3  (was #20374c)
+$input-bg: $theme-raised-bg; // T4  (was $white)
+$input-color: $theme-text; // T5  (was $gray-900)
+$input-border-color: $theme-input-border; // T6  (was transparent)
+$input-placeholder-color: $theme-muted; // T7  (was $gray-500)
+
+// Theme-defaults pass (2026-07-24): components that never opt into our own tokens were "born
+// grey" -- Superhero's stock $gray-600 (#4e5d6c) bleeding through Bootstrap's own component
+// defaults for surfaces that are conceptually "raised chrome" floating above the page (Modal,
+// Dropdown, Popover, Toast, the Card header cap, table-head/table-dark), not "panel" (which
+// #4e5d6c/$theme-panel-bg IS the correct, approved token for -- Card bodies, D14 seticon,
+// secondary buttons; left untouched below). Route each to the token it should have been
+// reading from all along. See docs/features/theming.md for the full inventory (including
+// $list-group-bg, deliberately NOT set here -- the list-group SCSS partial below is disabled
+// entirely, so it'd be a dead override; see that doc's "known gaps" section).
+$card-cap-bg: $theme-card-header-bg;
+$modal-content-bg: $theme-raised-bg;
+$dropdown-bg: $theme-raised-bg;
+$popover-bg: $theme-raised-bg;
+$toast-background-color: $theme-raised-bg;
+$offcanvas-bg-color: $theme-body-bg;
+$table-head-bg: $theme-raised-bg;
+$table-dark-bg: $theme-raised-bg;
+// Bootstrap core default ($gray-800, near-black); Superhero never overrides it, so the
+// select-arrow chevron was rendering almost invisibly against our dark $input-bg.
+$form-select-indicator-color: $theme-light;
+
+// Corner radii (2026-07-24, owner extension to the theme-defaults pass): wire Bootstrap's own
+// radius variables to the token tiers in _theme-tokens.scss instead of leaving them on
+// Superhero's own literals / the implicit CSS-var cascade some of these already inherit through.
+// Every value below is identical to what already ships (0 -- Superhero's own $border-radius/
+// -sm/-lg are already 0; $btn-/$card-/$input-border-radius* already inherit 0 from those via
+// Bootstrap core's var(--bs-border-radius) default), so this changes zero rendered pixels -- it
+// only makes the coupling explicit so a future radius ruling (e.g. semi-rounded buttons, which
+// the owner is weighing separately from this pass) is a token edit, not a component hunt.
+// $border-radius-pill deliberately NOT touched here -- see _theme-tokens.scss's own note on why
+// $theme-radius-pill isn't wired to it.
+$border-radius: $theme-radius-base;
+$border-radius-sm: $theme-radius-sm;
+$border-radius-lg: $theme-radius-base;
+$btn-border-radius: $theme-radius-base;
+$btn-border-radius-sm: $theme-radius-sm;
+$btn-border-radius-lg: $theme-radius-base;
+$card-border-radius: $theme-radius-base;
+$input-border-radius: $theme-radius-base;
+$input-border-radius-sm: $theme-radius-sm;
+$input-border-radius-lg: $theme-radius-base;
+
 @import "~bootswatch/dist/superhero/variables";
 
 // Configuration
@@ -59,7 +106,9 @@ $input-placeholder-color: #8fa0b0; // T7  (was $gray-500)
 
 // Bootswatch
 @import "~bootswatch/dist/superhero/bootswatch";
-.offcanvas {
-  background-color: $secondary;
-}
+// The `.offcanvas { background-color: $secondary; }` literal that used to live here (added
+// pre-Superhero, when the un-themed default needed a fix) is retired by the 2026-07-24
+// theme-defaults pass -- it was forcing the flat grey $theme-panel-bg onto the rail's own
+// outer chrome, fighting Bootstrap's own $offcanvas-bg-color (now explicitly routed to
+// $theme-body-bg above, before this file's Superhero import, same pattern as $dark/$input-bg).
 @import "~react-bootstrap-toggle/dist/bootstrap2-toggle.css";

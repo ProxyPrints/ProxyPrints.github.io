@@ -125,6 +125,15 @@ The methodology and the systems it governs.
   Sources accordion + pinned-favourite sources, the Select Version
   continuous grid, the artist support button, and the buttons-look-like-
   buttons audit.
+- [`features/theming.md`](features/theming.md) — the 2026-07-24
+  theme-defaults pass: `_theme-tokens.scss` (the one canonical palette +
+  corner-radius token file), the derivation layering that keeps every
+  Bootstrap variable override pointed at a token instead of a scattered
+  literal, the "born grey" Bootstrap-default inventory it fixed (Modal/
+  Dropdown/Popover/Toast/`Card.Header`/`Offcanvas`/table-head/the
+  form-select chevron), and its relationship to the fidelity specs
+  (`DisplayLeftRailFidelity.spec.ts` et al. assert some of these same
+  token values — retheming means updating both together).
 - [`features/search-operator-syntax.md`](features/search-operator-syntax.md)
   — Scryfall-style `artist:`/`border:`/`frame:`/`tag:`/`set:`/`lang:`
   search-operator syntax: the pure parser and the fork-coupled wiring seam.
