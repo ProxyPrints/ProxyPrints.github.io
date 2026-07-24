@@ -2219,8 +2219,10 @@ compose as `max(fetch, compute)` rather than `fetch + compute`.
 per-card unit:
 
 - **Fetch stage**: a pool of fetch threads (I/O-bound — a Python thread
-  releases the GIL for the duration of the blocking `requests.get` inside
-  `rate_limited_get`, so threads are the right primitive here, unlike the
+  releases the GIL for the duration of the blocking `Session.get` call inside
+  `rate_limited_get` (one `requests.Session` per destination limiter, reused
+  across every call rather than constructed fresh per request - 2026-07-24 IO
+  audit finding 2), so threads are the right primitive here, unlike the
   compute stage where threading measured 0.31x/3.25x-slower for CPU-bound
   OCR) built directly around `harvest_fetch_limiter.GOOGLE_IMAGE` — the
   reusable, already-integrated, already-owner-validated pacing (PR #179:
