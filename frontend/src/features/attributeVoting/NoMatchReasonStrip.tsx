@@ -121,6 +121,7 @@ export function NoMatchReasonStrip({
               disabled={submittingTagName != null}
               onClick={() => choose(tagName)}
               data-testid={`no-match-reason-${tagName}`}
+              variant="danger"
             />
           </Col>
         ))}
