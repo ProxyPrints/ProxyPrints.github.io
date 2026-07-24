@@ -1646,8 +1646,16 @@ export function SelectVersionResults({
       setSourceSettings={search.setSourceSettings}
       projectFilter={search.projectFilter}
       // E4/X4 (Bkg 3/4) - only the stacked (rail) caller hides "View" (Group-by/Compressed);
-      // the sidebar (modal/browse) callers are unaffected.
-      hiddenSections={layout === "stacked" ? ["view"] : undefined}
+      // the sidebar (modal/browse) callers are unaffected. 2026-07-24 owner escalation:
+      // the rail also hides the stock sources table and attribute toggle bars - the rail's
+      // own SOURCES accordion and Treatment/Frame/Border chip fieldset are the designed
+      // versions of both (SPEC-display-left-rail.md), and rendering the stock duplicates
+      // beneath them was the "looks nothing like Quorra's spec" report.
+      hiddenSections={
+        layout === "stacked"
+          ? ["view", "filter-sources", "filter-attributes"]
+          : undefined
+      }
     />
   );
 

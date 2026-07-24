@@ -49,7 +49,9 @@ interface GridSelectorFiltersProps {
    * rail forces compressed tiles anyway (Bkg 4 - the "Card display style"/Compressed toggle is
    * near-inert there and clips at the rail edge) - both controls live inside the one "View"
    * accordion (ViewSettings.tsx), so hiding that section kills both in one exclusion. */
-  hiddenSections?: Array<"jump" | "view" | "sort" | "filter">;
+  hiddenSections?: Array<
+    "jump" | "view" | "sort" | "filter" | "filter-sources" | "filter-attributes"
+  >;
 }
 
 export const GridSelectorFilters = ({
@@ -145,14 +147,19 @@ export const GridSelectorFilters = ({
               maxDPIUpperBound={projectFilter?.maximumDPI}
               maxSizeUpperBound={projectFilter?.maximumSize}
               showBoilerplate={false}
+              // The rail's chip fieldset already covers these (SPEC-display-left-rail.md) -
+              // the rail caller hides the stock duplicates; modal/browse callers keep them.
+              showResolvedAttributeFilter={!hidden.has("filter-attributes")}
               // allowedLanguages={allowedLanguages}
             />
-            <SourceSettingsElement
-              sourceSettings={sourceSettings}
-              setSourceSettings={setSourceSettings}
-              enableReorderingSources={false}
-              showBoilerplate={false}
-            />
+            {!hidden.has("filter-sources") && (
+              <SourceSettingsElement
+                sourceSettings={sourceSettings}
+                setSourceSettings={setSourceSettings}
+                enableReorderingSources={false}
+                showBoilerplate={false}
+              />
+            )}
           </>
         </AutofillCollapse>
       )}
