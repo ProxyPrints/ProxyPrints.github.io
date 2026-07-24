@@ -18,6 +18,7 @@ from .models import (
     CardScanLog,
     CardTagVote,
     DFCPair,
+    EnvelopeTrip,
     ImageEvidence,
     LandsAmbiguousResidue,
     PilotRunLedger,
@@ -272,6 +273,32 @@ class AdminCardScanLog(admin.ModelAdmin[CardScanLog]):
     list_filter = ("anonymous_id", "skip_reason")
     search_fields = ("run_id",)
     ordering = ("-scanned_at",)
+
+
+@admin.register(EnvelopeTrip)
+class AdminEnvelopeTrip(admin.ModelAdmin[EnvelopeTrip]):
+    # Stage E Phase 1 (docs/proposals/stage-e-streaming.md §3 decision (5)/§10(a)) - this is the
+    # admin-facing surface for "what's currently tripped" until a phase-2 streaming dispatcher's
+    # own UI (if any) exists; `docs/features/stage-e-operations.md`'s runbook points an operator
+    # here to find a trip_id for `resolve_envelope_trip --acknowledge-trip`.
+    list_display = ("trip_id", "bar", "run_id", "tripped_at", "acknowledged_at")
+    list_filter = ("bar",)
+    search_fields = ("trip_id", "run_id")
+    ordering = ("-tripped_at",)
+    # Every field read-only, deliberately (docs/proposals/stage-e-streaming.md §10(a)/
+    # operating_envelope.acknowledge_trip's own docstring): "the only code path permitted to set
+    # acknowledged_at" is `resolve_envelope_trip --acknowledge-trip`, never an admin-form edit -
+    # this view is a monitoring surface (find a trip_id to hand to that command), not a second
+    # resume path.
+    readonly_fields = (
+        "trip_id",
+        "bar",
+        "detail",
+        "run_id",
+        "tripped_at",
+        "acknowledged_at",
+        "acknowledged_note",
+    )
 
 
 @admin.register(LandsAmbiguousResidue)
