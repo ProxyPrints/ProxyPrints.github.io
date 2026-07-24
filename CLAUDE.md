@@ -275,15 +275,21 @@ external reader's orientation to the whole fork, see
   artifact 2 (knowledge-inventory sweep) status — all 3 MISSING
   constants decided, items 1–2's fix merged (PR #343) and deployed
   2026-07-23T01:33Z — plus the #347-amended fire sequence, now
-  **COMPLETE end to end (2026-07-23) — gate FIRED**: Bug-B whole-DB
-  reparse dry-run, B(i) write, B(ii)+B(iii) retraction, the Bug-A
-  forced-escalation sample, the 4c pilot dry-run, the owner sample
-  audit, the pilot `--write` (130,210 votes, DB-verified exact match to
-  the dry-run's prediction), and `consensus_recompute --apply` (49,206
-  tag transitions, printing 3→4 resolved) all DONE, and #340 root-cause
-  footprint sizing. Bug-A's full re-scan remains deferred post-pilot as
-  the one tracked open item. Single source of
-  truth for this
+  **COMPLETE end to end, gate FIRED, true completion 2026-07-24**:
+  Bug-B whole-DB reparse dry-run, B(i) write, B(ii)+B(iii) retraction,
+  the Bug-A forced-escalation sample, the 4c pilot dry-run, the owner
+  sample audit, the pilot `--write` (130,210 votes, DB-verified exact
+  match to the dry-run's prediction), `consensus_recompute --apply`
+  (49,206 tag transitions), plus five further 2026-07-24 corrective/
+  completion passes (lexicon-gate retraction, marker reparse,
+  artist-credit fill, calculator re-pass, a second `consensus_recompute`
+  closer) all DONE and #340 root-cause footprint sizing. Live
+  resolved-printing count is **3** (a provisional 4 was corrected back
+  by the second closer); all 218,345 cards remain
+  `artist_vote_status=unresolved` (single-machine-vote-below-threshold
+  finding); review queue is **134,370** cards. Bug-A's full re-scan
+  remains deferred post-pilot as the one tracked open item. Single
+  source of truth for this
   gate's status — don't restate gate status/decisions elsewhere, link
   here.
 - [`docs/documentation-process.md`](docs/documentation-process.md) — docs/
