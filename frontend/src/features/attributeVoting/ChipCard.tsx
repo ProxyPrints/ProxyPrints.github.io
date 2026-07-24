@@ -6,6 +6,14 @@
  * picker a user just interacted with, rather than introducing a second unrelated chip style.
  * Deliberately lighter than CandidateButton: no starburst/hover-zoom, since these chips are
  * small and numerous rather than one large focal candidate.
+ *
+ * WTC rebuild (2026-07-24, SPEC-wtc-rebuild.md section 4/1c "reason chip") - the ONE caller
+ * this component has today, NoMatchReasonStrip, sits inside the rebuilt /whatsthat's
+ * quick-negative (shape c) surface, which the spec's binding per-element table frames in
+ * `--danger` (a visibly different mode from a confirm/pick, per WD7) rather than this
+ * component's own default accent/blue frame. `variant` is additive and optional (default
+ * unchanged) specifically so this doesn't touch ReportCardPanel.tsx's own, unrelated use of
+ * the same component - only NoMatchReasonStrip opts into "danger".
  */
 
 import styled from "@emotion/styled";
@@ -14,8 +22,12 @@ import Button from "react-bootstrap/Button";
 
 import { STARBURST_OUTER_COLOR } from "@/features/printingTags/starburstShape";
 
-const StyledChipButton = styled(Button)`
-  border: 2px solid ${STARBURST_OUTER_COLOR};
+const StyledChipButton = styled(Button)<{ $variant: "accent" | "danger" }>`
+  border: 2px solid
+    ${(props) =>
+      props.$variant === "danger"
+        ? "var(--bs-danger, #f7768e)"
+        : STARBURST_OUTER_COLOR};
   border-radius: 0.5rem;
   background-color: transparent;
   color: inherit;
@@ -25,19 +37,31 @@ const StyledChipButton = styled(Button)`
 
   &:hover,
   &:focus {
-    background-color: rgba(77, 141, 223, 0.15);
-    border-color: ${STARBURST_OUTER_COLOR};
+    background-color: ${(props) =>
+      props.$variant === "danger"
+        ? "color-mix(in srgb, var(--bs-danger, #f7768e) 15%, transparent)"
+        : "rgba(77, 141, 223, 0.15)"};
+    border-color: ${(props) =>
+      props.$variant === "danger"
+        ? "var(--bs-danger, #f7768e)"
+        : STARBURST_OUTER_COLOR};
     color: inherit;
   }
 
   &.highlighted {
-    background-color: ${STARBURST_OUTER_COLOR};
+    background-color: ${(props) =>
+      props.$variant === "danger"
+        ? "var(--bs-danger, #f7768e)"
+        : STARBURST_OUTER_COLOR};
     color: #000000;
   }
 
   &.highlighted:hover,
   &.highlighted:focus {
-    background-color: ${STARBURST_OUTER_COLOR};
+    background-color: ${(props) =>
+      props.$variant === "danger"
+        ? "var(--bs-danger, #f7768e)"
+        : STARBURST_OUTER_COLOR};
   }
 
   &:disabled {
@@ -52,6 +76,9 @@ interface ChipCardProps {
   disabled?: boolean;
   onClick: () => void;
   "data-testid"?: string;
+  /** Additive, optional (own comment above) - "danger" is the WTC quick-negative frame;
+   * omitted (every other caller) keeps this component's original accent/blue frame. */
+  variant?: "accent" | "danger";
 }
 
 export function ChipCard({
@@ -61,10 +88,12 @@ export function ChipCard({
   disabled = false,
   onClick,
   "data-testid": dataTestId,
+  variant = "accent",
 }: ChipCardProps) {
   return (
     <StyledChipButton
       variant="outline-secondary"
+      $variant={variant}
       className={highlighted ? "highlighted" : ""}
       disabled={disabled}
       onClick={onClick}

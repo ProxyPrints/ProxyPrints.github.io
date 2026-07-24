@@ -17,6 +17,29 @@ Binding status (owner standing, 2026-07-23): the CSS token values below are
 BINDING. A visual regression against `wtc-mockup.html` is a defect, not a nuance.
 Every element on the affected page carries a sizing/coloring/spacing row.
 
+**AMENDMENTS — owner rulings closing the three "Owner questions" at the bottom
+of this spec (2026-07-24, relayed via the orchestrator ahead of implementation,
+PR #446):**
+
+1. **Owner Q1 (starburst burst)** — RETIRED. `BurstSvg`'s explosion animation is
+   dropped entirely; the calmer `--wtc-field` + `--wtc-reveal-glow` treatment
+   (WD5's own default) carries the reveal moment instead. The reveal reads
+   through the mystery-card flip only — no separate burst animation.
+2. **Owner Q2 (reward surface)** — KEPT, quiet. The "N tagged this session"
+   count stays (WD6's own default) — volume-rewarding, direction-neutral (see
+   ANNEX A's soundness note); no streak/score/confetti added on top of it.
+3. **Owner Q3 (subject prominence on phone)** — ACCEPTED as specified (WD3).
+   The subject compacts to ~132px horizontal below the hero's own 560px
+   `@container` fold point so the answer stays reachable near the top on a
+   phone; the open-ended shape (d) is the one shape that visually expands
+   (dashed "tricky one" framing) rather than compacting further, since it
+   needs more room for its own hint copy.
+
+These three rulings resolve every open item this spec's "OWNER QUESTIONS"
+section (bottom of this file) raised; nothing in this spec is still pending an
+owner call as of this amendment. See PR #446's own body for the
+section-by-section implementation mapping.
+
 D-number scope note: D-numbers are per-proposal in this repo (proposal-h owns
 its own D1–D19; the old WTC round used W4–W7). The decisions below are the
 **WTC-rebuild round's** ledger, numbered WD1.. to avoid collision with either.
