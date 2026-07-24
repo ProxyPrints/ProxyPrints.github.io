@@ -1670,3 +1670,48 @@ Verify any future fix here the same way: `--shard=1/4` (not the file in
 isolation) against a cold `.next` cache, since shard composition (not
 just raw worker count) drives how much dev-server contention this spec
 actually sees.
+
+## `local_calculate_verdicts` silently runs with an empty back-face lookup after an image rebuild (Scryfall cache lost)
+
+**Symptom**: `manage.py local_calculate_verdicts --write` runs
+cleanly, finishes `COMPLETED`, but back-face-only cards (e.g. a card
+uploaded under a DFC's second-face name) that should resolve via
+`_resolve_candidates_for_card`'s DFCPair fallback all come back
+`printing_pk=None`/no vote. Nothing errors or warns loudly - the only
+tell (if you go looking) is a per-card `logger.warning` from
+`_load_back_face_names` ("Scryfall bulk-data file not found... back-
+face lookup returning an empty set"), easy to miss in routine log
+output. Observed live: deploy-2 (2026-07-23) rebuilt the django/worker
+images, and the run that followed was silently degraded this way.
+
+**Cause**: `scryfall_cache/default_cards.json` (the Scryfall bulk-data
+cache `printing_metadata_import.py`/`mtg.py`'s
+`import_canonical_card_data` both read/refresh, ~558MB) lived as a
+plain file inside the django/worker container filesystem with no
+persistent volume mounted over it (`docker/docker-compose.prod.yml` had
+no `volumes:` entry for either service). Every `up --build` image
+rebuild throws away the old container filesystem, taking the cache with
+it. `get_back_face_names`/`is_back_face` (see their own docstrings)
+correctly treat a missing file as "no back faces known yet" - one
+warning, `frozenset()` returned, never a raise - which is the right
+behaviour for a per-card lookup, but left the whole `local_calculate_ verdicts` run silently degraded with no failure signal anywhere in its
+own `COMPLETED` ledger row or terminal summary.
+
+**Fix** (issue #402, two parts): (1) `scryfall_cache` is now a named,
+persistent Docker volume (`docker/docker-compose.prod.yml`, mirroring
+`postgres_data`/`elasticsearch_data`'s own pattern) mounted on BOTH the
+`django` service (manual `exec`-run commands) and the `worker` service
+(the weekly `import_canonical_card_data`/`update_dfcs` schedule that
+runs via its own `manage.py qcluster` process, per "Startup vs.
+scheduled catalog sync" above) - a rebuild no longer touches it.
+Compose changes only take effect at the NEXT deploy (`up --build -d`),
+not retroactively on already-running containers. (2)
+`printing_metadata_import.ensure_scryfall_cache_present()` is a new
+fail-loud guard, called at the very start of `local_calculate_verdicts`'s
+`Command.handle()` (before any card-by-card work) - it raises a
+`CommandError` naming the missing path if the cache file doesn't exist,
+distinct from `get_back_face_names`'s existing soft "empty set" path,
+unless `--allow-missing-scryfall-cache` is passed explicitly. This
+catches the failure mode structurally even if the volume mount is ever
+missed again (e.g. a fresh box rebuild that skips the compose file, or
+a manual `docker run` bypassing compose entirely).

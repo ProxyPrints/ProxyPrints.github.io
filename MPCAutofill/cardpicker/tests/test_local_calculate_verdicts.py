@@ -24,6 +24,7 @@ from typing import Any
 import imagehash
 import pytest
 
+from django.core.management import CommandError
 from django.db import connection
 
 from cardpicker.local_calculate_verdicts import (
@@ -72,6 +73,7 @@ from cardpicker.models import (
     PrintingTagStatus,
     VoteSource,
 )
+from cardpicker.printing_metadata_import import ensure_scryfall_cache_present
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
@@ -1617,20 +1619,24 @@ class TestFallbackSlowPathInteraction:
 class TestCommandLedgerHardeningAndDryRunGuard:
     """Phase 0 rails (issues #362/#153's milestone): the Command.handle() lifecycle itself, on an
     empty (zero-eligible-card) DB - the calculator behaviour above is already exhaustively covered
-    by the pure-function tests in this file; these exercise the ledger/guard WIRING around it."""
+    by the pure-function tests in this file; these exercise the ledger/guard WIRING around it.
+
+    None of these tests are exercising the scryfall-cache guard (issue #402, see
+    TestScryfallCacheGuard below) - they all pass --allow-missing-scryfall-cache since the test
+    environment has no real scryfall_cache/default_cards.json on disk."""
 
     def test_write_refused_without_a_prior_matching_dry_run(self, db):
         from django.core.management import CommandError, call_command
 
         with pytest.raises(CommandError, match="FORCED DRY-RUN GUARD"):
-            call_command("local_calculate_verdicts", "--write")
+            call_command("local_calculate_verdicts", "--write", "--allow-missing-scryfall-cache")
         assert not PilotRunLedger.objects.filter(command="local_calculate_verdicts").exists()
 
     def test_write_succeeds_after_a_matching_dry_run(self, db):
         from django.core.management import call_command
 
-        call_command("local_calculate_verdicts")  # dry-run (default)
-        call_command("local_calculate_verdicts", "--write")
+        call_command("local_calculate_verdicts", "--allow-missing-scryfall-cache")  # dry-run (default)
+        call_command("local_calculate_verdicts", "--write", "--allow-missing-scryfall-cache")
 
         ledgers = list(PilotRunLedger.objects.filter(command="local_calculate_verdicts").order_by("started_at"))
         assert len(ledgers) == 2
@@ -1641,7 +1647,7 @@ class TestCommandLedgerHardeningAndDryRunGuard:
     def test_skip_dryrun_check_bypasses_the_guard_and_is_recorded(self, db, capsys):
         from django.core.management import call_command
 
-        call_command("local_calculate_verdicts", "--write", "--skip-dryrun-check")
+        call_command("local_calculate_verdicts", "--write", "--skip-dryrun-check", "--allow-missing-scryfall-cache")
 
         printed = capsys.readouterr().out
         assert "SKIP-DRYRUN-CHECK" in printed
@@ -1668,8 +1674,62 @@ class TestCommandLedgerHardeningAndDryRunGuard:
 
         # No exception escapes call_command - resilient_terminal_output swallows the simulated
         # BrokenPipeError from the terminal summary print.
-        call_command("local_calculate_verdicts", "--write", "--skip-dryrun-check")
+        call_command("local_calculate_verdicts", "--write", "--skip-dryrun-check", "--allow-missing-scryfall-cache")
 
         ledger = PilotRunLedger.objects.get(command="local_calculate_verdicts")
         assert ledger.status == PilotRunLedger.Status.COMPLETED
         assert ledger.finished_at is not None
+
+
+class TestScryfallCacheGuard:
+    """Issue #402's fail-loud staleness guard: `ensure_scryfall_cache_present` (unit-level, pure
+    file-existence check - see TestGetBackFaceNames above for the sibling soft-fail lookup it's
+    deliberately NOT replacing) plus its wiring into `local_calculate_verdicts`'s own
+    Command.handle()."""
+
+    def test_raises_when_the_cache_file_is_missing(self, tmp_path):
+        missing_path = tmp_path / "does_not_exist.json"
+
+        with pytest.raises(CommandError, match="SCRYFALL CACHE MISSING"):
+            ensure_scryfall_cache_present(default_cards_path=missing_path)
+
+    def test_does_not_raise_when_the_cache_file_is_present(self, tmp_path):
+        path = _write_bulk_data_file(tmp_path, [])
+
+        ensure_scryfall_cache_present(default_cards_path=path)  # no exception
+
+    def test_command_refuses_to_start_when_the_cache_is_missing(self, db, monkeypatch, tmp_path):
+        from django.core.management import call_command
+
+        import cardpicker.printing_metadata_import as printing_metadata_import_module
+
+        monkeypatch.setattr(printing_metadata_import_module, "_cache_path", lambda: tmp_path / "does_not_exist.json")
+
+        with pytest.raises(CommandError, match="SCRYFALL CACHE MISSING"):
+            call_command("local_calculate_verdicts")
+        assert not PilotRunLedger.objects.filter(command="local_calculate_verdicts").exists()
+
+    def test_command_proceeds_when_the_flag_overrides_a_missing_cache(self, db, monkeypatch, tmp_path):
+        from django.core.management import call_command
+
+        import cardpicker.printing_metadata_import as printing_metadata_import_module
+
+        monkeypatch.setattr(printing_metadata_import_module, "_cache_path", lambda: tmp_path / "does_not_exist.json")
+
+        call_command("local_calculate_verdicts", "--allow-missing-scryfall-cache")  # no exception (dry-run)
+
+        ledger = PilotRunLedger.objects.get(command="local_calculate_verdicts")
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+
+    def test_command_proceeds_when_the_cache_is_actually_present(self, db, monkeypatch, tmp_path):
+        from django.core.management import call_command
+
+        import cardpicker.printing_metadata_import as printing_metadata_import_module
+
+        real_path = _write_bulk_data_file(tmp_path, [])
+        monkeypatch.setattr(printing_metadata_import_module, "_cache_path", lambda: real_path)
+
+        call_command("local_calculate_verdicts")  # no exception (dry-run), no override flag needed
+
+        ledger = PilotRunLedger.objects.get(command="local_calculate_verdicts")
+        assert ledger.status == PilotRunLedger.Status.COMPLETED

@@ -22,6 +22,7 @@ from cardpicker.pilot_run_lifecycle import (
     merge_counters,
     resilient_terminal_output,
 )
+from cardpicker.printing_metadata_import import ensure_scryfall_cache_present
 from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
 
 
@@ -40,7 +41,9 @@ class Command(BaseCommand):
         "and requires an explicit --write to actually write, matching local_residual_classify's "
         "own convention. --write also requires a matching COMPLETED dry-run PilotRunLedger row "
         "from the last --dry-run-window-hours (forced-dry-run guard, issue #362) - see "
-        "--skip-dryrun-check to override."
+        "--skip-dryrun-check to override. Refuses to start at all if the Scryfall bulk-data cache "
+        "(scryfall_cache/default_cards.json) is missing (issue #402) unless "
+        "--allow-missing-scryfall-cache is passed."
     )
 
     def add_arguments(self, parser: Any) -> None:
@@ -55,6 +58,16 @@ class Command(BaseCommand):
         parser.add_argument("--run-id", default=None, help="Reuse a specific run_id. Default: freshly generated.")
         parser.add_argument(
             "--chunk-size", type=int, default=500, help="Queryset .iterator() chunk size. Default: 500."
+        )
+        parser.add_argument(
+            "--allow-missing-scryfall-cache",
+            action="store_true",
+            default=False,
+            help="Explicitly accept a missing Scryfall bulk-data cache (scryfall_cache/"
+            "default_cards.json) instead of refusing to start (issue #402's fail-loud guard - "
+            "see printing_metadata_import.ensure_scryfall_cache_present). Without this flag, a "
+            "missing cache is a hard CommandError, not the silent degraded-to-empty back-face "
+            "lookup this command used to run with.",
         )
         # Forced-dry-run guard (issue #362, Phase 0 rails): this command has no caller-chosen
         # cohort narrower than "whatever's currently eligible" (unlike reparse_collector_evidence's
@@ -71,6 +84,13 @@ class Command(BaseCommand):
                 "this image is older than a previously-deployed one. Rebuild with the current "
                 "code before running this command."
             )
+
+        # Fail-loud staleness guard (issue #402): must run before any card-by-card work below,
+        # which otherwise silently degrades to an empty back-face lookup (get_back_face_names'
+        # own soft-fail path) if the cache file is missing - see
+        # ensure_scryfall_cache_present's own docstring.
+        if not kwargs["allow_missing_scryfall_cache"]:
+            ensure_scryfall_cache_present()
 
         run_id = kwargs["run_id"] or generate_run_id()
         dry_run = not kwargs["write"]
