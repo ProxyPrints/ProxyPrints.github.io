@@ -1,0 +1,62 @@
+// Canonical ProxyPrints theme palette (2026-07-24 theme-defaults pass).
+//
+// ONE source of truth for the site's dark-chrome / orange-accent theme. Every Bootstrap
+// variable override in styles.scss derives FROM these variables -- never from a literal hex
+// scattered across styles.scss or a component file. Retheming the site later should mean
+// editing THIS file only; see docs/features/theming.md for the full contract (including its
+// relationship to the fidelity specs, which assert some of these exact values).
+//
+// Values are the SPEC-display-left-rail.md §D.0 binding palette (itself the issue #302
+// palette), reproduced verbatim -- do not hand-tune a value here without updating that spec's
+// own table (and vice versa); they are meant to coincide exactly.
+
+// Base surfaces, darkest to most-raised
+$theme-body-bg: #0f2537; // §D.0 "body bg" -- page background, the darkest layer
+$theme-raised-bg: #22303f; // §D.0 "raised/input bg" -- floating chrome one step off the page:
+// rail-head/artist-line, the Sources list + filter inputs, and (this pass) the Bootstrap
+// defaults for Modal/Dropdown/Popover/Toast/ListGroup/Offcanvas/table-head/table-dark
+$theme-panel-bg: #4e5d6c; // §D.0 "panel/card/2ndry" -- Superhero's native $secondary/$gray-600.
+// NOT a bug to fix: this is the approved token for Card bodies (incl. AutofillCollapse's
+// "demoted body"), the D14 seticon, and secondary buttons/badges. See
+// docs/features/theming.md's "what's grey on purpose" note before ever routing this away.
+$theme-card-header-bg: #4e5d6b; // §D.0 "card-header" -- one hex digit off $theme-panel-bg, BY
+// DESIGN (owner ruling, 2026-07-23; see SPEC-display-left-rail.md §D.0's own note on this
+// exact pair). Do not "fix" this to equal $theme-panel-bg.
+$theme-band-bg: #2b3e50; // §D.0 "D14 band" -- the D14 confidence-strip token
+
+// Dividers
+$theme-divider: #16202b; // §D.0 divider colour -- every rail block boundary (O1)
+
+// Text
+$theme-text: #ebebeb; // §D.0 "text"
+$theme-muted: #8fa0b0; // §D.0 "muted"
+$theme-light: #abb6c2; // §D.0 "light" -- btn-outline-light family, form-select indicator
+
+// Accent / status (Superhero-native values, reproduced here so no override site derives from
+// a bare literal outside this file)
+$theme-primary: #df6919; // §D.0 primary
+$theme-primary-hover: #be5915; // §D.0 primary (hover)
+$theme-success: #5cb85c; // §D.0 success
+$theme-danger: #d9534f; // §D.0 danger
+$theme-warning: #ffc107; // §D.0 warning
+$theme-info: #5bc0de; // §D.0 info
+
+// Structural
+$theme-input-border: #4e5d6c; // §D.0 "input border"
+
+// Corner radii (2026-07-24, owner extension to the theme-defaults pass). Four semantic tiers,
+// wired into Bootstrap's own radius variables in styles.scss so a future radius ruling (e.g. the
+// "semi-rounded buttons" option the owner is weighing) is a token edit here, not a hunt through
+// component literals. Defaulted to the CURRENT shipped values -- flat 0 everywhere Bootstrap/
+// Superhero already renders flat (§D.0 "radius: 0 (flat)"), plus the existing 10px status-pill
+// literal (§D.0 "status-pill radius") -- so introducing these tokens changes zero rendered
+// pixels this round.
+$theme-radius-none: 0; // no rounding, ever (kept distinct from -base so a future -base bump
+// doesn't accidentally round something that must stay square-cornered)
+$theme-radius-sm: 0; // §D.0 "radius" -- Bootstrap's `-sm` tier (small buttons/inputs)
+$theme-radius-base: 0; // §D.0 "radius" -- the sitewide default tier (buttons/cards/inputs/`-lg`)
+$theme-radius-pill: 10px; // §D.0 "status-pill radius" -- our OWN component convention (D14
+// statepill, etc). Deliberately NOT wired into Bootstrap's own $border-radius-pill (that
+// variable defaults to 50rem/true-stadium and already backs a real, unrelated pill usage --
+// e.g. SearchSettings' `<Badge pill>` -- wiring it to 10px would visibly reshape that badge).
+// See docs/features/theming.md's "two different pills" note before ever changing this.

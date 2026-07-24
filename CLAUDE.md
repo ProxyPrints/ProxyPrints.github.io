@@ -200,6 +200,11 @@ external reader's orientation to the whole fork, see
 - [`docs/features/moderation.md`](docs/features/moderation.md) — Discord
   OAuth login, the `Moderators` group gate, sensitive-tag approval queue,
   card reports.
+- [`docs/features/theming.md`](docs/features/theming.md) — the 2026-07-24
+  theme-defaults pass: `_theme-tokens.scss` (the one canonical palette +
+  corner-radius token file), the derivation layering, the "born grey"
+  Bootstrap-default inventory it fixed, and its relationship to the
+  fidelity specs.
 - [`docs/features/local-file-source.md`](docs/features/local-file-source.md)
   — backend `LOCAL_FILE` catalog source type.
 - [`docs/features/card-dom-api.md`](docs/features/card-dom-api.md) —
