@@ -80,12 +80,15 @@ export function SharedDeckPage() {
   if (shared == null) {
     return null;
   }
+  const shareId =
+    typeof router.query.shareId === "string" ? router.query.shareId : undefined;
   return (
     <SharedDeckViewer
       backendURL={backendURL as string}
       name={shared.name}
       sharedAt={shared.sharedAt}
       payload={shared.payload}
+      shareId={shareId}
     />
   );
 }

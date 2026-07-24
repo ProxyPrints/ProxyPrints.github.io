@@ -31,6 +31,17 @@ interface AutofillCollapseProps {
    * JumpToVersion/CardResultSet/GridSelectorFilters) renders with Bootstrap's own stock padding,
    * byte-for-byte unchanged. */
   headerPadding?: string;
+  /** Additive, optional (SPEC-editor-polish.md §D.3, EP3 - "the grey #4E5D6B header/pins/body
+   * band is killed -> dark #22303f throughout"). Overrides the header's own hardcoded `#4E5D6B`
+   * ONLY for the caller that supplies this - see the header's own comment for why that value is
+   * otherwise deliberately locked (owner ruling, 2026-07-23) and must not be edited in place.
+   * `undefined` (every caller except `SourcesAccordion.tsx`, EP3's own revision target) keeps
+   * the shared `#4E5D6B` default, byte-for-byte unchanged. */
+  headerBackground?: string;
+  /** Additive, optional (SPEC-editor-polish.md §D.3, same EP3 de-grey) - the body's own
+   * background; `undefined` (every non-Sources caller) keeps Bootstrap Card's own stock
+   * default, unchanged. */
+  bodyBackground?: string;
 }
 
 /**
@@ -55,6 +66,8 @@ export function AutofillCollapse({
   pad = 0,
   id,
   headerPadding,
+  headerBackground,
+  bodyBackground,
 }: AutofillCollapseProps) {
   return (
     <>
@@ -79,7 +92,7 @@ export function AutofillCollapse({
             // the two tokens are one hex digit apart by design, not by accident. Do not "fix"
             // this back to `#4e5d6c` again; see SPEC-display-left-rail.md §D.0 for the explicit
             // note distinguishing them.
-            backgroundColor: "#4E5D6B",
+            backgroundColor: headerBackground ?? "#4E5D6B",
             zIndex: zIndex + 1,
             cursor: "pointer",
             ...(headerPadding != null ? { padding: headerPadding } : {}),
@@ -100,7 +113,14 @@ export function AutofillCollapse({
             </button>
           </Stack>
         </Card.Header>
-        <Card.Body className={`p-0 m-0`}>
+        <Card.Body
+          className={`p-0 m-0`}
+          style={
+            bodyBackground != null
+              ? { backgroundColor: bodyBackground }
+              : undefined
+          }
+        >
           <Collapse in={expanded}>
             {/* https://react-bootstrap.netlify.app/docs/utilities/transitions/#collapse */}
             <div id={id != null ? `${id}-body` : undefined}>

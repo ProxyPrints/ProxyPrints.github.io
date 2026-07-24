@@ -22,13 +22,31 @@ import {
 } from "./test-utils";
 
 /**
- * Permanent CSS-fidelity guard for the /display left rail (SPEC-rail-delegacy.md - SOURCE OF
- * TRUTH for every literal value asserted below; that file's own §D.1 (inherited, reproduced
- * verbatim) and §D.2 (introduced this round) are where these numbers come from). Rewritten for
- * the rail-delegacy round (2026-07-24, owner-approved): every grey `AutofillCollapse` section is
- * gone from the rail, so the assertions this file used to carry for "AutofillCollapse header in
- * rail" / demoted-zone padding are retired along with them - see the second describe block below
- * for what replaces them (the identify panel band + the bottom control stack).
+ * Permanent CSS-fidelity guard for the /display left rail. SOURCE OF TRUTH for every literal
+ * value asserted below is now a TWO-LAYER stack: SPEC-rail-delegacy.md (§D.1 inherited, §D.2
+ * introduced) for anything NOT revised by the editor-polish round, and SPEC-editor-polish.md
+ * (§D.1-§D.4/§D.8, the eleven-item + cue consolidated polish round, 2026-07-24) for every row
+ * that round REVISES or introduces - each assertion below is comment-linked to whichever spec
+ * actually owns its literal value, per row.
+ *
+ * Editor-polish round changes to this file's OWN assertions (not just new coverage):
+ *   - EP5 (REV RD8): the rail-head subject preview grows `66px` -> `116px`.
+ *   - EP7 (REV RD2): `.sortsel` `max-width` `150px` -> `172px`; the option list itself is now
+ *     client-side (see the new `funnel-sort-select` coverage below, not a re-assertion of the
+ *     old `SortByOptions` values).
+ *   - EP4 (REV RD5): Slot Actions relocates from the bottom control stack (previously asserted
+ *     inside `display-control-stack`) to the rail head's own compact icon row - the control-stack
+ *     test below now asserts ONE `.cs-legend` ("Print options" only), and a new rail-head test
+ *     asserts the relocated `display-slot-actions-section` instead.
+ *   - EP3 (REV): `.src-list`'s own background - `#22303f` -> `#2b3e50` (the de-grey pass moved
+ *     the LIST surface itself one step further, while the accordion shell around it and its body
+ *     both went `#22303f` - see SourcesAccordion.tsx's own module comment for the full token
+ *     breakdown).
+ * "More details" (amendment 1, relocates from the rail head to directly under D14) needed NO
+ * assertion changes here - every existing assertion queries its `display-rail-more-details-*`
+ * testids page-wide, never scoped to `display-rail-header`, so the relocation is invisible to
+ * this file's existing coverage; that coverage still exercises real behaviour at the new DOM
+ * location.
  *
  * Every assertion below reads REAL computed styles (`toHaveCSS`, backed by `getComputedStyle`),
  * never class names or inline-style source text - the same discipline this guard has followed
@@ -68,12 +86,13 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
       "1px solid rgb(22, 32, 43)"
     );
 
-    // Rev #3 (RD8) - the `66px` subject-card preview, aspect 63/88, `1px rgba(235,235,235,.15)`
-    // border. This fixture's slot has a real selected image, so the ART variant renders (not the
-    // dashed empty state).
+    // Rev #3 (RD8), EP5 (SPEC-editor-polish.md §D.1 `.subject`, REV - `66px` -> `116px`) - the
+    // subject-card preview, aspect 63/88, `1px rgba(235,235,235,.15)` border (unchanged by EP5).
+    // This fixture's slot has a real selected image, so the ART variant renders (not the dashed
+    // empty state).
     const subject = page.getByTestId("display-rail-subject");
     await expect(subject).toBeVisible();
-    await expect(subject).toHaveCSS("width", "66px");
+    await expect(subject).toHaveCSS("width", "116px");
     await expect(subject).toHaveCSS(
       "border",
       "1px solid rgba(235, 235, 235, 0.15)"
@@ -126,10 +145,13 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await expect(svhead).toBeVisible();
     await expect(svhead).toHaveCSS("font-size", "12px");
     await expect(svhead).toHaveCSS("margin-bottom", "6px");
+    // EP7 (SPEC-editor-polish.md §D.4 `.sortsel`, REV RD2) - `max-width` 150px -> 172px; the
+    // option list itself is now the five client-side orderings (see the dedicated EP7 test
+    // further down in this file, not re-asserted here to keep this test's own scope to sizing).
     const sortSelect = page.getByTestId("funnel-sort-select");
     await expect(sortSelect).toBeVisible();
     await expect(sortSelect).toHaveCSS("font-size", "12px");
-    await expect(sortSelect).toHaveCSS("max-width", "150px");
+    await expect(sortSelect).toHaveCSS("max-width", "172px");
     expect(await sortSelect.evaluate((el) => el.tagName)).toBe("SELECT");
 
     const filtersToggle = page.getByTestId("funnel-filters-toggle");
@@ -215,22 +237,33 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     // PrintingTagsBlock (reused verbatim, item 6/RD1) - the real "What's That Card?" heading.
     await expect(identifyBody).toContainText("What's That Card?");
 
-    // Item 7 (RD5) - the ONE bottom `.cstack`: Print Options + Slot Actions + Report, each its
-    // own `.cs-legend` (10px uppercase `#8fa0b0`) group, no grey accordion headers anywhere.
+    // Item 7 (RD5), EP4 (SPEC-editor-polish.md §D.7, REV RD5 - "Slot-Actions group in .cstack:
+    // REMOVED") - the bottom `.cstack` keeps ONLY Print Options + Report now; ONE `.cs-legend`
+    // (10px uppercase `#8fa0b0`), not two.
     const controlStack = page.getByTestId("display-control-stack");
     await expect(controlStack).toBeVisible();
     await expect(controlStack).toHaveCSS("padding", "8px 10px");
     const legends = controlStack.locator(".cs-legend");
-    await expect(legends).toHaveCount(2);
+    await expect(legends).toHaveCount(1);
     await expect(legends.first()).toHaveCSS("font-size", "10px");
     await expect(legends.first()).toHaveText("Print options");
-    await expect(legends.nth(1)).toHaveText("Slot actions");
+    // EP4 - Slot Actions is no longer inside the control stack at all.
+    await expect(
+      controlStack.getByTestId("display-slot-actions-section")
+    ).toHaveCount(0);
 
-    // Slot Actions button stack (§D.1, inherited - "button stack gap:6px") - no expand click
-    // needed any more, it's not behind an accordion.
-    const slotActions = page.getByTestId("display-slot-actions-section");
-    await expect(slotActions).toBeVisible();
-    await expect(slotActions).toHaveCSS("gap", "6px");
+    // EP4 (§D.1 `.slotacts-top .iact`) - Slot Actions relocated to the rail head's own compact
+    // icon row, beside the subject image; same action set, same per-action testids, just a
+    // `32×30` icon button now instead of a full-width labelled one.
+    const railHeadSlotActions = page
+      .getByTestId("display-rail-header")
+      .getByTestId("display-slot-actions-section");
+    await expect(railHeadSlotActions).toBeVisible();
+    const deleteAction = railHeadSlotActions.getByTestId(
+      "display-slot-action-delete"
+    );
+    await expect(deleteAction).toHaveCSS("width", "32px");
+    await expect(deleteAction).toHaveCSS("height", "30px");
 
     // Report (RD5) - a single `btn-outline-danger` that expands to `ReportCardPanel`'s reason
     // chips in place - `ReportBlock` is reused verbatim, no fork.
@@ -254,12 +287,19 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
       .locator("..");
     await expect(bulkRow).toHaveCSS("gap", "6px");
     await expect(bulkRow).toHaveCSS("margin-bottom", "6px");
+    // EP3 (SPEC-editor-polish.md §D.3, de-grey pass) - the accordion's OWN header/body go
+    // `#22303f` (asserted below via `display-sources-accordion`'s own background), while the
+    // `.src-list` surface one step further in is `#2b3e50` - see SourcesAccordion.tsx's own
+    // module comment for the exact token breakdown this two-tone reflects.
     const sourcesList = page.getByTestId("display-sources-list");
     await expect(sourcesList).toHaveCSS(
       "border",
       "1px solid rgba(0, 0, 0, 0.22)"
     );
-    await expect(sourcesList).toHaveCSS("background-color", "rgb(34, 48, 63)");
+    await expect(sourcesList).toHaveCSS("background-color", "rgb(43, 62, 80)");
+    await expect(
+      page.getByTestId("display-sources-accordion").locator(".card-header")
+    ).toHaveCSS("background-color", "rgb(34, 48, 63)");
   });
 
   // RD8/rev #3 - the subject-card preview's dashed empty state, and RD7's own dedup guarantee
@@ -336,5 +376,203 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await expect(page.getByTestId("filters-panel-inline")).toBeVisible();
     await expect(page.getByTestId("filters-panel-float")).toHaveCount(0);
     await expect(page.getByTestId("filters-panel-scrim")).toHaveCount(0);
+  });
+});
+
+// New coverage - editor-polish round (SPEC-editor-polish.md), items 6/8/9/cue + amendment 1.
+// Comment-linked to the exact §D row each assertion's literal value comes from, same discipline
+// as the describe block above.
+test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 pill restyle, sheet cue/flip gating, amendment 1 placement (SPEC-editor-polish.md)", () => {
+  test.describe.configure({ timeout: 60_000 });
+
+  const railFidelityHandlers = [
+    cardDocumentsSelectVersionMixedResults,
+    sourceDocumentsOneResult,
+    searchResultsSelectVersionMixedResults,
+    tagConsensusTwoUnresolvedTags,
+    submitTagVoteResolvesToApply,
+    castImplicitVoteSuccess,
+    retractImplicitVoteSuccess,
+    ...defaultHandlers,
+  ];
+
+  // EPcue (§D.8 `.slot-cue`, REV) + EP6/E24 (§D.8 `.slot-flip`, N) - both gated to slots that
+  // hold a card; a page always has more grid capacity than this fixture's 3 cards, so the
+  // trailing slots are genuinely empty and must show NEITHER button.
+  test("the sheet's ⋯ cue and ⟲ flip button are both 26×26 and both gated to card-holding slots only", async ({
+    page,
+    network,
+  }) => {
+    network.use(...railFidelityHandlers);
+    await openSelectVersionSection(page);
+
+    const filledCue = page.getByTestId("page-preview-slot-menu-cue").first();
+    await expect(filledCue).toHaveCSS("width", "26px");
+    await expect(filledCue).toHaveCSS("height", "26px");
+    const filledFlip = page.getByTestId("page-preview-slot-flip").first();
+    await expect(filledFlip).toHaveCSS("width", "26px");
+    await expect(filledFlip).toHaveCSS("height", "26px");
+
+    const slots = page.getByTestId("page-preview-slot");
+    const slotCount = await slots.count();
+    const cueCount = await page
+      .getByTestId("page-preview-slot-menu-cue")
+      .count();
+    const flipCount = await page.getByTestId("page-preview-slot-flip").count();
+    // This fixture's own "1x my search query" import lands exactly ONE filled slot (issue #167's
+    // shared setup, `openSelectVersionSection`) - every other grid position on the page is
+    // genuinely empty, so both counts must be exactly 1, strictly less than the total slot count.
+    expect(cueCount).toBe(1);
+    expect(flipCount).toBe(1);
+    expect(slotCount).toBeGreaterThan(1);
+  });
+
+  // EP6 (§D.1 `.fbtoggle`, N) - the rail-head Front/Back toggle exists once a card is selected,
+  // and toggling it updates the subject box's own `data-face` attribute (the preview-only swap -
+  // see RailHeader's own module comment for why D14/identify/More-details stay pinned to the
+  // real editing face throughout).
+  test("the rail-head Front/Back toggle previews the subject box's data-face without touching D14", async ({
+    page,
+    network,
+  }) => {
+    network.use(...railFidelityHandlers);
+    await openSelectVersionSection(page);
+
+    const subject = page.getByTestId("display-rail-subject");
+    await expect(subject).toHaveAttribute("data-face", "front");
+    const idTextBefore = await page
+      .getByTestId("display-confidence-element")
+      .locator(".idtext")
+      .textContent();
+
+    // `.click()` on the role=radio locator targets the (visually-hidden, `.btn-check`) input
+    // itself, which Bootstrap's own toggle-button CSS covers with its sibling `<label>` by
+    // design - `force: true` bypasses Playwright's actionability wait for that expected overlap
+    // (the same pattern any `ToggleButtonGroup`/`ToggleButton` test in this codebase needs).
+    await page.getByRole("radio", { name: "Back" }).click({ force: true });
+    // Either a real back-face thumbnail (`.subject[data-face=back]`, same testid, reused - a
+    // real distinct back ProjectMember resolved) or the `.backart` placeholder (nothing
+    // resolved for back) renders - never the FRONT-faced subject any more either way.
+    const backSubject = page
+      .getByTestId("display-rail-subject-backart")
+      .or(page.getByTestId("display-rail-subject"));
+    await expect(backSubject.first()).toBeVisible();
+    await expect(backSubject.first()).toHaveAttribute("data-face", "back");
+
+    // D14 - identity of the ACTUAL selected/resolved printing - never moves with the preview
+    // toggle.
+    await expect(
+      page.getByTestId("display-confidence-element").locator(".idtext")
+    ).toHaveText(idTextBefore ?? "");
+  });
+
+  // EP9 (§D.1 `.compare`, §D.2 `.statepill.cmp`, N) - the compare trigger lives on the D14
+  // pill now (not the set icon), and reveals a panel beside the subject image on hover/focus
+  // (the fine-pointer/mouse path - `ConfidenceElement.tsx`'s `useCoarsePointer` gate keeps the
+  // touch-only click-toggle handler UNWIRED here, so hover/mouseleave is the only mechanism a
+  // real mouse user gets - see that hook's own comment for why the two can't safely coexist on
+  // one element).
+  test("hovering the D14 pill reveals the Scryfall compare panel beside the subject image (fine pointer), and the set icon is no longer itself an interactive trigger", async ({
+    page,
+    network,
+  }) => {
+    network.use(...railFidelityHandlers);
+    await openSelectVersionSection(page);
+
+    const setIcon = page.getByTestId("display-confidence-set-symbol");
+    await expect(setIcon).not.toHaveAttribute("role", "button");
+
+    await expect(page.getByTestId("display-rail-compare")).toHaveCount(0);
+    const pill = page.getByTestId("display-confidence-compare-trigger");
+    await expect(pill).toHaveAttribute("role", "button");
+    await pill.hover();
+    const compare = page.getByTestId("display-rail-compare");
+    await expect(compare).toBeVisible();
+    await expect(compare).toHaveCSS("position", "absolute");
+    await expect(compare).toHaveCSS("left", "126px");
+
+    // Moving away hides it again (mouseleave).
+    await page.mouse.move(0, 0);
+    await expect(compare).toHaveCount(0);
+  });
+
+  // EP9/§G - the coarse-pointer (touch) path: a real hover-capable-false context, where the
+  // pill's tap IS the toggle (no hover wired at all - see ConfidenceElement.tsx's own
+  // `useCoarsePointer` comment for why the mechanisms are mutually exclusive per pointer type).
+  test.describe("coarse pointer (touch) - tap-toggle", () => {
+    test.use({ hasTouch: true, isMobile: true });
+
+    test("tapping the D14 pill toggles the compare panel open, then closed again", async ({
+      page,
+      network,
+    }) => {
+      network.use(...railFidelityHandlers);
+      await openSelectVersionSection(page);
+
+      const pill = page.getByTestId("display-confidence-compare-trigger");
+      await expect(page.getByTestId("display-rail-compare")).toHaveCount(0);
+      await pill.tap();
+      await expect(page.getByTestId("display-rail-compare")).toBeVisible();
+      await pill.tap();
+      await expect(page.getByTestId("display-rail-compare")).toHaveCount(0);
+    });
+  });
+
+  // EP8 (§D.2 `.notthis`, REV of the post-#413 look) - restyled to the pre-#413 tinted pill
+  // idiom: rounded 10px, tinted danger background, never the flat outline-danger bar.
+  test("the wrong-printing ✗ affordance is a tinted, rounded pill (EP8), not a flat outline-danger bar", async ({
+    page,
+    network,
+  }) => {
+    network.use(...railFidelityHandlers);
+    await openSelectVersionSection(page);
+
+    const notThis = page.getByTestId("display-confidence-not-this-printing");
+    await expect(notThis).toHaveCSS("border-radius", "10px");
+    await expect(notThis).toHaveCSS(
+      "background-color",
+      "rgba(217, 83, 79, 0.12)"
+    );
+  });
+
+  // Amendment 1 (owner, 2026-07-24, BINDING) - "More details" renders directly under the D14
+  // band now, ahead of the identify panel - not inside the rail head at all any more.
+  test("amendment 1 - 'More details' sits directly under the D14 band, ahead of the identify panel, and is no longer a descendant of the rail head", async ({
+    page,
+    network,
+  }) => {
+    network.use(...railFidelityHandlers);
+    await openSelectVersionSection(page);
+
+    await expect(
+      page
+        .getByTestId("display-rail-header")
+        .getByTestId("display-rail-more-details-toggle")
+    ).toHaveCount(0);
+
+    const order = await page.evaluate(() => {
+      const ids = [
+        "display-confidence-element",
+        "display-rail-more-details-toggle",
+        "display-identify-panel",
+      ];
+      const positions = ids.map((id) => {
+        const el = document.querySelector(`[data-testid="${id}"]`);
+        if (el == null) {
+          return -1;
+        }
+        // DOCUMENT_POSITION_FOLLOWING (4) means `el` comes AFTER document.body's first child scan
+        // point - simplest robust ordering check is comparing each element's own index among all
+        // matched nodes via compareDocumentPosition against the FIRST id found.
+        return Array.from(document.querySelectorAll("[data-testid]")).indexOf(
+          el
+        );
+      });
+      return positions;
+    });
+    const [d14Pos, moreDetailsPos, identifyPos] = order;
+    expect(d14Pos).toBeGreaterThan(-1);
+    expect(moreDetailsPos).toBeGreaterThan(d14Pos);
+    expect(identifyPos).toBeGreaterThan(moreDetailsPos);
   });
 });

@@ -260,7 +260,10 @@ import {
   SavedDecksLandingPanel,
   useHasSavedDecksForLanding,
 } from "@/features/display/SavedDecksLandingPanel";
-import { buildScryfallReferenceUrl } from "@/features/display/scryfallReference";
+import {
+  buildScryfallReferenceImageUrl,
+  buildScryfallReferenceUrl,
+} from "@/features/display/scryfallReference";
 import { SlotActionsSection } from "@/features/display/SlotActionsSection";
 import { SourcesAccordion } from "@/features/display/SourcesAccordion";
 import {
@@ -376,16 +379,40 @@ const SHEET_MAX_WIDTH_PX = 960;
 
 //# endregion
 
-//# region always-visible rail header (rail-delegacy round, rev #1/#2/#3 - SPEC-rail-delegacy.md §B/§C)
+//# region always-visible rail header (rail-delegacy round, rev #1/#2/#3 - SPEC-rail-delegacy.md §B/§C;
+//         editor-polish round items 4/5/6/9 - SPEC-editor-polish.md §D.1, amendment 1)
 //
 // Rewritten for the rail-delegacy round (2026-07-24, owner-approved): the rail-head stays LEAN
-// (RD6) - a `66px` subject-card preview of the slot's own selected art (RD8, `.subject`, a dashed
-// "No art selected" empty state otherwise) beside the identity column (slot/face + name), a
+// (RD6) - a subject-card preview of the slot's own selected art (RD8, `.subject`, a dashed "No
+// art selected" empty state otherwise) beside the identity column (slot/face + name), a
 // conditional requested≠resolved MISMATCH flag only (RD7 - `RequestedPrintingBadge`'s new
 // `showOnlyOnMismatch` prop; the canonical printing id itself lives ONCE, in the D14 band below,
-// never repeated here), and a "More details" disclosure (RD6/RD1's item-4 disposition) whose body
-// is the WHOLE Card-Details metadata block (`CardMetaTable` + `CardDownloadFavorite`) - previously
-// one of the nine grey `AutofillCollapse` sections, now folded in place.
+// never repeated here).
+//
+// Editor-polish round (SPEC-editor-polish.md §D.1/§C, owner amendment 1):
+//   - EP5 (REV RD8) - the subject grows 66px -> 116px.
+//   - EP6 (N) - a per-slot Front/Back toggle (`.fbtoggle`) beside the identity text; flipping it
+//     swaps ONLY the subject preview's own image/label to the OTHER face's own resolved art (a
+//     real, distinct ProjectMember - Front/Back are separate slots in this app's own data model,
+//     not one card's two sides) - never the D14/identify/More-details data below, which all stay
+//     pinned to the slot's actual editing face throughout (EP6's own wording scopes this to "the
+//     subject preview" specifically). No real back-face resolution (e.g. a plain shared cardback,
+//     or nothing selected at all) renders the `.backart` placeholder stripe instead of a second
+//     empty state.
+//   - EP4 (REV RD5) - Slot Actions (Change/Duplicate/Delete) relocate here as a compact icon row
+//     (`SlotActionsSection`'s new `compact` prop), beside the subject image; REMOVED from the
+//     bottom `ControlStack` (see that component's own comment).
+//   - EP9 (N) - the Scryfall compare reveal (trigger now lives on the D14 pill,
+//     `ConfidenceElement.tsx`) renders HERE, `position:absolute; left:126px` (116px subject +
+//     10px `.rhead-row` gap), since it must anchor beside the subject image, a different
+//     component than the D14 band that triggers it - see `Rail`'s own comment for the lifted
+//     `compareOpen` state this seam depends on.
+//   - Amendment 1 (owner, 2026-07-24 post-review, BINDING) - "More details" RELOCATES out of the
+//     rail head entirely, to directly under the D14 band (`MoreDetailsSection` below, mounted
+//     from `PromotedZone`) - ruled without a design re-pass, so this component drops both the
+//     `.detmore` toggle AND the `.detbody` Collapse it used to own; `MoreDetailsSection` inherits
+//     that exact JSX unchanged (same `CardMetaTable`/`CardDownloadFavorite`, same testids), just
+//     moved.
 
 interface RailHeaderProps {
   face: Faces;
@@ -393,8 +420,18 @@ interface RailHeaderProps {
   cardName: string | undefined;
   searchQuery: SearchQuery | undefined;
   cardDocument: CardDocument | undefined;
-  detailsOpen: boolean;
-  onToggleDetails: () => void;
+  /** EP6 - which face's art the `.subject` box currently shows; defaults to `face` when the
+   * toggle has never been touched (see `Rail`'s own `faceOverride` state). */
+  previewFace: Faces;
+  previewCardDocument: CardDocument | undefined;
+  onToggleFace: (face: Faces) => void;
+  /** EP4 - threaded straight to the relocated `SlotActionsSection` (same props that component
+   * always took; only its render SITE and `compact` layout changed). */
+  onSlotDeleted: () => void;
+  /** EP9 - lifted from `Rail` (see that component's own comment); `undefined` printing (nothing
+   * resolved yet) never renders the reveal regardless of `compareOpen`. */
+  compareOpen: boolean;
+  comparePrinting: { expansionCode: string; collectorNumber: string } | null;
 }
 
 const RailHeader = ({
@@ -403,23 +440,51 @@ const RailHeader = ({
   cardName,
   searchQuery,
   cardDocument,
-  detailsOpen,
-  onToggleDetails,
+  previewFace,
+  previewCardDocument,
+  onToggleFace,
+  onSlotDeleted,
+  compareOpen,
+  comparePrinting,
 }: RailHeaderProps) => {
   const resolvedPrinting =
     cardDocument?.canonicalCard ?? cardDocument?.suggestedCanonicalCard ?? null;
+  const compareImageUrl =
+    comparePrinting != null
+      ? buildScryfallReferenceImageUrl(
+          comparePrinting.expansionCode,
+          comparePrinting.collectorNumber
+        )
+      : undefined;
+  const showBackArtPlaceholder =
+    previewFace !== face && previewCardDocument == null;
   return (
     <div className="rail-head" data-testid="display-rail-header">
       <div className="rhead-row">
-        {/* RD8 (rev #3) - a PREVIEW of the same thumbnail URL the selected `.vtile`/`CardImage`
-            already renders (not a second full render; Select Version stays the art surface). */}
-        {cardDocument != null ? (
-          <div className="subject" data-testid="display-rail-subject">
+        {/* RD8 (rev #3)/EP5 - a PREVIEW of the same thumbnail URL the selected `.vtile`/
+            `CardImage` already renders (not a second full render; Select Version stays the art
+            surface). EP6 - previews `previewFace`, not always the slot's own editing `face`. */}
+        {previewCardDocument != null ? (
+          <div
+            className="subject"
+            data-testid="display-rail-subject"
+            data-face={previewFace}
+          >
             <img
-              src={cardDocument.smallThumbnailUrl}
+              src={previewCardDocument.smallThumbnailUrl}
               alt=""
               style={{ width: "100%", height: "100%", objectFit: "cover" }}
             />
+          </div>
+        ) : showBackArtPlaceholder ? (
+          <div
+            className="subject backart"
+            data-testid="display-rail-subject-backart"
+            data-face={previewFace}
+          >
+            Back face
+            <br />
+            not set
           </div>
         ) : (
           <div
@@ -434,7 +499,7 @@ const RailHeader = ({
         )}
         <div className="idcol">
           <div className="slot">
-            Slot {slot + 1} <span className="face">{face}</span>
+            Slot {slot + 1} <span className="face">{previewFace}</span>
           </div>
           <div className={cardName != null ? "name" : "name none"}>
             {cardName ?? "No art selected yet"}
@@ -447,45 +512,66 @@ const RailHeader = ({
             showOnlyOnMismatch
             resolvedPrinting={resolvedPrinting}
           />
-          <div>
-            <button
-              type="button"
-              className="detmore"
-              aria-expanded={detailsOpen}
-              onClick={onToggleDetails}
-              data-testid="display-rail-more-details-toggle"
+          {/* EP6 - only offered once a front is actually selected (nothing to flip away from
+              otherwise); a real `ToggleButtonGroup` (aria-pressed per segment, §G). */}
+          {cardDocument != null && (
+            <ToggleButtonGroup
+              type="radio"
+              name={`rail-face-toggle-${slot}`}
+              className="fbtoggle"
+              value={previewFace}
+              onChange={(value: Faces) => onToggleFace(value)}
             >
-              More details{" "}
-              <span className="chev">{detailsOpen ? "⌄" : "›"}</span>
-            </button>
-          </div>
+              <ToggleButton
+                id={`rail-face-toggle-${slot}-front`}
+                value={Front}
+                variant="outline-info"
+                size="sm"
+                aria-pressed={previewFace === Front}
+              >
+                Front
+              </ToggleButton>
+              <ToggleButton
+                id={`rail-face-toggle-${slot}-back`}
+                value={Back}
+                variant="outline-info"
+                size="sm"
+                aria-pressed={previewFace === Back}
+              >
+                Back
+              </ToggleButton>
+            </ToggleButtonGroup>
+          )}
+          {/* EP4 (REV RD5) - the compact icon row, relocated from the bottom control stack. */}
+          <SlotActionsSection
+            face={face}
+            slot={slot}
+            searchQuery={searchQuery}
+            onDeleted={onSlotDeleted}
+            compact
+          />
         </div>
+        {/* EP9 - anchored beside the subject image (`left:126px` = 116px subject + 10px
+            `.rhead-row` gap); only mounted while open, so its own hover/tap logic
+            (`ConfidenceElement.tsx`) never has to coordinate unmount timing with this component. */}
+        {compareOpen && compareImageUrl != null && (
+          <div className="compare" data-testid="display-rail-compare">
+            <img
+              src={compareImageUrl}
+              alt={
+                comparePrinting != null
+                  ? `Scryfall reference image for ${comparePrinting.expansionCode.toUpperCase()} ${
+                      comparePrinting.collectorNumber
+                    }`
+                  : "Scryfall reference image"
+              }
+            />
+            <div className="cap">
+              Scryfall CDN · <b>display-only, nothing stored</b>
+            </div>
+          </div>
+        )}
       </div>
-      <Collapse in={detailsOpen}>
-        <div>
-          {/* RD6 (O2 answered) - the WHOLE Card-Details metadata block (Resolution/DPI, File
-              size, Source, Source type, Class, Identifier, Language, Tags, dates) plus Download +
-              Favourite lives ONLY here now - one of the nine removed grey AutofillCollapse
-              sections, folded in place. */}
-          <div className="detbody" data-testid="display-rail-more-details-body">
-            {cardDocument != null ? (
-              <>
-                {/* RD7 - the printing id lives ONCE, in D14; drop CardMetaTable's own
-                    "Canonical Card" row here so it's never a static second copy. */}
-                <CardMetaTable
-                  cardDocument={cardDocument}
-                  showCanonicalCard={false}
-                />
-                <CardDownloadFavorite cardDocument={cardDocument} />
-              </>
-            ) : (
-              <p className="text-muted small mb-0">
-                Select an image for this slot first.
-              </p>
-            )}
-          </div>
-        </div>
-      </Collapse>
     </div>
   );
 };
@@ -507,7 +593,68 @@ interface PromotedZoneProps {
   backendURL: string;
   identifyOpen: boolean;
   onToggleIdentify: () => void;
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+  compareOpen: boolean;
+  onCompareToggle: () => void;
+  onCompareShow: () => void;
+  onCompareHide: () => void;
 }
+
+// Editor-polish round, owner amendment 1 (2026-07-24, BINDING) - "More details" RELOCATES from
+// the rail head to directly under the D14 band; this is the exact JSX `RailHeader` used to own
+// (same `CardMetaTable`/`CardDownloadFavorite`, same testids - `display-rail-more-details-*` -
+// so every existing behavior assertion querying those testids keeps working unchanged), just
+// moved into `PromotedZone`, between `ConfidenceElement` and `IdentifyPanel` per the amendment's
+// own "renders directly under the D14 confidence band" instruction.
+interface MoreDetailsSectionProps {
+  cardDocument: CardDocument | undefined;
+  open: boolean;
+  onToggle: () => void;
+}
+
+const MoreDetailsSection = ({
+  cardDocument,
+  open,
+  onToggle,
+}: MoreDetailsSectionProps) => (
+  <div className="detmore-wrap">
+    <button
+      type="button"
+      className="detmore"
+      aria-expanded={open}
+      onClick={onToggle}
+      data-testid="display-rail-more-details-toggle"
+    >
+      More details <span className="chev">{open ? "⌄" : "›"}</span>
+    </button>
+    <Collapse in={open}>
+      <div>
+        {/* RD6 (O2 answered) - the WHOLE Card-Details metadata block (Resolution/DPI, File
+            size, Source, Source type, Class, Identifier, Language, Tags, dates) plus Download +
+            Favourite lives ONLY here now - one of the nine removed grey AutofillCollapse
+            sections, folded in place. */}
+        <div className="detbody" data-testid="display-rail-more-details-body">
+          {cardDocument != null ? (
+            <>
+              {/* RD7 - the printing id lives ONCE, in D14; drop CardMetaTable's own
+                  "Canonical Card" row here so it's never a static second copy. */}
+              <CardMetaTable
+                cardDocument={cardDocument}
+                showCanonicalCard={false}
+              />
+              <CardDownloadFavorite cardDocument={cardDocument} />
+            </>
+          ) : (
+            <p className="text-muted small mb-0">
+              Select an image for this slot first.
+            </p>
+          )}
+        </div>
+      </div>
+    </Collapse>
+  </div>
+);
 
 // Rail-delegacy round (item 6, SPEC-rail-delegacy.md §B/§F) - the "Printing Tags" grey accordion
 // (PrintingTagPicker consensus/search/candidate-grid + the AttributeVotingPanel follow-up) is
@@ -567,9 +714,28 @@ const PromotedZone = ({
   backendURL,
   identifyOpen,
   onToggleIdentify,
+  detailsOpen,
+  onToggleDetails,
+  compareOpen,
+  onCompareToggle,
+  onCompareShow,
+  onCompareHide,
 }: PromotedZoneProps) => (
   <>
-    <ConfidenceElement cardDocument={cardDocument} backendURL={backendURL} />
+    <ConfidenceElement
+      cardDocument={cardDocument}
+      backendURL={backendURL}
+      compareOpen={compareOpen}
+      onCompareToggle={onCompareToggle}
+      onCompareShow={onCompareShow}
+      onCompareHide={onCompareHide}
+    />
+    {/* Amendment 1 - directly under the D14 band, ahead of the identify panel. */}
+    <MoreDetailsSection
+      cardDocument={cardDocument}
+      open={detailsOpen}
+      onToggle={onToggleDetails}
+    />
     <IdentifyPanel
       cardDocument={cardDocument}
       open={identifyOpen}
@@ -1031,6 +1197,27 @@ const ActionBarSearchGroup = styled.div`
   }
 `;
 
+// Editor-polish round, item 2 (EP2, SPEC-editor-polish.md §D.6 `.abtn`) - the page-wide button-
+// contrast floor: the toolbar's `outline-secondary` "Add"/"Add card"/etc buttons resolve to
+// Bootstrap Superhero's own `$secondary` (`#4e5d6c`) border/text, which reads as a near-
+// invisible grey ghost on this dark chrome. Scoped to the toolbar's own DOM subtree (this
+// styled-component wraps it - see `data-testid="display-toolbar"`'s own call site below) so
+// every OTHER `outline-secondary` button sitewide (outside this page) is unaffected - the same
+// component-scoped-override discipline as `.rail-source-toggle`/`.cstack .form-select` above.
+const ToolbarRoot = styled.div`
+  .btn-outline-secondary {
+    background: #22303f;
+    color: #ebebeb;
+    border: 1px solid #46586a;
+  }
+  .btn-outline-secondary:hover,
+  .btn-outline-secondary:focus {
+    background: #22303f;
+    color: #ebebeb;
+    border-color: #abb6c2;
+  }
+`;
+
 // Editor-completion package, E1/X6 - the mockup's rail stylesheet, lifted verbatim per the
 // owner's grant (spec §5: "the left rail MAY lift the mockup's CSS verbatim rather than
 // re-approximate through react-bootstrap idioms").
@@ -1233,15 +1420,18 @@ const RailRoot = styled.div`
      replace the nine removed grey AutofillCollapse sections.
      ============================================================================ */
 
-  /* rail-head: rev #1/#2/#3 - lean identity + subject-card preview + "More details" */
+  /* rail-head: rev #1/#2/#3 - lean identity + subject-card preview.
+     Editor-polish round (SPEC-editor-polish.md §D.1) - EP5 grows the subject 66px -> 116px, EP9
+     needs '.rhead-row' positioned so the '.compare' reveal (further down) can anchor to it. */
   .rhead-row {
+    position: relative;
     display: flex;
     gap: 10px;
     align-items: flex-start;
   }
   .subject {
-    flex: 0 0 66px;
-    width: 66px;
+    flex: 0 0 116px;
+    width: 116px;
     aspect-ratio: 63 / 88;
     position: relative;
     overflow: hidden;
@@ -1258,6 +1448,20 @@ const RailRoot = styled.div`
     justify-content: center;
     text-align: center;
     color: #8fa0b0;
+    font-size: 9px;
+    padding: 4px;
+    line-height: 1.3;
+  }
+  /* EP6 (N) - the back-face-not-set placeholder stripe: shown only while previewing the back
+     face AND nothing real resolved for it (never a second dashed empty box - visually distinct
+     from '.subject.empty' per §D.1's own literal token). */
+  .subject.backart {
+    background: linear-gradient(135deg, #2a2320, #1f1a17);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #a99;
     font-size: 9px;
     padding: 4px;
     line-height: 1.3;
@@ -1285,8 +1489,50 @@ const RailRoot = styled.div`
     color: #8fa0b0;
     font-style: italic;
   }
+  /* EP6 (N) - the per-slot Front/Back segmented toggle, 'ToggleButtonGroup' restyled to the
+     spec's own literal tokens (react-bootstrap's own outline-info variant is fully overridden
+     here, component-scoped to '.fbtoggle' only - no other 'ToggleButtonGroup' mount sitewide
+     carries this class). */
+  .fbtoggle {
+    margin-top: 7px;
+    border: 1px solid #6b7d8e;
+  }
+  .fbtoggle .btn {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 12px;
+    background: #22303f;
+    color: #8fa0b0;
+    border-color: #6b7d8e;
+    border-radius: 0;
+  }
+  .fbtoggle .btn.active,
+  .fbtoggle .btn:focus,
+  .fbtoggle .btn:hover {
+    background: #5bc0de;
+    color: #062430;
+    border-color: #5bc0de;
+    box-shadow: none;
+  }
+  /* EP4 (REV RD5, §D.1 '.slotacts-top .iact') - the compact icon row's OWN sizing lives in
+     'SlotActionsSection.tsx''s 'IconAction' styled-component (component-scoped there, same
+     discipline as '.rail-source-toggle'/'.cstack .form-select' elsewhere in this file); this
+     selector only carries the row's own gap/margin, which is genuinely this call site's concern
+     (the compact row's OTHER caller, if one is ever added, may want different spacing). */
+  .slotacts-top {
+    gap: 6px;
+    margin-top: 8px;
+  }
+  /* Amendment 1 (owner, 2026-07-24, BINDING) - "More details" moved out of the rail head to
+     directly under the D14 band; same padded/divider rhythm as its new neighbours ('.d14'/
+     '.idhang', both '#2b3e50') rather than the rail-head's own '#22303f', since it's still
+     "about the currently-identified printing," the same subject D14 covers. */
+  .detmore-wrap {
+    background: #2b3e50;
+    border-bottom: 1px solid #16202b;
+    padding: 8px 10px;
+  }
   .detmore {
-    margin-top: 6px;
     background: transparent;
     border: none;
     color: #8fa0b0;
@@ -1306,6 +1552,44 @@ const RailRoot = styled.div`
     padding-top: 8px;
     border-top: 1px solid #16202b;
     font-size: 11px;
+  }
+  /* EP9 (N, §D.1 '.compare') - the Scryfall reference reveal, anchored beside the 116px subject
+     image (116 + the '.rhead-row' 10px gap = 126). 'pointer-events: none' is load-bearing, not
+     decorative: at z-index 40 this panel paints ABOVE later DOM siblings (the D14 band sits
+     right after the rail head, and the panel's own aspect-ratio height easily reaches down far
+     enough to visually cover the very pill that triggered it) - without this, the panel would
+     intercept the pointer the instant it appears, firing a real mouseleave on the now-covered
+     pill, hiding the panel, un-covering the pill, re-firing mouseenter, and re-showing it - an
+     infinite open/close oscillation confirmed live via Playwright (repeated onMouseEnter firing
+     with the state never settling to true) before this fix. Purely visual, never itself a
+     click/hover target - ConfidenceElement.tsx's own pill stays the sole interactive surface,
+     exactly as the mockup's own hover-reveal (not a second interactive layer) intends. */
+  .compare {
+    position: absolute;
+    left: 126px;
+    top: 0;
+    z-index: 40;
+    width: 150px;
+    background: #0b1520;
+    border: 1px solid #5bc0de;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6);
+    padding: 5px;
+    pointer-events: none;
+  }
+  .compare img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 63 / 88;
+    object-fit: cover;
+  }
+  .compare .cap {
+    font-size: 9px;
+    color: #8fa0b0;
+    margin-top: 4px;
+  }
+  .compare .cap b {
+    color: #5bc0de;
+    font-weight: 700;
   }
 
   /* identify panel band (item 6) - hangs off D14, same surface (§2/#2b3e50) */
@@ -1351,6 +1635,7 @@ const RailRoot = styled.div`
     color: #ebebeb;
     font-weight: 700;
   }
+  /* EP7 (SPEC-editor-polish.md §D.4 '.sortsel', REV RD2) - 'max-width' 150px -> 172px. */
   .sortsel {
     background: #22303f;
     color: #ebebeb;
@@ -1358,7 +1643,24 @@ const RailRoot = styled.div`
     font-size: 12px;
     padding: 3px 6px;
     border-radius: 0;
-    max-width: 150px;
+    max-width: 172px;
+  }
+  /* EP10 (N, §D.4 '.vloading') - replaces '.vgrid' while 'search.displaySpinner' is true. */
+  .vloading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 140px;
+    color: #8fa0b0;
+    font-size: 12px;
+  }
+  /* EP10 - tints the site's canonical spinner '--primary' inside the rail only (component-
+     scoped via this ancestor selector, same discipline as '.rail-source-toggle' above - it
+     cannot reach a 'Spinner' mounted anywhere outside this styled-component's own DOM scope). */
+  .vloading .spinner-border {
+    color: #df6919;
   }
   .filtersbtn {
     background: transparent;
@@ -1462,42 +1764,26 @@ const RailRoot = styled.div`
   }
 `;
 
-//# region bottom control stack (item 7, SPEC-rail-delegacy.md §B/§F/RD5)
+//# region bottom control stack (item 7, SPEC-rail-delegacy.md §B/§F/RD5;
+//         editor-polish item 4, SPEC-editor-polish.md §D.7 - REVISES RD5)
 //
-// Print Options + Slot Actions + Report - the last three of the nine removed grey AutofillCollapse
-// sections - collapse into ONE designed `.cstack` at the rail bottom (RD5): a per-group `.cs-legend`
-// label replaces each section's own accordion header, and Report is a single `btn-outline-danger`
-// that expands to `ReportCardPanel`'s reason chips in place (already that component's own stock
-// behavior - `ReportBlock` needs no changes at all).
+// Print Options + Report - EP4 (REV RD5, §D.7) moves Slot Actions OUT of this stack entirely, up
+// into the rail head's compact icon row (`RailHeader`'s own `SlotActionsSection compact` mount) -
+// "no full-width slot-action buttons anywhere" per EP4's own wording. What's left collapses into
+// ONE designed `.cstack` at the rail bottom (RD5): a per-group `.cs-legend` label replaces each
+// section's own accordion header, and Report is a single `btn-outline-danger` that expands to
+// `ReportCardPanel`'s reason chips in place (already that component's own stock behavior -
+// `ReportBlock` needs no changes at all).
 
 interface ControlStackProps {
-  face: Faces;
-  slot: number;
-  query: SearchQuery | undefined;
   selectedCardDocument: CardDocument | undefined;
-  onSlotDeleted: () => void;
 }
 
-const ControlStack = ({
-  face,
-  slot,
-  query,
-  selectedCardDocument,
-  onSlotDeleted,
-}: ControlStackProps) => (
+const ControlStack = ({ selectedCardDocument }: ControlStackProps) => (
   <div className="cstack" data-testid="display-control-stack">
     <div className="cs-group">
       <div className="cs-legend">Print options</div>
       <PrintOptionsSection cardDocument={selectedCardDocument} />
-    </div>
-    <div className="cs-group">
-      <div className="cs-legend">Slot actions</div>
-      <SlotActionsSection
-        face={face}
-        slot={slot}
-        searchQuery={query}
-        onDeleted={onSlotDeleted}
-      />
     </div>
     <div className="cs-foot">
       {selectedCardDocument != null ? (
@@ -1547,6 +1833,16 @@ const Rail = ({
   // LeftRailOffcanvas's own comment on that `key`).
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [identifyOpen, setIdentifyOpen] = useState(false);
+  // EP6 - which face's art the rail-head subject preview currently shows; `null` means "the
+  // slot's own editing face" (the default, reset on every slot change for the same reason as
+  // `detailsOpen`/`identifyOpen` above).
+  const [faceOverride, setFaceOverride] = useState<Faces | null>(null);
+  // EP9 - the D14 pill's compare-reveal, lifted here since the trigger (ConfidenceElement,
+  // inside PromotedZone) and the reveal itself (anchored beside the subject image, inside
+  // RailHeader) are sibling components. `compareOpen` covers BOTH the click-toggle (persists
+  // until toggled again or a hover leaves) and the hover/focus show/hide pair - see
+  // `ConfidenceElement`'s own `compareProps` for how the two compose without fighting each other.
+  const [compareOpen, setCompareOpen] = useState(false);
 
   const projectMember = useAppSelector((state) =>
     selectedSlotRef != null
@@ -1554,6 +1850,22 @@ const Rail = ({
       : undefined
   );
   const query = projectMember?.query;
+
+  // EP6 - the OTHER face's own ProjectMember (Front/Back are separate slots in this app's data
+  // model, not two sides of one card - see RailHeader's own module comment). Always computed
+  // (never conditionally-called) so this hook call is unconditional regardless of
+  // `selectedSlotRef`, matching `projectMember`'s own pattern just above.
+  const otherFace: Faces | null =
+    selectedSlotRef != null
+      ? selectedSlotRef.face === Front
+        ? Back
+        : Front
+      : null;
+  const otherProjectMember = useAppSelector((state) =>
+    selectedSlotRef != null && otherFace != null
+      ? selectProjectMember(state, otherFace, selectedSlotRef.slot)
+      : undefined
+  );
 
   if (selectedSlotRef == null) {
     return (
@@ -1577,6 +1889,29 @@ const Rail = ({
       ? cardDocumentsByIdentifier[selectedImage]
       : undefined;
 
+  const otherCardDocument =
+    otherProjectMember?.selectedImage != null
+      ? cardDocumentsByIdentifier[otherProjectMember.selectedImage]
+      : undefined;
+
+  const previewFace = faceOverride ?? selectedSlotRef.face;
+  const previewCardDocument =
+    previewFace === selectedSlotRef.face
+      ? selectedCardDocument
+      : otherCardDocument;
+
+  const resolvedPrinting =
+    selectedCardDocument?.canonicalCard ??
+    selectedCardDocument?.suggestedCanonicalCard ??
+    null;
+  const comparePrinting =
+    resolvedPrinting != null
+      ? {
+          expansionCode: resolvedPrinting.expansionCode,
+          collectorNumber: resolvedPrinting.collectorNumber,
+        }
+      : null;
+
   return (
     <RailRoot data-testid="display-rail-content">
       <RailHeader
@@ -1585,19 +1920,30 @@ const Rail = ({
         cardName={cardName}
         searchQuery={query}
         cardDocument={selectedCardDocument}
-        detailsOpen={detailsOpen}
-        onToggleDetails={() => setDetailsOpen((previous) => !previous)}
+        previewFace={previewFace}
+        previewCardDocument={previewCardDocument}
+        onToggleFace={setFaceOverride}
+        onSlotDeleted={onSlotDeleted}
+        compareOpen={compareOpen}
+        comparePrinting={comparePrinting}
       />
-      {/* E2 (#2/#3) - the promoted, always-visible zone: D14 confidence element + the identify
-          panel that hangs off it (item 6) + artist support line, none of which are collapsible
-          accordion sections (D3). Fix round (SPEC-display-left-rail.md §3): ConfidenceElement
-          renders BEFORE ArtistSection - it is identity, not demoted metadata; see PromotedZone's
-          own comment for the full ordering rationale. */}
+      {/* E2 (#2/#3) - the promoted, always-visible zone: D14 confidence element + "More details"
+          (amendment 1) + the identify panel that hangs off it (item 6) + artist support line,
+          none of which are collapsible accordion sections (D3). Fix round
+          (SPEC-display-left-rail.md §3): ConfidenceElement renders BEFORE ArtistSection - it is
+          identity, not demoted metadata; see PromotedZone's own comment for the full ordering
+          rationale. */}
       <PromotedZone
         cardDocument={selectedCardDocument}
         backendURL={backendURL}
         identifyOpen={identifyOpen}
         onToggleIdentify={() => setIdentifyOpen((previous) => !previous)}
+        detailsOpen={detailsOpen}
+        onToggleDetails={() => setDetailsOpen((previous) => !previous)}
+        compareOpen={compareOpen}
+        onCompareToggle={() => setCompareOpen((previous) => !previous)}
+        onCompareShow={() => setCompareOpen(true)}
+        onCompareHide={() => setCompareOpen(false)}
       />
       {/* Fix round (SPEC-display-left-rail.md §4): the Sources accordion - sources gate art
           availability, so the owner brief puts it in the LEFT rail (a deviation from
@@ -1626,17 +1972,11 @@ const Rail = ({
           onImplicitSupport={onImplicitSupport}
         />
       </div>
-      {/* Rail-delegacy round (item 7, RD5) - Print Options + Slot Actions + Report collapse into
-          ONE designed control stack, the last of the nine removed grey AutofillCollapse
-          sections. AddCardToProjectForm is deliberately not mounted (the slot is already in the
-          project). */}
-      <ControlStack
-        face={selectedSlotRef.face}
-        slot={selectedSlotRef.slot}
-        query={query}
-        selectedCardDocument={selectedCardDocument}
-        onSlotDeleted={onSlotDeleted}
-      />
+      {/* Rail-delegacy round (item 7, RD5)/editor-polish item 4 (REV RD5) - Print Options +
+          Report collapse into ONE designed control stack (Slot Actions moved up to the rail
+          head - see ControlStack's own comment). AddCardToProjectForm is deliberately not
+          mounted (the slot is already in the project). */}
+      <ControlStack selectedCardDocument={selectedCardDocument} />
     </RailRoot>
   );
 };
@@ -1695,6 +2035,16 @@ export function DisplayPage() {
   );
   const [selectedSlotRef, setSelectedSlotRef] =
     useState<SelectedSlotRef | null>(null);
+  // EP6 (item 6/E24, SPEC-editor-polish.md §D.8 `.slot-flip`) - which slots (by their own
+  // `entry.slot` number, not page-relative index - the same slot can appear on different pages
+  // across re-layouts) are currently previewing their OTHER face on the SHEET itself, via the
+  // reserved corner `⟲` button. Distinct from `activeFace` (the project-wide Fronts/Backs view
+  // setting) - this is a per-slot, sheet-local override on top of it, the same "preview only,
+  // doesn't touch selection state" posture `Rail`'s own `faceOverride` takes for the rail-head
+  // subject box.
+  const [flippedPreviewSlots, setFlippedPreviewSlots] = useState<Set<number>>(
+    new Set()
+  );
 
   // Issue #267 (design doc ADDENDUM D12/F9) - the populated-state search bar's dual Add/Browse
   // mode. One boolean drives BOTH the search bar's own mode toggle and the center region's
@@ -1912,7 +2262,16 @@ export function DisplayPage() {
         pageIndex,
         entries,
         slots: entries.map((entry) => {
-          const projectMember = entry.member[activeFace];
+          // EP6 - a slot in `flippedPreviewSlots` renders its OTHER face's own resolved image on
+          // the sheet itself (preview only - `activeFace`/selection state are untouched); only
+          // actually flips when that other face has a real member to show.
+          const otherFace = activeFace === Front ? Back : Front;
+          const effectiveFace =
+            flippedPreviewSlots.has(entry.slot) &&
+            entry.member[otherFace] != null
+              ? otherFace
+              : activeFace;
+          const projectMember = entry.member[effectiveFace];
           const identifier = projectMember?.selectedImage;
           const cardDocument =
             identifier != null
@@ -1961,12 +2320,41 @@ export function DisplayPage() {
             orphanLabel: cardDocument?.isOrphan
               ? cardDocument.sourceName
               : undefined,
+            // EP6/item 6/E24 - a card on EITHER face (not just the currently-effective one) -
+            // see PagePreviewSlotContent's own `flippable` comment for why this must be
+            // independent of `imageUrl`.
+            flippable:
+              entry.member.front?.selectedImage != null ||
+              entry.member.back?.selectedImage != null,
           };
           return content;
         }),
       })),
-    [pages, activeFace, cardDocumentsByIdentifier, searchResultsLoading]
+    [
+      pages,
+      activeFace,
+      cardDocumentsByIdentifier,
+      searchResultsLoading,
+      flippedPreviewSlots,
+    ]
   );
+
+  // EP6 - toggles a slot's sheet-local face preview (see `flippedPreviewSlots`' own comment).
+  const handleSlotFlip = (pageIndex: number, indexOnPage: number) => {
+    const entry = sheets[pageIndex]?.entries[indexOnPage];
+    if (entry == null) {
+      return;
+    }
+    setFlippedPreviewSlots((previous) => {
+      const next = new Set(previous);
+      if (next.has(entry.slot)) {
+        next.delete(entry.slot);
+      } else {
+        next.add(entry.slot);
+      }
+      return next;
+    });
+  };
 
   const handleSlotClick = (pageIndex: number, indexOnPage: number) => {
     const entry = sheets[pageIndex]?.entries[indexOnPage];
@@ -2103,7 +2491,7 @@ export function DisplayPage() {
           mode, a plain controlled Form.Control in Browse mode - see ActionBarSearchGroup's own
           comment for why ImportText itself stays unaware of Browse mode), and the existing
           Import.tsx dropdown (D15 - Text/XML/CSV/URL, verbatim, unforked). */}
-      <div
+      <ToolbarRoot
         className="d-flex align-items-center flex-wrap gap-2 px-3 py-2 border-bottom"
         data-testid="display-toolbar"
       >
@@ -2200,7 +2588,7 @@ export function DisplayPage() {
           <RightPaddedIcon bootstrapIconName="gear" />
           Print &amp; Settings
         </Button>
-      </div>
+      </ToolbarRoot>
 
       <DisplayBodyRegion>
         {/* Issue #266 (design doc §4.1) - ONE node, all widths: inline sticky 380px column at
@@ -2390,6 +2778,9 @@ export function DisplayPage() {
                           x,
                           y
                         )
+                      }
+                      onSlotFlip={(indexOnPage) =>
+                        handleSlotFlip(sheet.pageIndex, indexOnPage)
                       }
                     />
                   </RenderIfVisible>

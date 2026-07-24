@@ -93,22 +93,29 @@ const LoadingSweep = styled.div`
 // has right-click as the primary trigger), persistent under `(pointer: coarse)` (a touch-primary
 // device has no hover state to reveal it via - E9's original "gesture-invoked, no visible
 // three-dots button" stance is deliberately revised here, see funnel-spec.md D22).
+//
+// Editor-polish round (EPcue, SPEC-editor-polish.md §D.8 `.slot-cue`, REV) - grows `20×20` ->
+// `26×26`, glyph `13px` -> `17px`, higher-contrast (`rgba(22,32,43,.85)` -> `rgba(11,21,32,.92)`,
+// border `1px #7f8fa0` -> `1.5px #abb6c2`, `#ebebeb` -> `#fff` glyph) so it reads over card art;
+// gains a drop-shadow. The render GATE (whether this mounts at all) is the caller's concern, not
+// this styled-component's - see `PagePreviewSlotEl`'s own updated gate comment below.
 const SlotMenuCue = styled.button`
   position: absolute;
-  bottom: 2px;
-  right: 2px;
-  z-index: 2;
-  width: 20px;
-  height: 20px;
+  bottom: 3px;
+  right: 3px;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(22, 32, 43, 0.85);
-  border: 1px solid #7f8fa0;
-  color: #ebebeb;
-  font-size: 13px;
+  background: rgba(11, 21, 32, 0.92);
+  border: 1.5px solid #abb6c2;
+  color: #fff;
+  font-size: 17px;
   line-height: 1;
-  border-radius: 3px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   opacity: 0;
   transition: opacity 0.15s ease;
   padding: 0;
@@ -125,6 +132,48 @@ const SlotMenuCue = styled.button`
   &:hover {
     background: #df6919;
     border-color: #df6919;
+  }
+`;
+
+// EP6 (item 6, SPEC-editor-polish.md §D.8 `.slot-flip`, N) - ships the reserved E24 top-right
+// corner (see this file's own `⟲` render site further down for the "reserved per the ruling"
+// comment this fulfils). Same reveal behaviour as `SlotMenuCue` (hover/focus-reveal on desktop,
+// persistent under `(pointer: coarse)`), gated to filled cells only (nothing to flip on an empty
+// slot).
+const SlotFlipButton = styled.button`
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11, 21, 32, 0.92);
+  border: 1.5px solid #abb6c2;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  padding: 0;
+
+  .page-preview-slot:hover &,
+  .page-preview-slot:focus-within & {
+    opacity: 1;
+  }
+
+  @media (pointer: coarse) {
+    opacity: 1;
+  }
+
+  &:hover {
+    background: #5bc0de;
+    border-color: #5bc0de;
+    color: #062430;
   }
 `;
 
@@ -209,6 +258,15 @@ export interface PagePreviewSlotContent {
    * `imageUrl` - same gating Card.tsx's own badge uses (never drawn over the empty/loading/failed
    * placeholder states above, which already carry their own distinct visual language). */
   orphanLabel?: string;
+  /** Editor-polish round, item 6/E24 (SPEC-editor-polish.md §D.8 `.slot-flip`) - whether the
+   * `⟲` flip button renders at ALL for this slot, independent of `imageUrl` (the CURRENTLY
+   * effective face's own resolution). Deliberately a SEPARATE flag: gating the flip button on
+   * `imageUrl` the same way the cue does would strand a user the moment they flip TO a face
+   * with no art of its own - the button gating what let them flip would itself vanish along
+   * with the image, with no way back. `true` when the slot has a real card on EITHER face
+   * (front and/or back); `undefined`/`false` (a genuinely empty slot, nothing on either face)
+   * renders no flip button, same as `onSlotFlip` simply being omitted. */
+  flippable?: boolean;
 }
 
 export interface PagePreviewProps {
@@ -255,6 +313,12 @@ export interface PagePreviewProps {
    * opting in) renders with zero behavior change: no cue, no long-press handlers, right-click
    * falls through to the browser's default menu exactly as today. */
   onSlotContextMenu?: (index: number, x: number, y: number) => void;
+  /** Editor-polish round, item 6/E24 (SPEC-editor-polish.md §D.8 `.slot-flip`, N) - ships the
+   * `⟲` corner flip button at the slot's reserved top-right corner, gated to slots that already
+   * hold a real image (`content.imageUrl != null`) - nothing to flip on an empty slot.
+   * `undefined` (every existing caller) renders with zero behavior change: no flip button at
+   * all, same as before this round. */
+  onSlotFlip?: (index: number) => void;
 }
 
 export function PagePreview({
@@ -270,6 +334,7 @@ export function PagePreview({
   selectedSlotIndex,
   screenPresentation = false,
   onSlotContextMenu,
+  onSlotFlip,
 }: PagePreviewProps) {
   const layout = useMemo(
     () =>
@@ -347,6 +412,7 @@ export function PagePreview({
             isSelected={onSlotClick != null && selectedSlotIndex === index}
             onSlotClick={onSlotClick}
             onSlotContextMenu={onSlotContextMenu}
+            onSlotFlip={onSlotFlip}
           />
         ))}
       </div>
@@ -367,6 +433,7 @@ interface PagePreviewSlotElProps {
   isSelected: boolean;
   onSlotClick?: (index: number) => void;
   onSlotContextMenu?: (index: number, x: number, y: number) => void;
+  onSlotFlip?: (index: number) => void;
 }
 
 /**
@@ -389,6 +456,7 @@ function PagePreviewSlotEl({
   isSelected,
   onSlotClick,
   onSlotContextMenu,
+  onSlotFlip,
 }: PagePreviewSlotElProps) {
   const longPressHandlers = useLongPress((x, y) =>
     onSlotContextMenu?.(index, x, y)
@@ -616,12 +684,15 @@ function PagePreviewSlotEl({
         </div>
       )}
       {/* F6/D22 - the visible touch-discoverable menu cue, BOTTOM-RIGHT of the slot (its own
-          corner - top-left is the E8 selection checkbox, top-right is the E24 flip button,
-          neither of which exists on /display yet, but the corner is reserved per the ruling).
-          Hover/focus-reveal on desktop (a mouse user has right-click); persistent under
-          `(pointer: coarse)` (a touch-primary device, which has no hover state to reveal it via).
-          Only rendered at all when a context menu is actually wired up. */}
-      {onSlotContextMenu != null && (
+          corner - top-left is the E8 selection checkbox, top-right is the E24 flip button, ships
+          just below, EPcue/item 6). Hover/focus-reveal on desktop (a mouse user has right-click);
+          persistent under `(pointer: coarse)` (a touch-primary device, which has no hover state
+          to reveal it via).
+          EPcue (SPEC-editor-polish.md §D.8, REV) - the render gate TIGHTENS from "a context menu
+          is wired" alone to "the slot holds a card AND a context menu is wired" - an empty slot
+          has nothing a menu could act on, so it now shows no cue at all (previously rendered on
+          every slot, filled or not, whenever `onSlotContextMenu` was supplied). */}
+      {onSlotContextMenu != null && content?.imageUrl != null && (
         <SlotMenuCue
           type="button"
           aria-label="Open card menu"
@@ -634,6 +705,24 @@ function PagePreviewSlotEl({
         >
           ⋯
         </SlotMenuCue>
+      )}
+      {/* EP6/item 6/E24 (SPEC-editor-polish.md §D.8 `.slot-flip`, N) - ships the reserved
+          top-right corner; gated on `content.flippable` (a card on EITHER face), NOT
+          `content.imageUrl` (the CURRENTLY effective face) - see that field's own comment for
+          why gating on the latter would strand a user the moment they flip to a face with no
+          art of its own. */}
+      {onSlotFlip != null && content?.flippable === true && (
+        <SlotFlipButton
+          type="button"
+          aria-label="Preview the other face of this card"
+          data-testid="page-preview-slot-flip"
+          onClick={(event) => {
+            event.stopPropagation();
+            onSlotFlip(index);
+          }}
+        >
+          ⟲
+        </SlotFlipButton>
       )}
     </div>
   );

@@ -60,15 +60,13 @@ import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import { createPortal } from "react-dom";
 
 import { errorToNotification, isRateLimited } from "@/common/apiErrors";
-import { SortByOptions } from "@/common/constants";
-import { getOrCreateAnonymousId } from "@/common/cookies";
-import { useTagDisplayName } from "@/common/tagDisplayNames";
 import {
-  CardDocument,
-  SortBy,
-  useAppDispatch,
-  useAppSelector,
-} from "@/common/types";
+  getLocalStoragePinnedSourcePks,
+  getOrCreateAnonymousId,
+} from "@/common/cookies";
+import { useTagDisplayName } from "@/common/tagDisplayNames";
+import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
+import { Spinner } from "@/components/Spinner";
 import {
   ALL_ATTRIBUTE_CHIPS,
   AttributeChipDef,
@@ -696,17 +694,26 @@ const ConfirmRibbonWrap = styled.div`
 
 /** Inline ghost tile - "+N more of this printing" (collapsed) / "Show fewer" (expanded), same
  * footprint as a real candidate tile so it flows in the SAME flex-wrap grid rather than a
- * full-width row breaking it (§7's hard requirement). A real `button`, per §8. */
+ * full-width row breaking it (§7's hard requirement). A real `button`, per §8.
+ *
+ * Editor-polish round (EP1, SPEC-editor-polish.md §D.4 `.vtile.ghost`) - the collapsed box now
+ * carries the first hidden copy's own thumbnail (dimmed) instead of a plain dashed empty box:
+ * `GhostThumb`/`GhostDim`/`GhostPlus`/`GhostCap` below render only when the caller supplies a
+ * `thumbnailUrl` (the "+N" expand ghost only - the "−" collapse ghost stays plain text, nothing
+ * to dim). Border REV per §D.4: `1px rgba(235,235,235,.15)` (was `1px dashed #abb6c2`). */
 const GhostTile = styled.button<{ $widthRem: number }>`
+  position: relative;
   width: ${(props) => props.$widthRem}rem;
   aspect-ratio: 63 / 88;
   flex: 0 0 auto;
+  overflow: hidden;
   background: transparent;
-  outline: 1px dashed #abb6c2;
+  outline: 1px solid rgba(235, 235, 235, 0.15);
   border: none;
   color: #abb6c2;
   font-size: 0.65rem;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   cursor: pointer;
@@ -718,6 +725,38 @@ const GhostTile = styled.button<{ $widthRem: number }>`
      discrepancy to preserve). */
   padding: 0;
   ${touchExpandTapArea}
+`;
+
+const GhostThumb = styled.img`
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+`;
+
+/* EP1 - the dimming scrim over the hidden copy's own thumbnail, per §D.4's literal token. */
+const GhostDim = styled.div`
+  position: absolute;
+  inset: 0;
+  background: rgba(11, 21, 32, 0.62);
+`;
+
+const GhostPlus = styled.span`
+  position: relative;
+  font-size: 16px;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+`;
+
+const GhostCap = styled.span`
+  position: relative;
+  font-size: 7px;
+  color: #cdd6df;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 0 3px;
+  margin-top: 2px;
 `;
 
 //# endregion
@@ -1122,6 +1161,84 @@ function SelectVersionTile({
 
 //# endregion
 
+//# region item 7 (EP7, SPEC-editor-polish.md §D.4/§F annex, amendment 2) - data-driven Sort
+//
+// REVISES RD2/O5: the backend-driven 6-option `SortByOptions` select (`search.sortBy`) is
+// replaced, on THIS surface only (the stacked/funnel layout - the sidebar/modal layout's own
+// `.sortsel` two paragraphs below is untouched), by a client-side comparator over fields the
+// response already carries (§F annex - no backend seam). Amendment 2 (owner, 2026-07-24) ruled
+// FIVE orderings ship now; "Community vote weight" (Q1) waits for the
+// `suggestedCanonicalCardConfidence` numeric seam to actually land - rendering nothing for it,
+// not a disabled placeholder, per the amendment's own explicit instruction. The amendment's own
+// parenthetical compresses "Name (A→Z)" / "Date added" into one "Name/Date" bucket - implemented
+// here as "Name (A→Z)" (the literal wording the ORIGINAL seven-item list uses for that bucket);
+// "Date added" is not a separate option this round - see this task's own PR body for the flagged
+// judgement call.
+type ClientSortKey =
+  | "default"
+  | "confirmation"
+  | "dpi"
+  | "size"
+  | "pinned"
+  | "name";
+
+const CLIENT_SORT_LABELS: Record<ClientSortKey, string> = {
+  default: "Default order",
+  confirmation: "Confirmation status",
+  dpi: "Resolution (DPI) high→low",
+  size: "File size low→high",
+  pinned: "Pinned sources first",
+  name: "Name (A→Z)",
+};
+
+/** Annex: "resolved → suggested → unknown" - lower rank sorts first. */
+function confirmationRank(card: CardDocument | undefined): number {
+  if (card == null) {
+    return 3;
+  }
+  if (card.canonicalCard != null) {
+    return 0;
+  }
+  if (card.suggestedCanonicalCard != null) {
+    return 1;
+  }
+  return 2;
+}
+
+function compareByClientSort(
+  key: ClientSortKey,
+  identifierA: string,
+  identifierB: string,
+  cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined },
+  pinnedSourcePks: Set<number>
+): number {
+  const cardA = cardDocumentsByIdentifier[identifierA];
+  const cardB = cardDocumentsByIdentifier[identifierB];
+  switch (key) {
+    case "confirmation":
+      return confirmationRank(cardA) - confirmationRank(cardB);
+    case "dpi":
+      // high -> low
+      return (cardB?.dpi ?? 0) - (cardA?.dpi ?? 0);
+    case "size":
+      // low -> high
+      return (cardA?.size ?? Infinity) - (cardB?.size ?? Infinity);
+    case "pinned": {
+      const rankA =
+        cardA != null && pinnedSourcePks.has(cardA.sourceId) ? 0 : 1;
+      const rankB =
+        cardB != null && pinnedSourcePks.has(cardB.sourceId) ? 0 : 1;
+      return rankA - rankB;
+    }
+    case "name":
+      return (cardA?.name ?? "").localeCompare(cardB?.name ?? "");
+    default:
+      return 0;
+  }
+}
+
+//# endregion
+
 interface SelectVersionResultsProps {
   imageIdentifiers: Array<string>;
   selectedImage: string | undefined;
@@ -1184,6 +1301,9 @@ export function SelectVersionResults({
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(
     new Set()
   );
+  // EP7 - the stacked/funnel layout's own client-side Sort (see this file's own "item 7" region
+  // comment above). `"default"` leaves selectVersionGrouping.ts's own ordering untouched.
+  const [clientSort, setClientSort] = useState<ClientSortKey>("default");
   const [dismissedConfirmChipKeys, setDismissedConfirmChipKeys] = useState<
     Set<string>
   >(new Set());
@@ -1398,6 +1518,38 @@ export function SelectVersionResults({
     [filteredIdentifiers, cardDocumentsByIdentifier, requestedPrinting]
   );
 
+  // EP7 - re-orders the TOP-LEVEL groups only (each group's own representative/rest ordering,
+  // and the canonical -> non-canonical -> unknown section ordering itself, are untouched -
+  // selectVersionGrouping.ts stays the one source of truth for those); "default" is a no-op
+  // returning `groups` itself, so this costs nothing when Sort is left alone. Pinned-source
+  // membership is read directly from the same localStorage helper SourcesAccordion.tsx itself
+  // uses (`getLocalStoragePinnedSourcePks`) - re-read on every `clientSort` change, not reactive
+  // to a pin toggle elsewhere in the rail mid-render (a real, documented limitation - re-picking
+  // "Pinned sources first" from the dropdown refreshes it).
+  const clientSortedGroups = useMemo(() => {
+    if (clientSort === "default") {
+      return groups;
+    }
+    const pinnedSourcePks = new Set(getLocalStoragePinnedSourcePks());
+    const compare = (identifierA: string, identifierB: string) =>
+      compareByClientSort(
+        clientSort,
+        identifierA,
+        identifierB,
+        cardDocumentsByIdentifier,
+        pinnedSourcePks
+      );
+    return {
+      canonical: [...groups.canonical].sort((a, b) =>
+        compare(a.representative, b.representative)
+      ),
+      nonCanonical: [...groups.nonCanonical].sort((a, b) =>
+        compare(a.representative, b.representative)
+      ),
+      unknown: [...groups.unknown].sort(compare),
+    };
+  }, [groups, clientSort, cardDocumentsByIdentifier]);
+
   // F4 - the funnel's own pick handler: computes the implicit support set for the picked
   // candidate, forwards the pick unchanged to the caller (onSelectImage - the slot's image is
   // always set, regardless of any vote outcome, per F4b's "the pick itself always succeeds"),
@@ -1507,11 +1659,16 @@ export function SelectVersionResults({
         label: string;
         ariaLabel: string;
         onClick: () => void;
+        /** EP1 (SPEC-editor-polish.md §D.4/E - "renders the first hidden copy's thumbnail,
+         * dimmed... with a centred +N and a 'more copies' caption") - set only on the "+N"
+         * expand ghost, never the "−" collapse one (nothing to preview there). */
+        thumbnailUrl?: string;
+        count?: number;
       };
 
   const continuousGridEntries: ContinuousGridEntry[] = [];
   if (layout === "stacked") {
-    groups.canonical.forEach((group) => {
+    clientSortedGroups.canonical.forEach((group) => {
       const label = `${group.expansionCode.toUpperCase()} ${
         group.collectorNumber
       }`;
@@ -1552,11 +1709,14 @@ export function SelectVersionResults({
           label: `+${group.rest.length}`,
           ariaLabel: `Show ${group.rest.length} more copies of ${label}`,
           onClick: () => toggleGroupExpanded(group.key),
+          thumbnailUrl:
+            cardDocumentsByIdentifier[group.rest[0]]?.smallThumbnailUrl,
+          count: group.rest.length,
         });
       }
     });
 
-    groups.nonCanonical.forEach((group) => {
+    clientSortedGroups.nonCanonical.forEach((group) => {
       const label = getTagDisplayName(group.tagName);
       const expanded = expandedGroupKeys.has(group.tagName);
       continuousGridEntries.push({
@@ -1590,11 +1750,14 @@ export function SelectVersionResults({
           label: `+${group.rest.length}`,
           ariaLabel: `Show ${group.rest.length} more ${label} copies`,
           onClick: () => toggleGroupExpanded(group.tagName),
+          thumbnailUrl:
+            cardDocumentsByIdentifier[group.rest[0]]?.smallThumbnailUrl,
+          count: group.rest.length,
         });
       }
     });
 
-    groups.unknown.forEach((identifier) => {
+    clientSortedGroups.unknown.forEach((identifier) => {
       const originalIndex = search.originalIndexMap.get(identifier);
       const label =
         originalIndex != null ? `Option ${originalIndex + 1}` : "Unknown";
@@ -1633,12 +1796,30 @@ export function SelectVersionResults({
           <GhostTile
             key={entry.key}
             type="button"
+            className="vtile ghost"
             $widthRem={tileWidthRem ?? 4.5}
             aria-label={entry.ariaLabel}
             onClick={entry.onClick}
             data-testid={`select-version-ghost-${entry.key}`}
           >
-            {entry.label}
+            {entry.thumbnailUrl != null ? (
+              <>
+                <GhostThumb
+                  src={entry.thumbnailUrl}
+                  alt=""
+                  aria-hidden="true"
+                />
+                <GhostDim aria-hidden="true" />
+                <GhostPlus
+                  data-testid={`select-version-ghost-plus-${entry.key}`}
+                >
+                  {entry.label}
+                </GhostPlus>
+                <GhostCap>more copies</GhostCap>
+              </>
+            ) : (
+              entry.label
+            )}
           </GhostTile>
         )
       )}
@@ -1911,26 +2092,24 @@ export function SelectVersionResults({
             {filteredIdentifiers.length !== 1 ? "s" : ""}
           </span>
           <span style={{ flex: "1 1 auto" }} />
-          {/* RD2 - a compact Form.Select of the 6 SortByOptions replaces the old
-              NullableSortByFilter tree-select (O5 accepted). */}
+          {/* EP7 (SPEC-editor-polish.md §D.4 `.sortsel`, REV RD2/O5, amendment 2) - the
+              backend-driven 6-option `SortByOptions` select is replaced, on this surface, by the
+              five client-side orderings (see this file's own "item 7" region comment above);
+              "Community vote weight" (Q1) renders nothing until the confidence-numeric seam
+              lands, per the amendment's explicit ruling. */}
           <Form.Select
             size="sm"
             className="sortsel"
             aria-label="Sort versions"
-            value={search.sortBy ?? ""}
+            value={clientSort}
             onChange={(event) =>
-              search.setSortBy(
-                event.target.value === ""
-                  ? undefined
-                  : (event.target.value as SortBy)
-              )
+              setClientSort(event.target.value as ClientSortKey)
             }
             data-testid="funnel-sort-select"
           >
-            <option value="">Default order</option>
-            {Object.entries(SortByOptions).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
+            {(Object.keys(CLIENT_SORT_LABELS) as ClientSortKey[]).map((key) => (
+              <option key={key} value={key}>
+                {CLIENT_SORT_LABELS[key]}
               </option>
             ))}
           </Form.Select>
@@ -2020,8 +2199,16 @@ export function SelectVersionResults({
           </AckLine>
         )}
 
-        {/* survivors grid, count-proportional (F1/D21). */}
-        {tier === "none" ? (
+        {/* EP10 (SPEC-editor-polish.md §D.4 `.vloading`/`.spinner-border`) - the site's canonical
+            round spinner (`components/Spinner.tsx`, reused verbatim) replaces the grid entirely
+            while the filter/settings debounce is still pending - this surface previously showed
+            no loading affordance at all for that gap. */}
+        {search.displaySpinner ? (
+          <div className="vloading" data-testid="select-version-loading">
+            <Spinner size={2.6} />
+            <span>Loading versions…</span>
+          </div>
+        ) : tier === "none" ? (
           <div
             className="text-center text-muted small py-3"
             data-testid="funnel-empty-state"

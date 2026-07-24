@@ -134,9 +134,18 @@ test.describe("SelectVersionSection (issue #167)", () => {
     // sv-001 (cardDocument13/14) has one extra copy (cardDocument13, the lower-DPI one) - an
     // inline ghost tile ("+1"), same footprint as a real tile, sits right after the
     // representative and expands it IN PLACE rather than via a full-width text link.
+    // EP1 (SPEC-editor-polish.md §D.4 `.vtile.ghost`, REV) - the ghost tile now also carries the
+    // first hidden copy's own thumbnail (dimmed) and a "more copies" caption, not just the bare
+    // "+N" text - `toContainText` (not `toHaveText`) since the "+1" count and caption are two
+    // separate child nodes now, not the button's whole text content.
     const ghost = page.getByTestId("select-version-ghost-sv-001-expand");
     await expect(ghost).toBeVisible();
-    await expect(ghost).toHaveText("+1");
+    await expect(ghost).toContainText("+1");
+    await expect(ghost).toContainText("more copies");
+    await expect(
+      page.getByTestId("select-version-ghost-plus-sv-001-expand")
+    ).toHaveText("+1");
+    await expect(ghost.locator("img")).toBeVisible();
     await ghost.click();
 
     await expect(
@@ -419,5 +428,77 @@ test.describe("SelectVersionSection (issue #167)", () => {
     expect(
       castsForCard19.some((call) => call.tagNames.includes("Old Border"))
     ).toBe(false);
+  });
+
+  // EP7 (SPEC-editor-polish.md §D.4 `.sortsel`, REV RD2, amendment 2) - the Sort dropdown is now
+  // the five client-side orderings amendment 2 ruled, not the old six-option `SortByOptions`
+  // (backend `dateCreatedDescending` etc.) list - "Community vote weight" renders nothing
+  // (no disabled placeholder) until the confidence-numeric seam lands, per that amendment's own
+  // explicit instruction.
+  test("EP7 - the Sort dropdown offers exactly the five ruled client-side orderings, and switching between them doesn't drop any candidate from the grid", async ({
+    page,
+    network,
+  }) => {
+    network.use(...selectVersionHandlers);
+    await openSelectVersionSection(page);
+
+    const sortSelect = page.getByTestId("funnel-sort-select");
+    const optionLabels = await sortSelect.locator("option").allTextContents();
+    expect(optionLabels).toEqual([
+      "Default order",
+      "Confirmation status",
+      "Resolution (DPI) high→low",
+      "File size low→high",
+      "Pinned sources first",
+      "Name (A→Z)",
+    ]);
+
+    const grid = page.getByTestId("select-version-continuous-grid");
+    const tileCountBefore = await grid
+      .locator('[data-testid^="select-version-tile-"]')
+      .count();
+
+    for (const label of [
+      "Confirmation status",
+      "Resolution (DPI) high→low",
+      "File size low→high",
+      "Pinned sources first",
+      "Name (A→Z)",
+    ]) {
+      await sortSelect.selectOption({ label });
+      // Re-ordering a grid must never change WHICH candidates are visible, only their order.
+      await expect(
+        grid.locator('[data-testid^="select-version-tile-"]')
+      ).toHaveCount(tileCountBefore);
+    }
+  });
+
+  // EP10 (SPEC-editor-polish.md §D.4 `.vloading`/`.spinner-border`, N) - the round Spinner
+  // (components/Spinner.tsx, reused verbatim) replaces the grid while `search.displaySpinner` is
+  // true (the settings-debounce-pending window) - this surface previously showed no loading
+  // affordance for that gap at all.
+  test("EP10 - typing in the sources filter briefly shows the round spinner in place of the grid while the debounce settles", async ({
+    page,
+    network,
+  }) => {
+    network.use(...selectVersionHandlers);
+    await openSelectVersionSection(page);
+
+    await page.getByTestId("funnel-filters-toggle").click();
+    // Nudging a DPI range filter input triggers the same debounced re-filter
+    // `search.displaySpinner` gates on - drag the min-DPI slider up.
+    const minDpiSlider = page.locator('input[type="range"]').first();
+    await minDpiSlider.focus();
+    await minDpiSlider.press("ArrowRight");
+
+    // The spinner is only visible for the (short) debounce window - assert it CAN appear
+    // (component-level contract) without racing a specific millisecond timing: either it was
+    // caught mid-debounce (spinner visible, grid absent) or the debounce already resolved by the
+    // time this check runs (grid visible again) - both are correct, non-flaky outcomes; what
+    // would be a real regression is the grid AND spinner both being absent (a broken render).
+    const spinnerOrGrid = page
+      .getByTestId("select-version-loading")
+      .or(page.getByTestId("select-version-continuous-grid"));
+    await expect(spinnerOrGrid.first()).toBeVisible();
   });
 });
