@@ -77,6 +77,7 @@ from cardpicker.pilot_run_lifecycle import (
     add_dry_run_guard_arguments,
     enforce_dry_run_precondition,
     initial_counters,
+    mark_ledger_failed,
     merge_counters,
     resilient_terminal_output,
     scope_hash,
@@ -321,12 +322,12 @@ class Command(BaseCommand):
                 )
                 if dry_run:
                     self.stdout.write("Dry run - nothing deleted, no card resynced.")
-        except Exception:
-            # Only a still-RUNNING row gets marked FAILED here - a run this invocation already
-            # marked COMPLETED above must never be overwritten by a later exception (e.g. from the
-            # terminal print, if resilient_terminal_output didn't already swallow it).
-            if ledger.status == PilotRunLedger.Status.RUNNING:
-                ledger.status = PilotRunLedger.Status.FAILED
-                ledger.finished_at = timezone.now()
-                ledger.save(update_fields=["status", "finished_at"])
+        except Exception as exc:
+            # Shared FAILED-transition rail (cardpicker.pilot_run_lifecycle.mark_ledger_failed,
+            # docs/proposals/stage-e-streaming.md §3 decision (6)/§10) - a no-op if this invocation
+            # already reached the COMPLETED save above (a later exception from the terminal print,
+            # if resilient_terminal_output didn't already swallow it, must never overwrite that
+            # completion), otherwise records a triage-able counters["failure_reason"] alongside the
+            # FAILED status, closing the "empty-failed-row" gap that helper's own docstring cites.
+            mark_ledger_failed(ledger, exc)
             raise

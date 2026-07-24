@@ -184,6 +184,12 @@ Deployment, incidents, and cross-session lessons.
 - [`lessons.md`](lessons.md) — terse, reusable cross-session lessons (CI
   vs. local venv trust, worktree port collisions, ES mapping drift, and
   more).
+- [`features/stage-e-operations.md`](features/stage-e-operations.md) — the
+  Stage E Phase 1 envelope enforcement primitive: PASSIVE vs. BULK mode,
+  the four ratified pause bars, and the trip/resume runbook
+  (`resolve_envelope_trip --acknowledge-trip`). Companion to
+  [`proposals/stage-e-streaming.md`](proposals/stage-e-streaming.md), which
+  remains the design authority.
 
 ## Plans & proposals
 

@@ -878,6 +878,87 @@ suggestion confidence is an **ordinal, auditable pipeline-state label**;
 neither is a calibrated probability, and this document does not pretend
 otherwise.
 
+## 10. Streaming and continuous operation
+
+Stage E (`docs/proposals/stage-e-streaming.md`, GitHub issue #153) moves
+this pipeline from discrete batch runs to continuous, event-driven
+dispatch. The question this section answers: does anything above change
+when cards are processed as they arrive rather than in a bounded cohort?
+**No.** Every soundness property this document establishes is a
+per-card or per-vote property, checked at decode time or at gate time —
+never a property of the schedule that decides _when_ a card is decoded.
+Concretely, four properties, none of which reference batch boundaries,
+run cadence, or wall-clock timing anywhere in their own definition:
+
+1. **The decode-or-abstain rule (§1)** — "accept iff exactly one
+   candidate survives within the evidence ball; abstain otherwise" is a
+   per-card function of the evidence gathered for that one card against
+   its own closed candidate set `C(n)`. Nothing about this rule reads
+   the state of any other card, any batch, or any clock; a streaming
+   dispatcher calling the same decoder once per card, seconds apart,
+   computes the identical output a batch driver calling it once per
+   card, in one process, would have computed for that card.
+2. **Vote weights (§4 item 2, the owner-ratified vote-weight scenario
+   matrix)** — `VoteSource` weights (machine 0.5, human 1.0, admin 5.0,
+   implicit 0.25 capped, federated 1.0-but-non-human-backed) are fixed
+   properties of _who cast a vote and how_, resolved per (card, tag)
+   outcome group at gate-evaluation time. `resolve_weighted_consensus`
+   has no notion of streaming vs. batch dispatch at all — it reads
+   whatever votes currently exist for a card and applies the same
+   matrix regardless of whether those votes arrived one batch apart or
+   one continuous stream apart.
+3. **The human-backed gate (§4 item 2)** — machine-sourced weight can
+   never alone clear the resolution threshold; at least one human- or
+   admin-weighted vote must be present in the winning tally. This is
+   evaluated identically per card regardless of dispatch cadence, and a
+   continuous stream does not add any new machine-only resolution path
+   that batch dispatch lacked — see decision (5) of the streaming brief
+   itself, which states this invariant is "untouched by moving from
+   batch to streaming, since it lives in the vote-weight/consensus
+   layer, not the dispatch layer."
+4. **The resolution false-accept bound (§7b)** — `P(false-accept resolved by machine alone) = 0, structurally`, because it factors
+   through `g₅` (the human-backed gate) exactly as in point 3 above.
+   This is a property of the composition `decode → gate`, not of the
+   loop that decides when `decode` runs for a given card next.
+
+**What genuinely IS new under continuous operation**, and the only
+soundness-adjacent surface this section flags: a human vote's own
+quality can, in principle, depend on the served MIX of cards a person
+is shown in a session — a queue that serves long, repetitive stretches
+of visually similar cards (a plausible byproduct of an event-driven
+trigger firing in clusters, e.g. one drive upload producing many
+consecutive near-duplicate submissions) could degrade attentiveness
+compared to the more varied mix a hand-curated batch cohort tends to
+produce. This is a real effect worth naming honestly, but it is
+**not** a resolver-soundness effect in the sense §§1–9 formalize: it
+would show up (if at all) as noisier _individual_ human votes feeding
+into the same, unchanged vote-weight/gate machinery described in
+points 2–3 above — the gate does not get weaker, a given vote might
+just be a worse signal. The pipeline's own existing selection layer —
+the `/whatsthat` vote-queue funnel (`question_feed.py`,
+`docs/features/printing-tags.md`'s "Frontend consumer" section) — is
+where a mix-composition property like this would need to be measured
+and, if it turns out to matter, mitigated (e.g. explicit variety-aware
+ordering, or logging the served sequence so a mix effect could be
+detected after the fact). It is deliberately **not** something this
+document proposes changing in the resolver — `resolve_weighted_consensus`
+has no mix-awareness today and gains none from this section; any
+mitigation belongs entirely to the selection/serving layer, matching
+this document's own repeated pattern of keeping "what narrows the
+candidate set or feeds evidence" strictly separate from "what the
+gate does with whatever evidence exists."
+
+**Not yet backed by written data**: at the time of writing, no
+committed doc or dated report in this repo measures serve-mix effects
+on vote quality empirically, or documents a specific mix-logging
+mitigation already built — this section states the argument (the
+effect is plausible, it lives in the selection layer, the resolver is
+unaffected) without asserting a citable measurement that does not yet
+exist, consistent with this document's own "no number without
+measurement" discipline (§9). If a labeled study of this effect (or a
+built mix-logging mechanism) lands later, this section is the place to
+fold it in — flagged here rather than left unlinked.
+
 ---
 
 ## Status
@@ -946,3 +1027,17 @@ the live-audit basis numbers and the "image-derived + human evidence
 only" framing. Full mechanism:
 `cardpicker.vote_consensus.resolve_vote_weight`; full ruling:
 [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §3 item 3.
+
+**§10 added 2026-07-24** (Stage E Phase 1, `docs/proposals/stage-e-streaming.md`,
+itself still HOLD pending owner review of its own §3-§5): the argument
+that moving from batch to continuous/streaming dispatch changes nothing
+about this document's soundness model — decode-or-abstain (§1), vote
+weights and the human-backed gate (§4 item 2), and the resolution
+false-accept bound (§7b) are all per-card/per-vote properties independent
+of scheduling. Names the one new, non-resolver soundness-adjacent surface
+(served-mix effects on human vote quality, living in the selection/
+vote-queue layer) without asserting a citable measurement that does not
+yet exist in the written record — see §10's own "Not yet backed by
+written data" note. Like §§7-9, §10's **text** is pending the same owner
+review §§1-6 received; the top-of-document STATUS banner is unchanged by
+this addition.

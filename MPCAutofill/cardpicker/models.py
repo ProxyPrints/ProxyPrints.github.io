@@ -1228,14 +1228,84 @@ class PilotRunLedger(models.Model):
     purged_at = models.DateTimeField(null=True, blank=True)
     # Free-form aggregate counters for commands whose completion shape doesn't fit votes_written
     # (e.g. run_image_evidence_cohort's Stage C fetch/compute counts - cohort_size/completed/
-    # fetch_failures/short_circuited/lockout_hit/rss_limit_hit/elapsed_s) - added so a future
-    # command's own counters never need a fresh migration, matching CardScanLog's own
+    # fetch_failures/short_circuited/lockout_hit/rss_limit_hit/elapsed_s/peak_rss_mb) - added so a
+    # future command's own counters never need a fresh migration, matching CardScanLog's own
     # survivor_pks JSONField convention elsewhere in this file. Never interpreted by any
     # purge/consensus code path, purely a queryable audit payload.
+    #
+    # `peak_rss_mb` (2026-07-24, docs/proposals/stage-e-streaming.md §3 decision (6)/§1's
+    # observability-gap finding) and `failure_reason` (same section, the "empty-failed-row" gap -
+    # see `cardpicker.pilot_run_lifecycle.mark_ledger_failed`'s own docstring) are two counters
+    # keys every long-running command's own ledger self-recording now aims to populate - documented
+    # here, not migrated in as real columns, since both fit the existing free-form JSON convention
+    # this field already exists for.
     counters = models.JSONField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"[{self.status}] {self.command} run_id={self.run_id}"
+
+
+def _generate_envelope_trip_id() -> str:
+    """Same shape as `local_identify_printing_tags.generate_run_id` (a UTC-timestamp prefix for
+    human scannability, plus a short random suffix so two trips recorded in the same second never
+    collide) - deliberately not reusing that function directly, since it lives in a different
+    module for a different id kind and this model should not import a management-adjacent module
+    just for an id-generation helper."""
+    return f"envtrip-{timezone.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+
+class EnvelopeTrip(models.Model):
+    """
+    A ledger-ADJACENT record (docs/proposals/stage-e-streaming.md §3 decision (5)/§10(a)'s
+    ratified PASSIVE-mode operating envelope) - deliberately NOT a `PilotRunLedger` row or a
+    `PilotRunLedger.counters` entry, unlike this file's other Stage E additions
+    (`peak_rss_mb`/`failure_reason`), because a trip is a genuinely different shape: it needs to be
+    looked up by a short human-facing id (`trip_id`, for the resume command's own `--acknowledge-
+    trip <trip-id>` flag), queried for "is anything currently open" cheaply and often (every
+    dispatch decision in the eventual phase-2 streaming loop), and mutated exactly once
+    (acknowledged) after creation - none of which fits `PilotRunLedger`'s RUNNING/COMPLETED/FAILED
+    lifecycle or its free-form, never-queried-by-key `counters` JSON blob.
+
+    One row per BREACH, not per bar - a bar that trips twice (once, gets acknowledged, trips again
+    later) gets two rows, an honest history of every pause the envelope ever enforced. See
+    `cardpicker.operating_envelope`'s own module docstring for the four ratified bars this model's
+    `bar` field names and the halt/resume mechanism this model persists one half of (the HALT+
+    RECORD side - the RESUME side is `resolve_envelope_trip`'s own management command, which is the
+    only code path permitted to set `acknowledged_at`).
+
+    `run_id` is nullable and best-effort (matches `AbstractWeightedVote.run_id`'s own "never a hard
+    gate" convention elsewhere in this file) - useful audit context for which streaming
+    invocation was live when the trip fired, never load-bearing for whether the trip gates
+    dispatch (see `operating_envelope.current_trip`'s own docstring for the exact scoping rule).
+    """
+
+    class Bar(models.TextChoices):
+        HOST_LOAD = "host_load", gettext_lazy("Host load average")
+        RSS = "rss", gettext_lazy("RSS per worker")
+        FETCH_FAILURE_RATE = "fetch_failure_rate", gettext_lazy("Fetch failure rate")
+        GOOGLE_LOCKOUT = "google_lockout", gettext_lazy("Google fetch lockout")
+
+    trip_id = models.CharField(max_length=40, unique=True, default=_generate_envelope_trip_id)
+    bar = models.CharField(max_length=32, choices=Bar.choices)
+    # The observed values that crossed the bar (e.g. {"load_avg": 8.2, "ceiling": 7.0}) - free-form
+    # JSON, same "queryable audit payload, never interpreted by any gate/consensus code path"
+    # convention as PilotRunLedger.counters, scoped down to just this one breach's own numbers.
+    detail = models.JSONField(null=True, blank=True)
+    run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    tripped_at = models.DateTimeField(auto_now_add=True)
+    # Both null together (the open/gating state) or both set together (the closed/acknowledged
+    # state) - enforced by operating_envelope.acknowledge_trip, the only code path that ever sets
+    # either field; never enforced at the DB layer since this table has no other writer to guard
+    # against.
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_note = models.TextField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["acknowledged_at", "tripped_at"])]
+
+    def __str__(self) -> str:
+        state = "acknowledged" if self.acknowledged_at is not None else "OPEN"
+        return f"[{state}] {self.bar} trip_id={self.trip_id}"
 
 
 class CardScanLog(models.Model):

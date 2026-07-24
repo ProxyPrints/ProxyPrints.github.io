@@ -16,6 +16,7 @@ from cardpicker.models import PilotRunLedger
 from cardpicker.pilot_run_lifecycle import (
     enforce_dry_run_precondition,
     initial_counters,
+    mark_ledger_failed,
     merge_counters,
     resilient_terminal_output,
     scope_hash,
@@ -217,3 +218,88 @@ class TestEnforceDryRunPrecondition:
             command="some_command", write_mode=True, skip_check=False, window_hours=48, scope=None
         )
         assert result is False
+
+
+class TestMarkLedgerFailed:
+    """mark_ledger_failed - the shared FAILED-transition rail (module docstring point 4,
+    docs/proposals/stage-e-streaming.md §3 decision (6)/§10, the "empty-failed-row" gap this
+    brief's own live-DB verification pass found: PilotRunLedger id 71 persisted FAILED with an
+    empty counters dict and no error detail)."""
+
+    def test_marks_a_running_row_failed_with_a_failure_reason(self, db):
+        ledger = PilotRunLedger.objects.create(
+            run_id="run-1", command="some_command", status=PilotRunLedger.Status.RUNNING
+        )
+
+        mark_ledger_failed(ledger, RuntimeError("boom"))
+
+        assert ledger.status == PilotRunLedger.Status.FAILED
+        assert ledger.finished_at is not None
+        assert ledger.counters == {"failure_reason": "RuntimeError: boom"}
+
+    def test_persists_to_the_database(self, db):
+        ledger = PilotRunLedger.objects.create(
+            run_id="run-1", command="some_command", status=PilotRunLedger.Status.RUNNING
+        )
+
+        mark_ledger_failed(ledger, ValueError("bad value"))
+
+        refetched = PilotRunLedger.objects.get(run_id="run-1")
+        assert refetched.status == PilotRunLedger.Status.FAILED
+        assert refetched.counters["failure_reason"] == "ValueError: bad value"
+
+    def test_preserves_existing_counters_rather_than_clobbering_them(self, db):
+        ledger = PilotRunLedger.objects.create(
+            run_id="run-1",
+            command="some_command",
+            status=PilotRunLedger.Status.RUNNING,
+            counters={"scope": "scope-a", "skip_dryrun_check_used": True},
+        )
+
+        mark_ledger_failed(ledger, RuntimeError("boom"))
+
+        assert ledger.counters == {
+            "scope": "scope-a",
+            "skip_dryrun_check_used": True,
+            "failure_reason": "RuntimeError: boom",
+        }
+
+    def test_is_a_no_op_when_the_row_already_completed(self, db):
+        """A run this invocation already marked COMPLETED must never be overwritten by a later
+        exception (e.g. from the terminal print, if resilient_terminal_output didn't already
+        swallow it) - see the module's own docstring."""
+        finished_at = timezone.now()
+        ledger = PilotRunLedger.objects.create(
+            run_id="run-1",
+            command="some_command",
+            status=PilotRunLedger.Status.COMPLETED,
+            finished_at=finished_at,
+            counters={"cohort_size": 5},
+        )
+
+        mark_ledger_failed(ledger, RuntimeError("stdout severed after completion"))
+
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.finished_at == finished_at
+        assert ledger.counters == {"cohort_size": 5}
+
+    def test_is_a_no_op_when_the_row_already_failed(self, db):
+        ledger = PilotRunLedger.objects.create(
+            run_id="run-1",
+            command="some_command",
+            status=PilotRunLedger.Status.FAILED,
+            counters={"failure_reason": "original failure"},
+        )
+
+        mark_ledger_failed(ledger, RuntimeError("a second, unrelated exception"))
+
+        assert ledger.counters == {"failure_reason": "original failure"}
+
+    def test_truncates_an_extremely_long_failure_reason(self, db):
+        ledger = PilotRunLedger.objects.create(
+            run_id="run-1", command="some_command", status=PilotRunLedger.Status.RUNNING
+        )
+
+        mark_ledger_failed(ledger, RuntimeError("x" * 5000))
+
+        assert len(ledger.counters["failure_reason"]) <= 2000
