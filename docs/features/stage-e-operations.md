@@ -183,7 +183,15 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    lacking a full-manifest `ImageEvidence` row — the same shape
    `run_image_evidence_cohort.py`'s own resume filter uses, imported, not
    reimplemented).
-5. **Stage C** (sequential, per-card, not pooled — a micro-batch is far too
+5. **Concurrency-cap slot acquire** (companion change, 2026-07-24 —
+   `cardpicker.stage_e_concurrency`) — refuses PROACTIVELY
+   (`status="throttled-concurrency-cap"`, zero DB writes beyond the
+   advisory-lock check itself) once `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`
+   (default 2) dispatches are already running concurrently, anywhere across
+   this box's django-q2 worker processes. See "Concurrency cap" below for
+   the full mechanism and the incident that motivated it — distinct from,
+   and a proactive complement to, the envelope's own reactive host-load bar.
+6. **Stage C** (sequential, per-card, not pooled — a micro-batch is far too
    small for BULK mode's process-pool concurrency to help) — the same
    `compute_card_evidence`/`persist_evidence` unit `run_image_evidence_cohort.py`
    drives, one card at a time. A `GoogleFetchLockoutError` stops Stage C for
@@ -191,15 +199,17 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    in-flight, already-committed work stays committed; Stage D below still
    runs against whatever was reached ("in-flight work drains, nothing NEW
    starts").
-6. **Stage D** — `run_join_key_calculator`/`run_fallback_calculator`/
+7. **Stage D** — `run_join_key_calculator`/`run_fallback_calculator`/
    `run_slow_path_calculator`, called AS-IS with the new `card_ids` scope, in
    the same escalation order every BULK-mode invocation already uses. Each of
    these already calls `resolve_and_persist_printing` internally for every
    card it touches — this is what satisfies §3 decision (4)'s "scoped
    incremental per-touch consensus recompute" with no separate consensus step
    in the dispatcher at all.
-7. **Ledger write** — one `PilotRunLedger` row per micro-batch (see
-   "Observability" below).
+8. **Ledger write, then concurrency-cap slot release** — one `PilotRunLedger`
+   row per micro-batch (see "Observability" below), then the slot acquired in
+   step 5 is released (always, including on an exception - see "Concurrency
+   cap" below).
 
 ### Trigger: event-driven, plus a cron backstop (§3 decision (1))
 
@@ -229,6 +239,51 @@ change needed to adjust) is a **placeholder**, not a considered answer —
 tail shakedown's own instrumentation (phase 3, not yet run). The default
 sits inside the brief's own "roughly 10-100 cards per batch" sanity range as
 a conservative starting point pending that measurement.
+
+### Concurrency cap (companion change, 2026-07-24)
+
+Caps the number of `dispatch_micro_batch` calls running CONCURRENTLY, across
+every django-q2 worker process on the box, to
+`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (default `2`, env-tunable —
+same "placeholder pending real measurement" posture as
+`STAGE_E_MICRO_BATCH_SIZE` above). Motivated by the shakedown incident PR
+#448 also fixed (the vote-collision half of the same run) — see
+`local_calculate_verdicts._split_new_printing_tag_votes`'s own docstring for
+the full incident numbers: eight concurrent dispatches, all running
+CPU-bound OCR/phash extraction at once, tripped the host-load envelope bar
+(`envtrip-20260724T214616-be6e5db9`, 11.85 observed against the 7.0
+ceiling) on a host with only 7 usable compute cores
+(`docs/features/catalog-completion-plan.md` L1794/2248/2366's hardware
+citation and its own 0.31x-slower-than-sequential CPU-bound-oversubscription
+finding).
+
+**Why a cap in addition to the envelope, not instead of it**: the envelope's
+own host-load bar is REACTIVE — `check_envelope` only trips AFTER a fresh
+signal sample crosses 7.0, which is necessarily after the load has already
+spiked (the incident's own trip landed 0.43s after the damage was done).
+The concurrency cap is PROACTIVE — it refuses to even START a dispatch once
+its own slots are all held, so the host is never driven past a bounded
+concurrency level by Stage E's own dispatches in the first place. Both stay
+in place; neither supersedes the other.
+
+**Mechanism**: Postgres session-scoped advisory locks
+(`cardpicker.stage_e_concurrency` — see that module's own docstring for the
+full comparison against a cache-based counter and a dedicated django-q
+queue, both rejected, and why advisory locks' automatic release-on-
+connection-death was the deciding factor over a DB-row counter). No new
+migration, no new infrastructure. A throttled dispatch returns
+`status="throttled-concurrency-cap"` and writes no ledger row, the same
+"halted dispatch never partially starts" convention `halted-open-trip`/
+`halted-new-trip` already established.
+
+**Runbook implication**: `STAGE_E_MAX_CONCURRENT_DISPATCHES` is the first
+tuning knob to raise once real shakedown data shows headroom below the
+7-core ceiling — raise it gradually and watch the host-load bar, never
+guess a large value up front. Do **not** attempt to defeat a persistent
+run of `throttled-concurrency-cap` outcomes by raising this value past what
+the envelope's own load bar tolerates — a cap that's too high just moves
+the failure back to the reactive host-load trip this change was built to
+avoid triggering in the first place.
 
 ### Observability: the streaming-run ledger convention
 
