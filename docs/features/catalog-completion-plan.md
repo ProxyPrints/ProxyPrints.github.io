@@ -2805,7 +2805,6 @@ likely extends Part 1's existing `PilotRunLedger` rather than a new
 model. Applies to the shared runner, so Stage C golden runs and the
 fidelity replay inherit it for free.
 
-<<<<<<< HEAD
 Piece (1)'s acceptance test now exists as a re-runnable script,
 `scripts/ops/crash_drill.sh` — kill-and-restart at an arbitrary
 mid-batch point, a truthful interrupted-run ledger, and a fully
@@ -2817,7 +2816,7 @@ slice of the blank-collector-text pool, chosen because the
 fetch-failed pool the drill originally targeted had collapsed to ~10
 cards, too small to host a reliable kill window) — swap that query
 when the current cohort stops being representative or large enough.
-=======
+
 The batch-run contract above is fully specified and its kill-test has
 passed in production (see the crash-drill note earlier in this
 section); extending the same four-piece contract to a continuous
@@ -2826,8 +2825,6 @@ consensus-recompute placement, the human-backed gate in a continuous
 world, observability) is designed in
 [`docs/proposals/stage-e-streaming.md`](../proposals/stage-e-streaming.md)
 (issue #153, HOLD pending owner review) — not restated here.
-
-> > > > > > > 3a342e6964a1e54fd8bd6a5e9d0ecb2975687e61
 
 ---
 
