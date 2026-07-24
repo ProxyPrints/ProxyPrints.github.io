@@ -91,6 +91,7 @@ from cardpicker.operating_envelope import (
 )
 from cardpicker.pilot_run_lifecycle import mark_ledger_failed, merge_counters
 from cardpicker.process_metrics import get_process_rss_mb
+from cardpicker.stage_e_concurrency import try_acquire_dispatch_slot
 from cardpicker.utils import get_baked_git_sha
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,11 @@ class DispatchOutcome:
       - "halted-open-trip" - `current_trip()` was already non-None; no self-resume (module docstring).
       - "halted-new-trip" - this call's own fresh envelope sample breached a bar.
       - "empty" - streaming is enabled and the envelope is clear, but nothing was eligible.
+      - "throttled-concurrency-cap" - a real batch was selected, but every
+        `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` slot (`cardpicker.stage_e_concurrency`) was
+        already held by another concurrent dispatch - PROACTIVE throttling, distinct from the
+        envelope's own REACTIVE halted-new-trip (see that module's own docstring for why both
+        exist). No ledger row is written, matching the other halted statuses.
       - "completed" - did real work; does not itself guarantee zero failures inside the batch
         (a card can still fail its own fetch/extraction), only that the DISPATCH LOOP didn't halt.
       - "completed-with-trip" - did real work, but a `GoogleFetchLockoutError` observed mid-batch
@@ -386,10 +392,12 @@ def dispatch_micro_batch(
     `stream_backstop_sweep` (`card_ids=None`, letting `_select_micro_batch` fill the whole batch
     from the backlog).
 
-    Ordering: default-off gate -> no-self-resume gate -> fresh envelope sample -> Stage C
-    (sequential, per-card) -> Stage D (AS-IS entry points, scoped) -> ledger write. Every gate below
-    returns WITHOUT touching the DB (aside from the envelope check's own trip-persist side effect)
-    the instant it applies - a halted dispatch never partially starts Stage C.
+    Ordering: default-off gate -> no-self-resume gate -> fresh envelope sample -> batch selection ->
+    concurrency-cap slot acquire (`cardpicker.stage_e_concurrency`) -> Stage C (sequential, per-card)
+    -> Stage D (AS-IS entry points, scoped) -> ledger write -> slot release. Every gate below returns
+    WITHOUT touching the DB (aside from the envelope check's own trip-persist side effect, and the
+    concurrency-cap check's own advisory-lock round trip, which writes nothing to any table) the
+    instant it applies - a halted or throttled dispatch never partially starts Stage C.
     """
     if not getattr(settings, "STAGE_E_STREAMING_ENABLED", False):
         return DispatchOutcome(status="disabled", run_id=run_id)
@@ -427,69 +435,86 @@ def dispatch_micro_batch(
     if not batch_ids:
         return DispatchOutcome(status="empty", run_id=run_id)
 
-    dispatch_run_id = run_id or f"stage-e-stream-{timezone.now().strftime('%Y%m%dT%H%M%S%f')}Z"
+    # CONCURRENCY CAP (companion to PR #448's vote-collision fix - cardpicker.stage_e_concurrency's
+    # own module docstring has the full incident/mechanism writeup): acquired around exactly the
+    # CPU-heavy segment below (ledger create through Stage C/D completion), not around the cheap
+    # batch-selection query above - holding a scarce slot while doing nothing but a bounded read
+    # would only starve other dispatches for no benefit. `slot is None` means every
+    # `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` slot is already held elsewhere - PROACTIVE
+    # throttling, distinct from the envelope's own REACTIVE halted-new-trip below.
+    with try_acquire_dispatch_slot() as slot:
+        if slot is None:
+            logger.info(
+                "Stage E dispatch throttled - all %s concurrency-cap slots already held",
+                getattr(settings, "STAGE_E_MAX_CONCURRENT_DISPATCHES", 2),
+            )
+            return DispatchOutcome(status="throttled-concurrency-cap", run_id=run_id)
 
-    # Micro-batch ledger row convention (task brief scope item 6, docs/features/stage-e-operations.md's
-    # "Phase 2" section): one PilotRunLedger row per micro-batch dispatch, `command=
-    # "stage_e_streaming_dispatch"`, `dry_run=False` always (PASSIVE mode has no dry-run leg - the
-    # per-envelope-change dry run §3 decision (5) describes is a one-off owner review of the
-    # envelope bounds themselves, not a per-batch gate the way BULK mode's forced-dry-run guard is).
-    ledger = PilotRunLedger.objects.create(
-        run_id=dispatch_run_id,
-        command="stage_e_streaming_dispatch",
-        dry_run=False,
-        status=PilotRunLedger.Status.RUNNING,
-        git_sha=get_baked_git_sha(),
-        counters={"trigger_reason": trigger_reason, "batch_size": len(batch_ids)},
-    )
+        dispatch_run_id = run_id or f"stage-e-stream-{timezone.now().strftime('%Y%m%dT%H%M%S%f')}Z"
 
-    outcome = DispatchOutcome(status="completed", run_id=dispatch_run_id, card_ids=batch_ids)
-    batch_start = time.monotonic()
-
-    try:
-        lockout_trip = _run_stage_c(batch_ids, dispatch_run_id, outcome)
-        # Stage D still runs even after a mid-batch lockout trip - "in-flight work drains, nothing
-        # NEW starts" (docs/features/stage-e-operations.md's HALT semantics) - see _run_stage_d's
-        # own docstring for why this is always safe to call regardless of how far Stage C got.
-        _run_stage_d(batch_ids, dispatch_run_id, outcome)
-
-        if lockout_trip is not None:
-            outcome.status = "completed-with-trip"
-            outcome.trip_id = lockout_trip.trip_id
-
-        peak_rss_mb = get_process_rss_mb()
-        ledger.status = PilotRunLedger.Status.COMPLETED
-        ledger.finished_at = timezone.now()
-        ledger.counters = merge_counters(
-            ledger.counters,
-            {
-                "elapsed_s": round(time.monotonic() - batch_start, 3),
-                "stage_c_completed": outcome.stage_c_completed,
-                "stage_c_fetch_failures": outcome.stage_c_fetch_failures,
-                "stage_d_join_key_votes": outcome.stage_d_join_key_votes,
-                "stage_d_join_key_already_voted": outcome.stage_d_join_key_already_voted,
-                "stage_d_fallback_votes": outcome.stage_d_fallback_votes,
-                "stage_d_fallback_already_voted": outcome.stage_d_fallback_already_voted,
-                "stage_d_slow_path_routed": outcome.stage_d_slow_path_routed,
-                "peak_rss_mb": peak_rss_mb,
-                "lockout_trip_id": lockout_trip.trip_id if lockout_trip is not None else None,
-            },
+        # Micro-batch ledger row convention (task brief scope item 6, docs/features/stage-e-operations.md's
+        # "Phase 2" section): one PilotRunLedger row per micro-batch dispatch, `command=
+        # "stage_e_streaming_dispatch"`, `dry_run=False` always (PASSIVE mode has no dry-run leg - the
+        # per-envelope-change dry run §3 decision (5) describes is a one-off owner review of the
+        # envelope bounds themselves, not a per-batch gate the way BULK mode's forced-dry-run guard is).
+        ledger = PilotRunLedger.objects.create(
+            run_id=dispatch_run_id,
+            command="stage_e_streaming_dispatch",
+            dry_run=False,
+            status=PilotRunLedger.Status.RUNNING,
+            git_sha=get_baked_git_sha(),
+            counters={"trigger_reason": trigger_reason, "batch_size": len(batch_ids)},
         )
-        ledger.save(update_fields=["status", "finished_at", "counters"])
-    except Exception as exc:
-        # Shared FAILED-transition rail (cardpicker.pilot_run_lifecycle.mark_ledger_failed) - a
-        # no-op if this invocation already reached the COMPLETED save above, otherwise records a
-        # triage-able counters["failure_reason"] alongside FAILED (docs/proposals/
-        # stage-e-streaming.md §3 decision (6)'s "empty-failed-row" gap fix, reused here rather than
-        # duplicated). A crash mid-Stage-C-loop leaves every already-`persist_evidence`-committed
-        # card durably written (each card's own persist is its own transaction) - the resume
-        # contract (docs/features/stage-e-operations.md) holds: a fresh dispatch over the same or an
-        # overlapping card set skips whatever's already current and picks up the rest, exactly the
-        # same "truthful ledger, idempotent re-entry" property the batch kill-test already proves.
-        mark_ledger_failed(ledger, exc)
-        raise
 
-    return outcome
+        outcome = DispatchOutcome(status="completed", run_id=dispatch_run_id, card_ids=batch_ids)
+        batch_start = time.monotonic()
+
+        try:
+            lockout_trip = _run_stage_c(batch_ids, dispatch_run_id, outcome)
+            # Stage D still runs even after a mid-batch lockout trip - "in-flight work drains, nothing
+            # NEW starts" (docs/features/stage-e-operations.md's HALT semantics) - see _run_stage_d's
+            # own docstring for why this is always safe to call regardless of how far Stage C got.
+            _run_stage_d(batch_ids, dispatch_run_id, outcome)
+
+            if lockout_trip is not None:
+                outcome.status = "completed-with-trip"
+                outcome.trip_id = lockout_trip.trip_id
+
+            peak_rss_mb = get_process_rss_mb()
+            ledger.status = PilotRunLedger.Status.COMPLETED
+            ledger.finished_at = timezone.now()
+            ledger.counters = merge_counters(
+                ledger.counters,
+                {
+                    "elapsed_s": round(time.monotonic() - batch_start, 3),
+                    "stage_c_completed": outcome.stage_c_completed,
+                    "stage_c_fetch_failures": outcome.stage_c_fetch_failures,
+                    "stage_d_join_key_votes": outcome.stage_d_join_key_votes,
+                    "stage_d_join_key_already_voted": outcome.stage_d_join_key_already_voted,
+                    "stage_d_fallback_votes": outcome.stage_d_fallback_votes,
+                    "stage_d_fallback_already_voted": outcome.stage_d_fallback_already_voted,
+                    "stage_d_slow_path_routed": outcome.stage_d_slow_path_routed,
+                    "peak_rss_mb": peak_rss_mb,
+                    "lockout_trip_id": lockout_trip.trip_id if lockout_trip is not None else None,
+                },
+            )
+            ledger.save(update_fields=["status", "finished_at", "counters"])
+        except Exception as exc:
+            # Shared FAILED-transition rail (cardpicker.pilot_run_lifecycle.mark_ledger_failed) - a
+            # no-op if this invocation already reached the COMPLETED save above, otherwise records a
+            # triage-able counters["failure_reason"] alongside FAILED (docs/proposals/
+            # stage-e-streaming.md §3 decision (6)'s "empty-failed-row" gap fix, reused here rather than
+            # duplicated). A crash mid-Stage-C-loop leaves every already-`persist_evidence`-committed
+            # card durably written (each card's own persist is its own transaction) - the resume
+            # contract (docs/features/stage-e-operations.md) holds: a fresh dispatch over the same or an
+            # overlapping card set skips whatever's already current and picks up the rest, exactly the
+            # same "truthful ledger, idempotent re-entry" property the batch kill-test already proves.
+            # The concurrency-cap slot is still released (try_acquire_dispatch_slot's own `finally`)
+            # even though this exception propagates past this `with` block.
+            mark_ledger_failed(ledger, exc)
+            raise
+
+        return outcome
 
 
 def dispatch_for_card(card_id: int, reason: str = "event") -> None:
