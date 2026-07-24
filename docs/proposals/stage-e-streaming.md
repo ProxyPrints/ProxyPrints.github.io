@@ -19,6 +19,18 @@ and [#278](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/278)
 (AI-art-detector rescan-on-evidence-change — this brief's second
 consumer, §7).
 
+**Phase 1 built 2026-07-24** (observability + envelope-enforcement
+primitives only, per the owner-pre-approved implementation task for this
+brief's §3 decision (6) gaps and §3 decision (5)/§10(a)'s ratified
+PASSIVE-mode bars) - `cardpicker/operating_envelope.py`, the
+`EnvelopeTrip` model, and `resolve_envelope_trip` (the resume command);
+see [`docs/features/stage-e-operations.md`](../features/stage-e-operations.md)
+for the operator-facing runbook and [`docs/theory.md`](../theory.md)'s
+new §10 for the soundness note. **This does not lift the HOLD above** -
+no streaming dispatch loop exists yet, and §3-§5 as a whole still need
+owner review before Phase 2 (the loop that actually consumes this
+primitive) is built.
+
 **§10 update (2026-07-24, owner):** four of §9's open items are now
 ratified — the rate-control/authorization-envelope question (§9 item 1)
 and the `CardScanLog` retention question (§9 item 2) are RESOLVED, and

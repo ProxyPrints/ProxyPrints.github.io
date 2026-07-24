@@ -269,6 +269,14 @@ export const navigateToPrintPDFTab = async (page: Page, query: string) => {
   await importTextOnEditorLanding(page, query);
   await expect(async () => {
     await page.getByTestId("finish-footer-print-export").click();
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still riding the
+    // untouched default cardback, so the reminder gate fires before navigation; "Use current &
+    // continue" proceeds (and suppresses the gate for the rest of this retry loop's session, so a
+    // `toPass` retry never re-shows it).
+    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+    if (await cardbackGate.isVisible().catch(() => false)) {
+      await cardbackGate.getByTestId("cardback-gate-use-current").click();
+    }
     await page.waitForURL(/\/print/, { timeout: 15_000 });
   }).toPass({ timeout: 45_000 });
   await page.getByRole("tab", { name: "PDF" }).click();
@@ -844,6 +852,23 @@ export const openDisplayCardbackGridSelector = async (page: Page) => {
   const gridSelector = page.getByTestId("cardback-grid-selector");
   await expect(gridSelector).toBeVisible();
   return gridSelector;
+};
+
+// Cardback flow round (SPEC-cardback-pdfwait.md) - same isVisible()-guard gear-open pattern as
+// openDisplaySearchSettingsModal/openDisplayCardbackGridSelector above, factored out since the
+// Finish footer (FinishFooter.tsx, `finish-footer-print-export`) ALSO lives inside the same
+// `display-print-settings-rail` Offcanvas - below `xl`, reachable only via the gear button. Every
+// existing caller of `finish-footer-print-export` in this suite runs at the default (unset)
+// viewport, which resolves to devices["Desktop Chrome"]'s 1280x720 (above `xl`, rail already
+// inline - see openDisplaySearchSettingsModal's own comment on why playwright.config.ts's
+// `contextOptions.viewport` override is dead config) - this helper is for any caller that
+// deliberately narrows below `xl` (e.g. a phone-width `test.use({ viewport })` block).
+export const ensureDisplayRightRailOpen = async (page: Page) => {
+  const rail = page.getByTestId("display-print-settings-rail");
+  if (!(await rail.isVisible())) {
+    await page.getByTestId("display-gear-button").click();
+    await expect(rail).toBeVisible();
+  }
 };
 
 /**

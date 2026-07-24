@@ -25,6 +25,7 @@ import { Blurrable } from "@/components/Blurrable";
 import { OverflowCol } from "@/components/OverflowCol";
 import { Spinner } from "@/components/Spinner";
 import { ClientSearchService } from "@/features/clientSearch/clientSearchService";
+import { useCardbackReminderGate } from "@/features/display/useCardbackReminderGate";
 import { downloadFile, useDoFileDownload } from "@/features/download/download";
 import { PostExportContributionPrompt } from "@/features/export/PostExportContributionPrompt";
 import { wasLatestCardsPdfDownloadSuccessful } from "@/features/export/postExportContributionPrompt";
@@ -60,6 +61,11 @@ import {
   ImageFetchFailure,
 } from "@/features/pdf/pdfImage";
 import { pdfRenderService } from "@/features/pdf/pdfRenderService";
+import {
+  PDFProgressBox,
+  PDFWaitGameEmbed,
+  PDFWaitPhase,
+} from "@/features/pdf/PDFWaitPanel";
 import {
   BORDERLESS_STUDIO_EXPANSION_MM,
   scmOffsetMMToPx,
@@ -1442,18 +1448,55 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
   // fileDownloads redux-slice check while the Save-to-Drive path can just read its own resolved
   // promise value directly.
   const contributionPrompt = usePostExportContributionPrompt();
-  const onDownloadPDFClick = async () => {
-    await downloadPDF();
-    if (wasLatestCardsPdfDownloadSuccessful()) {
-      contributionPrompt.notifyExportSucceeded();
-    }
+
+  // PDF-wait experience round (SPEC-cardback-pdfwait.md §D, PKG2) - `waitPhase` is DERIVED, not
+  // independently tracked, from the existing isDownloading/isSavingToDrive + imageFetchProgress
+  // state (D.1's own two-phase signal) plus this one extra bit for the transient post-success
+  // "done" display - see this file's own module comment on why deriving beats a hand-maintained
+  // state machine (fewer places that can drift out of sync).
+  const [showDoneState, setShowDoneState] = useState<boolean>(false);
+  const generating = isDownloading || isSavingToDrive;
+  const waitPhase: PDFWaitPhase = generating
+    ? imageFetchProgress == null ||
+      imageFetchProgress.completed < imageFetchProgress.total
+      ? "fetching"
+      : "assembling"
+    : showDoneState
+    ? "done"
+    : "idle";
+  // §D.3/PE1 - the game embed's own outro IS PostExportContributionPrompt, not a second nudge;
+  // suppress the LEFT column's standalone mount whenever the right column is already showing it.
+  const showEmbedOutro = waitPhase === "done" && contributionPrompt.visible;
+  const dismissEmbedOutro = () => {
+    contributionPrompt.dismiss();
+    setShowDoneState(false);
   };
-  const onSaveToDriveClick = async () => {
-    const succeeded = await saveToDrive();
-    if (succeeded === true) {
-      contributionPrompt.notifyExportSucceeded();
-    }
-  };
+
+  // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the spec's own coverage note: a user
+  // can reach /print directly (bookmark, refresh, or any entry that skips the editor's Finish
+  // footer/usePrePrintSaveGate entirely), so the classic direct "Generate PDF"/"Save PDF to
+  // Google Drive" buttons need their own independent reminder guard, not just the one composed
+  // into usePrePrintSaveGate.
+  const cardbackReminderGate = useCardbackReminderGate();
+
+  const onDownloadPDFClick = () =>
+    cardbackReminderGate.guard(async () => {
+      setShowDoneState(false);
+      await downloadPDF();
+      if (wasLatestCardsPdfDownloadSuccessful()) {
+        contributionPrompt.notifyExportSucceeded();
+        setShowDoneState(true);
+      }
+    });
+  const onSaveToDriveClick = () =>
+    cardbackReminderGate.guard(async () => {
+      setShowDoneState(false);
+      const succeeded = await saveToDrive();
+      if (succeeded === true) {
+        contributionPrompt.notifyExportSucceeded();
+        setShowDoneState(true);
+      }
+    });
 
   return (
     <Container fluid>
@@ -1617,24 +1660,18 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
               </Button>
             </div>
           )}
-          {(isDownloading || isSavingToDrive) && imageFetchProgress != null && (
-            <p
-              className="text-muted text-center mt-2 mb-0"
-              style={{ fontSize: "0.85em" }}
-              data-testid="pdf-image-fetch-progress"
-            >
-              {/* Approximate, not exact - see pdf.worker.ts's own comment on why "total" can
-                    undercount a deck with duplicate cards. A large export paced to the image
-                    CDN's shared rate limit can take several minutes - this exists so that wait
-                    reads as "working," not "hung." */}
-              Fetching images: {imageFetchProgress.completed} of ~
-              {imageFetchProgress.total}
-            </p>
-          )}
+          {/* PDF-wait experience round (SPEC-cardback-pdfwait.md §D.1, PKG2a) - replaces the old
+              bare "Fetching images: N/M" text with a real determinate/indeterminate/done
+              ProgressBar; never blocks the buttons above it. */}
+          <PDFProgressBox
+            phase={waitPhase}
+            imageFetchProgress={imageFetchProgress}
+          />
           {/* Issue #166 - see this component's own hook-usage comment above for the
               success-detection wiring; shown once per session, dismissible, never blocks the
-              buttons above it. */}
-          {contributionPrompt.visible && (
+              buttons above it. §D.3/PE1 - suppressed here whenever the game embed's own outro
+              (right column) is already showing this exact same prompt - one nudge, not two. */}
+          {contributionPrompt.visible && !showEmbedOutro && (
             <div className="mt-2">
               <PostExportContributionPrompt
                 show={contributionPrompt.visible}
@@ -1644,71 +1681,91 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
           )}
         </OverflowCol>
         <Col lg={9} md={8} sm={7} xs={6} style={{ position: "relative" }}>
-          {!scmMode && (
-            <div className="d-flex justify-content-end mb-2">
-              <Button
-                size="sm"
-                variant="outline-secondary"
-                data-testid="preview-mode-toggle"
-                onClick={() =>
-                  setPreviewMode(previewMode === "fast" ? "exact" : "fast")
-                }
-              >
-                {previewMode === "fast"
-                  ? "Switch to exact PDF preview"
-                  : "Switch to fast preview"}
-              </Button>
-            </div>
-          )}
-          {/* Image-fetch-failure/error detection comes from the real (debounced)
-              @react-pdf/renderer render via useRenderPDF, which runs unconditionally
-              regardless of which preview is on screen - these warnings stay visible in fast
-              mode too, not just exact mode, since generating a PDF full of silently-blank
-              cards is exactly the mistake this warns against, independent of which preview
-              the user happened to be looking at. */}
-          {!showSpinner && error != null && (
-            <Alert
-              variant="danger"
-              className="m-2"
-              data-testid="pdf-preview-error"
-            >
-              Couldn&apos;t generate a preview:{" "}
-              {error instanceof Error ? error.message : String(error)}
-            </Alert>
-          )}
-          {!showSpinner && error == null && failures.length > 0 && (
-            <Alert
-              variant="warning"
-              className="m-2"
-              data-testid="pdf-preview-image-failures"
-            >
-              {failures.length} card image{failures.length === 1 ? "" : "s"}{" "}
-              couldn&apos;t be loaded and will appear blank:{" "}
-              {failures.map((failure) => failure.label).join(", ")}
-            </Alert>
-          )}
-          {!scmMode && previewMode === "fast" ? (
-            <PagePreview
-              pageWidthMM={fastPreviewSize.width}
-              pageHeightMM={fastPreviewSize.height}
-              bleedEdgeMM={bleedEdgeMM ?? 0}
-              margins={fastPreviewMargins}
-              spacing={fastPreviewSpacing}
-              slots={fastPreviewSlots}
-              showCutLines={drawCardCutLines}
-              maxWidthPx={480}
+          {/* PDF-wait experience round (SPEC-cardback-pdfwait.md §D.2/§D.4, PKG2b) - while
+              generation runs, this column becomes the game embed instead of the (stale, since
+              nothing here is re-rendering mid-export) live preview; once it finishes, the embed's
+              own outro (the SHIPPED PostExportContributionPrompt, unchanged - §D.3/PE1) takes its
+              place until dismissed. Neither branch mounts <QuestionFeed> until generation has
+              actually started (2c's own lazy-load constraint - see PDFWaitPanel.tsx). */}
+          {waitPhase === "fetching" || waitPhase === "assembling" ? (
+            <PDFWaitGameEmbed
+              phase={waitPhase}
+              imageFetchProgress={imageFetchProgress}
+            />
+          ) : showEmbedOutro ? (
+            <PostExportContributionPrompt
+              show={showEmbedOutro}
+              onDismiss={dismissEmbedOutro}
             />
           ) : (
             <>
-              {showSpinner && (
-                <Spinner size={6} zIndex={3} positionAbsolute={true} />
+              {!scmMode && (
+                <div className="d-flex justify-content-end mb-2">
+                  <Button
+                    size="sm"
+                    variant="outline-secondary"
+                    data-testid="preview-mode-toggle"
+                    onClick={() =>
+                      setPreviewMode(previewMode === "fast" ? "exact" : "fast")
+                    }
+                  >
+                    {previewMode === "fast"
+                      ? "Switch to exact PDF preview"
+                      : "Switch to fast preview"}
+                  </Button>
+                </div>
               )}
-              <Blurrable
-                disabled={showSpinner}
-                style={{ height: 100 + "%", overflowY: "hidden" }}
-              >
-                <PDFCanvasPreview url={url} />
-              </Blurrable>
+              {/* Image-fetch-failure/error detection comes from the real (debounced)
+                  @react-pdf/renderer render via useRenderPDF, which runs unconditionally
+                  regardless of which preview is on screen - these warnings stay visible in fast
+                  mode too, not just exact mode, since generating a PDF full of silently-blank
+                  cards is exactly the mistake this warns against, independent of which preview
+                  the user happened to be looking at. */}
+              {!showSpinner && error != null && (
+                <Alert
+                  variant="danger"
+                  className="m-2"
+                  data-testid="pdf-preview-error"
+                >
+                  Couldn&apos;t generate a preview:{" "}
+                  {error instanceof Error ? error.message : String(error)}
+                </Alert>
+              )}
+              {!showSpinner && error == null && failures.length > 0 && (
+                <Alert
+                  variant="warning"
+                  className="m-2"
+                  data-testid="pdf-preview-image-failures"
+                >
+                  {failures.length} card image{failures.length === 1 ? "" : "s"}{" "}
+                  couldn&apos;t be loaded and will appear blank:{" "}
+                  {failures.map((failure) => failure.label).join(", ")}
+                </Alert>
+              )}
+              {!scmMode && previewMode === "fast" ? (
+                <PagePreview
+                  pageWidthMM={fastPreviewSize.width}
+                  pageHeightMM={fastPreviewSize.height}
+                  bleedEdgeMM={bleedEdgeMM ?? 0}
+                  margins={fastPreviewMargins}
+                  spacing={fastPreviewSpacing}
+                  slots={fastPreviewSlots}
+                  showCutLines={drawCardCutLines}
+                  maxWidthPx={480}
+                />
+              ) : (
+                <>
+                  {showSpinner && (
+                    <Spinner size={6} zIndex={3} positionAbsolute={true} />
+                  )}
+                  <Blurrable
+                    disabled={showSpinner}
+                    style={{ height: 100 + "%", overflowY: "hidden" }}
+                  >
+                    <PDFCanvasPreview url={url} />
+                  </Blurrable>
+                </>
+              )}
             </>
           )}
         </Col>
@@ -1724,6 +1781,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
           setPendingFailureConfirm(null);
         }}
       />
+      {cardbackReminderGate.element}
     </Container>
   );
 };

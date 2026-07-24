@@ -200,6 +200,13 @@ external reader's orientation to the whole fork, see
 - [`docs/features/moderation.md`](docs/features/moderation.md) — Discord
   OAuth login, the `Moderators` group gate, sensitive-tag approval queue,
   card reports.
+- [`docs/features/stage-e-operations.md`](docs/features/stage-e-operations.md)
+  — Stage E Phase 1 (issue #153): the PASSIVE/BULK operating-mode split,
+  the four ratified envelope pause bars (`cardpicker/operating_envelope.py`),
+  and the trip/resume runbook (`resolve_envelope_trip`). Companion to
+  [`docs/proposals/stage-e-streaming.md`](docs/proposals/stage-e-streaming.md),
+  which remains the design authority and is still HOLD pending owner
+  review of its §3-§5.
 - [`docs/features/theming.md`](docs/features/theming.md) — the 2026-07-24
   theme-defaults pass: `_theme-tokens.scss` (the one canonical palette +
   corner-radius token file), the derivation layering, the "born grey"

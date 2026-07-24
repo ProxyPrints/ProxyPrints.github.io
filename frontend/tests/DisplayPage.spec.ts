@@ -459,13 +459,32 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       cardDocument1.name
     );
 
-    await page.getByRole("button", { name: "Cardback" }).click();
+    // Cardback flow round (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3) - a dedicated testid, not
+    // a name-based locator, since a sheet slot's own "⟲" flip button can carry an accessible name
+    // mentioning "cardback" too (the custom-cardback indicator's aria-label).
+    await page.getByTestId("cardback-toolbar-button").click();
     const cardbackModal = page.getByTestId("cardback-grid-selector");
     await expect(cardbackModal).toBeVisible();
     await cardbackModal.getByAltText(cardDocument2.name).click();
+
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.2) - the modal no longer auto-closes on
+    // pick: the apply-all/set-default prompt now renders inline in this SAME modal (never a
+    // second stacked one), so a selection round-trips into project state on click, but the modal
+    // itself stays open until the user explicitly closes it.
+    await expect(
+      cardbackModal.getByTestId("cardback-apply-prompt")
+    ).toBeVisible();
+    await expect(backSheetSlot.locator("img")).toHaveAttribute(
+      "alt",
+      cardDocument2.name
+    );
+
+    // Two elements share the accessible name "Close" here (the header's own btn-close X, and
+    // this modal's own footer button) - the footer one is the later of the two in DOM order.
+    await cardbackModal.getByRole("button", { name: "Close" }).last().click();
     await expect(cardbackModal).not.toBeVisible();
 
-    // The back-face slot on the sheet now reflects the newly selected cardback, confirming the
+    // The back-face slot on the sheet still reflects the newly selected cardback, confirming the
     // selection round-tripped through the shared projectSlice.cardback state, not just the modal's
     // own local component state.
     await expect(backSheetSlot.locator("img")).toHaveAttribute(
