@@ -281,7 +281,7 @@ throttling every dispatch forever with no error and no envelope trip to
 surface it.
 
 **Event-dispatch drop semantics**: `Q_CLUSTER["max_attempts"] = 1`
-(`MPCAutofill/settings.py`) means an event-driven `async_task` that returns
+(`MPCAutofill/MPCAutofill/settings.py`) means an event-driven `async_task` that returns
 `throttled-concurrency-cap` is recorded SUCCESSFUL by django-q2 — it never
 retries, so the touched card is silently deferred to the backstop sweep
 (below) rather than lost outright. This is by design, not a gap: the sweep

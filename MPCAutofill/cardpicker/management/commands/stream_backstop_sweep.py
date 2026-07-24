@@ -31,7 +31,7 @@ already-saturated cap with no backoff), or when `--max-batches` is reached (a sa
 single invocation, not a design limit).
 
 THE SWEEP IS THE ONLY RECOVERY PATH FOR A THROTTLED EVENT DISPATCH: `Q_CLUSTER["max_attempts"] = 1`
-(`MPCAutofill/settings.py`) means an event-driven `async_task` that returns
+(`MPCAutofill/MPCAutofill/settings.py`) means an event-driven `async_task` that returns
 `DispatchOutcome(status="throttled-concurrency-cap")` is recorded SUCCESSFUL by django-q2 - it never
 retries, and the touched card is silently dropped until some future sweep picks it up via the
 backlog queries above. That makes it load-bearing that this command itself never treats
