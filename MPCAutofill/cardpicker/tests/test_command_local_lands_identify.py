@@ -53,6 +53,35 @@ class TestLocalLandsIdentifyCommand:
         assert "[DRY RUN]" in output
         assert CardPrintingTag.objects.count() == 0
 
+    def test_dry_run_prints_the_real_would_cast_breakdown_not_the_write_gated_zero(self, db, capsys):
+        """Regression for issue #407 (runs 20260724T013302/20260724T014701): the dry-run summary
+        must print the real would-cast prediction (ocr_resolved + singleton_votes + tiebreak_votes,
+        counters run_lands_identify computes unconditionally) rather than reusing votes_written
+        (the write-gated counter, always 0 in dry-run) - printing `would_cast=0` for a run that
+        actually predicted 113/300 votes misled a review into treating it as zero-yield."""
+        with patch("cardpicker.management.commands.local_lands_identify.run_lands_identify") as mock_run:
+            from cardpicker.local_lands_identify import LandsIdentifyResult
+
+            mock_run.return_value = LandsIdentifyResult(
+                dry_run=True,
+                run_id="test-run",
+                land_pool_size=39724,
+                sample_size=300,
+                sampled=300,
+                fetch_budget=300,
+                fetch_attempted=300,
+                evidence_backed=0,
+                ocr_resolved=102,
+                singleton_votes=7,
+                tiebreak_votes=4,
+                votes_written=0,
+            )
+            call_command("local_lands_identify", "--sample-size", "300", "--fetch-budget", "300")
+
+        output = capsys.readouterr().out
+        assert "total_votes=would_cast=113" in output
+        assert "would_cast=0" not in output
+
     def test_command_refuses_to_run_against_a_stale_image(self, db):
         with patch(
             "cardpicker.management.commands.local_lands_identify.find_stale_applied_migrations",

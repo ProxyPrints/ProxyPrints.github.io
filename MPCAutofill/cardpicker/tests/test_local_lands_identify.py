@@ -34,7 +34,12 @@ from cardpicker.local_lands_identify import (
     is_lands_target,
     run_lands_identify,
 )
-from cardpicker.models import CardPrintingTag, CardScanLog, LandsAmbiguousResidue
+from cardpicker.models import (
+    CardPrintingTag,
+    CardScanLog,
+    LandsAmbiguousResidue,
+    VoteSource,
+)
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
@@ -185,6 +190,78 @@ class TestIdentifyLandPrinting:
         assert distances is None  # no card hash to compare against yet
 
 
+class TestSplitNewVotes:
+    """Direct unit coverage for the issue #408 pre-write guard, independent of the full
+    run_lands_identify orchestration."""
+
+    def test_empty_batch_returns_empty(self, db):
+        assert module._split_new_votes([]) == ([], 0)
+
+    def test_no_pre_existing_votes_keeps_everything(self, db):
+        card = CardFactory(name="Plains")
+        printing = CanonicalCardFactory(name="Plains")
+        vote = CardPrintingTag(
+            card_id=card.pk, printing_id=printing.pk, anonymous_id=OCR_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+
+        new_votes, already_voted = module._split_new_votes([vote])
+
+        assert new_votes == [vote]
+        assert already_voted == 0
+
+    def test_identical_existing_triple_is_skipped(self, db):
+        card = CardFactory(name="Plains")
+        printing = CanonicalCardFactory(name="Plains")
+        CardPrintingTag.objects.create(
+            card=card, printing=printing, anonymous_id=OCR_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+        vote = CardPrintingTag(
+            card_id=card.pk, printing_id=printing.pk, anonymous_id=OCR_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+
+        new_votes, already_voted = module._split_new_votes([vote])
+
+        assert new_votes == []
+        assert already_voted == 1
+
+    def test_a_vote_under_a_different_identity_for_the_same_card_and_printing_is_not_skipped(self, db):
+        """A pre-existing vote from a DIFFERENT anonymous_id (e.g. LANDS_ANONYMOUS_ID) never
+        collides with the uniqueness constraint (card, printing, anonymous_id) and must not be
+        treated as a collision here."""
+        card = CardFactory(name="Plains")
+        printing = CanonicalCardFactory(name="Plains")
+        CardPrintingTag.objects.create(
+            card=card, printing=printing, anonymous_id=LANDS_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+        vote = CardPrintingTag(
+            card_id=card.pk, printing_id=printing.pk, anonymous_id=OCR_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+
+        new_votes, already_voted = module._split_new_votes([vote])
+
+        assert new_votes == [vote]
+        assert already_voted == 0
+
+    def test_mixed_batch_skips_only_the_colliding_vote(self, db):
+        collided_card = CardFactory(name="Plains")
+        clean_card = CardFactory(name="Plains")
+        printing = CanonicalCardFactory(name="Plains")
+        CardPrintingTag.objects.create(
+            card=collided_card, printing=printing, anonymous_id=OCR_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+        colliding_vote = CardPrintingTag(
+            card_id=collided_card.pk, printing_id=printing.pk, anonymous_id=OCR_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+        clean_vote = CardPrintingTag(
+            card_id=clean_card.pk, printing_id=printing.pk, anonymous_id=OCR_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+
+        new_votes, already_voted = module._split_new_votes([colliding_vote, clean_vote])
+
+        assert new_votes == [clean_vote]
+        assert already_voted == 1
+
+
 class TestRunLandsIdentify:
     def test_fetch_budget_zero_still_reports_pool_size_and_candidate_counts_with_no_fetches(self, db, monkeypatch):
         CanonicalCardFactory(name="Plains")
@@ -223,6 +300,44 @@ class TestRunLandsIdentify:
         assert result.ocr_resolved == 1
         assert result.votes_written == 1
         assert CardPrintingTag.objects.get().anonymous_id == OCR_ANONYMOUS_ID
+
+    def test_ocr_resolved_vote_colliding_with_an_existing_identical_vote_is_skipped_not_crashed(self, db, monkeypatch):
+        """Regression for issue #408 (run 20260724T021229-15c88eba): the OCR-resolved branch casts
+        votes under OCR_ANONYMOUS_ID, an identity `_land_pool_selected_cards`'s own eligibility
+        query never checks (it's scoped to LANDS_ANONYMOUS_ID) - so a card can legitimately still
+        be selected into this pool while an earlier pass/pilot run already cast an identical
+        (card, printing, OCR_ANONYMOUS_ID) vote. That agreement must be a no-op, not an
+        IntegrityError that aborts the whole batch: the pre-existing vote is skipped and counted
+        in `already_voted`, and every OTHER vote computed in the same run still commits."""
+        printing = CanonicalCardFactory(name="Plains")
+        collided_card = CardFactory(name="Plains")
+        CardPrintingTag.objects.create(
+            card=collided_card,
+            printing=printing,
+            anonymous_id=OCR_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            confidence=0.9,
+        )
+        clean_card = CardFactory(name="Plains")
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: object())
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, **kw: OcrCardResult(
+                vote=EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.95, detail="")
+            ),
+        )
+
+        result = run_lands_identify(dry_run=False, sample_size=300, fetch_budget=10)
+
+        # the computation itself is unaffected by the collision - both cards genuinely resolved.
+        assert result.ocr_resolved == 2
+        assert result.already_voted == 1
+        assert result.votes_written == 1
+        # no duplicate landed, no IntegrityError raised, and the pre-existing row is untouched.
+        assert CardPrintingTag.objects.filter(anonymous_id=OCR_ANONYMOUS_ID).count() == 2
+        assert CardPrintingTag.objects.get(card=clean_card).printing_id == printing.pk
 
     def test_fetch_budget_exhaustion_stops_the_pipeline_not_the_pool_count(self, db, monkeypatch):
         CanonicalCardFactory(name="Plains")

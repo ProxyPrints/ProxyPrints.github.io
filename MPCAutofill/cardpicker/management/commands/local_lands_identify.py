@@ -143,6 +143,7 @@ class Command(BaseCommand):
                     "singleton_votes": result.singleton_votes,
                     "tiebreak_votes": result.tiebreak_votes,
                     "ambiguous_phash": result.ambiguous_phash,
+                    "already_voted": result.already_voted,
                     "residue_written": result.residue_written,
                 },
             )
@@ -165,7 +166,8 @@ class Command(BaseCommand):
                     f"tiebreak_votes({'would_cast' if dry_run else 'written'})={result.tiebreak_votes} "
                     f"ambiguous_phash={result.ambiguous_phash} "
                     f"residue_rows({'would_write' if dry_run else 'written'})="
-                    f"{result.ambiguous_phash if dry_run else result.residue_written}"
+                    f"{result.ambiguous_phash if dry_run else result.residue_written} "
+                    f"already_voted={result.already_voted}"
                 )
                 print("[lands] per_name_candidate_counts (pre-artist-filter, full pool):")
                 for name, count in sorted(result.per_name_candidate_counts.items(), key=lambda kv: -kv[1])[:20]:
@@ -179,10 +181,25 @@ class Command(BaseCommand):
                 if not dry_run and touched_card_ids:
                     print(f"Gate check passed: 0/{len(touched_card_ids)} touched cards resolved machine-only.")
 
-                print(
-                    f"[{mode}] done. run_id={run_id} total_votes="
-                    f"{'written' if not dry_run else 'would_cast'}={votes_written}"
-                )
+                # issue #407: votes_written is the write-gated counter (always 0 in dry-run, since
+                # dry_run never reaches run_lands_identify's own bulk_create call) - printing it
+                # unconditionally here made every dry-run summary read total_votes=would_cast=0
+                # regardless of what the run actually predicted, which misled a review into
+                # treating a real 113/300 predicted-yield run as zero-yield. would_cast is instead
+                # the sum of the three counters run_lands_identify computes UNCONDITIONALLY
+                # (ocr_resolved/singleton_votes/tiebreak_votes, all incremented before any
+                # dry_run check - see _process_land_card), matching local_calculate_verdicts' own
+                # votes_would_cast convention (a counter tracked regardless of dry_run, not
+                # reused from the write-path counter).
+                if dry_run:
+                    would_cast = result.ocr_resolved + result.singleton_votes + result.tiebreak_votes
+                    print(
+                        f"[{mode}] done. run_id={run_id} total_votes=would_cast={would_cast} "
+                        f"(ocr_resolved={result.ocr_resolved}+singleton_votes={result.singleton_votes}+"
+                        f"tiebreak_votes={result.tiebreak_votes})/{result.sampled}"
+                    )
+                else:
+                    print(f"[{mode}] done. run_id={run_id} total_votes=written={votes_written}")
         except Exception:
             # Only a still-RUNNING row gets marked FAILED here - a run this invocation already
             # marked COMPLETED above (including the GATE VIOLATION CommandError path, which is
