@@ -437,15 +437,29 @@ interface RailHeaderProps {
 // badge's own margin is enough).
 const RailHeader = ({ face, slot, cardName, searchQuery }: RailHeaderProps) => (
   <div
-    className="border-bottom rail-head"
+    // O1 fix round (SPEC-display-left-rail.md §D.1/"Introduced this round" #1, corrected
+    // 2026-07-23, owner-approved): the plain Bootstrap `.border-bottom` utility used to sit here -
+    // its active `--bs-border-color` is genuinely ambiguous in the compiled CSS (both `#495057`
+    // and `#ced4da` are present), which could render a pale line on this dark rail. Retired in
+    // favour of RailRoot's own explicit `.rail-head{border-bottom:1px solid #16202b}` rule below -
+    // the same literal dark value `.d14` already used, now normalized across every rail block
+    // boundary.
+    className="rail-head"
     style={{ padding: "8px 10px" }}
     data-testid="display-rail-header"
   >
-    <div className="fw-bold">
+    {/* Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - `.rail-head`
+        itself sets no font-size, so `.slot`/`.name` used to fall through to the Bootstrap body
+        default (16px) instead of the spec's own `14px/700` and `15px` values. Component-scoped
+        inline styles on these two specific nodes (not a new `.rail-head .slot`/`.rail-head .name`
+        RailRoot descendant selector) per the #400 rule - `.slot`/`.name` are bare, reusable
+        classnames that could in principle appear elsewhere, so the fix travels with the exact DOM
+        node instead of a broader selector. */}
+    <div className="fw-bold" style={{ fontSize: "14px" }}>
       Slot {slot + 1}{" "}
       <span className="text-muted text-uppercase small ms-1">{face}</span>
     </div>
-    <div>
+    <div style={{ fontSize: "15px", marginTop: "1px" }}>
       {cardName ?? (
         <span className="text-muted fst-italic">No art selected yet</span>
       )}
@@ -487,8 +501,14 @@ const PromotedZone = ({ cardDocument, backendURL }: PromotedZoneProps) => (
   <>
     <ConfidenceElement cardDocument={cardDocument} backendURL={backendURL} />
     <div
-      className="artist-line border-bottom small"
-      style={{ padding: "8px 10px" }}
+      // O1 fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - see RailHeader's
+      // own identical comment for why the Bootstrap `.border-bottom` utility is retired here too.
+      // Machine-diff fix round: the `small` Bootstrap utility (0.875em -> 14px off a 16px parent)
+      // was CLOSE to the spec's own literal `.artist-line` binding value but not exact - replaced
+      // with an explicit `13px` inline style (component-scoped, this exact node only) matching
+      // §D.1 precisely.
+      className="artist-line"
+      style={{ padding: "8px 10px", fontSize: "13px" }}
     >
       <ArtistSection cardDocument={cardDocument} />
     </div>
@@ -963,17 +983,43 @@ const ActionBarSearchGroup = styled.div`
 // (RailSection/SourcesAccordion) - the value now travels WITH the component invocation instead
 // of being injected from this ancestor wrapper two files away. See that prop's own comment in
 // AutofillCollapse.tsx for the full before/after.
+//
+// O1 fix round (SPEC-display-left-rail.md §D.1/§A "Introduced this round" #1, corrected
+// 2026-07-23, owner-approved): divider normalization to #16202b, 1px, on every rail block
+// boundary. Shipped code was inconsistent - `.d14` already used the explicit `#16202b` literal
+// below, while `.rail-head`/`.artist-line`/`.sources` (SourcesAccordion.tsx's own outer wrapper -
+// a descendant of this styled-component's scope, so the selector below reaches it too) instead
+// used Bootstrap's `.border-bottom` utility, whose active `--bs-border-color` is genuinely
+// ambiguous in the compiled CSS (`#495057` vs `#ced4da` both present - the light value would
+// render a pale line on this dark rail). Retired in favour of the one explicit shipped dark value
+// everywhere; the Select Version wrapper gains a boundary hairline it never had before (mockup:
+// `.sv{border-bottom:1px solid var(--divider)}`).
 const RailRoot = styled.div`
   .rail-head {
     background: #22303f;
+    border-bottom: 1px solid #16202b;
   }
   .artist-line {
     background: #22303f;
+    border-bottom: 1px solid #16202b;
+  }
+  .sources {
+    border-bottom: 1px solid #16202b;
+  }
+  .select-version-wrapper {
+    border-bottom: 1px solid #16202b;
   }
   .select-version-heading {
     margin: 0;
     padding: 8px 0 4px;
     font-weight: 600;
+    /* Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this
+       bespoke, single-use classname had no font-size rule at all, so it fell through to the
+       Bootstrap body default (16px) instead of the spec's own 14px. This selector is invented
+       for this one heading element only (not a reused Bootstrap classname like the old
+       .card-header pattern), so extending its existing RailRoot rule is component-scoped in the
+       sense the #400 rule cares about - it cannot clobber anything else on the page. */
+    font-size: 14px;
   }
   /* D14 confidence band - full-width, no floating chip inset margin (density §2: "kills the
      floating-chip inset margin"). */
@@ -1064,6 +1110,46 @@ const RailRoot = styled.div`
      too (dispute is always possible, D1 semantics) - de-emphasised via opacity, not hidden. */
   .d14 .notthis[data-confirmed="true"] {
     opacity: 0.6;
+  }
+  /* Machine-diff fix round (owner ruling, 2026-07-23) - restyles the shared
+     react-bootstrap-toggle library into the corrected mockup's static two-cell segmented look
+     (both On/Off labels always visible, side by side) instead of its own stock sliding
+     single-label switch. Scoped to .rail-source-toggle (the className SourcesAccordion.tsx's own
+     Toggle passes) so every OTHER react-bootstrap-toggle mount sitewide (FinishSettings,
+     PDFGenerator, SearchTypeSettings, the filter Toggles, etc) is completely unaffected - this
+     selector can only ever match the rail's own Sources list toggles. The library's real DOM
+     already renders both toggle-on/toggle-off spans, each already carrying the requested
+     btn-primary/btn-secondary colour classes unconditionally (confirmed by reading
+     node_modules/react-bootstrap-toggle/dist/react-bootstrap-toggle.js) - only the sliding
+     positioning/overflow-clipping needed overriding to reveal both at once. */
+  .rail-source-toggle {
+    overflow: visible;
+    background: transparent;
+    border: 1px solid #6b7d8e;
+  }
+  .rail-source-toggle .toggle-group {
+    position: static;
+    width: 100%;
+    display: flex;
+    left: 0 !important;
+    transition: none;
+  }
+  .rail-source-toggle .toggle-on,
+  .rail-source-toggle .toggle-off {
+    position: static;
+    flex: 1;
+    left: auto;
+    right: auto;
+    padding: 0;
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .rail-source-toggle .toggle-off {
+    color: #8fa0b0;
+  }
+  .rail-source-toggle .toggle-handle {
+    display: none;
   }
 `;
 
@@ -1157,8 +1243,11 @@ const Rail = ({
       <SourcesAccordion />
       {/* E2/E3/L4 - Select Version, promoted + always open (renamed from "Choose Image", no
           collapse chrome at all - the primary art surface, not one accordion among several).
-          Density (§2): `px-2 pt-2` (8/8-top) -> explicit `8px 10px`. */}
-      <div style={{ padding: "8px 10px" }}>
+          Density (§2): `px-2 pt-2` (8/8-top) -> explicit `8px 10px`. O1 fix round
+          (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this wrapper gains a
+          `select-version-wrapper` class carrying the normalized `#16202b` bottom hairline (see
+          RailRoot's own rule below) - it had no block-boundary divider of its own before. */}
+      <div className="select-version-wrapper" style={{ padding: "8px 10px" }}>
         <h6 className="select-version-heading">Select Version</h6>
         <SelectVersionSection
           face={selectedSlotRef.face}

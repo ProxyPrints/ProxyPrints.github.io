@@ -60,17 +60,26 @@ export function AutofillCollapse({
     <>
       <Card style={{ position: "relative", zIndex }}>
         <Card.Header
-          className={`border-light${sticky ? " sticky-top" : ""}`}
+          // Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - the
+          // `border-light` Bootstrap utility used to sit here, tinting this header's own
+          // bottom border `$light` (`#abb6c2`, a visibly pale line on the dark rail). No spec
+          // anywhere (rail or otherwise) calls for a light-coloured header border - it was a
+          // stray utility class, not a deliberate design token - so it's removed at the shared
+          // component itself rather than overridden per call site.
+          className={sticky ? "sticky-top" : undefined}
           onClick={onClick}
           aria-expanded={expanded}
           aria-controls={id != null ? `${id}-body` : undefined}
           style={{
-            // CSS-fidelity source-map pass (SPEC-display-left-rail.md §0) - was "#4E5D6B" (a
-            // hand-typed literal one hex digit off the real theme token in the blue channel,
-            // 0x6B vs 0x6C - imperceptible but never actually sourced from the theme). Corrected
-            // to the exact `$secondary`/`$card-bg` value (#4e5d6c) SPEC-display-left-rail.md §0
-            // documents.
-            backgroundColor: "#4e5d6c",
+            // Machine-diff fix round (owner ruling, 2026-07-23): REVERTS the #400-era
+            // "correction" below - #4E5D6B is deliberate here, not a typo. Owner confirmed the
+            // corrected mockup (the actual binding reference, not an approximation of it) is
+            // `#4E5D6B` for THIS card-header token specifically, distinct from the `#4e5d6c`
+            // `$secondary`/panel token used elsewhere in the rail (D14 seticon, Card body, etc) -
+            // the two tokens are one hex digit apart by design, not by accident. Do not "fix"
+            // this back to `#4e5d6c` again; see SPEC-display-left-rail.md §D.0 for the explicit
+            // note distinguishing them.
+            backgroundColor: "#4E5D6B",
             zIndex: zIndex + 1,
             cursor: "pointer",
             ...(headerPadding != null ? { padding: headerPadding } : {}),
