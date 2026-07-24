@@ -77,6 +77,14 @@ test.describe("/display Finish footer (issue #275)", () => {
 
     await footer.getByTestId("finish-footer-print-export").click();
 
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still "riding
+    // the untouched default" cardback, so the reminder gate fires before the (absent, for an
+    // anonymous session) save gate / navigation. "Use current & continue" is the equivalent of
+    // this test's own old "no save gate, straight through" assertion for the NEW gate.
+    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+    await expect(cardbackGate).toBeVisible();
+    await cardbackGate.getByTestId("cardback-gate-use-current").click();
+
     // No save gate for an anonymous session (D9(3): "authenticated AND dirty" gates the prompt) -
     // straight through to the Print page.
     // Explicit generous timeout, not the default assertion timeout - see this describe block's
@@ -134,6 +142,12 @@ test.describe("/display Finish footer (issue #275)", () => {
       .getByTestId("finish-footer-print-export")
       .click();
 
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
+    // save gate (a deck-completeness decision precedes the persistence one).
+    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+    await expect(cardbackGate).toBeVisible();
+    await cardbackGate.getByTestId("cardback-gate-use-current").click();
+
     const gate = page.getByTestId("pre-print-save-gate-modal");
     await expect(gate).toBeVisible();
     await gate.getByTestId("pre-print-save-gate-save").click();
@@ -179,6 +193,12 @@ test.describe("/display Finish footer (issue #275)", () => {
       .getByTestId("display-finish-footer")
       .getByTestId("finish-footer-print-export")
       .click();
+
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
+    // save gate (a deck-completeness decision precedes the persistence one).
+    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+    await expect(cardbackGate).toBeVisible();
+    await cardbackGate.getByTestId("cardback-gate-use-current").click();
 
     const gate = page.getByTestId("pre-print-save-gate-modal");
     await expect(gate).toBeVisible();

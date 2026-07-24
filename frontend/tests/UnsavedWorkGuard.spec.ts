@@ -55,6 +55,13 @@ test.describe("Unsaved-work guard (priority bug fix)", () => {
 
     await page.getByTestId("finish-footer-print-export").click();
 
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still riding the
+    // untouched default cardback, so the reminder gate fires first; "Use current & continue"
+    // proceeds with the same client-side navigation this test is really about.
+    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+    await expect(cardbackGate).toBeVisible();
+    await cardbackGate.getByTestId("cardback-gate-use-current").click();
+
     // A real navigation, not just a same-page state change - waitForURL fails outright if the
     // click never actually left /editor, which is exactly the failure mode a regression here
     // would produce. Generous explicit timeout - /print's first on-demand dev-mode compile

@@ -482,3 +482,93 @@ describe("PagePreview - screenPresentation prop (R7/D17)", () => {
     expect(page.style.borderRadius).not.toBe("");
   });
 });
+
+// Cardback flow round (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3) - the flip button's own
+// non-default-back indicator dot, gated the SAME way the flip button itself is (flippable cells
+// only - never rendered on a genuinely empty slot, and never without onSlotFlip wired at all).
+describe("PagePreview - custom-cardback indicator dot (OWNER AMENDMENT 3)", () => {
+  it("renders the dot on a flippable slot whose hasCustomCardback is true", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Custom-back card",
+            flippable: true,
+            hasCustomCardback: true,
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+        onSlotFlip={() => undefined}
+      />
+    );
+
+    expect(
+      screen.getByTestId("page-preview-slot-custom-cardback-indicator")
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("page-preview-slot-flip")).toHaveAccessibleName(
+      "Preview the other face of this card (custom cardback)"
+    );
+  });
+
+  it("renders no dot on a flippable slot following the deck default (hasCustomCardback false/undefined)", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Default-back card",
+            flippable: true,
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+        onSlotFlip={() => undefined}
+      />
+    );
+
+    expect(screen.getByTestId("page-preview-slot-flip")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("page-preview-slot-custom-cardback-indicator")
+    ).toBeNull();
+  });
+
+  it("same gating as the flip button itself - no dot (and no flip button) on a genuinely empty slot, even if hasCustomCardback were somehow true", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={0}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: undefined,
+            name: "Slot 1",
+            flippable: false,
+            hasCustomCardback: true,
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+        onSlotFlip={() => undefined}
+      />
+    );
+
+    expect(screen.queryByTestId("page-preview-slot-flip")).toBeNull();
+    expect(
+      screen.queryByTestId("page-preview-slot-custom-cardback-indicator")
+    ).toBeNull();
+  });
+});

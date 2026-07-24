@@ -346,7 +346,7 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
     await expect(optionInput).toBeDisabled();
   });
 
-  test("submitting a valid option number selects that card and closes the modal", async ({
+  test("submitting a valid option number selects that card (cardback flow round: the modal now stays open with the apply/default prompt, closed explicitly)", async ({
     page,
     network,
   }) => {
@@ -365,11 +365,18 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
     await gridSelector.getByPlaceholder("1", { exact: true }).fill("2");
     await gridSelector.getByLabel("jump-to-version-submit").click();
 
-    await expect(gridSelector).not.toBeVisible();
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.2) - the toolbar entry's pick no longer
+    // auto-closes the modal (the apply-all/set-default prompt renders inline in this SAME modal
+    // instead); the selection itself still round-trips into project state immediately though.
+    await expect(
+      gridSelector.getByTestId("cardback-apply-prompt")
+    ).toBeVisible();
     await expectDisplaySheetSlotState(page, 1, "back", cardDocument2.name);
+    await gridSelector.getByRole("button", { name: "Close" }).last().click();
+    await expect(gridSelector).not.toBeVisible();
   });
 
-  test("submitting a valid identifier selects that card and closes the modal", async ({
+  test("submitting a valid identifier selects that card (cardback flow round: the modal now stays open with the apply/default prompt, closed explicitly)", async ({
     page,
     network,
   }) => {
@@ -387,8 +394,12 @@ test.describe("GridSelectorModal – JumpToVersion", () => {
       .fill(cardDocument2.identifier);
     await gridSelector.getByLabel("jump-to-version-submit").click();
 
-    await expect(gridSelector).not.toBeVisible();
+    await expect(
+      gridSelector.getByTestId("cardback-apply-prompt")
+    ).toBeVisible();
     await expectDisplaySheetSlotState(page, 1, "back", cardDocument2.name);
+    await gridSelector.getByRole("button", { name: "Close" }).last().click();
+    await expect(gridSelector).not.toBeVisible();
   });
 });
 
