@@ -33,7 +33,7 @@ flowchart TD
     G3 -- "yes" --> X3{{"HALTED · NEW TRIP<br/>EnvelopeTrip row persisted<br/>all dispatch stops"}}
     G3 -- "no" --> SEL["Select micro-batch<br/>size 25, seed first, backlog fill"]
 
-    SEL --> X4{{"ALREADY PROCESSED<br/>excluded by the anti-join:<br/>evidence carries every manifest key"}}
+    SEL --> X4{{"ALREADY PROCESSED<br/>skipped by cursor-walk verification:<br/>evidence carries every manifest key"}}
     SEL --> G4{"anything eligible?"}
     G4 -- "no" --> X5{{"EMPTY SELECTION<br/>nothing left to do"}}
     G4 -- "yes" --> G5{"concurrency slot free?"}
