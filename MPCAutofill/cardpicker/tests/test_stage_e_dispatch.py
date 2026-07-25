@@ -16,10 +16,12 @@ proves ImageEvidence rows actually land, matching `_evidence()`'s own convention
 import io
 from typing import Any
 
+import psycopg2
 import pytest
 from PIL import Image
 
 from django.core.management import call_command
+from django.db import connection
 from django.test import override_settings
 
 from cardpicker import stage_e_dispatch
@@ -43,6 +45,7 @@ from cardpicker.operating_envelope import (
     check_envelope,
     current_trip,
 )
+from cardpicker.stage_e_concurrency import _LOCK_NAMESPACE
 from cardpicker.stage_e_dispatch import (
     _FetchOutcomeWindow,
     _select_micro_batch,
@@ -350,6 +353,71 @@ class TestEndToEndMicroBatch:
         assert vote.printing_id == printing.pk
 
 
+class TestConcurrencyCapIntegration:
+    """The concurrency-cap companion change (`cardpicker.stage_e_concurrency`), exercised through
+    the REAL, post-#448 `dispatch_micro_batch` body - not just the module-level unit coverage in
+    `test_stage_e_concurrency.py`. A raw, independent `psycopg2` connection holds every available
+    slot (standing in for another concurrent dispatch on a separate django-q worker process, the
+    same "genuinely separate session" discipline `test_stage_e_concurrency.py`'s own module
+    docstring establishes - Postgres session-level advisory locks are re-entrant within one
+    session, so simulating a second dispatcher via Django's own connection would be a false test)."""
+
+    def _raw_connection_holding_every_slot(self, cap: int) -> "psycopg2.extensions.connection":
+        connection.ensure_connection()
+        raw = psycopg2.connect(**connection.get_connection_params())
+        raw.autocommit = True
+        with raw.cursor() as cursor:
+            for slot in range(cap):
+                cursor.execute("SELECT pg_try_advisory_lock(%s, %s)", [_LOCK_NAMESPACE, slot])
+                (acquired,) = cursor.fetchone()
+                assert acquired is True, f"test setup failed to claim slot {slot}"
+        return raw
+
+    @STREAMING_ON
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    def test_dispatch_is_throttled_when_the_only_slot_is_already_held(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+
+        def _fail_if_called(card, dpi=None):
+            raise AssertionError("Stage C must never run once the concurrency cap has throttled")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        raw = self._raw_connection_holding_every_slot(cap=1)
+        try:
+            outcome = dispatch_micro_batch(card_ids=[card.pk])
+        finally:
+            raw.close()  # auto-releases the advisory lock, same crash-safety property tested above
+
+        assert outcome.status == "throttled-concurrency-cap"
+        # a throttled dispatch never partially starts, matching halted-open-trip/halted-new-trip's
+        # own convention - no ledger row, no evidence, no vote.
+        assert PilotRunLedger.objects.count() == 0
+        assert ImageEvidence.objects.count() == 0
+        assert CardPrintingTag.objects.count() == 0
+
+    @STREAMING_ON
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    def test_dispatch_proceeds_normally_once_the_slot_is_released(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        card = CardFactory(name="Some Card", content_phash=42)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _full_evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        raw = self._raw_connection_holding_every_slot(cap=1)
+        raw.close()  # released before dispatching - the cap must not still be considered "held"
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+
+
 class TestGoogleLockoutMidBatch:
     @STREAMING_ON
     def test_lockout_stops_stage_c_trips_the_envelope_and_refuses_the_next_dispatch(
@@ -517,3 +585,44 @@ class TestBackstopSweep:
 
         assert EnvelopeTrip.objects.filter(bar=EnvelopeTrip.Bar.HOST_LOAD).count() == 1
         assert PilotRunLedger.objects.count() == 0  # halted before any batch ledger row was written
+
+    @STREAMING_ON
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    def test_sweep_stops_on_a_throttled_concurrency_cap_without_looping(
+        self, db: Any, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Tron gate defect fix: pre-fix, "throttled-concurrency-cap" matched neither
+        `_HALT_STATUSES` nor "empty" and fell through to `batches_dispatched += 1` with an immediate
+        re-entry into `dispatch_micro_batch` - a hot, backoff-free loop up to `--max-batches`,
+        precisely when the host is already saturated, reporting a success-shaped
+        `batches_dispatched=N` for a sweep that did nothing. Mirrors
+        `TestConcurrencyCapIntegration`'s own "genuinely separate session" discipline (that class's
+        own docstring) - a raw, independent `psycopg2` connection holds the only slot, standing in
+        for another concurrent dispatch (a django-q worker, or the event trigger racing this same
+        sweep) - reusing the SAME session for both would be a false test (re-entrant advisory
+        locks, this file's own `stage_e_concurrency` test module docstring)."""
+        CardFactory(name="Some Card", content_phash=42)
+
+        connection.ensure_connection()
+        raw = psycopg2.connect(**connection.get_connection_params())
+        raw.autocommit = True
+        with raw.cursor() as cursor:
+            cursor.execute("SELECT pg_try_advisory_lock(%s, %s)", [_LOCK_NAMESPACE, 0])
+            (acquired,) = cursor.fetchone()
+            assert acquired is True, "test setup failed to claim the only slot"
+        try:
+            call_command("stream_backstop_sweep", "--max-batches", "5")
+        finally:
+            raw.close()  # auto-releases the advisory lock, same crash-safety property tested above
+
+        output = capsys.readouterr().out
+        assert "sweep stopped: dispatch slots saturated (throttled-concurrency-cap)" in output
+        # exactly one occurrence - proves the loop actually STOPPED on the first throttled outcome
+        # rather than re-entering dispatch_micro_batch up to --max-batches=5 with no backoff.
+        assert output.count("sweep stopped: dispatch slots saturated") == 1
+        assert "batches_dispatched=0" in output
+        assert "stopped_reason=throttled-concurrency-cap" in output
+        # no ledger row - the throttled attempt never started real work, matching a halt's own
+        # convention (TestConcurrencyCapIntegration's own assertion for dispatch_micro_batch
+        # directly).
+        assert PilotRunLedger.objects.count() == 0

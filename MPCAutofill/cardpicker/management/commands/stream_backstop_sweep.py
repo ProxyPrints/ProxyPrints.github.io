@@ -24,8 +24,22 @@ scan-log row - catches a lost evidence-change dispatch; `_select_micro_batch` it
 does not fill from this backlog, see its own docstring, so the sweep covers it here instead). Stops
 when both backlogs come back empty, when the envelope trips ("halted-new-trip"/"halted-open-trip" -
 the sweep does not retry past a halt; the next scheduled sweep invocation picks up where this one
-stopped, exactly like a re-invoked BULK command would), or when `--max-batches` is reached (a safety
-bound for a single invocation, not a design limit).
+stopped, exactly like a re-invoked BULK command would), when every concurrency-cap slot is already
+held ("throttled-concurrency-cap" - same "stop, don't retry, the next scheduled sweep invocation
+picks up where this one stopped" posture as a halt, since looping here would just re-sample an
+already-saturated cap with no backoff), or when `--max-batches` is reached (a safety bound for a
+single invocation, not a design limit).
+
+THE SWEEP IS THE ONLY RECOVERY PATH FOR A THROTTLED EVENT DISPATCH: `Q_CLUSTER["max_attempts"] = 1`
+(`MPCAutofill/MPCAutofill/settings.py`) means an event-driven `async_task` that returns
+`DispatchOutcome(status="throttled-concurrency-cap")` is recorded SUCCESSFUL by django-q2 - it never
+retries, and the touched card is silently dropped until some future sweep picks it up via the
+backlog queries above. That makes it load-bearing that this command itself never treats
+"throttled-concurrency-cap" as ordinary work: looping past it burns a `current_trip()` query, an
+envelope sample, and (via the Stage C backlog fallback) a `_select_micro_batch` anti-join over the
+whole cards table, per iteration, up to `--max-batches` times, precisely when the host is already at
+its concurrency ceiling - the worst possible moment for a hot, backoff-free loop. See
+`stage_e_concurrency.py`'s own module docstring for why the cap is proactive rather than reactive.
 
 IDEMPOTENCE: every batch this command dispatches goes through the exact same `dispatch_micro_batch`
 conveyor the event trigger uses - Stage C's own resume filter and Stage D's own
@@ -49,6 +63,7 @@ from cardpicker.stage_e_dispatch import DEFAULT_MICRO_BATCH_SIZE, dispatch_micro
 DEFAULT_MAX_BATCHES = 1000
 
 _HALT_STATUSES = ("halted-open-trip", "halted-new-trip")
+_THROTTLED_STATUS = "throttled-concurrency-cap"
 
 
 def _next_stage_d_backlog_ids(batch_size: int) -> list[int]:
@@ -105,6 +120,7 @@ class Command(BaseCommand):
         total_stage_c = 0
         total_stage_d_votes = 0
         halted_status = None
+        stopped_reason = None
 
         for batch_num in range(max_batches):
             outcome = dispatch_micro_batch(
@@ -116,6 +132,17 @@ class Command(BaseCommand):
             if outcome.status in _HALT_STATUSES:
                 halted_status = outcome.status
                 self.stdout.write(f"Envelope halt ({outcome.status}, trip_id={outcome.trip_id}) - stopping sweep.")
+                break
+            if outcome.status == _THROTTLED_STATUS:
+                # PROACTIVE cap saturation, not a halt (stage_e_concurrency.py's own docstring) - a
+                # STOP condition all the same: looping here would just re-sample an already-saturated
+                # cap with no backoff (module docstring's own "hot, backoff-free loop" concern), and
+                # the throttled attempt did no work, so it must not count toward batches_dispatched.
+                stopped_reason = outcome.status
+                self.stdout.write(
+                    "sweep stopped: dispatch slots saturated (throttled-concurrency-cap); "
+                    "next scheduled sweep will resume."
+                )
                 break
 
             if outcome.status == "empty":
@@ -135,6 +162,13 @@ class Command(BaseCommand):
                     halted_status = outcome.status
                     self.stdout.write(f"Envelope halt ({outcome.status}, trip_id={outcome.trip_id}) - stopping sweep.")
                     break
+                if outcome.status == _THROTTLED_STATUS:
+                    stopped_reason = outcome.status
+                    self.stdout.write(
+                        "sweep stopped: dispatch slots saturated (throttled-concurrency-cap); "
+                        "next scheduled sweep will resume."
+                    )
+                    break
                 if outcome.status == "empty":
                     self.stdout.write("Backlog exhausted - nothing left to dispatch.")
                     break
@@ -147,5 +181,6 @@ class Command(BaseCommand):
 
         self.stdout.write(
             f"DONE batches_dispatched={batches_dispatched} stage_c_completed={total_stage_c} "
-            f"stage_d_votes_or_routes={total_stage_d_votes} halted={halted_status}"
+            f"stage_d_votes_or_routes={total_stage_d_votes} halted={halted_status} "
+            f"stopped_reason={stopped_reason}"
         )
