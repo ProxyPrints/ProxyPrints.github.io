@@ -413,9 +413,10 @@ class TestUpdateDatabase:
 
         names = set(Card.objects.values_list("name", flat=True))
         assert names == {f"Card {i}" for i in range(len(roots))}
-        # issue #473 PR-1: LOCAL_FILE sources carry no md5Checksum at all - stamping at this
-        # index seam must leave every card's md5_checksum null, never invented.
+        # issue #473 PR-1: LOCAL_FILE sources carry neither md5Checksum nor sha256Checksum at
+        # all - stamping at this index seam must leave every card's fields null, never invented.
         assert not Card.objects.filter(md5_checksum__isnull=False).exists()
+        assert not Card.objects.filter(sha256_checksum__isnull=False).exists()
 
     def test_one_source_failure_does_not_abort_the_others(
         self, transactional_db, settings, elasticsearch, tmp_path_factory, monkeypatch
@@ -638,6 +639,46 @@ class TestUpdateDatabase:
         card = transform_image_into_object(source=source, image=image, tags=Tags())
         assert card.md5_checksum is None
 
+    def test_transform_image_into_object_stamps_sha256_checksum_from_listing(self, django_settings):
+        """Owner-approved addition, 2026-07-25 evening: same seam as md5 above - Card.sha256_
+        checksum is copied verbatim from Image.sha256_checksum."""
+        source = factories.SourceFactory()
+        image = Image(
+            id="x",
+            name="Card.png",
+            size=1,
+            created_time=DEFAULT_DATE,
+            modified_time=DEFAULT_DATE,
+            height=1110,
+            folder=Folder(id="f", name="F", parent=None),
+            md5_checksum="deadbeef",
+            sha256_checksum="cafef00d" * 8,
+        )
+        card = transform_image_into_object(source=source, image=image, tags=Tags())
+        assert card.md5_checksum == "deadbeef"
+        assert card.sha256_checksum == "cafef00d" * 8
+
+    def test_transform_image_into_object_leaves_sha256_checksum_null_when_listing_omits_it(self, django_settings):
+        """A listing entry may carry an md5Checksum but genuinely omit sha256Checksum (Drive's
+        own sha256Checksum coverage is less consistent than md5Checksum, per this module's own
+        docstring) - the two fields are tracked independently, so this must never invent a
+        sha256 value from the md5 one, or vice versa."""
+        source = factories.SourceFactory()
+        image = Image(
+            id="x",
+            name="Card.png",
+            size=1,
+            created_time=DEFAULT_DATE,
+            modified_time=DEFAULT_DATE,
+            height=1110,
+            folder=Folder(id="f", name="F", parent=None),
+            md5_checksum="deadbeef",
+            # sha256_checksum intentionally omitted - defaults to None
+        )
+        card = transform_image_into_object(source=source, image=image, tags=Tags())
+        assert card.md5_checksum == "deadbeef"
+        assert card.sha256_checksum is None
+
     @freezegun.freeze_time(DEFAULT_DATE)
     def test_bulk_sync_objects_stamps_md5_checksum_on_create(self, django_settings, elasticsearch):
         source = factories.SourceFactory()
@@ -653,18 +694,21 @@ class TestUpdateDatabase:
                     tags=[],
                     size=0,
                     md5_checksum="deadbeef",
+                    sha256_checksum="cafef00d" * 8,
                 )
             ],
         )
-        assert Card.objects.get(identifier="new_card").md5_checksum == "deadbeef"
+        card = Card.objects.get(identifier="new_card")
+        assert card.md5_checksum == "deadbeef"
+        assert card.sha256_checksum == "cafef00d" * 8
 
     @freezegun.freeze_time(DEFAULT_DATE)
     def test_bulk_sync_objects_refreshes_md5_checksum_on_update_alone(self, django_settings, elasticsearch):
         """Unlike content_phash (never touched on update - see the test immediately above this
-        block), md5_checksum is free metadata already present on the incoming listing, so a
-        re-scan refreshes it even when nothing else about the card changed at all - this is the
-        clause that lets an ordinary periodic re-scan backfill previously-NULL checksums, not
-        only the dedicated backfill_md5_checksums command."""
+        block), md5_checksum/sha256_checksum are free metadata already present on the incoming
+        listing, so a re-scan refreshes both even when nothing else about the card changed at
+        all - this is the clause that lets an ordinary periodic re-scan backfill previously-NULL
+        checksums, not only the dedicated backfill_md5_checksums command."""
         source = factories.SourceFactory()
         existing = factories.CardFactory(
             identifier="existing_card",
@@ -673,6 +717,7 @@ class TestUpdateDatabase:
             date_created=make_aware(DEFAULT_DATE),
             date_modified=make_aware(DEFAULT_DATE),
             md5_checksum=None,
+            sha256_checksum=None,
         )
 
         bulk_sync_objects(
@@ -687,12 +732,14 @@ class TestUpdateDatabase:
                     tags=[],
                     size=0,
                     md5_checksum="freshsum",
+                    sha256_checksum="freshsha" * 8,
                 )
             ],
         )
 
         existing.refresh_from_db()
         assert existing.md5_checksum == "freshsum"
+        assert existing.sha256_checksum == "freshsha" * 8
 
     @freezegun.freeze_time(DEFAULT_DATE)
     def test_bulk_sync_objects_persists_expansion_hint_on_update(self, django_settings, elasticsearch):

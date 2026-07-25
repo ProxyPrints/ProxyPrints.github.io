@@ -15,4 +15,9 @@ class Migration(migrations.Migration):
             name="md5_checksum",
             field=models.CharField(blank=True, db_index=True, max_length=32, null=True),
         ),
+        migrations.AddField(
+            model_name="card",
+            name="sha256_checksum",
+            field=models.CharField(blank=True, db_index=True, max_length=64, null=True),
+        ),
     ]

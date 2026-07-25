@@ -1,9 +1,11 @@
 """
 See `cardpicker.md5_backfill`'s own module docstring for the full re-walk/reconcile design
-(issue #473 PR-1). This file is deliberately thin - Command.handle() wires the forced-dry-run
-guard + PilotRunLedger lifecycle rails (issue #362/#373 convention,
-`cardpicker.pilot_run_lifecycle`) around `run_md5_backfill`, matching every other big write
-command's own shape (e.g. `reparse_collector_evidence`, `consensus_recompute`).
+(issue #473 PR-1, now covering both md5 and sha256 in the one pass - the command keeps its
+original md5-only name since md5 remains the primary, grouping-defining field). This file is
+deliberately thin - Command.handle() wires the forced-dry-run guard + PilotRunLedger lifecycle
+rails (issue #362/#373 convention, `cardpicker.pilot_run_lifecycle`) around `run_md5_backfill`,
+matching every other big write command's own shape (e.g. `reparse_collector_evidence`,
+`consensus_recompute`).
 """
 
 from typing import Any
@@ -29,14 +31,17 @@ from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
 class Command(BaseCommand):
     help = (
         "Issue #473 PR-1: re-walks every GOOGLE_DRIVE source's Drive folder listing (metadata "
-        "only - zero image fetches) and reconciles each listing's md5Checksum against the "
-        "currently-stored Card.md5_checksum. LOCAL_FILE sources carry no checksum in their "
-        "listings and are always a no-op here (reported, not silently skipped). Dry-run by "
-        "default: prints planned-write count, group count, and dupe factor for cross-check "
-        "against issue #442's own sizing walk (18.87% dupe rate, 24,712/130,960 files, 12,275 "
-        "groups) BEFORE any --write. --write requires a matching COMPLETED dry-run of the SAME "
-        "--source-key selection within --dry-run-window-hours (forced-dry-run guard, issue #362) "
-        "- see --skip-dryrun-check to override. A PilotRunLedger row is written either way."
+        "only - zero image fetches) and reconciles each listing's md5Checksum AND sha256Checksum "
+        "against the currently-stored Card.md5_checksum/Card.sha256_checksum (owner-approved "
+        "sha256 addition, 2026-07-25 evening - same walk, same seam). LOCAL_FILE sources carry "
+        "neither checksum in their listings and are always a no-op here (reported, not silently "
+        "skipped). Dry-run by default: prints per-field coverage (matched/planned-write counts "
+        "for md5 and sha256 separately, since their listing coverage can differ), plus the "
+        "md5-only group count and dupe factor for cross-check against issue #442's own sizing "
+        "walk (18.87% dupe rate, 24,712/130,960 files, 12,275 groups) BEFORE any --write. "
+        "--write requires a matching COMPLETED dry-run of the SAME --source-key selection within "
+        "--dry-run-window-hours (forced-dry-run guard, issue #362) - see --skip-dryrun-check to "
+        "override. A PilotRunLedger row is written either way."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -126,6 +131,9 @@ class Command(BaseCommand):
                     "sources_skipped_no_checksum_support": result.sources_skipped_no_checksum_support,
                     "sources_unreachable": result.sources_unreachable,
                     "matched_files": result.matched_files,
+                    "md5_planned_writes": result.md5_planned_writes,
+                    "sha256_matched_files": result.sha256_matched_files,
+                    "sha256_planned_writes": result.sha256_planned_writes,
                     "planned_writes": result.planned_writes,
                     "written": result.written,
                     "dupe_groups": result.dupe_groups,
@@ -143,14 +151,24 @@ class Command(BaseCommand):
                 )
                 if result.sources_unreachable:
                     self.stdout.write(f"  unreachable source keys: {result.sources_unreachable}")
+                # per-field coverage, reported separately since md5/sha256 listing coverage can
+                # differ (owner-approved sha256 addition, 2026-07-25 evening).
                 self.stdout.write(
-                    f"matched_files={result.matched_files} dupe_groups={result.dupe_groups} "
-                    f"dupe_files={result.dupe_files} dupe_factor={result.dupe_factor:.4%}"
+                    f"md5:    matched_files={result.matched_files} planned_writes={result.md5_planned_writes}"
                 )
                 self.stdout.write(
-                    "Reconcile the two lines above against issue #442's own sizing walk "
-                    "(18.87% dupe rate, 24,712/130,960 files, 12,275 groups) before running "
-                    "--write."
+                    f"sha256: matched_files={result.sha256_matched_files} "
+                    f"planned_writes={result.sha256_planned_writes}"
+                )
+                self.stdout.write(
+                    f"dupe_groups={result.dupe_groups} dupe_files={result.dupe_files} "
+                    f"dupe_factor={result.dupe_factor:.4%} (md5-only - groups key on md5 "
+                    "exclusively, per issue #473 ruling 1)"
+                )
+                self.stdout.write(
+                    "Reconcile the md5 matched_files line and the dupe stats above against issue "
+                    "#442's own sizing walk (18.87% dupe rate, 24,712/130,960 files, 12,275 "
+                    "groups) before running --write."
                 )
                 if dry_run:
                     self.stdout.write(f"(dry-run) would_write={result.planned_writes}")

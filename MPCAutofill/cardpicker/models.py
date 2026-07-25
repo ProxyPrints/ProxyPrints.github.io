@@ -475,6 +475,21 @@ class Card(models.Model):
     # cross-source identity key here, not a distance-comparable perceptual hash, so there's no
     # reason to pay the twos-complement int-packing cost those two fields exist for.
     md5_checksum = models.CharField(max_length=32, null=True, blank=True, db_index=True)
+    # sha256 checksum (owner-approved addition, 2026-07-25 evening, issue #473 PR-1's comment
+    # thread) - same listing walk, same seam, same "copied verbatim, never computed locally"
+    # rule as md5_checksum above. Exists for one binding reason, not as a second copy of the same
+    # idea: PR-2's evidence-transfer premise ("identical bytes => identical evidence") has to be
+    # cryptographic, not merely probabilistic - md5 collisions are constructible, so a transfer
+    # gated on md5 alone would be forgeable. The BINDING consequence (stated in that same comment,
+    # cited here so it isn't re-derived): whenever BOTH cards in a transfer have a sha256 on file,
+    # transfer requires md5 AND sha256 to match; an md5 match with a sha256 mismatch is a loud
+    # anomaly (log + skip + flag), never a silent fallback to md5-only. Groups still key on md5
+    # ONLY (ruling 1 on issue #473 predates this addition and is unchanged by it) - sha256 is the
+    # transfer safety pairing and the future federation join key (issue #451 item 5), not a second
+    # grouping axis. NULL for exactly the same reasons md5_checksum can be NULL (LOCAL_FILE
+    # sources, or a Drive listing walked before this field existed) - never invented, never
+    # backfilled from image bytes we don't hold.
+    sha256_checksum = models.CharField(max_length=64, null=True, blank=True, db_index=True)
 
     def __str__(self) -> str:
         return (

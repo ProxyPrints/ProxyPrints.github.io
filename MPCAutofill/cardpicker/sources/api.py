@@ -85,6 +85,13 @@ class Image:
     # never sets this (no Drive-side checksum exists for a local file), which is the intended
     # "stays null" behaviour for that source type per the issue's owner ruling.
     md5_checksum: Optional[str] = None
+    # owner-approved addition, 2026-07-25 evening (issue #473 PR-1 comment thread): the same
+    # listing's `sha256Checksum` field, when the listing carries one - same "None default, every
+    # pre-existing call site keeps working, LocalFile never sets it" shape as md5_checksum above.
+    # See `Card.sha256_checksum`'s own docstring in `cardpicker.models` for why this exists
+    # alongside md5 rather than replacing it (the binding md5+sha256 evidence-transfer pairing
+    # rule for PR-2).
+    sha256_checksum: Optional[str] = None
 
     def unpack_name(
         self, tags: Tags
