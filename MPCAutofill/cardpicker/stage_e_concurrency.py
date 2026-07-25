@@ -55,22 +55,71 @@ not a cache-based counter and not a dedicated low-worker django-q queue:
   `EnvelopeTrip` itself is a DB row, not a cache entry) - zero new infrastructure, zero new
   migration (this module defines no model).
 
-CONNECTION-LIFECYCLE CONTRACT (why "same connection acquire-to-release" holds here): Postgres
-advisory locks are per-SESSION, so acquiring on one DB connection and releasing on a DIFFERENT one
-is a no-op that leaks the lock. `try_acquire_dispatch_slot` is a context manager that acquires and
-releases within the SAME `with` block, using Django's own per-thread `django.db.connection` proxy
-throughout - confirmed safe against django-q2's own connection-recycling behavior
-(`django_q.worker.py`'s `close_old_django_connections()` call, which happens ONLY immediately
-BEFORE the next task starts, never mid-task or between statements within one task) by direct
-inspection of the installed `django-q2` package: a single `dispatch_micro_batch` call - and
-therefore a single acquire/use/release cycle of this module - always executes as one uninterrupted
-segment on one connection, whether triggered via a django-q `async_task` or a direct
-`stream_backstop_sweep` command-line invocation.
+CONNECTION-LIFECYCLE CONTRACT (2026-07-25 REWRITE - the ORIGINAL version of this section was WRONG,
+see below): Postgres advisory locks are per-SESSION, so acquiring on one DB connection and releasing
+on a DIFFERENT one is a no-op that leaks the lock. This module therefore holds its lock on a
+DEDICATED `psycopg2` connection that IT ALONE owns for the duration of one `try_acquire_dispatch_
+slot()` call - never `django.db.connection` (Django's shared per-thread connection proxy).
+
+WHAT WENT WRONG IN PRODUCTION (2026-07-25T00:25Z shakedown, `envtrip-20260725T002504-73e1eb6d`,
+`{'ceiling': 7.0, 'load_avg': 11.4013671875}`): the FIRST version of this module acquired and
+released its advisory lock on `django.db.connection`, on the strength of a claim - made by direct
+inspection of `django_q.worker` - that a single `dispatch_micro_batch` call always runs as one
+uninterrupted segment on one connection. That claim was checked against the wrong code path.
+`django_q.worker.close_old_django_connections()` (called only between tasks) was never the risk;
+`django_q.brokers.orm.ORM.get_connection()` was. That method calls `django.db.close_old_connections()`
+UNCONDITIONALLY whenever it's invoked outside an atomic block (`if transaction.get_autocommit(...)`),
+and this project's `DATABASES["default"]` has no `CONN_MAX_AGE` override, so Django's own default (0)
+applies - `BaseDatabaseWrapper.close_if_unusable_or_obsolete` treats `close_at = now + 0` as already
+expired, so `close_old_connections()` closes `django.db.connection`'s underlying connection THE FIRST
+TIME anything calls it, unconditionally, not just after some elapsed age. And something DOES call it
+from squarely inside this module's own locked region: `cardpicker.stage_e_signals`'s `post_save`
+receivers fire during Stage C's `persist_evidence` (INSIDE `dispatch_micro_batch`'s `with
+try_acquire_dispatch_slot()` block) and call `django_q.tasks.async_task(...)`, which synchronously
+calls `broker.enqueue(pack)` on the SAME thread/process - for the installed ORM broker, `enqueue`
+calls `get_connection()` first, which closes the connection right then. A closed connection
+auto-releases every advisory lock its session held (the same crash-safety property this module
+relies on deliberately for a genuinely killed process), so the lock this module thought it was still
+holding was gone mid-dispatch - EVERY worker then found EVERY slot "free", explaining the shakedown's
+zero `throttled-concurrency-cap` outcomes despite eight concurrent dispatches, and the eight
+`pg_advisory_unlock reported slot N was not held by this connection` warnings this module's own
+defensive guard (`_release_slot`) logged when the final unlock ran against a since-reconnected
+`django.db.connection` (Django transparently reopens a closed connection on next use, but that is a
+NEW Postgres backend session - the unlock call executes there, not on the session that held the
+lock).
+
+THE FIX: hold the lock on a connection `stage_e_concurrency` opens for itself
+(`psycopg2.connect(**connection.get_connection_params())`, `autocommit=True` so it's never left
+idle-in-transaction and lock lifetime is tied to the session rather than any transaction this module
+never starts) and NOTHING ELSE ever touches - not django-q's broker, not `close_old_connections`, not
+any other code in the process. That connection lives for exactly one `try_acquire_dispatch_slot()`
+call: opened before the acquire, held across the whole `yield` (i.e. across all of Stage C/D, exactly
+where the lock needs to survive), explicitly `pg_advisory_unlock`'d AND `close()`'d in a `finally` -
+the explicit unlock is the fast/clean path, the `close()` is the crash-safety backstop that fires even
+if the explicit unlock itself somehow fails (Postgres auto-releases every advisory lock a closing
+session held, the exact mechanism this module's own crash-safety design already leans on for a
+genuinely killed process - see the DB-row-counter rejection above). The "not held by this connection"
+warning guard (`_release_slot`) is KEPT UNCHANGED, not removed - it is what caught this bug in the
+first place (the 8 log lines in the incident evidence), and it should now never fire again; a report
+of it firing again is a signal something ELSE has broken this contract.
+
+FAIL-CLOSED ON CONNECTION-CREATION FAILURE: if opening the dedicated connection itself raises (DB
+unreachable, connection pool/limit exhausted, etc.), `try_acquire_dispatch_slot()` yields `None` -
+the same "throttled, do no work this call" signal an exhausted cap already produces - rather than
+letting the dispatch proceed uncapped. An uncapped dispatch is exactly the failure this module exists
+to prevent; a connection-creation failure is precisely the moment this module is LEAST able to
+guarantee the cap holds, so it is also the moment to be most conservative. The cost is a spuriously
+throttled micro-batch (picked up again by the next event or the backstop sweep, matching the existing
+"throttled dispatch defers to the sweep" convention already documented in
+docs/features/stage-e-operations.md) - a strictly cheaper failure mode than a repeat of this
+incident.
 """
 
 import logging
 from contextlib import contextmanager
 from typing import Iterator, Optional
+
+import psycopg2
 
 from django.conf import settings
 from django.db import connection
@@ -105,17 +154,42 @@ def _slot_count() -> int:
     return configured
 
 
-def _try_acquire_slot() -> Optional[int]:
+def _open_dedicated_connection() -> "psycopg2.extensions.connection":
     """
-    Tries every slot index in `[0, _slot_count())` in ascending order, returning the first one
-    whose `pg_try_advisory_lock` call succeeds, or `None` if every slot is already held elsewhere.
-    Never blocks - `pg_try_advisory_lock` is non-blocking by design (unlike the plain
-    `pg_advisory_lock`, which would queue), matching this primitive's own "refuse immediately,
-    never queue" posture - the same posture `operating_envelope.check_envelope` already
-    established for the envelope itself (a busy host should shed load, not build a backlog of
+    Opens a NEW `psycopg2` connection this module alone owns for the lifetime of one
+    `try_acquire_dispatch_slot()` call - see the module docstring's "CONNECTION-LIFECYCLE CONTRACT"
+    section for the full incident this replaces `django.db.connection` to fix (django-q2's ORM
+    broker calls `django.db.close_old_connections()` - which, with `CONN_MAX_AGE` unset, closes the
+    connection UNCONDITIONALLY - from squarely inside this module's own locked region whenever a
+    follow-on dispatch is enqueued via `async_task`).
+
+    Connection PARAMETERS are read from Django's own `django.db.connection`
+    (`connection.get_connection_params()`, calling `connection.ensure_connection()` first since
+    `get_connection_params()` alone doesn't establish one) - not a separately-guessed host/port/
+    dbname - so this always targets whatever database Django itself is actually configured against,
+    including test-run database-name prefixing. `autocommit=True`: advisory locks are independent of
+    transactions, and leaving this connection in Postgres's default (non-autocommit) mode would hold
+    an idle-in-transaction session open for the whole dispatch for no reason, and would tie this
+    lock's release semantics to a commit/rollback this module never issues.
+    """
+    connection.ensure_connection()
+    params = connection.get_connection_params()
+    raw = psycopg2.connect(**params)
+    raw.autocommit = True
+    return raw
+
+
+def _try_acquire_slot(conn: "psycopg2.extensions.connection") -> Optional[int]:
+    """
+    Tries every slot index in `[0, _slot_count())` in ascending order, on the given (dedicated)
+    connection, returning the first one whose `pg_try_advisory_lock` call succeeds, or `None` if
+    every slot is already held elsewhere. Never blocks - `pg_try_advisory_lock` is non-blocking by
+    design (unlike the plain `pg_advisory_lock`, which would queue), matching this primitive's own
+    "refuse immediately, never queue" posture - the same posture `operating_envelope.check_envelope`
+    already established for the envelope itself (a busy host should shed load, not build a backlog of
     blocked dispatches waiting for a slot).
     """
-    with connection.cursor() as cursor:
+    with conn.cursor() as cursor:
         for slot in range(_slot_count()):
             cursor.execute("SELECT pg_try_advisory_lock(%s, %s)", [_LOCK_NAMESPACE, slot])
             (acquired,) = cursor.fetchone()
@@ -124,16 +198,17 @@ def _try_acquire_slot() -> Optional[int]:
     return None
 
 
-def _release_slot(slot: int) -> None:
+def _release_slot(conn: "psycopg2.extensions.connection", slot: int) -> None:
     """Releases a slot this process previously acquired via `_try_acquire_slot` - MUST run on the
-    same `django.db.connection` the acquire happened on (see module docstring's own
+    SAME dedicated connection the acquire happened on (see module docstring's own
     "CONNECTION-LIFECYCLE CONTRACT" section). Logs rather than raises if Postgres reports the lock
-    wasn't held (`pg_advisory_unlock` returns `false`, never an error, for that case) - this would
-    only happen if the underlying connection was somehow recycled mid-dispatch, a condition this
-    module's own docstring argues shouldn't occur but that a release path should still fail soft
-    against rather than crash an otherwise-successful dispatch over.
-    """
-    with connection.cursor() as cursor:
+    wasn't held (`pg_advisory_unlock` returns `false`, never an error, for that case) - KEPT
+    UNCHANGED from the pre-fix version deliberately: this is the exact guard that caught the
+    production incident (2026-07-25T00:25Z shakedown, 8 occurrences) this rewrite fixes, and it
+    should now never fire again - a fresh report of it firing is a signal that something else has
+    broken the dedicated-connection contract, not something to remove because "the incident is
+    fixed now"."""
+    with conn.cursor() as cursor:
         cursor.execute("SELECT pg_advisory_unlock(%s, %s)", [_LOCK_NAMESPACE, slot])
         (released,) = cursor.fetchone()
     if not released:
@@ -149,17 +224,36 @@ def try_acquire_dispatch_slot() -> Iterator[Optional[int]]:
     """
     The primitive `stage_e_dispatch.dispatch_micro_batch` calls. Yields the acquired slot index (an
     `int` in `[0, settings.STAGE_E_MAX_CONCURRENT_DISPATCHES)`), or `None` if every slot was already
-    held - the caller is expected to treat `None` as "throttled, do no work this call", the same
-    posture `current_trip() is not None` already gets in `dispatch_micro_batch`'s own no-self-resume
-    gate. ALWAYS releases whatever it acquired on exit, including when the `with` block raises -
-    a dispatch that crashes mid-batch must not permanently strand a slot (this module's own crash
-    line of defense is the connection-level auto-release described in the module docstring; this
-    `finally` is the FAST path for the ordinary "dispatch finished, successfully or not, without the
-    whole process dying" case).
+    held (or the dedicated connection itself couldn't be opened - see "FAIL-CLOSED ON
+    CONNECTION-CREATION FAILURE" in the module docstring) - the caller is expected to treat `None` as
+    "throttled, do no work this call", the same posture `current_trip() is not None` already gets in
+    `dispatch_micro_batch`'s own no-self-resume gate.
+
+    Opens a DEDICATED connection for this call (`_open_dedicated_connection`) and ALWAYS closes it on
+    exit, in a `finally`, whether the `with` block raises or not, and whether or not a slot was ever
+    acquired - a dispatch that crashes mid-batch must not leak either the slot or the connection.
+    Explicitly `pg_advisory_unlock`s before closing (the fast/clean path, and what makes
+    `_release_slot`'s "not held" warning guard meaningful); the `close()` itself is the crash-safety
+    backstop - Postgres auto-releases every advisory lock a closing session held, so even if the
+    explicit unlock somehow failed to run, closing the connection still frees the slot.
     """
-    slot = _try_acquire_slot()
     try:
+        conn = _open_dedicated_connection()
+    except Exception:
+        logger.exception(
+            "stage_e_concurrency: failed to open the dedicated advisory-lock connection - "
+            "failing CLOSED (treating this dispatch as throttled) rather than proceeding uncapped"
+        )
+        yield None
+        return
+
+    slot: Optional[int] = None
+    try:
+        slot = _try_acquire_slot(conn)
         yield slot
     finally:
-        if slot is not None:
-            _release_slot(slot)
+        try:
+            if slot is not None:
+                _release_slot(conn, slot)
+        finally:
+            conn.close()

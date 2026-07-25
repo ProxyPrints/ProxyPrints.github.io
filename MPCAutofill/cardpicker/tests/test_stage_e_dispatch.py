@@ -37,6 +37,7 @@ from cardpicker.models import (
     ImageEvidence,
     PilotRunLedger,
     PrintingTagStatus,
+    StageEThrottleCounter,
     VoteSource,
 )
 from cardpicker.operating_envelope import (
@@ -398,6 +399,11 @@ class TestConcurrencyCapIntegration:
         assert PilotRunLedger.objects.count() == 0
         assert ImageEvidence.objects.count() == 0
         assert CardPrintingTag.objects.count() == 0
+        # observability signal (Tron gate anomaly 4, 2026-07-25) - the ONE durable, queryable
+        # record that this throttle happened, since no ledger row was written above.
+        counter = StageEThrottleCounter.objects.get()
+        assert counter.count == 1
+        assert counter.last_throttled_at is not None
 
     @STREAMING_ON
     @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)

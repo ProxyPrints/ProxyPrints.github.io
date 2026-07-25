@@ -26,6 +26,7 @@ from .models import (
     ProjectMember,
     SavedDeck,
     Source,
+    StageEThrottleCounter,
     Tag,
     TagAliasSuggestion,
     TagSuggestionStatus,
@@ -299,6 +300,18 @@ class AdminEnvelopeTrip(admin.ModelAdmin[EnvelopeTrip]):
         "acknowledged_at",
         "acknowledged_note",
     )
+
+
+@admin.register(StageEThrottleCounter)
+class AdminStageEThrottleCounter(admin.ModelAdmin[StageEThrottleCounter]):
+    # Observability signal for `cardpicker.stage_e_concurrency`'s "throttled-concurrency-cap"
+    # outcome (StageEThrottleCounter's own docstring for the full "why a singleton counter, not a
+    # per-event row" reasoning) - the runbook's "tune STAGE_E_MAX_CONCURRENT_DISPATCHES against
+    # the observed throttle rate" instruction (docs/features/stage-e-operations.md) points an
+    # operator here. Always exactly one row. Read-only, same rationale as AdminEnvelopeTrip above
+    # - `StageEThrottleCounter.record()` is the only code path permitted to advance `count`.
+    list_display = ("singleton_key", "count", "last_throttled_at")
+    readonly_fields = ("singleton_key", "count", "last_throttled_at")
 
 
 @admin.register(LandsAmbiguousResidue)

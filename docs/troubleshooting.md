@@ -1743,3 +1743,57 @@ unless `--allow-missing-scryfall-cache` is passed explicitly. This
 catches the failure mode structurally even if the volume mount is ever
 missed again (e.g. a fresh box rebuild that skips the compose file, or
 a manual `docker run` bypassing compose entirely).
+
+## Stage E concurrency cap configured but zero `throttled-concurrency-cap` outcomes, host load trips anyway
+
+**Symptom**: `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` is set (e.g.
+the default `2`), several django-q2 workers are dispatching Stage E
+micro-batches concurrently, and yet: (a) `DispatchOutcome.status` is
+never `"throttled-concurrency-cap"` no matter how much concurrent load
+there is, (b) the worker log carries the literal warning
+`pg_advisory_unlock reported slot N was not held by this connection - possible connection recycling mid-dispatch` (`cardpicker. stage_e_concurrency`'s own defensive guard), one occurrence per
+dispatch, and (c) the host load average envelope bar
+(`operating_envelope`, ceiling `7.0`) trips anyway, from a burst of
+CPU-bound Stage C work that the concurrency cap should have prevented
+from ever starting.
+
+**Cause**: this exact signature is the 2026-07-25T00:25Z production
+shakedown (`envtrip-20260725T002504-73e1eb6d`,
+`{'ceiling': 7.0, 'load_avg': 11.4013671875}`) — the cap's advisory lock
+was held on `django.db.connection` (Django's shared per-thread
+connection) instead of a dedicated connection. `cardpicker. stage_e_signals`'s `post_save` receivers fire during Stage C's
+`persist_evidence`, squarely inside the cap's own locked region, and
+call `django_q.tasks.async_task(...)`, which synchronously calls the
+installed ORM broker's `enqueue` — `django_q.brokers.orm.ORM. get_connection()` calls `django.db.close_old_connections()`
+unconditionally whenever not inside an atomic block. With `CONN_MAX_AGE`
+unset (this project's `DATABASES["default"]` has no override, so
+Django's default `0` applies), that call closes the connection the
+first time anything asks, not just after some elapsed age. A closed
+connection auto-releases every Postgres advisory lock its session held,
+so the cap's own lock died mid-dispatch and every subsequent worker
+found every slot "free" — the warning above is Postgres reporting that
+the FINAL unlock call (which runs on a transparently-reconnected, and
+therefore DIFFERENT, backend session) found nothing to release.
+
+**Fix** (shipped 2026-07-25, same day): `cardpicker/stage_e_concurrency.py`
+now opens a DEDICATED `psycopg2` connection (`autocommit=True`) it alone
+owns for the lifetime of one `try_acquire_dispatch_slot()` call — never
+`django.db.connection`. See that module's own docstring ("WHAT WENT
+WRONG IN PRODUCTION" section) and
+[`docs/features/stage-e-operations.md`](features/stage-e-operations.md)'s
+"Concurrency cap" section for the full writeup, and
+`cardpicker/tests/test_stage_e_concurrency.py`'s
+`TestRegressionDedicatedConnectionSurvivesFollowOnEnqueue` for the
+regression tests that reproduce this exact failure (proven, by hand, to
+fail against the pre-fix module).
+
+**How to confirm it's this** (if the warning above recurs after the
+fix): the warning guard was deliberately KEPT, not removed, specifically
+so a regression here stays visible — a fresh occurrence means something
+else has broken the "dedicated connection, never `django.db.connection`"
+contract, not that the original bug is back verbatim. Check
+`StageEThrottleCounter.objects.get().count`/`.last_throttled_at`
+(Django admin, or `cardpicker.models.StageEThrottleCounter`) — introduced
+in the same fix as the one durable, queryable signal for whether
+throttling is happening at all (throttled dispatches write no
+`PilotRunLedger` row).

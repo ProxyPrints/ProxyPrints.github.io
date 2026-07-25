@@ -1,4 +1,4 @@
-As of: 2026-07-24
+As of: 2026-07-25
 What this is: the admin-facing operational truth for Stage E's envelope
 enforcement primitive (Phase 1) and streaming dispatch loop (Phase 2), both
 implementing [`docs/proposals/stage-e-streaming.md`](../proposals/stage-e-streaming.md)
@@ -240,7 +240,7 @@ tail shakedown's own instrumentation (phase 3, not yet run). The default
 sits inside the brief's own "roughly 10-100 cards per batch" sanity range as
 a conservative starting point pending that measurement.
 
-### Concurrency cap (companion change, 2026-07-24)
+### Concurrency cap (companion change, 2026-07-24; connection-lifecycle fix + throttle-observability counter, 2026-07-25)
 
 Caps the number of `dispatch_micro_batch` calls running CONCURRENTLY, across
 every django-q2 worker process on the box, to
@@ -271,14 +271,73 @@ in place; neither supersedes the other.
 full comparison against a cache-based counter and a dedicated django-q
 queue, both rejected, and why advisory locks' automatic release-on-
 connection-death was the deciding factor over a DB-row counter). No new
-migration, no new infrastructure. A throttled dispatch returns
-`status="throttled-concurrency-cap"` and writes no ledger row, the same
-"halted dispatch never partially starts" convention `halted-open-trip`/
-`halted-new-trip` already established. `_slot_count()` floors
-`STAGE_E_MAX_CONCURRENT_DISPATCHES` at `1` — a misconfigured `0` or negative
-value clamps to `1` slot (with a `logger.warning`) rather than silently
-throttling every dispatch forever with no error and no envelope trip to
-surface it.
+migration for the lock mechanism itself, no new infrastructure. A throttled
+dispatch returns `status="throttled-concurrency-cap"` and writes no
+`PilotRunLedger` row, the same "halted dispatch never partially starts"
+convention `halted-open-trip`/`halted-new-trip` already established — but it
+DOES advance a small observability counter, see "Throttle observability"
+below. `_slot_count()` floors `STAGE_E_MAX_CONCURRENT_DISPATCHES` at `1` — a
+misconfigured `0` or negative value clamps to `1` slot (with a
+`logger.warning`) rather than silently throttling every dispatch forever
+with no error and no envelope trip to surface it.
+
+**The lock rides a DEDICATED connection, not Django's own
+(2026-07-25 fix, PRODUCTION INCIDENT)**: the first live shakedown
+(`envtrip-20260725T002504-73e1eb6d`, `{'ceiling': 7.0, 'load_avg': 11.4013671875}`) found this cap did NOT bind — zero `throttled-concurrency- cap` outcomes despite 8 concurrent django-q workers, plus 8 occurrences of
+this module's own `pg_advisory_unlock reported slot N was not held by this connection` warning. Root cause: the original version of this module
+acquired and released its advisory lock on `django.db.connection` (Django's
+shared per-thread connection), on the strength of a claim — checked against
+the wrong code path — that a single `dispatch_micro_batch` call always runs
+as one uninterrupted segment on one connection. The REAL trigger:
+`cardpicker.stage_e_signals`'s `post_save` receivers fire during Stage C's
+`persist_evidence` (squarely inside the locked region) and call
+`django_q.tasks.async_task(...)`, which synchronously calls the installed
+ORM broker's `enqueue` — and `django_q.brokers.orm.ORM.get_connection()`
+calls `django.db.close_old_connections()` unconditionally whenever it's not
+inside an atomic block. This project's `DATABASES["default"]` has no
+`CONN_MAX_AGE` override, so Django's own default (`0`) applies — the
+connection is treated as already-expired the moment anything asks, not just
+after some elapsed age — so `close_old_connections()` closed
+`django.db.connection` the first time it was called, mid-dispatch. A closed
+connection auto-releases every advisory lock its session held, so every
+worker then found every slot "free". **The fix**: this module now opens a
+DEDICATED `psycopg2` connection (`autocommit=True`) it alone owns for the
+duration of one `try_acquire_dispatch_slot()` call — never
+`django.db.connection`, never touched by django-q's broker or any other
+code in the process. The connection is explicitly `pg_advisory_unlock`'d
+AND `close()`'d in a `finally`, so the lock is released even if the
+explicit unlock itself somehow fails (closing a session is Postgres's own
+backstop release mechanism — the same crash-safety property this module's
+own DB-row-counter rejection already leans on). The "not held by this
+connection" warning guard is KEPT, unchanged — it is what caught this
+incident, and should now never fire again; a fresh report of it firing is a
+signal that something else has broken the dedicated-connection contract.
+Connection-CREATION failure (the dedicated connection itself can't be
+opened) fails **CLOSED**: the dispatch is treated as throttled
+(`status="throttled-concurrency-cap"`) rather than proceeding uncapped — an
+uncapped dispatch is exactly the failure this incident was. See
+`cardpicker/stage_e_concurrency.py`'s own module docstring for the full
+incident writeup, and `cardpicker/tests/test_stage_e_concurrency.py`'s
+`TestRegressionDedicatedConnectionSurvivesFollowOnEnqueue` for the
+regression tests (proven, by hand, to fail against the pre-fix module).
+
+**Throttle observability (Tron gate anomaly 4, 2026-07-25)**: since a
+throttled dispatch writes no `PilotRunLedger` row, and this runbook's own
+"raise `STAGE_E_MAX_CONCURRENT_DISPATCHES` once real shakedown data shows
+headroom" instruction below needs SOMETHING queryable to check against, a
+throttled outcome now also calls `StageEThrottleCounter.record()`
+(`cardpicker/models.py`) — a SINGLETON, always-exactly-one-row counter
+(`count`, `last_throttled_at`), visible in the Django admin. Deliberately
+NOT a per-throttle-event row (the `PilotRunLedger`/`EnvelopeTrip` pattern):
+a burst of concurrent dispatches hitting an exhausted cap can throttle far
+more often than any dispatch ever completes, so a per-event row would
+WRITE-AMPLIFY under exactly the failure shape this whole feature exists to
+guard against. `count` is only ever advanced via an atomic `F("count") + 1`
+UPDATE, race-safe under Postgres row-level locking even with many worker
+processes throttling at once. New migration `0081_stageethrottlecounter`
+(one small table, no relation to any other model) — this is the one piece
+of "new infrastructure" this change adds, scoped deliberately narrowly to
+observability, not the lock mechanism itself.
 
 **Event-dispatch drop semantics**: `Q_CLUSTER["max_attempts"] = 1`
 (`MPCAutofill/MPCAutofill/settings.py`) means an event-driven `async_task` that returns
@@ -300,11 +359,16 @@ rather than reading a `batches_dispatched=0`-with-no-explanation line as
 **Runbook implication**: `STAGE_E_MAX_CONCURRENT_DISPATCHES` is the first
 tuning knob to raise once real shakedown data shows headroom below the
 7-core ceiling — raise it gradually and watch the host-load bar, never
-guess a large value up front. Do **not** attempt to defeat a persistent
-run of `throttled-concurrency-cap` outcomes by raising this value past what
-the envelope's own load bar tolerates — a cap that's too high just moves
-the failure back to the reactive host-load trip this change was built to
-avoid triggering in the first place.
+guess a large value up front. Check the observed throttle rate via
+`StageEThrottleCounter` (Django admin, or `StageEThrottleCounter.objects. get().count`/`.last_throttled_at`) before deciding it's worth raising at
+all — before the 2026-07-25 fix above, this number was always zero
+regardless of real load, which is exactly what made the cap's own
+non-binding failure invisible; a persistently zero count after the fix is
+a genuine "cap has headroom" signal, not a repeat of that gap. Do **not**
+attempt to defeat a persistent run of `throttled-concurrency-cap` outcomes
+by raising this value past what the envelope's own load bar tolerates — a
+cap that's too high just moves the failure back to the reactive host-load
+trip this change was built to avoid triggering in the first place.
 
 ### Observability: the streaming-run ledger convention
 
