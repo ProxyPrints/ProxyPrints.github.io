@@ -792,9 +792,19 @@ conditions.
 Nothing new beyond the existing streaming-run ledger ("Observability: the
 streaming-run ledger convention" above) — every batch already gets its own
 `PilotRunLedger` row via `dispatch_micro_batch`. `run_id` follows
-`stage-e-shakedown-b<batch-size>-<date>-<batch-num>`, so the 25/50/100-card
+`stage-e-shakedown-b<batch-size>-<invocation timestamp>-<batch-num>` (e.g.
+`stage-e-shakedown-b25-20260725T143022123456-0`), so the 25/50/100-card
 waves this shakedown measures against (§10(c)) separate cleanly for the
 #463 analysis.
+
+**Drill-found fix (§7(b)):** the timestamp component is microsecond-
+precision (`%Y%m%dT%H%M%S%f`, mirroring `dispatch_micro_batch`'s own
+default `run_id` convention) — an earlier date-only shape
+(`stage-e-shakedown-b<batch-size>-<date>-<batch-num>`) collided with
+`PilotRunLedger.run_id`'s UNIQUE constraint on any second same-day
+invocation, so a kill-and-resume (or any multi-invocation wave) died with
+`IntegrityError` at the very first batch's ledger create. The `b<batch-size>`
+segment stays greppable for the wave analysis regardless.
 
 ### Drill invocation sequences (`stage-e-streaming.md` §7)
 

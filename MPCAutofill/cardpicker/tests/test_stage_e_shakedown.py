@@ -7,6 +7,7 @@ run_id-prefix behaviour or exercised for real via the SAME halt/throttle mechani
 """
 
 import datetime as dt
+import re
 from typing import Any
 
 import psycopg2
@@ -233,9 +234,37 @@ class TestDriverChunkingAndRunIdPrefix:
 
         run_ids = sorted(PilotRunLedger.objects.values_list("run_id", flat=True))
         assert len(run_ids) == 3
-        today = timezone.now().strftime("%Y%m%d")
+        # microsecond-precision invocation timestamp (drill-found fix, §7(b) - a date-only prefix
+        # collided with PilotRunLedger.run_id's own UNIQUE constraint on a second same-day
+        # invocation), all three batches from this ONE invocation sharing the same prefix.
         for i, run_id in enumerate(run_ids):
-            assert run_id == f"stage-e-shakedown-b2-{today}-{i}"
+            assert re.fullmatch(rf"stage-e-shakedown-b2-\d{{8}}T\d{{12}}-{i}", run_id), run_id
+        prefixes = {run_id.rsplit("-", 1)[0] for run_id in run_ids}
+        assert len(prefixes) == 1  # same invocation -> same prefix, only the trailing chunk index varies
+
+    @STREAMING_ON
+    def test_two_same_day_invocations_produce_distinct_run_ids(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The drill-found defect itself (§7(b)): a date-only run_id prefix made a SECOND
+        same-day invocation collide with the first on PilotRunLedger.run_id's UNIQUE constraint,
+        so a kill-and-resume (or any multi-invocation wave) died with IntegrityError at the very
+        first batch's ledger create. Two back-to-back invocations here must produce entirely
+        disjoint run_id sets."""
+        card_one = CardFactory(content_phash=1)
+        _blank_tail_evidence(card_one)
+        _install_ok_stage_c_stub(monkeypatch)
+        call_command("stage_e_shakedown", "--reextracted-after", _now_cutoff())
+        first_run_ids = set(PilotRunLedger.objects.values_list("run_id", flat=True))
+        assert len(first_run_ids) == 1
+
+        card_two = CardFactory(content_phash=2)
+        _blank_tail_evidence(card_two)
+        # no IntegrityError - proves the fix; a pre-fix date-only prefix would collide here on any
+        # day where both invocations happen to run within the same calendar day (i.e. always, in
+        # practice, for a same-day kill-and-resume).
+        call_command("stage_e_shakedown", "--reextracted-after", _now_cutoff())
+        second_run_ids = set(PilotRunLedger.objects.values_list("run_id", flat=True)) - first_run_ids
+        assert len(second_run_ids) == 1
+        assert first_run_ids.isdisjoint(second_run_ids)
 
     @STREAMING_ON
     def test_max_batches_bounds_a_single_invocation(
