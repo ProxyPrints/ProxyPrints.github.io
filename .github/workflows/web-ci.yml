@@ -1,4 +1,20 @@
 name: Web CI
+
+# Owner-directed CI path-scoping, 2026-07-25: this workflow's own `on.push`
+# paths already gate the whole run to commits touching frontend/**,
+# MPCAutofill/**, or cloudflare-static-site/** - but every job below used
+# to run regardless of WHICH of those surfaces actually changed, so e.g. a
+# backend-only merge ran the full 4-shard Playwright suite for no reason.
+# The `changes` job below does a plain `git diff --name-only` against the
+# push's pre-image SHA (no third-party paths-filter action - this repo's
+# other workflows, e.g. upstream-drift-monitor.yml, already reach for
+# plain git diffing over an action for this) and each surface's jobs check
+# its output before running. `cloudflare-static-site/**` isn't wired into
+# any `changes` output: no job here currently reads that directory (its
+# entry in the trigger paths above predates the publish-* job removal - see
+# docs/infrastructure.md's CI/CD state notes) so a push touching only that
+# path now runs zero jobs in this workflow, matching "docs/config-only
+# shouldn't need much CI" applied to this surface too.
 on:
   push:
     branches: ["master"]
@@ -8,8 +24,49 @@ on:
       - "cloudflare-static-site/**"
   workflow_dispatch:
 jobs:
+  changes:
+    name: Detect changed surfaces
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.diff.outputs.backend }}
+      frontend: ${{ steps.diff.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so the diff below can always resolve
+          # `github.event.before`, mirroring coverage-delta.yml's own
+          # fetch-depth: 0 use for the same reason.
+          fetch-depth: 0
+      - name: Diff changed paths against the pre-push SHA
+        id: diff
+        run: |
+          BEFORE="${{ github.event.before }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            # workflow_dispatch (no `before`), a brand-new branch, or a
+            # force-push whose old tip this checkout can't see - no
+            # meaningful diff to compute, so run every surface's jobs
+            # rather than silently skip work.
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}")
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -q '^MPCAutofill/'; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "backend=false" >> "$GITHUB_OUTPUT"
+          fi
+          if echo "$CHANGED" | grep -q '^frontend/'; then
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend=false" >> "$GITHUB_OUTPUT"
+          fi
   test-backend:
     name: Backend tests
+    needs: [changes]
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -33,6 +90,8 @@ jobs:
           moxfield-secret: ${{ secrets.MOXFIELD_SECRET }}
   test-frontend:
     name: Frontend tests (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
+    needs: [changes]
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     # Playwright's browsers + OS deps are pre-baked into this image (matching
     # frontend/package-lock.json's pinned @playwright/test version), so the
@@ -56,8 +115,12 @@ jobs:
           shard_total: ${{ matrix.shardTotal }}
   merge-frontend-test-reports:
     name: Merge Playwright reports
-    if: ${{ !cancelled() }}
-    needs: [test-frontend]
+    # !cancelled() (not success()) so this still runs - and reports what
+    # passed/failed - even if one or more shards failed; ANDed with the
+    # frontend-changed flag so it doesn't try to merge reports that were
+    # never produced because test-frontend was skipped for this push.
+    if: ${{ !cancelled() && needs.changes.outputs.frontend == 'true' }}
+    needs: [changes, test-frontend]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -84,15 +147,18 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 30
-  test-pre-commit:
-    name: Formatting and static type checking
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/test-pre-commit
   build-frontend:
     name: Build frontend
-    needs: [test-frontend, test-pre-commit]
+    # Formatting/static-type-checking used to be duplicated here via a
+    # test-pre-commit job (removed 2026-07-25) - test-pre-commit.yml
+    # already runs `pre-commit run --all-files` unconditionally on every
+    # push to master, so the copy here could never actually deduplicate:
+    # even path-scoping it would still leave test-pre-commit.yml running
+    # the identical check on the same push. Removed rather than scoped;
+    # the standalone workflow's own status check on the commit still
+    # covers formatting, this job no longer waits on it.
+    needs: [changes, test-frontend]
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
