@@ -72,9 +72,12 @@ time (check before invoking, per the operator runbook in docs/features/stage-e-o
 
 INSTRUMENTATION (spec point 6): nothing new - every batch already gets its own `PilotRunLedger` row
 via `dispatch_micro_batch` (elapsed_s/stage_c_completed/stage_c_fetch_failures/peak_rss_mb/etc.,
-unchanged by this driver). `run_id` prefix is `stage-e-shakedown-b<batch-size>-<date>-<batch-num>`
-so the 25/50/100-card waves this shakedown measures against (§10(c)) separate cleanly in the ledger
-for the #463 analysis.
+unchanged by this driver). `run_id` prefix is
+`stage-e-shakedown-b<batch-size>-<microsecond-precision invocation timestamp>-<batch-num>` (a
+drill-found `PilotRunLedger.run_id` UNIQUE-constraint collision fix on the original date-only
+shape - see `RUN_ID_TIMESTAMP_FORMAT`'s own comment) so the 25/50/100-card waves this shakedown
+measures against (§10(c)) separate cleanly in the ledger for the #463 analysis, and every
+invocation - including a same-day kill-and-resume - gets its own distinct prefix.
 
 DRILL COMPATIBILITY (spec point 7): kill-safe by construction via the resume contract above (spec
 point 4) - see docs/features/stage-e-operations.md's "Shakedown driver" subsection for the exact
@@ -113,7 +116,15 @@ WAVE_1_SOURCE_NAMES = frozenset({"RustyShackleford", "Berndt_Toast83", "MaleMPC"
 # reused verbatim here.
 FORCE_ESCALATED_RUN_ID = "ntx-0721"
 
-DEFAULT_RUN_ID_DATE_FORMAT = "%Y%m%d"
+# Drill-found defect (§7(b), fixed post-#465): a date-only prefix
+# (`stage-e-shakedown-b<batchsize>-<date>-<chunk>`) collides with `PilotRunLedger.run_id`'s UNIQUE
+# constraint on any SECOND same-day invocation - kill-and-resume (spec point 4's own resume
+# contract) and every multi-invocation wave die with IntegrityError at the very first batch's
+# ledger create. Fixed by including a microsecond-precision invocation-time component, mirroring
+# `dispatch_micro_batch`'s own default run_id convention (`stage_e_dispatch.py`'s
+# `f"stage-e-stream-{timezone.now().strftime('%Y%m%dT%H%M%S%f')}Z"`) - every invocation gets a
+# distinct prefix while the `b<batchsize>` segment stays greppable for the #463 wave analysis.
+RUN_ID_TIMESTAMP_FORMAT = "%Y%m%dT%H%M%S%f"
 
 
 def bug_a_tail_card_ids(reextracted_after: Optional[datetime] = None) -> List[int]:
@@ -244,7 +255,7 @@ class Command(BaseCommand):
         if max_batches is not None:
             chunks = chunks[:max_batches]
 
-        run_id_prefix = f"stage-e-shakedown-b{batch_size}-{timezone.now().strftime(DEFAULT_RUN_ID_DATE_FORMAT)}"
+        run_id_prefix = f"stage-e-shakedown-b{batch_size}-{timezone.now().strftime(RUN_ID_TIMESTAMP_FORMAT)}"
 
         batches_dispatched = 0
         total_stage_c = 0
