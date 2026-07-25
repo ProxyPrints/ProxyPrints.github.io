@@ -1988,25 +1988,26 @@ class ImageEvidence(models.Model):
     md5_checksum = models.CharField(max_length=32, null=True, blank=True, db_index=True)
     sha256_checksum = models.CharField(max_length=64, null=True, blank=True, db_index=True)
 
-    # transferred (issue #473 PR-2's INTERIM STAGE D GUARD, temporary by design): True iff this
-    # row's own field values were COPIED from an md5-sibling's own current evidence
-    # (evidence_transfer.transfer_evidence) rather than produced by a real fetch+extraction pass
-    # against this card's own image. `local_calculate_verdicts._eligible_cards_queryset`'s two
-    # MACHINE-VOTING Stage D calculators (join-key/fallback - both cast a `CardPrintingTag` vote)
-    # exclude any card whose CURRENT evidence carries this flag from machine voting - a transferred
-    # row's own machine "observation" is the SAME underlying bytes a sibling card already voted
-    # from, not an independent one, so casting a vote from it here would fabricate independence the
-    # vote-weight matrix assumes is real (docs/theory.md's independence-assumptions section). The
-    # third Stage D calculator, slow-path, is deliberately NOT guarded - it casts no machine vote,
-    # only a human-review routing marker, which is exactly the safety net this guard exists to
-    # preserve, not a case it needs to protect against. REMOVAL IS PR-3's OWN BUSINESS (issue
-    # #473's build plan, PR-3 section: "Removes PR-2's interim Stage D guard") - once group-level
-    # vote pooling lands, a transferred row's vote is correctly deduped at the GROUP level instead
-    # of excluded outright, so this flag (and the guard reading it) stops being needed; do not
-    # remove either before that PR merges. `transferred_from_card_id` is a plain (non-FK) audit
-    # trail of which sibling card's row this one was copied from - never queried by the guard
-    # itself, kept only for a future incident's own "why does this row look like that one"
-    # question.
+    # transferred: True iff this row's own field values were COPIED from an md5-sibling's own
+    # current evidence (evidence_transfer.transfer_evidence) rather than produced by a real
+    # fetch+extraction pass against this card's own image. Until issue #473 PR-3 merged
+    # (2026-07-25), `local_calculate_verdicts`'s two MACHINE-VOTING Stage D calculators (join-key/
+    # fallback, IN THEIR OWN LOOP BODIES - not `_eligible_cards_queryset`, which never read this
+    # field) excluded any card whose CURRENT evidence carried this flag from machine voting
+    # outright: a transferred row's own machine "observation" is the SAME underlying bytes a
+    # sibling card already voted from, not an independent one, and casting a vote from it would
+    # have fabricated independence the vote-weight matrix assumes is real (docs/theory.md's
+    # independence-assumptions section). That interim guard is RETIRED as of PR-3
+    # (`TRANSFERRED_INTERIM_GUARD_SKIP_REASON`'s own module-level comment in
+    # `local_calculate_verdicts.py` carries the full history) - the independence concern is now
+    # handled at the GROUP tally level instead, by `vote_consensus.pool_group_votes` deduping a
+    # transferred card's vote against the sibling's it was copied from (both cast under the same
+    # calculator's fixed `anonymous_id`, so they share a `dedupe_key`), which is strictly more
+    # correct than excluding the vote outright: a transferred card can still contribute when a
+    # DIFFERENT agent is the one voting on the sibling. This field remains a plain, still-accurate
+    # provenance flag, read by no calculator anymore. `transferred_from_card_id` is a plain
+    # (non-FK) audit trail of which sibling card's row this one was copied from, kept only for a
+    # future incident's own "why does this row look like that one" question.
     transferred = models.BooleanField(default=False)
     transferred_from_card_id = models.IntegerField(null=True, blank=True)
 

@@ -457,31 +457,32 @@ JOIN_KEY_NO_MATCH_CONFIDENCE = 0.6
 # two already-established tiers immediately above and below it.
 JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT = 0.65
 
-# INTERIM STAGE D GUARD (issue #473 PR-2, TEMPORARY BY DESIGN - see `ImageEvidence.transferred`'s
-# own model-field docstring and `evidence_transfer.transfer_evidence`'s own docstring for the full
-# rationale): a card whose CURRENT evidence row was created by `evidence_transfer.transfer_evidence`
-# rather than a real per-card extraction pass is excluded from the two MACHINE-VOTING Stage D
-# calculators below (join-key/fallback - both cast a `CardPrintingTag` vote) - its own "machine
-# observation" is the SAME bytes an md5-sibling card already voted from, not an independent one,
-# so casting a vote from it here would fabricate the independence the vote-weight matrix assumes
-# is real. The THIRD Stage D calculator, slow-path, is deliberately NOT guarded - it casts no
-# machine vote at all, only a `CardScanLog` routing marker handing the card to a HUMAN reviewer
-# (see `run_slow_path_calculator`'s own loop comment), which is exactly the safety net this guard
-# exists to preserve, not a case it needs to protect against. RESCANNABLE (a future real extraction
-# pass, or PR-3's own group-level vote pooling landing and removing this guard entirely, both
-# un-stick a card stuck here) - included in each of the two guarded calculators' own
-# RESCANNABLE_SKIP_REASONS set below. ISSUE #473's OWN COORDINATION NOTE (PR-3 build-plan section):
-# "Removes PR-2's interim Stage D guard" - do not remove this guard, or the `transferred` flag it
-# reads, before PR-3
-# (group-level vote pooling) actually merges and the group-aware calculators no longer need it.
+# RETIRED: INTERIM STAGE D GUARD (issue #473 PR-2, TEMPORARY BY DESIGN, removed by PR-3 -
+# 2026-07-25 owner-ratified group-level vote pooling, `vote_consensus.pool_group_votes`). A card
+# whose CURRENT evidence row was created by `evidence_transfer.transfer_evidence` rather than a
+# real per-card extraction pass USED TO BE excluded outright from the two MACHINE-VOTING Stage D
+# calculators below (join-key/fallback - both cast a `CardPrintingTag` vote), because its own
+# "machine observation" is the SAME bytes an md5-sibling card already voted from, not an
+# independent one, and casting a vote from it would have fabricated the independence the
+# vote-weight matrix assumes is real. That independence concern is now handled correctly at the
+# TALLY level instead: both calculators cast every vote under one fixed `anonymous_id`
+# (`JOIN_KEY_ANONYMOUS_ID`/`STAGE_D_FALLBACK_ANONYMOUS_ID`), so a transferred-evidence card's vote
+# and the sibling's it was copied from share a `pool_group_votes` `dedupe_key` and collapse to ONE
+# event within the group tally - exactly the outcome exclusion existed to protect, achieved without
+# discarding the vote outright. `ImageEvidence.transferred`/`transferred_from_card_id` remain (see
+# that field's own docstring) as a plain audit trail of provenance, no longer read by either
+# calculator loop. `TRANSFERRED_INTERIM_GUARD_SKIP_REASON` below stays defined, and stays a member
+# of both calculators' own `RESCANNABLE_SKIP_REASONS` sets, purely so a HISTORICAL `CardScanLog`
+# row written by a pre-PR-3 run still reads sensibly and still marks that card eligible for
+# reselection - no code path writes a NEW row with this reason anymore.
 TRANSFERRED_INTERIM_GUARD_SKIP_REASON = "transferred-interim-guard"
 
 # A degenerate/skip outcome that stays eligible for re-selection on a future invocation, same
 # convention as local_identify_printing_tags.RESCANNABLE_SKIP_REASONS - "no-evidence" here
 # because ImageEvidence simply hadn't been extracted yet for this card at selection time is a
 # transient state (a future extraction run may still land it), not a permanent conclusion.
-# TRANSFERRED_INTERIM_GUARD_SKIP_REASON (above) is rescannable for the same reason - both a real
-# extraction landing later and PR-3's own guard removal un-stick a card stuck here.
+# TRANSFERRED_INTERIM_GUARD_SKIP_REASON (above) is included for the same reason, scoped now to
+# HISTORICAL rows only - see its own module-level comment for why it is retired, not removed.
 JOIN_KEY_RESCANNABLE_SKIP_REASONS = frozenset({"no-evidence", TRANSFERRED_INTERIM_GUARD_SKIP_REASON})
 
 # THE SET-CODE LEXICON GATE (module docstring) - a parsed `set_code` that matches no
@@ -1234,23 +1235,6 @@ def run_join_key_calculator(
                 )
             continue
 
-        # INTERIM STAGE D GUARD (issue #473 PR-2, temporary by design - see
-        # TRANSFERRED_INTERIM_GUARD_SKIP_REASON's own module-level comment above).
-        if evidence.transferred:
-            result.skip_counts[TRANSFERRED_INTERIM_GUARD_SKIP_REASON] = (
-                result.skip_counts.get(TRANSFERRED_INTERIM_GUARD_SKIP_REASON, 0) + 1
-            )
-            if not dry_run:
-                scan_log_batch.append(
-                    CardScanLog(
-                        card_id=card.pk,
-                        anonymous_id=JOIN_KEY_ANONYMOUS_ID,
-                        run_id=run_id,
-                        skip_reason=TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
-                    )
-                )
-            continue
-
         result.cards_considered += 1
         if index is None:
             index = _get_cached_candidate_name_index()
@@ -1332,8 +1316,9 @@ STAGE_D_FALLBACK_ANONYMOUS_ID = "stage-d-fallback-v1"
 # two carry the same meaning here as there, no rename needed.
 FALLBACK_NO_EVIDENCE_SKIP_REASON = "no-evidence"  # this calculator's own ImageEvidence-row-missing case, same meaning as JOIN_KEY's own identical string, different anonymous_id scope
 FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON = "no-sub-check-evidence"  # local_fallback.FallbackOutcome's own "no-evidence" concept, renamed to avoid colliding with the line above
-# TRANSFERRED_INTERIM_GUARD_SKIP_REASON (module-level comment above, issue #473 PR-2) is
-# rescannable here too - same reasoning as JOIN_KEY_RESCANNABLE_SKIP_REASONS' own inclusion of it.
+# TRANSFERRED_INTERIM_GUARD_SKIP_REASON (module-level comment above, issue #473 PR-2, retired by
+# PR-3) is included here too, scoped to HISTORICAL rows only - same reasoning as
+# JOIN_KEY_RESCANNABLE_SKIP_REASONS' own inclusion of it.
 FALLBACK_RESCANNABLE_SKIP_REASONS = frozenset({FALLBACK_NO_EVIDENCE_SKIP_REASON, TRANSFERRED_INTERIM_GUARD_SKIP_REASON})
 
 
@@ -1568,23 +1553,6 @@ def run_fallback_calculator(
                         anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
                         run_id=run_id,
                         skip_reason=FALLBACK_NO_EVIDENCE_SKIP_REASON,
-                    )
-                )
-            continue
-
-        # INTERIM STAGE D GUARD (issue #473 PR-2, temporary by design - see
-        # TRANSFERRED_INTERIM_GUARD_SKIP_REASON's own module-level comment above).
-        if evidence.transferred:
-            result.skip_counts[TRANSFERRED_INTERIM_GUARD_SKIP_REASON] = (
-                result.skip_counts.get(TRANSFERRED_INTERIM_GUARD_SKIP_REASON, 0) + 1
-            )
-            if not dry_run:
-                scan_log_batch.append(
-                    CardScanLog(
-                        card_id=card.pk,
-                        anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
-                        run_id=run_id,
-                        skip_reason=TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
                     )
                 )
             continue
@@ -1860,12 +1828,11 @@ def run_slow_path_calculator(
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 
-        # NOTE (issue #473 PR-2): the interim Stage D guard (TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
-        # see its own module-level comment) deliberately does NOT apply here - this calculator
-        # casts no machine vote at all, only a CardScanLog routing marker that hands the card to a
-        # HUMAN reviewer. A human looking at transferred-evidence-derived signals is exactly the
-        # safety net the guard exists to preserve, not a case it needs to protect against - the
-        # fabricated-independence risk is specific to an automated vote, never a human decision.
+        # NOTE (issue #473, TRANSFERRED_INTERIM_GUARD_SKIP_REASON's own module-level comment): this
+        # calculator was NEVER guarded on `evidence.transferred` even while PR-2's now-retired
+        # interim guard excluded the other two calculators - it casts no machine vote at all, only
+        # a CardScanLog routing marker that hands the card to a HUMAN reviewer, so a
+        # transferred-evidence card routing here behaves exactly as it always has.
         evidence = (
             current_evidence_queryset(card)
             .filter(extractor_versions__has_key="collector_line_ocr")

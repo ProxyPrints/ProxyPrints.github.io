@@ -262,15 +262,19 @@ def transfer_evidence(card: Card, source: ImageEvidence, run_id: Optional[str] =
     sibling's, but stays correct even in the degenerate case where the two could ever disagree
     post-verification-race) and sets `transferred=True` + `transferred_from_card_id=source.card_id`.
 
-    INTERIM STAGE D GUARD (issue #473 PR-2, temporary by design - see `ImageEvidence.transferred`'s
-    own model-field docstring and `local_calculate_verdicts._eligible_cards_queryset`'s own
-    coordination-note comment): `transferred=True` here is what that guard reads to exclude this
-    card from the TWO machine-voting Stage D calculators (join-key/fallback - both cast a
-    `CardPrintingTag` vote) until PR-3's group-level vote pooling lands and removes the guard - a
-    transferred row's own machine "observation" is the SAME bytes a sibling card already voted
-    from, not an independent one. The third calculator, slow-path, is deliberately NOT guarded -
-    it casts no machine vote at all, only a human-review routing marker, which is exactly the
-    safety net the guard exists to preserve.
+    `transferred=True` set here USED TO BE what an INTERIM STAGE D GUARD (issue #473 PR-2,
+    temporary by design - see `ImageEvidence.transferred`'s own model-field docstring for the full
+    history) read to exclude this card outright from the TWO machine-voting Stage D calculators
+    (join-key/fallback, in their own loop bodies in `local_calculate_verdicts.py` - never
+    `_eligible_cards_queryset`), on the reasoning that a transferred row's own machine
+    "observation" is the SAME bytes a sibling card already voted from, not an independent one.
+    That guard is RETIRED as of PR-3 (2026-07-25, `TRANSFERRED_INTERIM_GUARD_SKIP_REASON`'s own
+    module-level comment in `local_calculate_verdicts.py` carries the full history): the
+    independence concern is now handled at the GROUP tally level by `vote_consensus.
+    pool_group_votes` instead, since a transferred card's vote and the sibling's it was copied
+    from are cast under the same calculator's fixed `anonymous_id` and so collapse under one
+    `dedupe_key`. `transferred`/`transferred_from_card_id` remain a plain provenance record, read
+    by no calculator anymore.
     """
     evidence, _ = ImageEvidence.objects.get_or_create(card_id=card.pk, content_hash=card.content_phash)
     for field_name in _TRANSFERABLE_FIELD_NAMES:

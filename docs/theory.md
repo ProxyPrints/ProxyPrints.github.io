@@ -1130,3 +1130,12 @@ yet exist in the written record — see §10's own "Not yet backed by
 written data" note. Like §§7-9, §10's **text** is pending the same owner
 review §§1-6 received; the top-of-document STATUS banner is unchanged by
 this addition.
+
+**§4 item 3 (identity-group pooling) reviewed and approved by the
+owner, 2026-07-25**: the delta-gate round addressing the 2026-07-25
+NO-GO's wording conditions (the withholding rule's "any agent, human
+included" phrasing, the "sum over distinct agents rather than over
+rows" correction in two places, and the "human disagreement BETWEEN
+DISTINCT PEOPLE" scoping) closes that gate. Text status matches §7c/§7d
+above: corroborating a mechanism already merged (`ec18ecd8`,
+`vote_consensus.pool_group_votes`), not a new calibrated number.

@@ -764,15 +764,21 @@ class TestRunJoinKeyCalculator:
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
 
 
-class TestTransferredInterimGuard:
-    """Issue #473 PR-2's INTERIM STAGE D GUARD (see TRANSFERRED_INTERIM_GUARD_SKIP_REASON's own
-    module-level comment in local_calculate_verdicts.py): a card whose CURRENT evidence row was
-    created via evidence transfer must never receive a machine vote from the join-key or fallback
-    calculators - its own "observation" is the same bytes an md5-sibling already voted from, not
-    an independent one. The slow-path calculator is NOT guarded (it casts no machine vote, only a
-    human-review routing marker - see its own run_slow_path_calculator loop comment)."""
+class TestTransferredEvidenceIsEligible:
+    """Issue #473 PR-2's INTERIM STAGE D GUARD (TRANSFERRED_INTERIM_GUARD_SKIP_REASON) excluded a
+    card whose CURRENT evidence row was created via evidence transfer from the join-key/fallback
+    calculators outright - its own "observation" is the same bytes an md5-sibling already voted
+    from, not an independent one. PR-3 (2026-07-25, owner-ratified group-level vote pooling)
+    RETIRES that guard: a transferred card is now exactly as eligible as any other card in every
+    Stage D calculator, because the independence concern the guard existed to protect is now
+    handled correctly at the GROUP tally level instead (`vote_consensus.pool_group_votes` - see
+    `test_md5_group_pooling.py::TestTransferredEvidencePoolsWithItsSource` for the pooling-level
+    pin of that same claim). These tests replace the old skip-assertions with the mirror-image
+    vote-cast assertions; `TRANSFERRED_INTERIM_GUARD_SKIP_REASON` itself stays imported/exported
+    only because historical `CardScanLog` rows from before this change still carry it (see its own
+    module-level comment) - no test here expects a NEW row with that reason."""
 
-    def test_join_key_skips_a_transferred_evidence_card(self, db):
+    def test_join_key_votes_a_transferred_evidence_card(self, db):
         card = CardFactory(name="Some Card", content_phash=42)
         CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
         _evidence(
@@ -785,19 +791,30 @@ class TestTransferredInterimGuard:
 
         result = run_join_key_calculator(dry_run=False)
 
-        assert result.cards_considered == 0
-        assert result.votes_written == 0
-        assert CardPrintingTag.objects.count() == 0
-        log = CardScanLog.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
-        assert log.skip_reason == TRANSFERRED_INTERIM_GUARD_SKIP_REASON
+        assert result.cards_considered == 1
+        assert result.votes_written == 1
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.is_no_match is False
+        # no historical-guard skip row is written for this card at all
+        assert not CardScanLog.objects.filter(
+            card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason=TRANSFERRED_INTERIM_GUARD_SKIP_REASON
+        ).exists()
 
-    def test_join_key_still_votes_a_real_extraction_card(self, db):
-        """Control - the exact same evidence, minus transferred=True, votes normally. Proves the
-        guard is keyed on the flag, not some other incidental difference in the fixture."""
-        card = CardFactory(name="Some Card", content_phash=42)
+    def test_join_key_votes_identically_regardless_of_transferred(self, db):
+        """Control - the exact same evidence, minus transferred=True, casts the same vote. Proves
+        the retired guard's absence is a true no-op on outcome, not just "doesn't skip"."""
+        card_transferred = CardFactory(name="Some Card", content_phash=42)
+        card_real = CardFactory(name="Some Card", content_phash=43)
         CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
         _evidence(
-            card,
+            card_transferred,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            transferred=True,
+            transferred_from_card_id=999,
+        )
+        _evidence(
+            card_real,
             collector_line_set_code="mom",
             collector_line_collector_number="158",
             transferred=False,
@@ -805,55 +822,38 @@ class TestTransferredInterimGuard:
 
         result = run_join_key_calculator(dry_run=False)
 
-        assert result.cards_considered == 1
-        assert result.votes_written == 1
-        assert CardPrintingTag.objects.filter(card=card).count() == 1
+        assert result.cards_considered == 2
+        assert result.votes_written == 2
+        transferred_vote = CardPrintingTag.objects.get(card=card_transferred)
+        real_vote = CardPrintingTag.objects.get(card=card_real)
+        assert transferred_vote.printing_id == real_vote.printing_id
 
-    def test_transferred_guard_is_rescannable_after_a_real_extraction_lands(self, db):
+    def test_fallback_votes_a_transferred_evidence_card(self, db):
         card = CardFactory(name="Some Card", content_phash=42)
-        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
-        _evidence(
-            card,
-            collector_line_set_code="mom",
-            collector_line_collector_number="158",
-            transferred=True,
-            transferred_from_card_id=999,
-        )
-
-        first = run_join_key_calculator(dry_run=False)
-        assert first.cards_considered == 0
-
-        # a real extraction pass lands (persist_evidence always clears transferred - see
-        # image_evidence.persist_evidence's own docstring) - re-running now casts the vote.
-        evidence = card.image_evidence.get()
-        evidence.transferred = False
-        evidence.transferred_from_card_id = None
-        evidence.save()
-
-        second = run_join_key_calculator(dry_run=False)
-        assert second.cards_considered == 1
-        assert second.votes_written == 1
-
-    def test_fallback_skips_a_transferred_evidence_card(self, db):
-        card = CardFactory(name="Some Card", content_phash=42)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
         CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
         _evidence(
             card,
-            collector_line_collector_number="",
-            symbol_phash=_hash_of("mom"),
+            layout_class="black",
             transferred=True,
             transferred_from_card_id=999,
         )
 
         result = run_fallback_calculator(dry_run=False)
 
-        assert result.cards_considered == 0
-        log = CardScanLog.objects.get(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
-        assert log.skip_reason == TRANSFERRED_INTERIM_GUARD_SKIP_REASON
+        assert result.cards_considered == 1
+        assert result.votes_written == 1
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+        assert not CardScanLog.objects.filter(
+            card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID, skip_reason=TRANSFERRED_INTERIM_GUARD_SKIP_REASON
+        ).exists()
 
-    def test_slow_path_is_not_guarded_transferred_evidence_still_routes_to_review(self, db):
+    def test_slow_path_still_routes_transferred_evidence_to_review(self, db):
         """The slow-path calculator casts no machine vote (only a CardScanLog routing marker to a
-        HUMAN reviewer) - deliberately excluded from the guard, see its own loop comment."""
+        HUMAN reviewer) - it was never guarded on `transferred` either before or after PR-3, so
+        this behavior is unchanged; see its own loop comment."""
         card = CardFactory(name="Some Card", content_phash=42)
         CardPrintingTag.objects.create(
             card=card, printing=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR

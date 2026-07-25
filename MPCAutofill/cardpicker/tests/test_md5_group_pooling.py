@@ -9,13 +9,17 @@ Two halves, and the split matters:
    collapse), and an agent that contradicts itself counts for nothing (order-independently).
 2. Everything else exercises the real resolver/persistence/feed/recompute paths against real
    `Card`/`CardPrintingTag` rows, with group MEMBERSHIP supplied by the `md5_groups` fixture
-   below rather than by a populated `Card.md5_checksum` column - because that column arrives in
-   this issue's PR-1 (`md5-checksum-substrate`), which this branch is cut BEFORE. The fixture
-   replaces the three - and only three - functions in `printing_consensus` that touch the column
-   (`_card_md5_checksum`, `_md5_checksums_for_card_ids`, `_card_ids_with_md5_checksums`), so
-   every line of grouping, pooling, propagation, and feed logic under test is the real one; only
-   the storage of the checksum is faked. Once PR-1 is merged into this branch, these tests keep
-   passing unchanged and can be supplemented with column-backed equivalents.
+   below rather than by a populated `Card.md5_checksum` column - originally because that column
+   hadn't arrived yet (issue #473's PR-1, `md5-checksum-substrate`, which this module was first
+   written cut BEFORE). PR-1 has SINCE merged to `master` and reached this branch via the
+   2026-07-25 master merge - `Card.md5_checksum` is a real column here now - but the fixture is
+   kept as the grouping mechanism regardless, since it exercises the exact same real grouping/
+   pooling/propagation/feed code paths a column-backed group does (the fixture replaces the three
+   - and only three - functions in `printing_consensus` that touch the column:
+   `_card_md5_checksum`, `_md5_checksums_for_card_ids`, `_card_ids_with_md5_checksums`) without
+   needing every test to hand-craft matching checksum strings. `TestSingletonIsANoOp` and
+   `TestGroupExpansionQueryCostWithoutTheChecksumColumn` below deliberately do NOT use the
+   fixture, to pin real, column-backed behavior directly.
 
 The SINGLETON NO-OP proof (ruling 3) is deliberately NOT concentrated in one test here: it is
 the entire pre-existing consensus/printing/tag/question-feed/recompute suite, which passes
@@ -30,8 +34,12 @@ from unittest.mock import patch
 import pytest
 
 from cardpicker import printing_consensus
+from cardpicker.local_calculate_verdicts import (
+    JOIN_KEY_ANONYMOUS_ID,
+    run_join_key_calculator,
+)
 from cardpicker.management.commands.consensus_recompute import run_consensus_recompute
-from cardpicker.models import Card, PrintingTagStatus, VoteSource
+from cardpicker.models import Card, CardPrintingTag, PrintingTagStatus, VoteSource
 from cardpicker.printing_consensus import (
     build_group_printing_vote_tuples,
     group_printing_votes,
@@ -52,17 +60,20 @@ from cardpicker.tests.factories import (
     CanonicalCardFactory,
     CardFactory,
     CardPrintingTagFactory,
+    ImageEvidenceFactory,
 )
-from cardpicker.vote_consensus import VoteTuple, pool_group_votes
+from cardpicker.vote_consensus import VoteTuple, pool_group_votes, resolve_vote_weight
 
 
 @pytest.fixture
 def md5_groups(monkeypatch):
     """
-    Assigns md5 identity groups to `Card` rows without `Card.md5_checksum` existing yet (see this
-    module's docstring). Returns a callable: `md5_groups("checksum", card_a, card_b)` puts those
-    cards in one group. Cards never passed to it stay checksum-less - i.e. groups of one, the
-    ruling-3 degenerate case - exactly as every card in the catalogue is today.
+    Assigns md5 identity groups to `Card` rows via an in-memory stand-in rather than a populated
+    `Card.md5_checksum` column (see this module's own docstring, point 2, for why the fixture
+    approach is kept even now that the column is real on this branch). Returns a callable:
+    `md5_groups("checksum", card_a, card_b)` puts those cards in one group. Cards never passed to
+    it stay checksum-less - i.e. groups of one, the ruling-3 degenerate case - exactly as most of
+    the catalogue still is pending the backfill (`backfill_md5_checksums`) fully enrolling it.
     """
     checksum_by_card_id: dict[int, str] = {}
 
@@ -609,23 +620,32 @@ class TestQuestionFeedGroups:
 
 class TestGroupExpansionQueryCostWithoutTheChecksumColumn:
     """
-    `_md5_checksums_for_card_ids`'s and `md5_group_expanded_card_ids`'s own docstrings both claim
-    ZERO queries while `Card.md5_checksum` doesn't exist (issue #473's PR-1 hasn't merged into
-    this branch - see this module's docstring, point 2). Deliberately NOT using the `md5_groups`
-    fixture here: that fixture monkeypatches the three checksum-reading functions themselves, so
-    it can't tell us anything about what the REAL functions do when the column is genuinely
-    absent, which is exactly the claim being pinned.
+    Deliberately NOT using the `md5_groups` fixture here: that fixture monkeypatches the three
+    checksum-reading functions themselves, so it can't tell us anything about what the REAL
+    functions cost - which is exactly the claim being pinned. `Card.md5_checksum` is a real column
+    on this branch (issue #473's PR-1 merged to `master` and reached here via the 2026-07-25
+    master merge - see this module's own docstring, point 2), so `_md5_checksums_for_card_ids`
+    now issues its one checksum-lookup query even for card_ids that carry no checksum at all -
+    it returns an empty result rather than skipping the query outright, and its own docstring's
+    "zero queries... while the column doesn't exist" clause no longer applies on this branch.
+    What stays true, and is what this class actually pins, is the CHEAP-CASE bound: at most ONE
+    query for the common no-checksums-set-yet case, never the second (`_card_ids_with_md5_checksums`)
+    lookup, because the first query's empty result short-circuits before that second one is ever
+    issued. `md5_group_key`/`md5_group_card_ids` are unaffected either way - `_card_md5_checksum`
+    is a plain `getattr` on an already-loaded instance, never a query, column present or not.
     """
 
-    def test_group_expansion_issues_zero_queries_without_the_checksum_column(self, db, django_assert_num_queries):
+    def test_group_expansion_issues_at_most_one_query_and_never_the_second_lookup(self, db, django_assert_num_queries):
         card_a, card_b = CardFactory(), CardFactory()
 
-        with django_assert_num_queries(0):
+        with django_assert_num_queries(1):
             expanded = md5_group_expanded_card_ids([card_a.pk, card_b.pk])
 
         assert expanded == {card_a.pk, card_b.pk}
 
-    def test_group_key_and_card_ids_issue_zero_queries_without_the_checksum_column(self, db, django_assert_num_queries):
+    def test_group_key_and_card_ids_issue_zero_queries_regardless_of_the_checksum_column(
+        self, db, django_assert_num_queries
+    ):
         card = CardFactory()
 
         with django_assert_num_queries(0):
@@ -657,3 +677,82 @@ class TestAnsweredSetComputedOncePerFeedRequest:
             get_next_question_feed_item("voter-1")
 
         assert spy.call_count == 1
+
+
+def _join_key_evidence(card, **overrides):
+    defaults = dict(
+        content_hash=card.content_phash,
+        extractor_versions={"collector_line_ocr": "collector-line-ocr-v1"},
+        collector_line_set_code="mom",
+        collector_line_collector_number="158",
+        transferred=False,
+    )
+    defaults.update(overrides)
+    return ImageEvidenceFactory(card=card, **defaults)
+
+
+class TestTransferredEvidencePoolsWithItsSource:
+    """
+    Issue #473 PR-3 (2026-07-25): retiring the interim Stage D guard
+    (`local_calculate_verdicts.TRANSFERRED_INTERIM_GUARD_SKIP_REASON`) makes a transferred-
+    evidence card exactly as Stage-D-eligible as any other card - see
+    test_local_calculate_verdicts.py::TestTransferredEvidenceIsEligible for that half of the pin
+    (the guard's ABSENCE is intentional, not a regression). THIS class pins the other half: group-
+    level pooling is what actually prevents the guard's old failure mode (a transferred row's vote
+    fabricating an independent second confirmation of the same underlying bytes), because the
+    source card's REAL extraction and its md5 sibling's TRANSFERRED copy of it are cast by the
+    SAME calculator under one fixed `anonymous_id` (`JOIN_KEY_ANONYMOUS_ID`) - so `pool_group_
+    votes` collapses them to ONE event, the same rule that collapses one human voting twice.
+    """
+
+    def test_transferred_sibling_vote_pools_with_its_source_instead_of_doubling_it(self, db, md5_groups):
+        card_source, card_transferred = (
+            CardFactory(name="Some Card", content_phash=42),
+            CardFactory(name="Some Card", content_phash=42),
+        )
+        md5_groups("same-bytes", card_source, card_transferred)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _join_key_evidence(card_source, transferred=False)
+        _join_key_evidence(card_transferred, transferred=True, transferred_from_card_id=card_source.pk)
+
+        result = run_join_key_calculator(dry_run=False)
+
+        # both cards are Stage-D-eligible and both cast a vote - the retired guard no longer
+        # excludes the transferred one (mirrors TestTransferredEvidenceIsEligible's own pin).
+        assert result.cards_considered == 2
+        assert result.votes_written == 2
+        assert CardPrintingTag.objects.filter(anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 2
+
+        # but the GROUP tally pools them to ONE event, since both votes share JOIN_KEY_ANONYMOUS_ID
+        votes, is_group = group_printing_votes(card_source)
+        assert len(votes) == 2  # both rows are read...
+        vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
+        assert len(vote_tuples) == 1  # ...and pool to ONE event
+        assert vote_tuples[0].weight == resolve_vote_weight(VoteSource.OCR, JOIN_KEY_ANONYMOUS_ID)
+
+        # never enough to resolve alone - exactly the outcome the retired guard used to guarantee
+        # by excluding the transferred vote outright, now achieved by pooling instead.
+        assert resolve_printing(card_source) is None
+        assert resolve_printing(card_transferred) is None
+
+    def test_a_second_distinct_agent_can_still_tip_a_group_containing_a_transferred_vote(self, db, md5_groups):
+        """Contrast: pooling doesn't turn the transferred card into dead weight excluded from
+        ever influencing an outcome (that WAS the old guard's effect) - a genuinely independent
+        second agent's vote on the group still resolves it, same as any other group."""
+        card_source, card_transferred = (
+            CardFactory(name="Some Card", content_phash=42),
+            CardFactory(name="Some Card", content_phash=42),
+        )
+        md5_groups("same-bytes", card_source, card_transferred)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _join_key_evidence(card_source, transferred=False)
+        _join_key_evidence(card_transferred, transferred=True, transferred_from_card_id=card_source.pk)
+
+        run_join_key_calculator(dry_run=False)
+        assert resolve_printing(card_source) is None  # 0.5 pooled machine weight, short of quorum
+
+        human_vote(card_transferred, printing, "human-1")
+        human_vote(card_source, printing, "human-2")
+
+        assert resolve_printing(card_source) == printing
+        assert resolve_printing(card_transferred) == printing
