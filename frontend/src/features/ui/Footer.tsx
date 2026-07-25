@@ -44,7 +44,16 @@ const ColumnHeading = styled.h4`
   font-size: 0.72rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.4);
+  // Site-wide contrast audit (2026-07-25) - was a literal rgba(255,255,255,.4), 3.61:1 on
+  // FooterRoot's raised-bg (well under the AAA-normal 7:1 floor this label's own 11.5px/bold
+  // doesn't clear the "large text" bracket for). Not a Bootstrap-default leak like this task's
+  // other findings - a hand-written translucency that was never a token at all. theme-muted (the
+  // established small-caption token) still falls short of strict-AAA on this exact background
+  // (6.39:1 - a pre-existing, already-ratified PR #432 compromise, see that token's own comment
+  // in _theme-tokens.scss), so this uses the full-strength theme-text token instead - the
+  // uppercase/letter-spacing/bold styling already carries the "eyebrow label" visual distinction
+  // from body copy, so no separate dimmed tier is needed here. 9.02:1 on raised-bg, STRICT-AAA.
+  color: var(--theme-text);
   font-weight: 700;
 `;
 

@@ -870,6 +870,40 @@ export const sampleCardsServerError = http.get(
 
 //# endregion
 
+//# region contributions
+
+// Contrast-audit round (2026-07-25) - /contributions previously had no msw coverage at all, so
+// the page always fell back to NoBackendDefault in tests; the "Contribution Guidelines"
+// accordion bug the owner reported live only renders once a remote backend (and this endpoint)
+// is configured. Minimal one-source fixture, just enough to render both the summary and the
+// per-source table alongside the accordion under test.
+export const contributionsOneSource = http.get(
+  buildRoute("2/contributions/"),
+  () =>
+    HttpResponse.json(
+      {
+        cardCountByType: { CARD: 10, CARDBACK: 1, TOKEN: 2 },
+        sources: [
+          {
+            name: "Test Source",
+            sourceType: "AWS S3",
+            externalLink: "",
+            description: "A test source",
+            qtyCards: "10",
+            qtyCardbacks: "1",
+            qtyTokens: "2",
+            avgdpi: "300",
+            size: "1 GB",
+          },
+        ],
+        totalDatabaseSize: 1_000_000_000,
+      },
+      { status: 200 }
+    )
+);
+
+//# endregion
+
 //# region import sites
 
 export const importSitesNoResults = http.get(buildRoute("2/importSites"), () =>
