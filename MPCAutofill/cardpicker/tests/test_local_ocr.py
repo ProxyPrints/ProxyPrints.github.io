@@ -26,6 +26,7 @@ plan.md and this PR's own body).
 import importlib.util
 import logging
 import sys
+from typing import Any
 
 import pytest
 from PIL import Image, ImageDraw, ImageFilter
@@ -205,8 +206,12 @@ def _reset_engine_seam_state():
 
 
 class TestActiveEngineResolution:
-    def test_default_settings_resolve_to_pytesseract(self):
-        assert local_ocr._active_engine() == OCR_ENGINE_PYTESSERACT
+    def test_default_settings_resolve_to_tesserocr(self):
+        # THE FLIP (issue #480's combined pass): settings.OCR_ENGINE's own default is now
+        # "tesserocr", not "pytesseract" - see settings.py's own comment for the full rationale
+        # and this PR's own description for the owner A/B GO this default is gated on merging
+        # behind.
+        assert local_ocr._active_engine() == OCR_ENGINE_TESSEROCR
 
     def test_explicit_pytesseract_setting(self):
         with override_settings(OCR_ENGINE="pytesseract"):
@@ -264,6 +269,26 @@ class TestTesserocrTsvToDict:
     def test_blank_lines_are_ignored(self):
         data = local_ocr._tesserocr_tsv_to_dict(self._TSV + "\n")
         assert len(data["text"]) == 2
+
+    def test_row_missing_only_the_trailing_text_column_is_padded_not_dropped(self):
+        # issue #487 LOW: a row that's short only because its trailing "text" column was empty
+        # (some TSV writers trim a wholly-empty final field rather than leaving one behind) still
+        # carries a real, useful layout box - the previous version silently DROPPED any row with
+        # fewer than 12 tab-separated fields, this one pads instead.
+        row_missing_trailing_text_field = "1\t1\t0\t0\t0\t0\t0\t0\t100\t40\t-1"  # 11 fields, no text column at all
+        data = local_ocr._tesserocr_tsv_to_dict(row_missing_trailing_text_field)
+        assert data["text"] == [""]
+        assert data["conf"] == [-1.0]
+        assert data["level"] == [1]
+
+    def test_row_missing_more_than_the_trailing_text_column_still_raises(self):
+        # The padding above only degrades gracefully for a genuinely blank TRAILING text field - a
+        # row missing more than that (here: conf, height, width all absent too) is still a real
+        # parse failure (int("") on a missing numeric column, not silently accepted as valid data).
+        # This is exactly the failure `_tesserocr_tsv` (issue #487 fix 2) is responsible for
+        # catching one layer up - this pure-parse function itself is not expected to paper over it.
+        with pytest.raises(ValueError):
+            local_ocr._tesserocr_tsv_to_dict("1\t1\t0\t0\t0\t0\t0\t0\t100")
 
 
 class TestResolveTessdataPrefix:
@@ -344,6 +369,23 @@ class TestEngineSeamDispatch:
             run_tesseract_tsv(_text_crop("HELLO"))
             run_tesseract_text_and_words(_text_crop("HELLO"))
 
+    def test_tesserocr_dispatch_holds_the_process_lock_across_recognize_and_read(self, monkeypatch: pytest.MonkeyPatch):
+        """issue #487 fix 3: the whole recognize+read sequence against the shared, process-global
+        `_tesserocr_api` runs under `_tesserocr_lock` - proven here by asserting the lock is held
+        (from an outside observer's point of view, i.e. `.locked()` reports True) DURING
+        `_tesserocr_recognize`'s own call, not just checking the lock exists."""
+        observed: dict[str, bool] = {}
+
+        def _recognize(image: "Image.Image", config: str) -> _FakeTesserocrApi:
+            observed["locked_during_recognize"] = local_ocr._tesserocr_lock.locked()
+            return _FakeTesserocrApi(text="HELLO\n", tsv=self._TSV)
+
+        monkeypatch.setattr(local_ocr, "_tesserocr_recognize", _recognize)
+        with override_settings(OCR_ENGINE="tesserocr"):
+            run_tesseract_text_and_words(_text_crop("HELLO"))
+        assert observed["locked_during_recognize"] is True
+        assert not local_ocr._tesserocr_lock.locked()  # released again once the call returns
+
 
 class TestEngineSeamFallback:
     """The failure-tolerance contract this module's own docstring makes: tesserocr being absent
@@ -382,6 +424,64 @@ class TestEngineSeamFallback:
         assert isinstance(second, str)
         matching = [r for r in caplog.records if "tesserocr OCR call failed" in r.message]
         assert len(matching) == 1
+
+    def test_non_import_error_import_failure_still_falls_back_and_logs_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """issue #487 fix 1: `_tesserocr_available` used to catch only `ImportError` - a broken
+        shared-library link (a real, observed tesserocr failure mode: a version-mismatched
+        libtesseract/libleptonica pair, or a corrupt partial install) raises `OSError`/
+        `RuntimeError` straight out of the `import` statement itself, which the old narrower
+        except let escape uncaught. `sys.modules["tesserocr"] = None` (the other tests' own trick)
+        can only ever simulate a plain ImportError, so this patches `builtins.__import__` directly
+        to prove the WIDER exception type is now caught too."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "tesserocr":
+                raise OSError("simulated broken shared-library link")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+        crop = _text_crop("HELLO")
+        with override_settings(OCR_ENGINE="tesserocr"), caplog.at_level(logging.WARNING, logger="cardpicker.local_ocr"):
+            first = run_tesseract(crop)
+            second = run_tesseract(crop)
+        assert isinstance(first, str)
+        assert first == second  # same real pytesseract read both times, no crash either time
+        matching = [r for r in caplog.records if "not importable" in r.message]
+        assert len(matching) == 1  # exactly once across two calls, not once per call
+
+    def test_malformed_tsv_row_falls_back_to_pytesseract_instead_of_raising(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """issue #487 fix 2: `GetTSVText()`/`_tesserocr_tsv_to_dict`'s parse used to run OUTSIDE
+        `_tesserocr_recognize`'s own crash guard - a malformed row (here: a non-numeric "left"
+        column) raised a bare `ValueError` straight out of `run_tesseract_tsv`/
+        `run_tesseract_text_and_words` to their PROTECTED-CORE-adjacent callers. Now it degrades
+        to the pytesseract fallback instead, same "warn once, disable for the rest of this
+        process" contract as every other tesserocr failure mode."""
+        # Malformed via a non-numeric "left" column (a corrupt/truncated TSV row shape, not the
+        # padding-eligible "missing trailing text column" case `TestTesserocrTsvToDict` covers
+        # separately). `_tesserocr_available`/`_get_tesserocr_api` are faked (not
+        # `_tesserocr_recognize` itself) so the REAL recognize function's own sticky
+        # `_tesserocr_runtime_disabled` short-circuit is what's under test for the second call.
+        malformed_tsv = "5\t1\t1\t1\t1\t1\tNaN\t12\t32\t8\t81.5\tHELLO\n"
+        fake_api = _FakeTesserocrApi(text="HELLO\n", tsv=malformed_tsv)
+        monkeypatch.setattr(local_ocr, "_tesserocr_available", lambda: True)
+        monkeypatch.setattr(local_ocr, "_get_tesserocr_api", lambda: fake_api)
+        crop = _text_crop("HELLO")
+        with override_settings(OCR_ENGINE="tesserocr"), caplog.at_level(logging.WARNING, logger="cardpicker.local_ocr"):
+            text, words = run_tesseract_text_and_words(crop)
+            assert local_ocr._tesserocr_runtime_disabled is True
+            tsv_words = run_tesseract_tsv(crop)  # stays disabled - real recognize short-circuits now
+        assert isinstance(text, str)
+        assert isinstance(words, list)
+        assert isinstance(tsv_words, list)
+        matching = [r for r in caplog.records if "GetTSVText" in r.message]
+        assert len(matching) == 1  # exactly once across both calls, not once per call
 
 
 @pytest.mark.skipif(not _TESSEROCR_INSTALLED, reason=_TESSEROCR_SKIP_REASON)

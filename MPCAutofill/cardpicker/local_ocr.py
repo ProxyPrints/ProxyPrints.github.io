@@ -51,12 +51,30 @@ extractor-version event and is bundled with that version bump at the single comb
 whole-catalog pass #480 describes, never on its own. See `cardpicker/management/commands/
 ocr_engine_ab.py` for the read-only A/B validation tool this PR also ships, which is what
 produces the real-image evidence that flip will be gated on.
+
+TRON GATE FIXES (issue #487, landed in the flip PR per that issue's own routing instruction, not
+#486 which shipped the seam dark): (1) `_tesserocr_available` now catches `Exception`, not just
+`ImportError` - a broken shared-library link at import time can raise `OSError`/`RuntimeError`
+instead, and the old narrower except let that escape uncaught. (2) `GetTSVText`/
+`_tesserocr_tsv_to_dict`'s parse now runs INSIDE the same crash-guarded region as `Recognize()`
+(see `_tesserocr_text`/`_tesserocr_tsv` below) - a malformed TSV row used to raise straight out of
+`run_tesseract_tsv`/`run_tesseract_text_and_words` to PROTECTED-CORE-adjacent callers; now it
+degrades to the pytesseract fallback like every other tesserocr failure mode. (3) `_tesserocr_api`
+is a process-global `PyTessBaseAPI` with no natural thread-safety of its own (SetImage/Recognize/
+GetUTF8Text/GetTSVText all mutate the same underlying C++ object's state) - safe under today's
+actual callers (the compute stage of `run_image_evidence_cohort.py` uses a `ProcessPoolExecutor`,
+so each worker process gets its own copy of this module's globals; nothing today calls this
+module's public functions from more than one thread within a single process) but silently unsafe
+under any FUTURE threaded caller (e.g. a threaded WSGI worker handling two requests that both
+touch OCR). `_tesserocr_lock` below serializes the full SetPageSegMode/SetImage/Recognize/read
+sequence per call, closing that gap rather than merely documenting it.
 """
 
 import glob
 import logging
 import os
 import re
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -386,22 +404,41 @@ _tesserocr_runtime_disabled = False
 _tesserocr_api: Any = None  # one persistent PyTessBaseAPI instance per process (spike's own
 # explicit requirement - constructing it per call would forfeit most of the throughput win)
 
+# issue #487 fix 3: `_tesserocr_api` above is process-global with no thread-safety of its own -
+# SetPageSegMode/SetImage/Recognize/GetUTF8Text/GetTSVText all mutate the SAME underlying C++
+# object's internal state, so two threads calling into it concurrently (safe under every ACTUAL
+# caller today - see module docstring - but not guaranteed for a future one) could interleave and
+# corrupt each other's result. Every public entry point below acquires this for the FULL recognize
+# + read sequence of one call, not just the construction - a lock around construction alone would
+# still let two threads' `SetImage`/`Recognize` calls race against each other.
+_tesserocr_lock = threading.Lock()
+
 
 def _tesserocr_available() -> bool:
     """Lazy, at-most-once-per-process import attempt. Logs exactly one warning (not one per
     call) the first time `settings.OCR_ENGINE == "tesserocr"` is requested but the module isn't
     importable - expected on every deployed image until `docker/django/Dockerfile`'s tesserocr
-    install lands and is actually built into the running container (see module docstring)."""
+    install lands and is actually built into the running container (see module docstring).
+
+    issue #487 fix 1: catches `Exception`, not just `ImportError` - a broken shared-library link
+    (e.g. a corrupt/partial tesserocr install, or a libtesseract/libleptonica version mismatch)
+    can raise `OSError`/`RuntimeError` straight out of the `import` statement itself, not just
+    `ImportError`, and the old narrower except let that escape uncaught to every caller. Every
+    non-`ImportError` exception still degrades to the exact same fallback and still logs exactly
+    once per process (the sticky flag doesn't distinguish which exception type tripped it)."""
     global _tesserocr_import_failed
     if _tesserocr_import_failed is None:
         try:
             import tesserocr  # noqa: F401
-        except ImportError:
+        except Exception:
             logger.warning(
                 "settings.OCR_ENGINE='tesserocr' but the tesserocr module is not importable - "
-                "falling back to pytesseract for every OCR call in this process. Expected until "
-                "docker/django/Dockerfile's tesserocr install is present in the running image; "
-                "see local_ocr.py's module docstring for the full engine-seam contract."
+                "falling back to pytesseract for every OCR call in this process. Expected (a "
+                "plain ImportError) until docker/django/Dockerfile's tesserocr install is present "
+                "in the running image; also covers a non-ImportError import-time failure (e.g. a "
+                "broken/mismatched shared-library link raising OSError or RuntimeError) - see "
+                "local_ocr.py's module docstring for the full engine-seam contract.",
+                exc_info=True,
             )
             _tesserocr_import_failed = True
         else:
@@ -505,11 +542,62 @@ def _tesserocr_tsv_to_dict(tsv_text: str) -> dict[str, list[Any]]:
             continue
         parts = line.split("\t")
         if len(parts) < len(columns):
-            continue
+            # issue #487 LOW: pad rather than silently drop a short row - a row that's short only
+            # because its trailing "text" column was empty (some TSV writers trim a wholly-empty
+            # final field instead of leaving an empty one behind) still carries a real, useful
+            # layout box; the previous version discarded the whole row rather than treating a
+            # missing trailing field as blank text, unlike pytesseract's own tolerant TSV reader.
+            # A row that's short for a genuinely different reason (truncated mid-line, corrupt
+            # output) still surfaces as a raised exception below (int()/float() on a blank numeric
+            # field) - this padding doesn't swallow that, it's caught by this function's own
+            # callers (`_tesserocr_tsv` below, issue #487 fix 2), not here.
+            parts = parts + [""] * (len(columns) - len(parts))
         for i, column in enumerate(columns[:-1]):
             data[column].append(float(parts[i]) if column == "conf" else int(parts[i]))
         data["text"].append(parts[-1])
     return data
+
+
+def _tesserocr_text(api: Any) -> Optional[str]:
+    """`GetUTF8Text()` guarded the same way `_tesserocr_recognize`'s own construction/`Recognize()`
+    call is - a corrupted/disposed underlying API object could still raise here even after a
+    successful `Recognize()`. `None` degrades the caller to the pytesseract fallback, same "warn
+    once, disable for the rest of this process" contract as every other tesserocr failure mode."""
+    global _tesserocr_runtime_disabled
+    try:
+        return api.GetUTF8Text()
+    except Exception:
+        logger.warning(
+            "tesserocr GetUTF8Text() call failed - falling back to pytesseract for the rest of "
+            "this process's OCR calls.",
+            exc_info=True,
+        )
+        _tesserocr_runtime_disabled = True
+        return None
+
+
+def _tesserocr_tsv(api: Any) -> Optional[dict[str, list[Any]]]:
+    """issue #487 fix 2: `GetTSVText()` + `_tesserocr_tsv_to_dict`'s parse, guarded TOGETHER - the
+    previous version ran this pair OUTSIDE `_tesserocr_recognize`'s own crash guard, so a malformed
+    TSV row (an unparseable int/float column, a line truncated mid-row) raised a bare exception
+    (ValueError from `int()`/`float()`) straight out of `run_tesseract_tsv`/
+    `run_tesseract_text_and_words` to their PROTECTED-CORE-adjacent callers
+    (`local_fallback.py`/`local_identify_printing_tags.py` both call through those two public
+    functions). Now a parse failure degrades to the pytesseract fallback instead - same "warn
+    once, disable for the rest of this process" contract every other tesserocr failure mode here
+    already follows. `None` means "use pytesseract for this call instead", exactly like
+    `_tesserocr_recognize`'s own `None` return."""
+    global _tesserocr_runtime_disabled
+    try:
+        return _tesserocr_tsv_to_dict(api.GetTSVText(0))
+    except Exception:
+        logger.warning(
+            "tesserocr GetTSVText()/parse call failed - falling back to pytesseract for the rest "
+            "of this process's OCR calls.",
+            exc_info=True,
+        )
+        _tesserocr_runtime_disabled = True
+        return None
 
 
 def _active_engine() -> str:
@@ -523,9 +611,14 @@ def _active_engine() -> str:
 
 def run_tesseract(image: "Image.Image", config: str = TESSERACT_CONFIG) -> str:
     if _active_engine() == OCR_ENGINE_TESSEROCR:
-        api = _tesserocr_recognize(image, config)
-        if api is not None:
-            return api.GetUTF8Text()
+        # issue #487 fix 3: the whole recognize+read sequence against the shared, process-global
+        # `_tesserocr_api` instance is serialized under one lock - see `_tesserocr_lock`'s own
+        # comment for why construction-only locking wouldn't be enough.
+        with _tesserocr_lock:
+            api = _tesserocr_recognize(image, config)
+            text = _tesserocr_text(api) if api is not None else None
+        if text is not None:
+            return text
     return pytesseract.image_to_string(image, config=config)
 
 
@@ -587,9 +680,14 @@ def run_tesseract_tsv(image: "Image.Image") -> list[dict[str, Any]]:
     CLAUDE.md's "Governing premise: we index, we do not store images".
     """
     if _active_engine() == OCR_ENGINE_TESSEROCR:
-        api = _tesserocr_recognize(image, TESSERACT_CONFIG)
-        if api is not None:
-            return _words_from_tesseract_data(_tesserocr_tsv_to_dict(api.GetTSVText(0)))
+        # issue #487 fixes 2+3: GetTSVText()/parse now run INSIDE the crash guard (`_tesserocr_tsv`
+        # returns None rather than raising), and the whole sequence is serialized under the
+        # process-wide lock - see `_tesserocr_lock`'s own comment.
+        with _tesserocr_lock:
+            api = _tesserocr_recognize(image, TESSERACT_CONFIG)
+            tsv_data = _tesserocr_tsv(api) if api is not None else None
+        if tsv_data is not None:
+            return _words_from_tesseract_data(tsv_data)
     data = pytesseract.image_to_data(image, config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT)
     return _words_from_tesseract_data(data)
 
@@ -618,12 +716,17 @@ def run_tesseract_text_and_words(
     word boxes below come from ONE `Recognize()` call via the persistent tesserocr API instance -
     the same "single underlying pass, read two ways" property this function's own docstring
     already claims for the pytesseract path, just carried through to the second engine too.
+
+    issue #487 fixes 2+3: the `GetTSVText()`+parse read runs inside the same crash guard as
+    `Recognize()` (a malformed row degrades to the pytesseract fallback below, never raises), and
+    the full sequence is serialized under `_tesserocr_lock` (see its own comment).
     """
     if _active_engine() == OCR_ENGINE_TESSEROCR:
-        api = _tesserocr_recognize(image, config)
-        if api is not None:
-            data = _tesserocr_tsv_to_dict(api.GetTSVText(0))
-            return _text_from_tesseract_data(data), _words_from_tesseract_data(data)
+        with _tesserocr_lock:
+            api = _tesserocr_recognize(image, config)
+            tsv_data = _tesserocr_tsv(api) if api is not None else None
+        if tsv_data is not None:
+            return _text_from_tesseract_data(tsv_data), _words_from_tesseract_data(tsv_data)
     data = pytesseract.image_to_data(image, config=config, output_type=pytesseract.Output.DICT)
     return _text_from_tesseract_data(data), _words_from_tesseract_data(data)
 

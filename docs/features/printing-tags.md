@@ -1657,29 +1657,43 @@ reach at all:
   several) is treated as genuine whole-candidate-set evidence rather than
   a mere abstention. **OCR engine seam (issue #423, 2026-07-25 spike)**:
   `cardpicker/local_ocr.py` dispatches between two Tesseract bindings
-  behind `settings.OCR_ENGINE` - `"pytesseract"` (default, unchanged
+  behind `settings.OCR_ENGINE` - `"pytesseract"` (the OLD default,
   process-per-call behavior) or `"tesserocr"` (a persistent in-process
   `PyTessBaseAPI`, ~5.7x faster per the spike's real-OCR-call
   measurement, since it eliminates pytesseract's own ~97ms/call
-  tesseract-process-spawn floor). Shipped DARK: every deployed
-  environment still defaults to `"pytesseract"` as of this PR, and no
-  extractor version bump accompanies it - tesserocr's wheel vendors a
-  different compiled tesseract/leptonica build than the apt package
-  pytesseract shells out to, so flipping the flag is a genuine
-  extractor-version event, deliberately deferred to issue #480's combined
-  whole-catalog pass (that issue's own 2026-07-25 correction comment has
-  the ratified sequencing). `cardpicker/management/commands/ocr_engine_ab.py`
-  is the read-only real-image A/B validation tool any future flip
-  decision is gated on (per-image byte-identity, parse-level agreement,
-  stored-vs-fresh drift detection, confidence deltas, and latency for
-  both engines - writes nothing, per this doc's own "index, don't store"
-  discipline). Its `--disagreements-detail` flag classifies every
-  parse-level disagreement further - each engine's parse checked against
-  the real `known_set_codes()` lexicon and `validate_against_candidates`
+  tesseract-process-spawn floor).
+  `cardpicker/management/commands/ocr_engine_ab.py` is the read-only
+  real-image A/B validation tool any flip decision is gated on (per-image
+  byte-identity, parse-level agreement, stored-vs-fresh drift detection,
+  confidence deltas, and latency for both engines - writes nothing, per
+  this doc's own "index, don't store" discipline). Its
+  `--disagreements-detail` flag classifies every parse-level disagreement
+  further - each engine's parse checked against the real
+  `known_set_codes()` lexicon and `validate_against_candidates`
   candidate-matcher (same checks the real join-key calculator uses, not
   reimplemented) - into
   `tesserocr_only_valid`/`pytesseract_only_valid`/`both_valid_different`/
   `neither_valid` buckets, also recorded on the run's own ledger row.
+
+  **THE FLIP (issue #480's combined whole-catalog pass, held in a PR that
+  merges only on the owner's own A/B GO - see that PR's own description,
+  not a standalone decision)**: `settings.OCR_ENGINE` now defaults to
+  `"tesserocr"`, bundled in the SAME change as the OCR-derived extractor
+  version bump (`COLLECTOR_LINE_OCR`/`ARTIST_OCR`/`COLLECTOR_LINE_TSV`/
+  `LEGAL_LINE_EXTRACTOR_VERSION`, v1 -> v2 in `image_evidence.py`) -
+  tesserocr's wheel vendors a different compiled tesseract/leptonica build
+  than the apt package pytesseract shells out to, so the swap is real
+  output drift, not a transparent speed-up, and issue #480's own
+  correction comment forbids an engine swap without a version bump
+  (untracked drift under one provenance label). `OCR_ENGINE=pytesseract`
+  in the environment is the instant rollback. That same PR also landed
+  issue #487's three pre-flip fixes found by the Tron gate on PR #486:
+  `_tesserocr_available` widened to catch `Exception` (not just
+  `ImportError`), the TSV read+parse moved inside the crash-guarded
+  region (a malformed row degrades to the pytesseract fallback instead of
+  raising), and a `threading.Lock` serializing the process-global
+  `PyTessBaseAPI`'s SetImage/Recognize/read sequence.
+
 - **L2, perceptual hash**: art-region phash comparison against each
   name-candidate's Scryfall art crop, voting only when there's a clear
   single best match (distance threshold + margin over the second-best,
