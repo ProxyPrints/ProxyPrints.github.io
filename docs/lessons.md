@@ -938,3 +938,30 @@ with a test that exercises the region's real side effects (here: actually callin
 path, or the specific `close_old_connections()` primitive it bottoms out in, from inside the
 locked block and asserting the lock survives from a genuinely separate session) - never by static
 inspection of "what obviously touches the connection" alone.
+
+## BULK-born eligibility predicates are O(catalog) by design - never call one unscoped at streaming frequency, and fixing the first call site doesn't mean there isn't a second
+
+A predicate built for a whole-catalog BULK-mode command (e.g. `local_calculate_verdicts`'s
+`_eligible_cards_queryset`, or the pre-#458 `Card.objects.exclude(pk__in=ImageEvidence.objects...)`
+anti-join) is O(catalog) on purpose - that cost is amortized once per full-catalog run, which is
+the only frequency BULK mode ever calls it at. Streaming/dispatch code (Stage E's per-micro-batch
+or per-sweep-iteration calls) runs the same predicate far more often, so calling it unscoped
+re-pays the full O(catalog) cost every call - issue #458 observed 641s+-running queries from
+exactly this in `_select_micro_batch`. The fix is never "tune the batch size" (the query shape,
+not the batch size, is the problem); it's calling the predicate only with `card_ids` scoping, or
+walking it through the persistent-cursor chunk walk (`_cursor_chunk_walk`,
+`MPCAutofill/cardpicker/stage_e_dispatch.py`) that claims and verifies bounded pk-range chunks
+instead. **The two-layer trap**: fixing the first unscoped call site doesn't mean the surrounding
+path is clean - issue #458's fix exposed a second unscoped call one layer up (issue #460,
+`_next_stage_d_backlog_ids`'s catalog-wide `_stage_d_eligible_cards_queryset` call) that had
+always been masked by the first site's own stalls: the sweep loop never lived long enough to reach
+it before #458 shipped. After fixing an O(catalog) call site, grep the surrounding dispatch path
+for the NEXT unscoped call before declaring victory, rather than assuming one fix cleared the
+whole path.
+
+Separately: eligibility notions differ by what they can see, so an "empty backlog" readout does
+not mean no work exists. "Missing manifest keys" (the backstop sweep's own eligibility check)
+cannot see blank-VALUE evidence - the pipeline-fidelity gate's Bug-A tier-1 cards pass
+`extractor_versions__has_keys` (their extractors ran and wrote keys) despite carrying blank OCR
+values, so they're invisible to a keys-only sweep even though they genuinely need re-scanning
+(2026-07-25 reconciliation; see `docs/proposals/stage-e-streaming.md` SS6 item 1).

@@ -1797,3 +1797,40 @@ contract, not that the original bug is back verbatim. Check
 in the same fix as the one durable, queryable signal for whether
 throttling is happening at all (throttled dispatches write no
 `PilotRunLedger` row).
+
+## Host load stays high (~4+) with no visible pipeline process, `pg_stat_activity` shows `cardpicker` queries hours old
+
+**Symptom**: `uptime`/`top` shows sustained load ~4 or higher with no
+`manage.py`/`qcluster`/dispatch process anywhere in the process list to
+blame; `SELECT * FROM pg_stat_activity WHERE state != 'idle'` shows one
+or more `cardpicker_*` queries that have been `active` for hours.
+Observed 2026-07-25: six pre-#459 `SELECT DISTINCT cardpicker_card.id`
+backends kept grinding up to 2h31m after the client containers that
+issued them were recreated by the 14:03Z deploy.
+
+**Cause**: Postgres backends survive client death. A backend mid-query
+never touches its client socket until it has results to send, so it has
+no way to notice a deploy's container-recreate, a `docker exec` client
+being killed, or an OOM kill of the client process — it just keeps
+computing for a client that no longer exists. Any of those three events
+mid-long-query reproduces this: silent CPU burn on prod with nothing in
+the process list to blame, because the actual work is happening inside
+the Postgres server process, not the (now-dead) Django/worker client.
+
+**Fix now**: find the orphaned backend(s) in `pg_stat_activity` (`pid`,
+`query_start`, `query`) and `pg_terminate_backend(<pid>)` them via the
+host's orchestration kill script. Two traps doing this by hand: `pkill`
+does **not** exist in the slim django image (no `/bin/pkill` binary), so
+killing the query process from inside that container means a `/proc`
+scan-and-kill, not a `pkill` one-liner; and killing a `docker exec`
+**client** process only kills your shell into the container — it never
+touches the actual in-container process (or, per this entry's own
+cause, the Postgres backend it kicked off), so that alone does not stop
+the orphan grind.
+
+**Fix permanently**: issue #462 (`client_connection_check_interval`) —
+Postgres 14+'s periodic in-query client-socket probe that aborts a
+query once it notices its client is gone, deliberately not
+`statement_timeout` (BULK-mode eligibility scans legitimately run for
+minutes-hours with a live client and must not be killed on a timer).
+Parked on the board, not yet shipped.
