@@ -23,6 +23,7 @@ from PIL import Image
 from django.core.management import call_command
 from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 
 from cardpicker import stage_e_dispatch
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
@@ -37,6 +38,7 @@ from cardpicker.models import (
     ImageEvidence,
     PilotRunLedger,
     PrintingTagStatus,
+    StageESweepCursor,
     StageEThrottleCounter,
     VoteSource,
 )
@@ -267,24 +269,48 @@ def _full_evidence(card, **overrides: Any) -> ImageEvidence:
 
 
 class TestSelectMicroBatch:
+    """Issue #458 - `_select_micro_batch`'s backlog fill now walks `StageESweepCursor.position`
+    through the pk space in bounded chunks instead of anti-joining the whole catalog every call
+    (see that function's own docstring for the full design). Seed handling itself (dedupe,
+    seed-first, early return once the seed alone fills the batch) is untouched by #458 and is
+    covered by the first two tests below exactly as before."""
+
     def test_seed_cards_come_first_and_are_deduplicated(self, db: Any) -> None:
         card = CardFactory(content_phash=42)
         _full_evidence(card)
         batch = _select_micro_batch([card.pk, card.pk], batch_size=5)
         assert batch == [card.pk]
 
-    def test_backlog_fills_up_to_batch_size_excluding_already_processed_cards(self, db: Any) -> None:
+    def test_seed_alone_already_at_batch_size_skips_the_backlog_query_and_the_cursor_entirely(self, db: Any) -> None:
+        seed = CardFactory(content_phash=1)
+        CardFactory(content_phash=2)  # would be backlog-eligible, but batch_size=1 leaves no room
+        batch = _select_micro_batch([seed.pk], batch_size=1)
+        assert batch == [seed.pk]
+        # the cursor is never touched (not even created) when the seed alone fills the batch.
+        assert StageESweepCursor.objects.count() == 0
+
+    def test_backlog_fill_skips_fully_processed_cards_and_advances_the_cursor_to_the_last_examined_pk(
+        self, db: Any
+    ) -> None:
         done = CardFactory(content_phash=1)
         _full_evidence(done)
         pending_a = CardFactory(content_phash=2)
         pending_b = CardFactory(content_phash=3)
         no_hash = CardFactory(content_phash=None)
 
-        batch = _select_micro_batch([], batch_size=10)
+        # batch_size=2 is filled exactly by the two pending cards, so this dispatch stops there
+        # rather than continuing on to hit (and wrap on) the end of the pk space - wrap-around is
+        # its own separate scenario, covered below.
+        batch = _select_micro_batch([], batch_size=2)
 
         assert done.pk not in batch
         assert no_hash.pk not in batch
         assert set(batch) == {pending_a.pk, pending_b.pk}
+        # the cursor advances to the last pk this dispatch actually examined - `pending_b` is the
+        # highest-pk candidate (content_phash is not None) in the single chunk this call verified.
+        cursor = StageESweepCursor.objects.get()
+        assert cursor.position == pending_b.pk
+        assert cursor.wrap_count == 0
 
     def test_backlog_fill_is_bounded_by_batch_size(self, db: Any) -> None:
         for _ in range(5):
@@ -292,11 +318,111 @@ class TestSelectMicroBatch:
         batch = _select_micro_batch([], batch_size=2)
         assert len(batch) == 2
 
-    def test_seed_alone_already_at_batch_size_skips_the_backlog_query_entirely(self, db: Any) -> None:
+    def test_wrap_around_resets_position_and_increments_wrap_count_returning_an_empty_batch(self, db: Any) -> None:
+        card = CardFactory(content_phash=1)
+        _full_evidence(card)  # already processed - nothing left to sweep past it
+        StageESweepCursor.objects.create(singleton_key=1, position=card.pk)  # cursor at the end
+
+        batch = _select_micro_batch([], batch_size=5)
+
+        assert batch == []  # empty is a valid outcome (mirrors dispatch_micro_batch's own "empty")
+        cursor = StageESweepCursor.objects.get()
+        assert cursor.position == 0
+        assert cursor.wrap_count == 1
+
+    def test_wrap_around_stops_this_dispatch_rather_than_resuming_from_zero_leaving_a_partial_batch(
+        self, db: Any
+    ) -> None:
         seed = CardFactory(content_phash=1)
-        CardFactory(content_phash=2)  # would be backlog-eligible, but batch_size=1 leaves no room
-        batch = _select_micro_batch([seed.pk], batch_size=1)
-        assert batch == [seed.pk]
+        _full_evidence(seed)
+        pending = CardFactory(content_phash=2)  # would be found immediately if this wrapped AND
+        # kept scanning from 0 in the same call - the binding rule is that it must NOT, so this
+        # dispatch's own batch must come back with the seed only, not [seed, pending].
+        StageESweepCursor.objects.create(singleton_key=1, position=pending.pk)
+
+        batch = _select_micro_batch([seed.pk], batch_size=5)
+
+        assert batch == [seed.pk]  # the seed only - partial, never resumed from 0 in this call
+        cursor = StageESweepCursor.objects.get()
+        assert cursor.position == 0
+        assert cursor.wrap_count == 1
+
+    def test_cas_race_discards_the_lost_chunk_and_retries_until_it_wins(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pending = [CardFactory(content_phash=i) for i in range(1, 4)]
+        real_try_advance = StageESweepCursor.try_advance
+        calls = {"n": 0}
+
+        def _flaky_try_advance(from_position: int, to_position: int) -> bool:
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                return False  # simulate two concurrent dispatches winning the CAS race first
+            return real_try_advance(from_position, to_position)
+
+        monkeypatch.setattr(StageESweepCursor, "try_advance", staticmethod(_flaky_try_advance))
+
+        batch = _select_micro_batch([], batch_size=10)
+
+        assert calls["n"] == 3  # 2 losses + 1 winning attempt - well within the retry budget
+        assert set(batch) == {c.pk for c in pending}
+
+    def test_cas_race_gives_up_after_three_retries_and_returns_whatever_it_already_has(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for i in range(1, 4):
+            CardFactory(content_phash=i)
+        calls = {"n": 0}
+
+        def _always_loses(from_position: int, to_position: int) -> bool:
+            calls["n"] += 1
+            return False
+
+        monkeypatch.setattr(StageESweepCursor, "try_advance", staticmethod(_always_loses))
+
+        batch = _select_micro_batch([], batch_size=10)
+
+        assert batch == []  # never won a claim, so never verified a single candidate
+        assert calls["n"] == 4  # 1 initial attempt + 3 retries, then this dispatch stops
+
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=2, STAGE_E_SELECTION_SCAN_CAP=6)
+    def test_scan_cap_limits_examined_candidates_and_returns_a_partial_batch(self, db: Any) -> None:
+        for i in range(1, 5):
+            card = CardFactory(content_phash=i)
+            _full_evidence(card)  # 4 already-processed cards - the first 2 chunks of 2
+        eligible = CardFactory(content_phash=100)  # 5th candidate - inside the cap, genuinely eligible
+        trailing_processed = CardFactory(content_phash=200)
+        _full_evidence(trailing_processed)  # 6th and last candidate this dispatch examines
+        beyond_cap = CardFactory(content_phash=300)  # 7th candidate - past SCAN_CAP=6, never reached
+
+        batch = _select_micro_batch([], batch_size=5)
+
+        assert batch == [eligible.pk]  # only the one eligible card inside the examined window
+        assert beyond_cap.pk not in batch
+        cursor = StageESweepCursor.objects.get()
+        # exactly SCAN_CAP=6 candidates examined (3 chunks of CHUNK_SIZE=2), never more.
+        assert cursor.position == trailing_processed.pk
+
+    def test_selection_query_count_is_flat_regardless_of_catalog_size(self, db: Any) -> None:
+        """Bounded queries (issue #458's own acceptance bar): the query COUNT `_select_micro_batch`
+        issues must depend only on batch_size/CHUNK_SIZE/SCAN_CAP, never on how many rows already
+        exist in `cardpicker_card` - asserted directly via query counts, not timing."""
+        for i in range(1, 21):
+            CardFactory(content_phash=i)  # a 20-card catalog
+
+        with CaptureQueriesContext(connection) as small_catalog_queries:
+            small_batch = _select_micro_batch([], batch_size=5)
+        assert len(small_batch) == 5
+
+        StageESweepCursor.objects.all().delete()  # reset the cursor for a fair second measurement
+        for i in range(21, 421):
+            CardFactory(content_phash=i)  # grow the catalog by 20x
+
+        with CaptureQueriesContext(connection) as large_catalog_queries:
+            large_batch = _select_micro_batch([], batch_size=5)
+        assert len(large_batch) == 5
+
+        assert len(large_catalog_queries.captured_queries) == len(small_catalog_queries.captured_queries)
 
 
 class TestEndToEndMicroBatch:
