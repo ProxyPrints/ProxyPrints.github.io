@@ -230,11 +230,30 @@ FETCH_HEALTH_EXTRACTOR_VERSION = "fetch-health-v2"
 GEOMETRY_BLEED_EXTRACTOR_VERSION = "geometry-bleed-v1"
 LAYOUT_CLASS_EXTRACTOR_VERSION = "layout-class-v1"
 CROP_COORDINATES_EXTRACTOR_VERSION = "crop-coordinates-v1"
-COLLECTOR_LINE_OCR_EXTRACTOR_VERSION = "collector-line-ocr-v1"
-ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v1"
-COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v1"
+# v1 -> v2 (issue #480's combined pass, THE FLIP: settings.OCR_ENGINE default -> "tesserocr" -
+# see settings.py's own comment). These three extractors are the ones whose STORED VALUE actually
+# depends on which OCR engine produced it (they all read through `local_ocr.
+# run_tesseract_text_and_words`, which now runs on tesserocr's differently-compiled tesseract/
+# leptonica build by default - issue #423's spike already found byte-identical output is
+# structurally unreachable given that vendored-build mismatch). Bumping the version is what makes
+# every existing row under the OLD tag stale, so the next pass re-extracts it under the new
+# engine rather than silently mixing two engines' output under one provenance label (issue #480's
+# correction comment: "Engine swap WITHOUT a version bump is forbidden").
+COLLECTOR_LINE_OCR_EXTRACTOR_VERSION = "collector-line-ocr-v2"
+ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v2"
+COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v2"
+# NOT bumped: symbol_region is a raw phash of a crop region (imagehash, no tesseract call at all)
+# - engine-independent by construction.
 SYMBOL_REGION_EXTRACTOR_VERSION = "symbol-region-v1"
-LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v1"
+# v1 -> v2, same reasoning as the three OCR extractors above: legal_line reads through
+# `local_ocr.run_tesseract` (issue #423's engine seam covers this call site too, not just
+# `run_tesseract_text_and_words`), so its stored `legal_line_raw_text`/`legal_line_copyright_year`/
+# `legal_line_proxy_marker_detected` fields are just as engine-dependent as the collector-line
+# group's own OCR output.
+LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v2"
+# NOT bumped: quality_signals (blur_variance/image_entropy - pixel-statistics math, no OCR) and
+# color_profile (per-channel mean/stddev - also pixel-statistics math, no OCR) are both
+# engine-independent by construction, same reasoning as symbol_region above.
 QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
 COLOR_PROFILE_EXTRACTOR_VERSION = "color-profile-v1"
 

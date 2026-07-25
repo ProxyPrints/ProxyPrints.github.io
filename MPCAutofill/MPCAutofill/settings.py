@@ -366,12 +366,20 @@ ELASTICSEARCH_DSL_AUTOSYNC = False
 IMAGE_WORKER_URL = env("IMAGE_WORKER_URL", default="https://cdn.proxyprints.ca")
 
 # OCR engine seam (issue #423, cardpicker/local_ocr.py's own module docstring): "pytesseract"
-# (the default, unchanged process-per-call behavior) or "tesserocr" (persistent in-process
-# binding, ~5.7x faster per the 2026-07-25 spike, but not yet flipped live - see that module's
-# docstring for why). Shipped DARK in this PR: the flag exists and is wired end to end, but
-# nothing sets OCR_ENGINE=tesserocr in any deployed env yet - that flip is bundled with the
-# extractor-version bump at issue #480's combined whole-catalog pass, never on its own.
-OCR_ENGINE = env("OCR_ENGINE", default="pytesseract")
+# (the OLD default, unchanged process-per-call behavior) or "tesserocr" (persistent in-process
+# binding, ~5.7x faster per the 2026-07-25 spike - see that module's docstring for why the swap
+# is real output drift, not a transparent speed-up).
+#
+# THE FLIP (issue #480's combined whole-catalog pass, gated on this PR's own owner A/B GO - see
+# this PR's own description, NOT a standalone decision): default now "tesserocr". Bundled with
+# this default flip, in the SAME PR: the OCR-derived extractor-version bump in image_evidence.py
+# (COLLECTOR_LINE_OCR/ARTIST_OCR/COLLECTOR_LINE_TSV/LEGAL_LINE_EXTRACTOR_VERSION, v1 -> v2 - see
+# that module's own comments for the per-extractor reasoning) - per issue #480's correction
+# comment, an engine swap WITHOUT a version bump is forbidden (untracked drift under one
+# provenance label). `OCR_ENGINE=pytesseract` in the environment is the instant rollback - set it
+# to revert every deployed process to the old engine without a code change or redeploy of this
+# file, should the post-flip whole-catalog pass need to be paused/reverted.
+OCR_ENGINE = env("OCR_ENGINE", default="tesserocr")
 
 # Email for logging
 ADMINS = [("admin", env("TARGET_EMAIL", default=""))]
