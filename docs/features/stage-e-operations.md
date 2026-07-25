@@ -387,19 +387,28 @@ source never carries an md5 at all (e.g. `LOCAL_FILE`), stays current under
 the content-hash check alone — only a row that stamped a REAL, actively
 DISAGREEING md5 is treated as stale.
 
-**INTERIM Stage D guard (#473 PR-2, temporary by design).** A card whose
-CURRENT evidence row was created by transfer is excluded from all three
-Stage D calculators (`TRANSFERRED_INTERIM_GUARD_SKIP_REASON`,
-rescannable) — its own machine "observation" is the same bytes a sibling
-card already voted from, not an independent one, so casting a vote here
-would fabricate the independence the vote-weight matrix assumes is real.
-The slow-path calculator is deliberately NOT guarded — it casts no machine
-vote, only a `CardScanLog` routing marker to a HUMAN reviewer, which is
-exactly the safety net the guard exists to preserve. **Removal is PR-3's
-own business** (issue #473's build plan: group-level vote pooling correctly
-dedupes a transferred row's vote at the GROUP level instead of excluding it
-outright) — do not remove the guard, or the `ImageEvidence.transferred`
-flag it reads, before that PR merges.
+**Interim Stage D guard, RETIRED (#473 PR-2, added temporary-by-design;
+removed by PR-3, 2026-07-25).** From PR-2 until PR-3 merged, a card whose
+CURRENT evidence row was created by transfer was excluded outright from the
+two MACHINE-VOTING Stage D calculators, join-key and fallback
+(`TRANSFERRED_INTERIM_GUARD_SKIP_REASON`, rescannable, lived in each
+calculator's own loop body — never in `_eligible_cards_queryset`) — its own
+machine "observation" is the same bytes a sibling card already voted from,
+not an independent one, so casting a vote here would have fabricated the
+independence the vote-weight matrix assumes is real. The slow-path
+calculator was never guarded either way — it casts no machine vote, only a
+`CardScanLog` routing marker to a HUMAN reviewer, which is exactly the
+safety net the guard existed to preserve. Issue #473's own PR-3 (group-level
+vote pooling, `vote_consensus.pool_group_votes`) now handles that same
+independence concern correctly at the GROUP tally level instead: a
+transferred row and the sibling it was copied from are both cast under the
+SAME calculator's fixed `anonymous_id`, so they share one `pool_group_votes`
+`dedupe_key` and collapse to one event rather than being excluded outright —
+strictly more correct, since a transferred card can still contribute when a
+DIFFERENT agent votes on its sibling. `TRANSFERRED_INTERIM_GUARD_SKIP_REASON`
+stays defined for historical `CardScanLog` rows' readability; no code path
+writes a new one. See `docs/theory.md` §4 item 3 for the full soundness
+argument.
 
 **Decoupled fetch-ahead (#472).** `stage_e_streaming.md` §4 item 3 ratified
 "adopt, unconditionally" — the streaming conveyor's compute stage should

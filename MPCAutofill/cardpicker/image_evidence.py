@@ -1006,11 +1006,14 @@ def persist_evidence(result: ExtractionResult, run_id: Optional[str] = None) -> 
     `False`/`None` here (2026-07-25, issue #473 PR-2) - `persist_evidence` is called ONLY for a
     REAL extraction pass (`evidence_transfer.transfer_evidence` is the separate, only other writer
     of an `ImageEvidence` row, and it never calls this function), so every call here represents
-    genuine fresh extraction. A row that was previously TRANSFERRED (`transferred=True`) and later
-    receives a real extraction pass (e.g. `stage_e_shakedown`'s own `force_stage_c_reextract`) is
-    no longer a transferred row once this returns - leaving the flag stale would wrongly keep it
-    excluded from Stage D machine voting (the interim guard, `local_calculate_verdicts.
-    _eligible_cards_queryset`) even though it now carries a genuine independent extraction.
+    genuine fresh extraction. This reset stays correct and worth keeping even now that PR-3
+    (2026-07-25) has retired the interim Stage D guard that used to read this flag (see
+    `TRANSFERRED_INTERIM_GUARD_SKIP_REASON`'s own module-level comment in
+    `local_calculate_verdicts.py` for that history - the guard lived in the two calculators' own
+    loop bodies, never in `_eligible_cards_queryset`): `transferred` is still a real provenance
+    fact about this row, and a row that receives a genuine independent extraction is no longer a
+    copy of a sibling's bytes, so it should say so regardless of whether anything downstream still
+    reads the flag to make a decision.
     """
 
     if result.content_hash is None:
