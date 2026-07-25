@@ -1,11 +1,12 @@
 # Theming — the token file, the layering, and the "born grey" fix
 
-Two rounds live in this doc: the 2026-07-24 **theme-defaults pass** (fixed
+Three rounds live in this doc: the 2026-07-24 **theme-defaults pass** (fixed
 "born grey" Bootstrap components by giving every override one canonical
-token source) and the 2026-07-24 **Tokyo-11 re-theme** (swapped the palette
-itself — this is the token file's first real "retheme the site" exercise,
-and the section below on what that surfaced supersedes anything the
-theme-defaults pass implied about how easy a repaint would be).
+token source), the 2026-07-24 **Tokyo-11 re-theme** (swapped the palette
+itself), and the 2026-07-25 **contrast/residual-grey audit** (owner found
+real live-site defects the first two rounds missed — see "2026-07-25
+contrast/residual-grey audit" below, which also corrects a wrong claim the
+theme-defaults pass made about `$card-bg`).
 
 ## The token file
 
@@ -134,6 +135,13 @@ handful of small cyan "info" links elsewhere (`DisplayPage.tsx`'s identify
 panel, `SharedDeckViewer.tsx`) stay on `$theme-info` instead, precisely
 because they're small text and accent isn't AAA-safe there — see
 `$theme-info`'s own token-file comment.
+
+**CORRECTION (2026-07-25, contrast audit)**: "matching the pre-existing
+convention" above was never actually contrast-checked at the time it was
+written. The 2026-07-25 audit measured it: `$primary`-as-link-text is only
+5.98:1 on `$theme-panel-bg` — WORSE than the 6.74:1 this section rejects
+accent for, on the same kind of surface. See that pass's OPEN ITEM #2 below
+— not fixed yet, needs an owner call on the replacement token.
 
 ## Runtime CSS-custom-property bridge (added this round)
 
@@ -345,10 +353,26 @@ buttons/badges. Under #302 this token happened to equal Superhero's own
 Tokyo-11 breaks that coincidence, so `styles.scss` now explicitly sets
 `$secondary: $theme-panel-bg` to keep this exact role intact under the new
 palette (see that file's own "Tokyo-11: $theme-colors overrides" comment).
-`$card-bg`itself remains deliberately untouched by either pass — routing it to`$theme-raised-bg` would be a fidelity regression against the
-spec-locked Card-body role. If a surface still looks grey/wrong after a
-retheme, check whether it's one of these approved-panel surfaces before
-assuming it's a leftover default.
+If a surface still looks grey/wrong after a retheme, check whether it's one
+of these approved-panel surfaces before assuming it's a leftover default.
+
+**CORRECTION (2026-07-25, contrast audit)**: this doc previously claimed
+`$card-bg` "remains deliberately untouched by either pass — routing it to
+`$theme-raised-bg` would be a fidelity regression against the spec-locked
+Card-body role." That reasoning was backwards and the claim was wrong.
+Superhero's own `_variables.scss` sets `$card-bg: $gray-600 !default;` — a
+plain literal, **not** derived from `$secondary` the way this doc assumed
+(unlike `$card-cap-bg`/`$table-head-bg`/etc, which genuinely do inherit from
+whatever `$secondary` resolves to). So `$card-bg` was never actually routed
+to the approved panel token at all — every unstyled `Card.Body`/
+`Accordion.Body` sitewide (any `AutofillCollapse` caller not passing its own
+`bodyBackground`, and any plain `<Card>`/`<Accordion>`) was rendering
+Superhero's raw `#4e5d6c` this whole time, not `$theme-panel-bg`. Under the
+#302 palette those two values were numerically identical, so the bug was
+invisible; Tokyo-11 changed `$theme-panel-bg` to `#2f3549` without changing
+`$card-bg`, and the two only diverged then — this is exactly the
+"/contributions accordion body renders Bootstrap's default mid slate-grey"
+defect the owner found live. Fixed in `styles.scss`: `$card-bg: $theme-panel-bg;`, i.e. what this doc always intended.
 
 **Two different pills.** Bootstrap's own `$border-radius-pill` (default
 `50rem`, a true stadium shape) already backs a real, unrelated pill usage —
@@ -389,6 +413,143 @@ case, none needed — its only colour literals were danger-tint values now
 sourced from `var(--theme-danger-rgb)`). `Footer.tsx`/`Navbar.tsx` already
 used `var(--bs-primary)` before this pass (pre-existing precedent this
 pass's bridge extends) and needed no changes.
+
+## 2026-07-25 contrast/residual-grey audit
+
+Owner-reported, from live mobile screenshots of proxyprints.ca post-Tokyo-11:
+the `/contributions` "Contribution Guidelines" accordion header rendered as
+an orange fill with pale-lavender text (~1.26:1), its body a mid slate-grey,
+and several `outline-secondary` controls (editor mobile "Print & Settings"
+sheet's "Showing: Fronts"/"Cardback", the card-list restore-draft banner's
+"Dismiss" button beside "Restore") were nearly invisible. The owner's
+framing: this is a **class of surfaces missed** by the two 2026-07-24
+passes, not four isolated spots — so the fix pass is a mechanical, sitewide
+audit (see "The audit tool" below) plus token-layer fixes, the same
+discipline as the theme-defaults pass.
+
+**Root causes found, all in `frontend/src/styles/styles.scss`'s early
+token-assignment block (before the Bootstrap/Superhero imports, same
+`!default`-preemption mechanism the rest of this doc describes) unless
+noted:**
+
+- **`$card-bg`** — see the CORRECTION in "What's grey on purpose" above.
+  Fixed: `$card-bg: $theme-panel-bg;`. This is also what `$accordion-bg`
+  (Superhero: `$accordion-bg: $card-bg !default;`) reads from, so it fixes
+  the accordion body too, not just plain `<Card>`s.
+- **`$accordion-button-active-bg`/`$accordion-button-active-color`** —
+  Superhero sets these to `$primary`/`$body-color !default` respectively.
+  Tokyo-11's light, saturated `$primary` (orange) tolerates Superhero's own
+  much darker stock primary fine with light text on top; ours doesn't
+  (1.26:1). The owner's own ruling on the defect: the orange fill is
+  correct/intended (same `$primary` every button already uses) — the fix is
+  the ink, not the fill, exactly mirroring the button-ink flip two blocks up
+  in the same file (`$color-contrast-dark: $theme-btn-ink`, already
+  8.40:1-verified on this exact background). Fixed: both routed to
+  `$theme-btn-ink` (plus `$accordion-icon-active-color`, the chevron SVG
+  stroke, same reasoning).
+- **`.btn-outline-secondary`** — Bootstrap's `.btn-outline-{color}`
+  generator necessarily reuses the same `$theme-colors` map entry the solid
+  `.btn-secondary` FILL uses; there is no separate Bootstrap variable for
+  "what colour should outline-secondary's own text/border be" independent
+  of `$secondary`. Tokyo-11 intentionally repoints `$secondary` to
+  `$theme-panel-bg` (correct for the fill role — see "What's grey on
+  purpose" above), which is also a near-background dark tone — wrong for a
+  foreground/border role, ~1.2–1.4:1 on the ~38 `.btn-outline-secondary`
+  mounts sitewide. Not a bug Tokyo-11 introduced by mistake so much as an
+  inherent consequence of repointing `$secondary` at all. Fixed by
+  re-invoking Bootstrap's own `button-outline-variant()` mixin (the exact
+  call `_buttons.scss` itself makes) with `$theme-light` instead, right
+  after `@import "~bootstrap/scss/buttons";` — one global override, not a
+  per-component patch, regenerating hover/active/disabled states via the
+  same mixin math Bootstrap uses for every other outline variant.
+- **`$code-color`** — Bootstrap core default (`$pink`), never routed to a
+  token; every `<code>` tag sitewide (heaviest use: `/contributions` and
+  ImportText.tsx's Syntax Guide) measured 3.19:1 on panel. Fixed:
+  `$code-color: $theme-info` (this palette's existing "small/inline text"
+  role — explicitly not `$theme-accent`, which its own comment above rules
+  out for prose).
+- **`$body-secondary-color`/`$body-secondary-bg`** — Bootstrap core default
+  for `.text-muted`/`--bs-secondary-color` is `rgba($body-color, .75)`, a
+  translucent literal never routed to a token; measured 5.76:1 on raised-bg
+  (Footer's source-disclosure line). Fixed: routed to `$theme-muted`, same
+  small-caption token everything else uses — see the OPEN ITEM below for
+  why this doesn't fully clear strict-AAA either. `$body-secondary-bg`
+  (Bootstrap default `$gray-200`, a light grey) routed to `$theme-panel-bg`
+  pre-emptively; no `.bg-body-secondary` call site exists yet, so this is
+  future-proofing, verified inert today (same posture as the table-variant
+  row in the theme-defaults inventory above).
+- **`Footer.tsx`'s `ColumnHeading`** (`frontend/src/features/ui/Footer.tsx`)
+  — a hand-written `rgba(255, 255, 255, 0.4)`, not a Bootstrap default and
+  not a token at all, measured 3.61:1 on raised-bg. Routed to
+  `var(--theme-text)` (full strength — `$theme-muted` alone doesn't clear
+  strict-AAA on this background either, see OPEN ITEM below; the
+  uppercase/letter-spacing/bold styling already carries the "eyebrow label"
+  visual distinction from body copy, so no separate dimmed tier is needed).
+
+**OPEN ITEMS — owner decision needed, not resolved by this pass** (found by
+the audit, left alone because fixing them means either accepting a token's
+already-ratified compromise stays visible or reaches into a third-party
+library's own CSS with no token seam, both outside this pass's four
+reported defects):
+
+1. **`$theme-muted` itself still falls short of strict-AAA-normal (7:1) on
+   `$theme-raised-bg` and `$theme-panel-bg`** — 6.39:1 and 5.34:1
+   respectively (already documented above, PR #432's own deliberate
+   trade-off). Routing `$body-secondary-color`/`Footer.tsx`'s eyebrow label
+   onto this token (this pass) makes that pre-existing gap show up in more
+   places than before, not worse in degree — every occurrence this audit
+   still flags is exactly this one already-known number, not a new
+   regression. Needs either a second, higher-contrast "small-caption-on-
+   raised" token or an owner ruling that AA (4.5:1), not strict AAA, is the
+   accepted floor for this specific role.
+2. ~~`$link-color` (unset, defaults to `$primary`) measures only 5.98:1 on
+   `$theme-panel-bg`~~ — **RESOLVED, 2026-07-25 link-colour follow-up**, see
+   "Link colour fix" below for the full writeup and measured numbers. Left
+   in this numbered list (rather than deleted and silently reflowed) so
+   anything that already points at "item 2" by number — e.g. the "Accent
+   scope boundary" section above — stays accurate; a resolved item is
+   marked resolved in place, not removed.
+3. **Two third-party libraries render their own unthemed default
+   greys/whites**, found by the audit's off-palette-grey sweep but not
+   fixed (no Bootstrap/token seam reaches into either): `react-select`'s
+   placeholder text (`/myDecks`, `#808080` on `#ffffff` — a literal WHITE
+   dropdown surface on this dark theme, 3.95:1) and
+   `react-dropdown-tree-select`'s tag pills (`/explore`, `#000000` on
+   `#dddddd`). Both need their own scoped override stylesheet targeting
+   that library's own class names — owner-approved as a SEPARATE follow-up
+   PR after this one merges (kept apart to avoid two frontend branches
+   colliding in `styles.scss`), not a token-layer fix anyway.
+4. **`$theme-danger` as plain text colour measures 6.46:1** (`/whatsthat`'s
+   "Something went wrong" message) — this is the SAME already-documented,
+   already-ratified AAA-large-only exception the token file's own comment
+   and this doc's AAA contrast policy section describe for danger-as-
+   button-ink; this audit just found the identical number recurs when
+   danger is used as plain paragraph text, not only button fill. Not a new
+   gap, not fixed here.
+
+## The audit tool
+
+`frontend/tests/tooling/contrastAudit.ts` (Playwright-driven, importable) —
+walks every visible text-owning DOM node in the current page, computes the
+effective foreground/background pair (ancestor `background-color`
+compositing, `opacity` blending), and reports the WCAG contrast ratio
+against this doc's binding AAA bar (7:1 normal, 4.5:1 large/bold; 3:1 floor
+for genuinely-disabled controls). Also flags any background colour that's
+neither transparent nor a member of the Tokyo-11 palette AND reads as
+"grey" (low saturation, not near-black/near-white) — the mechanical version
+of "born grey" detection. Documented limitations (ancestor-opacity
+approximation, no gradient/box-shadow support, no automatic `:hover` sweep)
+are in the file's own header comment.
+
+`frontend/tests/ContrastAudit.spec.ts` is the runnable regression gate: per
+owner-reported-defect states (the `/contributions` accordion collapsed/
+expanded, the restore-draft banner, the Syntax Guide accordion, the editor's
+mobile Print & Settings sheet) plus a broader static-route sweep, each
+asserting zero contrast failures — a future component that reintroduces an
+unrouted Bootstrap default fails CI here, not just on the next live
+screenshot. Run it standalone with `npx playwright test tests/ContrastAudit.spec.ts --reporter=list` and read the console-logged
+off-palette-grey tables (advisory only, not asserted — see the file's own
+module comment for why).
 
 ## Relationship to the fidelity specs
 
@@ -435,3 +596,99 @@ they were re-derived.
   `next build` — see the PR body for pass/fail and counts.
 - Screenshots: `/display` editor at 1400px and 390px, a modal, and the
   `/print` page — paths in the PR body.
+
+## Verification (2026-07-25 contrast/residual-grey audit)
+
+- `tests/ContrastAudit.spec.ts` run before and after the fix, same 10 states
+  — see the PR body for the exact before/after failure table. All four
+  owner-reported defects (accordion header ink, accordion/card body grey,
+  the restore-banner Dismiss button, the Print & Settings sheet's Showing/
+  Cardback controls) measure zero contrast failures after the fix; every
+  remaining failure is one of this pass's four documented OPEN ITEMS above,
+  none of them new.
+- `DisplayLeftRailFidelity.spec.ts` (17 tests) and a broader sanity sweep
+  (`GeneralUIAccessibility.spec.ts`, `GridSelectorModal.spec.ts`,
+  `SelectVersionSection.spec.ts`, `ImportText.spec.ts`,
+  `DisplayFinishFooter.spec.ts`, `Navbar.spec.ts`, `CardbackPdfWaitFidelity.spec.ts`
+  — 76 tests total) — all green, confirming the `$card-bg`/
+  `$accordion-button-active-*`/`.btn-outline-secondary`/`$code-color`
+  changes don't regress anything already spec-locked (including the
+  `outline-danger` "wrong printing" pill, untouched since only
+  `outline-secondary` was re-generated).
+- `npx tsc --noEmit` — clean.
+- `npx prettier@2.7.1 --check` — clean on every changed file.
+- `next build` (static export) — compiles cleanly.
+- Screenshots at 390px: `/contributions` (collapsed + expanded accordion),
+  the card-list restore-draft banner, the editor's mobile Print & Settings
+  sheet (scrolled to show Cardback too) — paths in the PR body.
+
+## Link colour fix (2026-07-25 follow-up)
+
+Resolves OPEN ITEM 2 above. `$link-color` (Bootstrap core default: `$primary`
+— never previously overridden) is now `$theme-info`; `$link-hover-color`
+(Bootstrap default: an auto-derived 20%-darken of whatever `$link-color` is)
+is now explicitly `$theme-text`, since the auto-derived shade fails AAA on
+every surface once applied to a light colour on this dark theme (measured
+4.56–6.40:1 — darkening a light foreground toward black on an already-dark
+background reduces contrast, not increases it).
+
+**This is the THIRD correction this audit has made to a claim in this doc
+that was never actually measured** (the first two: `$card-bg` "deliberately
+untouched" in "What's grey on purpose", and `$link-color` "matching the
+pre-existing convention" in "Accent scope boundary" — both above). The
+pattern is worth naming once, plainly, so future work doesn't extend it:
+**an assertion about a colour relationship is not evidence until it's been
+computed.** All three corrections were "this reads as fine/intentional" or
+"matches an existing pattern" claims stated with no accompanying ratio —
+each one turned out to be either backwards or simply untested the moment a
+real contrast calculation was run against it. Nothing else in this doc's
+palette/token tables is assumed exempt from that same scrutiny; a future
+editor who wants to assert a pairing is safe should compute and cite the
+ratio in the same sentence, not state it as received wisdom.
+
+The owner initially asked for `$theme-accent` (reasoning: its own
+already-documented 6.74:1 on the D14 band surface reads as "better than
+`$primary`'s 5.98:1 on panel"). Measuring both across every surface a link
+can actually land on shows that reasoning compared two DIFFERENT surfaces
+(band vs panel) — on any SINGLE surface, `$primary` beats `$theme-accent`
+by roughly a full point, not the other way around:
+
+| Surface                 | `$primary` (old) | `$theme-accent` (rejected) | `$theme-info` (shipped, resting) | `$theme-text` (shipped, hover) |
+| ----------------------- | ---------------- | -------------------------- | -------------------------------- | ------------------------------ |
+| `$theme-body-bg`        | 8.40             | 7.39                       | 9.96                             | 10.59                          |
+| `$theme-raised-bg`      | 7.16             | 6.30 (fails)               | 8.49                             | 9.02                           |
+| `$theme-panel-bg`       | 5.98 (fails)     | 5.26 (fails)               | 7.09                             | 7.54                           |
+| `$theme-card-header-bg` | 5.99 (fails)     | 5.27 (fails)               | 7.10                             | 7.55                           |
+| `$theme-band-bg`        | 7.67             | 6.74 (fails)               | 9.09                             | 9.66                           |
+
+`$theme-accent` fails strict-AAA-normal on 4 of the 5 surfaces and is worse
+than the status quo it was meant to replace on all 5 — switching to it would
+have been a regression labelled as a fix, so it wasn't used. `$theme-info`
+is the minimal correct substitute: not a new palette entry (it's this
+codebase's existing "link-styled text" role token — see the "Accent scope
+boundary" section above, which already routed a handful of small cyan links
+to it for exactly this reason), and it clears strict-AAA-normal on every
+surface with real margin (7.09:1 minimum). `:visited`/`:active` need no
+separate rule — verified via Bootstrap core's own `_reboot.scss` source that
+neither pseudo-class gets one at all (both inherit the resting `$link-color`
+custom property, or `:hover`'s override if that's also active); confirmed by
+real `getComputedStyle` measurement, not just the source reading, in
+`ContrastAudit.spec.ts`'s "Link colour audit" block.
+
+## Verification (2026-07-25 link-colour follow-up)
+
+- `ContrastAudit.spec.ts`'s new "Link colour audit" describe block: one test
+  injects a real `<a>` into each of the five named surfaces and measures
+  real `getComputedStyle().color` for both resting and `:hover` (matching
+  the table above exactly, not just recomputing the SCSS literal); a second
+  test measures a real production link (`/contributions`'s ISO-639-1
+  Wikipedia reference, inside the accordion body this same audit's earlier
+  round fixed — panel-bg, 7.09:1 resting / 7.54:1 hover). Both pass.
+- `tests/tooling/contrastAudit.ts`'s `isKnownOpenItem()` allowlist had its
+  former `#ff9e64`-as-link-fg case removed entirely (not just left unused),
+  so a regression back to the old colour fails the general sweep too, not
+  only the dedicated link tests.
+- Full `ContrastAudit.spec.ts` suite (12 tests, including the two new link
+  ones) re-run after the fix — all pass; see the PR body for the console
+  output.
+- `npx tsc --noEmit`, `npx prettier@2.7.1 --check` — clean.

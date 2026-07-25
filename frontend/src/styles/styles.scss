@@ -42,6 +42,59 @@ $danger: $theme-danger;
 $warning: $theme-warning;
 $info: $theme-info;
 
+// Site-wide contrast audit (2026-07-25 follow-up, owner-approved open item 2): Bootstrap core's
+// own `$link-color: $primary !default;` measured 5.98/5.99:1 on panel/card-header-bg (below
+// strict-AAA-normal) -- see docs/features/theming.md's "Accent scope boundary" section, which
+// this follow-up corrects a second time. The FIRST correction (this same audit) found that
+// section's claim "$link-color stays on $primary... matching the pre-existing convention" had
+// never actually been measured. The owner asked to try routing it to `$theme-accent` instead, on
+// the reasoning that accent's own already-documented 6.74:1 (on the D14 band surface) reads as
+// "better than $primary's 5.98:1" -- but that compares two DIFFERENT surfaces (band vs panel),
+// not the same one. Measured apples-to-apples across every surface a link can land on
+// (body/raised/panel/card-header/band), accent is worse than primary on ALL FIVE, not better:
+//   body-bg        primary 8.40  accent 7.39  (accent barely clears 7:1, thin margin)
+//   raised-bg      primary 7.16  accent 6.30  (accent FAILS -- regression vs primary's own pass)
+//   panel-bg       primary 5.98  accent 5.26  (accent fails, and by more than primary already did)
+//   card-header-bg primary 5.99  accent 5.27  (same)
+//   band-bg        primary 7.67  accent 6.74  (accent FAILS -- this is the exact number the doc's
+//                                              own "Accent scope boundary" section already flags
+//                                              as below strict-AAA-normal for prose; nothing new)
+// Accent fails 4 of 5 surfaces outright and is strictly worse than the status quo on every one --
+// switching to it would be a regression dressed as a fix, so per this task's own "if any surface
+// fails, do not force it, propose the minimal adjusted shade instead" instruction, it is NOT used
+// here. `$theme-info` (cyan) is the minimal, already-approved substitute: it is ALREADY this
+// codebase's established "link-styled text" role token (see `$theme-info`'s own token-file
+// comment and the "Accent scope boundary" section's "handful of small cyan 'info' links... stay
+// on $theme-info instead, precisely because they're small text and accent isn't AAA-safe there"
+// -- this pass just extends that SAME existing role to every link, not a new decision) -- no new
+// palette entry, and it clears strict-AAA-normal on every one of the five surfaces with real
+// margin: body 9.96, raised 8.49, panel 7.09, card-header 7.10, band 9.09 (all Playwright-
+// verified against real rendered `<a>` computed styles, not just the SCSS literal -- see the
+// fidelity spec). `$link-hover-color`'s Bootstrap default (`shift-color($link-color, 20%)`, i.e.
+// darkened 20% toward black) fails AAA on every surface once applied to a light colour on an
+// already-dark theme (measured 4.56-6.40:1) -- overridden explicitly to `$theme-text` instead
+// (lightens on hover, a common/expected link-hover treatment), which clears every surface with
+// even MORE margin (7.54-10.59:1) than the resting colour. `:visited`/`:active` need no separate
+// override -- verified via Bootstrap core's own `_reboot.scss` source (`a { color:
+// rgba(var(--bs-link-color-rgb, ...)); &:hover { --bs-link-color-rgb: ...-hover-color-rgb; } }`)
+// that neither pseudo-class has its own rule at all, so both already inherit the same resting
+// `$link-color` (or `:hover`'s override, if that's ALSO active) with zero additional CSS.
+$link-color: $theme-info;
+$link-hover-color: $theme-text;
+
+// Site-wide contrast audit (2026-07-25): Bootstrap core's own `$body-secondary-color` (the
+// source of `.text-muted`/`--bs-secondary-color`, never overridden by Superhero) defaults to
+// `rgba($body-color, .75)` -- a translucent literal, not a token, that this audit measured at
+// 5.76:1 on `$theme-raised-bg` (Footer's own source-disclosure line). Routed to `$theme-muted`
+// instead, the same caption/legend token every other small/muted text sitewide already uses
+// (PR #432's own WCAG/APCA remediation pass) -- makes `.text-muted` consistent with that
+// existing treatment rather than a second, uncoordinated translucency. `$body-secondary-bg`
+// (Bootstrap core default `$gray-200`, a LIGHT grey -- would be a "born grey" leak the instant
+// any `.bg-body-secondary` utility is used) is routed to `$theme-panel-bg` for the same
+// not-yet-used-but-one-day-will-be-safety reason `$card-bg` above needed fixing.
+$body-secondary-color: $theme-muted;
+$body-secondary-bg: $theme-panel-bg;
+
 // Tokyo-11 button-ink flip (2026-07-24, AAA remediation): Superhero sets
 // `$min-contrast-ratio: 1.6` (deliberately low, so white button text survives against a
 // medium-brightness orange). Every Tokyo-11 $theme-colors entry above is LIGHT (an inverted
@@ -100,16 +153,43 @@ $focus-ring-color: $theme-accent;
 $btn-close-width: 25px;
 $btn-close-color: $theme-text;
 
+// Site-wide contrast audit (2026-07-25): `$code-color` (governs every `<code>` tag sitewide --
+// search-syntax examples on /contributions and ImportText.tsx's Syntax Guide are the two heaviest
+// users) is Bootstrap core's own `$pink` default, never overridden by Superhero, measured 3.19:1
+// on `$theme-panel-bg` -- well under AAA. `$theme-info` (cyan, same Tokyo Night provenance as
+// every other token here) is this palette's existing "small/inline text" role (see its own
+// comment in _theme-tokens.scss -- explicitly NOT `$theme-accent`, which that token's own comment
+// rules out for prose/inline text) and clears STRICT-AAA-normal on both raised (8.49:1) and panel
+// (7.09:1).
+$code-color: $theme-info;
+
 // Theme-defaults pass (2026-07-24): components that never opt into our own tokens were "born
 // grey" -- Superhero's stock $gray-600 (#4e5d6c) bleeding through Bootstrap's own component
 // defaults for surfaces that are conceptually "raised chrome" floating above the page (Modal,
 // Dropdown, Popover, Toast, the Card header cap, table-head/table-dark), not "panel" (which
 // #4e5d6c/$theme-panel-bg IS the correct, approved token for -- Card bodies, D14 seticon,
-// secondary buttons; left untouched below). Route each to the token it should have been
-// reading from all along. See docs/features/theming.md for the full inventory (including
-// $list-group-bg, deliberately NOT set here -- the list-group SCSS partial below is disabled
-// entirely, so it'd be a dead override; see that doc's "known gaps" section).
+// secondary buttons; left untouched below -- CORRECTION 2026-07-25, see $card-bg's own comment
+// two lines down, that assumption turned out to be wrong for $card-bg specifically). Route each
+// to the token it should have been reading from all along. See docs/features/theming.md for the
+// full inventory (including $list-group-bg, deliberately NOT set here -- the list-group SCSS
+// partial below is disabled entirely, so it'd be a dead override; see that doc's "known gaps"
+// section).
 $card-cap-bg: $theme-card-header-bg;
+// Site-wide contrast/residual-grey audit (2026-07-25, owner-reported live-mobile defect 2 --
+// "/contributions accordion body renders Bootstrap's default mid slate-grey card surface").
+// Root cause: Superhero's own `_variables.scss` sets `$card-bg: $gray-600 !default;` (a plain
+// literal, #4e5d6c) -- NOT derived from `$secondary`/`$body-bg` the way Bootstrap core's own
+// unthemed default (`var(--bs-body-bg)`) would be, so the 2026-07-24 theme-defaults pass's own
+// "$secondary already routes this" assumption above was incorrect for this one variable
+// specifically (every other "panel" surface that pass left alone - D14 seticon, secondary
+// buttons/badges - genuinely does derive from `$secondary`, just not this one). Every unstyled
+// `Card.Body`/`Accordion.Body` sitewide (react-bootstrap `<Card>`/`<Accordion>` used directly,
+// and every `AutofillCollapse` caller that doesn't pass its own `bodyBackground` prop) was
+// therefore rendering this literal grey, not a Tokyo-11 token, since the very first Superhero
+// pass -- not a Tokyo-11-round regression, just never caught before this audit. $theme-panel-bg
+// is _theme-tokens.scss's own documented "Card bodies" role, so this is the token that should
+// have been here.
+$card-bg: $theme-panel-bg;
 $modal-content-bg: $theme-raised-bg;
 $dropdown-bg: $theme-raised-bg;
 $popover-bg: $theme-raised-bg;
@@ -117,6 +197,23 @@ $toast-background-color: $theme-raised-bg;
 $offcanvas-bg-color: $theme-body-bg;
 $table-head-bg: $theme-raised-bg;
 $table-dark-bg: $theme-raised-bg;
+// Site-wide contrast audit (2026-07-25, owner-reported live-mobile defect 1 -- "/contributions
+// 'Contribution Guidelines' accordion header renders as an orange filled bar with pale lavender
+// text, ~1.26:1, nowhere near AAA"). Root cause: Superhero's own `_variables.scss` sets
+// `$accordion-button-active-bg: $primary !default;` / `$accordion-button-active-color:
+// $body-color !default;` -- our orange action colour and our light body-text token, a
+// combination Superhero's own (much darker, unsaturated) stock `$primary` tolerated but Tokyo-11's
+// light, saturated orange does not. The owner's ruling on this defect: the orange fill itself is
+// fine/intended (it's the same $primary every button already uses) -- the FIX is the ink, not
+// the fill, exactly matching the "$color-contrast-dark: $theme-btn-ink" button-ink flip two
+// blocks up in this file (8.40:1 STRICT-AAA on this exact bg, already verified there). Bootstrap
+// core's own `$accordion-icon-active-color: $primary-text-emphasis` (the expand/collapse chevron
+// SVG stroke) gets the same ink for the same reason -- it was never overridden by Superhero at
+// all, so it inherited an auto-shaded dark-orange from Bootstrap core's colour-emphasis system
+// instead of a token.
+$accordion-button-active-bg: $theme-primary;
+$accordion-button-active-color: $theme-btn-ink;
+$accordion-icon-active-color: $theme-btn-ink;
 // Bootstrap core default ($gray-800, near-black); Superhero never overrides it, so the
 // select-arrow chevron was rendering almost invisibly against our dark $input-bg.
 $form-select-indicator-color: $theme-light;
@@ -159,6 +256,35 @@ $input-border-radius-lg: $theme-radius-base;
 @import "~bootstrap/scss/tables";
 @import "~bootstrap/scss/forms";
 @import "~bootstrap/scss/buttons";
+
+// Site-wide contrast audit (2026-07-25, owner-reported live-mobile defect 3 -- "Showing:
+// Fronts"/"Cardback"/"Export"/"Dismiss" controls rendering as near-invisible outlines). Root
+// cause: Bootstrap's own `.btn-outline-{color}` generator (`_buttons.scss`'s `@each $color,
+// $value in $theme-colors { .btn-outline-#{$color} { @include button-outline-variant($value); }
+// }`) necessarily reuses the SAME `$theme-colors` map entry the solid `.btn-secondary` fill
+// uses -- there is no separate Bootstrap variable for "the colour an outline-secondary button's
+// own text/border should be" independent of "$secondary". Tokyo-11 intentionally repoints
+// `$secondary` to `$theme-panel-bg` (a near-background dark tone, correct for the FILL role --
+// see that token's own "what's grey on purpose" comment) rather than a legible foreground tone,
+// so every one of the ~38 `.btn-outline-secondary` call sites sitewide inherited
+// `$theme-panel-bg` (#2f3549) as its own TEXT colour against a background that's frequently
+// only one step removed from it (#1a1b26/#24283b) -- ~1.2-1.4:1, unreadable. This is not a new
+// problem Tokyo-11 introduced by mistake so much as an inherent Bootstrap-architecture
+// consequence of repointing `$secondary` at all; the fix re-invokes Bootstrap's OWN
+// `button-outline-variant` mixin (the exact call `_buttons.scss` itself would make) with
+// `$theme-light` instead -- the token _theme-tokens.scss already established for exactly this
+// "outline-button legibility" role (see its own comment: introduced for `outline-light`, aliased
+// to `$theme-text`, 9.02/7.54:1 STRICT-AAA on raised/panel). ONE global override, fixes every
+// call site (all four owner-reported controls plus every other `.btn-outline-secondary` mount),
+// not a per-component patch -- exactly the "fix the variable, not the component" pattern this
+// task's other two fixes ($card-bg/$accordion-button-active-* above) follow. Regenerates the
+// hover/active/disabled states too (same mixin, same math Bootstrap itself uses for every other
+// outline variant), so a disabled `.btn-outline-secondary` still clears the reduced disabled bar
+// via the `.btn:disabled{opacity:.65}` blend (~5.2:1 measured, see docs/features/theming.md).
+.btn-outline-secondary {
+  @include button-outline-variant($theme-light);
+}
+
 @import "~bootstrap/scss/transitions";
 @import "~bootstrap/scss/dropdown";
 // @import "~bootstrap/scss/button-group";
