@@ -1819,6 +1819,20 @@ class ImageEvidence(models.Model):
     vocabulary"); a truncated download (see `image_is_truncated` above) is reported through the
     SAME `"fetch_failed"` skip reason for the same reason - Stage D doesn't need a finer bucket
     than "no usable image data" to treat it correctly.
+
+    artbox_phash (public issue #480, "Artbox perceptual-hash extractor: evidence-only, rides the
+    next whole-catalog pass" - EVIDENCE ONLY, every consumer explicitly out of scope for this
+    extractor): `artbox_crop_px` is one of two fixed-fraction boxes (`image_evidence.
+    ARTBOX_MODERN_CROP_BOX`/`ARTBOX_OLD_CROP_BOX`), chosen by `artbox_frame_class` and remapped/
+    scaled the same way every other `*_crop_px` field above is (crop COORDINATES only, never crop
+    pixels). `artbox_frame_class` mirrors `local_fallback.classify_frame_style`'s own return
+    convention ("old"/"modern"), same blank-string-as-sentinel convention as `bleed_class`/
+    `layout_class` for the ambiguous/not-yet-run case - unlike `layout_class` (issue #148), which
+    predates the OCR group and had to use `classify_border_color` as a stand-in, this extractor
+    lands after issue #149's OCR group and can call the real frame classifier. `artbox_phash` is
+    a perceptual hash (`imagehash.phash`, same family/size as `symbol_phash` above) of that
+    region, stored the same signed-64-bit-int way. Null when not yet computed (fetch failure, an
+    unclassifiable frame, or a degenerate crop box - see `image_evidence.py`'s module docstring).
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -1931,6 +1945,18 @@ class ImageEvidence(models.Model):
     # quality_signals' own fields above).
     color_mean_rgb = models.JSONField(null=True, blank=True)
     color_stddev_rgb = models.JSONField(null=True, blank=True)
+
+    # artbox_phash (issue #480) - artbox_crop_px is one of ARTBOX_MODERN_CROP_BOX/
+    # ARTBOX_OLD_CROP_BOX (image_evidence.py), chosen by artbox_frame_class and remapped/scaled
+    # the same way every other *_crop_px field above is (crop COORDINATES only, never crop
+    # pixels). artbox_frame_class mirrors local_fallback.classify_frame_style's own return
+    # convention ("old"/"modern"), blank-string-as-sentinel like bleed_class/layout_class above.
+    # artbox_phash is a perceptual hash (imagehash.phash) of that region, stored as a signed
+    # 64-bit int via twos_complement - the same representation symbol_phash above uses. Null when
+    # not yet computed (fetch failure, an unclassifiable frame, or a degenerate crop box).
+    artbox_crop_px = models.JSONField(null=True, blank=True)
+    artbox_frame_class = models.CharField(max_length=16, blank=True, default="")
+    artbox_phash = models.BigIntegerField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

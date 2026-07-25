@@ -178,6 +178,65 @@ RECONCILIATION LEDGER (owner directive 2026-07-19, task #155): `build_reconcilia
 answers "attempted = voted + each named skip-reason + dropped" for one extractor over one set
 of cards, by querying ImageEvidence.extractor_versions + CardScanLog directly - see
 ImageEvidence's own docstring for the exact voted/skipped/dropped definitions.
+
+artbox_phash (public issue #480, "Artbox perceptual-hash extractor: evidence-only, rides the
+next whole-catalog pass" - EVIDENCE ONLY: every consumer, e.g. same-art clustering/artist-
+constrained narrowing/alternate-frame deduction, #363 lineage, is explicitly OUT OF SCOPE for
+this extractor, ratified in that issue's own body; the issue's own binding sequencing comment
+also rules out a standalone backfill - this extractor's own first real pass rides the next
+whole-catalog Stage C run alongside #473/#472, never a dedicated run of its own): a raw
+perceptual hash (`imagehash.phash`, same family/size as `symbol_phash`/`local_phash.py`'s own
+`content_phash`/`image_hash` - no golden-set evidence argues otherwise) of the card's own art-box
+region. Unlike `layout_class` (issue #148), which had to fall back to `classify_border_color`
+because `classify_frame_style`'s real inputs (a parsed collector number, the "Illus." anchor)
+didn't exist in `ImageEvidence` yet at that PR's own time (see this docstring's own `layout_class`
+section above), this extractor lands AFTER issue #149's OCR group already ran a few lines earlier
+in `compute_card_evidence` - `fields["collector_line_collector_number"]`/`fields["illus_anchor_
+fired"]` are real, already-computed facts by this point, so `classify_frame_style`'s real
+"old"/"modern" classes are finally reachable - matching issue #480's own "art box location varies
+by frame style, handle old/modern at minimum" design constraint literally (those are
+`classify_frame_style`'s own two reachable return values; "future" frame is unreachable from that
+classifier's signal set at all, per `local_fallback.py`'s own docstring, so this extractor cannot
+produce a third box for it either). `classify_frame_style` itself is called unmodified, imported
+from `local_fallback.py` (PROTECTED CORE) exactly the way `classify_bleed_edge`/
+`classify_border_color` already are elsewhere in this module - no protected-core file is touched
+by this extractor at all.
+
+Crop geometry: `ARTBOX_MODERN_CROP_BOX` (this module's own constant, just above the extraction
+function) reuses `local_phash.ART_CROP_BOX` unchanged - that module's own comment already
+documents it as the "MTG modern (2015+) frame art window." `ARTBOX_OLD_CROP_BOX` is a new,
+first-party constant (NOT copied from any external source - see
+`docs/upstreaming/license-provenance.md`'s absorption-protocol framing for why that distinction
+matters) living in THIS module rather than `local_phash.py`, deliberately - it avoids touching a
+PROTECTED CORE file for a brand-new box no existing code depended on, the same "reproduce rather
+than reach into protected-core internals" posture `_SYMBOL_HASH_BITS` above already established
+for this file. See that constant's own comment for the exact fractions and their honestly-stated
+confidence level (a reasoned estimate, not independently golden-set-verified the way
+`LEGAL_LINE_CROP_BOX` was).
+
+Both boxes are remapped via `normalize_crop_box`/`_crop_box_to_pixels` the same way every other
+`*_crop_px` field in this module is (crop COORDINATES only, never crop pixels - CLAUDE.md's
+"Governing premise"), then hashed via the same `_compute_region_phash` helper `symbol_region`
+already uses (store the math, not the strip). `artbox_frame_class` is stored alongside the hash -
+a genuine derived fact (which box, and therefore whose art-box convention, this hash used),
+mirroring `bleed_class`/`layout_class`'s own "store the classification, not just its
+consequence" precedent.
+
+Two named skips, sharing symbol_region's own "ambiguous" vocabulary rather than inventing a new
+string (same "pipeline's own existing strings verbatim" discipline every extractor in this module
+follows): `classify_frame_style` returning `None` (pass 1 found no collector number AND no
+"Illus." anchor fired - e.g. a token, a double-faced composite scan, or a corrupted fetch) is an
+unclassifiable frame, and a degenerate (zero/negative-area) crop box is the same real, mechanical
+"sub-floor" guard `symbol_region`'s own degenerate-crop-box check and `geometry_bleed`'s own
+zero-height guard exist for - not expected to fire against real fetched images either.
+
+SOUNDNESS NOTE FOR ANY FUTURE CONSUMER (carried forward from issue #480's own body, recorded here
+so it travels with the field rather than only living in a closed issue): perceptual identity is
+NOT byte identity - a future same-art-clustering consumer built on `artbox_phash` must NOT inherit
+`#473`'s counted-once md5 vote-pooling; per `docs/theory.md`'s two-threshold rule, artbox-phash
+groups may only narrow candidates (small-distance), never auto-vote, except at `d=0` for verified-
+identical uploads. This extractor emits the raw signal only - no consumer of any kind is built or
+wired in this PR.
 """
 
 import logging
@@ -195,6 +254,7 @@ from cardpicker.local_fallback import (
     SYMBOL_STRIP_BOX,
     classify_bleed_edge,
     classify_border_color,
+    classify_frame_style,
     extract_artist_name,
     normalize_crop_box,
 )
@@ -235,11 +295,40 @@ SYMBOL_REGION_EXTRACTOR_VERSION = "symbol-region-v1"
 LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v1"
 QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
 COLOR_PROFILE_EXTRACTOR_VERSION = "color-profile-v1"
+ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v1"
 
 # Bit width for the perceptual-hash int representation - matches local_phash.py's own private
 # _hash_to_int/_HASH_BITS exactly (imagehash's default hash_size=8 -> a 64-bit hash), reproduced
 # here rather than imported since that helper isn't exported from that PROTECTED CORE module.
 _SYMBOL_HASH_BITS = 64
+
+# artbox_phash (issue #480) crop geometry - see this module's own docstring for the full
+# rationale. MODERN reuses local_phash.ART_CROP_BOX verbatim (imported above as ART_CROP_BOX) -
+# that module's own comment already documents its derivation, not re-derived here.
+ARTBOX_MODERN_CROP_BOX: tuple[float, float, float, float] = ART_CROP_BOX
+
+# OLD (pre-2003, 1993/1997 frame families - classify_frame_style's "old" class) art-box fraction.
+# No golden-set-verified box exists for this frame family yet (unlike LEGAL_LINE_CROP_BOX, which
+# WAS checked against real fetched production images before being locked in - see local_ocr.py's
+# own comment on that constant) - this is a REASONED ESTIMATE, stated honestly as one rather than
+# a rigor it hasn't actually received, following ART_CROP_BOX's own precedent ("deliberately
+# crude for a pilot... a reasonable average, not tuned per-frame-era") rather than pretending
+# otherwise. Old-border frames print a thin, flat black/white/gold/silver rule rather than
+# modern's beveled multi-tone frame, so less margin needs trimming off each side (0.07/0.93 in
+# ARTBOX_MODERN_CROP_BOX -> 0.05/0.95 here); the title bar sits marginally closer to the top edge
+# for the same thinner-border reason (0.10 -> 0.07). The one structural difference that actually
+# motivates a SEPARATE box rather than reusing ARTBOX_MODERN_CROP_BOX outright: old frames carry
+# no separate expansion-symbol/collector-number strip competing for space on the type-line row -
+# that convention only starts at the 8th Edition/2003 reprint, exactly the same boundary
+# classify_frame_style itself keys off via parsed_a_collector_number (see local_fallback.py's own
+# FRAME_VALUE_TO_CLASS comment) - so the art box runs measurably further down before the type
+# line begins (0.58 -> 0.62). NOT verified against a real fetched old-border image - no local
+# fixtures exist to check it against (golden_set.py's own real-DB-backed cards are unreachable
+# from this worktree; see this PR's own test file and PR body for the same limitation the
+# tesserocr engine-swap spike, issue #423, stated honestly rather than glossed over). A future
+# golden-set pass that adds real old-border ground truth should tighten this the same way
+# LEGAL_LINE_CROP_BOX's own comment records having done for its box.
+ARTBOX_OLD_CROP_BOX: tuple[float, float, float, float] = (0.05, 0.07, 0.95, 0.62)
 
 
 @dataclass(frozen=True)
@@ -789,6 +878,35 @@ def compute_card_evidence(
     if profile is not None:
         profile["ocr_group_ms"] = (time.monotonic() - _ocr_group_started_at) * 1000
 
+    # artbox_phash (issue #480): reads the OCR group's own already-computed facts
+    # (collector_line_collector_number/illus_anchor_fired, both set a few lines above) as
+    # classify_frame_style's real inputs - see module docstring for why this extractor, unlike
+    # layout_class, can finally call the real frame classifier instead of the border-color
+    # stand-in. Shares symbol_region's own "ambiguous" skip-reason vocabulary for both an
+    # unclassifiable frame and a degenerate crop box (see module docstring for why one string
+    # covers both here).
+    if image is None:
+        skip_reasons["artbox_phash"] = "fetch_failed"
+    else:
+        parsed_a_collector_number = bool(fields.get("collector_line_collector_number"))
+        illus_anchor_fired_value = bool(fields.get("illus_anchor_fired"))
+        frame_class = classify_frame_style(parsed_a_collector_number, illus_anchor_fired_value)
+        fields["artbox_frame_class"] = frame_class or ""
+        if frame_class is None:
+            skip_reasons["artbox_phash"] = "ambiguous"
+        else:
+            artbox_box = ARTBOX_MODERN_CROP_BOX if frame_class == "modern" else ARTBOX_OLD_CROP_BOX
+            artbox_crop_px = _crop_box_to_pixels(artbox_box, bleed_class, width, height)
+            left, top, right, bottom = artbox_crop_px
+            if right <= left or bottom <= top:
+                # Same real, non-fabricated "sub-floor" guard symbol_region's own degenerate-crop-
+                # box check exists for - not expected to fire against real fetched images either.
+                skip_reasons["artbox_phash"] = "ambiguous"
+            else:
+                fields["artbox_crop_px"] = artbox_crop_px
+                fields["artbox_phash"] = _compute_region_phash(image, artbox_crop_px)
+    extractor_versions["artbox_phash"] = ARTBOX_PHASH_EXTRACTOR_VERSION
+
     # symbol_region (issue #160, "Part 4b: symbol harness"): SYMBOL_STRIP_BOX turned into pixel
     # coordinates the same way crop_coordinates derives its own three boxes, then a raw phash of
     # that region only - see module docstring for why this is a raw signal (Stage D's job to
@@ -1029,4 +1147,7 @@ __all__ = [
     "LEGAL_LINE_EXTRACTOR_VERSION",
     "QUALITY_SIGNALS_EXTRACTOR_VERSION",
     "COLOR_PROFILE_EXTRACTOR_VERSION",
+    "ARTBOX_PHASH_EXTRACTOR_VERSION",
+    "ARTBOX_MODERN_CROP_BOX",
+    "ARTBOX_OLD_CROP_BOX",
 ]
