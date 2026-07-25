@@ -1357,62 +1357,85 @@ class StageEThrottleCounter(models.Model):
 
 class StageESweepCursor(models.Model):
     """
-    Issue #458 - the persistent sweep cursor `cardpicker.stage_e_dispatch._select_micro_batch`'s
-    backlog-fill step reads and advances, replacing that function's old per-batch full-catalog
-    anti-join (`Card.objects.exclude(pk__in=ImageEvidence.objects...)`, O(catalog) and re-run from
-    scratch on every dispatch - see that function's own docstring for the incident this fixes).
-    SINGLETON, same one-row pattern as `StageEThrottleCounter` immediately above (`singleton_key`
-    `unique=True`, `get_or_create(singleton_key=1)` on first-ever touch).
+    Issue #458 - the persistent sweep cursor `cardpicker.stage_e_dispatch`'s chunked backlog walk
+    (`_cursor_chunk_walk`, shared by `_select_micro_batch`'s Stage C fill and
+    `stream_backstop_sweep._next_stage_d_backlog_ids`'s Stage D fill - issue #460) reads and
+    advances, replacing a per-batch full-catalog anti-join (`Card.objects.exclude(pk__in=
+    ImageEvidence.objects...)`, O(catalog) and re-run from scratch on every dispatch - see
+    `_select_micro_batch`'s own docstring for the incident this fixes).
 
-    `position` is the last Card pk this sweep has fully examined - the backlog fill always resumes
-    at `pk__gt=position`, a pure pk-index range scan, never a full-table scan. `wrap_count` counts
-    how many times the sweep has reached the end of the pk space and restarted at 0 (a healthy,
-    expected event on a near-complete catalog, not an error - see `_select_micro_batch`'s own
-    docstring and docs/features/stage-e-operations.md's Phase 2 section for the full semantics).
+    KEYED, not a singleton (issue #460): `name` (`STAGE_C`/`STAGE_D` below) identifies which of the
+    two independent backlog walks a row belongs to - Stage C's "no current ImageEvidence row yet"
+    sweep and Stage D's "evidence complete, no join-key vote yet" sweep cover different pk-space
+    progress and must never share one cursor's `position`/`wrap_count`, or advancing one walk would
+    silently skip pk ranges the other walk hasn't examined yet. `get_cursor(name)` is the
+    `get_or_create`-on-first-use entry point every classmethod below keys off; each name's own row
+    is otherwise the exact one-row-per-key analogue of `StageEThrottleCounter`'s singleton pattern
+    immediately above.
 
-    CAS OWNERSHIP, not a lock: `_select_micro_batch` claims a chunk via an optimistic
-    compare-and-swap UPDATE (`filter(singleton_key=1, position=<expected>).update(position=
-    <new>)`) BEFORE verifying it - rows-updated == 0 means a concurrent dispatch already claimed
-    that range, so the loser discards the chunk and retries against the now-current position. Two
-    concurrent dispatches therefore sweep DISJOINT ranges instead of duplicating verification work,
-    with no dedicated lock/transaction needed - the single-row UPDATE's own atomicity is the whole
-    mechanism, same "never a Python-side read-modify-write" posture `StageEThrottleCounter.record`
-    documents for its own counter.
+    `position` is the last Card pk this cursor's own walk has fully examined - the backlog fill
+    always resumes at `pk__gt=position`, a pure pk-index range scan, never a full-table scan.
+    `wrap_count` counts how many times this cursor's walk has reached the end of the pk space and
+    restarted at 0 (a healthy, expected event on a near-complete catalog, not an error - see
+    `_cursor_chunk_walk`'s own docstring and docs/features/stage-e-operations.md's Phase 2 section
+    for the full semantics).
+
+    CAS OWNERSHIP, not a lock: `_cursor_chunk_walk` claims a chunk via an optimistic
+    compare-and-swap UPDATE (`filter(name=<key>, position=<expected>).update(position=<new>)`)
+    BEFORE verifying it - rows-updated == 0 means a concurrent dispatch already claimed that range,
+    so the loser discards the chunk and retries against the now-current position. Two concurrent
+    dispatches walking the SAME cursor therefore sweep DISJOINT ranges instead of duplicating
+    verification work, with no dedicated lock/transaction needed - the single-row UPDATE's own
+    atomicity is the whole mechanism, same "never a Python-side read-modify-write" posture
+    `StageEThrottleCounter.record` documents for its own counter. Two dispatches walking DIFFERENT
+    cursors never contend at all - they update different rows.
     """
 
-    singleton_key = models.PositiveSmallIntegerField(default=1, unique=True)
+    # Issue #460 - the two backlog walks this cursor model serves. Defined here (the model that
+    # owns the `name` field's value space) rather than duplicated as string literals in
+    # `stage_e_dispatch.py`/`stream_backstop_sweep.py`, so the two call sites can never drift on
+    # spelling.
+    STAGE_C = "stage_c"
+    STAGE_D = "stage_d"
+
+    name = models.CharField(max_length=16, unique=True)
     position = models.BigIntegerField(default=0)
     wrap_count = models.IntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self) -> str:
-        return f"Stage E sweep cursor position={self.position} wrap_count={self.wrap_count}"
+        return f"Stage E sweep cursor name={self.name} position={self.position} wrap_count={self.wrap_count}"
 
     @classmethod
-    def get_singleton(cls) -> "StageESweepCursor":
-        """Ensures the one-and-only row exists and returns it - the first-ever call on a fresh
-        deployment creates it at `position=0`, `wrap_count=0`; every later call is a plain fetch."""
-        cursor, _ = cls.objects.get_or_create(singleton_key=1)
+    def get_cursor(cls, name: str) -> "StageESweepCursor":
+        """Ensures `name`'s own row exists and returns it - the first-ever call for a given name on
+        a fresh deployment creates it at `position=0`, `wrap_count=0`; every later call is a plain
+        fetch. `stage_d`'s row is created lazily this way the first time the backstop sweep's own
+        backlog (b) path runs; `stage_c`'s row is seeded by issue #460's own data migration
+        (renamed from the pre-#460 singleton row, position preserved) rather than created fresh."""
+        cursor, _ = cls.objects.get_or_create(name=name)
         return cursor
 
     @classmethod
-    def try_advance(cls, from_position: int, to_position: int) -> bool:
+    def try_advance(cls, name: str, from_position: int, to_position: int) -> bool:
         """The CAS claim described in the class docstring - `True` iff this call's own UPDATE
-        matched the singleton row (i.e. `position` was still `from_position` the instant this ran),
-        meaning this caller now owns the `(from_position, to_position]` range. `False` means a
-        concurrent dispatch already moved `position` first - the caller must discard whatever it
-        read for that range and retry against a freshly-read `position`, never assume ownership."""
-        return cls.objects.filter(singleton_key=1, position=from_position).update(position=to_position) == 1
+        matched `name`'s own row (i.e. `position` was still `from_position` the instant this ran),
+        meaning this caller now owns the `(from_position, to_position]` range of `name`'s walk.
+        `False` means a concurrent dispatch already moved `position` first - the caller must
+        discard whatever it read for that range and retry against a freshly-read `position`, never
+        assume ownership."""
+        return cls.objects.filter(name=name, position=from_position).update(position=to_position) == 1
 
     @classmethod
-    def try_wrap(cls, from_position: int) -> bool:
-        """Same CAS discipline as `try_advance`, for the end-of-pk-space case: resets `position` to
-        `0` and increments `wrap_count` iff `position` was still `from_position`. Callers stop this
-        dispatch regardless of the return value (`_select_micro_batch`'s own docstring: "never
-        continue scanning from 0 in the same dispatch") - a losing race here just means another
-        concurrent dispatch already performed the same wrap, which is harmless either way."""
+    def try_wrap(cls, name: str, from_position: int) -> bool:
+        """Same CAS discipline as `try_advance`, for the end-of-pk-space case: resets `name`'s own
+        `position` to `0` and increments its `wrap_count` iff `position` was still `from_position`.
+        Callers stop this dispatch regardless of the return value (`_cursor_chunk_walk`'s own
+        docstring: "never continue scanning from 0 in the same dispatch") - a losing race here just
+        means another concurrent dispatch already performed the same wrap, which is harmless
+        either way."""
         return (
-            cls.objects.filter(singleton_key=1, position=from_position).update(
+            cls.objects.filter(name=name, position=from_position).update(
                 position=0, wrap_count=models.F("wrap_count") + 1
             )
             == 1

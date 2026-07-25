@@ -21,23 +21,41 @@ in order per batch: (a) the Stage C backlog (cards with no CURRENT full-manifest
 - catches a lost card-create dispatch), (b) once (a) is empty for a given batch, the Stage D
 join-key-eligible backlog (cards with current evidence that have never received a join-key vote OR
 scan-log row - catches a lost evidence-change dispatch; `_select_micro_batch` itself deliberately
-does not fill from this backlog, see its own docstring, so the sweep covers it here instead). Stops
-when both backlogs come back empty, when the envelope trips ("halted-new-trip"/"halted-open-trip" -
-the sweep does not retry past a halt; the next scheduled sweep invocation picks up where this one
-stopped, exactly like a re-invoked BULK command would), when every concurrency-cap slot is already
-held ("throttled-concurrency-cap" - same "stop, don't retry, the next scheduled sweep invocation
-picks up where this one stopped" posture as a halt, since looping here would just re-sample an
-already-saturated cap with no backoff), or when `--max-batches` is reached (a safety bound for a
-single invocation, not a design limit).
+does not fill from this backlog, see its own docstring, so the sweep covers it here instead). Both
+backlogs are now cursor-backed, bounded-per-call walks (`cardpicker.stage_e_dispatch.
+_cursor_chunk_walk`, issue #458 for (a), issue #460 for (b) - see `_next_stage_d_backlog_ids`'s own
+docstring): NEITHER issues a query whose cost scales with catalog size, regardless of how sparse the
+backlog is or how large the catalog grows.
+
+STOPPING CONDITIONS, per batch: both backlogs come back empty (see the EXHAUSTED VS CAP-HIT
+paragraph below for what "empty" actually means for backlog (b)), the envelope trips
+("halted-new-trip"/"halted-open-trip" - the sweep does not retry past a halt; the next scheduled
+sweep invocation picks up where this one stopped, exactly like a re-invoked BULK command would),
+every concurrency-cap slot is already held ("throttled-concurrency-cap" - same "stop, don't retry,
+the next scheduled sweep invocation picks up where this one stopped" posture as a halt, since
+looping here would just re-sample an already-saturated cap with no backoff), or `--max-batches` is
+reached (a safety bound for a single invocation, not a design limit).
+
+EXHAUSTED VS CAP-HIT (issue #460 §4): `_next_stage_d_backlog_ids` returns `(ids, exhausted)`, not
+just `ids` - `exhausted=True` means backlog (b)'s cursor walk reached the end of the pk space and
+wrapped (genuinely nothing left, at least until the next full sweep of the pk space), `exhausted=
+False` on an EMPTY `ids` means the walk hit `STAGE_E_SELECTION_SCAN_CAP` (or its CAS retry budget)
+with more pk space still unscanned ahead of the cursor - a common outcome on a backlog that's sparse
+relative to the catalog (mostly-voted cards between the rare eligible ones). The `handle()` loop
+below breaks with "Backlog exhausted" ONLY on `exhausted=True`; a cap-hit-empty result CONTINUES to
+the NEXT `batch_num` iteration instead (the cursor already advanced past the examined range, so the
+next iteration's walk starts fresh from there) - already bounded by `range(max_batches)`, so this
+can never become an unbounded loop. Treating cap-hit-empty as exhaustion (the pre-#460 bug this
+fixes) would have wrongly ended the sweep with backlog (b) cards still waiting, unexamined, past the
+scan cap.
 
 THE SWEEP IS THE ONLY RECOVERY PATH FOR A THROTTLED EVENT DISPATCH: `Q_CLUSTER["max_attempts"] = 1`
 (`MPCAutofill/MPCAutofill/settings.py`) means an event-driven `async_task` that returns
 `DispatchOutcome(status="throttled-concurrency-cap")` is recorded SUCCESSFUL by django-q2 - it never
 retries, and the touched card is silently dropped until some future sweep picks it up via the
 backlog queries above. That makes it load-bearing that this command itself never treats
-"throttled-concurrency-cap" as ordinary work: looping past it burns a `current_trip()` query, an
-envelope sample, and (via the Stage C backlog fallback) a `_select_micro_batch` anti-join over the
-whole cards table, per iteration, up to `--max-batches` times, precisely when the host is already at
+"throttled-concurrency-cap" as ordinary work: looping past it burns a `current_trip()` query and an
+envelope sample per iteration, up to `--max-batches` times, precisely when the host is already at
 its concurrency ceiling - the worst possible moment for a hot, backoff-free loop. See
 `stage_e_concurrency.py`'s own module docstring for why the cap is proactive rather than reactive.
 
@@ -48,7 +66,7 @@ additional writes once the backlog is genuinely exhausted (the conveyor's own id
 mechanism this command adds).
 """
 
-from typing import Any
+from typing import Any, Iterable
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandParser
@@ -58,7 +76,12 @@ from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
 from cardpicker.local_calculate_verdicts import (
     _eligible_cards_queryset as _stage_d_eligible_cards_queryset,
 )
-from cardpicker.stage_e_dispatch import DEFAULT_MICRO_BATCH_SIZE, dispatch_micro_batch
+from cardpicker.models import StageESweepCursor
+from cardpicker.stage_e_dispatch import (
+    DEFAULT_MICRO_BATCH_SIZE,
+    _cursor_chunk_walk,
+    dispatch_micro_batch,
+)
 
 DEFAULT_MAX_BATCHES = 1000
 
@@ -66,20 +89,30 @@ _HALT_STATUSES = ("halted-open-trip", "halted-new-trip")
 _THROTTLED_STATUS = "throttled-concurrency-cap"
 
 
-def _next_stage_d_backlog_ids(batch_size: int) -> list[int]:
+def _next_stage_d_backlog_ids(batch_size: int) -> tuple[list[int], bool]:
     """
     The Stage-D-only backlog `_select_micro_batch` (`stage_e_dispatch.py`) deliberately does NOT
     fill from (see that function's own docstring) - cards whose Stage C evidence is already
-    complete but that have never had a join-key pass at all. Reuses
-    `local_calculate_verdicts._eligible_cards_queryset` UNSCOPED (`card_ids=None`) - the exact same
-    pool `run_join_key_calculator`'s own BULK-mode invocation would consider - sliced to
-    `batch_size`, never materializing the whole backlog. A module-private helper reused here rather
-    than duplicated, the same "reuse, never re-derive" convention `cardpicker/tests/
-    test_local_calculate_verdicts.py` already establishes for testing it directly.
+    complete but that have never had a join-key pass at all.
+
+    Issue #460 - walks `StageESweepCursor.STAGE_D` via the SAME shared `_cursor_chunk_walk` helper
+    `_select_micro_batch`'s own Stage C fill uses (`stage_e_dispatch.py`), replacing this
+    function's pre-#460 UNSCOPED `_stage_d_eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID)` call
+    (`card_ids=None` - an O(catalog) JSONB + anti-join over every evidence-complete card, re-run on
+    EVERY sweep iteration that hit "empty" - see issue #460's own Problem section for the incident
+    this fixes). `verify_chunk` reuses `_stage_d_eligible_cards_queryset` UNCHANGED, only now called
+    per-chunk with the `card_ids` scoping parameter it already accepted (truth predicate reused,
+    never re-derived) - so every query this function issues is bounded by
+    `STAGE_E_SELECTION_CHUNK_SIZE`/`STAGE_E_SELECTION_SCAN_CAP`, never by catalog size.
+
+    Returns `(ids, exhausted)` - see this module's own docstring's "EXHAUSTED VS CAP-HIT" paragraph
+    for what the caller must do with each.
     """
-    return list(
-        _stage_d_eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID).order_by("pk").values_list("pk", flat=True)[:batch_size]
-    )
+
+    def _verify_stage_d_chunk(chunk: list[int]) -> Iterable[int]:
+        return _stage_d_eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID, card_ids=chunk).values_list("pk", flat=True)
+
+    return _cursor_chunk_walk(StageESweepCursor.STAGE_D, _verify_stage_d_chunk, batch_size)
 
 
 class Command(BaseCommand):
@@ -148,10 +181,16 @@ class Command(BaseCommand):
             if outcome.status == "empty":
                 # Backlog (a) exhausted for this pass - try backlog (b) before concluding the whole
                 # sweep is done (module docstring).
-                stage_d_backlog_ids = _next_stage_d_backlog_ids(batch_size)
+                stage_d_backlog_ids, stage_d_exhausted = _next_stage_d_backlog_ids(batch_size)
                 if not stage_d_backlog_ids:
-                    self.stdout.write("Backlog exhausted - nothing left to dispatch.")
-                    break
+                    if stage_d_exhausted:
+                        self.stdout.write("Backlog exhausted - nothing left to dispatch.")
+                        break
+                    # Module docstring's "EXHAUSTED VS CAP-HIT" paragraph: the scan cap (or CAS
+                    # retry budget) was hit with more pk space still unscanned ahead of the cursor -
+                    # NOT exhaustion. Move on to the next batch_num rather than ending the sweep;
+                    # already bounded by range(max_batches), so this can never loop unboundedly.
+                    continue
                 outcome = dispatch_micro_batch(
                     card_ids=stage_d_backlog_ids,
                     trigger_reason="backstop-sweep-stage-d",

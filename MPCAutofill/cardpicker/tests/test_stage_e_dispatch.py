@@ -22,6 +22,7 @@ from PIL import Image
 
 from django.core.management import call_command
 from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
@@ -31,6 +32,9 @@ from cardpicker.image_evidence import ExtractionResult
 from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
 from cardpicker.management.commands.run_image_evidence_cohort import (
     MANIFEST_EXTRACTOR_KEYS,
+)
+from cardpicker.management.commands.stream_backstop_sweep import (
+    _next_stage_d_backlog_ids,
 )
 from cardpicker.models import (
     CardPrintingTag,
@@ -321,7 +325,7 @@ class TestSelectMicroBatch:
     def test_wrap_around_resets_position_and_increments_wrap_count_returning_an_empty_batch(self, db: Any) -> None:
         card = CardFactory(content_phash=1)
         _full_evidence(card)  # already processed - nothing left to sweep past it
-        StageESweepCursor.objects.create(singleton_key=1, position=card.pk)  # cursor at the end
+        StageESweepCursor.objects.create(name=StageESweepCursor.STAGE_C, position=card.pk)  # cursor at the end
 
         batch = _select_micro_batch([], batch_size=5)
 
@@ -338,7 +342,7 @@ class TestSelectMicroBatch:
         pending = CardFactory(content_phash=2)  # would be found immediately if this wrapped AND
         # kept scanning from 0 in the same call - the binding rule is that it must NOT, so this
         # dispatch's own batch must come back with the seed only, not [seed, pending].
-        StageESweepCursor.objects.create(singleton_key=1, position=pending.pk)
+        StageESweepCursor.objects.create(name=StageESweepCursor.STAGE_C, position=pending.pk)
 
         batch = _select_micro_batch([seed.pk], batch_size=5)
 
@@ -354,11 +358,11 @@ class TestSelectMicroBatch:
         real_try_advance = StageESweepCursor.try_advance
         calls = {"n": 0}
 
-        def _flaky_try_advance(from_position: int, to_position: int) -> bool:
+        def _flaky_try_advance(name: str, from_position: int, to_position: int) -> bool:
             calls["n"] += 1
             if calls["n"] <= 2:
                 return False  # simulate two concurrent dispatches winning the CAS race first
-            return real_try_advance(from_position, to_position)
+            return real_try_advance(name, from_position, to_position)
 
         monkeypatch.setattr(StageESweepCursor, "try_advance", staticmethod(_flaky_try_advance))
 
@@ -374,7 +378,7 @@ class TestSelectMicroBatch:
             CardFactory(content_phash=i)
         calls = {"n": 0}
 
-        def _always_loses(from_position: int, to_position: int) -> bool:
+        def _always_loses(name: str, from_position: int, to_position: int) -> bool:
             calls["n"] += 1
             return False
 
@@ -758,3 +762,218 @@ class TestBackstopSweep:
         # convention (TestConcurrencyCapIntegration's own assertion for dispatch_micro_batch
         # directly).
         assert PilotRunLedger.objects.count() == 0
+
+
+def _voted_card(content_phash: int = 1) -> Any:
+    """A Stage-C-complete card carrying a JOIN_KEY_ANONYMOUS_ID vote already - INELIGIBLE for the
+    Stage D backlog (`_eligible_cards_queryset`'s own `.exclude(printing_tags__anonymous_id=...)`),
+    used across `TestStageDBacklog`/`TestBackstopSweepBacklogBExhaustedVsCapHit` below to build a
+    "not what we're looking for" candidate that a cursor walk must still examine (and skip)
+    without mistaking it for backlog exhaustion."""
+    card = CardFactory(content_phash=content_phash)
+    _full_evidence(card)
+    CardPrintingTag.objects.create(
+        card=card, printing=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+    )
+    return card
+
+
+class TestSweepCursorMigration:
+    """Issue #460 - migration `0083_stageesweepcursor_keyed` renames the pre-#460 singleton row
+    (`singleton_key=1`, issue #458) to the keyed `stage_c` row, `position`/`wrap_count` preserved.
+    Exercised via `MigrationExecutor` directly (migrate back to 0082, create the pre-#460 row
+    shape, migrate forward to 0083, assert the row survived under its new key) - the one-time
+    transition every existing deployment's own database goes through."""
+
+    def test_existing_singleton_row_becomes_the_stage_c_row_with_position_preserved(self, db: Any) -> None:
+        executor = MigrationExecutor(connection)
+        executor.migrate([("cardpicker", "0082_stageesweepcursor")])
+        old_apps = executor.loader.project_state(("cardpicker", "0082_stageesweepcursor")).apps
+        old_cursor_model = old_apps.get_model("cardpicker", "StageESweepCursor")
+        old_cursor_model.objects.create(singleton_key=1, position=777, wrap_count=3)
+
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        executor.migrate([("cardpicker", "0083_stageesweepcursor_keyed")])
+
+        new_apps = executor.loader.project_state(("cardpicker", "0083_stageesweepcursor_keyed")).apps
+        new_cursor_model = new_apps.get_model("cardpicker", "StageESweepCursor")
+        row = new_cursor_model.objects.get()
+        assert row.name == "stage_c"
+        assert row.position == 777
+        assert row.wrap_count == 3
+
+        # Restore the schema to the latest migration state - this test is the only one in the
+        # suite that ever moves the schema backward, so every later test must see it forward again.
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        executor.migrate(executor.loader.graph.leaf_nodes())
+
+
+class TestKeyedCursorIsolation:
+    """Issue #460 - `StageESweepCursor.STAGE_C`/`STAGE_D` are independent rows; advancing/wrapping
+    one must never move the other."""
+
+    def test_advancing_stage_d_never_moves_stage_c(self, db: Any) -> None:
+        stage_c = StageESweepCursor.get_cursor(StageESweepCursor.STAGE_C)
+        stage_d = StageESweepCursor.get_cursor(StageESweepCursor.STAGE_D)
+
+        assert StageESweepCursor.try_advance(StageESweepCursor.STAGE_D, stage_d.position, 500) is True
+
+        stage_c.refresh_from_db()
+        assert stage_c.position == 0
+        stage_d.refresh_from_db()
+        assert stage_d.position == 500
+
+    def test_advancing_stage_c_never_moves_stage_d(self, db: Any) -> None:
+        stage_c = StageESweepCursor.get_cursor(StageESweepCursor.STAGE_C)
+        stage_d = StageESweepCursor.get_cursor(StageESweepCursor.STAGE_D)
+
+        assert StageESweepCursor.try_advance(StageESweepCursor.STAGE_C, stage_c.position, 300) is True
+
+        stage_d.refresh_from_db()
+        assert stage_d.position == 0
+        stage_c.refresh_from_db()
+        assert stage_c.position == 300
+
+    def test_wrapping_stage_d_never_touches_stage_cs_wrap_count(self, db: Any) -> None:
+        StageESweepCursor.get_cursor(StageESweepCursor.STAGE_C)
+        stage_d = StageESweepCursor.get_cursor(StageESweepCursor.STAGE_D)
+        StageESweepCursor.try_advance(StageESweepCursor.STAGE_D, stage_d.position, 100)
+
+        assert StageESweepCursor.try_wrap(StageESweepCursor.STAGE_D, 100) is True
+
+        stage_c = StageESweepCursor.objects.get(name=StageESweepCursor.STAGE_C)
+        assert stage_c.wrap_count == 0
+        stage_d.refresh_from_db()
+        assert stage_d.position == 0
+        assert stage_d.wrap_count == 1
+
+
+class TestStageDBacklog:
+    """Issue #460 - `_next_stage_d_backlog_ids` (`stream_backstop_sweep.py`), walking
+    `StageESweepCursor.STAGE_D` via the shared `_cursor_chunk_walk` helper
+    (`stage_e_dispatch.py`). Mirrors `TestSelectMicroBatch`'s own structure for the Stage C
+    cursor, one test per behavior this function's own docstring documents."""
+
+    def test_finds_an_evidence_complete_vote_missing_card_and_advances_the_cursor(self, db: Any) -> None:
+        eligible = CardFactory(content_phash=1)
+        _full_evidence(eligible)
+
+        # batch_size=1 matches exactly the one candidate available, so this call stops the instant
+        # it's found rather than continuing on to hit (and wrap on) the end of the pk space - wrap
+        # while carrying an already-found id is its own separate scenario (the CAS-race test below).
+        ids, exhausted = _next_stage_d_backlog_ids(1)
+
+        assert ids == [eligible.pk]
+        assert exhausted is False
+        cursor = StageESweepCursor.objects.get(name=StageESweepCursor.STAGE_D)
+        assert cursor.position == eligible.pk
+
+    def test_skips_a_card_that_already_has_a_join_key_vote(self, db: Any) -> None:
+        voted = _voted_card(content_phash=1)
+        pending = CardFactory(content_phash=2)
+        _full_evidence(pending)
+
+        ids, exhausted = _next_stage_d_backlog_ids(5)
+
+        assert ids == [pending.pk]
+        assert voted.pk not in ids
+
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=2, STAGE_E_SELECTION_SCAN_CAP=2)
+    def test_scan_cap_hit_with_backlog_still_unscanned_returns_exhausted_false(self, db: Any) -> None:
+        # Two already-voted (ineligible) cards fill the SCAN_CAP=2 examined window this call
+        # spends - a genuinely eligible card sits just past it, unscanned.
+        _voted_card(content_phash=1)
+        _voted_card(content_phash=2)
+        beyond_cap = CardFactory(content_phash=100)
+        _full_evidence(beyond_cap)
+
+        ids, exhausted = _next_stage_d_backlog_ids(5)
+
+        assert ids == []
+        assert exhausted is False  # cap-hit-empty, NOT exhaustion - beyond_cap is still unscanned
+        assert beyond_cap.pk not in ids
+
+    def test_wrap_around_with_nothing_eligible_returns_exhausted_true(self, db: Any) -> None:
+        _voted_card(content_phash=1)
+
+        ids, exhausted = _next_stage_d_backlog_ids(5)
+
+        assert ids == []
+        assert exhausted is True
+        cursor = StageESweepCursor.objects.get(name=StageESweepCursor.STAGE_D)
+        assert cursor.position == 0
+        assert cursor.wrap_count == 1
+
+    def test_cas_race_on_the_stage_d_cursor_discards_the_lost_chunk_and_retries_until_it_wins(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mirrors `TestSelectMicroBatch.test_cas_race_discards_the_lost_chunk_and_retries_until_
+        it_wins` for the Stage C cursor - same shared `_cursor_chunk_walk`, exercised here against
+        the Stage D cursor instead, proving the CAS retry logic isn't accidentally Stage-C-specific."""
+        pending = []
+        for i in range(1, 4):
+            card = CardFactory(content_phash=i)
+            _full_evidence(card)
+            pending.append(card)
+        real_try_advance = StageESweepCursor.try_advance
+        calls = {"n": 0}
+
+        def _flaky_try_advance(name: str, from_position: int, to_position: int) -> bool:
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                return False  # simulate two concurrent dispatches winning the CAS race first
+            return real_try_advance(name, from_position, to_position)
+
+        monkeypatch.setattr(StageESweepCursor, "try_advance", staticmethod(_flaky_try_advance))
+
+        ids, exhausted = _next_stage_d_backlog_ids(10)
+
+        assert calls["n"] == 3  # 2 losses + 1 winning attempt - well within the retry budget
+        assert set(ids) == {c.pk for c in pending}
+        assert exhausted is True  # the walk reached (and wrapped past) the end of the pk space
+
+
+class TestBackstopSweepBacklogBExhaustedVsCapHit:
+    """Issue #460 §4 - the sweep loop's own distinction between backlog (b)'s `exhausted=True`
+    (break) and a cap-hit-empty result (`exhausted=False`, continue to the next batch)."""
+
+    @STREAMING_ON
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=1, STAGE_E_SELECTION_SCAN_CAP=1)
+    def test_sweep_continues_past_a_cap_hit_empty_backlog_b_result_and_still_finds_the_later_card(
+        self, db: Any, capsys: pytest.CaptureFixture
+    ) -> None:
+        _voted_card(content_phash=1)  # examined and skipped on the sweep's first pass - cap-hit
+        card = CardFactory(name="Some Card", content_phash=2)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _full_evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        call_command("stream_backstop_sweep", "--max-batches", "5")
+
+        output = capsys.readouterr().out
+        assert "batches_dispatched=1" in output
+        assert "Backlog exhausted - nothing left to dispatch." in output
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+
+    @STREAMING_ON
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=1, STAGE_E_SELECTION_SCAN_CAP=1)
+    def test_sweep_stays_bounded_by_max_batches_when_cap_hit_empty_never_resolves(
+        self, db: Any, capsys: pytest.CaptureFixture
+    ) -> None:
+        # Five already-voted, Stage-C-complete cards - with SCAN_CAP=1 each sweep iteration's own
+        # backlog (b) walk examines exactly one of them and comes back cap-hit-empty every time,
+        # never reaching the end of the pk space (so never `exhausted`) within the two-batch
+        # budget this test allows - proving `range(max_batches)` alone is what stops this loop,
+        # not the exhausted/halt/throttle paths.
+        for i in range(1, 6):
+            _voted_card(content_phash=i)
+
+        call_command("stream_backstop_sweep", "--max-batches", "2")
+
+        output = capsys.readouterr().out
+        assert "batches_dispatched=0" in output
+        assert "Backlog exhausted" not in output
+        assert "Envelope halt" not in output
+        assert "sweep stopped" not in output
