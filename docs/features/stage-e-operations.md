@@ -1,13 +1,15 @@
 As of: 2026-07-25
 What this is: the admin-facing operational truth for Stage E's envelope
-enforcement primitive (Phase 1) and streaming dispatch loop (Phase 2), both
-implementing [`docs/proposals/stage-e-streaming.md`](../proposals/stage-e-streaming.md)
+enforcement primitive (Phase 1), streaming dispatch loop (Phase 2), and the
+Phase 3 shakedown driver (issue #465), all implementing
+[`docs/proposals/stage-e-streaming.md`](../proposals/stage-e-streaming.md)
 (issue [#153](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/153)).
 That brief is the design authority (still **HOLD**, owner review pending on
 §3-§5 as a whole) and is not restated here — this doc covers what an
 operator actually does: the two operating modes, what the envelope bars
-mean, the trip/resume runbook, and (new in Phase 2) the dispatch loop itself
-— its trigger, batching, and observability. See
+mean, the trip/resume runbook, the dispatch loop itself (its trigger,
+batching, and observability), and the shakedown driver that routes the
+Bug-A tail through that same dispatch loop. See
 [`docs/theory.md`](../theory.md)'s new "Streaming and continuous operation"
 section for why none of this changes the soundness model.
 
@@ -662,6 +664,136 @@ throttle, which is exactly the class of resource contention that produced
 the host-load trip above. Land a BULK write cleanly, or explicitly pause
 PASSIVE streaming for its duration, rather than running both at once.
 
+## Phase 3 — Shakedown driver
+
+`manage.py stage_e_shakedown` (issue #465) — routes the Bug-A blank-tier-1
+tail (issue #418) through the LIVE streaming conveyor
+(`cardpicker.stage_e_dispatch.dispatch_micro_batch`), per the owner-ratified
+sequencing (`stage-e-streaming.md` §6 item 1: the tail "does not get a batch
+pass") and §10(c) ("micro-batch size is measured, not chosen" — this
+driver's own per-batch `PilotRunLedger` rows are that measurement's data
+source, not this command's own conclusion; issue #463 decides the size once
+the waves below have run).
+
+**This section documents the mechanism the command ships. It does NOT
+authorize a prod run** — per `stage-e-streaming.md` §8, the implementation
+PR that builds any of §3-§5 (this driver included) gets a Tron
+efficiency+soundness pass before owner review, and that pass is a hard
+precondition on ANY invocation of this command against production, dry or
+live batch-size trial alike.
+
+### Cohort
+
+`cardpicker.management.commands.stage_e_shakedown.bug_a_tail_card_ids`
+re-derives issue #418's own blank-tier-1 signature query FRESH on every
+invocation — never cached, never hardcoded — matching
+`docs/data/2026-07-23-zeroing-and-buga-sample.md` §9(c)'s own "the signature
+query regenerates on demand" ruling:
+
+- `fetch_ok=True`, empty collector number, blank/whitespace
+  `collector_line_raw_text`, scoped to CURRENT evidence only
+  (`ImageEvidence.content_hash` matching the card's live `content_phash` —
+  the same convention `reparse_collector_evidence`/
+  `local_calculate_verdicts`'s own eligibility queries use elsewhere in this
+  pipeline).
+- Excludes `ntx-0721`'s own already-force-escalated cohort (the pool-sizing
+  query's own exclusion, reused verbatim).
+- Excludes wave-1's own top-4-source slice (`RustyShackleford`,
+  `Berndt_Toast83`, `MaleMPC`, `WarpDandy` — 10,437 of the 16,972-card pool,
+  CLOSED per `docs/pipeline-fidelity-gate.md` §15: already re-scanned,
+  reparsed, landed, and Stage D'd) — so this driver's own cohort is exactly
+  the still-open remainder, not the whole historical pool.
+
+### Driver loop and the one conveyor change
+
+The cohort is chunked into `--batch-size`-sized groups (default
+`settings.STAGE_E_MICRO_BATCH_SIZE`) and fed through
+`dispatch_micro_batch(card_ids=<chunk>, trigger_reason="shakedown", batch_size=<chunk size>, force_stage_c_reextract=True)` one chunk at a time.
+Every existing gate binds UNMODIFIED — streaming-enabled flag, no-self-resume,
+fresh envelope sample, concurrency cap, per-batch `PilotRunLedger` row. The
+loop STOPS (never retries) the instant a batch comes back `halted-*` or
+`throttled-concurrency-cap`, the same posture `stream_backstop_sweep.py`
+already uses for the identical reason (looping past either would just
+re-sample an already-open trip/an already-saturated cap with no backoff).
+`--max-batches` bounds one invocation's own worst case; `--limit` bounds the
+cohort itself for a pilot-sized run.
+
+`dispatch_micro_batch` gained exactly one new parameter for this,
+`force_stage_c_reextract: bool = False` (threaded to `_run_stage_c`) — the
+default-False path is byte-identical to before this change (proven by the
+full pre-existing `test_stage_e_dispatch.py` suite passing unmodified).
+`True`, passed ONLY by this driver, does two things a tail card's own
+"CURRENT full-manifest evidence, every field blank" shape needs: (a) skips
+the already-done exclusion, so a card the ordinary check would wrongly treat
+as finished gets a fresh fetch + extract anyway (`persist_evidence`'s own
+`get_or_create` semantics overwrite the same `(card, content_hash)` row in
+place — no duplication), and (b) forces `short_circuit=False` into
+`compute_card_evidence` — the same escalation-forcing effect
+`run_image_evidence_cohort`'s own `--no-shortcircuit` flag has, reused here
+rather than reimplemented.
+
+### Resume contract (`--reextracted-after`, REQUIRED)
+
+The operator passes the shakedown epoch's own start timestamp (ISO 8601).
+Any tail card whose CURRENT `ImageEvidence.updated_at` already postdates
+that value is excluded from the cohort — i.e. a card THIS epoch already
+force-re-extracted. A killed invocation resumes by re-invoking with the
+SAME `--reextracted-after` value: Google fetch quota, not compute, is the
+scarce resource a kill-and-resume must never burn twice.
+
+### Evidence-change echo
+
+Every `persist_evidence` write this driver's forced re-extraction performs
+is an ordinary `ImageEvidence` save, so `cardpicker.stage_e_signals`'s own
+`_dispatch_on_evidence_change` receiver fires for it exactly as it would for
+any other Stage C write — an async `dispatch_for_card(card_id, "evidence-change")` task queues behind it, independent of this driver's own
+dispatch calls. **This is ACCEPTABLE, not suppressed** (frozen at filing):
+the echoed dispatch finds evidence already current and, if a vote was
+already cast by this driver's own synchronous Stage D leg, finds the
+already-voted guard already satisfied — a fast, cheap no-op either way. The
+two are distinguishable in the ledger by `trigger_reason`: this driver's own
+batches carry `"shakedown"`, an echo dispatch carries `"evidence-change"`.
+If the Tron pass judges echo volume unacceptable at tail scale, the
+documented (not built) fallback is a suppress-signals flag on
+`persist_evidence` — do not build it preemptively.
+
+### Ledger convention
+
+Nothing new beyond the existing streaming-run ledger ("Observability: the
+streaming-run ledger convention" above) — every batch already gets its own
+`PilotRunLedger` row via `dispatch_micro_batch`. `run_id` follows
+`stage-e-shakedown-b<batch-size>-<date>-<batch-num>`, so the 25/50/100-card
+waves this shakedown measures against (§10(c)) separate cleanly for the
+#463 analysis.
+
+### Drill invocation sequences (`stage-e-streaming.md` §7)
+
+Both drills are owner-polled LIVE runs, not part of this command's own
+build — this is the invocation sequence for whoever runs them:
+
+- **§7(a) — `crash_drill.sh` at micro-batch granularity.** The script's own
+  seeded-cohort query (`scripts/ops/crash_drill.sh`, on `master` via #405)
+  already matches this driver's own base signature
+  (`ImageEvidence.objects.filter(fetch_ok=True, collector_line_raw_text='').exclude(run_id='ntx-0721')`) — its ONE
+  edit-point for this drill is the command it kills mid-run: swap the
+  `run_image_evidence_cohort --card-ids-file "$IDS"` invocation (phase 3 of
+  the script) for `stage_e_shakedown --reextracted-after <epoch> --batch-size <N>` fed the same seeded id file's cards as its own cohort
+  (bypass `bug_a_tail_card_ids`'s live-DB re-derivation for this drill only
+  if the script's own random sample doesn't already satisfy the signature —
+  check first, since the script's pool selector is close enough that it
+  usually will), confirming the SAME kill -9 mid-batch / truthful ledger /
+  idempotent resume properties hold at micro-batch granularity, not just
+  the bulk command's own.
+- **§7(b) — dispatcher-kill mid-driver-run.** Start `stage_e_shakedown`
+  against a bounded (`--limit`) pilot cohort, `kill -9` the process itself
+  (not a worker job — this driver has no dispatcher/worker split, it IS the
+  dispatcher for its own invocation) partway through, then re-invoke with
+  the SAME `--reextracted-after` value. Verify no double-fetch via
+  `PilotRunLedger` (each batch's own `run_id` and `stage_c_completed` count)
+  cross-checked against `ImageEvidence.updated_at` for the killed run's own
+  in-flight cards — nothing already committed before the kill should be
+  re-fetched by the resumed invocation.
+
 ## Phase 3 (not yet built)
 
 Informal shorthand, not a brief-defined phase number — see
@@ -670,14 +802,18 @@ of §3-§5 as a whole):
 
 - **Turning `STAGE_E_STREAMING_ENABLED` on** against production — the
   phase-3 shakedown's own polled owner action, explicitly not done by either
-  Phase 1 or Phase 2 landing.
+  Phase 1 or Phase 2 landing, and gated on the §8 Tron pass above.
 - **The live, host-level dispatcher-kill acceptance test** (`stage-e-streaming.md`
   §7(b)) — killing the dispatcher process itself mid-stream, not a simulated
-  exception.
+  exception. The invocation sequence is documented above; the drill itself
+  is still an owner-polled live run, not executed by this change.
 - **The `CardScanLog` retention tripwire mechanism** (§10(b)) — specced in
   the brief, not built in this change.
-- **The Bug-A tail shakedown itself** (§6 item 1, issue #418) — the cohort
-  that measures the real `STAGE_E_MICRO_BATCH_SIZE` (§10(c)).
+- **The Bug-A tail shakedown's own LIVE waves** (§6 item 1, issue #418,
+  §10(c)) — the driver mechanism is built ("Phase 3 — Shakedown driver"
+  above); running the 25/50/100-card waves against production and analyzing
+  the resulting ledger data (issue #463) is still an owner-polled action,
+  gated on the §8 Tron pass.
 
 ## See also
 

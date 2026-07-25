@@ -387,7 +387,9 @@ def _select_micro_batch(seed_card_ids: Iterable[int], batch_size: int) -> list[i
     return seen[:batch_size]
 
 
-def _run_stage_c(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) -> Optional[EnvelopeTrip]:
+def _run_stage_c(
+    batch_ids: list[int], run_id: str, outcome: DispatchOutcome, force_stage_c_reextract: bool = False
+) -> Optional[EnvelopeTrip]:
     """
     Sequential, per-card Stage C extraction over whichever of `batch_ids` still lack a full
     manifest - the SAME per-card unit (`image_evidence.compute_card_evidence` +
@@ -396,6 +398,19 @@ def _run_stage_c(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) ->
     (module docstring's own "PIPELINE STAGES" section explains why). Every fetch outcome is recorded
     onto `_window` regardless of whether it ends up mattering to THIS batch's own envelope decision -
     the window spans the whole worker process's uptime, not one batch.
+
+    `force_stage_c_reextract` (issue #465, `management/commands/stage_e_shakedown.py`'s one conveyor
+    change): `False` (the default) is BYTE-IDENTICAL to the pre-#465 behaviour below - the
+    already-done exclusion applies and `compute_card_evidence` gets `short_circuit=None` (deferring
+    to its own env-var default), exactly as before this parameter existed. `True` is passed ONLY by
+    that driver, for cards whose CURRENT full-manifest `ImageEvidence` row already exists but carries
+    blank values (the Bug-A tail's own signature - a card the already-done check below would
+    otherwise wrongly treat as finished): it (a) skips the already-done exclusion entirely, so every
+    id in `batch_ids` gets a fresh fetch + extract regardless of manifest completeness, and (b) forces
+    `short_circuit=False` into `compute_card_evidence` - the same escalation-forcing effect
+    `run_image_evidence_cohort.py`'s own `--no-shortcircuit` flag has (see that command's own
+    docstring for the mechanism reused here, not reimplemented), so a zero-digit tier-1 read is never
+    allowed to short-circuit past the fuller multi-tier escalation that could recover a real read.
 
     Returns the `EnvelopeTrip` this call itself recorded (only possible via the instant Google
     lockout bar - see `GoogleFetchLockoutError` below), or `None`. A lockout stops Stage C
@@ -413,12 +428,16 @@ def _run_stage_c(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) ->
     from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
     from cardpicker.image_evidence import compute_card_evidence, persist_evidence
 
-    manifest_keys = list(_stage_c_manifest_extractor_keys())
-    already_done_ids = set(
-        ImageEvidence.objects.filter(card_id__in=batch_ids, extractor_versions__has_keys=manifest_keys).values_list(
-            "card_id", flat=True
+    if force_stage_c_reextract:
+        already_done_ids: set[int] = set()
+    else:
+        manifest_keys = list(_stage_c_manifest_extractor_keys())
+        already_done_ids = set(
+            ImageEvidence.objects.filter(card_id__in=batch_ids, extractor_versions__has_keys=manifest_keys).values_list(
+                "card_id", flat=True
+            )
         )
-    )
+    short_circuit: Optional[bool] = False if force_stage_c_reextract else None
     lexicon = known_set_codes()
 
     for card_id in batch_ids:
@@ -448,7 +467,12 @@ def _run_stage_c(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) ->
         _window.record(success=True)
         image = Image.open(BytesIO(image_bytes))
         result = compute_card_evidence(
-            card_id, card.content_phash, image, fetch_latency_ms=fetch_latency_ms, known_set_codes=lexicon
+            card_id,
+            card.content_phash,
+            image,
+            fetch_latency_ms=fetch_latency_ms,
+            short_circuit=short_circuit,
+            known_set_codes=lexicon,
         )
         persist_evidence(result, run_id=run_id)
         outcome.stage_c_completed += 1
@@ -511,13 +535,19 @@ def dispatch_micro_batch(
     trigger_reason: str = "event",
     run_id: Optional[str] = None,
     batch_size: Optional[int] = None,
+    force_stage_c_reextract: bool = False,
 ) -> DispatchOutcome:
     """
     The CONVEYOR itself - one micro-batch dispatch decision (docs/proposals/stage-e-streaming.md
     §3, this module's own docstring). Called by `cardpicker.stage_e_signals`'s own event receivers
-    (via `dispatch_for_card`, `card_ids=[the triggering card's own pk]`) and by
-    `stream_backstop_sweep` (`card_ids=None`, letting `_select_micro_batch` fill the whole batch
-    from the backlog).
+    (via `dispatch_for_card`, `card_ids=[the triggering card's own pk]`), by `stream_backstop_sweep`
+    (`card_ids=None`, letting `_select_micro_batch` fill the whole batch from the backlog), and by
+    `management/commands/stage_e_shakedown.py` (issue #465, `card_ids=<its own driven chunk>`,
+    `force_stage_c_reextract=True`).
+
+    `force_stage_c_reextract` (issue #465): `False` (the default) is BYTE-IDENTICAL to this
+    function's pre-#465 behaviour - forwarded straight through to `_run_stage_c` (see that function's
+    own docstring for the two things `True` changes). Only the shakedown driver ever passes `True`.
 
     Ordering: default-off gate -> no-self-resume gate -> fresh envelope sample -> batch selection ->
     concurrency-cap slot acquire (`cardpicker.stage_e_concurrency`) -> Stage C (sequential, per-card)
@@ -605,7 +635,9 @@ def dispatch_micro_batch(
         batch_start = time.monotonic()
 
         try:
-            lockout_trip = _run_stage_c(batch_ids, dispatch_run_id, outcome)
+            lockout_trip = _run_stage_c(
+                batch_ids, dispatch_run_id, outcome, force_stage_c_reextract=force_stage_c_reextract
+            )
             # Stage D still runs even after a mid-batch lockout trip - "in-flight work drains, nothing
             # NEW starts" (docs/features/stage-e-operations.md's HALT semantics) - see _run_stage_d's
             # own docstring for why this is always safe to call regardless of how far Stage C got.

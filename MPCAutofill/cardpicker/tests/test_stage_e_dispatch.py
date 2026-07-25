@@ -484,6 +484,106 @@ class TestEndToEndMicroBatch:
         assert vote.printing_id == printing.pk
 
 
+class TestForceStageCReextract:
+    """Issue #465's one conveyor change (`force_stage_c_reextract`, threaded through
+    `dispatch_micro_batch` -> `_run_stage_c`) - `False` (the default, exercised by every other test
+    in this file) must stay byte-identical; `True` is exercised here directly, isolated from the
+    real `stage_e_shakedown` command (which has its own test module)."""
+
+    @STREAMING_ON
+    def test_default_false_still_skips_a_card_with_current_full_manifest_evidence(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Byte-identical-path proof, stated explicitly (not just implied by every pre-existing
+        test in this file passing unmodified): calling dispatch_micro_batch with
+        force_stage_c_reextract's own default (False, not even passed) behaves exactly like
+        `test_a_card_with_current_evidence_skips_stage_c_but_still_runs_stage_d` above."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _full_evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        def _fail_if_called(card, dpi=None):
+            raise AssertionError("Stage C should have been skipped - evidence is already current")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])  # force_stage_c_reextract not passed
+
+        assert outcome.status == "completed"
+        assert outcome.stage_c_completed == 0
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+
+    @STREAMING_ON
+    def test_force_true_re_extracts_a_card_with_current_but_blank_evidence(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Bug-A tail's own shape: a card already carries a CURRENT, full-manifest
+        ImageEvidence row (so the ordinary already-done check would skip it), but every field on
+        that row is blank - force_stage_c_reextract=True is what makes the conveyor re-fetch and
+        re-extract it anyway, overwriting the same (card, content_hash) row (persist_evidence's own
+        get_or_create semantics, unchanged)."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _full_evidence(card)  # every field blank - the tail's own signature
+
+        _install_stage_c_stub(
+            monkeypatch,
+            fetch_result=_png_bytes(),
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk], force_stage_c_reextract=True)
+
+        assert outcome.status == "completed"
+        assert outcome.stage_c_completed == 1  # re-extracted despite already-current evidence
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+        # exactly one ImageEvidence row for this card - the re-extraction overwrote it in place,
+        # never duplicated it (UniqueConstraint on (card, content_hash), persist_evidence's own
+        # get_or_create).
+        assert ImageEvidence.objects.filter(card=card).count() == 1
+
+    @STREAMING_ON
+    def test_force_true_forces_short_circuit_false_into_compute_card_evidence(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The escalation-forcing equivalent of run_image_evidence_cohort's own --no-shortcircuit
+        (that command's own docstring) - force_stage_c_reextract=True must pass short_circuit=False
+        through to compute_card_evidence, never leave it at None (which would defer to the
+        STAGE_C_NO_SHORTCIRCUIT env-var default instead of forcing the escalation)."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _full_evidence(card)
+
+        observed_short_circuit: list[Any] = []
+
+        def _recording_stub(
+            card_id: int,
+            content_hash,
+            image,
+            fetch_latency_ms=0.0,
+            profile=None,
+            short_circuit=None,
+            known_set_codes=None,
+        ):
+            observed_short_circuit.append(short_circuit)
+            return _stub_compute_card_evidence_ok()(
+                card_id, content_hash, image, fetch_latency_ms, profile, short_circuit, known_set_codes
+            )
+
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+        import cardpicker.image_evidence as image_evidence_module
+
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", lambda card, dpi=None: _png_bytes())
+        monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _recording_stub)
+
+        dispatch_micro_batch(card_ids=[card.pk], force_stage_c_reextract=True)
+
+        assert observed_short_circuit == [False]
+
+
 class TestConcurrencyCapIntegration:
     """The concurrency-cap companion change (`cardpicker.stage_e_concurrency`), exercised through
     the REAL, post-#448 `dispatch_micro_batch` body - not just the module-level unit coverage in
