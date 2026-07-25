@@ -93,7 +93,7 @@ from cardpicker.local_fallback import (
 from cardpicker.local_ocr import DEFAULT_CROP_BOX, LEGAL_LINE_CROP_BOX
 from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import CardScanLog, ImageEvidence
-from cardpicker.tests.factories import CardFactory
+from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory
 
 
 @dataclass(frozen=True)
@@ -235,6 +235,20 @@ class TestExtractCardEvidence:
         # genuinely skips here too (it's fed the identical stubbed text - see _stub_ocr's own
         # module-level patch of run_tesseract).
         assert result.skip_reasons == {"artist_ocr": "no-text", "legal_line": "no-text"}
+
+    def test_forwards_the_cards_own_md5_checksum_onto_the_result(self, db, monkeypatch):
+        card = CardFactory(content_phash=12345, md5_checksum="abc123")
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["md5_checksum"] == "abc123"
+        assert result.fields["sha256_checksum"] is None  # Card.sha256_checksum doesn't exist yet
 
     def test_failed_fetch_marks_fetch_not_ok_and_records_a_named_skip(self, db, monkeypatch):
         card = CardFactory(content_phash=12345)
@@ -1695,6 +1709,94 @@ class TestPersistEvidence:
         # exactly one bulk_create call, carrying all 5 rows - not 5 individual .create() calls.
         assert bulk_create_calls == [5]
         assert CardScanLog.objects.filter(card=card, run_id="run-1").count() == 5
+
+    def test_stamps_md5_and_sha256_when_present(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={"fetch_ok": True, "md5_checksum": "abc123", "sha256_checksum": "deadbeef"},
+            extractor_versions={"fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result, run_id="run-1")
+
+        assert evidence is not None
+        assert evidence.md5_checksum == "abc123"
+        assert evidence.sha256_checksum == "deadbeef"
+
+    def test_stamps_are_null_when_not_supplied(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={"fetch_ok": True},
+            extractor_versions={"fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.md5_checksum is None
+        assert evidence.sha256_checksum is None
+
+    def test_real_extraction_clears_a_prior_transferred_flag(self, db):
+        """A row previously created via evidence_transfer.transfer_evidence (transferred=True) that
+        later receives a REAL extraction pass must have `transferred` reset - persist_evidence is
+        the only caller for a genuine extraction, so it's the right place to enforce this (issue
+        #473 PR-2's own interim-guard correctness note, see persist_evidence's own docstring)."""
+        card = CardFactory(content_phash=999)
+        evidence = ImageEvidenceFactory(card=card, content_hash=999, transferred=True, transferred_from_card_id=12345)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={"fetch_ok": True},
+            extractor_versions={"fetch_health": FETCH_HEALTH_EXTRACTOR_VERSION},
+        )
+
+        updated = persist_evidence(result, run_id="run-2")
+
+        assert updated is not None
+        assert updated.pk == evidence.pk
+        assert updated.transferred is False
+        assert updated.transferred_from_card_id is None
+
+
+class TestCurrentEvidenceQueryset:
+    def test_content_hash_mismatch_is_stale(self, db):
+        card = CardFactory(content_phash=999)
+        ImageEvidenceFactory(card=card, content_hash=111)  # a prior image version
+
+        assert list(module.current_evidence_queryset(card)) == []
+
+    def test_matching_content_hash_no_md5_stamp_is_current(self, db):
+        """Null-tolerant: a legacy row with no md5_checksum stamp stays current regardless of
+        whether the card itself carries an md5 - explicit per this PR's own scope."""
+        card = CardFactory(content_phash=999, md5_checksum="abc123")
+        evidence = ImageEvidenceFactory(card=card, content_hash=999, md5_checksum=None)
+
+        assert list(module.current_evidence_queryset(card)) == [evidence]
+
+    def test_card_with_no_md5_is_current_regardless_of_evidence_stamp(self, db):
+        card = CardFactory(content_phash=999, md5_checksum=None)
+        evidence = ImageEvidenceFactory(card=card, content_hash=999, md5_checksum="stale-leftover")
+
+        assert list(module.current_evidence_queryset(card)) == [evidence]
+
+    def test_matching_md5_stamp_is_current(self, db):
+        card = CardFactory(content_phash=999, md5_checksum="abc123")
+        evidence = ImageEvidenceFactory(card=card, content_hash=999, md5_checksum="abc123")
+
+        assert list(module.current_evidence_queryset(card)) == [evidence]
+
+    def test_stamped_md5_mismatch_is_stale(self, db):
+        """The staleness fix's own core case: content_hash still matches (the perceptual hash
+        didn't change) but the stamped md5 disagrees with the card's own live md5 - an in-place
+        file replacement at the same Drive location. Both non-null and disagreeing => stale."""
+        card = CardFactory(content_phash=999, md5_checksum="new-md5")
+        ImageEvidenceFactory(card=card, content_hash=999, md5_checksum="old-md5")
+
+        assert list(module.current_evidence_queryset(card)) == []
 
 
 class TestBuildReconciliationReport:

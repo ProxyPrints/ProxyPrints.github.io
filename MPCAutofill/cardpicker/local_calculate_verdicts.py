@@ -379,6 +379,7 @@ import imagehash
 
 from django.db.models import Count, Max, Q, QuerySet
 
+from cardpicker.image_evidence import current_evidence_queryset
 from cardpicker.local_fallback import (
     FALLBACK_CONFIDENCE_MULTI_EVIDENCE,
     FALLBACK_CONFIDENCE_SINGLE_EVIDENCE,
@@ -456,11 +457,27 @@ JOIN_KEY_NO_MATCH_CONFIDENCE = 0.6
 # two already-established tiers immediately above and below it.
 JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT = 0.65
 
+# INTERIM STAGE D GUARD (issue #473 PR-2, TEMPORARY BY DESIGN - see `ImageEvidence.transferred`'s
+# own model-field docstring and `evidence_transfer.transfer_evidence`'s own docstring for the full
+# rationale): a card whose CURRENT evidence row was created by `evidence_transfer.transfer_evidence`
+# rather than a real per-card extraction pass is excluded from all three Stage D calculators below
+# (join-key/fallback/slow-path) - its own "machine observation" is the SAME bytes an md5-sibling
+# card already voted from, not an independent one, so casting a vote from it here would fabricate
+# the independence the vote-weight matrix assumes is real. RESCANNABLE (a future real extraction
+# pass, or PR-3's own group-level vote pooling landing and removing this guard entirely, both
+# un-stick a card stuck here) - included in each calculator's own RESCANNABLE_SKIP_REASONS set
+# below. ISSUE #473's OWN COORDINATION NOTE (PR-3 build-plan section): "Removes PR-2's interim
+# Stage D guard" - do not remove this guard, or the `transferred` flag it reads, before PR-3
+# (group-level vote pooling) actually merges and the group-aware calculators no longer need it.
+TRANSFERRED_INTERIM_GUARD_SKIP_REASON = "transferred-interim-guard"
+
 # A degenerate/skip outcome that stays eligible for re-selection on a future invocation, same
 # convention as local_identify_printing_tags.RESCANNABLE_SKIP_REASONS - "no-evidence" here
 # because ImageEvidence simply hadn't been extracted yet for this card at selection time is a
 # transient state (a future extraction run may still land it), not a permanent conclusion.
-JOIN_KEY_RESCANNABLE_SKIP_REASONS = frozenset({"no-evidence"})
+# TRANSFERRED_INTERIM_GUARD_SKIP_REASON (above) is rescannable for the same reason - both a real
+# extraction landing later and PR-3's own guard removal un-stick a card stuck here.
+JOIN_KEY_RESCANNABLE_SKIP_REASONS = frozenset({"no-evidence", TRANSFERRED_INTERIM_GUARD_SKIP_REASON})
 
 # THE SET-CODE LEXICON GATE (module docstring) - a parsed `set_code` that matches no
 # `CanonicalExpansion.code` at all, same permanent-conclusion category as "no-text"/"ambiguous"
@@ -1197,7 +1214,7 @@ def run_join_key_calculator(
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 
         evidence = (
-            ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)
+            current_evidence_queryset(card)
             .filter(extractor_versions__has_key="collector_line_ocr")
             .order_by("-updated_at")
             .first()
@@ -1208,6 +1225,23 @@ def run_join_key_calculator(
                 scan_log_batch.append(
                     CardScanLog(
                         card_id=card.pk, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id=run_id, skip_reason="no-evidence"
+                    )
+                )
+            continue
+
+        # INTERIM STAGE D GUARD (issue #473 PR-2, temporary by design - see
+        # TRANSFERRED_INTERIM_GUARD_SKIP_REASON's own module-level comment above).
+        if evidence.transferred:
+            result.skip_counts[TRANSFERRED_INTERIM_GUARD_SKIP_REASON] = (
+                result.skip_counts.get(TRANSFERRED_INTERIM_GUARD_SKIP_REASON, 0) + 1
+            )
+            if not dry_run:
+                scan_log_batch.append(
+                    CardScanLog(
+                        card_id=card.pk,
+                        anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+                        run_id=run_id,
+                        skip_reason=TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
                     )
                 )
             continue
@@ -1293,7 +1327,9 @@ STAGE_D_FALLBACK_ANONYMOUS_ID = "stage-d-fallback-v1"
 # two carry the same meaning here as there, no rename needed.
 FALLBACK_NO_EVIDENCE_SKIP_REASON = "no-evidence"  # this calculator's own ImageEvidence-row-missing case, same meaning as JOIN_KEY's own identical string, different anonymous_id scope
 FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON = "no-sub-check-evidence"  # local_fallback.FallbackOutcome's own "no-evidence" concept, renamed to avoid colliding with the line above
-FALLBACK_RESCANNABLE_SKIP_REASONS = frozenset({FALLBACK_NO_EVIDENCE_SKIP_REASON})
+# TRANSFERRED_INTERIM_GUARD_SKIP_REASON (module-level comment above, issue #473 PR-2) is
+# rescannable here too - same reasoning as JOIN_KEY_RESCANNABLE_SKIP_REASONS' own inclusion of it.
+FALLBACK_RESCANNABLE_SKIP_REASONS = frozenset({FALLBACK_NO_EVIDENCE_SKIP_REASON, TRANSFERRED_INTERIM_GUARD_SKIP_REASON})
 
 
 @dataclass(frozen=True)
@@ -1511,7 +1547,7 @@ def run_fallback_calculator(
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 
         evidence = (
-            ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)
+            current_evidence_queryset(card)
             .filter(extractor_versions__has_key="collector_line_ocr")
             .order_by("-updated_at")
             .first()
@@ -1527,6 +1563,23 @@ def run_fallback_calculator(
                         anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
                         run_id=run_id,
                         skip_reason=FALLBACK_NO_EVIDENCE_SKIP_REASON,
+                    )
+                )
+            continue
+
+        # INTERIM STAGE D GUARD (issue #473 PR-2, temporary by design - see
+        # TRANSFERRED_INTERIM_GUARD_SKIP_REASON's own module-level comment above).
+        if evidence.transferred:
+            result.skip_counts[TRANSFERRED_INTERIM_GUARD_SKIP_REASON] = (
+                result.skip_counts.get(TRANSFERRED_INTERIM_GUARD_SKIP_REASON, 0) + 1
+            )
+            if not dry_run:
+                scan_log_batch.append(
+                    CardScanLog(
+                        card_id=card.pk,
+                        anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+                        run_id=run_id,
+                        skip_reason=TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
                     )
                 )
             continue
@@ -1802,8 +1855,14 @@ def run_slow_path_calculator(
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 
+        # NOTE (issue #473 PR-2): the interim Stage D guard (TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
+        # see its own module-level comment) deliberately does NOT apply here - this calculator
+        # casts no machine vote at all, only a CardScanLog routing marker that hands the card to a
+        # HUMAN reviewer. A human looking at transferred-evidence-derived signals is exactly the
+        # safety net the guard exists to preserve, not a case it needs to protect against - the
+        # fabricated-independence risk is specific to an automated vote, never a human decision.
         evidence = (
-            ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)
+            current_evidence_queryset(card)
             .filter(extractor_versions__has_key="collector_line_ocr")
             .order_by("-updated_at")
             .first()
@@ -1862,6 +1921,7 @@ __all__ = [
     "JOIN_KEY_NO_MATCH_CONFIDENCE",
     "JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT",
     "JOIN_KEY_RESCANNABLE_SKIP_REASONS",
+    "TRANSFERRED_INTERIM_GUARD_SKIP_REASON",
     "JOIN_KEY_NO_HIT_SKIP_REASONS",
     "JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON",
     "known_set_codes",

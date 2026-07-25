@@ -68,8 +68,8 @@ from django.core.management.base import CommandError
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.management.commands import run_image_evidence_cohort as cohort_command
-from cardpicker.models import PilotRunLedger
-from cardpicker.tests.factories import CardFactory
+from cardpicker.models import ImageEvidence, PilotRunLedger
+from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory
 
 
 class _SyncPoolStub:
@@ -99,9 +99,13 @@ class _SyncPoolStub:
         return future
 
 
-def _stub_fetch_ok(card_id: int, stop_event: threading.Event) -> "cohort_command._FetchOutcome":
+def _stub_fetch_ok(
+    card_id: int, stop_event: threading.Event, run_id: str = "", dry_run: bool = False
+) -> "cohort_command._FetchOutcome":
     """Replaces the real fetch-stage step - no DB fetch, no network, always a clean success with
-    a trivial content_hash/image_bytes/fetch_latency_ms."""
+    a trivial content_hash/image_bytes/fetch_latency_ms. `run_id`/`dry_run` (2026-07-25, issue
+    #473 PR-2) are accepted and ignored - this stub never exercises the evidence-transfer check,
+    only `_submit_more_fetch`'s own wider call signature."""
     return cohort_command._FetchOutcome(
         card_id=card_id, content_hash=123, image_bytes=b"fake-jpeg-bytes", fetch_latency_ms=1.5, outcome=None
     )
@@ -117,6 +121,8 @@ def _stub_compute_ok(
     profile: bool = False,
     short_circuit: Optional[bool] = None,
     known_set_codes: Optional[frozenset[str]] = None,
+    md5_checksum: Optional[str] = None,
+    sha256_checksum: Optional[str] = None,
 ) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Replaces the real compute-stage step - no PIL decode, no extractors, no persist_evidence
     call, just the (card_id, outcome, profile, short_circuited) tuple `_run_cohort` consumes.
@@ -224,7 +230,9 @@ def test_card_ids_file_with_a_nonexistent_card_id_drops_cleanly(
     the synchronous pool stub, which shares this test's own connection rather than a real
     forked/threaded one)."""
 
-    def _stub_fetch_dropped(card_id: int, stop_event: threading.Event) -> "cohort_command._FetchOutcome":
+    def _stub_fetch_dropped(
+        card_id: int, stop_event: threading.Event, run_id: str = "", dry_run: bool = False
+    ) -> "cohort_command._FetchOutcome":
         return cohort_command._FetchOutcome(card_id=card_id, outcome="dropped")
 
     monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_dropped)
@@ -326,7 +334,9 @@ class TestPilotRunLedger:
         CardFactory(content_phash=1)
         CardFactory(content_phash=2)
 
-        def _stub_fetch_one_dropped(card_id: int, stop_event: threading.Event) -> "cohort_command._FetchOutcome":
+        def _stub_fetch_one_dropped(
+            card_id: int, stop_event: threading.Event, run_id: str = "", dry_run: bool = False
+        ) -> "cohort_command._FetchOutcome":
             return cohort_command._FetchOutcome(card_id=card_id, outcome="dropped")
 
         def _stub_compute_short_circuited(
@@ -339,6 +349,8 @@ class TestPilotRunLedger:
             profile: bool = False,
             short_circuit: Optional[bool] = None,
             known_set_codes: Optional[frozenset[str]] = None,
+            md5_checksum: Optional[str] = None,
+            sha256_checksum: Optional[str] = None,
         ) -> tuple[int, str, Optional[dict[str, float]], bool]:
             return card_id, "ok", None, True
 
@@ -347,11 +359,13 @@ class TestPilotRunLedger:
         # so a single stub covering both call sites keeps this deterministic regardless of order.
         calls = {"count": 0}
 
-        def _fetch_first_dropped_rest_ok(card_id: int, stop_event: threading.Event) -> "cohort_command._FetchOutcome":
+        def _fetch_first_dropped_rest_ok(
+            card_id: int, stop_event: threading.Event, run_id: str = "", dry_run: bool = False
+        ) -> "cohort_command._FetchOutcome":
             calls["count"] += 1
             if calls["count"] == 1:
-                return _stub_fetch_one_dropped(card_id, stop_event)
-            return _stub_fetch_ok(card_id, stop_event)
+                return _stub_fetch_one_dropped(card_id, stop_event, run_id, dry_run)
+            return _stub_fetch_ok(card_id, stop_event, run_id, dry_run)
 
         monkeypatch.setattr(cohort_command, "_fetch_one_card", _fetch_first_dropped_rest_ok)
         monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_short_circuited)
@@ -534,6 +548,66 @@ class TestFetchOneCard:
         assert result.image_bytes == b"raw-bytes"
         assert result.fetch_latency_ms >= 0.0
 
+    @pytest.mark.django_db
+    def test_md5_sibling_transfers_without_ever_fetching(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        sibling = CardFactory(md5_checksum="abc123", content_phash=111)
+        target = CardFactory(md5_checksum="abc123", content_phash=111)
+        ImageEvidenceFactory(
+            card=sibling,
+            content_hash=111,
+            extractor_versions={key: "v1" for key in cohort_command.MANIFEST_EXTRACTOR_KEYS},
+            symbol_phash=999,
+        )
+        stop_event = threading.Event()
+
+        def _fail_if_called(card: Any, dpi: Optional[int] = None) -> None:
+            raise AssertionError("a transfer-eligible card must never reach the fetch stage")
+
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", _fail_if_called)
+
+        result = cohort_command._fetch_one_card(card_id=target.pk, stop_event=stop_event, run_id="r1", dry_run=False)
+
+        assert result.outcome == "transferred"
+        assert result.content_hash == 111
+        assert result.image_bytes is None
+        evidence = ImageEvidence.objects.get(card=target)
+        assert evidence.transferred is True
+        assert evidence.transferred_from_card_id == sibling.pk
+        assert evidence.symbol_phash == 999
+
+    @pytest.mark.django_db
+    def test_dry_run_finds_a_transfer_but_writes_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        sibling = CardFactory(md5_checksum="abc123", content_phash=111)
+        target = CardFactory(md5_checksum="abc123", content_phash=111)
+        ImageEvidenceFactory(
+            card=sibling,
+            content_hash=111,
+            extractor_versions={key: "v1" for key in cohort_command.MANIFEST_EXTRACTOR_KEYS},
+        )
+        stop_event = threading.Event()
+
+        result = cohort_command._fetch_one_card(card_id=target.pk, stop_event=stop_event, run_id="r1", dry_run=True)
+
+        assert result.outcome == "transferred"
+        assert ImageEvidence.objects.filter(card=target).count() == 0
+
+    @pytest.mark.django_db
+    def test_no_eligible_sibling_falls_through_to_a_real_fetch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        card = CardFactory(md5_checksum="abc123", content_phash=111)  # no sibling exists at all
+        stop_event = threading.Event()
+
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", lambda card, dpi=None: b"raw-bytes")
+
+        result = cohort_command._fetch_one_card(card_id=card.pk, stop_event=stop_event)
+
+        assert result.outcome is None
+        assert result.image_bytes == b"raw-bytes"
+        assert ImageEvidence.objects.filter(card=card).count() == 0  # only persisted by compute
+
 
 class TestComputeOneCard:
     """`_compute_one_card` is the new compute-stage work unit - decodes the already-fetched raw
@@ -558,6 +632,8 @@ class TestComputeOneCard:
             profile: Optional[dict[str, float]] = None,
             short_circuit: Optional[bool] = None,
             known_set_codes: Optional[frozenset[str]] = None,
+            md5_checksum: Optional[str] = None,
+            sha256_checksum: Optional[str] = None,
         ) -> Any:
             captured["card_id"] = card_id
             captured["content_hash"] = content_hash
@@ -600,6 +676,8 @@ class TestComputeOneCard:
             profile: Optional[dict[str, float]] = None,
             short_circuit: Optional[bool] = None,
             known_set_codes: Optional[frozenset[str]] = None,
+            md5_checksum: Optional[str] = None,
+            sha256_checksum: Optional[str] = None,
         ) -> Any:
             captured["image"] = image
 
@@ -662,6 +740,8 @@ class TestComputeOneCard:
             profile: Optional[dict[str, float]] = None,
             short_circuit: Optional[bool] = None,
             known_set_codes: Optional[frozenset[str]] = None,
+            md5_checksum: Optional[str] = None,
+            sha256_checksum: Optional[str] = None,
         ) -> Any:
             if profile is not None:
                 profile["fetch_ms"] = fetch_latency_ms
@@ -769,6 +849,8 @@ class TestRunCohortProfileOutput:
             profile: bool = False,
             short_circuit: Optional[bool] = None,
             known_set_codes: Optional[frozenset[str]] = None,
+            md5_checksum: Optional[str] = None,
+            sha256_checksum: Optional[str] = None,
         ) -> tuple[int, str, Optional[dict[str, float]], bool]:
             profile_dict = {"fetch_ms": fetch_latency_ms, "wall_ms": 1.0} if profile else None
             return card_id, "ok", profile_dict, False
@@ -878,7 +960,7 @@ class TestRunCohortBackpressure:
         monkeypatch.setattr(
             cohort_command,
             "_fetch_one_card",
-            lambda card_id, stop_event: cohort_command._FetchOutcome(
+            lambda card_id, stop_event, run_id="", dry_run=False: cohort_command._FetchOutcome(
                 card_id=card_id, content_hash=1, image_bytes=b"x", fetch_latency_ms=0.0, outcome=None
             ),
         )
@@ -975,7 +1057,9 @@ class TestRunCohortFetchMemoryBound:
             weakref.finalize(payload, _mark_dead, card_id)
             return payload
 
-        def _stub_fetch(card_id: int, stop_event: threading.Event) -> "cohort_command._FetchOutcome":
+        def _stub_fetch(
+            card_id: int, stop_event: threading.Event, run_id: str = "", dry_run: bool = False
+        ) -> "cohort_command._FetchOutcome":
             return cohort_command._FetchOutcome(
                 card_id=card_id, content_hash=1, image_bytes=_make_payload(card_id), outcome=None
             )

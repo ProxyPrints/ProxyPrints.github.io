@@ -45,16 +45,22 @@ windowing, with no cross-process aggregation promised anywhere in the ratified d
 the window, it doesn't mandate a shared store).
 
 PIPELINE STAGES, in order, per micro-batch (task brief scope item 5): Stage C extraction
-(`cardpicker.image_evidence.compute_card_evidence`/`persist_evidence`, called per-card,
-SEQUENTIALLY - fed by `cardpicker.image_cdn_fetch.fetch_card_image_bytes`) -> Stage D calculators
-(`cardpicker.local_calculate_verdicts.run_join_key_calculator`/`run_fallback_calculator`/
+(`cardpicker.image_evidence.compute_card_evidence`/`persist_evidence`, called per-card - see
+`_run_stage_c`'s own docstring for its three phases: evidence-transfer check, then a decoupled
+fetch-ahead thread feeding this function's own SEQUENTIAL compute loop, issue #472) -> Stage D
+calculators (`cardpicker.local_calculate_verdicts.run_join_key_calculator`/`run_fallback_calculator`/
 `run_slow_path_calculator`, called AS-IS with the new `card_ids` scope, in the same join-key ->
 fallback -> slow-path escalation order every BULK-mode command already uses) -> ledger write.
-Sequential, not pooled, on purpose: PASSIVE mode's own micro-batches (§3 decision (2), a handful to
-a few dozen cards) are far too small for BULK mode's process-pool concurrency to buy anything - it
-would only add a fork's worth of startup overhead per batch. This matches the brief's own "a
-single-worker, single-core floor mode must be correct, just slow, never a degraded/unsound mode"
-requirement (§5).
+COMPUTE is sequential, not pooled, on purpose: PASSIVE mode's own micro-batches (§3 decision (2), a
+handful to a few dozen cards) are far too small for BULK mode's process-pool concurrency to buy
+anything - it would only add a fork's worth of startup overhead per batch. This matches the
+brief's own "a single-worker, single-core floor mode must be correct, just slow, never a
+degraded/unsound mode" requirement (§5). FETCH, as of issue #472 (2026-07-25, the ratified §4 item
+3 this Phase-2-era module originally shipped without - see `_run_stage_c`'s own docstring), is
+OVERLAPPED with that same sequential compute loop via one fetch-ahead thread + a bounded queue -
+this is deliberately NOT the same thing as pooling compute; only I/O-bound fetch-wait is
+overlapped, the OCR/extraction work itself stays exactly as sequential as the paragraph above
+requires.
 
 CONSENSUS RECOMPUTE (decision (4)) NEEDS NO SEPARATE STEP HERE: all three Stage D calculators
 already call `resolve_and_persist_printing(touched_card)` internally for every card they cast a
@@ -67,6 +73,8 @@ free. This module never imports `printing_consensus`/`vote_consensus`/`tag_conse
 
 import logging
 import os
+import queue
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -75,6 +83,8 @@ from typing import Callable, Deque, Iterable, Optional
 from django.conf import settings
 from django.utils import timezone
 
+from cardpicker.checksum_pairing import card_sha256_checksum
+from cardpicker.evidence_transfer import find_transfer_source, transfer_evidence
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.local_calculate_verdicts import (
     known_set_codes,
@@ -99,6 +109,7 @@ from cardpicker.operating_envelope import (
 from cardpicker.pilot_run_lifecycle import mark_ledger_failed, merge_counters
 from cardpicker.process_metrics import get_process_rss_mb
 from cardpicker.stage_e_concurrency import try_acquire_dispatch_slot
+from cardpicker.stage_e_signals import suppress_evidence_change_echo
 from cardpicker.utils import get_baked_git_sha
 
 logger = logging.getLogger(__name__)
@@ -201,6 +212,12 @@ class DispatchOutcome:
     run_id: Optional[str] = None
     card_ids: list[int] = field(default_factory=list)
     stage_c_completed: int = 0
+    # Evidence transfer (issue #473 PR-2, folded with issue #472): a card whose evidence row this
+    # batch produced via `evidence_transfer.transfer_evidence` (an md5-sibling's own current row,
+    # copied - no fetch, no real extraction) rather than a real per-card extraction pass. A SUBSET
+    # of `stage_c_completed` above - both counters increment together for a transferred card, this
+    # one just narrows down which completions were transfers vs. real fetch+extraction work.
+    stage_c_transferred: int = 0
     stage_c_fetch_failures: int = 0
     stage_d_join_key_votes: int = 0
     stage_d_fallback_votes: int = 0
@@ -387,17 +404,168 @@ def _select_micro_batch(seed_card_ids: Iterable[int], batch_size: int) -> list[i
     return seen[:batch_size]
 
 
+# Bounded fetch-ahead queue depth (issue #472's own design constraint: "Bounded prefetch depth
+# (1-2 images) so RSS stays flat") - a plain module constant, not a settings knob, matching the
+# brief's own concrete number rather than leaving it operator-tunable; PASSIVE mode's own
+# micro-batches are small enough (§3 decision (2), a handful to a few dozen cards) that this never
+# needs retuning the way BULK mode's own `--queue-depth` does.
+_STAGE_C_FETCH_AHEAD_DEPTH = 2
+
+
+@dataclass
+class _StageCFetchOutcome:
+    """One card's own fetch-stage result, handed from `_stage_c_fetch_ahead_worker` (the fetch-
+    ahead thread) to `_run_stage_c`'s own sequential compute loop via a bounded `queue.Queue`.
+    `card`/`content_hash`/`md5_checksum`/`sha256_checksum` are all read from the SAME `Card`
+    instance `_run_stage_c` already loaded (and used for its own transfer check) before handing
+    this card off to the fetch-ahead thread - no second `Card` query on either side of the
+    boundary. `lockout=True` iff this card's OWN fetch attempt raised `GoogleFetchLockoutError` -
+    the compute loop treats this as the signal to stop (module docstring's "halts NEW fetches
+    immediately" bar), never a fetch failure to retry.
+
+    `error`, if set, is a NON-`GoogleFetchLockoutError` exception the fetch attempt raised (2026-07-25,
+    kill-safety fix - see `_stage_c_fetch_ahead_worker`'s own docstring for why this exists at
+    all): re-raised by the compute loop IN THE MAIN THREAD the instant it's observed, so a crash
+    during fetch still propagates out of `_run_stage_c`/`dispatch_micro_batch` exactly as it did
+    before this module had a separate fetch thread at all - `TestKillSafetyResumeContract`'s own
+    "a mid-batch crash leaves a truthful FAILED ledger row" contract does not distinguish between
+    a crash during fetch and a crash during compute, and must not silently become a hang instead."""
+
+    card_id: int
+    content_hash: Optional[int]
+    md5_checksum: Optional[str]
+    sha256_checksum: Optional[str]
+    image_bytes: Optional[bytes]
+    fetch_latency_ms: float
+    lockout: bool = False
+    error: Optional[BaseException] = None
+
+
+def _stage_c_fetch_ahead_worker(
+    cards: list[Card],
+    out_queue: "queue.Queue[_StageCFetchOutcome]",
+    stop_event: threading.Event,
+) -> None:
+    """
+    THE fetch-ahead thread (issue #472) - ONE thread, sequential fetches (never pooled: the design
+    brief's own "no compute pooling" bar applies equally to a fetch pool here, since a SECOND
+    concurrent fetch would only race further ahead of a compute loop that's already the slower
+    stage, buying nothing the bounded queue depth doesn't already buy via fetch/compute OVERLAP
+    alone). Pushes one `_StageCFetchOutcome` per entry in `cards`, in order - `queue.Queue`'s own
+    FIFO ordering means the compute loop always drains outcomes in the SAME order this thread
+    fetched them, satisfying the design brief's own "fetch-outcome window records in completion
+    order" bar for free (a single serial fetch worker's own completion order IS its submission
+    order, there is no reordering possible with only one fetch in flight at a time).
+
+    `out_queue`'s own bound (`queue.Queue(maxsize=_STAGE_C_FETCH_AHEAD_DEPTH)`, set by the caller)
+    is what keeps RSS bounded independent of batch size - `put()` BLOCKS once the queue is full,
+    so this thread can never race further than `_STAGE_C_FETCH_AHEAD_DEPTH` outcomes ahead of
+    whatever the compute loop has actually consumed so far, regardless of how many cards remain in
+    `cards` or how large a future catalog's own micro-batch could be.
+
+    LOCKOUT (design brief's own "instant halt" bar): the moment `fetch_card_image_bytes` raises
+    `GoogleFetchLockoutError` for one card, `stop_event` is set and this thread returns immediately
+    WITHOUT attempting any further card in `cards` - "halts NEW fetches immediately". The card
+    whose OWN fetch triggered the lockout is reported to the compute loop via this outcome's own
+    `lockout=True` flag (never silently dropped), so the compute loop can record the trip itself
+    and stop too. Every outcome that already made it into `out_queue` BEFORE this happened is left
+    there untouched - "in-flight work drains" - the compute loop keeps consuming those (they sort
+    earlier in FIFO order than the lockout outcome) before it ever reaches the lockout marker,
+    exactly mirroring the pre-#472 sequential design's own "an already-fetched image still gets to
+    finish its own compute+persist" property, just now genuinely overlapped rather than accidental.
+
+    ANY OTHER EXCEPTION (2026-07-25, kill-safety fix - `TestKillSafetyResumeContract`'s own
+    mid-batch-crash test caught this during review): a plain `try/except GoogleFetchLockoutError`
+    here would let a non-lockout exception (a real bug, a simulated kill-drill fault, a genuine
+    network error `fetch_card_image_bytes` doesn't itself wrap) kill this THREAD silently - Python
+    does not propagate an uncaught exception from a spawned `threading.Thread` to its caller, so
+    the compute loop's own `queue.get()` for that card would block FOREVER waiting for an outcome
+    that will never arrive, turning a crash into a silent hang instead of the loud, ledger-recorded
+    failure the resume contract requires. Caught here as a bare `Exception`, packaged onto the
+    outcome's own `error` field, and this thread stops (same "no further cards attempted" posture
+    as a lockout) - the compute loop re-raises it in the MAIN thread the instant it's seen.
+    """
+    from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
+
+    for card in cards:
+        if stop_event.is_set():
+            return
+
+        fetch_started_at = time.monotonic()
+        try:
+            image_bytes = fetch_card_image_bytes(card, dpi=DEFAULT_FETCH_DPI)
+        except GoogleFetchLockoutError:
+            stop_event.set()
+            out_queue.put(
+                _StageCFetchOutcome(
+                    card_id=card.pk,
+                    content_hash=card.content_phash,
+                    md5_checksum=card.md5_checksum,
+                    sha256_checksum=card_sha256_checksum(card),
+                    image_bytes=None,
+                    fetch_latency_ms=0.0,
+                    lockout=True,
+                )
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring above
+            stop_event.set()
+            out_queue.put(
+                _StageCFetchOutcome(
+                    card_id=card.pk,
+                    content_hash=card.content_phash,
+                    md5_checksum=card.md5_checksum,
+                    sha256_checksum=card_sha256_checksum(card),
+                    image_bytes=None,
+                    fetch_latency_ms=0.0,
+                    error=exc,
+                )
+            )
+            return
+        fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
+
+        out_queue.put(
+            _StageCFetchOutcome(
+                card_id=card.pk,
+                content_hash=card.content_phash,
+                md5_checksum=card.md5_checksum,
+                sha256_checksum=card_sha256_checksum(card),
+                image_bytes=image_bytes,
+                fetch_latency_ms=fetch_latency_ms,
+            )
+        )
+
+
 def _run_stage_c(
     batch_ids: list[int], run_id: str, outcome: DispatchOutcome, force_stage_c_reextract: bool = False
 ) -> Optional[EnvelopeTrip]:
     """
-    Sequential, per-card Stage C extraction over whichever of `batch_ids` still lack a full
-    manifest - the SAME per-card unit (`image_evidence.compute_card_evidence` +
-    `image_evidence.persist_evidence`, fed by `image_cdn_fetch.fetch_card_image_bytes`)
-    `run_image_evidence_cohort.py`'s own fetch/compute stages call, just driven one card at a time
-    (module docstring's own "PIPELINE STAGES" section explains why). Every fetch outcome is recorded
-    onto `_window` regardless of whether it ends up mattering to THIS batch's own envelope decision -
-    the window spans the whole worker process's uptime, not one batch.
+    Per-card Stage C extraction over whichever of `batch_ids` still lack a full manifest - the SAME
+    per-card unit (`image_evidence.compute_card_evidence` + `image_evidence.persist_evidence`, fed
+    by `image_cdn_fetch.fetch_card_image_bytes`) `run_image_evidence_cohort.py`'s own fetch/compute
+    stages call. Three phases per batch, in order:
+
+    1. **Build the work list** (still fully sequential, cheap DB-only work): for each id not
+       already done, load its `Card` once and check `evidence_transfer.find_transfer_source`
+       BEFORE deciding whether this card needs a fetch at all (issue #473 PR-2's own scope: "check
+       BEFORE fetching") - a card with an eligible md5-sibling never reaches the fetch-ahead thread
+       at all, its evidence row is created via `evidence_transfer.transfer_evidence` right here and
+       counted via `outcome.stage_c_transferred`/`stage_c_completed`. Every card that still needs a
+       real extraction (no md5, no eligible sibling, or a loud pairing/content-hash anomaly - see
+       that function's own docstring) is collected into `to_fetch`.
+    2. **Decoupled fetch-ahead + sequential compute** (issue #472): `to_fetch` is handed to ONE
+       fetch-ahead thread (`_stage_c_fetch_ahead_worker`) writing into a bounded
+       (`_STAGE_C_FETCH_AHEAD_DEPTH`) queue; THIS function's own loop stays the sequential OCR/
+       extraction compute stage the design brief mandates (no compute pooling), just now able to
+       decode+extract card N while the fetch-ahead thread is already fetching card N+1's bytes,
+       instead of blocking on that fetch itself. Every fetch outcome (transfer OR real fetch) is
+       recorded onto `_window` regardless of whether it ends up mattering to THIS batch's own
+       envelope decision - the window spans the whole worker process's uptime, not one batch.
+    3. **Echo suppression** (issue #472's own fold, `cardpicker.stage_e_signals`'s own module
+       docstring has the full mechanism writeup): both the transfer write in phase 1 and the
+       `persist_evidence` write in phase 2 are wrapped in `suppress_evidence_change_echo()` - a
+       write performed by THIS dispatch loop must never queue a fresh `dispatch_for_card` echo task
+       for the same card, since Stage D (called next, over the SAME batch) already covers it.
 
     `force_stage_c_reextract` (issue #465, `management/commands/stage_e_shakedown.py`'s one conveyor
     change): `False` (the default) is BYTE-IDENTICAL to the pre-#465 behaviour below - the
@@ -411,21 +579,24 @@ def _run_stage_c(
     `run_image_evidence_cohort.py`'s own `--no-shortcircuit` flag has (see that command's own
     docstring for the mechanism reused here, not reimplemented), so a zero-digit tier-1 read is never
     allowed to short-circuit past the fuller multi-tier escalation that could recover a real read.
+    Transfer-checking (phase 1) is deliberately UNCONDITIONAL regardless of this flag - a
+    force-re-extracted card with a genuinely current, good md5-sibling gets FIXED by transfer
+    immediately rather than paying for a real re-fetch of what would produce the same bytes anyway;
+    `evidence_transfer.find_transfer_source`'s own asserts are what keep this safe.
 
     Returns the `EnvelopeTrip` this call itself recorded (only possible via the instant Google
     lockout bar - see `GoogleFetchLockoutError` below), or `None`. A lockout stops Stage C
     IMMEDIATELY for this batch - in-flight work already committed stays committed (each card's
-    `persist_evidence` call is already durable the instant it returns, matching the resume
-    contract's own "one-transaction batch commit or explicit evidence-first statement" - here, every
-    card's own persist is its own transaction, so there is no partial-card state to roll back) - and
-    records a fresh trip via `check_envelope(google_lockout=True)` so the NEXT dispatch call refuses
-    until an owner acknowledges it, matching the "instant pause" bar exactly.
+    `persist_evidence`/`transfer_evidence` call is already durable the instant it returns, matching
+    the resume contract's own "one-transaction batch commit or explicit evidence-first statement" -
+    here, every card's own persist is its own transaction, so there is no partial-card state to
+    roll back) - and records a fresh trip via `check_envelope(google_lockout=True)` so the NEXT
+    dispatch call refuses until an owner acknowledges it, matching the "instant pause" bar exactly.
     """
     from io import BytesIO
 
     from PIL import Image
 
-    from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
     from cardpicker.image_evidence import compute_card_evidence, persist_evidence
 
     if force_stage_c_reextract:
@@ -440,6 +611,9 @@ def _run_stage_c(
     short_circuit: Optional[bool] = False if force_stage_c_reextract else None
     lexicon = known_set_codes()
 
+    # PHASE 1 (module docstring): build the work list, resolving evidence transfer BEFORE
+    # deciding whether a card needs a fetch at all.
+    to_fetch: list[Card] = []
     for card_id in batch_ids:
         if card_id in already_done_ids:
             continue
@@ -450,34 +624,77 @@ def _run_stage_c(
         if card.content_phash is None:
             continue
 
-        fetch_started_at = time.monotonic()
-        try:
-            image_bytes = fetch_card_image_bytes(card, dpi=DEFAULT_FETCH_DPI)
-        except GoogleFetchLockoutError:
-            _window.record(success=False)
-            logger.error("Stage E dispatch: GoogleFetchLockoutError observed - halting Stage C for this batch")
-            return check_envelope(_sample_envelope_signals(google_lockout=True), run_id=run_id)
-        fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
-
-        if image_bytes is None:
-            _window.record(success=False)
-            outcome.stage_c_fetch_failures += 1
+        transfer_source = find_transfer_source(card)
+        if transfer_source is not None:
+            with suppress_evidence_change_echo():
+                transfer_evidence(card, transfer_source, run_id=run_id)
+            outcome.stage_c_completed += 1
+            outcome.stage_c_transferred += 1
             continue
 
-        _window.record(success=True)
-        image = Image.open(BytesIO(image_bytes))
-        result = compute_card_evidence(
-            card_id,
-            card.content_phash,
-            image,
-            fetch_latency_ms=fetch_latency_ms,
-            short_circuit=short_circuit,
-            known_set_codes=lexicon,
-        )
-        persist_evidence(result, run_id=run_id)
-        outcome.stage_c_completed += 1
+        to_fetch.append(card)
 
-    return None
+    if not to_fetch:
+        return None
+
+    # PHASE 2 (module docstring): decoupled fetch-ahead thread + this function's own sequential
+    # compute loop.
+    fetch_queue: "queue.Queue[_StageCFetchOutcome]" = queue.Queue(maxsize=_STAGE_C_FETCH_AHEAD_DEPTH)
+    stop_event = threading.Event()
+    fetch_thread = threading.Thread(
+        target=_stage_c_fetch_ahead_worker, args=(to_fetch, fetch_queue, stop_event), daemon=True
+    )
+    fetch_thread.start()
+
+    trip: Optional[EnvelopeTrip] = None
+    try:
+        for _ in range(len(to_fetch)):
+            fetch_outcome = fetch_queue.get()
+
+            if fetch_outcome.error is not None:
+                # Re-raise IN THE MAIN THREAD - see _StageCFetchOutcome/_stage_c_fetch_ahead_
+                # worker's own docstrings for why this exists (a spawned thread's own uncaught
+                # exception never reaches the caller on its own). Propagates out of this function,
+                # through dispatch_micro_batch's own `except Exception: mark_ledger_failed(...);
+                # raise` - identical observable behaviour to the pre-#472 sequential design's own
+                # "a fetch-time crash surfaces exactly like a compute-time one" contract.
+                raise fetch_outcome.error
+
+            if fetch_outcome.lockout:
+                _window.record(success=False)
+                logger.error("Stage E dispatch: GoogleFetchLockoutError observed - halting Stage C for this batch")
+                trip = check_envelope(_sample_envelope_signals(google_lockout=True), run_id=run_id)
+                break
+
+            if fetch_outcome.image_bytes is None:
+                _window.record(success=False)
+                outcome.stage_c_fetch_failures += 1
+                continue
+
+            _window.record(success=True)
+            image = Image.open(BytesIO(fetch_outcome.image_bytes))
+            result = compute_card_evidence(
+                fetch_outcome.card_id,
+                fetch_outcome.content_hash,
+                image,
+                fetch_latency_ms=fetch_outcome.fetch_latency_ms,
+                short_circuit=short_circuit,
+                known_set_codes=lexicon,
+                md5_checksum=fetch_outcome.md5_checksum,
+                sha256_checksum=fetch_outcome.sha256_checksum,
+            )
+            with suppress_evidence_change_echo():
+                persist_evidence(result, run_id=run_id)
+            outcome.stage_c_completed += 1
+    finally:
+        # Always join, whether the loop above finished normally, broke on a lockout, or raised -
+        # the fetch-ahead thread is `daemon=True` (won't block process exit on its own) but this
+        # function should never RETURN while it's still mid-fetch for a card nothing will ever
+        # consume; a lockout already made it return promptly on its own (module docstring), so this
+        # join is a bounded wait in every reachable case, never an indefinite one.
+        fetch_thread.join()
+
+    return trip
 
 
 def _run_stage_d(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) -> None:
@@ -655,6 +872,7 @@ def dispatch_micro_batch(
                 {
                     "elapsed_s": round(time.monotonic() - batch_start, 3),
                     "stage_c_completed": outcome.stage_c_completed,
+                    "stage_c_transferred": outcome.stage_c_transferred,
                     "stage_c_fetch_failures": outcome.stage_c_fetch_failures,
                     "stage_d_join_key_votes": outcome.stage_d_join_key_votes,
                     "stage_d_join_key_already_voted": outcome.stage_d_join_key_already_voted,

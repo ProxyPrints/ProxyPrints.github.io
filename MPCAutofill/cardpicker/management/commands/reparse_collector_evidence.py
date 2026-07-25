@@ -100,6 +100,7 @@ from typing import Any, Optional
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.utils import timezone
 
+from cardpicker.image_evidence import current_evidence_queryset
 from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_ANONYMOUS_ID,
     JoinKeyVerdict,
@@ -238,14 +239,15 @@ def select_card_ids_set_code_lexicon_gate(stage_d_run_id: str) -> list[int]:
 
 
 def _current_evidence_for_card(card: Card) -> Optional[ImageEvidence]:
-    """The CURRENT `ImageEvidence` row for `card` - same convention
-    `local_calculate_verdicts.run_join_key_calculator`'s own eligibility query uses:
-    `content_hash` must match the card's LIVE `content_phash` (a stale evidence row from a prior
-    image version is never re-parsed), most-recently-updated row first."""
+    """The CURRENT `ImageEvidence` row for `card` - built on the shared
+    `image_evidence.current_evidence_queryset` (2026-07-25, issue #473 PR-2): `content_hash` must
+    match the card's LIVE `content_phash` (a stale evidence row from a prior image version is
+    never re-parsed) AND its stamped `md5_checksum` doesn't actively disagree with the card's own
+    live md5 (null-tolerant - see that helper's own docstring), most-recently-updated row first."""
     if card.content_phash is None:
         return None
     return (
-        ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)
+        current_evidence_queryset(card)
         .filter(extractor_versions__has_key="collector_line_ocr")
         .order_by("-updated_at")
         .first()
