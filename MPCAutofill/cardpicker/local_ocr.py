@@ -17,9 +17,45 @@ PROTECTED CORE - are untouched and still only ever call the ORIGINAL `preprocess
 `run_tesseract`/`run_tesseract_text_and_words` gained an optional `config` kwarg (default
 unchanged, `TESSERACT_CONFIG`), so every existing single-argument call site keeps its exact prior
 behavior.
+
+ENGINE SEAM (issue #423, 2026-07-25 spike comment): `run_tesseract`/`run_tesseract_tsv`/
+`run_tesseract_text_and_words` dispatch to one of two OCR engine implementations behind
+`settings.OCR_ENGINE` ("pytesseract", the default and every pre-existing behavior, unchanged; or
+"tesserocr", a persistent in-process `PyTessBaseAPI` binding - ~5.7x faster per the spike's own
+real-OCR-call measurement, since it eliminates the ~97ms/call tesseract process-spawn floor
+`pytesseract.image_to_string`/`image_to_data` each pay). Both implementations honor the exact
+same PSM (parsed out of the `config` string, e.g. "--psm 6" -> PSM 6), OEM (left at each
+library's own default - OEM 3 on both sides, matching the spike's own A/B), and lang ("eng" on
+both sides, matching every pre-existing call site's implicit default) semantics, and
+`run_tesseract_tsv`/`run_tesseract_text_and_words` return the IDENTICAL shape (a `{column:
+[values...]}` dict with the same eleven tesseract TSV columns, including `conf`) regardless of
+which engine produced it - `_words_from_tesseract_data`/`_text_from_tesseract_data` (this
+module's existing, unchanged reconstruction helpers) consume either engine's output the same way.
+
+Import is LAZY (only attempted the first time `settings.OCR_ENGINE == "tesserocr"` is actually
+asked for) and FAILURE-TOLERANT at every layer: if the `tesserocr` module isn't installed (true
+for every deployed image until `docker/django/Dockerfile`'s own tesserocr install lands and gets
+built), or `PyTessBaseAPI` construction/recognition raises for any other reason (e.g. an
+unreadable tessdata path), this module logs ONE warning (not per-call - a module-level sticky
+flag suppresses repeats within the same process) and falls back to the pytesseract path for the
+rest of that process's lifetime. This can never crash a caller - the worst case of a fully broken
+tesserocr install is "silently no faster than before", never a 500.
+
+DELIBERATELY NOT DONE IN THIS PR (owner-ratified sequencing, issue #480's 2026-07-25 correction
+comment): no extractor version bump anywhere in this codebase, and `OCR_ENGINE` defaults to
+"pytesseract" in every environment - this PR ships the SWITCH, dark, not the FLIP. tesserocr's
+wheel vendors a different compiled tesseract/leptonica build than the apt-installed binary
+pytesseract shells out to (5.5.1 vs 5.5.0 as of the spike), so an engine change is real output
+drift, not a transparent speed-up - flipping `OCR_ENGINE` to "tesserocr" is a genuine
+extractor-version event and is bundled with that version bump at the single combined
+whole-catalog pass #480 describes, never on its own. See `cardpicker/management/commands/
+ocr_engine_ab.py` for the read-only A/B validation tool this PR also ships, which is what
+produces the real-image evidence that flip will be gated on.
 """
 
+import glob
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
@@ -27,10 +63,15 @@ from typing import TYPE_CHECKING, Any, Optional
 import pytesseract
 from PIL import Image, ImageFilter, ImageOps
 
+from django.conf import settings
+
 if TYPE_CHECKING:
     from cardpicker.local_identify_printing_tags import CandidatePrinting
 
 logger = logging.getLogger(__name__)
+
+OCR_ENGINE_PYTESSERACT = "pytesseract"
+OCR_ENGINE_TESSEROCR = "tesserocr"
 
 # left 6-35% width, bottom 90-96.5% height - tuned against real production images (2026-07-15):
 # the original 85% top boundary caught a full trailing line of rules text above the collector
@@ -327,7 +368,164 @@ def preprocess_fallback_variants(cropped: "Image.Image", upscale: int = 5) -> li
     return [percentile_dark_on_light, percentile_light_on_dark, sharp_dark_on_light, sharp_light_on_dark]
 
 
+# --- Engine seam (issue #423) - see this module's own docstring for the full contract. Every
+# name below is private; `run_tesseract`/`run_tesseract_tsv`/`run_tesseract_text_and_words`
+# remain the only public entry points, unchanged in signature.
+
+_PSM_RE = re.compile(r"--psm\s+(\d+)")
+_DEFAULT_PSM = 3  # tesseract's own built-in default when no --psm is given, matching pytesseract.
+
+# Sticky, module-level (i.e. per-process) failure state - set at most once per process, never
+# reset. `_tesserocr_import_failed`: None until the first "tesserocr" engine request actually
+# tries the import (True/False after). `_tesserocr_runtime_disabled`: flips True the first time a
+# CONSTRUCTED tesserocr call raises for any reason (bad tessdata path, a corrupt install, etc) -
+# a second, independent failure mode from a plain missing import, both funneled through the same
+# "warn once, fall back for the rest of this process" contract.
+_tesserocr_import_failed: Optional[bool] = None
+_tesserocr_runtime_disabled = False
+_tesserocr_api: Any = None  # one persistent PyTessBaseAPI instance per process (spike's own
+# explicit requirement - constructing it per call would forfeit most of the throughput win)
+
+
+def _tesserocr_available() -> bool:
+    """Lazy, at-most-once-per-process import attempt. Logs exactly one warning (not one per
+    call) the first time `settings.OCR_ENGINE == "tesserocr"` is requested but the module isn't
+    importable - expected on every deployed image until `docker/django/Dockerfile`'s tesserocr
+    install lands and is actually built into the running container (see module docstring)."""
+    global _tesserocr_import_failed
+    if _tesserocr_import_failed is None:
+        try:
+            import tesserocr  # noqa: F401
+        except ImportError:
+            logger.warning(
+                "settings.OCR_ENGINE='tesserocr' but the tesserocr module is not importable - "
+                "falling back to pytesseract for every OCR call in this process. Expected until "
+                "docker/django/Dockerfile's tesserocr install is present in the running image; "
+                "see local_ocr.py's module docstring for the full engine-seam contract."
+            )
+            _tesserocr_import_failed = True
+        else:
+            _tesserocr_import_failed = False
+    return not _tesserocr_import_failed
+
+
+def _resolve_tessdata_prefix() -> Optional[str]:
+    """The spike's own second gotcha: `PyTessBaseAPI()` with no explicit `path=` HANGS
+    indefinitely (not a clean error) when `TESSDATA_PREFIX` is unset and the wheel's own default
+    search doesn't find this image's tessdata layout - so this is always resolved explicitly,
+    never left to the library's own auto-discovery. Prefers `TESSDATA_PREFIX` if the environment
+    already sets it; otherwise globs the Debian/Ubuntu `tesseract-ocr-eng` package layout
+    (`/usr/share/tesseract-ocr/<major>/tessdata` - the major version differs by base image and
+    apt snapshot, e.g. 4.00 on this repo's own dev boxes vs 5 on the Debian-slim prod image per
+    the spike, hence the glob rather than a hardcoded version), taking the highest-sorting match
+    (newest major version) if more than one is present. Returns None (letting the underlying
+    construction fail, caught and logged by `_tesserocr_recognize` below) only if neither yields
+    anything - this function itself never raises."""
+    env_prefix = os.environ.get("TESSDATA_PREFIX")
+    if env_prefix:
+        return env_prefix
+    candidates = sorted(glob.glob("/usr/share/tesseract-ocr/*/tessdata"))
+    return candidates[-1] if candidates else None
+
+
+def _parse_psm_from_config(config: str) -> int:
+    match = _PSM_RE.search(config)
+    return int(match.group(1)) if match else _DEFAULT_PSM
+
+
+def _get_tesserocr_api() -> Any:
+    """One persistent `PyTessBaseAPI` instance for the lifetime of this process (spike's own
+    "integration shape" requirement (b): constructing it fresh per call pays its own smaller-but-
+    nonzero init cost every time and forfeits most of the throughput win). Page segmentation mode
+    is set per-call via `SetPageSegMode` (cheap, no re-init) rather than baked into construction,
+    so the same instance serves every `config` (PSM 6, PSM 11 fallback, etc) this module's callers
+    pass. OEM and lang are left at the library's own defaults (OEM 3, lang "eng") on construction -
+    matching the spike's own A/B, which used default OEM on both engines and never passed a lang
+    override on either side."""
+    global _tesserocr_api
+    if _tesserocr_api is None:
+        from tesserocr import PyTessBaseAPI
+
+        _tesserocr_api = PyTessBaseAPI(path=_resolve_tessdata_prefix())
+    return _tesserocr_api
+
+
+def _tesserocr_recognize(image: "Image.Image", config: str) -> Any:
+    """Runs one recognition pass via the persistent tesserocr API instance and returns it
+    (already `Recognize()`-d, ready for `GetUTF8Text()`/`GetTSVText()`), or `None` on ANY failure
+    - import failure (`_tesserocr_available`) or a runtime failure of the constructed API itself
+    (caught broadly here and logged ONCE, then sticky-disabled for the rest of this process, same
+    "warn once, fall back forever after" contract as the import-failure path). Every caller below
+    treats `None` as "use pytesseract for this call instead" - this function itself never raises."""
+    global _tesserocr_runtime_disabled
+    if _tesserocr_runtime_disabled or not _tesserocr_available():
+        return None
+    try:
+        api = _get_tesserocr_api()
+        api.SetPageSegMode(_parse_psm_from_config(config))
+        api.SetImage(image)
+        api.Recognize()
+        return api
+    except Exception:
+        logger.warning(
+            "tesserocr OCR call failed - falling back to pytesseract for the rest of this " "process's OCR calls.",
+            exc_info=True,
+        )
+        _tesserocr_runtime_disabled = True
+        return None
+
+
+def _tesserocr_tsv_to_dict(tsv_text: str) -> dict[str, list[Any]]:
+    """Parses `PyTessBaseAPI.GetTSVText`'s own tab-separated output into the EXACT same
+    `{column: [values...]}` shape `pytesseract.image_to_data(..., output_type=Output.DICT)`
+    returns - same eleven columns, same order, same per-column types (verified live: tesseract's
+    TSV format is `level, page_num, block_num, par_num, line_num, word_num, left, top, width,
+    height, conf, text`, byte-identical between the apt tesseract binary pytesseract shells out to
+    and tesserocr's own vendored build - both are the same upstream tesseract TSV writer). This is
+    what lets `_words_from_tesseract_data`/`_text_from_tesseract_data` (this module's existing,
+    UNCHANGED helpers) consume either engine's output identically - no engine-specific branch
+    anywhere downstream of this function."""
+    columns = (
+        "level",
+        "page_num",
+        "block_num",
+        "par_num",
+        "line_num",
+        "word_num",
+        "left",
+        "top",
+        "width",
+        "height",
+        "conf",
+        "text",
+    )
+    data: dict[str, list[Any]] = {column: [] for column in columns}
+    for line in tsv_text.splitlines():
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < len(columns):
+            continue
+        for i, column in enumerate(columns[:-1]):
+            data[column].append(float(parts[i]) if column == "conf" else int(parts[i]))
+        data["text"].append(parts[-1])
+    return data
+
+
+def _active_engine() -> str:
+    """Resolves which engine implementation actually runs THIS call - reads
+    `settings.OCR_ENGINE` fresh every time (so e.g. a test's `override_settings` takes effect
+    immediately) rather than caching the resolved choice; the expensive part (import/init) is
+    cached separately via the sticky flags above, not this cheap settings read."""
+    engine = getattr(settings, "OCR_ENGINE", OCR_ENGINE_PYTESSERACT)
+    return OCR_ENGINE_TESSEROCR if engine == OCR_ENGINE_TESSEROCR else OCR_ENGINE_PYTESSERACT
+
+
 def run_tesseract(image: "Image.Image", config: str = TESSERACT_CONFIG) -> str:
+    if _active_engine() == OCR_ENGINE_TESSEROCR:
+        api = _tesserocr_recognize(image, config)
+        if api is not None:
+            return api.GetUTF8Text()
     return pytesseract.image_to_string(image, config=config)
 
 
@@ -388,6 +586,10 @@ def run_tesseract_tsv(image: "Image.Image") -> list[dict[str, Any]]:
     coordinates + confidence) - the image itself is never touched beyond this one read, matching
     CLAUDE.md's "Governing premise: we index, we do not store images".
     """
+    if _active_engine() == OCR_ENGINE_TESSEROCR:
+        api = _tesserocr_recognize(image, TESSERACT_CONFIG)
+        if api is not None:
+            return _words_from_tesseract_data(_tesserocr_tsv_to_dict(api.GetTSVText(0)))
     data = pytesseract.image_to_data(image, config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT)
     return _words_from_tesseract_data(data)
 
@@ -411,7 +613,17 @@ def run_tesseract_text_and_words(
     pre-existing call site that doesn't pass one explicitly) - image_evidence.py's
     `collector_line_ocr` extractor passes `ALTERNATE_TESSERACT_CONFIG` for its own alternate-PSM
     fallback tier, once every PSM-6 attempt has already failed to parse a collector number.
+
+    ENGINE SEAM (issue #423): under `settings.OCR_ENGINE == "tesserocr"`, both the text and the
+    word boxes below come from ONE `Recognize()` call via the persistent tesserocr API instance -
+    the same "single underlying pass, read two ways" property this function's own docstring
+    already claims for the pytesseract path, just carried through to the second engine too.
     """
+    if _active_engine() == OCR_ENGINE_TESSEROCR:
+        api = _tesserocr_recognize(image, config)
+        if api is not None:
+            data = _tesserocr_tsv_to_dict(api.GetTSVText(0))
+            return _text_from_tesseract_data(data), _words_from_tesseract_data(data)
     data = pytesseract.image_to_data(image, config=config, output_type=pytesseract.Output.DICT)
     return _text_from_tesseract_data(data), _words_from_tesseract_data(data)
 
@@ -557,6 +769,8 @@ __all__ = [
     "LEGAL_LINE_CROP_BOX",
     "TESSERACT_CONFIG",
     "ALTERNATE_TESSERACT_CONFIG",
+    "OCR_ENGINE_PYTESSERACT",
+    "OCR_ENGINE_TESSEROCR",
     "OcrParseResult",
     "LegalLineParseResult",
     "crop_collector_line",

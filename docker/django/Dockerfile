@@ -7,11 +7,19 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Install tools and additional dependencies
+#
+# tesserocr (issue #423, 2026-07-25 spike): g++ and libtesseract-dev/libleptonica-dev are added
+# here even though the tesserocr 2.10.0 wheel below is prebuilt for aarch64 (no source build of
+# tesserocr itself needed) - the spike's own throwaway harness included them and measured the
+# whole build at ~94s, dominated by apt fetch/install, not compilation; kept here to match that
+# verified recipe rather than trim untested. g++ specifically covers cysignals (a tesserocr
+# dependency) building its small C++ extension from source.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         dos2unix \
-        gcc netcat-traditional curl libpq-dev \
+        gcc g++ netcat-traditional curl libpq-dev \
         tesseract-ocr tesseract-ocr-eng \
+        libtesseract-dev libleptonica-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements.txt
@@ -21,6 +29,17 @@ WORKDIR /MPCAutofill
 # Install pip requirements
 RUN pip3 install gunicorn wheel
 RUN pip3 install -r requirements.txt
+
+# tesserocr (issue #423): pinned to the exact version the 2026-07-25 spike validated (2.10.0,
+# aarch64 wheel `tesserocr-2.10.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl`
+# confirmed available). This image now carries BOTH OCR engines - `settings.OCR_ENGINE`
+# (cardpicker/local_ocr.py) controls which one actually runs, default "pytesseract" (unchanged
+# behavior) in every deployed environment as of this PR. NOT flipped here: the wheel vendors its
+# own tesseract 5.5.1/leptonica 1.85.0, a different compiled build than this image's apt
+# `tesseract-ocr` package (5.5.0/1.84.1) - see local_ocr.py's own module docstring for why that
+# gates the flip on `ocr_engine_ab`'s real-image validation, bundled with the extractor-version
+# bump at issue #480's combined whole-catalog pass, not shipped dark-but-live here.
+RUN pip3 install "tesserocr==2.10.0"
 
 # Copy relevant files from repository
 COPY docker /MPCAutofill/docker
