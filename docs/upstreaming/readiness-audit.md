@@ -379,6 +379,13 @@ yet, and this fork's own v1 posture is publisher-only (see
 `federation-v1.md`'s "Participation modes"), so there's nothing real to
 demo or extract against. Revisit once federation has an actual second
 instance on the other end — not before, and not on a schedule.
+Content-hash join keys (issue #473's md5/sha256 checksum substrate,
+`docs/federation/public-export-v1.md`'s exact-match subsection) are what
+would make this component's payoff concrete once built: a resolved
+identification verdict becomes portable across any mpc-autofill-lineage
+instance holding a byte-identical file, without either side transmitting
+an image — still gated on the same "no live peer yet" precondition
+above, not a separate readiness question.
 
 ## 4. Candidates from the original brief — verified, corrected, or dropped
 

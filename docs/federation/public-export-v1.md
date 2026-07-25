@@ -229,6 +229,64 @@ upstream-readiness audit's own Tier 5 entry on this same engine makes
 the identical pilot-status caveat — see §7's note on that doc's
 unmerged-branch status).
 
+### Exact-match join keys: md5/sha256 content hashes (draft addition, 2026-07-25)
+
+Everything above this subsection describes `content_phash`, a **fuzzy**
+join: two images that are visually the same but not byte-identical
+(different scan, different re-upload, different compression) still
+converge to the same or a nearby hash. Issue #473's identity-group work
+adds a second, **exact** join key underneath it — `Card.md5_checksum`
+(the Drive-listing `md5Checksum` this fork already re-walks to build
+local md5 identity groups) and, per the owner-approved follow-on in that
+issue's own comment thread, `Card.sha256_checksum` from the same
+listings walk. Where `content_phash` says "probably the same image," a
+matched (md5, sha256) pair says "provably the same bytes" — a peer
+instance holding a byte-identical copy of a file can inherit this fork's
+verdict and evidence with zero pixels crossing the wire and zero
+perceptual-hash reimplementation required on their end, which is the
+purest form of this doc's own §1 hard line: the join itself never needs
+either side to look at an image, only to compare a checksum their own
+source listing already reports. This is design-note text, not
+implementation — no export/import command exists yet (§7's "no verdict
+ingestion, anywhere" still holds) — recording the join-key shape and its
+two binding rules ahead of that build, per #451 item 5 ("federation join
+key ... later, biggest long-term"). Draft only, part of this doc's
+existing BUILD-hold posture, not a ratification of anything not already
+decided.
+
+**Pairing rule (binding wherever this join key is ever used, restated in
+substance from #473's own ratified comment, not paraphrased away)**: md5
+alone is not collision-resistant enough for a trust boundary — fine as
+this fork's own internal, single-operator grouping key, but a
+cross-instance trust context is exactly the kind of adversarial surface
+a constructed md5 collision could exploit. Any export or import built on
+this join key MUST pair md5 with sha256. An md5 match whose sha256 does
+**not** also match is a loud anomaly — log it, skip the join, flag it for
+review — never a silent fallback to treating the md5 match alone as good
+enough.
+
+**Counted-once rule, federation consequence**: #473's own group-tally
+ruling — an md5 identity group is ONE identification target; a machine
+evidence event dedupes to once per group, never sums once per member —
+has a direct import-side analogue that any future subscriber
+implementation must honor: an imported `FEDERATED` verdict whose content
+hash matches an entire local md5 group applies **once** to that group as
+a single evidence event, never once per member card the group happens to
+contain. Applying the same imported verdict to N sibling rows as N
+independent contributions would fabricate independence across the wire
+exactly the way #473's binding soundness rule already forbids doing
+locally — the discipline travels with the join key, it doesn't stop at
+the instance boundary.
+
+**Discovery, not crawling**: the mechanism above is how a peer
+_discovers_ it already holds a match — by comparing checksums against a
+published, signed export — never by ProxyPrints (or anyone) crawling
+Google Drive for public folders to go find copies. The Drive API has no
+public-corpus search surface, and this project's own catalog is built
+exclusively from community-submitted sources; hash exchange over an
+already-published export is the only discovery path this program has, or
+is ever meant to have.
+
 ### Reference implementation
 
 **Built** — `federation-hash-tool/` at the repo root, separate PR (#97),
