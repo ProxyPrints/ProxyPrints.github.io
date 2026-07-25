@@ -39,6 +39,23 @@ below (same rationale as `_stub_border_color`/`_stub_ocr`). `TestExtractCardEvid
 below uses real PIL images throughout (mirrors `TestExtractCardEvidenceLayoutClass`'s own style),
 since it's actually testing `_compute_region_phash`'s real output.
 
+artbox_phash (public issue #480, "Artbox perceptual-hash extractor: evidence-only, rides the
+next whole-catalog pass" - EVIDENCE ONLY, every consumer explicitly out of scope) reuses the same
+`_compute_region_phash` helper `symbol_region` does - every existing test that feeds a
+`_StubImage` through `extract_card_evidence` and already stubs `_compute_region_phash` via
+`_stub_symbol_region` (this extractor's own call is covered for free, same shared-function
+rationale). Unlike `symbol_region`, this extractor's CROP BOX SELECTION itself depends on real
+(never stubbed) `classify_frame_style` output, which in turn depends on the OCR-group's own
+already-computed `collector_line_collector_number`/`illus_anchor_fired` facts - `_stub_ocr`'s
+`collector_raw_text` argument is what drives old/modern/unclassifiable in the tests below (a
+digit-bearing text reads "modern", an "Illus. <name>" text with no digit reads "old", neither
+reads unclassifiable - see `TestExtractCardEvidenceArtboxPhash` below). NO golden-set fixtures
+exist for this extractor at merge time (no local fixtures - `golden_set.py`'s own real,
+DB-backed cards are unreachable from a worktree with no `docker/.env`/live network fetch path -
+the same limitation issue #423's tesserocr engine-swap spike stated honestly rather than glossed
+over) - `ARTBOX_OLD_CROP_BOX`'s own comment in `image_evidence.py` records this as an open
+follow-up for a future golden-set pass with real old-border ground truth.
+
 legal_line (public issue #151, "Legal-line extractor + moderator flag + volume report (task
 #159)" - extractor + moderator-flag signal only, see image_evidence.py's own module docstring for
 the scope split) crops its OWN dedicated region (`local_ocr.LEGAL_LINE_CROP_BOX`, not a reuse of
@@ -67,6 +84,9 @@ from PIL import Image, ImageDraw
 import cardpicker.image_evidence as module
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import (
+    ARTBOX_MODERN_CROP_BOX,
+    ARTBOX_OLD_CROP_BOX,
+    ARTBOX_PHASH_EXTRACTOR_VERSION,
     ARTIST_OCR_EXTRACTOR_VERSION,
     COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
     COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
@@ -143,8 +163,22 @@ def _stub_ocr(monkeypatch, collector_raw_text: str = "158/287 R MOM EN"):
     stub's "real text, empty word boxes" contract. Accepts (and ignores) a `config` kwarg (issue
     #259's `_collector_line_ocr_attempts` always passes one) - the default `collector_raw_text`
     always parses a collector number on this stub's very first attempt, so no test using the
-    default ever reaches a tier where `config` would differ from PSM 6 anyway."""
-    monkeypatch.setattr(module, "preprocess_variants", lambda cropped: [cropped])
+    default ever reaches a tier where `config` would differ from PSM 6 anyway.
+
+    `preprocess_variants` is stubbed to a TWO-element list (`[cropped, cropped]`), matching real
+    `preprocess_variants`' own "both polarities" contract (`_COLLECTOR_LINE_TIER1_ATTEMPT_COUNT`)
+    - issue #480's artbox_phash tests are the first ones in this file to pass a digit-free,
+    never-parsing `collector_raw_text` through this stub, which surfaced a real gap: a
+    single-element stub never lets tier-1's own attempt COUNT reach 2, so the pre-classification
+    short-circuit's own `len(tier1_raw_texts) == _COLLECTOR_LINE_TIER1_ATTEMPT_COUNT` gate never
+    fires, falling through into `preprocess_fallback_variants` - real, UNSTUBBED PIL preprocessing
+    that crashes on a `_StubImage`'s fake `.crop()` result. Also stubs `preprocess_fallback_
+    variants` itself (mirroring `preprocess_variants`) as a second line of defense - belt-and-
+    braces, since a real card whose tier-1 attempts both come back non-blank-but-unparseable
+    (digit-bearing) still escalates into tier 2 exactly as designed, and any future `_StubImage`
+    test hitting that path must not crash for the same reason."""
+    monkeypatch.setattr(module, "preprocess_variants", lambda cropped: [cropped, cropped])
+    monkeypatch.setattr(module, "preprocess_fallback_variants", lambda cropped: [cropped, cropped, cropped, cropped])
     monkeypatch.setattr(module, "run_tesseract", lambda variant, config=None: collector_raw_text)
     monkeypatch.setattr(module, "run_tesseract_text_and_words", lambda variant, config=None: (collector_raw_text, []))
 
@@ -223,6 +257,7 @@ class TestExtractCardEvidence:
             "collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
             "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
+            "artbox_phash": ARTBOX_PHASH_EXTRACTOR_VERSION,
             "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
             "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
             "quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION,
@@ -233,7 +268,9 @@ class TestExtractCardEvidence:
         # correct outcome for a modern card (see _stub_ocr's own docstring), not a gap. The same
         # text also carries no copyright year or proxy/not-for-sale marker, so legal_line
         # genuinely skips here too (it's fed the identical stubbed text - see _stub_ocr's own
-        # module-level patch of run_tesseract).
+        # module-level patch of run_tesseract). artbox_phash does NOT skip: the same stubbed text
+        # parses a real collector number, so classify_frame_style reads "modern" - see
+        # TestExtractCardEvidenceArtboxPhash below for the extractor's own dedicated tests.
         assert result.skip_reasons == {"artist_ocr": "no-text", "legal_line": "no-text"}
 
     def test_forwards_the_cards_own_md5_checksum_onto_the_result(self, db, monkeypatch):
@@ -277,6 +314,7 @@ class TestExtractCardEvidence:
             "collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
             "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
+            "artbox_phash": ARTBOX_PHASH_EXTRACTOR_VERSION,
             "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
             "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
             "quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION,
@@ -290,6 +328,7 @@ class TestExtractCardEvidence:
             "collector_line_ocr": "fetch_failed",
             "artist_ocr": "fetch_failed",
             "collector_line_tsv": "fetch_failed",
+            "artbox_phash": "fetch_failed",
             "symbol_region": "fetch_failed",
             "legal_line": "fetch_failed",
             "quality_signals": "fetch_failed",
@@ -401,6 +440,15 @@ class TestExtractCardEvidenceGeometryBleed:
 
         assert result.fields["aspect_ratio"] is None
         assert result.skip_reasons["geometry_bleed"] == "ambiguous"
+        # artbox_phash (issue #480): _stub_ocr's default collector-number-bearing text reads
+        # classify_frame_style as "modern" (a real, unstubbed call - see this extractor's own
+        # section in image_evidence.py's module docstring), so ARTBOX_MODERN_CROP_BOX is picked -
+        # height=0 then makes ITS pixel box degenerate too (top == bottom == 0), the same real,
+        # non-fabricated guard symbol_region's own degenerate-crop-box check exercises just below.
+        # No stub needed - _compute_region_phash is never called for a degenerate box.
+        assert "artbox_crop_px" not in result.fields
+        assert "artbox_phash" not in result.fields
+        assert result.skip_reasons["artbox_phash"] == "ambiguous"
         # symbol_region (issue #160): height=0 makes SYMBOL_STRIP_BOX's own pixel box degenerate
         # (top == bottom == 0) - the genuine, non-fabricated trigger of its degenerate-crop-box
         # guard (see image_evidence.py's module docstring: not expected to fire against the real
@@ -445,6 +493,10 @@ class TestExtractCardEvidenceGeometryBleed:
         assert result.skip_reasons["artist_ocr"] == "fetch_failed"
         assert "collector_line_word_boxes" not in result.fields
         assert result.skip_reasons["collector_line_tsv"] == "fetch_failed"
+        # artbox_phash (issue #480) shares the same root cause too.
+        assert "artbox_crop_px" not in result.fields
+        assert "artbox_phash" not in result.fields
+        assert result.skip_reasons["artbox_phash"] == "fetch_failed"
         # legal_line (issue #151) shares the same root cause too.
         assert "legal_line_crop_px" not in result.fields
         assert result.skip_reasons["legal_line"] == "fetch_failed"
@@ -769,6 +821,199 @@ class TestExtractCardEvidenceSymbolRegion:
         assert evidence is not None
         assert evidence.symbol_crop_px == [780, 550, 1000, 800]
         assert evidence.symbol_phash == -12345
+
+
+class TestExtractCardEvidenceArtboxPhash:
+    """public issue #480, "Artbox perceptual-hash extractor: evidence-only, rides the next
+    whole-catalog pass" - EVIDENCE ONLY, every consumer explicitly out of scope for this
+    extractor. See module docstring's own artbox_phash paragraph for the full test-setup
+    rationale (why `_stub_ocr`'s `collector_raw_text` argument drives the frame classification
+    these tests exercise, and the honest "no golden-set fixtures yet" limitation)."""
+
+    def test_digit_bearing_text_reads_modern_and_uses_modern_crop_box(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch, "158/287 R MOM EN")  # digit-bearing -> a real collector number
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["artbox_frame_class"] == "modern"
+        width, height = _BLEED_IMAGE.size
+        left, top, right, bottom = ARTBOX_MODERN_CROP_BOX  # 'bleed' is a no-op remap
+        assert result.fields["artbox_crop_px"] == [
+            round(left * width),
+            round(top * height),
+            round(right * width),
+            round(bottom * height),
+        ]
+        assert "artbox_phash" in result.fields
+        assert "artbox_phash" not in result.skip_reasons
+
+    def test_illus_anchor_with_no_digit_reads_old_and_uses_old_crop_box(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
+        # no digit anywhere - _COLLECTOR_NUMBER_RE never matches, so collector_number stays None;
+        # "Illus." anchor fires via extract_artist_name's own regex (see local_fallback.py).
+        _stub_ocr(monkeypatch, "Illus. John Avon")
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["collector_line_collector_number"] == ""
+        assert result.fields["illus_anchor_fired"] is True
+        assert result.fields["artbox_frame_class"] == "old"
+        width, height = _BLEED_IMAGE.size
+        left, top, right, bottom = ARTBOX_OLD_CROP_BOX  # 'bleed' is a no-op remap
+        assert result.fields["artbox_crop_px"] == [
+            round(left * width),
+            round(top * height),
+            round(right * width),
+            round(bottom * height),
+        ]
+        assert "artbox_phash" in result.fields
+        assert "artbox_phash" not in result.skip_reasons
+
+    def test_neither_signal_is_unclassifiable_and_records_named_skip(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
+        # neither a collector number nor an "Illus." credit - classify_frame_style's own
+        # documented "neither -> abstain (None)" outcome (see local_fallback.py's own comment).
+        _stub_ocr(monkeypatch, "no signal here at all")
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["artbox_frame_class"] == ""
+        assert "artbox_crop_px" not in result.fields
+        assert "artbox_phash" not in result.fields
+        assert result.skip_reasons["artbox_phash"] == "ambiguous"
+
+    def test_trimmed_image_applies_normalize_crop_box_remap(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch, "158/287 R MOM EN")
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_color_profile(monkeypatch)
+
+        result = extract_card_evidence(card)
+
+        width, height = _TRIMMED_IMAGE.size
+        left, top, right, bottom = normalize_crop_box(ARTBOX_MODERN_CROP_BOX, "trimmed")
+        assert result.fields["artbox_crop_px"] == [
+            round(left * width),
+            round(top * height),
+            round(right * width),
+            round(bottom * height),
+        ]
+
+    def test_degenerate_crop_box_records_named_skip_and_withholds_fields(self, db, monkeypatch):
+        # height=0 collapses ARTBOX_MODERN_CROP_BOX's own pixel box to zero area (top == bottom
+        # == 0) - the same real, non-fabricated trigger symbol_region's own equivalent test
+        # exercises.
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
+        _stub_border_color(monkeypatch)
+        _stub_ocr(monkeypatch, "158/287 R MOM EN")
+
+        result = extract_card_evidence(card)
+
+        assert "artbox_crop_px" not in result.fields
+        assert "artbox_phash" not in result.fields
+        assert result.skip_reasons["artbox_phash"] == "ambiguous"
+
+    def test_fetch_failure_withholds_fields_and_shares_skip_reason(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert "artbox_frame_class" not in result.fields
+        assert "artbox_crop_px" not in result.fields
+        assert "artbox_phash" not in result.fields
+        assert result.skip_reasons["artbox_phash"] == "fetch_failed"
+
+    @staticmethod
+    def _image_with_marked_artbox(width: int = 1000, height: int = 1000) -> "Image.Image":
+        """A real white-background PIL image with a checkerboard rendered across the FULL
+        ARTBOX_MODERN_CROP_BOX region - mirrors TestExtractCardEvidenceSymbolRegion's own
+        `_image_with_symbol_strip` checkerboard style (a flat fill is degenerate for phash's
+        DCT-based hash, see that method's own comment), but covers this extractor's own box
+        fully rather than reusing a different extractor's box that only partially overlaps it."""
+        img = Image.new("RGB", (width, height), "white")
+        draw = ImageDraw.Draw(img)
+        left, top, right, bottom = ARTBOX_MODERN_CROP_BOX
+        box = [round(left * width), round(top * height), round(right * width), round(bottom * height)]
+        step = 6
+        for y in range(box[1], box[3], step):
+            for x in range(box[0], box[2], step):
+                if (x // step + y // step) % 2 == 0:
+                    draw.rectangle([x, y, x + step, y + step], fill=(10, 20, 30))
+        return img
+
+    def test_computes_a_real_phash_int_and_is_deterministic(self, db, monkeypatch):
+        # Real PIL images (unlike the _StubImage-based tests above, which only exercise the crop
+        # BOX math via a stubbed _compute_region_phash) - mirrors
+        # TestExtractCardEvidenceSymbolRegion's own real-image style, since this checks the
+        # actual hash output.
+        image = self._image_with_marked_artbox(1000, 1000)
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        _stub_ocr(monkeypatch, "158/287 R MOM EN")
+
+        first = extract_card_evidence(card)
+        second = extract_card_evidence(card)
+
+        assert isinstance(first.fields["artbox_phash"], int)
+        # a signed 64-bit int (twos_complement's own output range) - not asserting an exact
+        # value, same "don't pin the continuous/brittle" rationale symbol_region's own test gives.
+        assert -(2**63) <= first.fields["artbox_phash"] < 2**63
+        # determinism: hashing the exact same pixels twice must produce the exact same int.
+        assert first.fields["artbox_phash"] == second.fields["artbox_phash"]
+
+    def test_different_regions_hash_differently(self, db, monkeypatch):
+        # a blank (all-white) card vs. one with a distinct rendered checkerboard inside the
+        # art-box region - real evidence the hash reflects THIS region's own content, not a
+        # constant.
+        blank_image = Image.new("RGB", (1000, 1000), "white")
+        marked_image = self._image_with_marked_artbox(1000, 1000)
+        card = CardFactory(content_phash=1)
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: blank_image)
+        _stub_ocr(monkeypatch, "158/287 R MOM EN")
+        blank_result = extract_card_evidence(card)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: marked_image)
+        _stub_ocr(monkeypatch, "158/287 R MOM EN")
+        marked_result = extract_card_evidence(card)
+
+        assert blank_result.fields["artbox_phash"] != marked_result.fields["artbox_phash"]
+
+    def test_persist_writes_artbox_fields(self, db):
+        card = CardFactory(content_phash=999)
+        result = ExtractionResult(
+            card_id=card.pk,
+            content_hash=999,
+            fields={"artbox_crop_px": [70, 100, 930, 620], "artbox_frame_class": "modern", "artbox_phash": -54321},
+            extractor_versions={"artbox_phash": ARTBOX_PHASH_EXTRACTOR_VERSION},
+        )
+
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.artbox_crop_px == [70, 100, 930, 620]
+        assert evidence.artbox_frame_class == "modern"
+        assert evidence.artbox_phash == -54321
 
 
 class TestExtractCardEvidenceCollectorLineOcr:

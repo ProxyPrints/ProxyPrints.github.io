@@ -155,9 +155,16 @@ extractor's version key) so a re-invocation after a kill does not re-pay the fet
 cards already done, matching task #147's resume-contract spirit without building its full
 run-ledger machinery (explicitly out of scope for this bounded run per its own directive).
 `MANIFEST_EXTRACTOR_KEYS` is kept in sync with `image_evidence.extract_card_evidence`'s own
-`extractor_versions` keys (11 as of the color_profile/quality_signals extractor group) - stale
-here would silently under-count "already done" and re-pay fetch+OCR cost this resume filter
-exists specifically to avoid.
+`extractor_versions` keys (12 as of the artbox_phash extractor, issue #480) - stale here would
+silently under-count "already done" and re-pay fetch+OCR cost this resume filter exists
+specifically to avoid.
+
+`artbox_phash` (issue #480, added 2026-07-25) has the same "adding a manifest key stales every
+row's `has_keys` check" consequence every prior manifest addition has had, deliberately - see
+that issue's own binding sequencing comment: this key merges into the manifest, but the resulting
+whole-catalog Stage C pass it makes eligible does NOT run until the owner schedules it (riding
+`#473`/`#472`'s own deploy first, per that comment) - never a standalone `artbox_phash`-only
+backfill, which would duplicate ~218k fetches the combined pass already needs to make anyway.
 
 EVIDENCE TRANSFER (2026-07-25, issue #473 PR-2, folded with issue #472): `_fetch_one_card` checks
 `evidence_transfer.find_transfer_source(card)` BEFORE the network fetch call below - a card with a
@@ -223,8 +230,8 @@ from cardpicker.utils import get_baked_git_sha, read_card_ids_file
 
 logger = logging.getLogger(__name__)
 
-# The full Stage C manifest as of 2026-07-20 (fetch_health + geometry-bleed + geometry-group +
-# OCR-group + symbol-region + legal-line + quality-signals/color-profile) - matches
+# The full Stage C manifest as of 2026-07-25 (fetch_health + geometry-bleed + geometry-group +
+# OCR-group + artbox-phash + symbol-region + legal-line + quality-signals/color-profile) - matches
 # image_evidence.extract_card_evidence's own extractor_versions keys exactly. Keep this set in
 # sync with that function whenever a new extractor group lands (see module docstring).
 MANIFEST_EXTRACTOR_KEYS = frozenset(
@@ -236,6 +243,7 @@ MANIFEST_EXTRACTOR_KEYS = frozenset(
         "collector_line_ocr",
         "artist_ocr",
         "collector_line_tsv",
+        "artbox_phash",
         "symbol_region",
         "legal_line",
         "quality_signals",

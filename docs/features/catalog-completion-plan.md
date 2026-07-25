@@ -1705,7 +1705,7 @@ fit" conditional wording; full suite 1099 passed / 4 skipped (the same
 CI-documented named skips — nothing newly broken); `makemigrations --check`
 clean (no model change).
 
-**color_profile / quality_signals / fetch-health completion — LAST Stage C manifest
+**color_profile / quality_signals / fetch-health completion — Stage C manifest
 extractor group, built** (public issue #150's re-spec, 2026-07-20 — the phash half of the
 original issue is DROPPED per the owner's same-day re-spec comment on #150, superseded by
 user-submitted phash on the art-similarity flag, task #203; set-symbol phash already shipped
@@ -1782,6 +1782,58 @@ plus 13 pre-existing `TestExtractCardEvidence`/`GeometryBleed`/`CropCoordinates`
 tests updated for the two new extractors' presence (`_stub_quality_signals`/`_stub_color_profile`
 helpers, mirroring `_stub_symbol_region`'s own identical rationale); full suite (host venv) 1106
 passed / 4 skipped (the same CI-documented named skips - nothing newly broken); `makemigrations --check` clean.
+
+**artbox_phash — twelfth Stage C manifest extractor, built, evidence-only (public issue #480,
+2026-07-25)**: a perceptual hash (`imagehash.phash`, same family/size as `symbol_region`'s own
+`symbol_phash`) of the card's art-box region, keyed off the frame family (`local_fallback.classify_frame_style`'s
+real "old"/"modern" output, finally reachable now that the OCR group's own
+`collector_line_collector_number`/`illus_anchor_fired` facts exist earlier in the same extraction
+pass, unlike `layout_class`, issue #148, which had to fall back to `classify_border_color` for
+exactly this reason at ITS own PR's own time - see that section above). Two fixed-fraction crop
+boxes, `image_evidence.ARTBOX_MODERN_CROP_BOX` (reuses `local_phash.ART_CROP_BOX` unchanged) and
+the new `ARTBOX_OLD_CROP_BOX` (a reasoned, honestly-stated ESTIMATE for the pre-2003 frame family,
+not independently golden-set-verified the way `LEGAL_LINE_CROP_BOX` was; see that constant's own
+comment in `image_evidence.py` for the exact fractions and reasoning), remapped/scaled the same
+way every other `*_crop_px` field is - crop COORDINATES only, never crop pixels. An unclassifiable
+frame (`classify_frame_style` returns `None`) or a degenerate crop box both share `symbol_region`'s
+own "ambiguous" skip-reason vocabulary. Migration `0084` (additive-only `AddField`s -
+`artbox_crop_px`, `artbox_frame_class`, `artbox_phash`); checked `gh issue list --label deploy-freeze-active --state all` fresh immediately before writing it, empty. No PROTECTED CORE
+file touched (`classify_frame_style` called unmodified from `local_fallback.py`, exactly the way
+`classify_bleed_edge`/`classify_border_color` already are elsewhere in this module; the new
+crop-box constant lives in `image_evidence.py` itself rather than reaching into `local_phash.py`,
+avoiding a protected-core touch for a box no existing code depended on).
+
+EVIDENCE ONLY, per the issue's own binding scope: every consumer (same-art clustering, artist-
+constrained narrowing, alternate-frame deduction - #363 lineage) is explicitly out of scope pending
+its own soundness design session, and the issue's own soundness note (carried into
+`image_evidence.py`'s module docstring so it travels with the field) is that a future consumer must
+NOT inherit `#473`'s counted-once md5 vote-pooling - `docs/theory.md`'s two-threshold rule (small-d
+narrows only, `d=0` entails for verified-identical uploads, never auto-votes otherwise) governs any
+future use of this hash.
+
+**Binding sequencing, the actual point of the issue (owner-ratified 2026-07-25, see the issue's own
+two comments for the full reasoning and a same-day correction)**: this key merging into the
+manifest stales `has_keys` catalog-wide (every card becomes Stage-C-eligible again, a real 218k-card
+event) - deliberately, since the intent is for this extractor's first real pass to ride the NEXT
+whole-catalog Stage C pass alongside `#473` (md5 substrate/transfer/pooling) and `#472` (decoupled
+fetch), never a standalone `artbox_phash`-only backfill (which would duplicate ~218k fetches the
+combined pass makes anyway). That combined pass does NOT run until the owner schedules it - this PR
+only lands the extractor + its manifest registration, nothing more. A same-day follow-up comment on
+#480 corrected an earlier coupling recommendation: THIS extractor alone does not touch the OCR
+engine version (tesserocr, #423) - per-extractor manifest versioning means an artbox-only pass only
+ever computes the missing `artbox_phash` key, never re-runs `collector_line_ocr`/`legal_line`'s own
+already-current versions; the OCR engine swap is a SEPARATE, still-gated decision (needs #423's own
+real-card-image validation first) that would ride the SAME combined pass only if and when its own
+version bump is ready too.
+
+No golden-set fixtures at merge time (`golden_set.py`'s own real, DB-backed cards - see this doc's
+own "Golden-set gathering" paragraph above for how those are normally exercised - are unreachable
+from a worktree session with no `docker/.env`/live network fetch path, the same limitation issue
+#423's tesserocr spike stated honestly rather than glossed over); synthetic-image tests only
+(`TestExtractCardEvidenceArtboxPhash` in `test_image_evidence.py` - crop-region correctness per
+frame class, hash determinism, the bleed-class remap, the unclassifiable-frame skip path, and
+`MANIFEST_EXTRACTOR_KEYS` registration). Tracked as an open item for a future golden-set pass, same
+as `ARTBOX_OLD_CROP_BOX`'s own crop-fraction confidence.
 
 **Stage C bulk driver: compute profile + concurrency/OCR-cost fix (2026-07-20)** —
 `docs/reports/2026-07-20-pipeline-compute-profile.md` measured the bulk cohort driver
