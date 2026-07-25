@@ -365,6 +365,14 @@ ELASTICSEARCH_DSL_AUTOSYNC = False
 # sources only today - see get_worker_image_url in that module).
 IMAGE_WORKER_URL = env("IMAGE_WORKER_URL", default="https://cdn.proxyprints.ca")
 
+# OCR engine seam (issue #423, cardpicker/local_ocr.py's own module docstring): "pytesseract"
+# (the default, unchanged process-per-call behavior) or "tesserocr" (persistent in-process
+# binding, ~5.7x faster per the 2026-07-25 spike, but not yet flipped live - see that module's
+# docstring for why). Shipped DARK in this PR: the flag exists and is wired end to end, but
+# nothing sets OCR_ENGINE=tesserocr in any deployed env yet - that flip is bundled with the
+# extractor-version bump at issue #480's combined whole-catalog pass, never on its own.
+OCR_ENGINE = env("OCR_ENGINE", default="pytesseract")
+
 # Email for logging
 ADMINS = [("admin", env("TARGET_EMAIL", default=""))]
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"

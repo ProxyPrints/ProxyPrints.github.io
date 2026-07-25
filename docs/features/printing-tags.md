@@ -1615,7 +1615,25 @@ reach at all:
   syntactically valid parse that matches none of the card's candidates) -
   see "Negative-vote wiring" below for why this one skip_reason (of
   several) is treated as genuine whole-candidate-set evidence rather than
-  a mere abstention.
+  a mere abstention. **OCR engine seam (issue #423, 2026-07-25 spike)**:
+  `cardpicker/local_ocr.py` dispatches between two Tesseract bindings
+  behind `settings.OCR_ENGINE` - `"pytesseract"` (default, unchanged
+  process-per-call behavior) or `"tesserocr"` (a persistent in-process
+  `PyTessBaseAPI`, ~5.7x faster per the spike's real-OCR-call
+  measurement, since it eliminates pytesseract's own ~97ms/call
+  tesseract-process-spawn floor). Shipped DARK: every deployed
+  environment still defaults to `"pytesseract"` as of this PR, and no
+  extractor version bump accompanies it - tesserocr's wheel vendors a
+  different compiled tesseract/leptonica build than the apt package
+  pytesseract shells out to, so flipping the flag is a genuine
+  extractor-version event, deliberately deferred to issue #480's combined
+  whole-catalog pass (that issue's own 2026-07-25 correction comment has
+  the ratified sequencing). `cardpicker/management/commands/ocr_engine_ab.py`
+  is the read-only real-image A/B validation tool any future flip
+  decision is gated on (per-image byte-identity, parse-level agreement,
+  stored-vs-fresh drift detection, confidence deltas, and latency for
+  both engines - writes nothing, per this doc's own "index, don't store"
+  discipline).
 - **L2, perceptual hash**: art-region phash comparison against each
   name-candidate's Scryfall art crop, voting only when there's a clear
   single best match (distance threshold + margin over the second-best,

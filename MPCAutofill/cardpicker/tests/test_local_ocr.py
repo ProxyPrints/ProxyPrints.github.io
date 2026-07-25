@@ -23,10 +23,20 @@ gated re-extraction against the live no-text cohort (see docs/features/catalog-c
 plan.md and this PR's own body).
 """
 
+import importlib.util
+import logging
+import sys
+
+import pytest
 from PIL import Image, ImageDraw, ImageFilter
 
+from django.test import override_settings
+
+from cardpicker import local_ocr
 from cardpicker.local_ocr import (
     ALTERNATE_TESSERACT_CONFIG,
+    OCR_ENGINE_PYTESSERACT,
+    OCR_ENGINE_TESSEROCR,
     TESSERACT_CONFIG,
     _median_from_histogram,
     parse_collector_line,
@@ -35,6 +45,7 @@ from cardpicker.local_ocr import (
     preprocess_variants,
     run_tesseract,
     run_tesseract_text_and_words,
+    run_tesseract_tsv,
 )
 
 
@@ -137,6 +148,278 @@ class TestRunTesseractConfigKwarg:
         text, words = run_tesseract_text_and_words(crop, config=ALTERNATE_TESSERACT_CONFIG)
         assert isinstance(text, str)
         assert isinstance(words, list)
+
+
+_TESSEROCR_INSTALLED = importlib.util.find_spec("tesserocr") is not None
+_TESSEROCR_SKIP_REASON = (
+    "tesserocr not installed in this environment - it's an optional dependency added to "
+    "docker/django/Dockerfile only (issue #423), not requirements.txt, so it's expected absent "
+    "on a runner that only installed requirements.txt (e.g. default CI)."
+)
+
+
+class _FakeTesserocrApi:
+    """Minimal stand-in for `tesserocr.PyTessBaseAPI` - just enough surface for `local_ocr.py`'s
+    engine seam to call (`SetPageSegMode`/`SetImage`/`Recognize`/`GetUTF8Text`/`GetTSVText`), so
+    the dispatch tests below exercise the REAL seam code in `local_ocr.py` without needing the
+    real tesserocr C extension installed - see `_TESSEROCR_INSTALLED` above for the separate,
+    real-engine confirmation class that DOES need it (and is named-skipped when absent)."""
+
+    def __init__(self, text: str, tsv: str) -> None:
+        self._text = text
+        self._tsv = tsv
+        self.psm_calls: list[int] = []
+
+    def SetPageSegMode(self, psm: int) -> None:
+        self.psm_calls.append(psm)
+
+    def SetImage(self, image: "Image.Image") -> None:
+        pass
+
+    def Recognize(self) -> None:
+        pass
+
+    def GetUTF8Text(self) -> str:
+        return self._text
+
+    def GetTSVText(self, page: int) -> str:
+        return self._tsv
+
+
+@pytest.fixture(autouse=True)
+def _reset_engine_seam_state():
+    """`local_ocr.py`'s own engine-seam failure-tracking globals (`_tesserocr_import_failed`/
+    `_tesserocr_runtime_disabled`/`_tesserocr_api`) are deliberately process-global in production
+    (module docstring: sticky, never reset - one warning per process lifetime, one persistent API
+    instance per process) - reset around every test in this file so no test leaks that state into
+    another."""
+
+    def _reset() -> None:
+        local_ocr._tesserocr_import_failed = None
+        local_ocr._tesserocr_runtime_disabled = False
+        local_ocr._tesserocr_api = None
+
+    _reset()
+    yield
+    _reset()
+
+
+class TestActiveEngineResolution:
+    def test_default_settings_resolve_to_pytesseract(self):
+        assert local_ocr._active_engine() == OCR_ENGINE_PYTESSERACT
+
+    def test_explicit_pytesseract_setting(self):
+        with override_settings(OCR_ENGINE="pytesseract"):
+            assert local_ocr._active_engine() == OCR_ENGINE_PYTESSERACT
+
+    def test_explicit_tesserocr_setting(self):
+        with override_settings(OCR_ENGINE="tesserocr"):
+            assert local_ocr._active_engine() == OCR_ENGINE_TESSEROCR
+
+    def test_unrecognized_setting_falls_back_to_pytesseract(self):
+        with override_settings(OCR_ENGINE="something-else-entirely"):
+            assert local_ocr._active_engine() == OCR_ENGINE_PYTESSERACT
+
+
+class TestParsePsmFromConfig:
+    def test_extracts_psm_number_from_config_string(self):
+        assert local_ocr._parse_psm_from_config("--psm 6") == 6
+        assert local_ocr._parse_psm_from_config("--psm 11") == 11
+
+    def test_defaults_when_no_psm_present(self):
+        assert local_ocr._parse_psm_from_config("") == local_ocr._DEFAULT_PSM
+        assert local_ocr._parse_psm_from_config("--oem 1") == local_ocr._DEFAULT_PSM
+
+
+class TestTesserocrTsvToDict:
+    """Pure parsing logic, no tesserocr dependency - `PyTessBaseAPI.GetTSVText`'s own tab-
+    separated output format is stable/documented (same upstream tesseract TSV writer pytesseract's
+    own `image_to_data` shells out to), so this is tested directly against a hand-built TSV string
+    rather than requiring the real library."""
+
+    _TSV = "1\t1\t0\t0\t0\t0\t0\t0\t100\t40\t-1\t\n5\t1\t1\t1\t1\t1\t6\t12\t32\t8\t81.5\tHELLO\n"
+
+    def test_parses_into_the_same_column_shape_pytesseract_returns(self):
+        data = local_ocr._tesserocr_tsv_to_dict(self._TSV)
+        assert list(data.keys()) == [
+            "level",
+            "page_num",
+            "block_num",
+            "par_num",
+            "line_num",
+            "word_num",
+            "left",
+            "top",
+            "width",
+            "height",
+            "conf",
+            "text",
+        ]
+        assert data["text"] == ["", "HELLO"]
+        assert data["conf"] == [-1.0, 81.5]
+        assert data["left"] == [0, 6]
+        assert isinstance(data["left"][0], int)
+        assert isinstance(data["conf"][0], float)
+
+    def test_blank_lines_are_ignored(self):
+        data = local_ocr._tesserocr_tsv_to_dict(self._TSV + "\n")
+        assert len(data["text"]) == 2
+
+
+class TestResolveTessdataPrefix:
+    def test_prefers_the_env_var_when_set(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("TESSDATA_PREFIX", "/env/tessdata")
+        assert local_ocr._resolve_tessdata_prefix() == "/env/tessdata"
+
+    def test_falls_back_to_the_highest_sorting_glob_match(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("TESSDATA_PREFIX", raising=False)
+        monkeypatch.setattr(
+            local_ocr.glob,
+            "glob",
+            lambda pattern: [
+                "/usr/share/tesseract-ocr/4.00/tessdata",
+                "/usr/share/tesseract-ocr/5/tessdata",
+            ],
+        )
+        assert local_ocr._resolve_tessdata_prefix() == "/usr/share/tesseract-ocr/5/tessdata"
+
+    def test_returns_none_when_nothing_is_found(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("TESSDATA_PREFIX", raising=False)
+        monkeypatch.setattr(local_ocr.glob, "glob", lambda pattern: [])
+        assert local_ocr._resolve_tessdata_prefix() is None
+
+
+class TestEngineSeamDispatch:
+    """Both engines are callable behind the SAME public interface (`run_tesseract`/
+    `run_tesseract_tsv`/`run_tesseract_text_and_words`) - the tesserocr side is exercised via
+    `_FakeTesserocrApi` (monkeypatched in place of `_tesserocr_recognize`), so these tests pass
+    identically whether or not the real tesserocr C extension happens to be installed in this
+    environment."""
+
+    _TSV = "1\t1\t0\t0\t0\t0\t0\t0\t100\t40\t-1\t\n5\t1\t1\t1\t1\t1\t6\t12\t32\t8\t81.5\tHELLO\n"
+    _EXPECTED_WORDS = [{"text": "HELLO", "left": 6, "top": 12, "width": 32, "height": 8, "conf": 81.5}]
+
+    def test_run_tesseract_dispatches_to_tesserocr_when_selected(self, monkeypatch: pytest.MonkeyPatch):
+        fake_api = _FakeTesserocrApi(text="HELLO\n", tsv=self._TSV)
+        monkeypatch.setattr(local_ocr, "_tesserocr_recognize", lambda image, config: fake_api)
+        with override_settings(OCR_ENGINE="tesserocr"):
+            assert run_tesseract(_text_crop("HELLO")) == "HELLO\n"
+
+    def test_run_tesseract_tsv_dispatches_to_tesserocr_when_selected(self, monkeypatch: pytest.MonkeyPatch):
+        fake_api = _FakeTesserocrApi(text="HELLO\n", tsv=self._TSV)
+        monkeypatch.setattr(local_ocr, "_tesserocr_recognize", lambda image, config: fake_api)
+        with override_settings(OCR_ENGINE="tesserocr"):
+            words = run_tesseract_tsv(_text_crop("HELLO"))
+        assert words == self._EXPECTED_WORDS
+
+    def test_run_tesseract_text_and_words_dispatches_to_tesserocr_when_selected(self, monkeypatch: pytest.MonkeyPatch):
+        fake_api = _FakeTesserocrApi(text="HELLO\n", tsv=self._TSV)
+        monkeypatch.setattr(local_ocr, "_tesserocr_recognize", lambda image, config: fake_api)
+        with override_settings(OCR_ENGINE="tesserocr"):
+            text, words = run_tesseract_text_and_words(_text_crop("HELLO"))
+        assert text == "HELLO"
+        assert words == self._EXPECTED_WORDS
+
+    def test_config_psm_reaches_the_real_recognize_function_and_the_underlying_api(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Here `_tesserocr_recognize` ITSELF runs (unlike the tests above, which replace it
+        # wholesale) - only `_tesserocr_available`/`_get_tesserocr_api` are faked, so this proves
+        # the real seam function correctly parses `config` and calls `SetPageSegMode` with it.
+        fake_api = _FakeTesserocrApi(text="HELLO\n", tsv=self._TSV)
+        monkeypatch.setattr(local_ocr, "_tesserocr_available", lambda: True)
+        monkeypatch.setattr(local_ocr, "_get_tesserocr_api", lambda: fake_api)
+        with override_settings(OCR_ENGINE="tesserocr"):
+            run_tesseract_text_and_words(_text_crop("HELLO"), config=TESSERACT_CONFIG)
+            run_tesseract_text_and_words(_text_crop("HELLO"), config=ALTERNATE_TESSERACT_CONFIG)
+        assert fake_api.psm_calls == [6, 11]
+
+    def test_default_pytesseract_path_never_touches_tesserocr(self, monkeypatch: pytest.MonkeyPatch):
+        def _fail_if_called(*args, **kwargs):
+            raise AssertionError("pytesseract's own default engine must never call _tesserocr_recognize")
+
+        monkeypatch.setattr(local_ocr, "_tesserocr_recognize", _fail_if_called)
+        with override_settings(OCR_ENGINE="pytesseract"):
+            run_tesseract(_text_crop("HELLO"))
+            run_tesseract_tsv(_text_crop("HELLO"))
+            run_tesseract_text_and_words(_text_crop("HELLO"))
+
+
+class TestEngineSeamFallback:
+    """The failure-tolerance contract this module's own docstring makes: tesserocr being absent
+    or broken can never crash a caller, only make it silently no faster than before."""
+
+    def test_missing_module_falls_back_to_pytesseract_and_logs_exactly_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        # `sys.modules["tesserocr"] = None` is the standard trick for simulating "this module
+        # cannot be imported" without needing it to be genuinely absent from the environment -
+        # `import tesserocr` raises ImportError against a None sys.modules entry.
+        monkeypatch.setitem(sys.modules, "tesserocr", None)
+        crop = _text_crop("HELLO")
+        with override_settings(OCR_ENGINE="tesserocr"), caplog.at_level(logging.WARNING, logger="cardpicker.local_ocr"):
+            first = run_tesseract(crop)
+            second = run_tesseract(crop)
+        assert isinstance(first, str)
+        assert first == second  # same real pytesseract read both times, no crash either time
+        matching = [r for r in caplog.records if "not importable" in r.message]
+        assert len(matching) == 1  # exactly once across two calls, not once per call
+
+    def test_runtime_failure_disables_tesserocr_for_the_rest_of_the_process(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        def _boom() -> None:
+            raise RuntimeError("simulated tesserocr init failure")
+
+        monkeypatch.setattr(local_ocr, "_tesserocr_available", lambda: True)
+        monkeypatch.setattr(local_ocr, "_get_tesserocr_api", _boom)
+        crop = _text_crop("HELLO")
+        with override_settings(OCR_ENGINE="tesserocr"), caplog.at_level(logging.WARNING, logger="cardpicker.local_ocr"):
+            first = run_tesseract(crop)
+            assert local_ocr._tesserocr_runtime_disabled is True
+            second = run_tesseract(crop)  # stays disabled - _get_tesserocr_api is not called again
+        assert isinstance(first, str)
+        assert isinstance(second, str)
+        matching = [r for r in caplog.records if "tesserocr OCR call failed" in r.message]
+        assert len(matching) == 1
+
+
+@pytest.mark.skipif(not _TESSEROCR_INSTALLED, reason=_TESSEROCR_SKIP_REASON)
+class TestTesserocrRealEngineConfigFidelity:
+    """Real-tesserocr confirmation (skipped, with a named reason, when the optional dependency
+    isn't installed - see `_TESSEROCR_SKIP_REASON`): unlike `TestEngineSeamDispatch` above (which
+    proves the DISPATCH logic with a fake), this proves the REAL tesserocr call path produces the
+    same call-contract shape `run_tesseract_text_and_words`'s docstring promises - a non-empty
+    text/words pair with the confidence field present, and PSM 11 (ALTERNATE_TESSERACT_CONFIG)
+    genuinely reaching the underlying engine as a different mode than the PSM 6 default (verified
+    via each config producing a `SetPageSegMode` call in `TestEngineSeamDispatch` above, and here
+    via both configs at least returning cleanly against a real crop)."""
+
+    def test_real_tesserocr_produces_the_same_return_shape_as_pytesseract(self):
+        crop = _text_crop("158/287 R MOM EN")
+        with override_settings(OCR_ENGINE="tesserocr"):
+            text, words = run_tesseract_text_and_words(crop, config=TESSERACT_CONFIG)
+        assert isinstance(text, str)
+        assert isinstance(words, list)
+        for word in words:
+            assert set(word.keys()) == {"text", "left", "top", "width", "height", "conf"}
+            assert isinstance(word["conf"], float)
+
+    def test_real_tesserocr_accepts_the_alternate_psm_config(self):
+        crop = _text_crop("158/287 R MOM EN")
+        with override_settings(OCR_ENGINE="tesserocr"):
+            text, words = run_tesseract_text_and_words(crop, config=ALTERNATE_TESSERACT_CONFIG)
+        assert isinstance(text, str)
+        assert isinstance(words, list)
+
+    def test_real_tesserocr_never_falls_back_to_pytesseract_on_a_healthy_install(self):
+        # A healthy install/tessdata path should reach real Recognize() successfully, not the
+        # failure-tolerance fallback path - this is what distinguishes this test from
+        # TestEngineSeamFallback above (which deliberately breaks the install).
+        crop = _text_crop("HELLO")
+        with override_settings(OCR_ENGINE="tesserocr"):
+            run_tesseract(crop)
+        assert local_ocr._tesserocr_runtime_disabled is False
 
 
 class TestFallbackTierRecoversBlurryUpload:
