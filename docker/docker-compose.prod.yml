@@ -139,7 +139,7 @@ services:
       service: elasticsearch
     restart: unless-stopped
     expose:
-      - 5432
+      - 9200
     # See the !reset comment on the postgres service above - same bug, same fix.
     ports: !reset []
     environment:
