@@ -10,7 +10,11 @@ from cardpicker.documents import CardSearch
 from cardpicker.models import CanonicalArtist, CanonicalCard, Card, VotePolarity
 from cardpicker.sources.api import Folder, Image
 from cardpicker.sources.source_types import SourceTypeChoices
-from cardpicker.sources.update_database import bulk_sync_objects, update_database
+from cardpicker.sources.update_database import (
+    bulk_sync_objects,
+    transform_image_into_object,
+    update_database,
+)
 from cardpicker.tags import Tags
 from cardpicker.tests import factories
 from cardpicker.tests.conftest import google_drive_credentials_available
@@ -409,6 +413,9 @@ class TestUpdateDatabase:
 
         names = set(Card.objects.values_list("name", flat=True))
         assert names == {f"Card {i}" for i in range(len(roots))}
+        # issue #473 PR-1: LOCAL_FILE sources carry no md5Checksum at all - stamping at this
+        # index seam must leave every card's md5_checksum null, never invented.
+        assert not Card.objects.filter(md5_checksum__isnull=False).exists()
 
     def test_one_source_failure_does_not_abort_the_others(
         self, transactional_db, settings, elasticsearch, tmp_path_factory, monkeypatch
@@ -595,6 +602,97 @@ class TestUpdateDatabase:
         existing.refresh_from_db()
         assert existing.searchq == "renamed"  # the update itself did happen
         assert existing.content_phash == 123  # but content_phash survived it untouched
+
+    def test_transform_image_into_object_stamps_md5_checksum_from_listing(self, django_settings):
+        """Issue #473 PR-1: Card.md5_checksum is copied verbatim from Image.md5_checksum at the
+        exact seam where a Card is first built from a source's listing - no separate fetch."""
+        source = factories.SourceFactory()
+        image = Image(
+            id="x",
+            name="Card.png",
+            size=1,
+            created_time=DEFAULT_DATE,
+            modified_time=DEFAULT_DATE,
+            height=1110,
+            folder=Folder(id="f", name="F", parent=None),
+            md5_checksum="deadbeef",
+        )
+        card = transform_image_into_object(source=source, image=image, tags=Tags())
+        assert card.md5_checksum == "deadbeef"
+
+    def test_transform_image_into_object_leaves_md5_checksum_null_when_listing_has_none(self, django_settings):
+        """Never invented - a LOCAL_FILE source's Image (or any Drive listing entry that
+        genuinely omits md5Checksum) has md5_checksum=None, and that's exactly what lands on the
+        Card too (Card.md5_checksum's own null-is-a-singleton-group contract, issue #473 ruling
+        3)."""
+        source = factories.SourceFactory()
+        image = Image(
+            id="x",
+            name="Card.png",
+            size=1,
+            created_time=DEFAULT_DATE,
+            modified_time=DEFAULT_DATE,
+            height=1110,
+            folder=Folder(id="f", name="F", parent=None),
+        )
+        card = transform_image_into_object(source=source, image=image, tags=Tags())
+        assert card.md5_checksum is None
+
+    @freezegun.freeze_time(DEFAULT_DATE)
+    def test_bulk_sync_objects_stamps_md5_checksum_on_create(self, django_settings, elasticsearch):
+        source = factories.SourceFactory()
+        bulk_sync_objects(
+            source=source,
+            cards=[
+                Card(
+                    identifier="new_card",
+                    searchq="new card",
+                    date_created=make_aware(DEFAULT_DATE),
+                    date_modified=make_aware(DEFAULT_DATE),
+                    source=source,
+                    tags=[],
+                    size=0,
+                    md5_checksum="deadbeef",
+                )
+            ],
+        )
+        assert Card.objects.get(identifier="new_card").md5_checksum == "deadbeef"
+
+    @freezegun.freeze_time(DEFAULT_DATE)
+    def test_bulk_sync_objects_refreshes_md5_checksum_on_update_alone(self, django_settings, elasticsearch):
+        """Unlike content_phash (never touched on update - see the test immediately above this
+        block), md5_checksum is free metadata already present on the incoming listing, so a
+        re-scan refreshes it even when nothing else about the card changed at all - this is the
+        clause that lets an ordinary periodic re-scan backfill previously-NULL checksums, not
+        only the dedicated backfill_md5_checksums command."""
+        source = factories.SourceFactory()
+        existing = factories.CardFactory(
+            identifier="existing_card",
+            searchq="mountain",
+            source=source,
+            date_created=make_aware(DEFAULT_DATE),
+            date_modified=make_aware(DEFAULT_DATE),
+            md5_checksum=None,
+        )
+
+        bulk_sync_objects(
+            source=source,
+            cards=[
+                Card(
+                    identifier="existing_card",
+                    searchq="mountain",
+                    date_created=make_aware(DEFAULT_DATE),
+                    date_modified=make_aware(DEFAULT_DATE),  # unchanged
+                    source=source,
+                    tags=[],
+                    size=0,
+                    md5_checksum="freshsum",
+                )
+            ],
+        )
+
+        existing.refresh_from_db()
+        assert existing.md5_checksum == "freshsum"
 
     @freezegun.freeze_time(DEFAULT_DATE)
     def test_bulk_sync_objects_persists_expansion_hint_on_update(self, django_settings, elasticsearch):

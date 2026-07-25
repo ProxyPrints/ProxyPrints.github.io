@@ -457,6 +457,24 @@ class Card(models.Model):
     # reusing 0 as a sentinel the way CanonicalCard.image_hash does (that field predates this
     # decision; not retrofitted here, out of scope).
     content_phash = models.BigIntegerField(null=True, blank=True, db_index=True)
+    # md5 checksum substrate (issue #473 PR-1, docs/features/catalog-completion-plan.md's
+    # #442-sourced "index Drive checksums" leverage) - the Google Drive API's own `md5Checksum`
+    # field on a file listing, copied verbatim from the same folder-listing metadata
+    # `transform_image_into_object` already reads (see `cardpicker.sources.api.Image.
+    # md5_checksum`) - never computed locally, never derived from image bytes we don't hold (the
+    # governing "we index, we do not store images" premise in CLAUDE.md). NULL means "no
+    # checksum known for this card" - either the source type doesn't carry one at all (LOCAL_FILE
+    # - see `LocalFile.get_all_images_inside_folder`, which never sets it) or the Drive listing
+    # simply hadn't been walked with checksum-awareness yet (pre-#473 cards, until
+    # `backfill_md5_checksums` or an ordinary re-scan through `update_database` fills it in). Per
+    # the owner's ruling 3 on issue #473: a NULL or otherwise-unique md5 is a "group of one" -
+    # every future group-level pooling change (PR-2/PR-3) must be a provable no-op for that
+    # degenerate case, so this field is NEVER invented/guessed when the listing doesn't supply
+    # one. Deliberately a plain string (Drive's own hex-digest format, not re-encoded) rather than
+    # a BigIntegerField like `content_phash`/`CanonicalCard.image_hash` - md5 is an opaque
+    # cross-source identity key here, not a distance-comparable perceptual hash, so there's no
+    # reason to pay the twos-complement int-packing cost those two fields exist for.
+    md5_checksum = models.CharField(max_length=32, null=True, blank=True, db_index=True)
 
     def __str__(self) -> str:
         return (

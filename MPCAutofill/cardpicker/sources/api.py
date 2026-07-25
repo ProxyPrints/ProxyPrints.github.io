@@ -78,6 +78,13 @@ class Image:
     modified_time: dt.datetime
     height: int
     folder: Folder
+    # issue #473 PR-1: the source's own listing checksum for this file, when the listing carries
+    # one at all (Google Drive's `md5Checksum` field - see `GoogleDrive.get_all_images_inside_
+    # folder`). Optional with a `None` default so every existing positional/keyword call site
+    # that predates this field keeps working unchanged; `LocalFile.get_all_images_inside_folder`
+    # never sets this (no Drive-side checksum exists for a local file), which is the intended
+    # "stays null" behaviour for that source type per the issue's owner ruling.
+    md5_checksum: Optional[str] = None
 
     def unpack_name(
         self, tags: Tags

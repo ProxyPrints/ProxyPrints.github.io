@@ -147,7 +147,8 @@ class GoogleDrive(SourceType):
                     "mimeType contains 'image/jpeg') and "
                     f"'{folder.id}' in parents",
                     fields="nextPageToken, files("
-                    "id, name, trashed, size, parents, createdTime, modifiedTime, imageMediaMetadata"
+                    "id, name, trashed, size, parents, createdTime, modifiedTime, imageMediaMetadata, "
+                    "md5Checksum"
                     ")",
                     pageSize=500,
                     pageToken=page_token,
@@ -168,6 +169,11 @@ class GoogleDrive(SourceType):
                             folder=folder,
                             height=item["imageMediaMetadata"]["height"],
                             size=int(item["size"]),
+                            # issue #473 PR-1 - `.get`, not `[...]`, since the Drive API's own
+                            # docs don't guarantee md5Checksum is present for every file (e.g. a
+                            # Google Docs Editors file has none - shouldn't occur for genuine
+                            # image/png|jpg|jpeg mimeTypes, but never assumed).
+                            md5_checksum=item.get("md5Checksum"),
                         )
                     )
 
