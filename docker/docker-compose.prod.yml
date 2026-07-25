@@ -127,15 +127,21 @@ services:
     restart: unless-stopped
     expose:
       - 5432
-    ports: []
+    # !reset (Compose merge tag, v2.24+): a plain `ports: []` does NOT override
+    # the base file's populated `ports:` list through `extends` - Compose only
+    # replaces a list field on a literal override, not through the extend/merge
+    # path, so the base 127.0.0.1:5432 mapping was silently surviving into prod
+    # (issue #475). `!reset` forces the field to actually reset to empty.
+    ports: !reset []
   elasticsearch:
     extends:
       file: docker-compose.yml
       service: elasticsearch
     restart: unless-stopped
     expose:
-      - 5432
-    ports: []
+      - 9200
+    # See the !reset comment on the postgres service above - same bug, same fix.
+    ports: !reset []
     environment:
       - discovery.type=single-node
       - logger.level=WARN
