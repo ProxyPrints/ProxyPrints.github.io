@@ -51,13 +51,15 @@ exists to gate WRITE commands behind a matching prior dry-run; a command that ca
 nothing for that guard to gate.
 """
 
+import contextlib
 import logging
+import os
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from django.core.management.base import BaseCommand, CommandParser
 from django.test import override_settings
@@ -65,15 +67,23 @@ from django.utils import timezone
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
+from cardpicker.image_evidence import _parse_is_lexicon_valid
+from cardpicker.local_calculate_verdicts import (
+    _get_cached_candidate_name_index,
+    _resolve_candidates_for_card,
+    known_set_codes,
+)
 from cardpicker.local_ocr import (
     DEFAULT_CROP_BOX,
     OCR_ENGINE_PYTESSERACT,
     OCR_ENGINE_TESSEROCR,
     TESSERACT_CONFIG,
+    OcrParseResult,
     crop_collector_line,
     parse_collector_line,
     preprocess_variants,
     run_tesseract_text_and_words,
+    validate_against_candidates,
 )
 from cardpicker.models import Card, ImageEvidence, PilotRunLedger
 from cardpicker.pilot_run_lifecycle import (
@@ -100,18 +110,24 @@ class _FetchOutcome:
     card_id: int
     image_bytes: Optional[bytes] = None
     content_hash: Optional[int] = None
+    card_name: Optional[str] = None
     outcome: Optional[str] = None  # None means fetched OK; otherwise a skip reason
 
 
 @dataclass
 class _CardAbResult:
     card_id: int
+    card_name: str
     byte_identical: bool
     parse_agree: bool
     stored_vs_fresh_agree: Optional[bool]
     conf_delta: Optional[float]
     latency_pytesseract_ms: float
     latency_tesserocr_ms: float
+    # kept alongside `parse_agree` (not derivable from it) so `--disagreements-detail` can
+    # classify each disagreeing card's two parses without re-running either engine.
+    parsed_pytesseract: OcrParseResult
+    parsed_tesserocr: OcrParseResult
 
 
 @dataclass
@@ -139,7 +155,13 @@ def _fetch_one(card_id: int, stop_event: Any) -> _FetchOutcome:
         return _FetchOutcome(card_id=card_id, outcome="lockout")
     if image_bytes is None:
         return _FetchOutcome(card_id=card_id, outcome="fetch_failed")
-    return _FetchOutcome(card_id=card_id, image_bytes=image_bytes, content_hash=card.content_phash, outcome=None)
+    return _FetchOutcome(
+        card_id=card_id,
+        image_bytes=image_bytes,
+        content_hash=card.content_phash,
+        card_name=card.name,
+        outcome=None,
+    )
 
 
 def _mean_conf(words: list[dict[str, Any]]) -> Optional[float]:
@@ -147,7 +169,32 @@ def _mean_conf(words: list[dict[str, Any]]) -> Optional[float]:
     return sum(confidences) / len(confidences) if confidences else None
 
 
-def _compare_one_card(card_id: int, content_hash: Optional[int], image_bytes: bytes) -> Optional[_CardAbResult]:
+@contextlib.contextmanager
+def _suppress_libpng_warnings() -> Iterator[None]:
+    """Some real card images decode with a benign libpng `iCCP: known incorrect sRGB profile`
+    (and similar) warning - emitted by libpng itself straight to the process's OS-level stderr
+    file descriptor during Pillow's decode, not raised as a Python `warnings.warn` call, so a
+    `warnings.catch_warnings()` filter can never catch it. Redirects fd 2 to `os.devnull` only
+    for the duration of the image decode/crop/preprocess calls below, so this run's own stdout
+    (what an executor tails and what `--disagreements-detail`'s report depends on) survives
+    untouched. Safe here specifically because `_compare_one_card` runs strictly sequentially in
+    the main thread (module docstring) - never wrap a call made from a worker thread with this,
+    the fd redirect is process-global, not per-thread.
+    """
+    saved_fd = os.dup(2)
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull_fd, 2)
+        yield
+    finally:
+        os.dup2(saved_fd, 2)
+        os.close(devnull_fd)
+        os.close(saved_fd)
+
+
+def _compare_one_card(
+    card_id: int, card_name: str, content_hash: Optional[int], image_bytes: bytes
+) -> Optional[_CardAbResult]:
     """The compute-only half - takes already-fetched bytes (never re-fetches), decodes lazily,
     crops+preprocesses ONCE, then runs the SAME variant through both engines via the real seam
     (`run_tesseract_text_and_words`, `override_settings` swapping which engine is active - see
@@ -160,9 +207,10 @@ def _compare_one_card(card_id: int, content_hash: Optional[int], image_bytes: by
     from PIL import Image
 
     try:
-        image = Image.open(BytesIO(image_bytes))
-        cropped = crop_collector_line(image, DEFAULT_CROP_BOX)
-        variant = preprocess_variants(cropped)[0]
+        with _suppress_libpng_warnings():
+            image = Image.open(BytesIO(image_bytes))
+            cropped = crop_collector_line(image, DEFAULT_CROP_BOX)
+            variant = preprocess_variants(cropped)[0]
     except Exception:
         logger.exception("Failed to decode/crop/preprocess card %s - counting as a fetch failure", card_id)
         return None
@@ -205,6 +253,7 @@ def _compare_one_card(card_id: int, content_hash: Optional[int], image_bytes: by
 
     return _CardAbResult(
         card_id=card_id,
+        card_name=card_name,
         byte_identical=text_py == text_te,
         parse_agree=(parsed_py.set_code, parsed_py.collector_number)
         == (parsed_te.set_code, parsed_te.collector_number),
@@ -212,6 +261,8 @@ def _compare_one_card(card_id: int, content_hash: Optional[int], image_bytes: by
         conf_delta=conf_delta,
         latency_pytesseract_ms=latency_py_ms,
         latency_tesserocr_ms=latency_te_ms,
+        parsed_pytesseract=parsed_py,
+        parsed_tesserocr=parsed_te,
     )
 
 
@@ -252,7 +303,10 @@ def run_ab(sample: int, seed: Optional[int], stdout_write: Any) -> _AbSummary:
                 summary.fetch_failures += 1
             else:
                 assert outcome.image_bytes is not None
-                result = _compare_one_card(outcome.card_id, outcome.content_hash, outcome.image_bytes)
+                assert outcome.card_name is not None
+                result = _compare_one_card(
+                    outcome.card_id, outcome.card_name, outcome.content_hash, outcome.image_bytes
+                )
                 if result is None:
                     summary.fetch_failures += 1
                 else:
@@ -333,6 +387,113 @@ def _print_report(summary: _AbSummary, stdout_write: Any) -> dict[str, Any]:
     }
 
 
+DISAGREEMENT_BUCKET_TESSEROCR_ONLY = "tesserocr_only_valid"
+DISAGREEMENT_BUCKET_PYTESSERACT_ONLY = "pytesseract_only_valid"
+DISAGREEMENT_BUCKET_BOTH_VALID = "both_valid_different"
+DISAGREEMENT_BUCKET_NEITHER_VALID = "neither_valid"
+DISAGREEMENT_BUCKETS = (
+    DISAGREEMENT_BUCKET_TESSEROCR_ONLY,
+    DISAGREEMENT_BUCKET_PYTESSERACT_ONLY,
+    DISAGREEMENT_BUCKET_BOTH_VALID,
+    DISAGREEMENT_BUCKET_NEITHER_VALID,
+)
+
+
+@dataclass(frozen=True)
+class _ParseValidation:
+    lexicon_valid: bool
+    candidate_match: bool
+
+    @property
+    def valid(self) -> bool:
+        return self.lexicon_valid and self.candidate_match
+
+
+def _classify_parse(
+    parsed: OcrParseResult, card_name: str, known_codes: frozenset[str], index: Any
+) -> _ParseValidation:
+    """Classifies a single engine's parse for `--disagreements-detail` - LEXICON-VALID reuses
+    `image_evidence._parse_is_lexicon_valid` (the same "set code is None, or exists in
+    `CanonicalExpansion`" gate `local_calculate_verdicts.calculate_join_key_verdict` applies
+    inline via its own `known_set_codes()`-built lexicon - see that function's own SET-CODE
+    LEXICON GATE docstring paragraph); CANDIDATE-MATCHES reuses `local_ocr.
+    validate_against_candidates` unmodified against this card's own name-scoped candidate set
+    (`local_calculate_verdicts._resolve_candidates_for_card`, the same back-face-aware resolver
+    the real join-key calculator uses - see that function's own docstring for why candidates
+    MUST be name-scoped, never a global query). Neither check is reimplemented here."""
+    lexicon_valid = _parse_is_lexicon_valid(parsed, known_codes)
+    candidates = _resolve_candidates_for_card(card_name, index)
+    matched, _skip_reason = validate_against_candidates(parsed, candidates)
+    return _ParseValidation(lexicon_valid=lexicon_valid, candidate_match=matched is not None)
+
+
+def _fmt_parsed(parsed: OcrParseResult) -> str:
+    return f"({parsed.set_code}, {parsed.collector_number})"
+
+
+def _print_disagreements_detail(summary: _AbSummary, stdout_write: Any) -> dict[str, int]:
+    """For every card whose two engines' PARSES disagree (`_CardAbResult.parse_agree is False`),
+    prints one classification line per card and returns a summary dict of the four mutually
+    exclusive buckets below (also merged into this run's own ledger `counters` by the caller).
+    Read-only throughout - `known_set_codes()` and `_get_cached_candidate_name_index()` are both
+    plain DB reads, no write path exists here at all (matching this whole command's own
+    unconditional `dry_run=True` convention).
+
+    A parse counts as VALID for bucketing purposes only when BOTH named checks pass (lexicon-
+    valid AND candidate-matched) - `candidate_match=True` structurally implies `lexicon_valid=
+    True` already (a real matched `CandidatePrinting`'s `expansion_code` is always a real
+    `CanonicalExpansion.code`, or the parse never carried a set code at all - the pre-M15,
+    collector-number-only case `_parse_is_lexicon_valid` already treats as vacuously valid), so
+    this conjunction is equivalent to `candidate_match` alone in practice; written as an explicit
+    `and` anyway so the bucket definition doesn't silently depend on that structural fact holding
+    forever.
+    """
+    disagreements = [r for r in summary.results if not r.parse_agree]
+    counts = {bucket: 0 for bucket in DISAGREEMENT_BUCKETS}
+
+    stdout_write("")
+    stdout_write("--- disagreements detail ---")
+    if not disagreements:
+        stdout_write("no parse-level disagreements in this sample")
+        return counts
+
+    known_codes = known_set_codes()
+    index = _get_cached_candidate_name_index()
+
+    for r in disagreements:
+        py = _classify_parse(r.parsed_pytesseract, r.card_name, known_codes, index)
+        te = _classify_parse(r.parsed_tesserocr, r.card_name, known_codes, index)
+
+        if py.valid and te.valid:
+            bucket = DISAGREEMENT_BUCKET_BOTH_VALID
+        elif py.valid:
+            bucket = DISAGREEMENT_BUCKET_PYTESSERACT_ONLY
+        elif te.valid:
+            bucket = DISAGREEMENT_BUCKET_TESSEROCR_ONLY
+        else:
+            bucket = DISAGREEMENT_BUCKET_NEITHER_VALID
+        counts[bucket] += 1
+
+        stdout_write(
+            f"card_id={r.card_id} "
+            f"pytesseract={_fmt_parsed(r.parsed_pytesseract)} "
+            f"lexicon_valid={_fmt_bool(py.lexicon_valid)} candidate_match={_fmt_bool(py.candidate_match)} | "
+            f"tesserocr={_fmt_parsed(r.parsed_tesserocr)} "
+            f"lexicon_valid={_fmt_bool(te.lexicon_valid)} candidate_match={_fmt_bool(te.candidate_match)} | "
+            f"bucket={bucket}"
+        )
+
+    stdout_write("")
+    stdout_write("--- disagreements classification summary ---")
+    stdout_write(
+        f"tesserocr_only_valid={counts[DISAGREEMENT_BUCKET_TESSEROCR_ONLY]} "
+        f"pytesseract_only_valid={counts[DISAGREEMENT_BUCKET_PYTESSERACT_ONLY]} "
+        f"both_valid_different={counts[DISAGREEMENT_BUCKET_BOTH_VALID]} "
+        f"neither_valid={counts[DISAGREEMENT_BUCKET_NEITHER_VALID]}"
+    )
+    return counts
+
+
 class Command(BaseCommand):
     help = (
         "Read-only real-image A/B validation for the tesserocr OCR engine seam (issue #423): "
@@ -342,7 +503,10 @@ class Command(BaseCommand):
         "agreement, stored-vs-fresh agreement (drift detection against this card's existing "
         "collector_line_ocr evidence), confidence deltas, and per-call latency for both engines. "
         "Writes nothing to ImageEvidence or any card - purely a report. This is the tool #423's "
-        "spike comment names as the prerequisite for any future OCR_ENGINE flip decision."
+        "spike comment names as the prerequisite for any future OCR_ENGINE flip decision. "
+        "--disagreements-detail additionally classifies every parse-level disagreement by "
+        "lexicon-validity and candidate-match, against the real known_set_codes()/"
+        "validate_against_candidates checks (still read-only)."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -360,10 +524,22 @@ class Command(BaseCommand):
             "time (always echoed to stdout and the run's own ledger row, so an unseeded run's "
             "sample is still identifiable after the fact).",
         )
+        parser.add_argument(
+            "--disagreements-detail",
+            action="store_true",
+            default=False,
+            help="For every card where the two engines' parses disagree, print a per-card "
+            "classification line (each engine's parsed (set_code, collector_number), whether "
+            "each is lexicon-valid and candidate-matched) plus a "
+            "tesserocr_only_valid/pytesseract_only_valid/both_valid_different/neither_valid "
+            "summary - also merged into this run's own ledger counters. Read-only, same as "
+            "every other report this command produces.",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         sample: int = max(0, options["sample"])
         seed: Optional[int] = options["seed"]
+        disagreements_detail: bool = options["disagreements_detail"]
         # Microsecond-precision timestamp (2026-07-25, PR #470's own "same-day/same-second
         # collision" fix, mirrored here rather than re-derived - see that PR for the original
         # UNIQUE-constraint incident on PilotRunLedger.run_id): a whole-second-only timestamp
@@ -384,6 +560,11 @@ class Command(BaseCommand):
             self.stdout.write(f"run_id={run_id} sample={sample} seed={seed}")
             ab_summary = run_ab(sample=sample, seed=seed, stdout_write=self.stdout.write)
             report_counters = _print_report(ab_summary, self.stdout.write)
+
+            if disagreements_detail:
+                report_counters = merge_counters(
+                    report_counters, _print_disagreements_detail(ab_summary, self.stdout.write)
+                )
 
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()

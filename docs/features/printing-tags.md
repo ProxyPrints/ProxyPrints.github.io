@@ -1673,7 +1673,13 @@ reach at all:
   decision is gated on (per-image byte-identity, parse-level agreement,
   stored-vs-fresh drift detection, confidence deltas, and latency for
   both engines - writes nothing, per this doc's own "index, don't store"
-  discipline).
+  discipline). Its `--disagreements-detail` flag classifies every
+  parse-level disagreement further - each engine's parse checked against
+  the real `known_set_codes()` lexicon and `validate_against_candidates`
+  candidate-matcher (same checks the real join-key calculator uses, not
+  reimplemented) - into
+  `tesserocr_only_valid`/`pytesseract_only_valid`/`both_valid_different`/
+  `neither_valid` buckets, also recorded on the run's own ledger row.
 - **L2, perceptual hash**: art-region phash comparison against each
   name-candidate's Scryfall art crop, voting only when there's a clear
   single best match (distance threshold + margin over the second-best,
