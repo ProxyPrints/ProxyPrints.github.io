@@ -17,7 +17,9 @@ import {
 import {
   auditContrast,
   ContrastFailure,
+  contrastRatioHex,
   formatFailureTable,
+  rgbStringToHex,
   splitKnownOpenItems,
 } from "./tooling/contrastAudit";
 
@@ -230,3 +232,135 @@ for (const route of ["", "about", "explore", "myDecks", "whatsthat", "new"]) {
     assertNoNewFailures(result.contrastFailures, `/${route || "(home)"}`);
   });
 }
+
+// Link colour audit (2026-07-25 follow-up, owner-approved open item 2) - $link-color switched
+// from $primary (measured 5.98:1 on panel, below AAA) to $theme-info (measured 7.09-9.96:1 on
+// every surface a link can land on - see styles.scss's own comment for the full measurement,
+// including why $theme-accent was tried and rejected: it's WORSE than $primary on every one of
+// these five surfaces, not better). Covers resting, hover, AND the two pseudo-classes Bootstrap's
+// own reboot.scss never gives a separate rule to (:visited/:active fall through to the resting
+// $link-color unless :hover is also active - verified via source inspection, see styles.scss) -
+// asserted here anyway rather than only trusted from source reading, since real getComputedStyle
+// after a real DOM mutation is the actual regression gate, not the source-reading argument for it.
+test.describe("Link colour audit (owner-approved open item 2 - $link-color -> $theme-info)", () => {
+  // Synthetic isolated surfaces (deterministic backgrounds, not dependent on finding a real link
+  // on all five - band-bg in particular has no real prose link anywhere in the app today) - real
+  // getComputedStyle() of a real rendered <a>, not a recomputation of the SCSS literal.
+  const SURFACES: Array<[label: string, hex: string]> = [
+    ["body-bg", "#1a1b26"],
+    ["raised-bg", "#24283b"],
+    ["panel-bg", "#2f3549"],
+    ["card-header-bg", "#2f3548"],
+    ["band-bg", "#222234"],
+  ];
+
+  test("resting and hover colour clear strict-AAA-normal (7:1) on every surface a link can land on", async ({
+    page,
+    network,
+  }) => {
+    network.use(whoamiAnonymous, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "about");
+
+    const failures: string[] = [];
+    for (const [label, bgHex] of SURFACES) {
+      const linkId = `link-audit-${label}`;
+      await page.evaluate(
+        ({ bgHex, linkId }) => {
+          // Remove any prior probe (they'd otherwise stack at the same fixed position - not
+          // just visual clutter, the REAL mouse cursor left hovering the last one's pixel
+          // position would make the new element start life already :hover'd, since :hover is
+          // coordinate-based, not element-based).
+          document
+            .querySelectorAll('[data-link-audit-probe="1"]')
+            .forEach((n) => n.remove());
+          const div = document.createElement("div");
+          div.setAttribute("data-link-audit-probe", "1");
+          // Fixed + top z-index so this synthetic probe is never occluded by the real page's
+          // own fixed/sticky chrome (the navbar intercepted pointer events here without this).
+          div.style.position = "fixed";
+          div.style.top = "0";
+          div.style.left = "0";
+          div.style.zIndex = "999999";
+          div.style.backgroundColor = bgHex;
+          div.style.padding = "8px";
+          const a = document.createElement("a");
+          a.href = "#";
+          a.id = linkId;
+          a.textContent = "Sample link text";
+          div.appendChild(a);
+          document.body.appendChild(div);
+        },
+        { bgHex, linkId }
+      );
+      // Move the real cursor well away before reading "resting" - :hover is coordinate-based, so
+      // without this the cursor left over from the PREVIOUS iteration's `.hover()` call (same
+      // fixed top:0/left:0 screen position every iteration) would make the freshly-created link
+      // read as already-hovered.
+      await page.mouse.move(600, 600);
+
+      const link = page.locator(`#${linkId}`);
+      const restingColor = await link.evaluate(
+        (el) => getComputedStyle(el).color
+      );
+      const restingHex = rgbStringToHex(restingColor);
+      const restingRatio = contrastRatioHex(restingHex, bgHex);
+      if (restingRatio < 7) {
+        failures.push(
+          `${label} resting: ${restingHex} on ${bgHex} = ${restingRatio}:1 (< 7:1)`
+        );
+      }
+
+      await link.hover();
+      const hoverColor = await link.evaluate(
+        (el) => getComputedStyle(el).color
+      );
+      const hoverHex = rgbStringToHex(hoverColor);
+      const hoverRatio = contrastRatioHex(hoverHex, bgHex);
+      if (hoverRatio < 7) {
+        failures.push(
+          `${label} hover: ${hoverHex} on ${bgHex} = ${hoverRatio}:1 (< 7:1)`
+        );
+      }
+
+      console.log(
+        `link colour - ${label}: resting ${restingHex} = ${restingRatio}:1, hover ${hoverHex} = ${hoverRatio}:1`
+      );
+    }
+
+    expect(failures, failures.join("\n")).toEqual([]);
+  });
+
+  test("a real production link (contributions guidelines' ISO-639-1 reference, inside the accordion body's panel-bg) clears strict-AAA-normal", async ({
+    page,
+    network,
+  }) => {
+    network.use(contributionsOneSource, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "contributions");
+
+    const header = page.getByRole("button", {
+      name: "Contribution Guidelines",
+    });
+    await header.click();
+    const link = page.getByRole("link", { name: "ISO-639-1 nomenclature" });
+    await expect(link).toBeVisible();
+
+    const panelBgHex = "#2f3549";
+
+    const restingColor = await link.evaluate(
+      (el) => getComputedStyle(el).color
+    );
+    const restingHex = rgbStringToHex(restingColor);
+    const restingRatio = contrastRatioHex(restingHex, panelBgHex);
+
+    await link.hover();
+    const hoverColor = await link.evaluate((el) => getComputedStyle(el).color);
+    const hoverHex = rgbStringToHex(hoverColor);
+    const hoverRatio = contrastRatioHex(hoverHex, panelBgHex);
+
+    console.log(
+      `real ISO-639-1 link: resting ${restingHex} = ${restingRatio}:1, hover ${hoverHex} = ${hoverRatio}:1`
+    );
+    expect(restingRatio).toBeGreaterThanOrEqual(7);
+    expect(hoverRatio).toBeGreaterThanOrEqual(7);
+  });
+});

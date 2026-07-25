@@ -309,13 +309,16 @@ export async function auditContrast(
   return result as AuditResult;
 }
 
-// Site-wide contrast audit (2026-07-25) OPEN ITEMS - see docs/features/theming.md's
-// "2026-07-25 contrast/residual-grey audit" section for the full writeup of each. These are
-// real, MEASURED, owner-attention-needed gaps this audit found, deliberately left unfixed
-// because resolving them means either accepting an already-ratified token's own known shortfall
-// stays visible (items 1/4) or changing a deliberate pre-existing sitewide convention that needs
-// an explicit owner call on the replacement (item 2), or reaches into a third-party library's
-// own CSS with no token seam at all (item 3) - none of that is this pass's four reported
+// Site-wide contrast audit (2026-07-25) OPEN ITEMS - numbered to match docs/features/theming.md's
+// "2026-07-25 contrast/residual-grey audit" OPEN ITEMS list exactly (see that section for the
+// full writeup of each) - item 2 (former: $link-color/$primary measuring 5.98:1 on panel) is
+// RESOLVED as of the 2026-07-25 link-colour follow-up ($link-color -> $theme-info, 7.09-9.96:1 on
+// every surface, see styles.scss's own comment) and deliberately has no case here any more - an
+// orange (#ff9e64) link-text failure recurring now would be a genuine regression, not a
+// known/allowed gap, so it must NOT be allowlisted again. Items 1/3/4 remain real, MEASURED,
+// owner-attention-needed gaps, left unfixed because resolving them means either accepting an
+// already-ratified token's own known shortfall stays visible (1/4) or reaches into a third-party
+// library's own CSS with no token seam at all (3) - none of that is this pass's four reported
 // defects. Matched structurally (fg/selector patterns), not by page/route, so the SAME
 // already-known gap recurring on a different page never counts as a new failure - but anything
 // that does NOT match one of these signatures is a genuine, unexpected regression and fails the
@@ -324,16 +327,10 @@ function isKnownOpenItem(f: ContrastFailure): boolean {
   // 1. $theme-muted (#a3aad0) itself falls short of strict-AAA-normal on raised/panel-family
   // backgrounds (6.39/6.68/5.34:1 measured) - a PR #432-ratified compromise, not new.
   if (f.fg === "#a3aad0" && f.reason === "contrast") return true;
-  // 2. $link-color (unset, defaults to $primary/#ff9e64) measures 5.98:1 on panel - a
-  // pre-existing, never-previously-measured convention (Navbar.tsx/Footer.tsx/AuthWidget.tsx use
-  // the same var(--bs-primary) link styling). Matched on the resolved orange foreground alone,
-  // not the tag - inline markup inside a link (e.g. contributions.tsx's `<a><b>ISO-639-1</b></a>`
-  // wikipedia reference) puts the direct text node on the `<b>`, not the `<a>`, but it's
-  // inheriting the exact same $link-color value either way.
-  if (f.fg === "#ff9e64" && f.reason === "contrast") return true;
   // 3. Third-party libraries' own unthemed defaults (react-select's white "Choose..."
   // placeholder, react-dropdown-tree-select's grey tag pills/close button) - no Bootstrap/token
-  // seam reaches either; needs its own scoped override stylesheet, out of scope for this pass.
+  // seam reaches either; needs its own scoped override stylesheet, a separate follow-up PR (per
+  // the owner - kept apart from this PR to avoid two frontend branches colliding in styles.scss).
   if (
     (f.selector.includes("rdts") ||
       f.selector.startsWith("span.placeholder")) &&
@@ -360,6 +357,39 @@ export function splitKnownOpenItems(failures: ContrastFailure[]): {
     (isKnownOpenItem(f) ? knownOpenItems : newFailures).push(f);
   }
   return { newFailures, knownOpenItems };
+}
+
+// Standalone hex-pair WCAG contrast ratio (2026-07-25, link-colour follow-up) - the same
+// relative-luminance math `collectInPage` uses in-browser, exposed here as a plain Node-side
+// function for tests that measure a specific known pairing (e.g. a link's `color` against a
+// deliberately-controlled background) rather than sweeping the whole DOM. Keep these two
+// implementations in sync if the formula ever changes.
+export function contrastRatioHex(hexA: string, hexB: string): number {
+  const toRgb = (hex: string) => {
+    const n = parseInt(hex.replace("#", ""), 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  };
+  const luminance = (c: { r: number; g: number; b: number }) => {
+    const [R, G, B] = [c.r, c.g, c.b].map((ch) => {
+      const v = ch / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * R + 0.7152 * G + 0.0722 * B;
+  };
+  const L1 = luminance(toRgb(hexA)) + 0.05;
+  const L2 = luminance(toRgb(hexB)) + 0.05;
+  return Math.round((L1 > L2 ? L1 / L2 : L2 / L1) * 100) / 100;
+}
+
+/** Converts a browser `getComputedStyle().color` `rgb(...)`/`rgba(...)` string to `#rrggbb`. */
+export function rgbStringToHex(rgbString: string): string {
+  const m = rgbString.match(/rgba?\(([^)]+)\)/);
+  if (!m) throw new Error(`Not an rgb()/rgba() string: ${rgbString}`);
+  const [r, g, b] = m[1]
+    .split(",")
+    .map((s) => Math.round(parseFloat(s.trim())));
+  const hex = (n: number) => n.toString(16).padStart(2, "0");
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
 }
 
 export function formatFailureTable(failures: ContrastFailure[]): string {

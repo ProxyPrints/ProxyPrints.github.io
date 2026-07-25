@@ -488,8 +488,9 @@ noted:**
 
 **OPEN ITEMS — owner decision needed, not resolved by this pass** (found by
 the audit, left alone because fixing them means either accepting a token's
-already-ratified compromise stays visible or changing a deliberate
-pre-existing convention, both outside this pass's four reported defects):
+already-ratified compromise stays visible or reaches into a third-party
+library's own CSS with no token seam, both outside this pass's four
+reported defects):
 
 1. **`$theme-muted` itself still falls short of strict-AAA-normal (7:1) on
    `$theme-raised-bg` and `$theme-panel-bg`** — 6.39:1 and 5.34:1
@@ -501,16 +502,13 @@ pre-existing convention, both outside this pass's four reported defects):
    regression. Needs either a second, higher-contrast "small-caption-on-
    raised" token or an owner ruling that AA (4.5:1), not strict AAA, is the
    accepted floor for this specific role.
-2. **`$link-color` (unset, defaults to `$primary`) measures only 5.98:1 on
-   `$theme-panel-bg`** — below strict-AAA-normal, and this doc's own
-   "Accent scope boundary" section previously asserted this was fine
-   ("stays on `$primary`... matching the pre-existing convention") without
-   ever actually measuring it. It's worse than the accent purple that same
-   section rejected for prose (6.74:1) on the one surface both were
-   checked against. Not fixed here — changing `$link-color` sitewide is a
-   materially bigger, more visible change than this pass's other four
-   fixes (every plain `<a>` tag's colour, not an unrouted default nobody
-   chose), and needs an explicit owner call on the replacement token.
+2. ~~`$link-color` (unset, defaults to `$primary`) measures only 5.98:1 on
+   `$theme-panel-bg`~~ — **RESOLVED, 2026-07-25 link-colour follow-up**, see
+   "Link colour fix" below for the full writeup and measured numbers. Left
+   in this numbered list (rather than deleted and silently reflowed) so
+   anything that already points at "item 2" by number — e.g. the "Accent
+   scope boundary" section above — stays accurate; a resolved item is
+   marked resolved in place, not removed.
 3. **Two third-party libraries render their own unthemed default
    greys/whites**, found by the audit's off-palette-grey sweep but not
    fixed (no Bootstrap/token seam reaches into either): `react-select`'s
@@ -518,8 +516,9 @@ pre-existing convention, both outside this pass's four reported defects):
    dropdown surface on this dark theme, 3.95:1) and
    `react-dropdown-tree-select`'s tag pills (`/explore`, `#000000` on
    `#dddddd`). Both need their own scoped override stylesheet targeting
-   that library's own class names — a distinct, larger follow-up, not a
-   token-layer fix.
+   that library's own class names — owner-approved as a SEPARATE follow-up
+   PR after this one merges (kept apart to avoid two frontend branches
+   colliding in `styles.scss`), not a token-layer fix anyway.
 4. **`$theme-danger` as plain text colour measures 6.46:1** (`/whatsthat`'s
    "Something went wrong" message) — this is the SAME already-documented,
    already-ratified AAA-large-only exception the token file's own comment
@@ -622,3 +621,74 @@ they were re-derived.
 - Screenshots at 390px: `/contributions` (collapsed + expanded accordion),
   the card-list restore-draft banner, the editor's mobile Print & Settings
   sheet (scrolled to show Cardback too) — paths in the PR body.
+
+## Link colour fix (2026-07-25 follow-up)
+
+Resolves OPEN ITEM 2 above. `$link-color` (Bootstrap core default: `$primary`
+— never previously overridden) is now `$theme-info`; `$link-hover-color`
+(Bootstrap default: an auto-derived 20%-darken of whatever `$link-color` is)
+is now explicitly `$theme-text`, since the auto-derived shade fails AAA on
+every surface once applied to a light colour on this dark theme (measured
+4.56–6.40:1 — darkening a light foreground toward black on an already-dark
+background reduces contrast, not increases it).
+
+**This is the THIRD correction this audit has made to a claim in this doc
+that was never actually measured** (the first two: `$card-bg` "deliberately
+untouched" in "What's grey on purpose", and `$link-color` "matching the
+pre-existing convention" in "Accent scope boundary" — both above). The
+pattern is worth naming once, plainly, so future work doesn't extend it:
+**an assertion about a colour relationship is not evidence until it's been
+computed.** All three corrections were "this reads as fine/intentional" or
+"matches an existing pattern" claims stated with no accompanying ratio —
+each one turned out to be either backwards or simply untested the moment a
+real contrast calculation was run against it. Nothing else in this doc's
+palette/token tables is assumed exempt from that same scrutiny; a future
+editor who wants to assert a pairing is safe should compute and cite the
+ratio in the same sentence, not state it as received wisdom.
+
+The owner initially asked for `$theme-accent` (reasoning: its own
+already-documented 6.74:1 on the D14 band surface reads as "better than
+`$primary`'s 5.98:1 on panel"). Measuring both across every surface a link
+can actually land on shows that reasoning compared two DIFFERENT surfaces
+(band vs panel) — on any SINGLE surface, `$primary` beats `$theme-accent`
+by roughly a full point, not the other way around:
+
+| Surface                 | `$primary` (old) | `$theme-accent` (rejected) | `$theme-info` (shipped, resting) | `$theme-text` (shipped, hover) |
+| ----------------------- | ---------------- | -------------------------- | -------------------------------- | ------------------------------ |
+| `$theme-body-bg`        | 8.40             | 7.39                       | 9.96                             | 10.59                          |
+| `$theme-raised-bg`      | 7.16             | 6.30 (fails)               | 8.49                             | 9.02                           |
+| `$theme-panel-bg`       | 5.98 (fails)     | 5.26 (fails)               | 7.09                             | 7.54                           |
+| `$theme-card-header-bg` | 5.99 (fails)     | 5.27 (fails)               | 7.10                             | 7.55                           |
+| `$theme-band-bg`        | 7.67             | 6.74 (fails)               | 9.09                             | 9.66                           |
+
+`$theme-accent` fails strict-AAA-normal on 4 of the 5 surfaces and is worse
+than the status quo it was meant to replace on all 5 — switching to it would
+have been a regression labelled as a fix, so it wasn't used. `$theme-info`
+is the minimal correct substitute: not a new palette entry (it's this
+codebase's existing "link-styled text" role token — see the "Accent scope
+boundary" section above, which already routed a handful of small cyan links
+to it for exactly this reason), and it clears strict-AAA-normal on every
+surface with real margin (7.09:1 minimum). `:visited`/`:active` need no
+separate rule — verified via Bootstrap core's own `_reboot.scss` source that
+neither pseudo-class gets one at all (both inherit the resting `$link-color`
+custom property, or `:hover`'s override if that's also active); confirmed by
+real `getComputedStyle` measurement, not just the source reading, in
+`ContrastAudit.spec.ts`'s "Link colour audit" block.
+
+## Verification (2026-07-25 link-colour follow-up)
+
+- `ContrastAudit.spec.ts`'s new "Link colour audit" describe block: one test
+  injects a real `<a>` into each of the five named surfaces and measures
+  real `getComputedStyle().color` for both resting and `:hover` (matching
+  the table above exactly, not just recomputing the SCSS literal); a second
+  test measures a real production link (`/contributions`'s ISO-639-1
+  Wikipedia reference, inside the accordion body this same audit's earlier
+  round fixed — panel-bg, 7.09:1 resting / 7.54:1 hover). Both pass.
+- `tests/tooling/contrastAudit.ts`'s `isKnownOpenItem()` allowlist had its
+  former `#ff9e64`-as-link-fg case removed entirely (not just left unused),
+  so a regression back to the old colour fails the general sweep too, not
+  only the dedicated link tests.
+- Full `ContrastAudit.spec.ts` suite (12 tests, including the two new link
+  ones) re-run after the fix — all pass; see the PR body for the console
+  output.
+- `npx tsc --noEmit`, `npx prettier@2.7.1 --check` — clean.

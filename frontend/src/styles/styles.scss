@@ -42,6 +42,46 @@ $danger: $theme-danger;
 $warning: $theme-warning;
 $info: $theme-info;
 
+// Site-wide contrast audit (2026-07-25 follow-up, owner-approved open item 2): Bootstrap core's
+// own `$link-color: $primary !default;` measured 5.98/5.99:1 on panel/card-header-bg (below
+// strict-AAA-normal) -- see docs/features/theming.md's "Accent scope boundary" section, which
+// this follow-up corrects a second time. The FIRST correction (this same audit) found that
+// section's claim "$link-color stays on $primary... matching the pre-existing convention" had
+// never actually been measured. The owner asked to try routing it to `$theme-accent` instead, on
+// the reasoning that accent's own already-documented 6.74:1 (on the D14 band surface) reads as
+// "better than $primary's 5.98:1" -- but that compares two DIFFERENT surfaces (band vs panel),
+// not the same one. Measured apples-to-apples across every surface a link can land on
+// (body/raised/panel/card-header/band), accent is worse than primary on ALL FIVE, not better:
+//   body-bg        primary 8.40  accent 7.39  (accent barely clears 7:1, thin margin)
+//   raised-bg      primary 7.16  accent 6.30  (accent FAILS -- regression vs primary's own pass)
+//   panel-bg       primary 5.98  accent 5.26  (accent fails, and by more than primary already did)
+//   card-header-bg primary 5.99  accent 5.27  (same)
+//   band-bg        primary 7.67  accent 6.74  (accent FAILS -- this is the exact number the doc's
+//                                              own "Accent scope boundary" section already flags
+//                                              as below strict-AAA-normal for prose; nothing new)
+// Accent fails 4 of 5 surfaces outright and is strictly worse than the status quo on every one --
+// switching to it would be a regression dressed as a fix, so per this task's own "if any surface
+// fails, do not force it, propose the minimal adjusted shade instead" instruction, it is NOT used
+// here. `$theme-info` (cyan) is the minimal, already-approved substitute: it is ALREADY this
+// codebase's established "link-styled text" role token (see `$theme-info`'s own token-file
+// comment and the "Accent scope boundary" section's "handful of small cyan 'info' links... stay
+// on $theme-info instead, precisely because they're small text and accent isn't AAA-safe there"
+// -- this pass just extends that SAME existing role to every link, not a new decision) -- no new
+// palette entry, and it clears strict-AAA-normal on every one of the five surfaces with real
+// margin: body 9.96, raised 8.49, panel 7.09, card-header 7.10, band 9.09 (all Playwright-
+// verified against real rendered `<a>` computed styles, not just the SCSS literal -- see the
+// fidelity spec). `$link-hover-color`'s Bootstrap default (`shift-color($link-color, 20%)`, i.e.
+// darkened 20% toward black) fails AAA on every surface once applied to a light colour on an
+// already-dark theme (measured 4.56-6.40:1) -- overridden explicitly to `$theme-text` instead
+// (lightens on hover, a common/expected link-hover treatment), which clears every surface with
+// even MORE margin (7.54-10.59:1) than the resting colour. `:visited`/`:active` need no separate
+// override -- verified via Bootstrap core's own `_reboot.scss` source (`a { color:
+// rgba(var(--bs-link-color-rgb, ...)); &:hover { --bs-link-color-rgb: ...-hover-color-rgb; } }`)
+// that neither pseudo-class has its own rule at all, so both already inherit the same resting
+// `$link-color` (or `:hover`'s override, if that's ALSO active) with zero additional CSS.
+$link-color: $theme-info;
+$link-hover-color: $theme-text;
+
 // Site-wide contrast audit (2026-07-25): Bootstrap core's own `$body-secondary-color` (the
 // source of `.text-muted`/`--bs-secondary-color`, never overridden by Superhero) defaults to
 // `rgba($body-color, .75)` -- a translucent literal, not a token, that this audit measured at
