@@ -460,14 +460,19 @@ JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT = 0.65
 # INTERIM STAGE D GUARD (issue #473 PR-2, TEMPORARY BY DESIGN - see `ImageEvidence.transferred`'s
 # own model-field docstring and `evidence_transfer.transfer_evidence`'s own docstring for the full
 # rationale): a card whose CURRENT evidence row was created by `evidence_transfer.transfer_evidence`
-# rather than a real per-card extraction pass is excluded from all three Stage D calculators below
-# (join-key/fallback/slow-path) - its own "machine observation" is the SAME bytes an md5-sibling
-# card already voted from, not an independent one, so casting a vote from it here would fabricate
-# the independence the vote-weight matrix assumes is real. RESCANNABLE (a future real extraction
+# rather than a real per-card extraction pass is excluded from the two MACHINE-VOTING Stage D
+# calculators below (join-key/fallback - both cast a `CardPrintingTag` vote) - its own "machine
+# observation" is the SAME bytes an md5-sibling card already voted from, not an independent one,
+# so casting a vote from it here would fabricate the independence the vote-weight matrix assumes
+# is real. The THIRD Stage D calculator, slow-path, is deliberately NOT guarded - it casts no
+# machine vote at all, only a `CardScanLog` routing marker handing the card to a HUMAN reviewer
+# (see `run_slow_path_calculator`'s own loop comment), which is exactly the safety net this guard
+# exists to preserve, not a case it needs to protect against. RESCANNABLE (a future real extraction
 # pass, or PR-3's own group-level vote pooling landing and removing this guard entirely, both
-# un-stick a card stuck here) - included in each calculator's own RESCANNABLE_SKIP_REASONS set
-# below. ISSUE #473's OWN COORDINATION NOTE (PR-3 build-plan section): "Removes PR-2's interim
-# Stage D guard" - do not remove this guard, or the `transferred` flag it reads, before PR-3
+# un-stick a card stuck here) - included in each of the two guarded calculators' own
+# RESCANNABLE_SKIP_REASONS set below. ISSUE #473's OWN COORDINATION NOTE (PR-3 build-plan section):
+# "Removes PR-2's interim Stage D guard" - do not remove this guard, or the `transferred` flag it
+# reads, before PR-3
 # (group-level vote pooling) actually merges and the group-aware calculators no longer need it.
 TRANSFERRED_INTERIM_GUARD_SKIP_REASON = "transferred-interim-guard"
 

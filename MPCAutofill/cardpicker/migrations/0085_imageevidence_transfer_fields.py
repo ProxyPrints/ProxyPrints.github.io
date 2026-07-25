@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("cardpicker", "0084_card_md5_checksum"),
+        ("cardpicker", "0084_card_checksums"),
     ]
 
     operations = [

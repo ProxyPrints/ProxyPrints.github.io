@@ -348,7 +348,6 @@ def _fetch_one_card(
     except Card.DoesNotExist:
         return _FetchOutcome(card_id=card_id, outcome="dropped")
 
-    from cardpicker.checksum_pairing import card_sha256_checksum
     from cardpicker.evidence_transfer import find_transfer_source, transfer_evidence
 
     transfer_source = find_transfer_source(card)
@@ -359,7 +358,7 @@ def _fetch_one_card(
             card_id=card_id,
             content_hash=card.content_phash,
             md5_checksum=card.md5_checksum,
-            sha256_checksum=card_sha256_checksum(card),
+            sha256_checksum=card.sha256_checksum,
             outcome="transferred",
         )
 
@@ -381,7 +380,7 @@ def _fetch_one_card(
         card_id=card_id,
         content_hash=card.content_phash,
         md5_checksum=card.md5_checksum,
-        sha256_checksum=card_sha256_checksum(card),
+        sha256_checksum=card.sha256_checksum,
         image_bytes=image_bytes,
         fetch_latency_ms=fetch_latency_ms,
         outcome=None,

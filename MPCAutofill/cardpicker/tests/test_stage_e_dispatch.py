@@ -14,6 +14,7 @@ proves ImageEvidence rows actually land, matching `_evidence()`'s own convention
 """
 
 import io
+import threading
 import time
 from typing import Any
 
@@ -1109,6 +1110,7 @@ class TestEvidenceTransferInDispatch:
         ImageEvidenceFactory(
             card=sibling,
             content_hash=111,
+            md5_checksum="abc123",
             extractor_versions={key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS},
             symbol_phash=999,
         )
@@ -1138,6 +1140,7 @@ class TestEvidenceTransferInDispatch:
         ImageEvidenceFactory(
             card=sibling,
             content_hash=111,
+            md5_checksum="abc123",
             extractor_versions={key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS},
         )
         real_card = CardFactory(name="Real", content_phash=222)  # no md5 - always real extraction
@@ -1296,3 +1299,87 @@ class TestDecoupledFetchAhead:
         # card A's own already-fetched work still committed before the crash.
         assert ImageEvidence.objects.filter(card=card_a).count() == 1
         assert ImageEvidence.objects.filter(card=card_b).count() == 0
+
+    @STREAMING_ON
+    def test_a_compute_crash_does_not_wedge_the_fetch_ahead_thread(
+        self, transactional_db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression pin (Tron §8 gate condition 3, 2026-07-25, HIGH severity): a crash during
+        COMPUTE (not fetch) - e.g. a PIL error decoding a corrupt download - must not wedge the
+        fetch-ahead thread forever on a full `out_queue.put(...)` (see `_run_stage_c`'s own
+        `finally` block docstring for the full mechanism this pins: `stop_event.set()` BEFORE
+        `fetch_thread.join()`, plus draining the queue). More cards than the fetch-ahead queue
+        depth so the fetch thread reliably races ahead of compute and is genuinely blocked on its
+        own `put()` by the time compute raises - a bare `join()` with no signal/drain first would
+        hang this test (and, in prod, wedge the dispatch slot with a lying RUNNING ledger row)
+        indefinitely; the `run_thread.join(timeout=...)` below is what actually proves "does not
+        hang" rather than merely "eventually completes if given long enough".
+
+        `transactional_db`, not the plain `db` fixture (2026-07-25, found running this test):
+        `dispatch_micro_batch` runs on a REAL background thread here (needed so the test itself can
+        enforce a wall-clock timeout, since a hang is exactly the bug being pinned) - a thread with
+        its own DB connection reading/writing against fixture data created inside the plain `db`
+        fixture's own uncommitted SAVEPOINT-wrapped transaction is precisely the class of problem
+        `test_run_image_evidence_cohort.py`'s own module docstring documents needing
+        `transaction=True` for (real commit-and-truncate isolation, matching prod's own
+        "no surrounding atomic block" shape) - the plain `db` fixture reproduced a SEPARATE,
+        fixture-level hang (the background thread blocked waiting on the main thread's own
+        transaction) that had nothing to do with the fetch-ahead bug this test exists to pin."""
+        cards = [CardFactory(name=f"Card {i}", content_phash=i) for i in range(1, 6)]  # > queue depth
+
+        def fake_fetch(card: Any, dpi: Any = None) -> Any:
+            return _png_bytes()  # fast, no sleep - lets fetch race ahead of compute
+
+        compute_calls = {"n": 0}
+
+        def fake_compute(
+            card_id: int,
+            content_hash: Any,
+            image: Any,
+            fetch_latency_ms: float = 0.0,
+            profile: Any = None,
+            short_circuit: Any = None,
+            known_set_codes: Any = None,
+            md5_checksum: Any = None,
+            sha256_checksum: Any = None,
+        ) -> Any:
+            compute_calls["n"] += 1
+            if compute_calls["n"] == 2:
+                raise RuntimeError("simulated compute-side crash")
+            return _stub_compute_card_evidence_ok()(
+                card_id,
+                content_hash,
+                image,
+                fetch_latency_ms,
+                profile,
+                short_circuit,
+                known_set_codes,
+                md5_checksum,
+                sha256_checksum,
+            )
+
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+        import cardpicker.image_evidence as image_evidence_module
+
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", fake_fetch)
+        monkeypatch.setattr(image_evidence_module, "compute_card_evidence", fake_compute)
+
+        result_holder: dict[str, Any] = {}
+
+        def _run() -> None:
+            try:
+                dispatch_micro_batch(card_ids=[c.pk for c in cards], run_id="compute-crash-drill")
+            except Exception as exc:  # noqa: BLE001 - captured for the assertion below, not swallowed
+                result_holder["exc"] = exc
+
+        run_thread = threading.Thread(target=_run, daemon=True)
+        run_thread.start()
+        run_thread.join(timeout=10)
+
+        assert not run_thread.is_alive(), (
+            "dispatch_micro_batch hung - the fetch-ahead thread was likely wedged on a full "
+            "queue after the compute-side crash (Tron §8 gate condition 3)"
+        )
+        assert isinstance(result_holder.get("exc"), RuntimeError)
+        ledger = PilotRunLedger.objects.get(run_id="compute-crash-drill")
+        assert ledger.status == PilotRunLedger.Status.FAILED

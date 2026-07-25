@@ -1982,22 +1982,24 @@ class ImageEvidence(models.Model):
     # recompute. (2) evidence_transfer.find_transfer_source's own sibling-pairing search, which
     # additionally requires sha256_checksum to match whenever BOTH sides carry one (the binding
     # 2026-07-25 pairing rule on issue #473 - md5 collisions are constructible, sha256 is the
-    # cryptographic backstop). sha256_checksum mirrors Card.sha256_checksum's own "may not exist
-    # on this branch yet" tolerance (checksum_pairing.card_sha256_checksum) - always nullable here
-    # regardless of whether that sibling PR has landed, so this column never needs its own
-    # follow-up migration once it does.
+    # cryptographic backstop). sha256_checksum mirrors Card.sha256_checksum's own nullability
+    # (both are NULL for exactly the same reasons - LOCAL_FILE sources, or a Drive listing walked
+    # before this field existed - never invented, never backfilled from image bytes we don't hold).
     md5_checksum = models.CharField(max_length=32, null=True, blank=True, db_index=True)
     sha256_checksum = models.CharField(max_length=64, null=True, blank=True, db_index=True)
 
     # transferred (issue #473 PR-2's INTERIM STAGE D GUARD, temporary by design): True iff this
     # row's own field values were COPIED from an md5-sibling's own current evidence
     # (evidence_transfer.transfer_evidence) rather than produced by a real fetch+extraction pass
-    # against this card's own image. `local_calculate_verdicts._eligible_cards_queryset`'s three
-    # Stage D calculators (join-key/fallback/slow-path) exclude any card whose CURRENT evidence
-    # carries this flag from machine voting - a transferred row's own machine "observation" is the
-    # SAME underlying bytes a sibling card already voted from, not an independent one, so casting
-    # a vote from it here would fabricate independence the vote-weight matrix assumes is real
-    # (docs/theory.md's independence-assumptions section). REMOVAL IS PR-3's OWN BUSINESS (issue
+    # against this card's own image. `local_calculate_verdicts._eligible_cards_queryset`'s two
+    # MACHINE-VOTING Stage D calculators (join-key/fallback - both cast a `CardPrintingTag` vote)
+    # exclude any card whose CURRENT evidence carries this flag from machine voting - a transferred
+    # row's own machine "observation" is the SAME underlying bytes a sibling card already voted
+    # from, not an independent one, so casting a vote from it here would fabricate independence the
+    # vote-weight matrix assumes is real (docs/theory.md's independence-assumptions section). The
+    # third Stage D calculator, slow-path, is deliberately NOT guarded - it casts no machine vote,
+    # only a human-review routing marker, which is exactly the safety net this guard exists to
+    # preserve, not a case it needs to protect against. REMOVAL IS PR-3's OWN BUSINESS (issue
     # #473's build plan, PR-3 section: "Removes PR-2's interim Stage D guard") - once group-level
     # vote pooling lands, a transferred row's vote is correctly deduped at the GROUP level instead
     # of excluded outright, so this flag (and the guard reading it) stops being needed; do not

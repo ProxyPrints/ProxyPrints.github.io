@@ -40,6 +40,9 @@ services:
       # Stage E streaming activation (docs/features/stage-e-operations.md) - reads
       # docker/.env; default False = dormant. Phase-3 activation flips the .env value.
       - STAGE_E_STREAMING_ENABLED=${STAGE_E_STREAMING_ENABLED:-False}
+      # Stage C evidence transfer kill-switch (issue #473 PR-2, Tron §8 gate condition) - default
+      # True (transfer ON); docker/.env can flip it False to isolate a live-run anomaly.
+      - STAGE_C_EVIDENCE_TRANSFER_ENABLED=${STAGE_C_EVIDENCE_TRANSFER_ENABLED:-True}
       # Discord OAuth (moderation layer, docs/features/moderation.md) - docker/.env alone
       # does NOT inject arbitrary variables into the container; only vars explicitly listed
       # here (via ${...} interpolation) actually reach the process. This block was missing
@@ -87,6 +90,9 @@ services:
       # Stage E streaming activation (docs/features/stage-e-operations.md) - reads
       # docker/.env; default False = dormant. Phase-3 activation flips the .env value.
       - STAGE_E_STREAMING_ENABLED=${STAGE_E_STREAMING_ENABLED:-False}
+      # Stage C evidence transfer kill-switch (issue #473 PR-2, Tron §8 gate condition) - default
+      # True (transfer ON); docker/.env can flip it False to isolate a live-run anomaly.
+      - STAGE_C_EVIDENCE_TRANSFER_ENABLED=${STAGE_C_EVIDENCE_TRANSFER_ENABLED:-True}
       # Discord OAuth (moderation layer, docs/features/moderation.md) - docker/.env alone
       # does NOT inject arbitrary variables into the container; only vars explicitly listed
       # here (via ${...} interpolation) actually reach the process. This block was missing

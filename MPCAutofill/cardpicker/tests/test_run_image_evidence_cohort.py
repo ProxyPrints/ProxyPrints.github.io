@@ -555,6 +555,7 @@ class TestFetchOneCard:
         ImageEvidenceFactory(
             card=sibling,
             content_hash=111,
+            md5_checksum="abc123",
             extractor_versions={key: "v1" for key in cohort_command.MANIFEST_EXTRACTOR_KEYS},
             symbol_phash=999,
         )
@@ -584,6 +585,7 @@ class TestFetchOneCard:
         ImageEvidenceFactory(
             card=sibling,
             content_hash=111,
+            md5_checksum="abc123",
             extractor_versions={key: "v1" for key in cohort_command.MANIFEST_EXTRACTOR_KEYS},
         )
         stop_event = threading.Event()

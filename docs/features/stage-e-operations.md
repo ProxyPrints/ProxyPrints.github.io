@@ -325,18 +325,34 @@ values onto the target card's own `(card, content_hash)` row instead of
 paying for a real fetch+OCR pass over what would decode to byte-identical
 pixels — `find_transfer_source` never trusts the pairing blindly:
 
+- **Kill-switch**: `settings.STAGE_C_EVIDENCE_TRANSFER_ENABLED` (default
+  `True`) gates the whole function — `False` returns `None` immediately, no
+  query issued, both call sites fall straight through to their own
+  pre-existing real-fetch path. Exists for first-pass reversibility (Tron §8
+  gate condition, 2026-07-25) — a single settings flip isolates whether a
+  live-run anomaly originates in transfer, no code change or redeploy needed.
+- **Transfer-source integrity** (Tron §8 gate condition): a sibling row is
+  only a valid SOURCE if its own stamped `md5_checksum` IS NOT NULL and
+  EQUALS the target's live md5 — a strict, non-null-tolerant match, deliberately
+  NOT the same null-tolerant rule the staleness fix below uses for CURRENCY.
+  A sibling that never got the md5 stamp at all (a legacy row) is never
+  eligible to seed a transfer, so a fresh stamp is never minted on the copy
+  from an unverified source.
 - **Content-hash assertion**: byte-identical files imply an identical
   perceptual hash — the sibling's own `content_hash` is compared against the
   target's own live `content_phash`. A mismatch is IMPOSSIBLE for genuinely
-  byte-identical files, so observing one is a LOUD anomaly (logged at
-  ERROR) — transfer is skipped, the card falls through to a real fetch.
+  byte-identical files, so observing one is a LOUD anomaly.
 - **sha256 pairing rule** (binding, owner-ratified 2026-07-25 alongside
-  `Card.sha256_checksum`'s own addition — a sibling PR on the same stacked
-  base, read tolerantly via `checksum_pairing.card_sha256_checksum` since it
-  may not exist on a given deploy yet): whenever BOTH cards carry a sha256,
-  it must ALSO match — md5 collisions are constructible, sha256 is the
-  cryptographic backstop. A present-on-both mismatch is the same kind of
-  loud, skip-and-fall-through anomaly as a content-hash mismatch.
+  `Card.sha256_checksum`'s own addition, now a real column on every deploy):
+  whenever BOTH cards carry a sha256, it must ALSO match — md5 collisions
+  are constructible, sha256 is the cryptographic backstop. A present-on-both
+  mismatch is the same kind of loud anomaly as a content-hash mismatch.
+
+Both anomaly paths log at ERROR **and** write a durable `CardScanLog(anonymous_id="evidence-transfer-v1", skip_reason=<the specific anomaly>)`
+row (Tron §8 gate condition, 2026-07-25) — the log line alone isn't
+queryable after the fact; a whole-catalog run needs to COUNT these per card.
+Either anomaly SKIPS the transfer and falls through to real extraction,
+never a silent downgrade.
 
 A transferred row is stamped `md5_checksum`/`sha256_checksum` (from the
 TARGET card's own live values, not copied from the sibling) and
@@ -347,6 +363,13 @@ are ALSO stamped at real extraction time now (`compute_card_evidence`'s own
 (a REAL extraction, never a transfer — the two writers are disjoint)
 unconditionally resets `transferred=False`, so a row that starts as a
 transfer and later gets a genuine re-extraction is no longer flagged as one.
+
+**Fetch fallback — explicitly DEFERRED, not built in this PR.** Issue
+#473's own PR-2 scope text also named a fetch fallback ("on 404/lockout, try
+an md5 sibling's source URL — same bytes"). Not built here — evidence
+TRANSFER (this section) already covers the dominant win (skip the fetch
+entirely when a sibling's evidence already exists); the narrower fetch-level
+fallback is left for a follow-up rather than widening this PR's own scope.
 
 **Staleness fix (#473 PR-2).** Every "is this `ImageEvidence` row CURRENT
 for this card" check across the codebase (`image_evidence. current_evidence_queryset`, the single shared helper — previously N

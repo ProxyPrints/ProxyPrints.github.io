@@ -190,7 +190,6 @@ import imagehash
 
 from django.db.models import Q, QuerySet
 
-from cardpicker.checksum_pairing import card_sha256_checksum
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
 from cardpicker.local_fallback import (
@@ -465,7 +464,7 @@ def extract_card_evidence(
         short_circuit=short_circuit,
         known_set_codes=known_set_codes,
         md5_checksum=card.md5_checksum,
-        sha256_checksum=card_sha256_checksum(card),
+        sha256_checksum=card.sha256_checksum,
     )
 
 
@@ -563,8 +562,8 @@ def compute_card_evidence(
     majority) sees zero behavior or compute change either way.
 
     `md5_checksum`/`sha256_checksum` (2026-07-25, issue #473 PR-2, folded with issue #472): the
-    calling card's own live `Card.md5_checksum`/`checksum_pairing.card_sha256_checksum(card)` at
-    the moment of THIS real extraction pass, stamped verbatim onto the result's `fields` (so
+    calling card's own live `Card.md5_checksum`/`Card.sha256_checksum` at the moment of THIS real
+    extraction pass, stamped verbatim onto the result's `fields` (so
     `persist_evidence` writes them the same way every other field is written - no special-casing).
     `None` (the default) is every pre-#473 caller's own behavior, unchanged - both fields are
     nullable and null-tolerant everywhere they're read (`evidence_transfer.md5_currency_q`,

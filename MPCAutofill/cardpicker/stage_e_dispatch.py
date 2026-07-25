@@ -83,7 +83,6 @@ from typing import Callable, Deque, Iterable, Optional
 from django.conf import settings
 from django.utils import timezone
 
-from cardpicker.checksum_pairing import card_sha256_checksum
 from cardpicker.evidence_transfer import find_transfer_source, transfer_evidence
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.local_calculate_verdicts import (
@@ -501,7 +500,7 @@ def _stage_c_fetch_ahead_worker(
                     card_id=card.pk,
                     content_hash=card.content_phash,
                     md5_checksum=card.md5_checksum,
-                    sha256_checksum=card_sha256_checksum(card),
+                    sha256_checksum=card.sha256_checksum,
                     image_bytes=None,
                     fetch_latency_ms=0.0,
                     lockout=True,
@@ -515,7 +514,7 @@ def _stage_c_fetch_ahead_worker(
                     card_id=card.pk,
                     content_hash=card.content_phash,
                     md5_checksum=card.md5_checksum,
-                    sha256_checksum=card_sha256_checksum(card),
+                    sha256_checksum=card.sha256_checksum,
                     image_bytes=None,
                     fetch_latency_ms=0.0,
                     error=exc,
@@ -529,7 +528,7 @@ def _stage_c_fetch_ahead_worker(
                 card_id=card.pk,
                 content_hash=card.content_phash,
                 md5_checksum=card.md5_checksum,
-                sha256_checksum=card_sha256_checksum(card),
+                sha256_checksum=card.sha256_checksum,
                 image_bytes=image_bytes,
                 fetch_latency_ms=fetch_latency_ms,
             )
@@ -687,11 +686,38 @@ def _run_stage_c(
                 persist_evidence(result, run_id=run_id)
             outcome.stage_c_completed += 1
     finally:
-        # Always join, whether the loop above finished normally, broke on a lockout, or raised -
-        # the fetch-ahead thread is `daemon=True` (won't block process exit on its own) but this
-        # function should never RETURN while it's still mid-fetch for a card nothing will ever
-        # consume; a lockout already made it return promptly on its own (module docstring), so this
-        # join is a bounded wait in every reachable case, never an indefinite one.
+        # Always signal-then-drain-then-join, whether the loop above finished normally, broke on
+        # a lockout, or raised - the fetch-ahead thread is `daemon=True` (won't block process exit
+        # on its own) but this function should never RETURN while it's still mid-fetch for a card
+        # nothing will ever consume.
+        #
+        # `stop_event.set()` MUST happen BEFORE the drain+join below (Tron §8 gate condition,
+        # 2026-07-25, HIGH severity - found on review): a bare `fetch_thread.join()` here, with
+        # neither `stop_event.set()` nor a queue drain first, left the fetch-ahead thread wedged
+        # FOREVER the moment COMPUTE (not fetch) raised mid-batch - e.g. a corrupt download that
+        # decodes far enough to pass the fetch stage but raises a PIL error inside
+        # `compute_card_evidence`/`persist_evidence` above. Once this loop stops calling
+        # `fetch_queue.get()` (it exited via the exception), a fetch-ahead thread already blocked
+        # on `out_queue.put(...)` for its own next outcome (the queue is bounded at
+        # `_STAGE_C_FETCH_AHEAD_DEPTH`) never unblocks on its own - `stop_event` alone does
+        # nothing for a thread that isn't back at its own loop-top `if stop_event.is_set(): return`
+        # check yet, and nothing else will ever call `.get()` again to free room for that `put()`
+        # to complete. The observable failure mode was silent and total: `join()` blocks
+        # indefinitely, so this function (and `dispatch_micro_batch`'s own `except Exception:
+        # mark_ledger_failed(...); raise` around it) never even reaches the point of recording the
+        # crash - the `PilotRunLedger` row stays lying at `RUNNING` forever, and the concurrency-cap
+        # slot this dispatch holds (`stage_e_concurrency.try_acquire_dispatch_slot`) never gets
+        # released either, wedging the whole worker process's dispatch capacity over ONE corrupt
+        # image. Fixed by (1) `stop_event.set()` first, so the thread returns the instant it's back
+        # at its own loop-top, and (2) draining `fetch_queue` below, which is what actually
+        # unblocks a `put()` already in progress - after at most one more successful put (the one
+        # the drain makes room for), the thread reaches its own stop_event check and returns.
+        stop_event.set()
+        while True:
+            try:
+                fetch_queue.get_nowait()
+            except queue.Empty:
+                break
         fetch_thread.join()
 
     return trip
