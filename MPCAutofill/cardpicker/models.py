@@ -457,6 +457,39 @@ class Card(models.Model):
     # reusing 0 as a sentinel the way CanonicalCard.image_hash does (that field predates this
     # decision; not retrofitted here, out of scope).
     content_phash = models.BigIntegerField(null=True, blank=True, db_index=True)
+    # md5 checksum substrate (issue #473 PR-1, docs/features/catalog-completion-plan.md's
+    # #442-sourced "index Drive checksums" leverage) - the Google Drive API's own `md5Checksum`
+    # field on a file listing, copied verbatim from the same folder-listing metadata
+    # `transform_image_into_object` already reads (see `cardpicker.sources.api.Image.
+    # md5_checksum`) - never computed locally, never derived from image bytes we don't hold (the
+    # governing "we index, we do not store images" premise in CLAUDE.md). NULL means "no
+    # checksum known for this card" - either the source type doesn't carry one at all (LOCAL_FILE
+    # - see `LocalFile.get_all_images_inside_folder`, which never sets it) or the Drive listing
+    # simply hadn't been walked with checksum-awareness yet (pre-#473 cards, until
+    # `backfill_md5_checksums` or an ordinary re-scan through `update_database` fills it in). Per
+    # the owner's ruling 3 on issue #473: a NULL or otherwise-unique md5 is a "group of one" -
+    # every future group-level pooling change (PR-2/PR-3) must be a provable no-op for that
+    # degenerate case, so this field is NEVER invented/guessed when the listing doesn't supply
+    # one. Deliberately a plain string (Drive's own hex-digest format, not re-encoded) rather than
+    # a BigIntegerField like `content_phash`/`CanonicalCard.image_hash` - md5 is an opaque
+    # cross-source identity key here, not a distance-comparable perceptual hash, so there's no
+    # reason to pay the twos-complement int-packing cost those two fields exist for.
+    md5_checksum = models.CharField(max_length=32, null=True, blank=True, db_index=True)
+    # sha256 checksum (owner-approved addition, 2026-07-25 evening, issue #473 PR-1's comment
+    # thread) - same listing walk, same seam, same "copied verbatim, never computed locally"
+    # rule as md5_checksum above. Exists for one binding reason, not as a second copy of the same
+    # idea: PR-2's evidence-transfer premise ("identical bytes => identical evidence") has to be
+    # cryptographic, not merely probabilistic - md5 collisions are constructible, so a transfer
+    # gated on md5 alone would be forgeable. The BINDING consequence (stated in that same comment,
+    # cited here so it isn't re-derived): whenever BOTH cards in a transfer have a sha256 on file,
+    # transfer requires md5 AND sha256 to match; an md5 match with a sha256 mismatch is a loud
+    # anomaly (log + skip + flag), never a silent fallback to md5-only. Groups still key on md5
+    # ONLY (ruling 1 on issue #473 predates this addition and is unchanged by it) - sha256 is the
+    # transfer safety pairing and the future federation join key (issue #451 item 5), not a second
+    # grouping axis. NULL for exactly the same reasons md5_checksum can be NULL (LOCAL_FILE
+    # sources, or a Drive listing walked before this field existed) - never invented, never
+    # backfilled from image bytes we don't hold.
+    sha256_checksum = models.CharField(max_length=64, null=True, blank=True, db_index=True)
 
     def __str__(self) -> str:
         return (
@@ -1960,6 +1993,49 @@ class ImageEvidence(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # Evidence transfer (issue #473 PR-2, folded with issue #472) - stamped at BOTH real
+    # extraction time (image_evidence.compute_card_evidence, copied from the source card's own
+    # live Card.md5_checksum/sha256_checksum at the moment this row was computed) and transfer
+    # time (evidence_transfer.transfer_evidence, copied from the TARGET card - the one whose
+    # (card, content_hash) row this is - never from the sibling the fields were copied from,
+    # since find_transfer_source already verified the target's own value agrees). Used two ways:
+    # (1) evidence CURRENCY (image_evidence.current_evidence_queryset) additionally requires
+    # md5_checksum == Card.md5_checksum whenever BOTH are non-null - closes the silent
+    # in-place-file-replacement hole a content_phash-only currency check can miss. NULL-TOLERANT:
+    # a legacy row written before this field existed (md5_checksum is None here) stays current
+    # under the content_hash check alone until it's naturally re-extracted - no forced mass
+    # recompute. (2) evidence_transfer.find_transfer_source's own sibling-pairing search, which
+    # additionally requires sha256_checksum to match whenever BOTH sides carry one (the binding
+    # 2026-07-25 pairing rule on issue #473 - md5 collisions are constructible, sha256 is the
+    # cryptographic backstop). sha256_checksum mirrors Card.sha256_checksum's own nullability
+    # (both are NULL for exactly the same reasons - LOCAL_FILE sources, or a Drive listing walked
+    # before this field existed - never invented, never backfilled from image bytes we don't hold).
+    md5_checksum = models.CharField(max_length=32, null=True, blank=True, db_index=True)
+    sha256_checksum = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+
+    # transferred: True iff this row's own field values were COPIED from an md5-sibling's own
+    # current evidence (evidence_transfer.transfer_evidence) rather than produced by a real
+    # fetch+extraction pass against this card's own image. Until issue #473 PR-3 merged
+    # (2026-07-25), `local_calculate_verdicts`'s two MACHINE-VOTING Stage D calculators (join-key/
+    # fallback, IN THEIR OWN LOOP BODIES - not `_eligible_cards_queryset`, which never read this
+    # field) excluded any card whose CURRENT evidence carried this flag from machine voting
+    # outright: a transferred row's own machine "observation" is the SAME underlying bytes a
+    # sibling card already voted from, not an independent one, and casting a vote from it would
+    # have fabricated independence the vote-weight matrix assumes is real (docs/theory.md's
+    # independence-assumptions section). That interim guard is RETIRED as of PR-3
+    # (`TRANSFERRED_INTERIM_GUARD_SKIP_REASON`'s own module-level comment in
+    # `local_calculate_verdicts.py` carries the full history) - the independence concern is now
+    # handled at the GROUP tally level instead, by `vote_consensus.pool_group_votes` deduping a
+    # transferred card's vote against the sibling's it was copied from (both cast under the same
+    # calculator's fixed `anonymous_id`, so they share a `dedupe_key`), which is strictly more
+    # correct than excluding the vote outright: a transferred card can still contribute when a
+    # DIFFERENT agent is the one voting on the sibling. This field remains a plain, still-accurate
+    # provenance flag, read by no calculator anymore. `transferred_from_card_id` is a plain
+    # (non-FK) audit trail of which sibling card's row this one was copied from, kept only for a
+    # future incident's own "why does this row look like that one" question.
+    transferred = models.BooleanField(default=False)
+    transferred_from_card_id = models.IntegerField(null=True, blank=True)
 
     class Meta:
         constraints = [

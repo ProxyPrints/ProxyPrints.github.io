@@ -25,22 +25,83 @@ downstream Stage C step is naturally idempotent (its own resume filter skips a c
 is already current, see `stage_e_dispatch._run_stage_c`), and Stage D's own eligibility queries
 already exclude a card once it's carrying a vote from a given calculator's own `anonymous_id` - so
 a burst of `ImageEvidence` saves for the same card (e.g. one extractor group's write, then
-another's, both landing on the SAME row within one Stage C pass) triggers several dispatch calls
-that mostly resolve to fast, cheap no-ops rather than repeated real work. This is the SAME
-"evidence-change event re-opens a card to re-scan, never an elapsed-time trigger" contract issue
-#278's own selector already specifies (docs/proposals/stage-e-streaming.md §4 item 4) - deliberately
-generic here (every evidence-change fires an attempt, not just #278's own specific detector), since
-this module only decides WHETHER to attempt a dispatch, never what any downstream engine does with
-it.
+another's, both landing on the SAME row within one Stage C pass) triggers several dispatch calls.
+
+**CORRECTED 2026-07-25 (issue #472, the same §8 Tron pass that corrected the identical
+overstated line in `stage_e_shakedown.py`'s own "EVIDENCE-CHANGE ECHO" section and
+docs/features/stage-e-operations.md's "Evidence-change echo" section)**: an earlier version of
+this paragraph characterized that burst as "mostly resolv[ing] to fast, cheap no-ops rather than
+repeated real work." That is WRONG in general - an echo dispatch calls `dispatch_micro_batch` with
+NO `batch_size`, so `_select_micro_batch` backfills the echo's own seed card up to the FULL
+`STAGE_E_MICRO_BATCH_SIZE` from the Stage C backlog cursor walk. An echo is a COMPLETE micro-batch,
+never just the one already-current seed card - cheap (~3.5s fixed overhead, no extraction) ONLY
+while the Stage C backlog is genuinely zero at echo time; a non-zero backlog turns an echo into a
+real ~25-card extraction batch that itself persists ~25 more `ImageEvidence` rows, queuing ~24
+FURTHER echoes - a cascade, not a fixed cost (see `stage_e_shakedown.py`'s own section for the full
+measured numbers).
+
+ECHO SUPPRESSION (2026-07-25, issue #472's own build, closing the gap the paragraph above
+describes for the ONE caller that can trigger the cascade repeatedly - `stage_e_dispatch.
+_run_stage_c`'s own `persist_evidence`/`evidence_transfer.transfer_evidence` writes): every
+`ImageEvidence` write performed FROM INSIDE the streaming/shakedown dispatch path is wrapped in
+`suppress_evidence_change_echo()` below - the write-side already knows it's running inside a
+dispatch (Stage D, over the SAME micro-batch, already covers whatever this write would otherwise
+re-trigger a fresh dispatch call to reach), so it flags itself via a `contextvars.ContextVar`
+rather than requiring this receiver to infer intent from the write. `_dispatch_on_evidence_change`
+below checks that flag first and returns immediately if set - no `async_task` is queued at all for
+a write made inside that context. BULK-mode writes (`run_image_evidence_cohort.py`'s own
+`persist_evidence` calls, a genuinely independent command that never runs inside a dispatch) are
+UNFLAGGED and keep firing this receiver's `async_task` exactly as before this change - only writes
+performed BY the dispatch loop itself are suppressed. This is the "documented (not built) fallback"
+docs/features/stage-e-operations.md's own "Evidence-change echo" section flagged as becoming
+REQUIRED before scaling beyond a bounded pilot - now built.
+
+This is the SAME "evidence-change event re-opens a card to re-scan, never an elapsed-time trigger"
+contract issue #278's own selector already specifies (docs/proposals/stage-e-streaming.md §4 item
+4) - deliberately generic here (every evidence-change fires an attempt, not just #278's own
+specific detector), since this module only decides WHETHER to attempt a dispatch, never what any
+downstream engine does with it.
 """
 
-from typing import Any
+import contextvars
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 from django.conf import settings
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from cardpicker.models import Card, ImageEvidence
+
+# ECHO SUPPRESSION (module docstring, issue #472) - `True` for the duration of an `ImageEvidence`
+# write issued FROM INSIDE `stage_e_dispatch._run_stage_c` (the ONLY caller of
+# `suppress_evidence_change_echo` below), `False` otherwise (including every BULK-mode write, which
+# never enters this context at all). A `contextvars.ContextVar` rather than a plain module global
+# or `threading.local`: correct under both the synchronous per-thread execution this module's own
+# django-q worker actually uses today AND any future asyncio-based caller, with no extra code
+# needed either way - contextvars propagate correctly across `await` points where a bare
+# `threading.local` would not, and behave identically to a `threading.local` for the synchronous
+# case this module has today.
+_dispatch_persist_in_progress: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "_dispatch_persist_in_progress", default=False
+)
+
+
+@contextmanager
+def suppress_evidence_change_echo() -> Iterator[None]:
+    """
+    Context manager wrapping an `ImageEvidence` write made FROM INSIDE the streaming/shakedown
+    dispatch path (`stage_e_dispatch._run_stage_c`'s own `persist_evidence`/
+    `evidence_transfer.transfer_evidence` calls - the ONLY caller) - see module docstring's "ECHO
+    SUPPRESSION" section for the full rationale. Re-entrant-safe (nested `with` blocks all see
+    `True` until the OUTERMOST one exits, via `ContextVar.set`/`.reset`'s own token mechanism) even
+    though `_run_stage_c` never actually nests these calls today - defensive, not load-bearing.
+    """
+    token = _dispatch_persist_in_progress.set(True)
+    try:
+        yield
+    finally:
+        _dispatch_persist_in_progress.reset(token)
 
 
 @receiver(post_save, sender=Card)
@@ -57,6 +118,12 @@ def _dispatch_on_card_create(sender: Any, instance: Card, created: bool, **kwarg
 @receiver(post_save, sender=ImageEvidence)
 def _dispatch_on_evidence_change(sender: Any, instance: ImageEvidence, **kwargs: Any) -> None:
     if not getattr(settings, "STAGE_E_STREAMING_ENABLED", False):
+        return
+    if _dispatch_persist_in_progress.get():
+        # ECHO SUPPRESSION (module docstring, issue #472) - this write was made FROM INSIDE the
+        # dispatch path itself; queuing another dispatch for it would be exactly the cascade risk
+        # the module docstring's "CORRECTED 2026-07-25" section describes. BULK-mode writes never
+        # set this flag, so they always reach the async_task call below, unchanged.
         return
     from django_q.tasks import async_task
 

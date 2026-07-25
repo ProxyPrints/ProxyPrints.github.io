@@ -305,18 +305,23 @@ def eligible_evidence_queryset() -> "QuerySet[Any]":
     `content_hash` matches the card's own live `content_phash`, the same "never trust a stale
     evidence row from a prior image version" convention every other Stage C/D reader in this
     codebase follows (e.g. `local_detect_ai_art._eligible_cards_queryset`,
-    `reparse_collector_evidence._current_evidence_for_card`). A card with no `content_phash` yet
-    (no stable hash to key a CURRENT lookup against) is excluded by the join returning no match,
-    the same outcome those other readers reach via an explicit `if card.content_phash is None`
-    skip.
+    `reparse_collector_evidence._current_evidence_for_card`) - PLUS (2026-07-25, issue #473 PR-2)
+    the row's own stamped `md5_checksum` doesn't actively disagree with the card's own live md5
+    (`evidence_transfer.md5_currency_q`'s own null-tolerant F-expression form of the identical rule
+    `image_evidence.current_evidence_queryset` applies for the single-card case). A card with no
+    `content_phash` yet (no stable hash to key a CURRENT lookup against) is excluded by the join
+    returning no match, the same outcome those other readers reach via an explicit
+    `if card.content_phash is None` skip.
     """
     from django.db.models import F
 
+    from cardpicker.evidence_transfer import md5_currency_q
     from cardpicker.models import ImageEvidence
 
     return (
         ImageEvidence.objects.exclude(artist_ocr_raw_text="")
         .filter(artist_ocr_name="", content_hash=F("card__content_phash"))
+        .filter(md5_currency_q())
         .select_related("card")
     )
 

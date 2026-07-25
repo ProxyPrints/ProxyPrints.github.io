@@ -166,6 +166,15 @@ whole-catalog Stage C pass it makes eligible does NOT run until the owner schedu
 `#473`/`#472`'s own deploy first, per that comment) - never a standalone `artbox_phash`-only
 backfill, which would duplicate ~218k fetches the combined pass already needs to make anyway.
 
+EVIDENCE TRANSFER (2026-07-25, issue #473 PR-2, folded with issue #472): `_fetch_one_card` checks
+`evidence_transfer.find_transfer_source(card)` BEFORE the network fetch call below - a card with a
+known `Card.md5_checksum` and an eligible md5-sibling's own CURRENT full-manifest `ImageEvidence`
+row gets its own row created via `evidence_transfer.transfer_evidence` instead of paying for a
+real fetch+OCR pass over byte-identical content. Terminal outcome `"transferred"` (new, alongside
+the pre-existing `"skipped-lockout"`/`"dropped"`) bypasses the compute pool entirely, same as those
+- see `_fetch_one_card`'s own docstring for the exact mechanism and `evidence_transfer.py`'s own
+module docstring for the pairing/staleness rules that keep this safe.
+
 A `GoogleFetchLockoutError` (403 from the shared Google-bound destination) is a hard stop for
 the whole run, exactly as `image_cdn_fetch.fetch_card_image`/`fetch_card_image_bytes`'s own
 docstrings require every caller to treat it - this command sets a stop flag (a `threading.Event`,
@@ -304,21 +313,41 @@ class _FetchOutcome:
     fetch step completed (successfully or with an ordinary, non-lockout failure) and this card
     should proceed to the compute stage; any other value is a terminal outcome that bypasses
     compute entirely (matching the old bundled design's own "skipped-lockout"/"dropped"
-    conventions, replicated here so the final summary counts are unchanged)."""
+    conventions, replicated here so the final summary counts are unchanged - plus `"transferred"`,
+    2026-07-25, issue #473 PR-2's own new terminal outcome, see `_fetch_one_card`'s own docstring).
+    `md5_checksum`/`sha256_checksum` (also issue #473 PR-2) are the card's own live values at fetch
+    time, carried across to the compute stage for stamping onto the resulting `ImageEvidence` row -
+    see `_compute_one_card`'s own docstring."""
 
     card_id: int
     content_hash: Optional[int] = None
+    md5_checksum: Optional[str] = None
+    sha256_checksum: Optional[str] = None
     image_bytes: Optional[bytes] = None
     fetch_latency_ms: float = 0.0
     outcome: Optional[str] = None
 
 
-def _fetch_one_card(card_id: int, stop_event: threading.Event) -> _FetchOutcome:
+def _fetch_one_card(
+    card_id: int, stop_event: threading.Event, run_id: str = "", dry_run: bool = False
+) -> _FetchOutcome:
     """Fetch-stage step (thread, not process) - I/O-bound network fetch only, per the decoupling
     design. Returns the RAW fetched bytes (never decoded here - see
     `image_cdn_fetch.fetch_card_image_bytes`'s own docstring for why), never runs any extractor.
     `stop_event` is checked FIRST so a task dispatched after another fetch thread already observed
-    a lockout never calls `fetch_card_image_bytes` (and so never fetches) at all."""
+    a lockout never calls `fetch_card_image_bytes` (and so never fetches) at all.
+
+    EVIDENCE TRANSFER (2026-07-25, issue #473 PR-2's own "BULK resume-filter seam... find where a
+    card is about to be fetched" scope item): checked here, BEFORE the network fetch call below -
+    `evidence_transfer.find_transfer_source(card)` looks for an md5-sibling's own CURRENT
+    full-manifest `ImageEvidence` row; if found, this card's own row is written via
+    `evidence_transfer.transfer_evidence` (skipped entirely under `dry_run`, matching
+    `_compute_one_card`'s own `dry_run` convention for its real-extraction persist call) and this
+    function returns immediately with `outcome="transferred"` - `_run_cohort`'s own main loop
+    already treats any non-`None` `outcome` as "record it, never submit to the compute pool" (see
+    that function's own `if fetch_result.outcome is not None: ...` branch, unchanged), so this new
+    outcome value needs no new branch there. `run_id` is threaded through from `_run_cohort` (an
+    otherwise-unused parameter added to this function purely to carry it here)."""
     if stop_event.is_set():
         return _FetchOutcome(card_id=card_id, outcome="skipped-lockout")
 
@@ -326,6 +355,20 @@ def _fetch_one_card(card_id: int, stop_event: threading.Event) -> _FetchOutcome:
         card = Card.objects.select_related("source").get(pk=card_id)
     except Card.DoesNotExist:
         return _FetchOutcome(card_id=card_id, outcome="dropped")
+
+    from cardpicker.evidence_transfer import find_transfer_source, transfer_evidence
+
+    transfer_source = find_transfer_source(card)
+    if transfer_source is not None:
+        if not dry_run:
+            transfer_evidence(card, transfer_source, run_id=run_id)
+        return _FetchOutcome(
+            card_id=card_id,
+            content_hash=card.content_phash,
+            md5_checksum=card.md5_checksum,
+            sha256_checksum=card.sha256_checksum,
+            outcome="transferred",
+        )
 
     from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
 
@@ -344,6 +387,8 @@ def _fetch_one_card(card_id: int, stop_event: threading.Event) -> _FetchOutcome:
     return _FetchOutcome(
         card_id=card_id,
         content_hash=card.content_phash,
+        md5_checksum=card.md5_checksum,
+        sha256_checksum=card.sha256_checksum,
         image_bytes=image_bytes,
         fetch_latency_ms=fetch_latency_ms,
         outcome=None,
@@ -360,6 +405,8 @@ def _compute_one_card(
     profile: bool = False,
     short_circuit: Optional[bool] = None,
     known_set_codes: Optional[frozenset[str]] = None,
+    md5_checksum: Optional[str] = None,
+    sha256_checksum: Optional[str] = None,
 ) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Module-level (picklable) compute-only work unit for the process pool - takes plain,
     already-fetched data (never a `Card`/`Image` instance re-fetched or re-decoded elsewhere), and
@@ -391,7 +438,12 @@ def _compute_one_card(
     query in the parent process, not per-card) and forwarded straight through - see
     `compute_card_evidence`'s own docstring for the escalation-loop acceptance criterion this
     controls. Picklable (a plain `frozenset[str]`), so passing it into each `compute_pool.submit`
-    call below costs one IPC serialization per card, not a query."""
+    call below costs one IPC serialization per card, not a query.
+
+    `md5_checksum`/`sha256_checksum` (2026-07-25, issue #473 PR-2): the card's own live values,
+    already read by `_fetch_one_card` (no second query here) and carried across via
+    `_FetchOutcome` - forwarded straight through to `compute_card_evidence` for stamping onto the
+    resulting `ImageEvidence` row, same as `stage_e_dispatch._run_stage_c`'s own compute step."""
     from cardpicker.image_evidence import compute_card_evidence, persist_evidence
 
     wall_started_at = time.monotonic() if profile else None
@@ -413,6 +465,8 @@ def _compute_one_card(
         profile=profile_dict,
         short_circuit=short_circuit,
         known_set_codes=known_set_codes,
+        md5_checksum=md5_checksum,
+        sha256_checksum=sha256_checksum,
     )
     if not dry_run:
         persist_evidence(result, run_id=run_id)
@@ -460,6 +514,11 @@ class _CohortStats:
         # remainder in particular) produces the plan's own "open verification gap" measurement
         # data rather than only the 20k-cohort's retrospective estimate.
         self.short_circuited = 0
+        # Evidence transfer (2026-07-25, issue #473 PR-2) - a card whose row was created via
+        # `evidence_transfer.transfer_evidence` (an md5-sibling's own current row, copied) rather
+        # than a real fetch+extraction pass. Counted the same way short_circuited is (a real
+        # completion, never a fetch_failures/dropped case), never subtracted from `completed`.
+        self.transferred = 0
         self.rss_limit_hit = False
         # peak parent-process RSS observed across this run's own progress-line samples (2026-07-24,
         # docs/proposals/stage-e-streaming.md §3 decision (6)/§1's own "this is a real observability
@@ -482,6 +541,8 @@ class _CohortStats:
             self.completed += 1
             if outcome in ("fetch_failed", "dropped"):
                 self.fetch_failures += 1
+            if outcome == "transferred":
+                self.transferred += 1
             if short_circuited:
                 self.short_circuited += 1
             completed = self.completed
@@ -496,7 +557,7 @@ class _CohortStats:
             self._stdout_write(
                 f"[{completed}/{self._total}] elapsed={elapsed:.0f}s rate={rate:.3f}/s "
                 f"fetch_failures={self.fetch_failures} short_circuited={self.short_circuited} "
-                f"rss_mb={rss_display}"
+                f"transferred={self.transferred} rss_mb={rss_display}"
             )
             if (
                 self._max_rss_mb is not None
@@ -599,7 +660,7 @@ def _run_cohort(
                     card_id = next(cohort_iter)
                 except StopIteration:
                     return
-                outstanding_fetch.add(fetch_pool.submit(_fetch_one_card, card_id, stop_event))
+                outstanding_fetch.add(fetch_pool.submit(_fetch_one_card, card_id, stop_event, run_id, dry_run))
 
         def _drain_one_pending() -> None:
             done, _ = wait(set(pending.keys()), return_when=FIRST_COMPLETED)
@@ -646,6 +707,8 @@ def _run_cohort(
                     profile,
                     short_circuit,
                     known_set_codes,
+                    fetch_result.md5_checksum,
+                    fetch_result.sha256_checksum,
                 )
                 pending[compute_future] = fetch_result.card_id
             _submit_more_fetch()

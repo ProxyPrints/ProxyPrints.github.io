@@ -3,7 +3,9 @@ The apply-mode sibling of `consensus_impact_report` (read that command first - t
 reuses its iteration/grouping structure and its module docstring's own flagged "worth doing
 before running at scale" batching note, which this command is the one that actually does).
 
-Iterates every voted (card, printing)/(card, artist)/(card, tag) pair on record and calls the
+Iterates every voted (card, printing)/(card, artist)/(card, tag) pair on record - printing by md5
+IDENTITY GROUP, once per group rather than once per member (issue #473; a checksum-less card is a
+group of one, so this is the same walk it always was) - and calls the
 REAL `resolve_and_persist_printing`/`resolve_and_persist_artist`/`resolve_and_persist_tag_votes`
 paths (from `cardpicker.printing_consensus`/`cardpicker.artist_consensus`/`cardpicker.tag_consensus`
 - PROTECTED CORE, imported and called here, never modified) so persisted status matches what the
@@ -26,7 +28,10 @@ the small, clean lift it might first look like):
   - printing/artist: `resolve_and_persist_printing`/`resolve_and_persist_artist` read
     `card.printing_tags.all()`/`card.artist_votes.all()` - a `prefetch_related` per batch (not
     per card) already makes this ONE query per batch of cards, not one per card, so no further
-    batching work was needed here.
+    batching work was needed here. (Since issue #473, that prefetch is still what the printing
+    path uses for every card in a group of ONE - i.e. every checksum-less card; a genuine
+    multi-member md5 group reads its members' pooled votes in one further query per group, and
+    is visited once rather than once per member - see `_recompute_printing`.)
   - tag: `resolve_and_persist_tag_votes` already resolves every tag on ONE card in a single call
     (3 queries total per card, regardless of how many tags that card has votes for) - so the
     APPLY path is already card-granular, not pair-granular, and needed no further batching either.
@@ -67,7 +72,7 @@ them at once, but a dedicated throttle would be worth adding at that point, not 
 """
 
 from collections import Counter, defaultdict
-from typing import Any, Iterable, Iterator
+from typing import Any, Hashable, Iterable, Iterator, Sequence
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
@@ -105,6 +110,8 @@ from cardpicker.pilot_run_lifecycle import (
 )
 from cardpicker.printing_consensus import (
     NO_MATCH,
+    md5_group_cards,
+    md5_group_key,
     resolve_and_persist_printing,
     resolve_printing,
 )
@@ -125,14 +132,19 @@ def _chunked(items: list[int], size: int) -> Iterator[list[int]]:
         yield items[i : i + size]
 
 
-def _would_be_printing_status(card: Card) -> str:
+def _would_be_printing_status(card: Card, group_card_ids: Sequence[int] | None = None) -> str:
     """
-    Exact duplicate of `consensus_impact_report._would_be_printing_status` - kept local rather
-    than imported (that function is module-private by its leading underscore, and this file's
-    own scope is meant to stay a self-contained management command) - see this module's own
-    docstring for why the dry-run path needs a non-writing prediction at all, unlike --apply.
+    `consensus_impact_report._would_be_printing_status` plus one optional argument - kept local
+    rather than imported (that function is module-private by its leading underscore, and this
+    file's own scope is meant to stay a self-contained management command) - see this module's
+    own docstring for why the dry-run path needs a non-writing prediction at all, unlike --apply.
+
+    `group_card_ids` is the md5 identity group `_recompute_printing` has already materialized
+    for this card (issue #473), passed through so the dry run doesn't re-derive the same group
+    per prediction. Omitting it (as `consensus_impact_report` does) is still correct, just one
+    query less efficient: `resolve_printing` derives the group itself when it isn't told.
     """
-    result = resolve_printing(card)
+    result = resolve_printing(card, group_card_ids=group_card_ids)
     if result is None:
         return PrintingTagStatus.UNRESOLVED
     if result == NO_MATCH:
@@ -242,21 +254,47 @@ def _record_transition(section: dict[str, Any], before: Any, after: Any, sample:
 
 
 def _recompute_printing(report: dict[str, Any], apply: bool, batch_size: int, sample_limit: int) -> None:
+    """
+    Iterates md5 identity GROUPS once each, not their members N times (issue #473): the group's
+    pooled tally resolves to one outcome and `resolve_and_persist_printing` writes that outcome
+    to every member in the same call, so visiting a second member would recompute an identical
+    result and rewrite identical rows. The first member reached in `date_created`-agnostic pk
+    order claims its group via `seen_group_keys`; every member is still COUNTED and still
+    reported on (transitions are recorded per card identifier, exactly as before, including for
+    members that carry no votes of their own but inherit the group's resolution).
+
+    Idempotence is unchanged and unconditional: the outcome is a pure function of the group's
+    current vote rows, written back on every call, so a second run over an already-recomputed
+    pool produces byte-identical persisted state - see this module's own docstring.
+
+    A checksum-less catalogue (every card a group of one - and, until #473's PR-1 lands, that is
+    every card) keys every card to its own pk, so `seen_group_keys` never skips anything and this
+    walks exactly the cards, queries, writes, and counters it walked before #473.
+    """
     section = report["printing"]
     card_ids = list(Card.objects.filter(printing_tags__isnull=False).values_list("id", flat=True).distinct())
+    seen_group_keys: set[Hashable] = set()
     for batch_ids in _chunked(card_ids, batch_size):
         with transaction.atomic():
             cards = Card.objects.filter(pk__in=batch_ids).prefetch_related("printing_tags")
             for card in cards:
-                section["checked"] += 1
-                before = card.printing_tag_status
+                group_key = md5_group_key(card)
+                if group_key in seen_group_keys:
+                    continue
+                seen_group_keys.add(group_key)
+                members = md5_group_cards(card)
+                before_by_member = [(member, member.printing_tag_status) for member in members]
                 if apply:
-                    resolve_and_persist_printing(card)
-                    section["written"] += 1
-                    after = card.printing_tag_status
+                    resolve_and_persist_printing(card, members=members)
+                    for member, before in before_by_member:
+                        section["checked"] += 1
+                        section["written"] += 1
+                        _record_transition(section, before, member.printing_tag_status, member.identifier, sample_limit)
                 else:
-                    after = _would_be_printing_status(card)
-                _record_transition(section, before, after, card.identifier, sample_limit)
+                    after = _would_be_printing_status(card, group_card_ids=[member.pk for member in members])
+                    for member, before in before_by_member:
+                        section["checked"] += 1
+                        _record_transition(section, before, after, member.identifier, sample_limit)
 
 
 def _recompute_artist(report: dict[str, Any], apply: bool, batch_size: int, sample_limit: int) -> None:

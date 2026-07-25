@@ -365,6 +365,14 @@ ELASTICSEARCH_DSL_AUTOSYNC = False
 # sources only today - see get_worker_image_url in that module).
 IMAGE_WORKER_URL = env("IMAGE_WORKER_URL", default="https://cdn.proxyprints.ca")
 
+# OCR engine seam (issue #423, cardpicker/local_ocr.py's own module docstring): "pytesseract"
+# (the default, unchanged process-per-call behavior) or "tesserocr" (persistent in-process
+# binding, ~5.7x faster per the 2026-07-25 spike, but not yet flipped live - see that module's
+# docstring for why). Shipped DARK in this PR: the flag exists and is wired end to end, but
+# nothing sets OCR_ENGINE=tesserocr in any deployed env yet - that flip is bundled with the
+# extractor-version bump at issue #480's combined whole-catalog pass, never on its own.
+OCR_ENGINE = env("OCR_ENGINE", default="pytesseract")
+
 # Email for logging
 ADMINS = [("admin", env("TARGET_EMAIL", default=""))]
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
@@ -441,6 +449,17 @@ Q_CLUSTER = {
 # them checks this flag first and is a no-op while it's False. Flipping it to True is the ONLY
 # action phase 3 needs to take to go live - no redeploy of this module required.
 STAGE_E_STREAMING_ENABLED = env.bool("STAGE_E_STREAMING_ENABLED", default=False)
+
+# Stage C evidence transfer kill-switch (issue #473 PR-2, Tron §8 gate condition, 2026-07-25) -
+# cardpicker/evidence_transfer.py's own module docstring has the full mechanism writeup. Default
+# `True` (transfer is ON by default for this first pass) so the feature actually runs without an
+# operator having to flip it on first - `False` makes `find_transfer_source` return `None`
+# unconditionally (no query issued), so both call sites (`stage_e_dispatch._run_stage_c`,
+# `run_image_evidence_cohort._fetch_one_card`) fall straight through to their own pre-existing
+# real-fetch path, exactly as if this feature didn't exist. Exists for first-pass reversibility -
+# a single settings flip isolates whether a live-run anomaly originates in transfer, no code change
+# or redeploy needed.
+STAGE_C_EVIDENCE_TRANSFER_ENABLED = env.bool("STAGE_C_EVIDENCE_TRANSFER_ENABLED", default=True)
 
 # Micro-batch size (docs/proposals/stage-e-streaming.md §3 decision (2), sharpened by §10(c)): NOT
 # a value this brief or this change invents precision for - §10(c) ratifies that the real number

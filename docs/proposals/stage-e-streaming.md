@@ -550,6 +550,30 @@ implication: both structures are read-only lookups feeding into the
 existing decode-or-abstain evidence channels, never a vote source
 themselves.
 
+**IMPLEMENTED for `CandidateNameIndex()` (issue #469, 2026-07-25)** —
+`cardpicker.local_calculate_verdicts.run_join_key_calculator`/
+`run_fallback_calculator` (Stage D's own streaming-dispatched callers,
+via `stage_e_dispatch.py`) now build `CandidateNameIndex()` lazily (only
+once an eligible card actually needs candidate resolution, never
+unconditionally at dispatch start) and cache it at module scope for the
+worker process's lifetime, invalidated by a cheap version-stamp check
+(`(CanonicalCard max pk, count, CanonicalExpansion max pk, count)`)
+rather than a write-time signal — the "explicit invalidation event"
+above, implemented as a per-call CHECK rather than a push. `known_set_codes()`
+(the lexicon) was deliberately left AS-IS by that fix — it's ~1,000s of
+rows (not CandidateNameIndex's 113k+), the issue's own measured cost
+finding was CandidateNameIndex alone (1.48s), and `known_set_codes()`'s
+own docstring already documents a specific reason process-lifetime
+caching doesn't suit it (test-isolation leakage across Django's
+per-test transactional `CanonicalExpansion` rows) that a future pass
+would need to address separately, not silently inherit from this fix.
+The four OTHER `CandidateNameIndex()` call sites this section's own
+survey found (`local_identify_printing_tags.py`/
+`local_residual_classify.py`/`local_lands_identify.py`/
+`harvest_probe.py`) are untouched and remain "once per invocation" —
+they're all `management command` entry points, not long-lived streaming
+workers, so the gap this item describes doesn't apply to them.
+
 ---
 
 ## 5. Hardware envelope & federated scalability
