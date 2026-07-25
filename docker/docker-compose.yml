@@ -7,6 +7,12 @@ services:
   postgres:
     image: postgres:15.0-alpine
     container_name: mpcautofill_postgres
+    # client_connection_check_interval (Postgres 14+): probes the client socket
+    # periodically DURING query execution and aborts the query if the client is
+    # gone, rather than computing to completion for a dead client (issue #462).
+    # Deliberately NOT statement_timeout - BULK-mode eligibility scans legitimately
+    # run for minutes-hours with a live client and must not be killed.
+    command: postgres -c client_connection_check_interval=30000
     ports:
       - "127.0.0.1:5432:5432"
     environment:

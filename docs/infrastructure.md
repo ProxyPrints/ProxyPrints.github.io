@@ -115,6 +115,11 @@ this fixed and its follow-on hardening. Fixed by `eaece1fd` (#18,
   recreates the `django` container), also restart `nginx`** — see
   [[troubleshooting.md]] ("nginx 502s everything after a django container
   restart") for the mechanism and exact fix.
+- **`client_connection_check_interval=30000`** (postgres `command:`, issue
+  #462) makes a backend abort its query if the client socket died mid-query
+  instead of computing to completion for nobody. Rollout requires one
+  deliberate `postgres` container recreate (seconds of DB downtime) — django
+  and the worker reconnect on their own, no restart needed for either.
 
 ### Boot-time recovery
 
