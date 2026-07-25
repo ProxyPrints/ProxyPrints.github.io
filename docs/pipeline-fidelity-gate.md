@@ -332,6 +332,56 @@ CLAUDE.md's "Governing premise: we index, we do not store images").
 
 ## 6. Verified data snapshot (2026-07-22, live)
 
+### FIG-2 — Catalog funnel (shape only, no counts)
+
+```mermaid
+flowchart TD
+    A["CATALOG"] --> B["PERCEPTUAL HASH<br/>extracted"]
+    A -.-> A1{{"no phash yet"}}
+
+    B --> C["IMAGE EVIDENCE EXTRACTED<br/>near-complete"]
+    B -.-> B1{{"phash but no evidence yet"}}
+
+    C --> D["CARRIES ≥1 PRINTING VOTE<br/>machine votes abundant"]
+    C -.-> C1{{"evidence but no vote yet<br/>Stage D has not reached these"}}
+
+    D --> E{"human-backed consensus gate<br/>weight ≥ 2 · share ≥ 0.6 · a human said so"}
+
+    E -- "cleared" --> F(["RESOLVED PRINTING<br/>rare — by design"])
+    E -- "held" --> G{{"UNRESOLVED<br/>machine votes alone can never clear this gate"}}
+    E -- "ruled out" --> H(["NO MATCH"])
+
+    G --> I["REVIEW QUEUE<br/>awaiting a human vote"]
+
+    classDef stage fill:#24283b,stroke:#565f89,stroke-width:1px,color:#c0caf5
+    classDef gate fill:#2f3549,stroke:#ff9e64,stroke-width:2px,color:#c0caf5
+    classDef halt fill:#f7768e,stroke:#8c3d4e,stroke-width:2px,color:#1a1b26
+    classDef excl fill:#7dcfff,stroke:#3f7f9c,stroke-width:2px,color:#1a1b26
+    classDef done fill:#9ece6a,stroke:#5c7c3d,stroke-width:2px,color:#1a1b26
+
+    class A,B,C,D,I stage
+    class E gate
+    class G halt
+    class A1,B1,C1 excl
+    class F,H done
+```
+
+**Deliberately shape-only — no absolute counts in this diagram** (owner
+ruling, 2026-07-25): every number behind each row above is real, live,
+and already published in the tables directly below this figure on this
+same page — repeating them inside the diagram itself would fork the
+numbers this page's own rule forbids ("don't restate gate status/
+decisions elsewhere, link here") and would go stale the moment the next
+pass runs. What the shape says instead: extraction (phash → image
+evidence) is functionally complete; Stage D coverage (the "carries a
+vote" row) is the one place more machine capacity still helps; the
+human-backed consensus gate is a **hard** requirement, not a formality —
+machine votes alone can never clear it, so "held" is the gate working as
+designed, not a fault, and the review queue is where held cards wait for
+exactly the one thing that clears them: a human vote. Absolute counts
+return to this diagram once real user confirmations start accumulating
+in volume; until then, read them from the tables immediately below.
+
 **Catalog**: 218,285 cards; 218,270 with a current `ImageEvidence` row.
 
 **Vote pool** (`CardPrintingTag` / `CardTagVote` / `CardArtistVote`,

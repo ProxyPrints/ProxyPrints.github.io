@@ -22,6 +22,11 @@
           "targets": ["wiki"]
         },
         {
+          "source": "docs/pipeline-fidelity-gate.md",
+          "wiki": "Pipeline-Fidelity-Gate",
+          "targets": ["wiki"]
+        },
+        {
           "source": "docs/federation-v1.md",
           "wiki": "Federation-v1",
           "targets": ["wiki"]

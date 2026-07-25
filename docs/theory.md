@@ -880,6 +880,11 @@ otherwise.
 
 ## 10. Streaming and continuous operation
 
+See [`identification-pipeline.md`'s FIG-1](identification-pipeline.md#fig-1--pipeline-flow-where-a-card-can-stop)
+for a diagram of every interception point a card can hit while moving
+through the mechanism this section describes — repo-internal jargon this
+file deliberately avoids, so the diagram lives there, not here.
+
 Stage E (`docs/proposals/stage-e-streaming.md`, GitHub issue #153) moves
 this pipeline from discrete batch runs to continuous, event-driven
 dispatch. The question this section answers: does anything above change
