@@ -761,7 +761,15 @@ card, it is a complete micro-batch:
   backlog is genuinely zero** at echo time — nothing for
   `_select_micro_batch` to backfill with, so the batch stays at size 1 and
   both Stage C (already-current) and Stage D (already-voted) resolve to
-  no-ops.
+  no-ops. **This ~3.5s figure predates issue #469's fix** (2026-07-25,
+  `cardpicker/local_calculate_verdicts.py`): the unconditional
+  `CandidateNameIndex()` build (measured 1.48s, dominating this figure)
+  is now lazy and cached per worker process, and the `CardScanLog`
+  exclusion subquery is now scoped by `card_id__in` when `card_ids` is
+  provided instead of scanning the whole 2M+-row table — an "empty"
+  echo dispatch should cost meaningfully less than 3.5s now, though this
+  has not been re-measured live against production data; treat ~3.5s as
+  a stale upper bound, not a current one.
 - **If the backlog is non-zero, an echo becomes a real extraction batch**
   (~25 cards, ~95s observed) that itself persists ~25 more `ImageEvidence`
   rows — which queues ~24 FURTHER echoes. This is a cascade, not a fixed
