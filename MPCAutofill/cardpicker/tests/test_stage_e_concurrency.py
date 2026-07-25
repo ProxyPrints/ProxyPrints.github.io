@@ -8,14 +8,18 @@ A DELIBERATE, LOAD-BEARING TEST-DESIGN CONSTRAINT, discovered while writing thes
 style choice): Postgres SESSION-level advisory locks are RE-ENTRANT within one session - a session
 that already holds `pg_try_advisory_lock(ns, 0)` gets an immediate second success (not a move to
 slot 1) if it calls the exact same lock again on the SAME connection, incrementing an internal
-reference count that then needs a matching number of unlocks. Calling `_try_acquire_slot()` (or
-entering `try_acquire_dispatch_slot()`) TWICE on Django's own shared per-thread `connection` WITHOUT
-releasing in between therefore does NOT simulate "two independent dispatches" the way it would for
-two genuinely separate sessions - it silently re-acquires the SAME slot instead. Every test below
-that needs more than one concurrent "dispatcher" therefore uses a genuinely SEPARATE `psycopg2`
-connection per dispatcher (`_raw_connection`/`_try_acquire_on_new_connection`) - this is also the
-production-faithful choice, since two real concurrent dispatches are always on two separate
-django-q worker PROCESSES (separate connections), never the same session calling this module twice.
+reference count that then needs a matching number of unlocks. Calling this module's own
+`_try_acquire_slot`/`_release_slot` TWICE on the SAME connection WITHOUT releasing in between
+therefore does NOT simulate "two independent dispatches" the way it would for two genuinely
+separate sessions - it silently re-acquires the SAME slot instead. Every test below that needs more
+than one concurrent "dispatcher" therefore gives each one its OWN genuinely SEPARATE `psycopg2`
+connection (`_raw_connection`, `_try_acquire_on_connection`/`_release_on_connection`) - this is also
+the production-faithful choice, since two real concurrent dispatches are always on two separate
+django-q worker PROCESSES (separate connections), and (2026-07-25 rewrite) the module itself now
+opens its OWN dedicated connection per call rather than ever touching Django's shared one - see
+`stage_e_concurrency`'s own module docstring, "CONNECTION-LIFECYCLE CONTRACT" section, for the
+production incident that made "a dedicated connection, not django.db.connection" the whole point of
+this rewrite.
 """
 
 import threading
@@ -25,7 +29,7 @@ from typing import Any, Optional
 import psycopg2
 import pytest
 
-from django.db import connection
+from django.db import close_old_connections, connection
 from django.test import override_settings
 
 from cardpicker import stage_e_concurrency
@@ -46,7 +50,10 @@ def _raw_connection() -> "psycopg2.extensions.connection":
     database-name prefixing. Forces Django's own connection to actually exist first
     (`connection.ensure_connection()`) since `get_connection_params()` alone doesn't establish one.
     `autocommit=True` - advisory locks are independent of transactions, and leaving a raw connection
-    in Postgres's default (non-autocommit) mode would hold an idle transaction open for no reason."""
+    in Postgres's default (non-autocommit) mode would hold an idle transaction open for no reason.
+    This is also EXACTLY the approach `stage_e_concurrency._open_dedicated_connection` itself now
+    uses in production (2026-07-25 rewrite) - this test helper predates that rewrite and is the
+    reason the task that produced it pointed the fix here."""
     connection.ensure_connection()
     params = connection.get_connection_params()
     raw = psycopg2.connect(**params)
@@ -56,9 +63,9 @@ def _raw_connection() -> "psycopg2.extensions.connection":
 
 def _try_acquire_on_connection(conn: "psycopg2.extensions.connection", cap: int) -> Optional[int]:
     """The exact same acquire loop `_try_acquire_slot` runs internally, against an explicit,
-    caller-owned connection rather than Django's shared one - see module docstring for why this
-    (not a second call to `_try_acquire_slot` itself) is how a second, independent dispatcher is
-    simulated in these tests."""
+    caller-owned connection - kept as an independent re-implementation (not just a call to
+    `stage_e_concurrency._try_acquire_slot`) deliberately, so these tests aren't purely tautological
+    against the module's own acquire loop."""
     with conn.cursor() as cursor:
         for slot in range(cap):
             cursor.execute("SELECT pg_try_advisory_lock(%s, %s)", [_LOCK_NAMESPACE, slot])
@@ -73,16 +80,34 @@ def _release_on_connection(conn: "psycopg2.extensions.connection", slot: int) ->
         cursor.execute("SELECT pg_advisory_unlock(%s, %s)", [_LOCK_NAMESPACE, slot])
 
 
+def _slot_0_is_held_by_someone_else() -> bool:
+    """From a genuinely separate, freshly-opened session: `True` if slot 0 is currently held by
+    ANY other session (this function's own connection is closed again immediately either way, so
+    it never itself holds the lock afterwards)."""
+    raw = _raw_connection()
+    try:
+        with raw.cursor() as cursor:
+            cursor.execute("SELECT pg_try_advisory_lock(%s, %s)", [_LOCK_NAMESPACE, 0])
+            (acquired,) = cursor.fetchone()
+            if acquired:
+                cursor.execute("SELECT pg_advisory_unlock(%s, %s)", [_LOCK_NAMESPACE, 0])
+        return not acquired
+    finally:
+        raw.close()
+
+
 @pytest.fixture(autouse=True)
 def _release_any_leaked_locks(db: Any):
     """Postgres advisory locks are SESSION-scoped, not transaction-scoped - pytest-django's own
     per-test transaction ROLLBACK (the `db` fixture) does NOT release them, unlike ordinary row
-    writes. Every test below is expected to release everything it acquires, but this fixture is a
-    safety net: it fully DRAINS every plausible slot's lock count on Django's own test connection
-    after each test (looping `pg_advisory_unlock` until it reports nothing left, not just once -
-    a single call would only undo ONE level of the re-entrant reference count the module docstring
-    describes, silently leaving a still-held lock behind for the next test in the same pytest
-    session to trip over)."""
+    writes. Every test below is expected to release everything it acquires (raw connections are
+    always `close()`d in a `finally`, which auto-releases anything still held), but this fixture is
+    a defensive safety net for Django's OWN long-lived connection specifically - the one thing nnot
+    covered by a raw connection's own teardown: it fully DRAINS every plausible slot's lock count on
+    Django's own test connection after each test (looping `pg_advisory_unlock` until it reports
+    nothing left, not just once - a single call would only undo ONE level of the re-entrant
+    reference count the module docstring describes, silently leaving a still-held lock behind for
+    the next test in the same pytest session to trip over)."""
     yield
     with connection.cursor() as cursor:
         for slot in range(8):  # generous upper bound - real caps in this file never exceed 2
@@ -96,54 +121,60 @@ def _release_any_leaked_locks(db: Any):
 class TestTryAcquireSlot:
     @CAP_2
     def test_two_independent_dispatchers_get_distinct_slots(self, db: Any) -> None:
-        dispatcher_a = _try_acquire_slot()  # Django's own connection
+        raw_a = _raw_connection()
         raw_b = _raw_connection()
         try:
-            dispatcher_b = _try_acquire_on_connection(raw_b, cap=2)
+            dispatcher_a = _try_acquire_slot(raw_a)
+            dispatcher_b = _try_acquire_slot(raw_b)
 
             assert dispatcher_a == 0
             assert dispatcher_b == 1
 
-            _release_slot(dispatcher_a)
-            _release_on_connection(raw_b, dispatcher_b)
+            _release_slot(raw_a, dispatcher_a)
+            _release_slot(raw_b, dispatcher_b)
         finally:
+            raw_a.close()
             raw_b.close()
 
     @CAP_2
     def test_a_third_independent_dispatcher_is_refused_once_the_cap_is_exhausted(self, db: Any) -> None:
-        dispatcher_a = _try_acquire_slot()
+        raw_a = _raw_connection()
         raw_b = _raw_connection()
         raw_c = _raw_connection()
         try:
-            dispatcher_b = _try_acquire_on_connection(raw_b, cap=2)
-            dispatcher_c = _try_acquire_on_connection(raw_c, cap=2)
+            dispatcher_a = _try_acquire_slot(raw_a)
+            dispatcher_b = _try_acquire_slot(raw_b)
+            dispatcher_c = _try_acquire_slot(raw_c)
 
             assert dispatcher_a is not None and dispatcher_b is not None
             assert dispatcher_c is None
 
-            _release_slot(dispatcher_a)
-            _release_on_connection(raw_b, dispatcher_b)
+            _release_slot(raw_a, dispatcher_a)
+            _release_slot(raw_b, dispatcher_b)
         finally:
+            raw_a.close()
             raw_b.close()
             raw_c.close()
 
     @CAP_2
     def test_releasing_a_slot_makes_it_acquirable_by_a_different_dispatcher(self, db: Any) -> None:
-        dispatcher_a = _try_acquire_slot()
+        raw_a = _raw_connection()
         raw_b = _raw_connection()
         raw_c = _raw_connection()
         try:
-            dispatcher_b = _try_acquire_on_connection(raw_b, cap=2)
+            dispatcher_a = _try_acquire_slot(raw_a)
+            dispatcher_b = _try_acquire_slot(raw_b)
             assert dispatcher_a == 0 and dispatcher_b == 1
 
-            _release_slot(dispatcher_a)  # slot 0 freed
+            _release_slot(raw_a, dispatcher_a)  # slot 0 freed
 
-            dispatcher_c = _try_acquire_on_connection(raw_c, cap=2)
+            dispatcher_c = _try_acquire_slot(raw_c)
             assert dispatcher_c == 0  # a THIRD, different dispatcher claims the freed slot
 
-            _release_on_connection(raw_b, dispatcher_b)
-            _release_on_connection(raw_c, dispatcher_c)
+            _release_slot(raw_b, dispatcher_b)
+            _release_slot(raw_c, dispatcher_c)
         finally:
+            raw_a.close()
             raw_b.close()
             raw_c.close()
 
@@ -226,6 +257,34 @@ class TestTryAcquireDispatchSlot:
         finally:
             raw.close()
 
+    @CAP_2
+    def test_does_not_use_djangos_shared_connection_at_all(self, db: Any) -> None:
+        """Companion assertion to the regression tests below, at the unit level: acquiring and
+        releasing a slot must not touch `django.db.connection`'s own cursor - if it did, the
+        pre-fix bug (lock held on a connection django-q's broker can close mid-dispatch) would be
+        back. Patches `django.db.connection.cursor` to explode if called, for the duration of one
+        acquire/release cycle only - restored via an explicit `finally`, NOT `pytest`'s
+        `monkeypatch` fixture, because this test's own teardown (the autouse leaked-lock drain
+        fixture, and pytest-django's own `_post_teardown` -> `check_constraints`) both call
+        `connection.cursor()` themselves AFTER the test body returns but BEFORE a
+        function-scoped `monkeypatch` fixture would have restored it, which made the patch leak
+        into (and fail) teardown machinery that has nothing to do with this test's own
+        assertion."""
+        original_cursor = connection.cursor
+
+        def _boom(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError(
+                "stage_e_concurrency touched django.db.connection.cursor() - it must only ever "
+                "use its own dedicated connection (see module docstring)"
+            )
+
+        connection.cursor = _boom  # type: ignore[method-assign]
+        try:
+            with try_acquire_dispatch_slot() as slot:
+                assert slot == 0
+        finally:
+            connection.cursor = original_cursor  # type: ignore[method-assign]
+
 
 class TestCrossConnectionRace:
     """Proves real cross-SESSION safety with independent raw connections standing in for separate
@@ -233,10 +292,11 @@ class TestCrossConnectionRace:
 
     @CAP_2
     def test_a_second_independent_session_cannot_exceed_the_cap(self, db: Any) -> None:
-        dispatcher_a = _try_acquire_slot()
+        raw_a = _raw_connection()
         raw_b = _raw_connection()
         try:
-            dispatcher_b = _try_acquire_on_connection(raw_b, cap=2)
+            dispatcher_a = _try_acquire_slot(raw_a)
+            dispatcher_b = _try_acquire_slot(raw_b)
             assert dispatcher_a == 0 and dispatcher_b == 1
 
             raw_c = _raw_connection()
@@ -252,9 +312,10 @@ class TestCrossConnectionRace:
             finally:
                 raw_c.close()
 
-            _release_slot(dispatcher_a)
-            _release_on_connection(raw_b, dispatcher_b)
+            _release_slot(raw_a, dispatcher_a)
+            _release_slot(raw_b, dispatcher_b)
         finally:
+            raw_a.close()
             raw_b.close()
 
     @CAP_2
@@ -268,10 +329,16 @@ class TestCrossConnectionRace:
 
         raw.close()  # simulates `kill -9` on the process holding this session - no unlock call
 
-        # Django's own connection now claims the same slot successfully - auto-released, not leaked.
-        reacquired = _try_acquire_slot()
-        assert reacquired == 0
-        _release_slot(reacquired)
+        # A fresh independent session now claims the same slot successfully - auto-released, not
+        # leaked (production-faithful: this module never holds a lock on Django's own connection,
+        # so a fresh dedicated connection standing in for a fresh worker is the right check here).
+        raw2 = _raw_connection()
+        try:
+            reacquired = _try_acquire_slot(raw2)
+            assert reacquired == 0
+            _release_slot(raw2, reacquired)
+        finally:
+            raw2.close()
 
 
 class TestSimulatedConcurrentDispatchers:
@@ -345,3 +412,71 @@ class TestSimulatedConcurrentDispatchers:
         # expected to eventually succeed (slots free up and get reused within the race), but never
         # simultaneously - that instant-in-time property is what max_observed pins down above.
         assert len(throttled) >= 1  # cap=2 with 6 simultaneous starters must throttle at least one
+
+
+class TestRegressionDedicatedConnectionSurvivesFollowOnEnqueue:
+    """
+    Regression tests for the 2026-07-25T00:25Z production incident
+    (`envtrip-20260725T002504-73e1eb6d`, `{'ceiling': 7.0, 'load_avg': 11.4013671875}`) - zero
+    `throttled-concurrency-cap` outcomes despite 8 concurrent django-q workers, plus 8 occurrences of
+    this module's own `pg_advisory_unlock reported slot N was not held by this connection` warning.
+    See `stage_e_concurrency`'s own module docstring, "WHAT WENT WRONG IN PRODUCTION" section, for
+    the full root-cause writeup this test reproduces: `cardpicker.stage_e_signals`'s `post_save`
+    receivers call `django_q.tasks.async_task(...)` from INSIDE `dispatch_micro_batch`'s locked
+    region (during Stage C's `persist_evidence`); `async_task` synchronously calls the installed ORM
+    broker's `enqueue`, which calls `django.db.close_old_connections()` whenever not inside an atomic
+    block - and with `CONN_MAX_AGE` unset (this project's `DATABASES["default"]` has no override,
+    Django's own default is `0`), that call closes the connection UNCONDITIONALLY, not just past some
+    age. A closed connection auto-releases every Postgres advisory lock its session held.
+
+    PROVEN TO CATCH THE REGRESSION (verified by hand against the pre-fix module, not committed - see
+    this change's own PR description): pointing `try_acquire_dispatch_slot` back at
+    `django.db.connection` instead of a dedicated connection makes both tests below FAIL - the
+    "genuinely separate session" check finds slot 0 free (silently reacquirable), instead of still
+    held.
+
+    `transactional_db`, not `db`: the `db` fixture wraps every test in an outer atomic block
+    (`get_autocommit()` is `False` throughout the test), which is not the connection state a real
+    django-q worker process is in when a signal receiver fires mid-dispatch - `ORM.get_connection`'s
+    own `if transaction.get_autocommit(...)` check is exactly why the production trigger only fires
+    OUTSIDE an atomic block, and calling `close_old_connections()` directly while genuinely inside
+    the `db` fixture's own outer atomic block would corrupt that fixture's own transactional
+    isolation for the rest of the test (Django's "didn't restore autocommit, drop the connection"
+    rule in `close_if_unusable_or_obsolete` fires regardless of which code calls it).
+    `transactional_db` gives this test a real, autocommit=True connection - the production-faithful
+    state, and the same fixture this codebase's own `TestConcurrency`-style tests
+    (`test_local_identify_printing_tags.py`) already use for the identical reason.
+    """
+
+    @CAP_2
+    def test_slot_survives_a_follow_on_async_task_enqueue_inside_the_locked_region(self, transactional_db: Any) -> None:
+        """The exact production trigger, reproduced end to end: a real `django_q.tasks.async_task`
+        call, made from inside the locked region, exactly where `stage_e_signals` makes it."""
+        from django_q.tasks import async_task
+
+        with try_acquire_dispatch_slot() as slot:
+            assert slot == 0
+
+            async_task("cardpicker.stage_e_dispatch.dispatch_for_card", 1, "evidence-change")
+
+            assert _slot_0_is_held_by_someone_else() is True
+
+        # released cleanly on exit despite the mid-block connection churn.
+        assert _slot_0_is_held_by_someone_else() is False
+
+    @CAP_2
+    def test_slot_survives_close_old_connections_called_directly_inside_the_locked_region(
+        self, transactional_db: Any
+    ) -> None:
+        """A more minimal, django-q-version-independent reproduction of the identical root cause:
+        directly calling `django.db.close_old_connections()` (what the ORM broker calls internally)
+        from inside the locked region must not affect this module's own lock, because the lock is
+        held on a connection `close_old_connections()` never touches."""
+        with try_acquire_dispatch_slot() as slot:
+            assert slot == 0
+
+            close_old_connections()
+
+            assert _slot_0_is_held_by_someone_else() is True
+
+        assert _slot_0_is_held_by_someone_else() is False

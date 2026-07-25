@@ -82,7 +82,13 @@ from cardpicker.local_calculate_verdicts import (
     run_join_key_calculator,
     run_slow_path_calculator,
 )
-from cardpicker.models import Card, EnvelopeTrip, ImageEvidence, PilotRunLedger
+from cardpicker.models import (
+    Card,
+    EnvelopeTrip,
+    ImageEvidence,
+    PilotRunLedger,
+    StageEThrottleCounter,
+)
 from cardpicker.operating_envelope import (
     FETCH_FAILURE_WINDOW,
     EnvelopeSignals,
@@ -164,7 +170,12 @@ class DispatchOutcome:
         `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` slot (`cardpicker.stage_e_concurrency`) was
         already held by another concurrent dispatch - PROACTIVE throttling, distinct from the
         envelope's own REACTIVE halted-new-trip (see that module's own docstring for why both
-        exist). No ledger row is written, matching the other halted statuses.
+        exist). No `PilotRunLedger` row is written, matching the other halted statuses - but
+        (2026-07-25, Tron gate observability anomaly 4) `StageEThrottleCounter.record()` DOES
+        advance a singleton, always-exactly-one-row counter (`cardpicker.models.
+        StageEThrottleCounter`'s own docstring has the full "why a counter, not a per-event row"
+        reasoning) so the runbook's own "tune STAGE_E_MAX_CONCURRENT_DISPATCHES against the
+        observed throttle rate" instruction has something queryable to check.
       - "completed" - did real work; does not itself guarantee zero failures inside the batch
         (a card can still fail its own fetch/extraction), only that the DISPATCH LOOP didn't halt.
       - "completed-with-trip" - did real work, but a `GoogleFetchLockoutError` observed mid-batch
@@ -396,8 +407,9 @@ def dispatch_micro_batch(
     concurrency-cap slot acquire (`cardpicker.stage_e_concurrency`) -> Stage C (sequential, per-card)
     -> Stage D (AS-IS entry points, scoped) -> ledger write -> slot release. Every gate below returns
     WITHOUT touching the DB (aside from the envelope check's own trip-persist side effect, and the
-    concurrency-cap check's own advisory-lock round trip, which writes nothing to any table) the
-    instant it applies - a halted or throttled dispatch never partially starts Stage C.
+    concurrency-cap check's own advisory-lock round trip, plus - 2026-07-25 - a throttled outcome's
+    `StageEThrottleCounter.record()` call, a single-row atomic counter update, never a growing
+    table) the instant it applies - a halted or throttled dispatch never partially starts Stage C.
     """
     if not getattr(settings, "STAGE_E_STREAMING_ENABLED", False):
         return DispatchOutcome(status="disabled", run_id=run_id)
@@ -448,6 +460,13 @@ def dispatch_micro_batch(
                 "Stage E dispatch throttled - all %s concurrency-cap slots already held",
                 getattr(settings, "STAGE_E_MAX_CONCURRENT_DISPATCHES", 2),
             )
+            # Observability signal (Tron gate anomaly 4, 2026-07-25): a throttled dispatch writes
+            # no PilotRunLedger row (see the comment above this `with` block for why), so this
+            # singleton counter (StageEThrottleCounter's own docstring has the full "why a
+            # counter, not a per-event row" reasoning) is the ONLY durable, queryable record that
+            # throttling happened - the runbook's "tune STAGE_E_MAX_CONCURRENT_DISPATCHES against
+            # the observed throttle rate" instruction has nothing else to check against.
+            StageEThrottleCounter.record()
             return DispatchOutcome(status="throttled-concurrency-cap", run_id=run_id)
 
         dispatch_run_id = run_id or f"stage-e-stream-{timezone.now().strftime('%Y%m%dT%H%M%S%f')}Z"

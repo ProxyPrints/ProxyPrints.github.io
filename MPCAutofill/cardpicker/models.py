@@ -1308,6 +1308,53 @@ class EnvelopeTrip(models.Model):
         return f"[{state}] {self.bar} trip_id={self.trip_id}"
 
 
+class StageEThrottleCounter(models.Model):
+    """
+    Stage E Phase 2 companion - a SINGLETON, always-exactly-one-row atomic counter for
+    `cardpicker.stage_e_concurrency`'s "throttled-concurrency-cap" outcome (Tron gate round-1
+    "COMPANION" review, observability anomaly 4, 2026-07-25: a throttled dispatch wrote no ledger
+    row and emitted only a `logger.info` line, so the runbook's own "tune
+    STAGE_E_MAX_CONCURRENT_DISPATCHES against the observed throttle rate"
+    (docs/features/stage-e-operations.md) instruction had nothing queryable to check against).
+
+    Deliberately NOT a `PilotRunLedger` row and NOT `EnvelopeTrip`-shaped (one row per event) -
+    see `EnvelopeTrip`'s own docstring for the same "different shape needs a different table"
+    reasoning this mirrors. A per-throttle-event row would WRITE-AMPLIFY under exactly the
+    failure shape this whole feature exists to guard against: a burst of concurrent dispatches
+    hitting an exhausted cap can throttle far more often than any dispatch ever completes -
+    unlike `PilotRunLedger`'s one-row-per-invocation cadence or `EnvelopeTrip`'s one-row-per-
+    breach cadence, both of which stay bounded by how often real work actually runs.
+
+    Exactly one row, ever - `singleton_key` is `unique=True` so a first-ever-throttle race
+    between two worker processes resolves to a single winning row via `record()`'s own
+    `get_or_create` fallback (Django/Postgres serialize the losing INSERT into an
+    `IntegrityError`, which `get_or_create` already retries as a fetch). `count` is only ever
+    advanced via an atomic `F("count") + 1` UPDATE - race-safe under Postgres row-level locking
+    even with many worker processes throttling at once, never a Python-side read-modify-write
+    (which would silently lose increments under that exact concurrency).
+    """
+
+    singleton_key = models.PositiveSmallIntegerField(default=1, unique=True)
+    count = models.PositiveIntegerField(default=0)
+    last_throttled_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"Stage E throttle count={self.count} (last {self.last_throttled_at})"
+
+    @classmethod
+    def record(cls) -> None:
+        """Called once per `"throttled-concurrency-cap"` dispatch outcome
+        (`cardpicker.stage_e_dispatch.dispatch_micro_batch`). Prefers the atomic `UPDATE` path
+        (the common case, after the singleton row exists); only falls back to `get_or_create` the
+        first time this counter is ever touched on a given deployment."""
+        from django.db.models import F
+        from django.utils import timezone
+
+        updated = cls.objects.filter(singleton_key=1).update(count=F("count") + 1, last_throttled_at=timezone.now())
+        if not updated:
+            cls.objects.get_or_create(singleton_key=1, defaults={"count": 1, "last_throttled_at": timezone.now()})
+
+
 class CardScanLog(models.Model):
     """
     Persists ABSTENTION evidence exactly like `AbstractWeightedVote` subclasses persist assent

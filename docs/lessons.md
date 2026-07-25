@@ -915,3 +915,26 @@ old code touches OUTSIDE the per-task function's own locals (closures, module-le
 already-open resources) and re-derive fork-safety for each one explicitly - don't assume "the
 tests still pass" proves this, since a small/mocked test run may never exercise the actual shared
 state that breaks at real concurrency.
+
+## "No connection pool exists, so the connection is stable" is a claim that needs a test exercising the region's own side effects, not a static read
+
+The Stage E concurrency cap (`cardpicker.stage_e_concurrency`, PR #450) shipped its lock on
+`django.db.connection` on the strength of a claim - made by directly reading `django_q.worker` -
+that a single `dispatch_micro_batch` call always runs as one uninterrupted segment on one
+connection. That claim was checked against the wrong code path: `django_q.worker`'s own
+connection-recycling only happens BETWEEN tasks, never mid-task, which is true and irrelevant -
+the actual risk was `django_q.brokers.orm.ORM.get_connection()`, reached from INSIDE the locked
+region via a `post_save` signal receiver (`cardpicker.stage_e_signals`) calling
+`django_q.tasks.async_task(...)`, which calls `django.db.close_old_connections()`
+unconditionally whenever not inside an atomic block - a completely different module than the one
+the static review inspected. The tests passed (they exercised the lock's own acquire/release
+logic correctly) while production failed, because no test ever exercised the SIDE EFFECT that
+actually threatened the connection: a follow-on `async_task` enqueue happening from inside the
+held lock's own critical section. **The general check**: a static review that concludes "no
+connection pool/recycling path exists here" only rules out connection instability from the code
+PATHS it actually read - it does not prove the connection survives everything the region's own
+code (including anything a signal handler triggers) might call into. Prove connection stability
+with a test that exercises the region's real side effects (here: actually calling the enqueue
+path, or the specific `close_old_connections()` primitive it bottoms out in, from inside the
+locked block and asserting the lock survives from a genuinely separate session) - never by static
+inspection of "what obviously touches the connection" alone.
