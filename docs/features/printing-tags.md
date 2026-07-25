@@ -138,6 +138,30 @@ printings, artists, tags, and moderation from one screen.
     unchanged here (no persisted `CONTESTED` status exists for printing;
     artist's own CONTESTED-vs-UNRESOLVED split is a separate, untouched
     raw-outcome-count heuristic).
+- <a id="md5-identity-group-pooling"></a>**md5 identity-group pooling**
+  (issue #473 PR-3, owner-ratified 2026-07-25; soundness statement in
+  [`theory.md`](../theory.md)'s §4 item 3): cards sharing a non-null
+  `Card.md5_checksum` index the **same image file** and are ONE
+  identification target, so printing consensus tallies them together.
+  `printing_consensus.md5_group_card_ids()` expands a card to its group;
+  `build_group_printing_vote_tuples()` builds the group's tally and
+  `vote_consensus.pool_group_votes()` collapses it: **non-human-backed
+  votes dedupe per casting `anonymous_id`** (one machine agent's verdict
+  about identical bytes is one event, at its max weight — never summed
+  across siblings), while **human-backed votes all count and sum** (real,
+  independent people). The pooled tally then runs through the UNCHANGED
+  `resolve_weighted_consensus` — same weights, same thresholds, same two
+  mechanisms above, same human-backed gate, applied once per group
+  instead of once per member. `resolve_and_persist_printing()` writes the
+  outcome (`inferred_canonical_card` + `printing_tag_status`) to **every**
+  member, in pk order, reindexing only the members whose indexed printing
+  actually changed; `consensus_recompute` walks each group once;
+  `question_feed` classifies likely-resolve on the group tally and serves
+  at most one member of a group per voter. A card with a null or unique
+  checksum is a **group of one**, for which all of the above is provably
+  the pre-#473 behavior — which is also every card until #473's PR-1
+  populates the column (`LOCAL_FILE` and other checksum-less sources stay
+  null permanently).
 - **Frontend consumer (funnel round, docs/features/grid-selector.md's
   "art-picker FUNNEL" section)**: the two endpoints below are called
   from the `/display` rail's Select Version FUNNEL

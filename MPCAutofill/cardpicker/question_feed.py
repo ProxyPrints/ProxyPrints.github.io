@@ -41,6 +41,18 @@ arithmetic. Every served item (from either the likely-resolve pool or the remain
 recorded in `QuestionFeedServedLog` - the bias-conditioning record the data brief's SOUNDNESS
 NOTE calls for, so a future audit can correlate click behavior against a session's
 easy-question exposure. See `_served_mix_ratio`/`_log_served` below.
+
+md5 identity groups (issue #473, owner-ratified 2026-07-25): a set of cards indexing a
+byte-identical image file is ONE identification target, so this feed asks about it once. Two
+consequences here, both delegated to `printing_consensus` rather than reimplemented: the
+likely-resolve classification reads the GROUP's pooled tally (`_printing_vote_tuples` ->
+`group_printing_votes`/`build_group_printing_vote_tuples`), and every printing tier excludes
+the full identity group of every card this voter has already answered
+(`_voter_answered_printing_card_ids`), so a voter is served at most one member per group rather
+than N copies of the same question. Both degenerate exactly to the pre-#473 behavior for a card
+whose group is itself alone, which - until that issue's PR-1 populates `Card.md5_checksum` - is
+every card in the catalogue. The artist and tag tiers are untouched by this: identity grouping
+is a statement about the IMAGE FILE, and those questions are already keyed differently.
 """
 
 from collections import defaultdict
@@ -68,6 +80,7 @@ from cardpicker.local_calculate_verdicts import (
 from cardpicker.models import (
     ArtistVoteStatus,
     Card,
+    CardPrintingTag,
     CardScanLog,
     CardTagVote,
     PrintingTagStatus,
@@ -78,12 +91,16 @@ from cardpicker.models import (
     VoteSource,
 )
 from cardpicker.printing_candidates import get_ranked_printing_candidates
-from cardpicker.printing_consensus import NO_MATCH, get_contested_card_ids
+from cardpicker.printing_consensus import (
+    build_group_printing_vote_tuples,
+    get_contested_card_ids,
+    group_printing_votes,
+    md5_group_expanded_card_ids,
+)
 from cardpicker.schema_types import QuestionFeedCounts, QuestionFeedItem, TypeEnum
 from cardpicker.tag_consensus import get_tag_net_polarity, get_tag_review_queue_pairs
 from cardpicker.vote_consensus import (
     VoteTuple,
-    is_human_backed_source,
     resolve_vote_weight,
     resolve_weighted_consensus,
 )
@@ -167,28 +184,46 @@ def _tag_item(card: Card, tag_name: str) -> QuestionFeedItem:
 
 def _printing_vote_tuples(card: Card) -> list[VoteTuple]:
     """
-    Builds `VoteTuple`s for `card`'s current `CardPrintingTag` rows - the exact same per-vote
-    weight/human-backed resolution `printing_consensus.resolve_printing` uses
-    (`resolve_vote_weight`/`is_human_backed_source`, both imported from `vote_consensus` rather
-    than reimplemented), just without that function's private printing-lookup bookkeeping this
-    caller doesn't need (only the outcome KEY, an int pk or the `NO_MATCH` sentinel, matters
-    for the likely-resolve check below).
+    Builds `VoteTuple`s for the current `CardPrintingTag` rows of `card`'s md5 IDENTITY GROUP -
+    every card indexing a byte-identical image file, `card` included (issue #473) - by calling
+    `printing_consensus.group_printing_votes`/`build_group_printing_vote_tuples`, the exact
+    functions `printing_consensus.resolve_printing` itself uses, so the group expansion, the
+    per-vote weight/human-backed resolution, and the machine-evidence pooling are one shared
+    implementation rather than a second copy that could drift from the real resolver. Passing no
+    `printings_by_id` keeps this off `vote.printing` entirely: only the outcome KEY (an int pk or
+    the `NO_MATCH` sentinel) matters for the likely-resolve check below, and this runs in a scan
+    loop. A group of one yields exactly the tuples this function built before #473.
     """
-    return [
-        VoteTuple(
-            outcome_key=NO_MATCH if vote.is_no_match else vote.printing_id,
-            weight=resolve_vote_weight(vote.source, vote.anonymous_id),
-            is_human_backed=is_human_backed_source(vote.source),
-        )
-        for vote in card.printing_tags.all()
-    ]
+    votes, is_group = group_printing_votes(card)
+    return build_group_printing_vote_tuples(votes, pool=is_group)
+
+
+def _voter_answered_printing_card_ids(anonymous_id: str) -> set[int]:
+    """
+    Every card this voter has already cast a printing vote on, WIDENED to those cards' full md5
+    identity groups (`printing_consensus.md5_group_expanded_card_ids`) - the exclusion set the
+    printing tiers below filter against, so a voter who answered one member of a group is never
+    asked the same byte-identical image again under a sibling's identifier (issue #473: the feed
+    serves one member per group, not N).
+
+    This replaces the `.exclude(printing_tags__anonymous_id=anonymous_id)` clause those tiers
+    used before, and is exactly equivalent to it for a card whose group is itself alone (the
+    same set of cards, expressed as pks) - which, for a checksum-less catalogue, is every card.
+    One indexed query, plus the expansion's own (at most) two - the tiers each scan or `.first()`
+    over the result, so this is not a per-candidate cost.
+    """
+    voted_card_ids = CardPrintingTag.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True)
+    return md5_group_expanded_card_ids(voted_card_ids)
 
 
 def is_likely_resolve_printing(card: Card) -> bool:
     """
     True when ONE hypothetical additional agreeing human vote (`VoteSource.USER` weight) added
-    to `card`'s current highest-weighted printing outcome group would resolve it under the REAL
-    resolver (`vote_consensus.resolve_weighted_consensus` - the same function
+    to the current highest-weighted printing outcome group of `card`'s md5 IDENTITY GROUP (issue
+    #473 - the pooled tally of every byte-identical sibling, via `_printing_vote_tuples`, not
+    this one card's rows in isolation; a group one human vote from resolving is likely-resolve
+    for every member of it, and resolving it resolves all of them) would resolve it under the
+    REAL resolver (`vote_consensus.resolve_weighted_consensus` - the same function
     `printing_consensus.resolve_printing` calls; this never reimplements its weight/threshold
     arithmetic). This is the serve-time LIKELY-RESOLVE classification the 2026-07-24 data
     brief's exact-code simulation approach specifies (the same method that produced its
@@ -249,7 +284,7 @@ def _likely_resolve_printing_card(anonymous_id: str) -> Optional[Card]:
     """
     candidates = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, printing_tags__isnull=False)
-        .exclude(printing_tags__anonymous_id=anonymous_id)
+        .exclude(pk__in=_voter_answered_printing_card_ids(anonymous_id))
         .distinct()
         .order_by("date_created")
     )
@@ -278,7 +313,7 @@ def _tier_1_confirm_suggestion(anonymous_id: str) -> Optional[QuestionFeedItem]:
             printing_tags__source__in=[VoteSource.DEDUCTION, VoteSource.OCR],
         )
         .exclude(printing_tags__source__in=[VoteSource.USER, VoteSource.ADMIN, VoteSource.FEDERATED])
-        .exclude(printing_tags__anonymous_id=anonymous_id)
+        .exclude(pk__in=_voter_answered_printing_card_ids(anonymous_id))
         .distinct()
         .order_by("date_created")
     )
@@ -292,7 +327,7 @@ def _tier_1_confirm_suggestion(anonymous_id: str) -> Optional[QuestionFeedItem]:
 def _tier_2_contested(anonymous_id: str) -> Optional[tuple[QuestionFeedItem, str]]:
     printing_card = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, pk__in=get_contested_card_ids())
-        .exclude(printing_tags__anonymous_id=anonymous_id)
+        .exclude(pk__in=_voter_answered_printing_card_ids(anonymous_id))
         .order_by("-date_created")
         .first()
     )
@@ -362,7 +397,7 @@ def _tier_4_fresh(anonymous_id: str) -> Optional[tuple[QuestionFeedItem, str]]:
     printing_card = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         .exclude(pk__in=get_contested_card_ids())
-        .exclude(printing_tags__anonymous_id=anonymous_id)
+        .exclude(pk__in=_voter_answered_printing_card_ids(anonymous_id))
         .annotate(vote_count=Count("printing_tags", distinct=True))
         .annotate(origin_reason=_latest_stage_d_origin_reason_subquery())
         .annotate(

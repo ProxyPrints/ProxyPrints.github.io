@@ -212,7 +212,7 @@ distance distribution, don't pick a cutoff in isolation.**
 
 ## 4. Soundness mechanisms
 
-Two structural properties keep this decoder safe to run unattended at
+Three structural properties keep this decoder safe to run unattended at
 catalog scale, independent of how accurate any single engine's evidence
 turns out to be:
 
@@ -281,6 +281,42 @@ turns out to be:
    actually verifying — not "43,425 correct decisions," but "43,425
    decisions that were structurally incapable of resolving anything on
    their own."
+3. **Identity-group pooling, i.e. one target gets one tally**
+   (owner-ratified 2026-07-25; `vote_consensus.pool_group_votes`,
+   `printing_consensus.resolve_and_persist_printing`). Several catalog
+   records can index the _same image file_ — different uploaders, same
+   bytes, byte-equality established by the storage provider's own
+   checksum, not by any similarity measure of ours. Such a set is **one
+   identification target**, and is tallied as one: an evidence event
+   observed on several members counts **once**, at its maximum weight
+   (keyed on the identity of the agent that produced it), while
+   human-backed votes, being genuinely independent observers of the same
+   target, sum as they always did. The resolved outcome is then written
+   to every member, so byte-identical images cannot disagree with each
+   other about what they depict — a class of catalog inconsistency that
+   is now unreachable by construction rather than merely unlikely.
+   The soundness claim is deliberately narrow and worth stating exactly:
+   pooling can only **remove** weight from a tally, never add any, so no
+   resolution becomes reachable that the same underlying evidence could
+   not already have produced on a single record. §7b's false-accept
+   bound is therefore preserved or tightened, never loosened — and the
+   `g₅` gate above is untouched by pooling, since a group's tally is
+   still subject to the same human-backed requirement, the same
+   quorum/share thresholds, and the same D1/D4 exclusions, applied once
+   instead of _n_ times. What this closes is an **independence**
+   failure, not a weighting one: the moment identical bytes let the
+   pipeline reuse one card's extracted evidence for its siblings instead
+   of re-deriving it (the point of establishing byte-equality at all —
+   the catalog is not permitted to hoard images, so re-fetching is the
+   expensive step), an un-pooled tally would read one observation as _n_
+   agreeing machine confirmations. That is precisely the mutual
+   independence §7a's `ε₁…ε₄` composition assumes, so pooling is what
+   keeps the composed bound honest once evidence is shared. Human
+   disagreement inside a group is not special-cased: it is one visible
+   contest on one target, decided by the same vote-weight matrix as any
+   other. A record whose checksum is unknown or unique is a group of
+   one, for which every statement above is the identity — the pre-2026-07-25
+   per-record behavior, unchanged.
 
 Together these mean the system's worst-case failure mode, even under a
 badly miscalibrated engine, is a wasted human review cycle (a bad

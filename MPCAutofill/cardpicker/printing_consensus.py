@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Iterable, Literal, TypedDict
+from typing import Hashable, Iterable, Literal, Sequence, TypedDict
 
 from django.conf import settings
 
@@ -8,11 +8,101 @@ from cardpicker.vote_consensus import (
     VoteTuple,
     contested_queryset,
     is_human_backed_source,
+    pool_group_votes,
     resolve_vote_weight,
     resolve_weighted_consensus,
 )
 
 NO_MATCH: Literal["NO_MATCH"] = "NO_MATCH"
+
+# `Card.md5_checksum` (the Drive-API-reported checksum of the image file this catalogue row
+# indexes), referenced by NAME rather than as an attribute so this module is importable and
+# correct both before and after that field exists: it is added by issue #473's PR-1
+# (`md5-checksum-substrate`), which this branch is cut BEFORE and merges AFTER. Every read of it
+# funnels through `_card_md5_checksum`/`_card_ids_with_md5_checksums` below - the only two places
+# in this module that touch the column - so on a checkout without the field every card is a
+# group of one and every group-aware path below degenerates, provably, to its pre-#473 behavior.
+MD5_CHECKSUM_FIELD = "md5_checksum"
+
+
+def _card_md5_checksum(card: Card) -> str | None:
+    """
+    `card`'s file checksum, or `None` when it has none (`LOCAL_FILE` and other checksum-less
+    sources, per issue #473 ruling 3) - and, until PR-1 lands, for every card, since the field
+    doesn't exist yet and `getattr` reports the default. Empty string is normalized to `None`:
+    "" is not an identity, and grouping every checksum-less card into one giant group would be a
+    catastrophic misreading of exactly this degenerate case.
+    """
+    return getattr(card, MD5_CHECKSUM_FIELD, None) or None
+
+
+def _card_ids_with_md5_checksums(checksums: set[str]) -> list[int]:
+    """
+    Every `Card.pk` whose checksum is in `checksums` - the one query in this module that filters
+    ON the column (see `MD5_CHECKSUM_FIELD`). Unreachable while the field doesn't exist, because
+    its only callers below skip it when they hold no non-null checksum, and `_card_md5_checksum`
+    can only report non-null once PR-1 has added the column.
+    """
+    return list(Card.objects.filter(**{f"{MD5_CHECKSUM_FIELD}__in": checksums}).values_list("pk", flat=True))
+
+
+def md5_group_key(card: Card) -> Hashable:
+    """
+    Stable identity of `card`'s md5 group, for callers that need to visit each group ONCE across
+    a large iteration (`consensus_recompute`) rather than re-resolving the same group per member.
+    A checksum-less card keys on its own pk, so it is always a group of one and never collides
+    with another card's key.
+    """
+    checksum = _card_md5_checksum(card)
+    return ("md5", checksum) if checksum is not None else ("card", card.pk)
+
+
+def md5_group_card_ids(card: Card) -> list[int]:
+    """
+    The pks of `card`'s md5 identity group - every card indexing a byte-identical image file,
+    `card` included - sorted, so the tally built from it is deterministic. `[card.pk]` for a
+    checksum-less or unique-checksum card (issue #473 ruling 3's group of one), which is also
+    the shape every card has before PR-1 adds the checksum column.
+    """
+    checksum = _card_md5_checksum(card)
+    if checksum is None:
+        return [card.pk]
+    return sorted(set(_card_ids_with_md5_checksums({checksum})) | {card.pk})
+
+
+def md5_group_cards(card: Card) -> list[Card]:
+    """
+    `card`'s md5 group as `Card` INSTANCES, with the caller's own `card` object first and
+    unreplaced - `resolve_and_persist_printing` writes through these instances, and its callers
+    (e.g. `consensus_recompute`, the vote-submission views) read `card.printing_tag_status` off
+    their own object afterwards, so substituting a freshly-fetched copy of the same row would
+    silently strand them on a stale status. A group of one performs no query at all.
+    """
+    group_card_ids = md5_group_card_ids(card)
+    other_ids = [card_id for card_id in group_card_ids if card_id != card.pk]
+    if not other_ids:
+        return [card]
+    return [card, *Card.objects.filter(pk__in=other_ids)]
+
+
+def md5_group_expanded_card_ids(card_ids: Iterable[int]) -> set[int]:
+    """
+    `card_ids` widened to include every md5 sibling of every card in it - "the cards this voter
+    has already answered" widened to "the identity groups this voter has already answered", for
+    `question_feed`'s serve-one-member-per-group exclusion. Returns `card_ids` unchanged when
+    none of them carry a checksum (which, before PR-1, is always).
+    """
+    ids = set(card_ids)
+    if not ids:
+        return ids
+    checksums = {
+        checksum
+        for checksum in (_card_md5_checksum(card) for card in Card.objects.filter(pk__in=ids))
+        if checksum is not None
+    }
+    if not checksums:
+        return ids
+    return ids | set(_card_ids_with_md5_checksums(checksums))
 
 
 @dataclass(frozen=True)
@@ -56,28 +146,57 @@ def get_resolved_printings(identifiers: Iterable[str]) -> dict[str, ResolvedPrin
     return result
 
 
-def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
+def group_printing_votes(card: Card, group_card_ids: Sequence[int] | None = None) -> tuple[list[CardPrintingTag], bool]:
     """
-    Reconciles all `CardPrintingTag` votes cast against `card` into a single resolved
-    outcome: a specific `CanonicalCard` printing, the `NO_MATCH` sentinel (consensus is
-    that no printing matches), or `None` if there isn't yet enough signal to conclude
-    anything. See `cardpicker.vote_consensus.resolve_weighted_consensus` for the shared
-    weighting/threshold rules (votes weighted by `source`, `PRINTING_TAG_MIN_VOTES`/
-    `MIN_SHARE` gates, non-AI gate) - this is a thin wrapper translating `CardPrintingTag`
-    rows into `VoteTuple`s and the winning outcome key back into a `CanonicalCard`.
+    Every `CardPrintingTag` row cast against any member of `card`'s md5 identity group, plus
+    whether that group actually has more than one member. Pass `group_card_ids` when the caller
+    already knows the group (e.g. it is about to persist to those same members) to avoid
+    re-deriving it.
+
+    A group of ONE reads `card.printing_tags.all()` - deliberately the identical expression
+    this module used before issue #473, not a `filter(card_id__in=[card.pk])` that happens to
+    return the same rows: that expression is what honours a caller's own
+    `prefetch_related("printing_tags")` (`consensus_recompute` batches on exactly that, one
+    query per batch instead of one per card), and keeping it is what makes the singleton case a
+    byte-for-byte no-op in query shape as well as in outcome. The multi-member branch orders by
+    `(card_id, pk)` so the pooled tally `pool_group_votes` builds is deterministic across runs.
+    """
+    if group_card_ids is None:
+        group_card_ids = md5_group_card_ids(card)
+    if len(group_card_ids) <= 1:
+        return list(card.printing_tags.all()), False
+    votes = list(
+        CardPrintingTag.objects.filter(card_id__in=group_card_ids).select_related("printing").order_by("card_id", "pk")
+    )
+    return votes, True
+
+
+def build_group_printing_vote_tuples(
+    votes: Iterable[CardPrintingTag], pool: bool, printings_by_id: dict[int, CanonicalCard] | None = None
+) -> list[VoteTuple]:
+    """
+    Translates `CardPrintingTag` rows into the `VoteTuple`s `resolve_weighted_consensus` reads,
+    pooling them across an md5 identity group when `pool` is True (issue #473 ruling 1, applied
+    by `vote_consensus.pool_group_votes`): every non-human-backed vote is keyed on the
+    `anonymous_id` of the agent that cast it, so one machine agent's verdict about a set of
+    byte-identical images is ONE event at its maximum weight no matter how many members carry a
+    copy of it, while human-backed votes stay unkeyed and therefore sum, being genuinely
+    independent people looking at the image. With `pool=False` (a group of one) no vote is
+    keyed, `pool_group_votes` is never called, and the returned list is exactly what this
+    module built before #473.
+
+    Passing a `printings_by_id` dict populates it with each voted `CanonicalCard` (needed to map
+    a winning outcome key back to a printing). Callers that only need the outcome KEY - e.g.
+    `question_feed.is_likely_resolve_printing`, which runs this in a scan loop - pass `None` and
+    this never touches `vote.printing`, so it costs no per-vote related lookup for them.
 
     Per-vote weight is resolved via `vote_consensus.resolve_vote_weight` (not a bare
     `_SOURCE_WEIGHTS[vote.source]` lookup) so the 2026-07-23 owner ruling zeroing the
     deductive-backfill cohort's weight (see that function's own docstring) is honoured here -
     the one call site every printing consensus computation (winner selection, the gate checks
-    and share math inside `resolve_weighted_consensus`, and every caller of this function,
+    and share math inside `resolve_weighted_consensus`, and every caller of `resolve_printing`,
     including `consensus_impact_report`/`consensus_recompute`) ultimately funnels through.
     """
-    votes = list(card.printing_tags.all())
-    if not votes:
-        return None
-
-    printings_by_id: dict[int, CanonicalCard] = {}
     vote_tuples: list[VoteTuple] = []
     for vote in votes:
         key: int | Literal["NO_MATCH"]
@@ -86,16 +205,46 @@ def resolve_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
         else:
             # guaranteed non-null here by the model's printing_xor_no_match CheckConstraint
             assert vote.printing_id is not None
-            assert vote.printing is not None
             key = vote.printing_id
-            printings_by_id[vote.printing_id] = vote.printing
+            if printings_by_id is not None:
+                assert vote.printing is not None
+                printings_by_id[vote.printing_id] = vote.printing
+        is_human_backed = is_human_backed_source(vote.source)
         vote_tuples.append(
             VoteTuple(
                 outcome_key=key,
                 weight=resolve_vote_weight(vote.source, vote.anonymous_id),
-                is_human_backed=is_human_backed_source(vote.source),
+                is_human_backed=is_human_backed,
+                dedupe_key=None if (is_human_backed or not pool) else vote.anonymous_id,
             )
         )
+    return pool_group_votes(vote_tuples) if pool else vote_tuples
+
+
+def resolve_printing(
+    card: Card, group_card_ids: Sequence[int] | None = None
+) -> CanonicalCard | Literal["NO_MATCH"] | None:
+    """
+    Reconciles all `CardPrintingTag` votes cast against `card`'s md5 identity group into a
+    single resolved outcome: a specific `CanonicalCard` printing, the `NO_MATCH` sentinel
+    (consensus is that no printing matches), or `None` if there isn't yet enough signal to
+    conclude anything. See `cardpicker.vote_consensus.resolve_weighted_consensus` for the shared
+    weighting/threshold rules (votes weighted by `source`, `PRINTING_TAG_MIN_VOTES`/
+    `MIN_SHARE` gates, non-AI gate) - this is a thin wrapper translating `CardPrintingTag`
+    rows into `VoteTuple`s and the winning outcome key back into a `CanonicalCard`.
+
+    The identity group (issue #473) is every card indexing a byte-identical image file: ONE
+    identification target, so its votes are tallied once, together, and the outcome applies to
+    all of it. A card with no checksum, or the only card with its checksum, is a group of one
+    (ruling 3) and takes the pre-#473 path unchanged - same rows, same query, same tuples, same
+    result. `group_card_ids` may be passed by a caller that already derived the group.
+    """
+    votes, is_group = group_printing_votes(card, group_card_ids)
+    if not votes:
+        return None
+
+    printings_by_id: dict[int, CanonicalCard] = {}
+    vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group, printings_by_id=printings_by_id)
 
     winning_key = resolve_weighted_consensus(
         vote_tuples, min_weight=settings.PRINTING_TAG_MIN_VOTES, min_share=settings.PRINTING_TAG_MIN_SHARE
@@ -121,49 +270,68 @@ def _effective_indexed_printing_id(status: str, printing_id: int | None) -> int 
     return printing_id if status == PrintingTagStatus.RESOLVED else None
 
 
-def resolve_and_persist_printing(card: Card) -> CanonicalCard | Literal["NO_MATCH"] | None:
+def resolve_and_persist_printing(
+    card: Card, members: Sequence[Card] | None = None
+) -> CanonicalCard | Literal["NO_MATCH"] | None:
     """
-    Runs `resolve_printing(card)` and writes the outcome onto `card.inferred_canonical_card`
-    and `card.printing_tag_status` together, so that `Card.serialise()` (which already reads
-    `inferred_canonical_card`) and the printing-tag review queue (which filters on the
-    indexed `printing_tag_status`, rather than recomputing consensus for every card) both
-    stay in sync with the latest votes. Intended to be called synchronously right after a
-    vote is submitted for `card` - cheap, since it only touches this one card's own votes.
-    Returns the same outcome `resolve_printing` returned, so callers don't need to
-    recompute it again immediately afterwards.
+    Runs `resolve_printing(card)` and writes the outcome onto `inferred_canonical_card` and
+    `printing_tag_status` together - for EVERY member of `card`'s md5 identity group, not just
+    `card` (issue #473 ruling 1: byte-identical images are one identification target, so a
+    resolution reached on one of them is a resolution for all of them, and cannot be allowed to
+    disagree with itself across the group by construction). `Card.serialise()` (which already
+    reads `inferred_canonical_card`) and the printing-tag review queue (which filters on the
+    indexed `printing_tag_status`, rather than recomputing consensus for every card) therefore
+    stay in sync with the latest votes for every member at once. Intended to be called
+    synchronously right after a vote is submitted for `card` - cheap, since it only touches this
+    one group's own votes. Returns the same outcome `resolve_printing` returned, so callers
+    don't need to recompute it again immediately afterwards.
 
-    Also pushes `card` into Elasticsearch, but only when the outcome actually changes what's
-    indexed (see `_effective_indexed_printing_id`) - entering RESOLVED, leaving RESOLVED
-    (contested/unresolved again after new votes), or the resolved printing itself changing
-    while remaining RESOLVED. A re-resolve that lands on the same outcome as before (the
-    common case whenever this runs against a card that already has a settled consensus) does
-    not touch the index. The push itself is failure-isolated (`reindex_card_safely`) - an ES
-    hiccup is logged, never raised; this function's own DB write has already committed by
-    that point regardless.
+    A group of one (a checksum-less or unique-checksum card - ruling 3) writes exactly the one
+    row it always did, through the caller's own `card` instance, with no additional query.
+    `members` may be passed by a caller that already materialized the group (see
+    `md5_group_cards`, whose contract this expects: `card` itself, first, unreplaced).
+
+    Also pushes each written card into Elasticsearch, but only when the outcome actually changes
+    what's indexed for THAT card (see `_effective_indexed_printing_id`) - entering RESOLVED,
+    leaving RESOLVED (contested/unresolved again after new votes), or the resolved printing
+    itself changing while remaining RESOLVED. A re-resolve that lands on the same outcome as
+    before (the common case whenever this runs against a card that already has a settled
+    consensus) does not touch the index; the per-member gate means propagating an unchanged
+    outcome across a group reindexes only the members that were actually out of step. The push
+    itself is failure-isolated (`reindex_card_safely`) - an ES hiccup is logged, never raised;
+    this function's own DB write has already committed by that point regardless.
+
+    Members are WRITTEN in pk order (not in the caller-first order they arrive in), so two
+    concurrent votes landing on two different members of the same group take that group's row
+    locks in the same order and queue behind each other instead of deadlocking. For a group of
+    one this is the same single write, in the same place, it always was.
     """
-    prior_status = card.printing_tag_status
-    prior_printing_id = card.inferred_canonical_card_id
-    prior_effective = _effective_indexed_printing_id(prior_status, prior_printing_id)
+    group_cards = list(members) if members is not None else md5_group_cards(card)
+    result = resolve_printing(card, group_card_ids=[member.pk for member in group_cards])
 
-    result = resolve_printing(card)
-    if result is None:
-        card.inferred_canonical_card = None
-        card.printing_tag_status = PrintingTagStatus.UNRESOLVED
-    elif result == NO_MATCH:
-        card.inferred_canonical_card = None
-        card.printing_tag_status = PrintingTagStatus.NO_MATCH
-    else:
-        card.inferred_canonical_card = result
-        card.printing_tag_status = PrintingTagStatus.RESOLVED
-    card.save(update_fields=["inferred_canonical_card", "printing_tag_status"])
+    for member in sorted(group_cards, key=lambda group_card: group_card.pk):
+        prior_status = member.printing_tag_status
+        prior_printing_id = member.inferred_canonical_card_id
+        prior_effective = _effective_indexed_printing_id(prior_status, prior_printing_id)
 
-    new_effective = _effective_indexed_printing_id(card.printing_tag_status, card.inferred_canonical_card_id)
-    if new_effective != prior_effective:
-        from cardpicker.documents import (
-            reindex_card_safely,  # local import - avoids a top-level ES dependency in this module
-        )
+        if result is None:
+            member.inferred_canonical_card = None
+            member.printing_tag_status = PrintingTagStatus.UNRESOLVED
+        elif result == NO_MATCH:
+            member.inferred_canonical_card = None
+            member.printing_tag_status = PrintingTagStatus.NO_MATCH
+        else:
+            member.inferred_canonical_card = result
+            member.printing_tag_status = PrintingTagStatus.RESOLVED
+        member.save(update_fields=["inferred_canonical_card", "printing_tag_status"])
 
-        reindex_card_safely(card)
+        new_effective = _effective_indexed_printing_id(member.printing_tag_status, member.inferred_canonical_card_id)
+        if new_effective != prior_effective:
+            from cardpicker.documents import (
+                reindex_card_safely,  # local import - avoids a top-level ES dependency in this module
+            )
+
+            reindex_card_safely(member)
 
     return result
 

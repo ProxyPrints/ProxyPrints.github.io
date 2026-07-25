@@ -129,6 +129,65 @@ class VoteTuple(NamedTuple):
     # docstring for how this is used: capped per-outcome-group, and excluded entirely (alongside
     # every other non-human-backed vote) whenever that function's D1/D4 mechanisms engage.
     is_implicit: bool = False
+    # Identity of the EVENT this vote reports, for `pool_group_votes` (md5 identity groups, issue
+    # #473 ruling 1). Two votes carrying the same non-None `dedupe_key` are the same underlying
+    # evidence event observed on more than one member of an identity group, and collapse to ONE
+    # vote before any weight is summed. `None` (the default, and the value every pre-existing
+    # call site constructs) means "an independent event" and never collapses with anything -
+    # which is what makes a group of one a byte-for-byte no-op: nothing to collapse against.
+    # Set by `printing_consensus.build_group_printing_vote_tuples` for non-human-backed votes
+    # inside a multi-member group only; see that function and `pool_group_votes` below.
+    dedupe_key: Hashable | None = None
+
+
+def pool_group_votes(votes: Iterable[VoteTuple]) -> list[VoteTuple]:
+    """
+    Collapses the votes of an md5 IDENTITY GROUP (issue #473: a set of `Card`s whose stored
+    file checksums are equal, i.e. byte-identical images - ONE identification target, not N)
+    into the tally `resolve_weighted_consensus` should actually see, per the owner's 2026-07-25
+    ruling 1: an evidence EVENT that was merely observed on several members of the group counts
+    ONCE, at its maximum weight, never summed; genuinely independent events all count.
+
+    Mechanically: every vote carrying a non-None `dedupe_key` (see `VoteTuple.dedupe_key` -
+    today set only for non-human-backed votes, keyed on the casting agent's `anonymous_id`, and
+    only when the group has more than one member) collapses with every other vote sharing that
+    key, keeping the single highest-weighted one; `dedupe_key=None` votes (every human-backed
+    vote, and EVERY vote of a group of one) pass through untouched, in input order. The result
+    is fed to `resolve_weighted_consensus` unchanged - none of the matrix logic (the implicit
+    cap, D1/D4 non-human exclusion, the human-backed gate, the deductive-backfill zero-weight
+    override) is aware that pooling happened, and none of it needed to change.
+
+    Soundness (the property docs/theory.md §4's group-pooling item states): this function can
+    only ever REMOVE weight from a tally, never add any. Pooling therefore cannot create a
+    resolution that the same evidence could not already have produced on a single card, and the
+    §7b false-accept bound is preserved or tightened, never loosened - the reason machine
+    evidence transferred between byte-identical siblings (issue #473 PR-2) cannot masquerade as
+    N independent confirmations of the same printing.
+
+    Ties and self-contradiction: equal weights keep the FIRST vote in input order (callers pass
+    a deterministically ordered group tally - see `printing_consensus.group_printing_votes` -
+    so this is stable across runs, not arbitrary per-query). If one agent's deduped votes argue
+    for DIFFERENT outcomes across the group (possible: `CardPrintingTag`'s uniqueness
+    constraints allow one `anonymous_id` several printing votes per card, e.g. a rescan that
+    matched differently), that agent contradicts itself about byte-identical bytes and, per the
+    ruling's "ONE event" wording, still contributes exactly one vote. Keeping one side rather
+    than both is strictly less machine weight than the pre-pooling tally carried, so it cannot
+    make anything easier to resolve; and no volume of machine weight can resolve a group by
+    itself regardless (the human-backed gate is untouched by this function).
+    """
+    pooled: list[VoteTuple] = []
+    index_by_dedupe_key: dict[Hashable, int] = {}
+    for vote in votes:
+        if vote.dedupe_key is None:
+            pooled.append(vote)
+            continue
+        index = index_by_dedupe_key.get(vote.dedupe_key)
+        if index is None:
+            index_by_dedupe_key[vote.dedupe_key] = len(pooled)
+            pooled.append(vote)
+        elif vote.weight > pooled[index].weight:
+            pooled[index] = vote
+    return pooled
 
 
 class _PendingPrivileged:
@@ -232,6 +291,11 @@ def resolve_weighted_consensus(
     lone human vote plus agreeing machine weight can still be promoted to a resolution the same
     way it always could (D2: `exclude_non_human` is false in that shape, since there's only one
     human-backed group and its own human weight doesn't clear `min_weight` by itself).
+
+    This function is unaware of md5 identity groups (issue #473) and deliberately stays that
+    way: a group-aware caller pools its members' votes through `pool_group_votes` FIRST and
+    hands the result here, so every mechanism above runs on the pooled tally with no branch of
+    its own. A group of one pools to itself, which is what makes grouping a no-op for it.
     """
     votes = list(votes)
     if not votes:
@@ -330,6 +394,7 @@ def contested_queryset(
 
 __all__ = [
     "VoteTuple",
+    "pool_group_votes",
     "resolve_weighted_consensus",
     "PENDING_PRIVILEGED",
     "_SOURCE_WEIGHTS",
