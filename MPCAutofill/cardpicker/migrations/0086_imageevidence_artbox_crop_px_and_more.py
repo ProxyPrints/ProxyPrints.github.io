@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("cardpicker", "0083_stageesweepcursor_keyed"),
+        ("cardpicker", "0085_imageevidence_transfer_fields"),
     ]
 
     operations = [
