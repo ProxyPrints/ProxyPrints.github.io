@@ -97,6 +97,21 @@ entry). A `Nav.Link` to `/guide` in `frontend/src/features/ui/Navbar.tsx`
 ships alongside this widening (ungated, same as `Download` — `/guide` has
 no backend dependency), closing proposal-i's "not yet built" item 3.
 
+**Known gap, deliberately deferred (2026-07-25): mermaid diagrams are
+wiki-only for now.** `docs/identification-pipeline.md` (FIG-1) and
+`docs/pipeline-fidelity-gate.md` (FIG-2) each carry a committed
+` ```mermaid ` fence. GitHub and the wiki both render it natively; the
+site's guide page does not — `frontend/src/pages/guide/[[...slug]].tsx`
+renders markdown via `marked` v18, which has no mermaid support, so a
+fence would show as raw fenced source text on proxyprints.ca. Neither
+page is in this file's `"site"` target list for exactly that reason.
+Three ways to close the gap, owner sign-off needed before any of them:
+(a) add a mermaid renderer to the guide page (new frontend dependency);
+(b) commit an SVG beside each fence and have the site prefer it (no new
+dependency, but a second artifact that can drift from the mermaid
+source); (c) leave it wiki-only indefinitely. Nothing about this gap
+blocks the `docs/`/wiki commit itself.
+
 **Link-rewrite parity fixtures**: since one function now serves two output
 shapes (wiki mode vs. site mode) rather than two separate implementations,
 [`.github/scripts/tests/test_publish_wiki_link_rewrite.py`](../.github/scripts/tests/test_publish_wiki_link_rewrite.py)
