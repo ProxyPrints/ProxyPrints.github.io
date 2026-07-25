@@ -14,6 +14,17 @@ repos:
     rev: v2.3.0
     hooks:
       - id: check-yaml
+        exclude: ^docker/docker-compose\.prod\.yml$
+      - id: check-yaml
+        name: check-yaml (unsafe, Compose custom tags)
+        # docker-compose.prod.yml uses the Compose merge tag `!reset` (postgres/
+        # elasticsearch `ports:`, issue #475) - a real, Compose-spec-valid tag
+        # that generic YAML's safe constructor doesn't know, so the default
+        # check-yaml hook errors on it ("could not determine a constructor for
+        # the tag '!reset'"). --unsafe here means syntax-only (no construction),
+        # not "skip the file" - still catches genuine YAML syntax errors.
+        files: ^docker/docker-compose\.prod\.yml$
+        args: [--unsafe]
       - id: end-of-file-fixer
       - id: trailing-whitespace
         exclude: ".*/__snapshots__/.*" # trimming whitespace can break snapshot tests

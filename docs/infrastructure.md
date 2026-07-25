@@ -91,18 +91,26 @@ this fixed and its follow-on hardening. Fixed by `eaece1fd` (#18,
   uploads single-digit megabytes and finishes in ~5 minutes.
 - Postgres/ES: `docker-compose.yml` (dev, base file) publishes
   `127.0.0.1:5432`/`127.0.0.1:9200` deliberately - they were
-  internet-exposed at one point. `docker-compose.prod.yml` overrides both
-  services' `ports:` to `[]` (Compose replaces, not merges, list fields) -
-  a fresh `docker compose -f docker-compose.prod.yml up` publishes neither
-  port to the host at all, only `expose:` for container-to-container
-  access. The containers actually running on this box (as of 2026-07-18)
-  still answer on `127.0.0.1:5432`/`127.0.0.1:9200` regardless - they
-  predate the `ports: []` override and haven't been recreated since
-  (Docker doesn't retroactively apply a compose-file port change to an
-  already-running container). Don't rely on this from a fresh script: if
-  postgres/elasticsearch are ever recreated (version bump,
-  `--force-recreate`, etc.) under the current prod compose file, host-port
-  access silently disappears.
+  internet-exposed at one point. `docker-compose.prod.yml`'s `postgres`/
+  `elasticsearch` services `extends` the base file's services rather than
+  defining their own - a plain `ports: []` override does NOT reset a list
+  field inherited through `extends` (only a literal, non-extended service
+  override replaces a list; issue #475, found and fixed 2026-07-25), so the
+  base file's host-port mapping was silently surviving into prod despite
+  the doc previously asserting otherwise. Fixed by tagging both services'
+  `ports:` with the Compose merge tag `ports: !reset []` (verified against
+  this box's v5.3.1 CLI, which supports it), confirmed via
+  `docker compose -f docker-compose.prod.yml config` rendering `ports: null`
+  for both services while `expose:` (container-to-container only) stays
+  populated. The containers actually running on this box (as of 2026-07-18,
+  still true as of this fix landing) still answer on
+  `127.0.0.1:5432`/`127.0.0.1:9200` regardless - Docker doesn't retroactively
+  apply a compose-file port change to an already-running container, so the
+  live listener only disappears at the **next** postgres/ES recreate (a
+  rider on issue #462's deploy step - one recreate covers both fixes if they
+  land together). Don't rely on the fix taking effect from a fresh script
+  reading this file alone: if postgres/elasticsearch haven't been recreated
+  since this change landed, host-port access is still live.
 - **After `docker compose up -d django worker` (or any command that
   recreates the `django` container), also restart `nginx`** — see
   [[troubleshooting.md]] ("nginx 502s everything after a django container
