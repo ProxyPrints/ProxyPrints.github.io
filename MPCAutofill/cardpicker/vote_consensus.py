@@ -183,12 +183,13 @@ def pool_group_votes(votes: Iterable[VoteTuple]) -> list[VoteTuple]:
     re-labels one. What it therefore preserves EXACTLY is the machine-alone bound: no volume of
     non-human-backed weight can resolve a group, because the human-backed gate is untouched and
     pooling cannot manufacture a human-backed vote. What it makes true, rather than assumes, is
-    the independence the quorum threshold rests on: after pooling, `min_weight` counts distinct
-    agents, so neither one person answering n siblings nor one machine agent's evidence
-    transferred to n siblings (issue #473 PR-2) can reach quorum by repetition. Note the
-    direction of that claim carefully: pooling REPLACES a per-card tally with a group tally, and
-    a group tally can resolve things no single card's tally could (two different people, one
-    vote each, on two members) - that is the intended multiplier, not an accident.
+    the independence the quorum threshold rests on: after pooling, `min_weight` is a sum over
+    distinct agents rather than over rows, so neither one person answering n siblings nor one
+    machine agent's evidence transferred to n siblings (issue #473 PR-2) can reach quorum by
+    repetition. Note the direction of that claim carefully: pooling REPLACES a per-card tally
+    with a group tally, and a group tally can resolve things no single card's tally could (two
+    different people, one vote each, on two members) - that is the intended multiplier, not an
+    accident.
 
     Ordering: the retained set is a function of the votes, not of the order they arrive in
     (agreement is order-insensitive, and a contradicting agent is dropped wholesale), so a

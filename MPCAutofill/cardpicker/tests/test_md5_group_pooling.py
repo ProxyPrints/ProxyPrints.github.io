@@ -45,6 +45,7 @@ from cardpicker.printing_consensus import (
 from cardpicker.question_feed import (
     _tier_1_confirm_suggestion,
     _voter_answered_printing_card_ids,
+    get_next_question_feed_item,
     is_likely_resolve_printing,
 )
 from cardpicker.tests.factories import (
@@ -345,6 +346,43 @@ class TestGroupTally:
 
         assert build(True) == build(False) == [1.0]
 
+    def test_a_self_contradicting_human_alone_does_not_resolve_the_group(self, db, md5_groups):
+        # the human-vote analogue of test_a_self_contradicting_machine_agent_contributes_nothing
+        # above: ONE human (source=user) voting X on one sibling and Y on the other has
+        # contradicted itself about byte-identical bytes, same as a machine agent would, and is
+        # withheld entirely - the group must not resolve on that agent's votes alone.
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing_x, printing_y = CanonicalCardFactory(), CanonicalCardFactory()
+        human_vote(card_a, printing_x, "human-1")
+        human_vote(card_b, printing_y, "human-1")
+
+        votes, is_group = group_printing_votes(card_a)
+        vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
+        assert vote_tuples == []
+        assert resolve_printing(card_a) is None
+        assert resolve_printing(card_b) is None
+
+    def test_self_contradicting_human_withheld_not_latest_wins(self, db, md5_groups):
+        # issue #483: pins WHICH of the candidate contradiction policies this pipeline actually
+        # implements. h1 votes X on sibling1, then Y on sibling2 - a self-contradiction, withheld
+        # entirely per `pool_group_votes` rule 2. h2 votes Y once. A "latest wins" policy would
+        # count h1's most recent vote (Y) alongside h2's Y for a 2.0 quorum on Y and wrongly
+        # resolve the group; withhold-entirely leaves only h2's 1.0, short of
+        # PRINTING_TAG_MIN_VOTES=2, so the group stays unresolved.
+        card_1, card_2 = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_1, card_2)
+        printing_x, printing_y = CanonicalCardFactory(), CanonicalCardFactory()
+        human_vote(card_1, printing_x, "h1")
+        human_vote(card_2, printing_y, "h1")
+        human_vote(card_1, printing_y, "h2")
+
+        votes, is_group = group_printing_votes(card_1)
+        vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
+        assert [(vote.outcome_key, vote.dedupe_key) for vote in vote_tuples] == [(printing_y.pk, "h2")]
+        assert resolve_printing(card_1) is None
+        assert resolve_printing(card_2) is None
+
     def test_a_group_never_resolves_on_machine_weight_alone(self, db, md5_groups):
         # four siblings, four DIFFERENT agents (nothing dedupes), 2.0 of machine weight - which
         # would clear the quorum threshold on arithmetic alone. The human-backed gate holds at
@@ -567,3 +605,55 @@ class TestQuestionFeedGroups:
         # identical question.
         human_vote(card_a, printing, "voter-1")
         assert _tier_1_confirm_suggestion("voter-1") is None
+
+
+class TestGroupExpansionQueryCostWithoutTheChecksumColumn:
+    """
+    `_md5_checksums_for_card_ids`'s and `md5_group_expanded_card_ids`'s own docstrings both claim
+    ZERO queries while `Card.md5_checksum` doesn't exist (issue #473's PR-1 hasn't merged into
+    this branch - see this module's docstring, point 2). Deliberately NOT using the `md5_groups`
+    fixture here: that fixture monkeypatches the three checksum-reading functions themselves, so
+    it can't tell us anything about what the REAL functions do when the column is genuinely
+    absent, which is exactly the claim being pinned.
+    """
+
+    def test_group_expansion_issues_zero_queries_without_the_checksum_column(self, db, django_assert_num_queries):
+        card_a, card_b = CardFactory(), CardFactory()
+
+        with django_assert_num_queries(0):
+            expanded = md5_group_expanded_card_ids([card_a.pk, card_b.pk])
+
+        assert expanded == {card_a.pk, card_b.pk}
+
+    def test_group_key_and_card_ids_issue_zero_queries_without_the_checksum_column(self, db, django_assert_num_queries):
+        card = CardFactory()
+
+        with django_assert_num_queries(0):
+            key = md5_group_key(card)
+            card_ids = md5_group_card_ids(card)
+
+        assert key == ("card", card.pk)
+        assert card_ids == [card.pk]
+
+
+class TestAnsweredSetComputedOncePerFeedRequest:
+    """
+    2026-07-25 gate on PR #482, condition f1: `_voter_answered_printing_card_ids` must be resolved
+    ONCE per `get_next_question_feed_item` call and threaded down to every tier it consults, not
+    recomputed per tier.
+    """
+
+    def test_answered_set_is_computed_exactly_once(self, db, md5_groups):
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        machine_vote(card_a, printing, "ocr-bot")
+        machine_vote(card_b, printing, "ocr-bot")
+
+        with patch(
+            "cardpicker.question_feed._voter_answered_printing_card_ids",
+            side_effect=_voter_answered_printing_card_ids,
+        ) as spy:
+            get_next_question_feed_item("voter-1")
+
+        assert spy.call_count == 1

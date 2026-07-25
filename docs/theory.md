@@ -291,9 +291,9 @@ turns out to be:
    target**, and is tallied as one, under a single rule: **the tally
    counts distinct agents, not rows.** All of one agent's agreeing votes
    across the group collapse into one — human and machine alike, keyed
-   on the caster's identity — and an agent whose votes across the group
-   _disagree_ with each other contributes nothing at all, on the same
-   withhold-don't-manufacture logic `g₄` applies to its cross-checks
+   on the caster's identity — and any agent, human included, whose votes
+   across the group disagree with each other contributes nothing, on the
+   same withhold-don't-manufacture logic `g₄` applies to its cross-checks
    (§7a). Distinct agents still sum, which is the point of grouping:
    two different people, one vote each, on two members of a group are
    two independent confirmations of one target.
@@ -320,10 +320,10 @@ turns out to be:
      since the catalog is not permitted to hoard images and re-fetching
      is the expensive step) one machine observation can appear as _n_
      agreeing confirmations. Group-level per-agent dedupe is what makes
-     `min_weight` a count of distinct agents again, and it is what keeps
-     §7a's `ε₁…ε₄` composition's mutual-independence assumption honest
-     once evidence is shared. This is a **restored** assumption, not a
-     new guarantee.
+     `min_weight` a sum over distinct agents rather than over rows, and it
+     is what keeps §7a's `ε₁…ε₄` composition's mutual-independence
+     assumption honest once evidence is shared. This is a **restored**
+     assumption, not a new guarantee.
    - **Explicitly NOT claimed**: that pooling reaches no new
      resolutions. It reaches some. A group tally replaces _n_ per-record
      tallies, so two different people voting on two different members
@@ -344,10 +344,11 @@ turns out to be:
    checksum backfill, a re-upload, a corrected file), and a membership
    change requires a recompute for the affected group before its members
    are back in agreement — that recompute is `consensus_recompute`,
-   which walks groups, not rows. Human disagreement inside a group is
-   not special-cased: it is one visible contest on one target, decided
-   by the same vote-weight matrix as any other. A record whose checksum
-   is unknown or unique is a group of one, for which every statement
+   which walks groups, not rows. Human disagreement BETWEEN DISTINCT
+   PEOPLE inside a group is not special-cased: it is one visible contest
+   on one target, decided by the same vote-weight matrix as any other. A
+   record whose checksum is unknown or unique is a group of one, for
+   which every statement
    above is the identity — the pre-2026-07-25 per-record behavior,
    unchanged.
 

@@ -171,10 +171,11 @@ printings, artists, tags, and moderation from one screen.
   the only writer, though a change in group MEMBERSHIP (checksum
   backfill, re-upload) needs a `consensus_recompute` pass for the
   affected group; `consensus_recompute` walks each group once;
-  `question_feed` classifies likely-resolve on the group tally and serves
-  at most one member of a group per voter. A card with a null or unique
-  checksum is a **group of one**, for which all of the above is provably
-  the pre-#473 behavior — which is also every card until #473's PR-1
+  `question_feed` classifies likely-resolve on the group tally and never
+  serves a second member of a group a voter has already answered. A card
+  with a null or unique checksum is a **group of one**, for which all of
+  the above is provably the pre-#473 behavior — which is also every
+  card until #473's PR-1
   populates the column (`LOCAL_FILE` and other checksum-less sources stay
   null permanently).
 - **Frontend consumer (funnel round, docs/features/grid-selector.md's
