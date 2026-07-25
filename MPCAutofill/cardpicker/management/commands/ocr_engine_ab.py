@@ -4,12 +4,13 @@ local_ocr.py's own module docstring). Fetches a bounded sample of real card imag
 (the same fetch helper and shared rate-limiter every other pilot command uses -
 `image_cdn_fetch.fetch_card_image_bytes`, paced via `harvest_fetch_limiter.GOOGLE_IMAGE` - see
 that module's own docstring) and runs the SAME preprocessing through both OCR engines
-(`local_ocr.run_tesseract_text_and_words`, dispatched via `django.test.override_settings` so this
-command dogfoods the exact same seam production code would use, not a parallel implementation of
-its own) - never persists a single pixel, matching CLAUDE.md's "Governing premise: we index, we
-do not store images". This is the tool #423's spike comment says any GO decision on flipping
-`OCR_ENGINE` is gated on; running it does not itself flip anything (see local_ocr.py's own
-docstring for why the flip is deliberately deferred to issue #480's combined whole-catalog pass).
+(`local_ocr.run_tesseract_text_and_words`, dispatched via this module's own `_ocr_engine` context
+manager so this command dogfoods the exact same seam production code would use, not a parallel
+implementation of its own) - never persists a single pixel, matching CLAUDE.md's "Governing
+premise: we index, we do not store images". This is the tool #423's spike comment says any GO
+decision on flipping `OCR_ENGINE` is gated on; running it does not itself flip anything (see
+local_ocr.py's own docstring for why the flip is deliberately deferred to issue #480's combined
+whole-catalog pass).
 
 SCOPE REDUCTION vs `run_image_evidence_cohort.py` (deliberate, read this before reusing this
 command's shape for something bigger): that command's own two-stage windowed fetch/compute
@@ -55,12 +56,13 @@ import logging
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
+from django.conf import settings as django_settings
 from django.core.management.base import BaseCommand, CommandParser
-from django.test import override_settings
 from django.utils import timezone
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
@@ -93,6 +95,27 @@ DEFAULT_SAMPLE = 200
 # concurrency ceiling regardless of thread count.
 FETCH_THREADS = 8
 PROGRESS_EVERY = 25
+
+
+@contextmanager
+def _ocr_engine(name: str) -> Iterator[None]:
+    """Swaps `settings.OCR_ENGINE` directly for the duration of one dispatch call into
+    `local_ocr.run_tesseract_text_and_words`, restoring the original value afterward - issue #487
+    LOW: NOT `django.test.override_settings`, which this command previously (and only ever)
+    borrowed from Django's own test framework. `override_settings` fires the `setting_changed`
+    signal on every enter/exit (meant for test fixtures - e.g. cache/URL-conf machinery - to
+    re-sync around a test boundary); calling it twice per compared card in a real management
+    command's own hot path pays that signal-dispatch overhead for no reason this command actually
+    needs, and borrows test-only tooling into production code for no functional benefit over a
+    plain attribute swap. Safe with no locking here specifically because `_compare_one_card` (this
+    context manager's only caller) runs strictly sequentially in the main thread - see this
+    module's own docstring's "SCOPE REDUCTION" section."""
+    original = getattr(django_settings, "OCR_ENGINE", OCR_ENGINE_PYTESSERACT)
+    django_settings.OCR_ENGINE = name
+    try:
+        yield
+    finally:
+        django_settings.OCR_ENGINE = original
 
 
 @dataclass(frozen=True)
@@ -150,8 +173,9 @@ def _mean_conf(words: list[dict[str, Any]]) -> Optional[float]:
 def _compare_one_card(card_id: int, content_hash: Optional[int], image_bytes: bytes) -> Optional[_CardAbResult]:
     """The compute-only half - takes already-fetched bytes (never re-fetches), decodes lazily,
     crops+preprocesses ONCE, then runs the SAME variant through both engines via the real seam
-    (`run_tesseract_text_and_words`, `override_settings` swapping which engine is active - see
-    module docstring for why this dogfoods the seam instead of re-implementing dispatch here).
+    (`run_tesseract_text_and_words`, `_ocr_engine` swapping which engine is active - see that
+    context manager's own docstring and this module's own docstring for why this dogfoods the seam
+    instead of re-implementing dispatch here).
     Returns `None` only if the image itself fails to decode/crop (a genuinely corrupt fetch) -
     counted by the caller as a fetch_failures-style skip, matching `run_image_evidence_cohort.py`'s
     own "a failure this late in the pipeline is still a fetch_failed for reporting purposes"
@@ -167,12 +191,12 @@ def _compare_one_card(card_id: int, content_hash: Optional[int], image_bytes: by
         logger.exception("Failed to decode/crop/preprocess card %s - counting as a fetch failure", card_id)
         return None
 
-    with override_settings(OCR_ENGINE=OCR_ENGINE_PYTESSERACT):
+    with _ocr_engine(OCR_ENGINE_PYTESSERACT):
         started_at = time.monotonic()
         text_py, words_py = run_tesseract_text_and_words(variant, config=TESSERACT_CONFIG)
         latency_py_ms = (time.monotonic() - started_at) * 1000
 
-    with override_settings(OCR_ENGINE=OCR_ENGINE_TESSEROCR):
+    with _ocr_engine(OCR_ENGINE_TESSEROCR):
         started_at = time.monotonic()
         text_te, words_te = run_tesseract_text_and_words(variant, config=TESSERACT_CONFIG)
         latency_te_ms = (time.monotonic() - started_at) * 1000
