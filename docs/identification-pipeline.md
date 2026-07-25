@@ -49,8 +49,8 @@ flowchart TD
     SD --> CONS["Weighted consensus over every vote on the card"]
     CONS --> G6{"weight ≥ 2<br/>AND share ≥ 0.6<br/>AND at least one human-backed vote"}
 
-    G6 -- "no" --> X9{{"CONSENSUS FLOOR<br/>218,351 cards park here<br/>machine votes alone can never clear it"}}
-    G6 -- "yes" --> RES(["RESOLVED PRINTING<br/>3 cards"])
+    G6 -- "no" --> X9{{"CONSENSUS FLOOR<br/>nearly every card parks here<br/>machine votes alone can never clear it"}}
+    G6 -- "yes" --> RES(["RESOLVED PRINTING<br/>a human vote cleared it"])
 
     X9 --> WTC["WTC question feed<br/>serves ≥51% of questions from cards<br/>one more human vote would resolve"]
     WTC --> HV["Human vote cast, weight 1.0"]
@@ -82,14 +82,19 @@ so the diagram reads correctly under either a light or a dark GitHub/wiki
 theme.
 
 **Reading it:** eight of the nine interceptions are cheap and local. The
-ninth — CONSENSUS FLOOR — holds 218,351 of 218,355 cards, and it is the
-only one that is not a fault. It is the soundness property: no volume of
-machine votes resolves a printing, so the pipeline's throughput is
-bounded by human attention on purpose. The loop back through the WTC
-question feed is the actual design claim — machines narrow the candidate
-set, humans close it. See
-[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) for how many
-cards are currently sitting at each stage.
+ninth — CONSENSUS FLOOR — is where the overwhelming majority of the
+catalog sits by volume, and it is the only one that is not a fault. It is
+the soundness property: no volume of machine votes resolves a printing,
+so the pipeline's throughput is bounded by human attention on purpose.
+The loop back through the WTC question feed is the actual design claim —
+machines narrow the candidate set, humans close it. **Deliberately no
+absolute counts in this diagram** (owner ruling, 2026-07-25, same
+"shape for now, numbers once traffic starts the confirmations" posture as
+FIG-2 below) — see
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md), the single
+source of truth for gate status, for how many cards are currently sitting
+at each stage. Absolute counts return to this diagram once real user
+confirmations start accumulating in volume.
 
 ## What exists before anything runs
 
