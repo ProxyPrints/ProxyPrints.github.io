@@ -44,6 +44,7 @@ from cardpicker.local_calculate_verdicts import (
     SLOW_PATH_ANONYMOUS_ID,
     SLOW_PATH_TO_REVIEW_REASON,
     STAGE_D_FALLBACK_ANONYMOUS_ID,
+    TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
     _eligible_cards_queryset,
     _filter_by_symbol_phash,
     _resolve_candidates_for_card,
@@ -761,6 +762,115 @@ class TestRunJoinKeyCalculator:
         # exactly one vote survives - ignore_conflicts=True silently dropped the duplicate insert
         # attempt, it did not raise and did not create a second row.
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
+
+
+class TestTransferredInterimGuard:
+    """Issue #473 PR-2's INTERIM STAGE D GUARD (see TRANSFERRED_INTERIM_GUARD_SKIP_REASON's own
+    module-level comment in local_calculate_verdicts.py): a card whose CURRENT evidence row was
+    created via evidence transfer must never receive a machine vote from the join-key or fallback
+    calculators - its own "observation" is the same bytes an md5-sibling already voted from, not
+    an independent one. The slow-path calculator is NOT guarded (it casts no machine vote, only a
+    human-review routing marker - see its own run_slow_path_calculator loop comment)."""
+
+    def test_join_key_skips_a_transferred_evidence_card(self, db):
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            transferred=True,
+            transferred_from_card_id=999,
+        )
+
+        result = run_join_key_calculator(dry_run=False)
+
+        assert result.cards_considered == 0
+        assert result.votes_written == 0
+        assert CardPrintingTag.objects.count() == 0
+        log = CardScanLog.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert log.skip_reason == TRANSFERRED_INTERIM_GUARD_SKIP_REASON
+
+    def test_join_key_still_votes_a_real_extraction_card(self, db):
+        """Control - the exact same evidence, minus transferred=True, votes normally. Proves the
+        guard is keyed on the flag, not some other incidental difference in the fixture."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            transferred=False,
+        )
+
+        result = run_join_key_calculator(dry_run=False)
+
+        assert result.cards_considered == 1
+        assert result.votes_written == 1
+        assert CardPrintingTag.objects.filter(card=card).count() == 1
+
+    def test_transferred_guard_is_rescannable_after_a_real_extraction_lands(self, db):
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            transferred=True,
+            transferred_from_card_id=999,
+        )
+
+        first = run_join_key_calculator(dry_run=False)
+        assert first.cards_considered == 0
+
+        # a real extraction pass lands (persist_evidence always clears transferred - see
+        # image_evidence.persist_evidence's own docstring) - re-running now casts the vote.
+        evidence = card.image_evidence.get()
+        evidence.transferred = False
+        evidence.transferred_from_card_id = None
+        evidence.save()
+
+        second = run_join_key_calculator(dry_run=False)
+        assert second.cards_considered == 1
+        assert second.votes_written == 1
+
+    def test_fallback_skips_a_transferred_evidence_card(self, db):
+        card = CardFactory(name="Some Card", content_phash=42)
+        CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+        _evidence(
+            card,
+            collector_line_collector_number="",
+            symbol_phash=_hash_of("mom"),
+            transferred=True,
+            transferred_from_card_id=999,
+        )
+
+        result = run_fallback_calculator(dry_run=False)
+
+        assert result.cards_considered == 0
+        log = CardScanLog.objects.get(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert log.skip_reason == TRANSFERRED_INTERIM_GUARD_SKIP_REASON
+
+    def test_slow_path_is_not_guarded_transferred_evidence_still_routes_to_review(self, db):
+        """The slow-path calculator casts no machine vote (only a CardScanLog routing marker to a
+        HUMAN reviewer) - deliberately excluded from the guard, see its own loop comment."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        CardPrintingTag.objects.create(
+            card=card, printing=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+        _evidence(
+            card,
+            collector_line_collector_number="999",
+            transferred=True,
+            transferred_from_card_id=999,
+        )
+
+        result = run_slow_path_calculator(dry_run=False)
+
+        assert result.cards_considered == 1
+        assert result.routed_written == 1
+        log = CardScanLog.objects.get(card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID)
+        assert log.skip_reason == SLOW_PATH_TO_REVIEW_REASON
 
 
 class TestEligibleCardsQueryset:

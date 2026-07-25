@@ -285,14 +285,17 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    this box's django-q2 worker processes. See "Concurrency cap" below for
    the full mechanism and the incident that motivated it — distinct from,
    and a proactive complement to, the envelope's own reactive host-load bar.
-6. **Stage C** (sequential, per-card, not pooled — a micro-batch is far too
-   small for BULK mode's process-pool concurrency to help) — the same
+6. **Stage C** (COMPUTE sequential, per-card, not pooled — a micro-batch is
+   far too small for BULK mode's process-pool concurrency to help; FETCH
+   overlapped with compute since 2026-07-25, issue #472 — see "Evidence
+   transfer and decoupled fetch-ahead" below) — the same
    `compute_card_evidence`/`persist_evidence` unit `run_image_evidence_cohort.py`
-   drives, one card at a time. A `GoogleFetchLockoutError` stops Stage C for
-   this batch immediately and records a fresh trip (instant-pause bar) —
-   in-flight, already-committed work stays committed; Stage D below still
-   runs against whatever was reached ("in-flight work drains, nothing NEW
-   starts").
+   drives. Before a card is fetched at all, an md5-sibling evidence-transfer
+   check runs (issue #473 PR-2, same section below) — a hit skips the fetch
+   entirely. A `GoogleFetchLockoutError` stops Stage C for this batch
+   immediately and records a fresh trip (instant-pause bar) — in-flight,
+   already-committed work stays committed; Stage D below still runs against
+   whatever was reached ("in-flight work drains, nothing NEW starts").
 7. **Stage D** — `run_join_key_calculator`/`run_fallback_calculator`/
    `run_slow_path_calculator`, called AS-IS with the new `card_ids` scope, in
    the same escalation order every BULK-mode invocation already uses. Each of
@@ -304,6 +307,138 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    row per micro-batch (see "Observability" below), then the slot acquired in
    step 5 is released (always, including on an exception - see "Concurrency
    cap" below).
+
+### Evidence transfer and decoupled fetch-ahead (issues #473 PR-2 and #472, 2026-07-25)
+
+Both landed together (owner-approved fold — "same function, one coherent
+change") inside `stage_e_dispatch._run_stage_c`'s own Stage C leg, plus the
+matching seam in `run_image_evidence_cohort.py`'s BULK fetch stage
+(`_fetch_one_card`). Neither changes Stage C's own OUTPUT shape or Stage D's
+own decode logic — both are dispatch-side efficiency/soundness fixes.
+
+**Evidence transfer (#473 PR-2).** Before a card with a known
+`Card.md5_checksum` (issue #473 PR-1's own checksum substrate) is fetched at
+all, `cardpicker.evidence_transfer.find_transfer_source` looks for an
+md5-identical sibling card's own CURRENT, full-manifest `ImageEvidence` row.
+If found, `evidence_transfer.transfer_evidence` copies that row's field
+values onto the target card's own `(card, content_hash)` row instead of
+paying for a real fetch+OCR pass over what would decode to byte-identical
+pixels — `find_transfer_source` never trusts the pairing blindly:
+
+- **Kill-switch**: `settings.STAGE_C_EVIDENCE_TRANSFER_ENABLED` (default
+  `True`) gates the whole function — `False` returns `None` immediately, no
+  query issued, both call sites fall straight through to their own
+  pre-existing real-fetch path. Exists for first-pass reversibility (Tron §8
+  gate condition, 2026-07-25) — a single settings flip isolates whether a
+  live-run anomaly originates in transfer, no code change or redeploy needed.
+- **Transfer-source integrity** (Tron §8 gate condition): a sibling row is
+  only a valid SOURCE if its own stamped `md5_checksum` IS NOT NULL and
+  EQUALS the target's live md5 — a strict, non-null-tolerant match, deliberately
+  NOT the same null-tolerant rule the staleness fix below uses for CURRENCY.
+  A sibling that never got the md5 stamp at all (a legacy row) is never
+  eligible to seed a transfer, so a fresh stamp is never minted on the copy
+  from an unverified source.
+- **Content-hash assertion**: byte-identical files imply an identical
+  perceptual hash — the sibling's own `content_hash` is compared against the
+  target's own live `content_phash`. A mismatch is IMPOSSIBLE for genuinely
+  byte-identical files, so observing one is a LOUD anomaly.
+- **sha256 pairing rule** (binding, owner-ratified 2026-07-25 alongside
+  `Card.sha256_checksum`'s own addition, now a real column on every deploy):
+  whenever BOTH cards carry a sha256, it must ALSO match — md5 collisions
+  are constructible, sha256 is the cryptographic backstop. A present-on-both
+  mismatch is the same kind of loud anomaly as a content-hash mismatch.
+
+Both anomaly paths log at ERROR **and** write a durable `CardScanLog(anonymous_id="evidence-transfer-v1", skip_reason=<the specific anomaly>)`
+row (Tron §8 gate condition, 2026-07-25) — the log line alone isn't
+queryable after the fact; a whole-catalog run needs to COUNT these per card.
+Either anomaly SKIPS the transfer and falls through to real extraction,
+never a silent downgrade.
+
+A transferred row is stamped `md5_checksum`/`sha256_checksum` (from the
+TARGET card's own live values, not copied from the sibling) and
+`transferred=True` — an `ImageEvidence.transferred_from_card_id` audit trail
+records which sibling it came from. `Card.md5_checksum`/`sha256_checksum`
+are ALSO stamped at real extraction time now (`compute_card_evidence`'s own
+`md5_checksum`/`sha256_checksum` parameters) — every `persist_evidence` call
+(a REAL extraction, never a transfer — the two writers are disjoint)
+unconditionally resets `transferred=False`, so a row that starts as a
+transfer and later gets a genuine re-extraction is no longer flagged as one.
+
+**Fetch fallback — explicitly DEFERRED, not built in this PR.** Issue
+#473's own PR-2 scope text also named a fetch fallback ("on 404/lockout, try
+an md5 sibling's source URL — same bytes"). Not built here — evidence
+TRANSFER (this section) already covers the dominant win (skip the fetch
+entirely when a sibling's evidence already exists); the narrower fetch-level
+fallback is left for a follow-up rather than widening this PR's own scope.
+
+**Staleness fix (#473 PR-2).** Every "is this `ImageEvidence` row CURRENT
+for this card" check across the codebase (`image_evidence. current_evidence_queryset`, the single shared helper — previously N
+independent inline copies in `local_calculate_verdicts.py`'s three
+calculators, `local_layout_class_cast.py`, `local_detect_ai_art.py`,
+`local_lands_identify.py`, `reparse_collector_evidence.py`, plus the two
+bulk-query readers `modern_artist_credit.py`/`review_clusters.py`) now
+ADDITIONALLY requires the row's own stamped `md5_checksum` to agree with
+`Card.md5_checksum` whenever BOTH are non-null — closes a silent
+in-place-file-replacement hole a content_phash-only check could miss (a
+source file replaced at the same Drive location moves the Drive
+`md5Checksum` without necessarily producing a different perceptual hash).
+NULL-TOLERANT BY DESIGN: a legacy row predating the stamp, or a card whose
+source never carries an md5 at all (e.g. `LOCAL_FILE`), stays current under
+the content-hash check alone — only a row that stamped a REAL, actively
+DISAGREEING md5 is treated as stale.
+
+**INTERIM Stage D guard (#473 PR-2, temporary by design).** A card whose
+CURRENT evidence row was created by transfer is excluded from all three
+Stage D calculators (`TRANSFERRED_INTERIM_GUARD_SKIP_REASON`,
+rescannable) — its own machine "observation" is the same bytes a sibling
+card already voted from, not an independent one, so casting a vote here
+would fabricate the independence the vote-weight matrix assumes is real.
+The slow-path calculator is deliberately NOT guarded — it casts no machine
+vote, only a `CardScanLog` routing marker to a HUMAN reviewer, which is
+exactly the safety net the guard exists to preserve. **Removal is PR-3's
+own business** (issue #473's build plan: group-level vote pooling correctly
+dedupes a transferred row's vote at the GROUP level instead of excluding it
+outright) — do not remove the guard, or the `ImageEvidence.transferred`
+flag it reads, before that PR merges.
+
+**Decoupled fetch-ahead (#472).** `stage_e_streaming.md` §4 item 3 ratified
+"adopt, unconditionally" — the streaming conveyor's compute stage should
+overlap fetch with compute from the start — but Phase 2 shipped fully
+sequential anyway. Fixed by retrofitting the SAME decoupled-fetch
+architecture `run_image_evidence_cohort.py` already uses (PRs #228/#237,
+measured 1.44-1.52x BULK-mode gain) into `_run_stage_c`: ONE fetch-ahead
+thread (never pooled — the ratified brief's own "no compute pooling" bar
+applies equally to a second fetch worker, which would only race further
+ahead of a compute loop that's already the slower stage) writes into a
+bounded (`maxsize=2`) `queue.Queue`; this function's own COMPUTE loop stays
+exactly as sequential as before, just no longer blocked on the NEXT card's
+fetch while extracting the CURRENT one. A single serial fetch worker's own
+completion order IS its submission order, so the fetch-outcome window
+(`_window`) records outcomes in the same order it always did — no
+reordering risk from the added concurrency. `GoogleFetchLockoutError` still
+halts NEW fetches immediately (the thread stops after reporting the
+lockout outcome); already-fetched-but-not-yet-computed cards already
+sitting in the queue still drain to compute first ("in-flight work
+drains, nothing NEW starts") — FIFO ordering makes this automatic. A
+non-lockout exception during fetch (a real bug, a kill-drill fault) is
+caught in the fetch-ahead thread and re-raised in the MAIN thread by the
+compute loop the instant it's observed — a bare `try/except GoogleFetchLockoutError` there would have let an uncaught exception in the
+spawned thread silently kill it, leaving the compute loop's own
+`queue.get()` blocked forever waiting for an outcome that would never
+arrive (found and fixed during this change's own review, pinned by
+`test_stage_e_dispatch.py`'s `TestDecoupledFetchAhead:: test_a_non_lockout_fetch_crash_propagates_instead_of_hanging`) — the
+kill-safety resume contract's own "a mid-batch crash leaves a truthful
+FAILED ledger row" property must hold for a fetch-time crash exactly as it
+already did for a compute-time one.
+
+**Echo suppression (#472's own fold).** See "Evidence-change echo" below
+(Phase 3 section) — `cardpicker.stage_e_signals.suppress_evidence_change_echo`
+wraps every `ImageEvidence` write `_run_stage_c` performs (both the
+transfer write and the real-extraction `persist_evidence` call), so a write
+made BY the dispatch loop itself never queues a fresh echo dispatch for the
+same card (Stage D, called next over the same batch, already covers it).
+BULK-mode writes (`run_image_evidence_cohort.py`) are unflagged and keep
+firing the echo exactly as before this change.
 
 ### Trigger: event-driven, plus a cron backstop (§3 decision (1))
 
@@ -745,7 +880,8 @@ scarce resource a kill-and-resume must never burn twice.
 
 **Corrected 2026-07-25 per the §8 Tron pass on PR #467** — an earlier
 version of this note characterized the echo as a uniformly "fast, cheap
-no-op." That is wrong; the actual mechanism below is what Tron verified.
+no-op." That is wrong; the mechanism below (now SUPPRESSED, see the closing
+subsection) is what Tron verified.
 
 Every `persist_evidence` write this driver's forced re-extraction performs
 is an ordinary `ImageEvidence` save, so `cardpicker.stage_e_signals`'s own
@@ -780,20 +916,26 @@ card, it is a complete micro-batch:
   driver (`"throttled-concurrency-cap"`) well before the cohort is
   exhausted.
 
-**Acceptable at bounded-pilot scale, still not suppressed here** (frozen at
-filing) — the two are distinguishable in the ledger by `trigger_reason`:
-this driver's own batches carry `"shakedown"`, an echo dispatch carries
+The two are distinguishable in the ledger by `trigger_reason`: this
+driver's own batches carry `"shakedown"`, an echo dispatch carries
 `"evidence-change"`, so the ledger itself shows whether echoes are staying
 cheap (batch size stays at 1) or cascading (batch size climbs toward
 `STAGE_E_MICRO_BATCH_SIZE`).
 
-**Tron's condition (§8 pass on PR #467):** the documented (not built)
-fallback — a suppress-signals flag on `persist_evidence` — becomes
-**REQUIRED, not optional,** before scaling beyond a bounded pilot, if
-either (a) throttle-stops dominate the driver's own ledger output, or (b)
-the Stage C backlog is measured non-zero at run time (check before
-invoking). Do not build the fallback preemptively outside those
-conditions.
+**Tron's condition, RESOLVED 2026-07-25 (issue #472, folded with #473
+PR-2):** the "documented (not built) fallback" this section used to flag as
+becoming REQUIRED before scaling beyond a bounded pilot is now BUILT —
+`cardpicker.stage_e_signals.suppress_evidence_change_echo` wraps every
+`ImageEvidence` write `stage_e_dispatch._run_stage_c` performs, and this
+driver's own forced re-extraction runs entirely through that same function
+(`dispatch_micro_batch` → `_run_stage_c`) — so this driver's own
+`persist_evidence` writes are suppressed automatically, with no separate
+opt-in. The cascade risk this whole section describes no longer applies to
+THIS driver's own invocations; it remains a real risk only for a write path
+that reaches `ImageEvidence.save()` from OUTSIDE the dispatch loop (BULK
+mode's own `run_image_evidence_cohort.py`, which is unaffected by design —
+see the Phase 2 "Evidence transfer and decoupled fetch-ahead" section's own
+"Echo suppression" paragraph).
 
 ### Ledger convention
 

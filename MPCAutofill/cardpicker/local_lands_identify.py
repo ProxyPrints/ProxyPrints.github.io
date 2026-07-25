@@ -92,6 +92,7 @@ from typing import Optional
 
 from cardpicker import local_ocr, local_phash
 from cardpicker.image_cdn_fetch import fetch_card_image
+from cardpicker.image_evidence import current_evidence_queryset
 from cardpicker.local_fallback import detect_illus_anchor, match_artist
 from cardpicker.local_identify_printing_tags import (
     OCR_ANONYMOUS_ID,
@@ -364,21 +365,24 @@ def _split_new_votes(votes_batch: list[CardPrintingTag]) -> tuple[list[CardPrint
 
 
 def _current_evidence_for_card(card: Card) -> Optional[ImageEvidence]:
-    """The module docstring's CURRENCY check - identical shape to `local_calculate_verdicts`'s
-    three own eligible-cards loops (`run_join_key_calculator`/`run_fallback_calculator`/
-    `run_slow_path_calculator`, all filter `ImageEvidence.objects.filter(card_id=..., content_hash
-    =card.content_phash)`): a row is only trusted for this card if its `content_hash` matches the
-    card's own LIVE `content_phash` (an evidence row from a prior image upload is never reused for
-    a card whose upload has since changed) and it actually carries both extractor groups this
-    module consumes. `card.content_phash is None` (no stable hash yet) always misses - same "no
-    stable hash yet to key a CURRENT ImageEvidence lookup against" case those three callers each
-    skip early for their own reasons. `.order_by("-updated_at").first()` picks the most recently
-    written row on the rare chance more than one somehow exists for the same (card, content_hash)
-    pair (the model's own unique constraint means this is normally exactly one or zero)."""
+    """The module docstring's CURRENCY check - built on `image_evidence.current_evidence_queryset`
+    (2026-07-25, issue #473 PR-2 - the shared helper `local_calculate_verdicts`'s own three
+    eligible-cards loops, `local_layout_class_cast.py`, `local_detect_ai_art.py`, and
+    `reparse_collector_evidence.py`'s own same-named function all use too now): a row is only
+    trusted for this card if its `content_hash` matches the card's own LIVE `content_phash` (an
+    evidence row from a prior image upload is never reused for a card whose upload has since
+    changed), its stamped `md5_checksum` doesn't actively disagree with the card's own live md5
+    (null-tolerant - see that helper's own docstring), AND it actually carries both extractor
+    groups this module consumes. `card.content_phash is None` (no stable hash yet) always misses -
+    same "no stable hash yet to key a CURRENT ImageEvidence lookup against" case those other
+    callers each skip early for their own reasons. `.order_by("-updated_at").first()` picks the
+    most recently written row on the rare chance more than one somehow exists for the same (card,
+    content_hash) pair (the model's own unique constraint means this is normally exactly one or
+    zero)."""
     if card.content_phash is None:
         return None
     return (
-        ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)
+        current_evidence_queryset(card)
         .filter(extractor_versions__has_key="collector_line_ocr")
         .filter(extractor_versions__has_key="artist_ocr")
         .order_by("-updated_at")

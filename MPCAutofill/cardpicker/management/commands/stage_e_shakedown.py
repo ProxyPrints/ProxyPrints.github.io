@@ -45,7 +45,8 @@ here, not compute) - it picks up exactly where the killed run left off.
 
 EVIDENCE-CHANGE ECHO (spec point 5, corrected per the §8 Tron pass on PR #467 - the original
 "fast, cheap no-op either way" characterization below was WRONG, left here struck through in spirit
-by this correction rather than silently rewritten): every `persist_evidence` write this driver's
+by this correction rather than silently rewritten; RESOLVED 2026-07-25, issue #472 folded with
+issue #473 PR-2 - see the closing paragraph): every `persist_evidence` write this driver's
 forced re-extraction performs is an ordinary `ImageEvidence` save, so `cardpicker.stage_e_signals`'s
 own `_dispatch_on_evidence_change` receiver fires for it exactly as it would for any other Stage C
 write - an async `dispatch_for_card(card_id, "evidence-change")` task queues behind it, independent
@@ -59,16 +60,19 @@ extraction) ONLY while the Stage C backlog is genuinely zero at echo time (nothi
 queuing ~24 FURTHER echoes - a cascade, not a fixed cost. Each echo also holds one of the two
 `STAGE_E_MAX_CONCURRENT_DISPATCHES` slots for its own duration, so a live echo stream competes
 with this driver's own dispatch calls for the same cap and can throttle-stop the driver
-(`"throttled-concurrency-cap"`) well before the cohort is exhausted. ACCEPTABLE at bounded-pilot
-scale (frozen at filing, still not suppressed here) - the two are distinguishable in the ledger by
-`trigger_reason`: this driver's own batches carry `"shakedown"`, an echo dispatch carries
-`"evidence-change"`, so the ledger itself shows whether echoes are staying cheap (batch_size stays
-at 1) or cascading (batch_size climbs toward STAGE_E_MICRO_BATCH_SIZE). Tron's own condition
-(§8 pass on PR #467): the documented fallback (NOT built here, per the frozen spec's own
-instruction not to build it preemptively - a suppress-signals flag on `persist_evidence`) becomes
-REQUIRED, not optional, before scaling beyond a bounded pilot, if either (a) throttle-stops
-dominate the driver's own ledger output, or (b) the Stage C backlog is measured non-zero at run
-time (check before invoking, per the operator runbook in docs/features/stage-e-operations.md).
+(`"throttled-concurrency-cap"`) well before the cohort is exhausted. The two are distinguishable in
+the ledger by `trigger_reason`: this driver's own batches carry `"shakedown"`, an echo dispatch
+carries `"evidence-change"`, so the ledger itself shows whether echoes are staying cheap
+(batch_size stays at 1) or cascading (batch_size climbs toward STAGE_E_MICRO_BATCH_SIZE).
+
+RESOLVED (2026-07-25, issue #472 folded with issue #473 PR-2): the suppress-signals fallback Tron's
+own condition (§8 pass on PR #467) flagged as becoming REQUIRED before scaling beyond a bounded
+pilot is now BUILT - `cardpicker.stage_e_signals.suppress_evidence_change_echo` wraps every
+`ImageEvidence` write `stage_e_dispatch._run_stage_c` performs, and this driver's own forced
+re-extraction runs entirely through `dispatch_micro_batch` -> `_run_stage_c`, so every write this
+driver's own writes trigger is now suppressed automatically - no separate opt-in, no code change
+needed here. See docs/features/stage-e-operations.md's "Evidence transfer and decoupled
+fetch-ahead" section for the full mechanism.
 
 INSTRUMENTATION (spec point 6): nothing new - every batch already gets its own `PilotRunLedger` row
 via `dispatch_micro_batch` (elapsed_s/stage_c_completed/stage_c_fetch_failures/peak_rss_mb/etc.,

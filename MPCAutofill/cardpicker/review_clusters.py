@@ -202,18 +202,21 @@ def _eligible_review_cards() -> "list[Card]":
 def _current_evidence_by_card_id(cards: "list[Card]") -> dict[int, tuple[Optional[int], str]]:
     """Bulk-fetches each card's CURRENT `ImageEvidence` row (content_hash matching that card's
     own live content_phash - an evidence row from a prior image version is never trusted, same
-    freshness rule `local_calculate_verdicts.py`'s own calculators apply) and returns
-    {card_id: (symbol_phash, legal_line_raw_text)}. One query total, not one per card: ordered
-    so the first row seen per card_id in iteration order is its most recent, then filtered in
-    Python against that card's live content_phash."""
+    freshness rule `local_calculate_verdicts.py`'s own calculators apply - PLUS, 2026-07-25, issue
+    #473 PR-2, the row's own stamped md5_checksum not actively disagreeing with the card's own
+    live md5, null-tolerant, same rule `image_evidence.current_evidence_queryset` applies for the
+    single-card case) and returns {card_id: (symbol_phash, legal_line_raw_text)}. One query total,
+    not one per card: ordered so the first row seen per card_id in iteration order is its most
+    recent, then filtered in Python against that card's live content_phash/md5_checksum."""
     card_ids = [c.pk for c in cards if c.content_phash is not None]
     if not card_ids:
         return {}
     live_content_phash_by_card_id = {c.pk: c.content_phash for c in cards if c.content_phash is not None}
+    live_md5_by_card_id = {c.pk: c.md5_checksum for c in cards if c.content_phash is not None}
     result: dict[int, tuple[Optional[int], str]] = {}
     rows = (
         ImageEvidence.objects.filter(card_id__in=card_ids)
-        .values("card_id", "content_hash", "symbol_phash", "legal_line_raw_text")
+        .values("card_id", "content_hash", "md5_checksum", "symbol_phash", "legal_line_raw_text")
         .order_by("card_id", "-updated_at")
     )
     for row in rows:
@@ -222,6 +225,10 @@ def _current_evidence_by_card_id(cards: "list[Card]") -> dict[int, tuple[Optiona
             continue  # already took this card's most-recent row - see the ordering above
         if row["content_hash"] != live_content_phash_by_card_id[card_id]:
             continue  # stale evidence for a since-changed image - never trusted
+        live_md5 = live_md5_by_card_id[card_id]
+        row_md5 = row["md5_checksum"]
+        if row_md5 is not None and live_md5 is not None and row_md5 != live_md5:
+            continue  # #473 PR-2's md5 staleness rule - null-tolerant, see module docstring above
         result[card_id] = (row["symbol_phash"], row["legal_line_raw_text"] or "")
     return result
 

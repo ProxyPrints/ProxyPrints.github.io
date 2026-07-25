@@ -1968,6 +1968,48 @@ class ImageEvidence(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Evidence transfer (issue #473 PR-2, folded with issue #472) - stamped at BOTH real
+    # extraction time (image_evidence.compute_card_evidence, copied from the source card's own
+    # live Card.md5_checksum/sha256_checksum at the moment this row was computed) and transfer
+    # time (evidence_transfer.transfer_evidence, copied from the TARGET card - the one whose
+    # (card, content_hash) row this is - never from the sibling the fields were copied from,
+    # since find_transfer_source already verified the target's own value agrees). Used two ways:
+    # (1) evidence CURRENCY (image_evidence.current_evidence_queryset) additionally requires
+    # md5_checksum == Card.md5_checksum whenever BOTH are non-null - closes the silent
+    # in-place-file-replacement hole a content_phash-only currency check can miss. NULL-TOLERANT:
+    # a legacy row written before this field existed (md5_checksum is None here) stays current
+    # under the content_hash check alone until it's naturally re-extracted - no forced mass
+    # recompute. (2) evidence_transfer.find_transfer_source's own sibling-pairing search, which
+    # additionally requires sha256_checksum to match whenever BOTH sides carry one (the binding
+    # 2026-07-25 pairing rule on issue #473 - md5 collisions are constructible, sha256 is the
+    # cryptographic backstop). sha256_checksum mirrors Card.sha256_checksum's own nullability
+    # (both are NULL for exactly the same reasons - LOCAL_FILE sources, or a Drive listing walked
+    # before this field existed - never invented, never backfilled from image bytes we don't hold).
+    md5_checksum = models.CharField(max_length=32, null=True, blank=True, db_index=True)
+    sha256_checksum = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+
+    # transferred (issue #473 PR-2's INTERIM STAGE D GUARD, temporary by design): True iff this
+    # row's own field values were COPIED from an md5-sibling's own current evidence
+    # (evidence_transfer.transfer_evidence) rather than produced by a real fetch+extraction pass
+    # against this card's own image. `local_calculate_verdicts._eligible_cards_queryset`'s two
+    # MACHINE-VOTING Stage D calculators (join-key/fallback - both cast a `CardPrintingTag` vote)
+    # exclude any card whose CURRENT evidence carries this flag from machine voting - a transferred
+    # row's own machine "observation" is the SAME underlying bytes a sibling card already voted
+    # from, not an independent one, so casting a vote from it here would fabricate independence the
+    # vote-weight matrix assumes is real (docs/theory.md's independence-assumptions section). The
+    # third Stage D calculator, slow-path, is deliberately NOT guarded - it casts no machine vote,
+    # only a human-review routing marker, which is exactly the safety net this guard exists to
+    # preserve, not a case it needs to protect against. REMOVAL IS PR-3's OWN BUSINESS (issue
+    # #473's build plan, PR-3 section: "Removes PR-2's interim Stage D guard") - once group-level
+    # vote pooling lands, a transferred row's vote is correctly deduped at the GROUP level instead
+    # of excluded outright, so this flag (and the guard reading it) stops being needed; do not
+    # remove either before that PR merges. `transferred_from_card_id` is a plain (non-FK) audit
+    # trail of which sibling card's row this one was copied from - never queried by the guard
+    # itself, kept only for a future incident's own "why does this row look like that one"
+    # question.
+    transferred = models.BooleanField(default=False)
+    transferred_from_card_id = models.IntegerField(null=True, blank=True)
+
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["card", "content_hash"], name="unique_image_evidence_per_card_hash")

@@ -188,6 +188,8 @@ from typing import Any, Iterator, Optional
 
 import imagehash
 
+from django.db.models import Q, QuerySet
+
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
 from cardpicker.local_fallback import (
@@ -461,6 +463,8 @@ def extract_card_evidence(
         profile=profile,
         short_circuit=short_circuit,
         known_set_codes=known_set_codes,
+        md5_checksum=card.md5_checksum,
+        sha256_checksum=card.sha256_checksum,
     )
 
 
@@ -472,6 +476,8 @@ def compute_card_evidence(
     profile: Optional[dict[str, float]] = None,
     short_circuit: Optional[bool] = None,
     known_set_codes: Optional[frozenset[str]] = None,
+    md5_checksum: Optional[str] = None,
+    sha256_checksum: Optional[str] = None,
 ) -> ExtractionResult:
     """
     Compute-only continuation of `extract_card_evidence` above - everything that function does
@@ -554,11 +560,27 @@ def compute_card_evidence(
     the gate entirely - every parse is accepted exactly as before, the pre-2026-07-23 behavior -
     so this is purely additive: a card whose first parse is already lexicon-valid (the overwhelming
     majority) sees zero behavior or compute change either way.
+
+    `md5_checksum`/`sha256_checksum` (2026-07-25, issue #473 PR-2, folded with issue #472): the
+    calling card's own live `Card.md5_checksum`/`Card.sha256_checksum` at the moment of THIS real
+    extraction pass, stamped verbatim onto the result's `fields` (so
+    `persist_evidence` writes them the same way every other field is written - no special-casing).
+    `None` (the default) is every pre-#473 caller's own behavior, unchanged - both fields are
+    nullable and null-tolerant everywhere they're read (`evidence_transfer.md5_currency_q`,
+    `current_evidence_queryset` below). Real extraction ALWAYS re-stamps to the card's own live
+    values regardless of what a prior row (including a prior TRANSFERRED row - see
+    `evidence_transfer.transfer_evidence`'s own docstring) happened to carry - this is the
+    "computed-once-forever, but re-extraction always re-stamps the truth" half of the staleness fix
+    the transfer half's own stamping mirrors.
     """
     if short_circuit is None:
         short_circuit = _short_circuit_enabled_by_env()
 
-    fields: dict[str, Any] = {"fetch_latency_ms": fetch_latency_ms}
+    fields: dict[str, Any] = {
+        "fetch_latency_ms": fetch_latency_ms,
+        "md5_checksum": md5_checksum,
+        "sha256_checksum": sha256_checksum,
+    }
     extractor_versions: dict[str, str] = {}
     skip_reasons: dict[str, str] = {}
     if profile is not None:
@@ -916,6 +938,52 @@ def compute_card_evidence(
     )
 
 
+def current_evidence_queryset(card: Card) -> "QuerySet[ImageEvidence]":
+    """
+    THE single "which `ImageEvidence` row(s) are CURRENT for this card" queryset (2026-07-25,
+    issue #473 PR-2's staleness fix) - replaces what used to be N independent inline copies of
+    `ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)` scattered
+    across `local_calculate_verdicts.py` (all three Stage D calculators),
+    `local_layout_class_cast.py`, `local_detect_ai_art.py`, `local_lands_identify.py`'s own
+    `_current_evidence_for_card`, and `reparse_collector_evidence.py`'s own same-named function -
+    one shared definition, so the staleness rule below can never drift between call sites the way
+    that many independent inline copies eventually would have.
+
+    Currency = TWO conditions, BOTH required:
+
+    1. `content_hash` matches the card's own LIVE `content_phash` (the pre-existing rule, unchanged
+       - an evidence row from a prior image upload is never reused once the upload changes).
+    2. (2026-07-25, #473 PR-2) The row's own STAMPED `md5_checksum` agrees with `Card.md5_checksum`
+       WHENEVER BOTH are non-null - closes the silent in-place-file-replacement hole a
+       content_phash-only currency check can miss (a source file replaced at the same Drive
+       location changes the Drive `md5Checksum` on the next listing walk without necessarily
+       producing a different perceptual hash on every re-fetch, e.g. a lightly re-encoded but
+       visually-identical re-upload).
+
+    NULL-TOLERANT BY DESIGN, stated explicitly per this PR's own scope: a legacy evidence row
+    written before the `md5_checksum` stamp existed (`row.md5_checksum is None`) OR a card whose
+    source never carries an md5 at all (`card.md5_checksum is None`, e.g. `LOCAL_FILE`) stays
+    CURRENT under condition 1 alone - only a row that stamped a REAL md5 which now actively
+    DISAGREES with the card's own live md5 is excluded. Forcing every legacy row to fail currency
+    the day this ships would be its own multi-day mass-recompute for zero new information about
+    those specific cards; this fix is scoped to catching a REAL disagreement, not to retroactively
+    distrusting everything that predates the stamp.
+
+    `card.content_phash is None` (no stable hash yet) always returns an empty queryset - every
+    existing call site already guarded this case itself before this function existed (the "no
+    stable hash yet to key a CURRENT ImageEvidence lookup against" comment repeated at each one),
+    but this function enforces it directly too rather than trusting every future caller to keep
+    doing so - `ImageEvidence.content_hash` is a non-nullable column, so a `None` here could never
+    have matched a real row anyway.
+    """
+    if card.content_phash is None:
+        return ImageEvidence.objects.none()
+    qs = ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)
+    if card.md5_checksum is not None:
+        qs = qs.filter(Q(md5_checksum__isnull=True) | Q(md5_checksum=card.md5_checksum))
+    return qs
+
+
 def persist_evidence(result: ExtractionResult, run_id: Optional[str] = None) -> Optional[ImageEvidence]:
     """
     The thin, separate DB-write step (see module docstring for why this is split from
@@ -933,6 +1001,16 @@ def persist_evidence(result: ExtractionResult, run_id: Optional[str] = None) -> 
     local_identify_printing_tags.py, local_residual_classify.py, local_layout_class_cast.py,
     local_detect_ai_art.py, local_lands_identify.py) - this was the one outlier (2026-07-24 IO
     audit, finding 3).
+
+    `evidence.transferred`/`transferred_from_card_id` are unconditionally reset to
+    `False`/`None` here (2026-07-25, issue #473 PR-2) - `persist_evidence` is called ONLY for a
+    REAL extraction pass (`evidence_transfer.transfer_evidence` is the separate, only other writer
+    of an `ImageEvidence` row, and it never calls this function), so every call here represents
+    genuine fresh extraction. A row that was previously TRANSFERRED (`transferred=True`) and later
+    receives a real extraction pass (e.g. `stage_e_shakedown`'s own `force_stage_c_reextract`) is
+    no longer a transferred row once this returns - leaving the flag stale would wrongly keep it
+    excluded from Stage D machine voting (the interim guard, `local_calculate_verdicts.
+    _eligible_cards_queryset`) even though it now carries a genuine independent extraction.
     """
 
     if result.content_hash is None:
@@ -944,6 +1022,8 @@ def persist_evidence(result: ExtractionResult, run_id: Optional[str] = None) -> 
         setattr(evidence, field_name, value)
     evidence.extractor_versions = {**evidence.extractor_versions, **result.extractor_versions}
     evidence.run_id = run_id
+    evidence.transferred = False
+    evidence.transferred_from_card_id = None
     evidence.save()
 
     scan_log_batch = [
@@ -1015,6 +1095,7 @@ __all__ = [
     "ExtractionResult",
     "extract_card_evidence",
     "compute_card_evidence",
+    "current_evidence_queryset",
     "persist_evidence",
     "ReconciliationReport",
     "build_reconciliation_report",
