@@ -74,6 +74,42 @@ dispatched is allowed to drain (matching the existing kill-test/resume-
 contract's own "in-flight work drains, nothing new starts" discipline), but
 no NEW batch goes out while a trip is open.
 
+### FIG-4a — Trip lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Clear
+    Clear --> Clear : sample under every bar<br/>dispatch proceeds
+    Clear --> Tripped : any one bar crossed<br/>EnvelopeTrip row written
+    Tripped --> Tripped : every further dispatch refuses<br/>status halted-open-trip
+    Tripped --> Acknowledged : resolve_envelope_trip<br/>--acknowledge-trip ID<br/>mandatory human note
+    Acknowledged --> Clear : dispatch resumes
+
+    note right of Tripped
+        There is no automatic edge out of Tripped.
+        No code path in the dispatch loop can
+        acknowledge a trip. This is the design.
+    end note
+```
+
+### FIG-4b — Gate anatomy
+
+A table, not a graph — five gates vary along five fixed attributes, which
+a table renders directly and a graph would only obscure.
+
+| Gate                   | What it measures                                                                                                                                                                                                                                                                                                                | Threshold                                                                                | On fire                                                                                                                                               | Resume                                           | Cost when it fires                                                                                                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Host load**          | 1-minute load average, sampled fresh before every dispatch                                                                                                                                                                                                                                                                      | `> 7.0` — the box has 8 OCPU with 1 pinned to networking, so 7.0 _is_ the 7 usable cores | Writes an `EnvelopeTrip`, returns `halted-new-trip`; all dispatch stops                                                                               | Human `--acknowledge-trip` with a mandatory note | Total pipeline stop until a human returns. Both live trips were this bar                                                                                                                       |
+| **RSS per worker**     | Resident memory of the dispatching worker process                                                                                                                                                                                                                                                                               | `> 512 MB`                                                                               | Same — trip, halt                                                                                                                                     | Same                                             | Total stop. Never fired live                                                                                                                                                                   |
+| **Fetch-failure rate** | Failures over a rolling 500-outcome window, per worker process                                                                                                                                                                                                                                                                  | `> 1%`, and never on an empty window                                                     | Same — trip, halt                                                                                                                                     | Same                                             | Total stop. Never fired live                                                                                                                                                                   |
+| **Google lockout**     | Any `GoogleFetchLockoutError`                                                                                                                                                                                                                                                                                                   | None — any single occurrence trips instantly                                             | Stage C stops mid-batch; in-flight work drains, nothing new starts                                                                                    | Same                                             | Total stop. Never fired live                                                                                                                                                                   |
+| **Concurrency cap**    | Dispatches running at once, across every django-q2 worker process, via a Postgres advisory lock held on a **dedicated** connection (2026-07-25 fix, PR #453 — never Django's own shared `django.db.connection`, which a same-process `django_q` broker enqueue call could silently close mid-dispatch, auto-releasing the lock) | `2` slots, floored at 1 if misconfigured                                                 | Returns `throttled-concurrency-cap` and does nothing — **no trip, no ledger row**, but does advance the `StageEThrottleCounter` observability counter | **Automatic** — the next sweep picks the card up | One deferred micro-batch. Did not bind on either live shakedown run (see FIG-3a below) — root-caused and fixed 2026-07-25 (PR #453); see "Concurrency cap" below for the full incident writeup |
+
+The cap is the only one of the five that is proactive rather than
+reactive, and the only one that recovers without a human. The other four
+are the same mechanism with different sensors: measure, cross, stop, wait
+for a person.
+
 ## Resume requires a fresh owner action — always
 
 **There is no self-resume, in any case, for any bar.** This is a hard
@@ -133,6 +169,61 @@ is the ONLY code path permitted to set those fields
 not an oversight: the admin is a monitoring surface for finding a `trip_id`
 to hand to the command, not a second, less-visible resume path that could
 bypass the mandatory `--note` and the CLI's own audit trail.
+
+### FIG-3a — Shakedown timeline (dated snapshot, read 2026-07-25T01:18:57Z)
+
+A worked example of the runbook above, against the pipeline's first two
+live PASSIVE-mode shakedown runs. This is a **dated snapshot, not a live
+readout** — written as a two-incident post-mortem so it stays true after
+the second trip below is eventually cleared, not as a "current state"
+claim that goes stale the moment someone runs `resolve_envelope_trip`.
+
+```mermaid
+timeline
+    title Stage E shakedown · host load against a 7.0 ceiling on 7 usable cores
+    section Run 1 — 2026-07-24
+        21:44:47Z : Backstop sweep opens the first dispatch
+        21:44:50Z : 9 dispatches now running concurrently on 7 cores
+        21:44:50-56Z : 7 of 9 crash · IntegrityError on a duplicate vote
+        21:46:16Z : TRIP envtrip-be6e5db9 · load 11.85 vs ceiling 7.0 · ALL DISPATCH HALTS
+    section Between the runs
+        Vote collision fixed : skip-if-exists guard plus ignore_conflicts
+        Concurrency cap added : 2 slots via Postgres advisory locks
+    section Run 2 — 2026-07-25
+        00:22:13Z : Owner acknowledges trip 1 · dispatch resumes
+        00:23:23-37Z : 9 dispatches · ALL 9 COMPLETE · the collision fix held
+        00:23-25Z : Cap does NOT bind · 8 unlock warnings · 0 throttles
+        00:25:04Z : TRIP envtrip-73e1eb6d · load 11.40 vs ceiling 7.0 · STILL OPEN
+```
+
+**Reading it:** one bug was fixed and one was revealed. The vote collision
+is gone — run 2 wrote nine clean ledger rows where run 1 lost seven. The
+concurrency cap that was supposed to prevent the load spike never engaged:
+Postgres reported the advisory lock was already released by the time each
+dispatch tried to unlock it, so every dispatch believed it had a free slot
+and zero were ever throttled. Load reached 11.40 against a 7.0 ceiling for
+the second time, and the envelope caught it for the second time.
+
+**State as of the stamp above:** trip `envtrip-20260724T214616-be6e5db9`
+(run 1) is **acknowledged**. Trip `envtrip-20260725T002504-73e1eb6d`
+(run 2) remains **open** — its root cause (the advisory lock riding
+Django's shared, same-thread connection, which a same-process `django_q`
+enqueue call could silently close mid-dispatch) has since been found and
+fixed (PR #453, see FIG-4b and "Concurrency cap" below for the mechanism),
+but a fix does not self-clear a trip: per "Resume requires a fresh owner
+action — always" above, only an explicit `resolve_envelope_trip --acknowledge-trip` against this specific trip ID resumes dispatch. This
+line will go stale the moment that happens; the timeline above will not.
+
+**Deliberately not committed here: the quantitative load-versus-ceiling
+chart.** Mermaid has no primitive for a threshold line, a shaded
+exceedance band, or a halted interval, so a faithful version of that chart
+is hand-authored SVG, not mermaid — and isn't checked into `docs/` in this
+pass (no asset-maintenance owner assigned yet, and the real
+`STAGE_E_MICRO_BATCH_SIZE`/cap-tuning numbers this chart would anchor to
+are still pending the phase-3 shakedown per "Micro-batch sizing" above).
+The event timeline above carries the same facts in prose-adjacent form;
+the chart can follow once there's real tuning data to plot against the
+ceiling.
 
 ## Phase 2 — the streaming dispatch loop
 

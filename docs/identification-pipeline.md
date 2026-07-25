@@ -17,6 +17,80 @@ gate's current status; this file describes the mechanics, not the gate.
 **Reviewed and approved by the owner, 2026-07-21.** Written for the
 pre-197k review.
 
+## FIG-1 — Pipeline flow, where a card can stop
+
+```mermaid
+flowchart TD
+    IN["Card named eligible<br/>card-create · evidence-change · cron backstop sweep"]
+
+    IN --> G1{"streaming enabled?"}
+    G1 -- "no" --> X1{{"OFF<br/>STAGE_E_STREAMING_ENABLED = False<br/>no work, no ledger row"}}
+    G1 -- "yes" --> G2{"envelope trip already open?"}
+
+    G2 -- "yes" --> X2{{"HALTED · OPEN TRIP<br/>every dispatch refuses<br/>no self-resume, ever"}}
+    G2 -- "no" --> G3{"fresh signal sample<br/>breaches a bar?"}
+
+    G3 -- "yes" --> X3{{"HALTED · NEW TRIP<br/>EnvelopeTrip row persisted<br/>all dispatch stops"}}
+    G3 -- "no" --> SEL["Select micro-batch<br/>size 25, seed first, backlog fill"]
+
+    SEL --> X4{{"ALREADY PROCESSED<br/>excluded by the anti-join:<br/>evidence carries every manifest key"}}
+    SEL --> G4{"anything eligible?"}
+    G4 -- "no" --> X5{{"EMPTY SELECTION<br/>nothing left to do"}}
+    G4 -- "yes" --> G5{"concurrency slot free?"}
+
+    G5 -- "no" --> X6{{"THROTTLED · CAP<br/>all 2 slots held<br/>deferred to the next sweep<br/>NO ledger row is written"}}
+    G5 -- "yes" --> LED["Open ledger row<br/>PilotRunLedger, status running"]
+
+    LED --> SC["STAGE C · fetch image, extract OCR evidence<br/>one card at a time"]
+    SC -- "fetch fails" --> X7{{"FETCH FAILURE<br/>card skipped, counted,<br/>fed to the rolling 500-card window"}}
+    SC -- "crash" --> X8{{"FAILED DISPATCH<br/>ledger row marked failed<br/>with a triage-able reason"}}
+    SC --> SD["STAGE D · join-key → fallback → slow-path<br/>casts machine votes at weight 0.5"]
+
+    SD --> CONS["Weighted consensus over every vote on the card"]
+    CONS --> G6{"weight ≥ 2<br/>AND share ≥ 0.6<br/>AND at least one human-backed vote"}
+
+    G6 -- "no" --> X9{{"CONSENSUS FLOOR<br/>218,351 cards park here<br/>machine votes alone can never clear it"}}
+    G6 -- "yes" --> RES(["RESOLVED PRINTING<br/>3 cards"])
+
+    X9 --> WTC["WTC question feed<br/>serves ≥51% of questions from cards<br/>one more human vote would resolve"]
+    WTC --> HV["Human vote cast, weight 1.0"]
+    HV --> CONS
+
+    classDef halt fill:#f7768e,stroke:#8c3d4e,stroke-width:2px,color:#1a1b26
+    classDef defer fill:#e0af68,stroke:#8a6a3d,stroke-width:2px,color:#1a1b26
+    classDef excl fill:#7dcfff,stroke:#3f7f9c,stroke-width:2px,color:#1a1b26
+    classDef work fill:#24283b,stroke:#565f89,stroke-width:1px,color:#c0caf5
+    classDef gate fill:#2f3549,stroke:#ff9e64,stroke-width:2px,color:#c0caf5
+    classDef done fill:#9ece6a,stroke:#5c7c3d,stroke-width:2px,color:#1a1b26
+
+    class X2,X3,X8,X9 halt
+    class X6,X7 defer
+    class X1,X4,X5 excl
+    class IN,SEL,LED,SC,SD,CONS,WTC,HV work
+    class G1,G2,G3,G4,G5,G6 gate
+    class RES done
+```
+
+Shape carries the meaning first: a hexagon is an interception (the card
+stops here); a diamond is a gate being evaluated; a plain rectangle is
+work actually happening; a stadium is a terminal outcome. Colour then
+grades _why_ a hexagon stopped — red is a **hard halt** (a human must
+act), amber is a **soft defer** (the system retries by itself on its
+own), blue is a **correct exclusion** (nothing is wrong, the card just
+doesn't need this pass). Every `classDef` sets both `fill:` and `color:`
+so the diagram reads correctly under either a light or a dark GitHub/wiki
+theme.
+
+**Reading it:** eight of the nine interceptions are cheap and local. The
+ninth — CONSENSUS FLOOR — holds 218,351 of 218,355 cards, and it is the
+only one that is not a fault. It is the soundness property: no volume of
+machine votes resolves a printing, so the pipeline's throughput is
+bounded by human attention on purpose. The loop back through the WTC
+question feed is the actual design claim — machines narrow the candidate
+set, humans close it. See
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) for how many
+cards are currently sitting at each stage.
+
 ## What exists before anything runs
 
 - A **Card row**: name, source drive, and a content phash of the image.
