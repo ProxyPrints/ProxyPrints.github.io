@@ -1355,6 +1355,70 @@ class StageEThrottleCounter(models.Model):
             cls.objects.get_or_create(singleton_key=1, defaults={"count": 1, "last_throttled_at": timezone.now()})
 
 
+class StageESweepCursor(models.Model):
+    """
+    Issue #458 - the persistent sweep cursor `cardpicker.stage_e_dispatch._select_micro_batch`'s
+    backlog-fill step reads and advances, replacing that function's old per-batch full-catalog
+    anti-join (`Card.objects.exclude(pk__in=ImageEvidence.objects...)`, O(catalog) and re-run from
+    scratch on every dispatch - see that function's own docstring for the incident this fixes).
+    SINGLETON, same one-row pattern as `StageEThrottleCounter` immediately above (`singleton_key`
+    `unique=True`, `get_or_create(singleton_key=1)` on first-ever touch).
+
+    `position` is the last Card pk this sweep has fully examined - the backlog fill always resumes
+    at `pk__gt=position`, a pure pk-index range scan, never a full-table scan. `wrap_count` counts
+    how many times the sweep has reached the end of the pk space and restarted at 0 (a healthy,
+    expected event on a near-complete catalog, not an error - see `_select_micro_batch`'s own
+    docstring and docs/features/stage-e-operations.md's Phase 2 section for the full semantics).
+
+    CAS OWNERSHIP, not a lock: `_select_micro_batch` claims a chunk via an optimistic
+    compare-and-swap UPDATE (`filter(singleton_key=1, position=<expected>).update(position=
+    <new>)`) BEFORE verifying it - rows-updated == 0 means a concurrent dispatch already claimed
+    that range, so the loser discards the chunk and retries against the now-current position. Two
+    concurrent dispatches therefore sweep DISJOINT ranges instead of duplicating verification work,
+    with no dedicated lock/transaction needed - the single-row UPDATE's own atomicity is the whole
+    mechanism, same "never a Python-side read-modify-write" posture `StageEThrottleCounter.record`
+    documents for its own counter.
+    """
+
+    singleton_key = models.PositiveSmallIntegerField(default=1, unique=True)
+    position = models.BigIntegerField(default=0)
+    wrap_count = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Stage E sweep cursor position={self.position} wrap_count={self.wrap_count}"
+
+    @classmethod
+    def get_singleton(cls) -> "StageESweepCursor":
+        """Ensures the one-and-only row exists and returns it - the first-ever call on a fresh
+        deployment creates it at `position=0`, `wrap_count=0`; every later call is a plain fetch."""
+        cursor, _ = cls.objects.get_or_create(singleton_key=1)
+        return cursor
+
+    @classmethod
+    def try_advance(cls, from_position: int, to_position: int) -> bool:
+        """The CAS claim described in the class docstring - `True` iff this call's own UPDATE
+        matched the singleton row (i.e. `position` was still `from_position` the instant this ran),
+        meaning this caller now owns the `(from_position, to_position]` range. `False` means a
+        concurrent dispatch already moved `position` first - the caller must discard whatever it
+        read for that range and retry against a freshly-read `position`, never assume ownership."""
+        return cls.objects.filter(singleton_key=1, position=from_position).update(position=to_position) == 1
+
+    @classmethod
+    def try_wrap(cls, from_position: int) -> bool:
+        """Same CAS discipline as `try_advance`, for the end-of-pk-space case: resets `position` to
+        `0` and increments `wrap_count` iff `position` was still `from_position`. Callers stop this
+        dispatch regardless of the return value (`_select_micro_batch`'s own docstring: "never
+        continue scanning from 0 in the same dispatch") - a losing race here just means another
+        concurrent dispatch already performed the same wrap, which is harmless either way."""
+        return (
+            cls.objects.filter(singleton_key=1, position=from_position).update(
+                position=0, wrap_count=models.F("wrap_count") + 1
+            )
+            == 1
+        )
+
+
 class CardScanLog(models.Model):
     """
     Persists ABSTENTION evidence exactly like `AbstractWeightedVote` subclasses persist assent

@@ -463,3 +463,22 @@ STAGE_E_MICRO_BATCH_SIZE = env.int("STAGE_E_MICRO_BATCH_SIZE", default=25)
 # without a code change (env var) pending real shakedown data, matching STAGE_E_MICRO_BATCH_SIZE's
 # own "placeholder, not invented precision" convention immediately above.
 STAGE_E_MAX_CONCURRENT_DISPATCHES = env.int("STAGE_E_MAX_CONCURRENT_DISPATCHES", default=2)
+
+# Persistent sweep cursor sizing (issue #458 - see cardpicker/stage_e_dispatch.py's
+# `_select_micro_batch` and docs/features/stage-e-operations.md's Phase 2 section for the full
+# design). Plain constants, not env-tunable (unlike STAGE_E_MICRO_BATCH_SIZE/
+# STAGE_E_MAX_CONCURRENT_DISPATCHES above) - the spec that ratified these two numbers explicitly
+# calls for `getattr(settings, ...)` reads with no env passthrough, since these bound a single
+# dispatch's own query cost rather than tuning throughput against live shakedown data.
+#
+# STAGE_E_SELECTION_CHUNK_SIZE - how many candidate pks a single CAS-claimed range covers per
+# verification query (`Card.objects.filter(pk__gt=position).order_by("pk")[:CHUNK_SIZE]`, then one
+# bounded `ImageEvidence.objects.filter(card_id__in=chunk, ...)` query against exactly that chunk).
+STAGE_E_SELECTION_CHUNK_SIZE = 250
+
+# STAGE_E_SELECTION_SCAN_CAP - the total number of candidate pks a single `_select_micro_batch`
+# call will examine across however many chunks it takes, even if the batch never fills (a
+# mostly-already-processed range can require examining many chunks to find few - or zero -
+# eligible cards) - the bound that keeps one dispatch's own selection cost flat regardless of how
+# sparse the remaining backlog is.
+STAGE_E_SELECTION_SCAN_CAP = 1000

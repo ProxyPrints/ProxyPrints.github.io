@@ -273,7 +273,8 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    `settings.STAGE_E_MICRO_BATCH_SIZE` from the Stage C backlog (cards
    lacking a full-manifest `ImageEvidence` row — the same shape
    `run_image_evidence_cohort.py`'s own resume filter uses, imported, not
-   reimplemented).
+   reimplemented) via the persistent sweep cursor described below (issue
+   [#458](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/458)).
 5. **Concurrency-cap slot acquire** (companion change, 2026-07-24 —
    `cardpicker.stage_e_concurrency`) — refuses PROACTIVELY
    (`status="throttled-concurrency-cap"`, zero DB writes beyond the
@@ -330,6 +331,58 @@ change needed to adjust) is a **placeholder**, not a considered answer —
 tail shakedown's own instrumentation (phase 3, not yet run). The default
 sits inside the brief's own "roughly 10-100 cards per batch" sanity range as
 a conservative starting point pending that measurement.
+
+### Backlog selection: persistent sweep cursor (issue #458, 2026-07-25)
+
+The old backlog-fill query anti-joined the WHOLE catalog against
+`ImageEvidence` on every single micro-batch dispatch — a full JSONB scan
+re-run from scratch every ~25-card batch, growing more expensive as the
+catalog completes (observed: three such queries active 641s+ each, zero
+concurrency-cap slots even held, five batches dispatched in ~11 minutes).
+Batch-size tuning couldn't fix this — the query shape itself was O(catalog)
+per batch, not per candidate examined.
+
+`_select_micro_batch`'s backlog fill now walks a persistent, singleton
+`StageESweepCursor.position` incrementally through the Card pk space, in
+bounded chunks (`settings.STAGE_E_SELECTION_CHUNK_SIZE`, default `250`) —
+each chunk is a pure `pk__gt=position` index range scan, then one bounded
+`ImageEvidence.objects.filter(card_id__in=chunk, ...)` verification query
+against exactly that chunk, never the whole catalog. A chunk is claimed via
+an optimistic compare-and-swap (`StageESweepCursor.try_advance`) BEFORE it's
+verified — a losing CAS (a concurrent dispatch already claimed that range)
+discards the chunk and retries against the freshly-read position, up to 3
+retries per dispatch. This makes two concurrent dispatches (another django-q
+worker, or the backstop sweep racing an event trigger) sweep DISJOINT pk
+ranges instead of duplicating verification work.
+
+**Wrap semantics.** Reaching the end of the pk space (an empty chunk) resets
+`position` to `0` and increments `wrap_count` — but the dispatch that
+triggers the wrap STOPS immediately rather than continuing to scan from `0`
+in the same call, so a single dispatch's own cost stays bounded regardless
+of where the cursor happens to be. The NEXT dispatch (event-driven or
+backstop) picks up the sweep from `0`.
+
+**Cadence.** A full catalog cycle takes roughly
+`ceil(catalog_size / STAGE_E_SELECTION_SCAN_CAP)` dispatches — at the
+default `STAGE_E_SELECTION_SCAN_CAP = 1000` against the current ~218k-card
+catalog, that's **~220 dispatches** per full pk-space cycle, then it wraps
+and starts again. Cards completed by an event trigger AHEAD of the cursor's
+current position are simply skipped when the sweep later reaches them
+(verification finds current evidence, moves on); cards that become newly
+eligible BEHIND the cursor (a reparse, an evidence invalidation) are picked
+up either by their own event trigger or by the sweep after its next wrap —
+there is no write-path coupling anywhere that tries to "notify" the cursor
+of this (eligibility truth is always derived from `ImageEvidence` at read
+time, same posture as everywhere else in this module).
+
+**This is the designed steady state, not a stall.** On a near-complete
+catalog, most sweep dispatches will legitimately scan their full
+`STAGE_E_SELECTION_SCAN_CAP` worth of candidates, find nothing eligible, and
+return `status="empty"` — that's the sweep correctly walking past
+already-done cards at a bounded cost, not a sign anything is stuck. Don't
+page on a run of `"empty"` outcomes from the backstop sweep alone; check
+`StageESweepCursor.wrap_count` (climbing over time is the sweep working) and
+the actual Stage C/D backlog size before treating it as an incident.
 
 ### Concurrency cap (companion change, 2026-07-24; connection-lifecycle fix + throttle-observability counter, 2026-07-25)
 
