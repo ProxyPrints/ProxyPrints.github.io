@@ -316,9 +316,15 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
 - **Cron backstop** (`manage.py stream_backstop_sweep`): re-runs the same
   eligibility selectors against the Stage C backlog, then (once that's empty)
   the Stage D join-key-eligible backlog, dispatching micro-batches until both
-  are exhausted, the envelope trips, or `--max-batches` is reached. Catches
-  anything a lost/never-fired django-q dispatch missed (django-q2's own
-  delivery guarantee is at-least-once-attempted, not exactly-once-delivered).
+  are exhausted, the envelope trips, or `--max-batches` is reached. Both
+  backlogs are now cursor-backed, per-call-bounded walks (issue
+  [#458](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/458) for
+  Stage C, issue
+  [#460](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/460) for
+  Stage D — see "Backlog selection: the two-cursor walk" below) — neither
+  issues a query whose cost scales with catalog size. Catches anything a
+  lost/never-fired django-q dispatch missed (django-q2's own delivery
+  guarantee is at-least-once-attempted, not exactly-once-delivered).
   **Not scheduled anywhere by this change** — no django-q `Schedule` row is
   created; wiring an actual cadence is a phase-3/live-deploy action, not a
   code change.
@@ -332,7 +338,7 @@ tail shakedown's own instrumentation (phase 3, not yet run). The default
 sits inside the brief's own "roughly 10-100 cards per batch" sanity range as
 a conservative starting point pending that measurement.
 
-### Backlog selection: persistent sweep cursor (issue #458, 2026-07-25)
+### Backlog selection: the two-cursor walk (issue #458, 2026-07-25; extended to a second cursor, issue #460, 2026-07-25)
 
 The old backlog-fill query anti-joined the WHOLE catalog against
 `ImageEvidence` on every single micro-batch dispatch — a full JSONB scan
@@ -340,49 +346,88 @@ re-run from scratch every ~25-card batch, growing more expensive as the
 catalog completes (observed: three such queries active 641s+ each, zero
 concurrency-cap slots even held, five batches dispatched in ~11 minutes).
 Batch-size tuning couldn't fix this — the query shape itself was O(catalog)
-per batch, not per candidate examined.
+per batch, not per candidate examined. Fixing `_select_micro_batch`'s own
+Stage C backlog fill (issue #458) left the backstop sweep's SECOND backlog
+path exposed to the identical disease one layer up: `_next_stage_d_backlog_ids`
+(`stream_backstop_sweep.py`) evaluated the Stage D join-key-eligible
+queryset UNSCOPED on every sweep iteration that hit "empty" — the sweep
+wedged again, this time on backlog (b) rather than (a), issue #460.
 
-`_select_micro_batch`'s backlog fill now walks a persistent, singleton
-`StageESweepCursor.position` incrementally through the Card pk space, in
+Both backlogs now walk their own **keyed** `StageESweepCursor` row
+(`name="stage_c"` / `name="stage_d"` — see `StageESweepCursor`'s own model
+docstring for why the two rows must stay independent) through the SAME
+shared helper, `cardpicker.stage_e_dispatch._cursor_chunk_walk(cursor_name, verify_chunk, limit)`: `_select_micro_batch`'s Stage C fill calls it with
+`cursor_name=StageESweepCursor.STAGE_C` and a verifier checking for a
+CURRENT full-manifest `ImageEvidence` row; `_next_stage_d_backlog_ids`
+(`stream_backstop_sweep.py`) calls it with `cursor_name=StageESweepCursor.STAGE_D`
+and a verifier that's just `local_calculate_verdicts._eligible_cards_queryset`
+re-called PER CHUNK with the `card_ids` scoping parameter it already
+accepted (the truth predicate is reused, never re-derived — Stage D's
+eligibility rule lives in exactly one place either way). One shared walk
+means the two backlogs can never drift on chunking, scan-cap, CAS, or wrap
+semantics.
+
+The walk advances `position` incrementally through the Card pk space, in
 bounded chunks (`settings.STAGE_E_SELECTION_CHUNK_SIZE`, default `250`) —
 each chunk is a pure `pk__gt=position` index range scan, then one bounded
-`ImageEvidence.objects.filter(card_id__in=chunk, ...)` verification query
-against exactly that chunk, never the whole catalog. A chunk is claimed via
-an optimistic compare-and-swap (`StageESweepCursor.try_advance`) BEFORE it's
-verified — a losing CAS (a concurrent dispatch already claimed that range)
-discards the chunk and retries against the freshly-read position, up to 3
-retries per dispatch. This makes two concurrent dispatches (another django-q
-worker, or the backstop sweep racing an event trigger) sweep DISJOINT pk
-ranges instead of duplicating verification work.
+verification query against exactly that chunk, never the whole catalog. A
+chunk is claimed via an optimistic compare-and-swap
+(`StageESweepCursor.try_advance(cursor_name, ...)`) BEFORE it's verified —
+a losing CAS (a concurrent dispatch already claimed that range) discards
+the chunk and retries against the freshly-read position, up to 3 retries
+per call. This makes two concurrent dispatches WALKING THE SAME CURSOR
+(another django-q worker, or the backstop sweep racing an event trigger)
+sweep DISJOINT pk ranges instead of duplicating verification work; two
+dispatches walking DIFFERENT cursors (Stage C vs. Stage D) never contend at
+all, since they update different rows.
 
-**Wrap semantics.** Reaching the end of the pk space (an empty chunk) resets
-`position` to `0` and increments `wrap_count` — but the dispatch that
-triggers the wrap STOPS immediately rather than continuing to scan from `0`
-in the same call, so a single dispatch's own cost stays bounded regardless
-of where the cursor happens to be. The NEXT dispatch (event-driven or
-backstop) picks up the sweep from `0`.
+**Wrap semantics, and the exhausted-vs-cap-hit distinction (issue #460 §4).**
+Reaching the end of the pk space (an empty chunk) resets `position` to `0`
+and increments `wrap_count` — but the call that triggers the wrap STOPS
+immediately rather than continuing to scan from `0` in the same call, so a
+single call's own cost stays bounded regardless of where the cursor happens
+to be. `_cursor_chunk_walk` returns `(found_ids, exhausted)`:
+`exhausted=True` iff THIS call reached the end of the pk space and wrapped
+(genuinely nothing left, at least until the next full pk-space cycle);
+`exhausted=False` on an empty result means the SCAN CAP (or CAS retry
+budget) was hit with more pk space still unscanned ahead of the cursor — a
+common outcome on a backlog that's sparse relative to the catalog.
+`_select_micro_batch` doesn't need this distinction (it has no
+caller-visible "empty" vs. "exhausted" difference to make) and discards it;
+the backstop sweep's own `handle()` loop DOES need it for backlog (b) — it
+breaks with "Backlog exhausted" only on `exhausted=True`, and on a
+cap-hit-empty result CONTINUES to the next batch instead of ending the
+sweep early (already bounded by `--max-batches`, so this can never become
+an unbounded loop).
+Treating cap-hit-empty as exhaustion was exactly the pre-#460 bug: it would
+have ended a sweep with backlog (b) cards still waiting, unexamined, past
+the scan cap. The NEXT dispatch/sweep iteration (event-driven or backstop)
+picks up each cursor's own walk from wherever it stopped, `0` after a wrap.
 
-**Cadence.** A full catalog cycle takes roughly
-`ceil(catalog_size / STAGE_E_SELECTION_SCAN_CAP)` dispatches — at the
-default `STAGE_E_SELECTION_SCAN_CAP = 1000` against the current ~218k-card
-catalog, that's **~220 dispatches** per full pk-space cycle, then it wraps
-and starts again. Cards completed by an event trigger AHEAD of the cursor's
-current position are simply skipped when the sweep later reaches them
-(verification finds current evidence, moves on); cards that become newly
-eligible BEHIND the cursor (a reparse, an evidence invalidation) are picked
-up either by their own event trigger or by the sweep after its next wrap —
-there is no write-path coupling anywhere that tries to "notify" the cursor
-of this (eligibility truth is always derived from `ImageEvidence` at read
-time, same posture as everywhere else in this module).
+**Cadence.** A full catalog cycle, for either cursor, takes roughly
+`ceil(catalog_size / STAGE_E_SELECTION_SCAN_CAP)` calls — at the default
+`STAGE_E_SELECTION_SCAN_CAP = 1000` against the current ~218k-card catalog,
+that's **~220 calls** per full pk-space cycle, then it wraps and starts
+again. Cards completed by an event trigger AHEAD of a cursor's current
+position are simply skipped when that cursor's walk later reaches them
+(verification finds current evidence/a current vote, moves on); cards that
+become newly eligible BEHIND the cursor (a reparse, an evidence
+invalidation, a retracted vote) are picked up either by their own event
+trigger or by the sweep after that cursor's next wrap — there is no
+write-path coupling anywhere that tries to "notify" either cursor of this
+(eligibility truth is always derived from `ImageEvidence`/`CardPrintingTag`
+at read time, same posture as everywhere else in this module).
 
 **This is the designed steady state, not a stall.** On a near-complete
-catalog, most sweep dispatches will legitimately scan their full
+catalog, most sweep calls will legitimately scan their full
 `STAGE_E_SELECTION_SCAN_CAP` worth of candidates, find nothing eligible, and
-return `status="empty"` — that's the sweep correctly walking past
-already-done cards at a bounded cost, not a sign anything is stuck. Don't
-page on a run of `"empty"` outcomes from the backstop sweep alone; check
-`StageESweepCursor.wrap_count` (climbing over time is the sweep working) and
-the actual Stage C/D backlog size before treating it as an incident.
+return an empty result (cap-hit, not exhausted) — that's a cursor correctly
+walking past already-done cards at a bounded cost, not a sign anything is
+stuck. Don't page on a run of "empty"/cap-hit outcomes from the backstop
+sweep alone; check `StageESweepCursor.wrap_count` for EACH row
+(`name="stage_c"` and `name="stage_d"` climbing independently over time is
+both sweeps working) and the actual Stage C/D backlog size before treating
+it as an incident.
 
 ### Concurrency cap (companion change, 2026-07-24; connection-lifecycle fix + throttle-observability counter, 2026-07-25)
 

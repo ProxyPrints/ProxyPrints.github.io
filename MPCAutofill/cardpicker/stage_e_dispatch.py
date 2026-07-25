@@ -70,7 +70,7 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Iterable, Optional
+from typing import Callable, Deque, Iterable, Optional
 
 from django.conf import settings
 from django.utils import timezone
@@ -237,6 +237,97 @@ def _sample_envelope_signals(google_lockout: bool = False) -> EnvelopeSignals:
     )
 
 
+def _cursor_chunk_walk(
+    cursor_name: str,
+    verify_chunk: Callable[[list[int]], Iterable[int]],
+    limit: int,
+) -> tuple[list[int], bool]:
+    """
+    THE shared chunked cursor walk (issue #460 - extends issue #458's single Stage C sweep cursor
+    to a second, independently-keyed one; see `StageESweepCursor`'s own docstring for why the two
+    walks need separate rows). `_select_micro_batch`'s Stage C backlog fill and
+    `stream_backstop_sweep._next_stage_d_backlog_ids`'s Stage D backlog fill both call this ONE
+    function, parameterized only by which `StageESweepCursor` row to walk (`cursor_name`, one of
+    `StageESweepCursor.STAGE_C`/`STAGE_D`) and a per-chunk verifier callable (`verify_chunk`,
+    called with a bounded, already-CAS-claimed list of candidate pks and returning the subset of
+    them that are genuinely eligible) - so the two callers cannot drift apart on chunking, scan-cap,
+    CAS, or wrap semantics the way two independent implementations eventually would.
+
+    Walks `StageESweepCursor(name=cursor_name).position` forward through the Card pk space (cards
+    with a stable content hash - both Stage C and Stage D eligibility presuppose one, see
+    `_select_micro_batch`'s own docstring) in bounded `STAGE_E_SELECTION_CHUNK_SIZE`-sized chunks,
+    each chunk claimed via an optimistic CAS (`StageESweepCursor.try_advance`) BEFORE `verify_chunk`
+    ever runs against it - two concurrent dispatches walking the SAME cursor (another django-q
+    worker, or the backstop sweep racing an event trigger) therefore sweep DISJOINT ranges rather
+    than duplicating verification work or racing each other's cursor writes. Every query this
+    function issues is shaped by CHUNK_SIZE/SCAN_CAP, never by catalog size - the incremental
+    pk-index range scan (`pk__gt=position`) and `verify_chunk`'s own bounded, chunk-scoped query
+    both cost the same regardless of how large the catalog grows.
+
+    Stops filling once `limit` ids have been found, once `STAGE_E_SELECTION_SCAN_CAP` candidates
+    have been examined this call (a mostly-already-processed range can need many chunks to find few
+    or zero eligible cards - this caps that call's own worst case), once the walk reaches the end of
+    the pk space (wraps `position` back to `0`, increments `wrap_count`, and STOPS this call without
+    continuing to scan from 0 in the same call - see `StageESweepCursor`'s own docstring), or once
+    `_MAX_SWEEP_CAS_RETRIES` consecutive CAS losses have been spent. Every one of these is a normal,
+    expected stopping point, not a failure.
+
+    Returns `(found_ids, exhausted)`. `found_ids` is capped at `limit`, always a valid (possibly
+    partial, possibly empty) result. `exhausted` is `True` iff this call reached the end of the pk
+    space and wrapped - the ONLY signal that distinguishes "this cursor's backlog is genuinely empty
+    right now" from "the scan cap (or CAS retry budget) was hit with more pk space still unscanned
+    ahead of `position`" (issue #460 §4) - a cap-hit-empty result must NOT be treated as exhaustion
+    by a caller (see `stream_backstop_sweep.py`'s own handling of this distinction).
+    """
+    found: list[int] = []
+    found_set: set[int] = set()
+    chunk_size = getattr(settings, "STAGE_E_SELECTION_CHUNK_SIZE", DEFAULT_SELECTION_CHUNK_SIZE)
+    scan_cap = getattr(settings, "STAGE_E_SELECTION_SCAN_CAP", DEFAULT_SELECTION_SCAN_CAP)
+
+    position = StageESweepCursor.get_cursor(cursor_name).position
+    examined = 0
+    cas_retries = 0
+    exhausted = False
+
+    while len(found) < limit and examined < scan_cap:
+        this_chunk_limit = min(chunk_size, scan_cap - examined)
+        chunk = list(
+            Card.objects.filter(content_phash__isnull=False, pk__gt=position)
+            .order_by("pk")
+            .values_list("pk", flat=True)[:this_chunk_limit]
+        )
+        if not chunk:
+            # End of the pk space - wrap and stop THIS call outright (this function's own docstring:
+            # never continue scanning from 0 in the same call). The CAS here can lose too (another
+            # dispatch already wrapped it) - harmless either way, this call is stopping regardless.
+            StageESweepCursor.try_wrap(cursor_name, position)
+            exhausted = True
+            break
+
+        if not StageESweepCursor.try_advance(cursor_name, position, chunk[-1]):
+            # Lost the race for this range to a concurrent dispatch walking the same cursor -
+            # discard the chunk (never verified, so never a candidate for this call) and retry
+            # against the now-current position, up to _MAX_SWEEP_CAS_RETRIES times.
+            cas_retries += 1
+            if cas_retries > _MAX_SWEEP_CAS_RETRIES:
+                break
+            position = StageESweepCursor.get_cursor(cursor_name).position
+            continue
+
+        # This call now owns [position, chunk[-1]] - verify only this bounded chunk.
+        examined += len(chunk)
+        eligible_ids = set(verify_chunk(chunk))
+        for card_id in chunk:
+            if card_id in eligible_ids and card_id not in found_set:
+                found.append(card_id)
+                found_set.add(card_id)
+                if len(found) >= limit:
+                    break
+        position = chunk[-1]
+
+    return found[:limit], exhausted
+
+
 def _select_micro_batch(seed_card_ids: Iterable[int], batch_size: int) -> list[int]:
     """
     Builds one micro-batch's own card-id list (docs/proposals/stage-e-streaming.md §3 decision (2)):
@@ -252,30 +343,21 @@ def _select_micro_batch(seed_card_ids: Iterable[int], batch_size: int) -> list[i
     Stage D attempt regardless (`dispatch_micro_batch` scopes Stage D to the WHOLE returned batch,
     seed included), and Stage C is the dominant wall-clock cost driver `batch_size` is sized against
     (§3 decision (2)/§1's own worst-case floor), so backlog-filling from Stage C's own queue is the
-    lever that matters for keeping a batch's wall-clock cost bounded.
+    lever that matters for keeping a batch's wall-clock cost bounded. (The Stage-D-only backlog now
+    has its own cursor-backed walk too - `StageESweepCursor.STAGE_D`, driven by
+    `stream_backstop_sweep._next_stage_d_backlog_ids`, issue #460 - but this function still never
+    reads it; that division of responsibility is unchanged.)
 
-    BACKLOG FILL, issue #458 (persistent sweep cursor, chunked verification) - replaces the old
+    BACKLOG FILL, issue #458 (persistent sweep cursor, chunked verification), issue #460 (walk
+    factored out into `_cursor_chunk_walk`, shared with the Stage D backlog fill) - replaces the old
     per-batch `Card.objects.exclude(pk__in=ImageEvidence.objects.filter(...))` anti-join, which
     re-ran a full-catalog JSONB scan from scratch on EVERY micro-batch (O(catalog), observed
-    641s+-running under a completing catalog - see issue #458's own Problem section). This walks
-    `StageESweepCursor.position` forward through the pk space in bounded `STAGE_E_SELECTION_CHUNK_
-    SIZE`-sized chunks, each chunk claimed via an optimistic CAS (`StageESweepCursor.try_advance`)
-    BEFORE it's verified against `ImageEvidence` - two concurrent dispatches (another django-q
-    worker, or the backstop sweep racing an event trigger) therefore sweep DISJOINT ranges rather
-    than duplicating verification work or racing each other's cursor writes. Every query below is
-    shaped by CHUNK_SIZE/SCAN_CAP, never by catalog size - the incremental pk-index range scan
-    (`pk__gt=position`) and the bounded `card_id__in=chunk` verification query both cost the same
-    regardless of how large the catalog grows.
-
-    Stops filling once `batch_size` is reached, once `STAGE_E_SELECTION_SCAN_CAP` candidates have
-    been examined this call (a mostly-already-processed range can need many chunks to find few or
-    zero eligible cards - this caps that dispatch's own worst case), once the sweep reaches the end
-    of the pk space (wraps `position` back to `0`, increments `wrap_count`, and STOPS this dispatch
-    without continuing to scan from 0 in the same call - see `StageESweepCursor`'s own docstring),
-    or once `_MAX_SWEEP_CAS_RETRIES` consecutive CAS losses have been spent. Every one of these is a
-    normal, expected stopping point, not a failure - a partial or even empty backlog fill is a
-    valid `_select_micro_batch` result (`dispatch_micro_batch`'s own "empty" status already exists
-    for exactly this).
+    641s+-running under a completing catalog - see issue #458's own Problem section). This function's
+    own behavior through `_cursor_chunk_walk` is unchanged from before the #460 refactor: same
+    cursor (`StageESweepCursor.STAGE_C`), same chunking/scan-cap/CAS/wrap semantics, same "a partial
+    or even empty backlog fill is a valid result" posture (`dispatch_micro_batch`'s own "empty"
+    status already exists for exactly this) - this function simply doesn't need `_cursor_chunk_walk`'s
+    `exhausted` return value, since it has no caller-visible distinction to make with it.
     """
     seen: list[int] = []
     seen_set: set[int] = set()
@@ -287,51 +369,20 @@ def _select_micro_batch(seed_card_ids: Iterable[int], batch_size: int) -> list[i
         return seen[:batch_size]
 
     manifest_keys = list(_stage_c_manifest_extractor_keys())
-    chunk_size = getattr(settings, "STAGE_E_SELECTION_CHUNK_SIZE", DEFAULT_SELECTION_CHUNK_SIZE)
-    scan_cap = getattr(settings, "STAGE_E_SELECTION_SCAN_CAP", DEFAULT_SELECTION_SCAN_CAP)
 
-    position = StageESweepCursor.get_singleton().position
-    examined = 0
-    cas_retries = 0
-
-    while len(seen) < batch_size and examined < scan_cap:
-        this_chunk_limit = min(chunk_size, scan_cap - examined)
-        chunk = list(
-            Card.objects.filter(content_phash__isnull=False, pk__gt=position)
-            .order_by("pk")
-            .values_list("pk", flat=True)[:this_chunk_limit]
-        )
-        if not chunk:
-            # End of the pk space - wrap and stop THIS dispatch outright (module docstring: never
-            # continue scanning from 0 in the same call). The CAS here can lose too (another
-            # dispatch already wrapped it) - harmless either way, this call is stopping regardless.
-            StageESweepCursor.try_wrap(position)
-            break
-
-        if not StageESweepCursor.try_advance(position, chunk[-1]):
-            # Lost the race for this range to a concurrent dispatch - discard the chunk (never
-            # verified, so never a candidate for this batch) and retry against the now-current
-            # position, up to _MAX_SWEEP_CAS_RETRIES times.
-            cas_retries += 1
-            if cas_retries > _MAX_SWEEP_CAS_RETRIES:
-                break
-            position = StageESweepCursor.get_singleton().position
-            continue
-
-        # This dispatch now owns [position, chunk[-1]] - verify only this bounded chunk.
-        examined += len(chunk)
+    def _verify_stage_c_chunk(chunk: list[int]) -> Iterable[int]:
         done_ids = set(
             ImageEvidence.objects.filter(card_id__in=chunk, extractor_versions__has_keys=manifest_keys).values_list(
                 "card_id", flat=True
             )
         )
-        for card_id in chunk:
-            if card_id not in done_ids and card_id not in seen_set:
-                seen.append(card_id)
-                seen_set.add(card_id)
-                if len(seen) >= batch_size:
-                    break
-        position = chunk[-1]
+        return [card_id for card_id in chunk if card_id not in done_ids]
+
+    found, _exhausted = _cursor_chunk_walk(StageESweepCursor.STAGE_C, _verify_stage_c_chunk, batch_size - len(seen))
+    for card_id in found:
+        if card_id not in seen_set:
+            seen.append(card_id)
+            seen_set.add(card_id)
 
     return seen[:batch_size]
 
