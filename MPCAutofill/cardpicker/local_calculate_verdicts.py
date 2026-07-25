@@ -377,7 +377,7 @@ from typing import Iterable, Optional
 
 import imagehash
 
-from django.db.models import Q, QuerySet
+from django.db.models import Count, Max, Q, QuerySet
 
 from cardpicker.local_fallback import (
     FALLBACK_CONFIDENCE_MULTI_EVIDENCE,
@@ -939,11 +939,20 @@ def _eligible_cards_queryset(
        ARRAY[...]`), not the JSONField `contains` operator - same lookup name, different
        semantics, matching the pilot's own established usage.
     """
-    non_rescannable_scanned_card_ids = (
-        CardScanLog.objects.filter(anonymous_id=anonymous_id)
-        .exclude(skip_reason__in=rescannable_skip_reasons)
-        .values_list("card_id", flat=True)
+    non_rescannable_scanned_card_ids_qs = CardScanLog.objects.filter(anonymous_id=anonymous_id).exclude(
+        skip_reason__in=rescannable_skip_reasons
     )
+    if card_ids is not None:
+        # Issue #469 (Tron §8 gate finding, 2026-07-25): CardScanLog is 2,093,147 rows live and
+        # append-only, growing - when the caller has already narrowed the outer Card queryset to
+        # `card_ids`, this subquery should be scoped the same way rather than scanning the whole
+        # table. Purely a cost narrowing, not a behaviour change: the resulting excluded-pk set is
+        # equivalent for THIS caller either way, since a row this subquery would find outside
+        # `card_ids` could never survive the outer queryset's own `.filter(pk__in=card_ids)`
+        # (applied below) regardless. `card_ids is None` (BULK mode) leaves this exactly as it
+        # was before this fix - unscoped over the whole table - byte-identical to pre-fix behaviour.
+        non_rescannable_scanned_card_ids_qs = non_rescannable_scanned_card_ids_qs.filter(card_id__in=card_ids)
+    non_rescannable_scanned_card_ids = non_rescannable_scanned_card_ids_qs.values_list("card_id", flat=True)
     queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
@@ -1065,6 +1074,87 @@ def _split_new_printing_tag_votes(
     return new_votes, len(votes_batch) - len(new_votes)
 
 
+# ---------------------------------------------------------------------------------------------
+# LAZY, PER-WORKER-PROCESS `CandidateNameIndex` CACHE (issue #469, Tron §8 gate finding,
+# 2026-07-25): `CandidateNameIndex()` scans all 113,224 CanonicalCard rows (measured 1.48s) - the
+# two callers below (`run_join_key_calculator`/`run_fallback_calculator`) used to build a fresh one
+# UNCONDITIONALLY at the top of every dispatch, before even checking whether this dispatch's own
+# `card_ids` scope has any eligible cards at all, which dominates the cost of an "empty" Stage E
+# streaming dispatch. Fix implements `docs/proposals/stage-e-streaming.md` §4 item 5's already-
+# ratified shape exactly: "built once per worker process lifetime... with an explicit invalidation
+# event" rather than once per management-command invocation (the pre-existing, owner-accepted
+# pattern that section's own survey found at every OTHER `CandidateNameIndex()` call site -
+# `local_identify_printing_tags.py`/`local_residual_classify.py`/`local_lands_identify.py`/
+# `harvest_probe.py` - none of which this fix touches; those remain "once per invocation" as
+# ratified). `CandidateNameIndex` itself (`local_identify_printing_tags.py`) is untouched - a
+# read-only in-memory lookup built from a `.values_list(...)` query, safe to hold across calls -
+# this cache lives entirely in THIS module, no signal wiring into any PROTECTED CORE module.
+#
+# Invalidation is a cheap version-stamp CHECK per call, not a write-time hook (the doc's own "no
+# soundness implication" framing): `(CanonicalCard max pk, CanonicalCard count, CanonicalExpansion
+# max pk, CanonicalExpansion count)`. Either table's INSERT (a fresh max pk) or DELETE (count
+# moves even when max pk doesn't, e.g. deleting the highest-pk row) changes the stamp and forces a
+# rebuild. An in-place UPDATE to an existing row's name/expansion FK with no insert/delete is NOT
+# detected - accepted deliberately: canonical cards/expansions are catalog data, not routinely
+# renamed in place, and a stale index in that narrow case just re-derives the same candidate
+# answer a fresh one would have anyway (no vote-soundness exposure, matching the doc's own
+# "pure performance change" framing for this whole item).
+# ---------------------------------------------------------------------------------------------
+
+CandidateNameIndexVersionStamp = tuple[int, int, int, int]
+
+_candidate_name_index_cache: Optional[tuple[CandidateNameIndexVersionStamp, CandidateNameIndex]] = None
+
+
+def _candidate_name_index_version_stamp() -> CandidateNameIndexVersionStamp:
+    """
+    Cheap (index-only aggregate, not a table scan) stamp used to detect a CanonicalCard/
+    CanonicalExpansion write since the cached `CandidateNameIndex` was built - see this section's
+    own module-level comment above for the full invalidation-shape rationale.
+    """
+    canonical_card_agg = CanonicalCard.objects.aggregate(max_pk=Max("pk"), count=Count("pk"))
+    canonical_expansion_agg = CanonicalExpansion.objects.aggregate(max_pk=Max("pk"), count=Count("pk"))
+    return (
+        canonical_card_agg["max_pk"] or 0,
+        canonical_card_agg["count"] or 0,
+        canonical_expansion_agg["max_pk"] or 0,
+        canonical_expansion_agg["count"] or 0,
+    )
+
+
+def _get_cached_candidate_name_index() -> CandidateNameIndex:
+    """
+    Returns the current worker process's cached `CandidateNameIndex`, building (or rebuilding,
+    on a version-stamp mismatch - see `_candidate_name_index_version_stamp`'s own docstring) it
+    exactly once per distinct stamp. Callers (`run_join_key_calculator`/`run_fallback_calculator`)
+    call this LAZILY - only once they already have a card to resolve candidates for, never
+    unconditionally at the top of a dispatch - so a dispatch whose `card_ids`-scoped eligible set
+    is empty never pays this call's own version-stamp query, let alone a `CandidateNameIndex`
+    build.
+    """
+    global _candidate_name_index_cache
+    stamp = _candidate_name_index_version_stamp()
+    if _candidate_name_index_cache is not None and _candidate_name_index_cache[0] == stamp:
+        return _candidate_name_index_cache[1]
+    index = CandidateNameIndex()
+    _candidate_name_index_cache = (stamp, index)
+    return index
+
+
+def reset_candidate_name_index_cache_for_tests() -> None:
+    """
+    TEST-ONLY hook, never called from any production code path - clears the module-level
+    `CandidateNameIndex` cache above. In practice the version stamp already changes test-to-test
+    on its own (Postgres sequence `nextval()` advances even across a rolled-back transaction, so a
+    fresh `CanonicalCard` row in the next test always gets a higher pk than the previous test's,
+    changing the stamp and forcing a rebuild) - this hook exists so a test asserting an exact
+    `CandidateNameIndex` construction COUNT doesn't have to depend on that incidental sequence
+    behaviour to start from a known-empty cache.
+    """
+    global _candidate_name_index_cache
+    _candidate_name_index_cache = None
+
+
 def run_join_key_calculator(
     run_id: Optional[str] = None,
     dry_run: bool = True,
@@ -1089,7 +1179,11 @@ def run_join_key_calculator(
     default) is every existing caller's own behaviour, unchanged.
     """
     run_id = run_id or generate_run_id()
-    index = CandidateNameIndex()
+    # Lazy, cached `index` (issue #469 - see this module's own "LAZY, PER-WORKER-PROCESS
+    # CandidateNameIndex CACHE" section above): built on first actual need below, never
+    # unconditionally here, so a dispatch whose eligible set turns out empty (or every card is
+    # skipped before reaching the point that needs candidate resolution) never pays for it.
+    index: Optional[CandidateNameIndex] = None
     lexicon = known_set_codes()  # module docstring's SET-CODE LEXICON GATE - built once, reused
     # across the whole batch, same shape as `index` immediately above.
     result = JoinKeyCalculatorResult(dry_run=dry_run, run_id=run_id)
@@ -1119,6 +1213,8 @@ def run_join_key_calculator(
             continue
 
         result.cards_considered += 1
+        if index is None:
+            index = _get_cached_candidate_name_index()
         candidates = _resolve_candidates_for_card(card.name, index, default_cards_path=default_cards_path)
         verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=lexicon)
 
@@ -1401,7 +1497,9 @@ def run_fallback_calculator(
     `_fallback_eligible_cards_queryset` - see `_eligible_cards_queryset`'s own docstring.
     """
     run_id = run_id or generate_run_id()
-    index = CandidateNameIndex()
+    # Lazy, cached `index` - see run_join_key_calculator's own comment and this module's "LAZY,
+    # PER-WORKER-PROCESS CandidateNameIndex CACHE" section above (issue #469).
+    index: Optional[CandidateNameIndex] = None
     result = FallbackCalculatorResult(dry_run=dry_run, run_id=run_id)
 
     votes_batch: list[CardPrintingTag] = []
@@ -1434,6 +1532,8 @@ def run_fallback_calculator(
             continue
 
         result.cards_considered += 1
+        if index is None:
+            index = _get_cached_candidate_name_index()
         candidates = _resolve_candidates_for_card(card.name, index, default_cards_path=default_cards_path)
         verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
 
