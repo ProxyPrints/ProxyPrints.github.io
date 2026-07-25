@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Hashable, Iterable, Literal, Sequence, TypedDict
 
 from django.conf import settings
+from django.core.exceptions import FieldDoesNotExist
 
 from cardpicker.models import CanonicalCard, Card, CardPrintingTag, PrintingTagStatus
 from cardpicker.vote_consensus import (
@@ -19,9 +20,10 @@ NO_MATCH: Literal["NO_MATCH"] = "NO_MATCH"
 # indexes), referenced by NAME rather than as an attribute so this module is importable and
 # correct both before and after that field exists: it is added by issue #473's PR-1
 # (`md5-checksum-substrate`), which this branch is cut BEFORE and merges AFTER. Every read of it
-# funnels through `_card_md5_checksum`/`_card_ids_with_md5_checksums` below - the only two places
-# in this module that touch the column - so on a checkout without the field every card is a
-# group of one and every group-aware path below degenerates, provably, to its pre-#473 behavior.
+# funnels through `_card_md5_checksum`/`_md5_checksums_for_card_ids`/`_card_ids_with_md5_checksums`
+# below - the only three places in this module that touch the column - so on a checkout without
+# the field every card is a group of one and every group-aware path below degenerates, provably,
+# to its pre-#473 behavior.
 MD5_CHECKSUM_FIELD = "md5_checksum"
 
 
@@ -34,6 +36,38 @@ def _card_md5_checksum(card: Card) -> str | None:
     catastrophic misreading of exactly this degenerate case.
     """
     return getattr(card, MD5_CHECKSUM_FIELD, None) or None
+
+
+def _md5_checksum_column_exists() -> bool:
+    """
+    Whether `Card.md5_checksum` exists on this checkout - False until issue #473's PR-1 merges
+    into this branch, True forever after. Only the BULK reader below needs to ask: it filters on
+    the column by name (`.values_list`), which raises rather than degrading if the field is
+    absent, unlike `_card_md5_checksum`'s per-instance `getattr`. A `_meta` lookup, so this is a
+    dict access, not a query - safe to call per request.
+    """
+    try:
+        Card._meta.get_field(MD5_CHECKSUM_FIELD)
+    except FieldDoesNotExist:
+        return False
+    return True
+
+
+def _md5_checksums_for_card_ids(card_ids: Iterable[int]) -> set[str]:
+    """
+    The distinct non-null checksums held by `card_ids` - ONE column read, not a fetch of whole
+    `Card` rows (2026-07-25 gate on PR #482, condition f1: the row-fetch form regressed the
+    question feed's per-request cost even before PR-1, since it hydrated a model instance per
+    card the voter had ever voted on purely to read one string off it). Returns an empty set,
+    without querying at all, while the column doesn't exist.
+    """
+    if not _md5_checksum_column_exists():
+        return set()
+    return {
+        checksum
+        for checksum in Card.objects.filter(pk__in=card_ids).values_list(MD5_CHECKSUM_FIELD, flat=True)
+        if checksum
+    }
 
 
 def _card_ids_with_md5_checksums(checksums: set[str]) -> list[int]:
@@ -90,16 +124,14 @@ def md5_group_expanded_card_ids(card_ids: Iterable[int]) -> set[int]:
     `card_ids` widened to include every md5 sibling of every card in it - "the cards this voter
     has already answered" widened to "the identity groups this voter has already answered", for
     `question_feed`'s serve-one-member-per-group exclusion. Returns `card_ids` unchanged when
-    none of them carry a checksum (which, before PR-1, is always).
+    none of them carry a checksum (which, before PR-1, is always - at a cost of zero queries,
+    see `_md5_checksums_for_card_ids`). At most two queries otherwise, neither of which
+    materializes a `Card` instance.
     """
     ids = set(card_ids)
     if not ids:
         return ids
-    checksums = {
-        checksum
-        for checksum in (_card_md5_checksum(card) for card in Card.objects.filter(pk__in=ids))
-        if checksum is not None
-    }
+    checksums = _md5_checksums_for_card_ids(ids)
     if not checksums:
         return ids
     return ids | set(_card_ids_with_md5_checksums(checksums))
@@ -177,13 +209,23 @@ def build_group_printing_vote_tuples(
     """
     Translates `CardPrintingTag` rows into the `VoteTuple`s `resolve_weighted_consensus` reads,
     pooling them across an md5 identity group when `pool` is True (issue #473 ruling 1, applied
-    by `vote_consensus.pool_group_votes`): every non-human-backed vote is keyed on the
-    `anonymous_id` of the agent that cast it, so one machine agent's verdict about a set of
-    byte-identical images is ONE event at its maximum weight no matter how many members carry a
-    copy of it, while human-backed votes stay unkeyed and therefore sum, being genuinely
-    independent people looking at the image. With `pool=False` (a group of one) no vote is
-    keyed, `pool_group_votes` is never called, and the returned list is exactly what this
-    module built before #473.
+    by `vote_consensus.pool_group_votes`): EVERY vote is keyed on the `anonymous_id` of the agent
+    that cast it - human-backed votes included - so one agent's agreeing votes about a set of
+    byte-identical images are ONE event no matter how many members carry a copy, and one agent
+    that contradicts itself across members is withheld from the tally entirely. Distinct agents
+    still sum: two different people voting on two members are two votes, which is the point of
+    tallying a group as one target.
+
+    Human-backed votes were NOT keyed in this function's first form, on the reading that separate
+    people are separate events regardless. That was wrong for the case that matters and was
+    rejected at review (2026-07-25 gate on PR #482, condition 1): `anonymous_id` identifies the
+    VOTER, so leaving human votes unkeyed let ONE person reach a 2.0 quorum by answering the same
+    image twice under two of its identifiers - a resolution neither card could reach alone, from
+    one human judgement. Keying humans too is what makes `PRINTING_TAG_MIN_VOTES` a count of
+    distinct agents rather than of rows.
+
+    With `pool=False` (a group of one) no vote is keyed, `pool_group_votes` is never called, and
+    the returned list is exactly what this module built before #473.
 
     Passing a `printings_by_id` dict populates it with each voted `CanonicalCard` (needed to map
     a winning outcome key back to a printing). Callers that only need the outcome KEY - e.g.
@@ -209,13 +251,12 @@ def build_group_printing_vote_tuples(
             if printings_by_id is not None:
                 assert vote.printing is not None
                 printings_by_id[vote.printing_id] = vote.printing
-        is_human_backed = is_human_backed_source(vote.source)
         vote_tuples.append(
             VoteTuple(
                 outcome_key=key,
                 weight=resolve_vote_weight(vote.source, vote.anonymous_id),
-                is_human_backed=is_human_backed,
-                dedupe_key=None if (is_human_backed or not pool) else vote.anonymous_id,
+                is_human_backed=is_human_backed_source(vote.source),
+                dedupe_key=vote.anonymous_id if pool else None,
             )
         )
     return pool_group_votes(vote_tuples) if pool else vote_tuples

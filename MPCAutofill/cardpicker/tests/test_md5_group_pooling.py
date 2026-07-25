@@ -4,17 +4,18 @@ Group-level vote pooling for md5 identity groups (issue #473 PR-3, owner-ratifie
 Two halves, and the split matters:
 
 1. `TestPoolGroupVotes` exercises `vote_consensus.pool_group_votes` as the pure function it is -
-   no database, no models, no md5 anywhere. This is where the "dedupes weight, never fabricates
-   it" property docs/theory.md §4's group-pooling item claims is actually pinned down.
+   no database, no models, no md5 anywhere. This is where the two properties docs/theory.md §4's
+   group-pooling item actually claims are pinned down: one agent counts once (agreeing votes
+   collapse), and an agent that contradicts itself counts for nothing (order-independently).
 2. Everything else exercises the real resolver/persistence/feed/recompute paths against real
    `Card`/`CardPrintingTag` rows, with group MEMBERSHIP supplied by the `md5_groups` fixture
    below rather than by a populated `Card.md5_checksum` column - because that column arrives in
    this issue's PR-1 (`md5-checksum-substrate`), which this branch is cut BEFORE. The fixture
-   replaces the two - and only two - functions in `printing_consensus` that touch the column
-   (`_card_md5_checksum`, `_card_ids_with_md5_checksums`), so every line of grouping, pooling,
-   propagation, and feed logic under test is the real one; only the storage of the checksum is
-   faked. Once PR-1 is merged into this branch, these tests keep passing unchanged and can be
-   supplemented with column-backed equivalents.
+   replaces the three - and only three - functions in `printing_consensus` that touch the column
+   (`_card_md5_checksum`, `_md5_checksums_for_card_ids`, `_card_ids_with_md5_checksums`), so
+   every line of grouping, pooling, propagation, and feed logic under test is the real one; only
+   the storage of the checksum is faked. Once PR-1 is merged into this branch, these tests keep
+   passing unchanged and can be supplemented with column-backed equivalents.
 
 The SINGLETON NO-OP proof (ruling 3) is deliberately NOT concentrated in one test here: it is
 the entire pre-existing consensus/printing/tag/question-feed/recompute suite, which passes
@@ -67,10 +68,14 @@ def md5_groups(monkeypatch):
     def fake_card_md5_checksum(card: Card) -> str | None:
         return checksum_by_card_id.get(card.pk)
 
+    def fake_md5_checksums_for_card_ids(card_ids) -> set[str]:
+        return {checksum for card_id, checksum in checksum_by_card_id.items() if card_id in set(card_ids)}
+
     def fake_card_ids_with_md5_checksums(checksums: set[str]) -> list[int]:
         return [card_id for card_id, checksum in checksum_by_card_id.items() if checksum in checksums]
 
     monkeypatch.setattr(printing_consensus, "_card_md5_checksum", fake_card_md5_checksum)
+    monkeypatch.setattr(printing_consensus, "_md5_checksums_for_card_ids", fake_md5_checksums_for_card_ids)
     monkeypatch.setattr(printing_consensus, "_card_ids_with_md5_checksums", fake_card_ids_with_md5_checksums)
 
     def assign(checksum: str, *cards: Card) -> None:
@@ -125,23 +130,52 @@ class TestPoolGroupVotes:
         pooled = pool_group_votes(votes)
         assert [vote.weight for vote in pooled] == [1.0]
 
-    def test_equal_weights_keep_the_first_vote_in_input_order(self):
+    def test_an_agent_that_contradicts_itself_is_withheld_entirely(self):
+        # NOT "keep the heavier side", and specifically NOT "keep whichever came first" - an
+        # agent that says two different things about byte-identical bytes is evidence for
+        # neither (see `pool_group_votes`' rule 2, and the order-independence test below for the
+        # failure the earlier keep-the-max form actually had).
         votes = [
             VoteTuple(outcome_key="first", weight=0.5, is_human_backed=False, dedupe_key="bot"),
-            VoteTuple(outcome_key="second", weight=0.5, is_human_backed=False, dedupe_key="bot"),
+            VoteTuple(outcome_key="second", weight=1.0, is_human_backed=False, dedupe_key="bot"),
         ]
-        assert [vote.outcome_key for vote in pool_group_votes(votes)] == ["first"]
+        assert pool_group_votes(votes) == []
+
+    def test_withholding_is_scoped_to_the_contradicting_agent(self):
+        votes = [
+            VoteTuple(outcome_key="x", weight=1.0, is_human_backed=True, dedupe_key="human-1"),
+            VoteTuple(outcome_key="x", weight=0.5, is_human_backed=False, dedupe_key="bot-a"),
+            VoteTuple(outcome_key="x", weight=0.5, is_human_backed=False, dedupe_key="bot-b"),
+            VoteTuple(outcome_key="y", weight=0.5, is_human_backed=False, dedupe_key="bot-b"),
+        ]
+        pooled = pool_group_votes(votes)
+        assert [(vote.outcome_key, vote.dedupe_key) for vote in pooled] == [("x", "human-1"), ("x", "bot-a")]
+
+    def test_pooling_is_order_independent(self):
+        # the concrete defect the 2026-07-25 gate found in the keep-the-max form: with equal
+        # weights it resolved a self-contradiction by INPUT order, which in the real caller is
+        # `card_id` order - so which sibling happened to have the lower pk decided which outcome
+        # a contradicting agent appeared to support, manufacturing correlated agreement.
+        votes = [
+            VoteTuple(outcome_key="x", weight=1.0, is_human_backed=True, dedupe_key="human-1"),
+            VoteTuple(outcome_key="x", weight=0.5, is_human_backed=False, dedupe_key="bot"),
+            VoteTuple(outcome_key="y", weight=0.5, is_human_backed=False, dedupe_key="bot"),
+            VoteTuple(outcome_key="x", weight=0.5, is_human_backed=False, dedupe_key="other-bot"),
+        ]
+        forward = pool_group_votes(votes)
+        reversed_order = pool_group_votes(list(reversed(votes)))
+        assert sorted(forward) == sorted(reversed_order)
 
     def test_pooling_never_increases_total_weight(self):
         votes = [
-            VoteTuple(outcome_key=1, weight=1.0, is_human_backed=True),
+            VoteTuple(outcome_key=1, weight=1.0, is_human_backed=True, dedupe_key="human-1"),
             VoteTuple(outcome_key=1, weight=0.5, is_human_backed=False, dedupe_key="bot"),
             VoteTuple(outcome_key=1, weight=0.5, is_human_backed=False, dedupe_key="bot"),
-            VoteTuple(outcome_key=2, weight=0.5, is_human_backed=False, dedupe_key="bot"),
         ]
         pooled = pool_group_votes(votes)
         assert sum(vote.weight for vote in pooled) <= sum(vote.weight for vote in votes)
-        # and specifically: the one human event survives intact, the one agent collapses to one
+        # and specifically: the one human agent survives intact, the one machine agent's two
+        # agreeing observations collapse to one
         assert len(pooled) == 2
 
 
@@ -239,9 +273,77 @@ class TestGroupTally:
         human_vote(card_a, printing, "human-1")
         human_vote(card_b, printing, "human-2")
 
-        # two independent people, 1.0 each, pooled to 2.0 = PRINTING_TAG_MIN_VOTES
+        # two DISTINCT people, 1.0 each, pooled to 2.0 = PRINTING_TAG_MIN_VOTES. This is the
+        # intended multiplier: one target, two independent human confirmations of it.
         assert resolve_printing(card_a) == printing
         assert resolve_printing(card_b) == printing
+
+    def test_one_human_answering_two_siblings_is_one_vote(self, db, md5_groups):
+        # 2026-07-25 gate on PR #482, condition 1 (its scenario A, reproduced): the SAME
+        # `anonymous_id` voting once on each of two byte-identical members must not add up to a
+        # 2.0 quorum. One person answering the same image twice under two of its identifiers is
+        # one answer - neither card could resolve alone, and the group must not either.
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        human_vote(card_a, printing, "human-1")
+        human_vote(card_b, printing, "human-1")
+
+        votes, is_group = group_printing_votes(card_a)
+        assert len(votes) == 2  # both rows are read...
+        assert len(build_group_printing_vote_tuples(votes, pool=is_group)) == 1  # ...one agent
+
+        assert resolve_printing(card_a) is None
+        assert resolve_printing(card_b) is None
+
+    def test_a_third_distinct_human_still_resolves_that_group(self, db, md5_groups):
+        # the complement of the test above: deduping one repeat voter must not make a group
+        # unresolvable, only un-inflatable. A second real person tips it exactly as it should.
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        human_vote(card_a, printing, "human-1")
+        human_vote(card_b, printing, "human-1")
+        assert resolve_printing(card_a) is None
+
+        human_vote(card_b, printing, "human-2")
+        assert resolve_printing(card_a) == printing
+
+    def test_a_self_contradicting_machine_agent_contributes_nothing(self, db, md5_groups):
+        # 2026-07-25 gate on PR #482, condition 2 (its scenario B at k=2): one human vote for X
+        # plus two OCR agents that each say X on one sibling and Y on the other. Each such agent
+        # has contradicted itself about identical bytes, so it withholds entirely - leaving 1.0
+        # of human weight, short of quorum. Under the earlier keep-the-max collapse this
+        # resolved to X purely because the X rows had the lower card_id.
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing_x, printing_y = CanonicalCardFactory(), CanonicalCardFactory()
+        human_vote(card_a, printing_x, "human-1")
+        for index in range(2):
+            machine_vote(card_a, printing_x, f"bot-{index}")
+            machine_vote(card_b, printing_y, f"bot-{index}")
+
+        votes, is_group = group_printing_votes(card_a)
+        vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
+        assert [vote.weight for vote in vote_tuples] == [1.0]  # the human, and nothing else
+        assert resolve_printing(card_a) is None
+
+    def test_self_contradiction_handling_is_independent_of_card_id_order(self, db, md5_groups):
+        # same shape as above, built twice with the outcomes swapped between the low-pk and
+        # high-pk sibling. The tally - and therefore the outcome - must be identical, since
+        # nothing about which sibling was created first says anything about the printing.
+        def build(x_first: bool) -> list[float]:
+            card_low, card_high = CardFactory(), CardFactory()
+            md5_groups(f"same-bytes-{x_first}", card_low, card_high)
+            printing_x, printing_y = CanonicalCardFactory(), CanonicalCardFactory()
+            human_vote(card_low, printing_x, f"human-{x_first}")
+            machine_vote(card_low if x_first else card_high, printing_x, f"bot-{x_first}")
+            machine_vote(card_high if x_first else card_low, printing_y, f"bot-{x_first}")
+            votes, is_group = group_printing_votes(card_low)
+            assert resolve_printing(card_low) is None
+            return sorted(vote.weight for vote in build_group_printing_vote_tuples(votes, pool=is_group))
+
+        assert build(True) == build(False) == [1.0]
 
     def test_a_group_never_resolves_on_machine_weight_alone(self, db, md5_groups):
         # four siblings, four DIFFERENT agents (nothing dedupes), 2.0 of machine weight - which

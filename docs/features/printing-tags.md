@@ -145,17 +145,32 @@ printings, artists, tags, and moderation from one screen.
   identification target, so printing consensus tallies them together.
   `printing_consensus.md5_group_card_ids()` expands a card to its group;
   `build_group_printing_vote_tuples()` builds the group's tally and
-  `vote_consensus.pool_group_votes()` collapses it: **non-human-backed
-  votes dedupe per casting `anonymous_id`** (one machine agent's verdict
-  about identical bytes is one event, at its max weight — never summed
-  across siblings), while **human-backed votes all count and sum** (real,
-  independent people). The pooled tally then runs through the UNCHANGED
+  `vote_consensus.pool_group_votes()` collapses it by **casting
+  `anonymous_id`, for every vote — human-backed included**: one agent's
+  agreeing votes across members become ONE vote (a person answering the
+  same image under two of its identifiers is one answer; a machine
+  agent's verdict about identical bytes is one verdict), and an agent
+  whose votes across members **disagree** with each other is withheld
+  from the tally entirely (it has contradicted itself about identical
+  bytes, so it is evidence for neither side — the same
+  withhold-never-manufacture rule the `g₄` cross-checks follow). What
+  sums is **distinct agents**: two different people voting on two
+  different members are two votes, and that is the intended multiplier.
+  Both rules were tightened at the 2026-07-25 gate on PR #482 — human
+  votes were originally left unkeyed (which let ONE person reach quorum
+  by answering two siblings) and self-contradiction originally kept the
+  max-weight side (which, at equal weights, let `card_id` order decide
+  which outcome an agent appeared to support). The pooled tally then runs
+  through the UNCHANGED
   `resolve_weighted_consensus` — same weights, same thresholds, same two
   mechanisms above, same human-backed gate, applied once per group
   instead of once per member. `resolve_and_persist_printing()` writes the
   outcome (`inferred_canonical_card` + `printing_tag_status`) to **every**
   member, in pk order, reindexing only the members whose indexed printing
-  actually changed; `consensus_recompute` walks each group once;
+  actually changed — so members cannot diverge while that shared path is
+  the only writer, though a change in group MEMBERSHIP (checksum
+  backfill, re-upload) needs a `consensus_recompute` pass for the
+  affected group; `consensus_recompute` walks each group once;
   `question_feed` classifies likely-resolve on the group tally and serves
   at most one member of a group per voter. A card with a null or unique
   checksum is a **group of one**, for which all of the above is provably

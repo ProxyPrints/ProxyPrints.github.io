@@ -283,40 +283,73 @@ turns out to be:
    their own."
 3. **Identity-group pooling, i.e. one target gets one tally**
    (owner-ratified 2026-07-25; `vote_consensus.pool_group_votes`,
-   `printing_consensus.resolve_and_persist_printing`). Several catalog
-   records can index the _same image file_ — different uploaders, same
-   bytes, byte-equality established by the storage provider's own
-   checksum, not by any similarity measure of ours. Such a set is **one
-   identification target**, and is tallied as one: an evidence event
-   observed on several members counts **once**, at its maximum weight
-   (keyed on the identity of the agent that produced it), while
-   human-backed votes, being genuinely independent observers of the same
-   target, sum as they always did. The resolved outcome is then written
-   to every member, so byte-identical images cannot disagree with each
-   other about what they depict — a class of catalog inconsistency that
-   is now unreachable by construction rather than merely unlikely.
-   The soundness claim is deliberately narrow and worth stating exactly:
-   pooling can only **remove** weight from a tally, never add any, so no
-   resolution becomes reachable that the same underlying evidence could
-   not already have produced on a single record. §7b's false-accept
-   bound is therefore preserved or tightened, never loosened — and the
-   `g₅` gate above is untouched by pooling, since a group's tally is
-   still subject to the same human-backed requirement, the same
-   quorum/share thresholds, and the same D1/D4 exclusions, applied once
-   instead of _n_ times. What this closes is an **independence**
-   failure, not a weighting one: the moment identical bytes let the
-   pipeline reuse one card's extracted evidence for its siblings instead
-   of re-deriving it (the point of establishing byte-equality at all —
-   the catalog is not permitted to hoard images, so re-fetching is the
-   expensive step), an un-pooled tally would read one observation as _n_
-   agreeing machine confirmations. That is precisely the mutual
-   independence §7a's `ε₁…ε₄` composition assumes, so pooling is what
-   keeps the composed bound honest once evidence is shared. Human
-   disagreement inside a group is not special-cased: it is one visible
-   contest on one target, decided by the same vote-weight matrix as any
-   other. A record whose checksum is unknown or unique is a group of
-   one, for which every statement above is the identity — the pre-2026-07-25
-   per-record behavior, unchanged.
+   `printing_consensus.build_group_printing_vote_tuples`,
+   `resolve_and_persist_printing`). Several catalog records can index the
+   _same image file_ — different uploaders, same bytes, byte-equality
+   established by the storage provider's own checksum, not by any
+   similarity measure of ours. Such a set is **one identification
+   target**, and is tallied as one, under a single rule: **the tally
+   counts distinct agents, not rows.** All of one agent's agreeing votes
+   across the group collapse into one — human and machine alike, keyed
+   on the caster's identity — and an agent whose votes across the group
+   _disagree_ with each other contributes nothing at all, on the same
+   withhold-don't-manufacture logic `g₄` applies to its cross-checks
+   (§7a). Distinct agents still sum, which is the point of grouping:
+   two different people, one vote each, on two members of a group are
+   two independent confirmations of one target.
+
+   Three claims, separated by how strong each actually is, because
+   conflating them is how a bound like this gets oversold:
+
+   - **Preserved exactly**: the machine-alone bound. `g₅` is untouched
+     by pooling — a group's tally faces the same human-backed
+     requirement, the same `min_weight`/`min_share` thresholds, and the
+     same D1/D4 exclusions, applied once instead of _n_ times — and
+     pooling only ever drops votes, so it cannot manufacture the
+     human-backed one the gate demands. `P(resolved | machine evidence alone) = 0`
+     survives intact, at group scope.
+   - **Newly rested on something real**: the independence the quorum
+     threshold assumes. Summed weight only means "several agents agree"
+     if the summands are different agents; per-record tallying got that
+     for free only because a person or a scanner could vote on a record
+     once. Byte-identical siblings break that for free-ness in both
+     directions — one person can answer the same image under _n_
+     identifiers, and (once identical bytes let the pipeline reuse one
+     record's extracted evidence for its siblings rather than
+     re-deriving it — the point of establishing byte-equality at all,
+     since the catalog is not permitted to hoard images and re-fetching
+     is the expensive step) one machine observation can appear as _n_
+     agreeing confirmations. Group-level per-agent dedupe is what makes
+     `min_weight` a count of distinct agents again, and it is what keeps
+     §7a's `ε₁…ε₄` composition's mutual-independence assumption honest
+     once evidence is shared. This is a **restored** assumption, not a
+     new guarantee.
+   - **Explicitly NOT claimed**: that pooling reaches no new
+     resolutions. It reaches some. A group tally replaces _n_ per-record
+     tallies, so two different people voting on two different members
+     now resolve a target that neither record could resolve alone. That
+     is the intended multiplier — the whole reason to treat the set as
+     one question — and it is a change in what is reachable, not merely
+     a restriction of it. (An earlier draft of this item claimed the
+     opposite, that pooling could only remove weight and therefore reach
+     nothing new. That was false, and its own test suite proved it; it
+     is corrected here rather than quietly dropped.)
+
+   §7b's false-accept bound is unchanged in form: it is stated per
+   identification target, and an identity group is exactly one target.
+   Consistency across members is a **write-path** property, not a
+   metaphysical one: the outcome is resolved once and written to every
+   member through the one shared path, so members cannot diverge while
+   that path is the only writer. Group MEMBERSHIP can still change (a
+   checksum backfill, a re-upload, a corrected file), and a membership
+   change requires a recompute for the affected group before its members
+   are back in agreement — that recompute is `consensus_recompute`,
+   which walks groups, not rows. Human disagreement inside a group is
+   not special-cased: it is one visible contest on one target, decided
+   by the same vote-weight matrix as any other. A record whose checksum
+   is unknown or unique is a group of one, for which every statement
+   above is the identity — the pre-2026-07-25 per-record behavior,
+   unchanged.
 
 Together these mean the system's worst-case failure mode, even under a
 badly miscalibrated engine, is a wasted human review cycle (a bad
