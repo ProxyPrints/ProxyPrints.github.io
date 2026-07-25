@@ -43,19 +43,32 @@ time (or the timestamp of a prior, killed invocation of the SAME epoch) so a re-
 kill never re-pays a fetch this epoch already spent (Google fetch quota is the scarce resource
 here, not compute) - it picks up exactly where the killed run left off.
 
-EVIDENCE-CHANGE ECHO (spec point 5): every `persist_evidence` write this driver's forced
-re-extraction performs is an ordinary `ImageEvidence` save, so `cardpicker.stage_e_signals`'s own
-`_dispatch_on_evidence_change` receiver fires for it exactly as it would for any other Stage C write
-- an async `dispatch_for_card(card_id, "evidence-change")` task queues behind it, independent of
-this driver's own dispatch calls. ACCEPTABLE (frozen at filing, not suppressed): the echoed dispatch
-finds evidence already current (this driver's own write already landed) and, if a vote was already
-cast (by this driver's own Stage D leg, which runs synchronously within the SAME
-`dispatch_micro_batch` call before the echo task even gets scheduled), finds the already-voted guard
-already satisfied - so it resolves to a fast, cheap no-op. The two are distinguishable in the
-ledger by `trigger_reason`: this driver's own batches carry `"shakedown"`, any echo dispatch carries
-`"evidence-change"`. If Tron judges the echo volume unacceptable at tail scale, the documented
-fallback (NOT built here, per the frozen spec's own instruction not to build it preemptively) is a
-suppress-signals flag on `persist_evidence`.
+EVIDENCE-CHANGE ECHO (spec point 5, corrected per the §8 Tron pass on PR #467 - the original
+"fast, cheap no-op either way" characterization below was WRONG, left here struck through in spirit
+by this correction rather than silently rewritten): every `persist_evidence` write this driver's
+forced re-extraction performs is an ordinary `ImageEvidence` save, so `cardpicker.stage_e_signals`'s
+own `_dispatch_on_evidence_change` receiver fires for it exactly as it would for any other Stage C
+write - an async `dispatch_for_card(card_id, "evidence-change")` task queues behind it, independent
+of this driver's own dispatch calls. That echo calls `dispatch_micro_batch` with NO `batch_size`
+passed, so `_select_micro_batch` backfills the echo's own seed card up to the FULL
+`STAGE_E_MICRO_BATCH_SIZE` from the Stage C backlog cursor walk - an echo is never just the one
+already-current seed card, it is a complete micro-batch. This is cheap (~3.5s fixed overhead, no
+extraction) ONLY while the Stage C backlog is genuinely zero at echo time (nothing for
+`_select_micro_batch` to backfill with). If the backlog is non-zero, an echo becomes a real
+~25-card extraction batch (~95s observed) that itself persists ~25 more `ImageEvidence` rows,
+queuing ~24 FURTHER echoes - a cascade, not a fixed cost. Each echo also holds one of the two
+`STAGE_E_MAX_CONCURRENT_DISPATCHES` slots for its own duration, so a live echo stream competes
+with this driver's own dispatch calls for the same cap and can throttle-stop the driver
+(`"throttled-concurrency-cap"`) well before the cohort is exhausted. ACCEPTABLE at bounded-pilot
+scale (frozen at filing, still not suppressed here) - the two are distinguishable in the ledger by
+`trigger_reason`: this driver's own batches carry `"shakedown"`, an echo dispatch carries
+`"evidence-change"`, so the ledger itself shows whether echoes are staying cheap (batch_size stays
+at 1) or cascading (batch_size climbs toward STAGE_E_MICRO_BATCH_SIZE). Tron's own condition
+(§8 pass on PR #467): the documented fallback (NOT built here, per the frozen spec's own
+instruction not to build it preemptively - a suppress-signals flag on `persist_evidence`) becomes
+REQUIRED, not optional, before scaling beyond a bounded pilot, if either (a) throttle-stops
+dominate the driver's own ledger output, or (b) the Stage C backlog is measured non-zero at run
+time (check before invoking, per the operator runbook in docs/features/stage-e-operations.md).
 
 INSTRUMENTATION (spec point 6): nothing new - every batch already gets its own `PilotRunLedger` row
 via `dispatch_micro_batch` (elapsed_s/stage_c_completed/stage_c_fetch_failures/peak_rss_mb/etc.,

@@ -743,19 +743,49 @@ scarce resource a kill-and-resume must never burn twice.
 
 ### Evidence-change echo
 
+**Corrected 2026-07-25 per the §8 Tron pass on PR #467** — an earlier
+version of this note characterized the echo as a uniformly "fast, cheap
+no-op." That is wrong; the actual mechanism below is what Tron verified.
+
 Every `persist_evidence` write this driver's forced re-extraction performs
 is an ordinary `ImageEvidence` save, so `cardpicker.stage_e_signals`'s own
 `_dispatch_on_evidence_change` receiver fires for it exactly as it would for
 any other Stage C write — an async `dispatch_for_card(card_id, "evidence-change")` task queues behind it, independent of this driver's own
-dispatch calls. **This is ACCEPTABLE, not suppressed** (frozen at filing):
-the echoed dispatch finds evidence already current and, if a vote was
-already cast by this driver's own synchronous Stage D leg, finds the
-already-voted guard already satisfied — a fast, cheap no-op either way. The
-two are distinguishable in the ledger by `trigger_reason`: this driver's own
-batches carry `"shakedown"`, an echo dispatch carries `"evidence-change"`.
-If the Tron pass judges echo volume unacceptable at tail scale, the
-documented (not built) fallback is a suppress-signals flag on
-`persist_evidence` — do not build it preemptively.
+dispatch calls. That echo calls `dispatch_micro_batch` with **no
+`batch_size`** passed, so `_select_micro_batch` backfills the echo's own
+seed card up to the **full `STAGE_E_MICRO_BATCH_SIZE`** from the Stage C
+backlog cursor walk — an echo is never just the one already-current seed
+card, it is a complete micro-batch:
+
+- **Cheap (~3.5s fixed overhead, no extraction) ONLY while the Stage C
+  backlog is genuinely zero** at echo time — nothing for
+  `_select_micro_batch` to backfill with, so the batch stays at size 1 and
+  both Stage C (already-current) and Stage D (already-voted) resolve to
+  no-ops.
+- **If the backlog is non-zero, an echo becomes a real extraction batch**
+  (~25 cards, ~95s observed) that itself persists ~25 more `ImageEvidence`
+  rows — which queues ~24 FURTHER echoes. This is a cascade, not a fixed
+  cost.
+- **Each echo holds one of the two `STAGE_E_MAX_CONCURRENT_DISPATCHES`
+  slots** for its own duration, so a live echo stream competes with this
+  driver's own dispatch calls for the same cap and can throttle-stop the
+  driver (`"throttled-concurrency-cap"`) well before the cohort is
+  exhausted.
+
+**Acceptable at bounded-pilot scale, still not suppressed here** (frozen at
+filing) — the two are distinguishable in the ledger by `trigger_reason`:
+this driver's own batches carry `"shakedown"`, an echo dispatch carries
+`"evidence-change"`, so the ledger itself shows whether echoes are staying
+cheap (batch size stays at 1) or cascading (batch size climbs toward
+`STAGE_E_MICRO_BATCH_SIZE`).
+
+**Tron's condition (§8 pass on PR #467):** the documented (not built)
+fallback — a suppress-signals flag on `persist_evidence` — becomes
+**REQUIRED, not optional,** before scaling beyond a bounded pilot, if
+either (a) throttle-stops dominate the driver's own ledger output, or (b)
+the Stage C backlog is measured non-zero at run time (check before
+invoking). Do not build the fallback preemptively outside those
+conditions.
 
 ### Ledger convention
 
