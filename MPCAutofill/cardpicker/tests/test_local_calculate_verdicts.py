@@ -44,6 +44,7 @@ from cardpicker.local_calculate_verdicts import (
     SLOW_PATH_ANONYMOUS_ID,
     SLOW_PATH_TO_REVIEW_REASON,
     STAGE_D_FALLBACK_ANONYMOUS_ID,
+    TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
     _eligible_cards_queryset,
     _filter_by_symbol_phash,
     _resolve_candidates_for_card,
@@ -763,6 +764,115 @@ class TestRunJoinKeyCalculator:
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
 
 
+class TestTransferredInterimGuard:
+    """Issue #473 PR-2's INTERIM STAGE D GUARD (see TRANSFERRED_INTERIM_GUARD_SKIP_REASON's own
+    module-level comment in local_calculate_verdicts.py): a card whose CURRENT evidence row was
+    created via evidence transfer must never receive a machine vote from the join-key or fallback
+    calculators - its own "observation" is the same bytes an md5-sibling already voted from, not
+    an independent one. The slow-path calculator is NOT guarded (it casts no machine vote, only a
+    human-review routing marker - see its own run_slow_path_calculator loop comment)."""
+
+    def test_join_key_skips_a_transferred_evidence_card(self, db):
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            transferred=True,
+            transferred_from_card_id=999,
+        )
+
+        result = run_join_key_calculator(dry_run=False)
+
+        assert result.cards_considered == 0
+        assert result.votes_written == 0
+        assert CardPrintingTag.objects.count() == 0
+        log = CardScanLog.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert log.skip_reason == TRANSFERRED_INTERIM_GUARD_SKIP_REASON
+
+    def test_join_key_still_votes_a_real_extraction_card(self, db):
+        """Control - the exact same evidence, minus transferred=True, votes normally. Proves the
+        guard is keyed on the flag, not some other incidental difference in the fixture."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            transferred=False,
+        )
+
+        result = run_join_key_calculator(dry_run=False)
+
+        assert result.cards_considered == 1
+        assert result.votes_written == 1
+        assert CardPrintingTag.objects.filter(card=card).count() == 1
+
+    def test_transferred_guard_is_rescannable_after_a_real_extraction_lands(self, db):
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(
+            card,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            transferred=True,
+            transferred_from_card_id=999,
+        )
+
+        first = run_join_key_calculator(dry_run=False)
+        assert first.cards_considered == 0
+
+        # a real extraction pass lands (persist_evidence always clears transferred - see
+        # image_evidence.persist_evidence's own docstring) - re-running now casts the vote.
+        evidence = card.image_evidence.get()
+        evidence.transferred = False
+        evidence.transferred_from_card_id = None
+        evidence.save()
+
+        second = run_join_key_calculator(dry_run=False)
+        assert second.cards_considered == 1
+        assert second.votes_written == 1
+
+    def test_fallback_skips_a_transferred_evidence_card(self, db):
+        card = CardFactory(name="Some Card", content_phash=42)
+        CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+        _evidence(
+            card,
+            collector_line_collector_number="",
+            symbol_phash=_hash_of("mom"),
+            transferred=True,
+            transferred_from_card_id=999,
+        )
+
+        result = run_fallback_calculator(dry_run=False)
+
+        assert result.cards_considered == 0
+        log = CardScanLog.objects.get(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert log.skip_reason == TRANSFERRED_INTERIM_GUARD_SKIP_REASON
+
+    def test_slow_path_is_not_guarded_transferred_evidence_still_routes_to_review(self, db):
+        """The slow-path calculator casts no machine vote (only a CardScanLog routing marker to a
+        HUMAN reviewer) - deliberately excluded from the guard, see its own loop comment."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        CardPrintingTag.objects.create(
+            card=card, printing=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+        _evidence(
+            card,
+            collector_line_collector_number="999",
+            transferred=True,
+            transferred_from_card_id=999,
+        )
+
+        result = run_slow_path_calculator(dry_run=False)
+
+        assert result.cards_considered == 1
+        assert result.routed_written == 1
+        log = CardScanLog.objects.get(card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID)
+        assert log.skip_reason == SLOW_PATH_TO_REVIEW_REASON
+
+
 class TestEligibleCardsQueryset:
     """`_eligible_cards_queryset`'s two knowledge-inventory excludes (module docstring's
     "CONSTANT #3" section; owner-ruled must-fix, 2026-07-22) - `RESOLUTION_FLOOR_DPI` and
@@ -821,6 +931,69 @@ class TestEligibleCardsQueryset:
         the exclusion is scoped to those two tag names specifically, not "any tag at all"."""
         card = CardFactory(tags=["altered-art"])
         assert card.pk in self._eligible_pks()
+
+
+class TestEligibleCardsQuerysetCardScanLogScoping:
+    """Issue #469 (Tron §8 gate finding, 2026-07-25): `_eligible_cards_queryset`'s
+    `CardScanLog`-derived exclusion subquery is now scoped by `card_id__in=card_ids` whenever
+    `card_ids` is provided, instead of always scanning the whole (2,093,147-row-live,
+    append-only) `CardScanLog` table. This is a pure cost narrowing - proves the resulting
+    ELIGIBLE SET is identical scoped vs. unscoped for a `card_ids`-bounded caller, and that
+    `card_ids=None` (BULK mode) is completely untouched by the scoping branch."""
+
+    def test_scoped_and_unscoped_eligible_sets_agree(self, db):
+        excluded_card = CardFactory(name="Excluded Card")
+        # a non-rescannable skip reason (anything outside JOIN_KEY_RESCANNABLE_SKIP_REASONS,
+        # which is frozenset({"no-evidence"})) makes this card permanently excluded.
+        CardScanLog.objects.create(card=excluded_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="ambiguous")
+        eligible_card = CardFactory(name="Eligible Card")
+        other_scoped_card = CardFactory(name="Also In Scope But Untouched")
+
+        unscoped = set(
+            _eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID)
+            .filter(pk__in=[excluded_card.pk, eligible_card.pk, other_scoped_card.pk])
+            .values_list("pk", flat=True)
+        )
+        scoped = set(
+            _eligible_cards_queryset(
+                JOIN_KEY_ANONYMOUS_ID, card_ids=[excluded_card.pk, eligible_card.pk, other_scoped_card.pk]
+            ).values_list("pk", flat=True)
+        )
+
+        assert excluded_card.pk not in unscoped
+        assert unscoped == scoped == {eligible_card.pk, other_scoped_card.pk}
+
+    def test_card_ids_scoping_still_excludes_a_scan_logged_card_outside_the_scope_list(self, db):
+        """The CardScanLog row itself doesn't have to be for a card IN `card_ids` to matter to
+        THIS test's own scoping correctness - this only pins that a card genuinely excluded by
+        its own scan-log row stays excluded when it IS in `card_ids`, the same outcome the
+        unscoped subquery already gave it."""
+        excluded_card = CardFactory(name="Excluded Card")
+        CardScanLog.objects.create(
+            card=excluded_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="unknown-set-code"
+        )
+
+        scoped = set(
+            _eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID, card_ids=[excluded_card.pk]).values_list("pk", flat=True)
+        )
+
+        assert scoped == set()
+
+    def test_card_ids_none_matches_pre_fix_bulk_behaviour(self, db):
+        """BULK mode (`card_ids=None`, every existing management-command caller) must never take
+        the `card_id__in` scoping branch - this pins the observable outcome (a scan-logged card
+        stays excluded, an untouched card stays eligible) unchanged from before this fix, the
+        same outcome `TestEligibleCardsQueryset` above already exercises for every OTHER
+        exclusion; this whole test file's full pre-existing suite passing unmodified (no test
+        below needed updating for this fix) is the fuller "byte-identical BULK behaviour" proof."""
+        excluded_card = CardFactory(name="Excluded Card")
+        CardScanLog.objects.create(card=excluded_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="ambiguous")
+        eligible_card = CardFactory(name="Eligible Card")
+
+        pks = set(_eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID, card_ids=None).values_list("pk", flat=True))
+
+        assert excluded_card.pk not in pks
+        assert eligible_card.pk in pks
 
 
 class TestResolveCandidatesForCard:
@@ -1729,6 +1902,162 @@ class TestRunFallbackCalculator:
         assert result.already_voted == 1
         assert result.votes_written == 0
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 1
+
+
+class TestCandidateNameIndexLazyProcessCache:
+    """Issue #469 (Tron §8 gate finding, 2026-07-25): `CandidateNameIndex()` (a 113,224-row live
+    scan, measured 1.48s) used to be built UNCONDITIONALLY at the top of
+    `run_join_key_calculator`/`run_fallback_calculator`, before any eligibility check - fixed to
+    build lazily (only once a card actually needs candidate resolution) and to cache the result
+    per worker process, invalidated by a cheap `(CanonicalCard max pk, count, CanonicalExpansion
+    max pk, count)` version stamp - `docs/proposals/stage-e-streaming.md` §4 item 5's own
+    "once per worker process lifetime, with an explicit invalidation event" ruling. Every test
+    here resets the module-level cache first (`reset_candidate_name_index_cache_for_tests`) so
+    construction COUNTS are deterministic and don't depend on Postgres's own incidental
+    sequence-advance-across-rollback behaviour."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self):
+        import cardpicker.local_calculate_verdicts as module
+
+        module.reset_candidate_name_index_cache_for_tests()
+        yield
+        module.reset_candidate_name_index_cache_for_tests()
+
+    @staticmethod
+    def _count_constructions(monkeypatch) -> list[int]:
+        """Returns a single-element mutable counter, incremented once per real
+        `CandidateNameIndex.__init__` call - patches the REAL `__init__` (not a full replacement)
+        so the returned index objects stay fully functional, not a stub."""
+        import cardpicker.local_calculate_verdicts as module
+
+        count = [0]
+        real_init = CandidateNameIndex.__init__
+
+        def counting_init(self, *args, **kwargs):
+            count[0] += 1
+            real_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(module.CandidateNameIndex, "__init__", counting_init)
+        return count
+
+    def test_join_key_calculator_never_constructs_the_index_when_the_eligible_set_is_empty(self, db, monkeypatch):
+        count = self._count_constructions(monkeypatch)
+        # no Card fixtures at all - the eligible queryset is empty.
+
+        result = run_join_key_calculator(dry_run=True)
+
+        assert result.cards_considered == 0
+        assert count[0] == 0
+
+    def test_fallback_calculator_never_constructs_the_index_when_the_eligible_set_is_empty(self, db, monkeypatch):
+        count = self._count_constructions(monkeypatch)
+        # no Card fixtures at all - the eligible queryset is empty.
+
+        result = run_fallback_calculator(dry_run=True)
+
+        assert result.cards_considered == 0
+        assert count[0] == 0
+
+    def test_join_key_calculator_constructs_the_index_once_when_a_card_is_eligible(self, db, monkeypatch):
+        count = self._count_constructions(monkeypatch)
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        result = run_join_key_calculator(dry_run=True)
+
+        assert result.cards_considered == 1
+        assert count[0] == 1
+
+    def test_cache_hit_across_two_calls_in_one_process(self, db, monkeypatch):
+        """The second `run_join_key_calculator` call reuses the SAME cached `CandidateNameIndex`
+        - no CanonicalCard/CanonicalExpansion write happened in between, so the version stamp is
+        unchanged and no second construction happens. `dry_run=False` on the first call so its
+        own vote actually lands, making card_a ineligible for the second call - otherwise a
+        dry-run casts no vote and card_a would simply be reconsidered."""
+        count = self._count_constructions(monkeypatch)
+        card_a = CardFactory(name="Card A", content_phash=1)
+        CanonicalCardFactory(name="Card A", expansion__code="mom", collector_number="1")
+        _evidence(card_a, collector_line_set_code="mom", collector_line_collector_number="1")
+
+        first = run_join_key_calculator(dry_run=False)
+        assert first.votes_written == 1
+        assert count[0] == 1
+
+        # a SECOND card matching the SAME already-indexed canonical printing - no new
+        # CanonicalCard/CanonicalExpansion write happens here, only a new Card/ImageEvidence
+        # (neither participates in the version stamp).
+        card_b = CardFactory(name="Card A", content_phash=2)
+        _evidence(card_b, collector_line_set_code="mom", collector_line_collector_number="1")
+
+        second = run_join_key_calculator(dry_run=False)
+        assert second.cards_considered == 1  # card_a is now excluded - already voted on
+        assert second.votes_written == 1
+        # still 1 - the second call hit the cache rather than rebuilding.
+        assert count[0] == 1
+
+    def test_cache_reused_across_join_key_and_fallback_calculators(self, db, monkeypatch):
+        """The cache is module-level, not per-caller - `run_fallback_calculator` reuses the same
+        cached index `run_join_key_calculator` already built, in the same worker process."""
+        count = self._count_constructions(monkeypatch)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+        card_a = CardFactory(name="Some Card", content_phash=42)
+        _evidence(card_a, collector_line_set_code="mom", collector_line_collector_number="158")
+        run_join_key_calculator(dry_run=True)
+        assert count[0] == 1
+
+        card_b = CardFactory(name="Some Card", content_phash=43)
+        _evidence(card_b, layout_class="black")
+        CardScanLog.objects.create(card=card_b, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="ambiguous")
+
+        run_fallback_calculator(dry_run=True)
+        assert count[0] == 1
+
+    def test_cache_invalidated_when_a_canonical_card_is_added(self, db, monkeypatch):
+        """A `CanonicalCard` landing between two dispatches (the exact "explicit invalidation
+        event" `docs/proposals/stage-e-streaming.md` §4 item 5 calls for) forces a rebuild - and
+        the rebuilt index actually sees the newly-added candidate, not a stale snapshot.
+        `dry_run=False` on the first call so card_a's vote actually lands, making it ineligible
+        for the second call - the second call's `cards_considered` then isolates card_b alone."""
+        count = self._count_constructions(monkeypatch)
+        card_a = CardFactory(name="Card A", content_phash=1)
+        CanonicalCardFactory(name="Card A", expansion__code="mom", collector_number="1")
+        _evidence(card_a, collector_line_set_code="mom", collector_line_collector_number="1")
+
+        first = run_join_key_calculator(dry_run=False)
+        assert first.votes_written == 1
+        assert count[0] == 1
+
+        # a new CanonicalCard row lands - the invalidation event.
+        CanonicalCardFactory(name="Card B", expansion__code="won", collector_number="2")
+        card_b = CardFactory(name="Card B", content_phash=2)
+        _evidence(card_b, collector_line_set_code="won", collector_line_collector_number="2")
+
+        second = run_join_key_calculator(dry_run=False)
+        assert second.cards_considered == 1  # card_a already voted on, only card_b is eligible
+        assert second.votes_written == 1  # proves the REBUILT index actually sees "Card B"
+        assert count[0] == 2
+
+    def test_cache_invalidated_when_a_bare_canonical_expansion_is_added(self, db, monkeypatch):
+        """A `CanonicalExpansion` row added on its own (no `CanonicalCard` change) also moves the
+        version stamp - covers the stamp's OTHER half, not just CanonicalCard."""
+        count = self._count_constructions(monkeypatch)
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        run_join_key_calculator(dry_run=True)
+        assert count[0] == 1
+
+        CanonicalExpansionFactory(code="xyz")  # a bare expansion row, no CanonicalCard attached
+
+        card_two = CardFactory(name="Some Card", content_phash=99)
+        _evidence(card_two, collector_line_set_code="mom", collector_line_collector_number="158")
+        run_join_key_calculator(dry_run=True)
+
+        assert count[0] == 2
 
 
 class TestFallbackSlowPathInteraction:

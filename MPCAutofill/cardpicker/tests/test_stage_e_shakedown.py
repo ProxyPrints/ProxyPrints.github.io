@@ -185,7 +185,15 @@ def _install_ok_stage_c_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         return buffer.getvalue()
 
     def _stub_compute(
-        card_id: int, content_hash, image, fetch_latency_ms=0.0, profile=None, short_circuit=None, known_set_codes=None
+        card_id: int,
+        content_hash,
+        image,
+        fetch_latency_ms=0.0,
+        profile=None,
+        short_circuit=None,
+        known_set_codes=None,
+        md5_checksum=None,
+        sha256_checksum=None,
     ):
         fields = {
             "fetch_ok": True,

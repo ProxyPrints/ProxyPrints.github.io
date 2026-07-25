@@ -106,6 +106,21 @@ against.
   `content_hash` is the planned upgrade path for surviving re-uploads - the field itself
   (`Card.content_phash`) and its own local consumer (two-threshold dedup clustering) now exist;
   the cross-instance join logic that would actually use it for federation is still unbuilt.
+- **Checksum substrate (2026-07-25, issue #473)**: `Card.md5_checksum`/
+  `Card.sha256_checksum` — the Drive-listing-sourced, exact-byte-identity
+  fields issue #473's identity-group work adds locally — are a second,
+  exact-match complement to the `content_phash` upgrade path above: where
+  `content_phash` tolerates re-encoding/re-upload, a matched md5/sha256
+  pair confirms two files are the literal same bytes, the strongest
+  possible join key a federation peer could offer (see
+  `docs/federation/public-export-v1.md`'s content-hash join-key
+  subsection for the pairing rule and its counted-once federation
+  consequence). Once real peer relationships exist, `docs/theory.md` §6's
+  "Relation to Dawid-Skene reliability estimation" already frames the
+  natural next step — a federation peer is just another noisy source
+  whose reliability can be estimated the same way a human or machine
+  voter's can, using agreement measured over these same shared content
+  hashes as the evidence — cited there, not restated here.
 - Artists travel by canonical name; tags by `Tag.name`. **Tag names are
   therefore a cross-instance contract: renaming a Tag is a breaking data
   migration, not an edit.** `Tag.name` is the immutable interchange key;

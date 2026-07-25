@@ -116,6 +116,13 @@ def transform_image_into_object(source: Source, image: Image, tags: Tags) -> Car
         canonical_card_id=canonical_card_pk,
         canonical_artist_id=canonical_artist_pk,
         expansion_hint=expansion_hint or "",
+        # issue #473 PR-1: copied verbatim from the listing (image.md5_checksum is None for
+        # LOCAL_FILE sources and any Drive file whose listing genuinely omitted it - never
+        # invented here, matching Card.md5_checksum's own docstring).
+        md5_checksum=image.md5_checksum,
+        # owner-approved addition, 2026-07-25 evening - same seam, same never-invented rule; see
+        # Card.sha256_checksum's own docstring for why this exists alongside md5.
+        sha256_checksum=image.sha256_checksum,
         # content_phash deliberately left unset (defaults to None/NULL - "not yet computed") -
         # populated by hash_newly_created_cards below, for CREATED cards only. This function
         # builds an in-memory, not-yet-persisted Card from folder-listing metadata only (no
@@ -250,6 +257,16 @@ def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
             | (incoming[identifier].canonical_artist_id != existing[identifier].canonical_artist_id)
             # or if the expansion hint has changed.
             | (incoming[identifier].expansion_hint != existing[identifier].expansion_hint)
+            # or if the md5 checksum has changed (issue #473 PR-1) - unlike content_phash, this
+            # is free metadata already present on `incoming[identifier]` from the same listing
+            # this whole sync already fetched (no extra network call needed), so an ordinary
+            # re-scan is allowed to both backfill a previously-NULL checksum and catch the rare
+            # same-identifier content replacement case (content_phash's own docstring notes Drive
+            # normally avoids this - a real content replacement usually gets a new file id
+            # instead - but this is a free check either way).
+            | (incoming[identifier].md5_checksum != existing[identifier].md5_checksum)
+            # or if the sha256 checksum has changed - same free-metadata reasoning as md5 above.
+            | (incoming[identifier].sha256_checksum != existing[identifier].sha256_checksum)
         ):
             # record an update for this card
             incoming[identifier].pk = existing[identifier].pk  # this must be explicitly set for bulk_update.
@@ -285,6 +302,8 @@ def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
                     "canonical_card",
                     "canonical_artist",
                     "expansion_hint",
+                    "md5_checksum",
+                    "sha256_checksum",
                 ],
                 batch_size=1000,
             )

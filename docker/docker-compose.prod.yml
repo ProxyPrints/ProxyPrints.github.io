@@ -40,6 +40,9 @@ services:
       # Stage E streaming activation (docs/features/stage-e-operations.md) - reads
       # docker/.env; default False = dormant. Phase-3 activation flips the .env value.
       - STAGE_E_STREAMING_ENABLED=${STAGE_E_STREAMING_ENABLED:-False}
+      # Stage C evidence transfer kill-switch (issue #473 PR-2, Tron §8 gate condition) - default
+      # True (transfer ON); docker/.env can flip it False to isolate a live-run anomaly.
+      - STAGE_C_EVIDENCE_TRANSFER_ENABLED=${STAGE_C_EVIDENCE_TRANSFER_ENABLED:-True}
       # Discord OAuth (moderation layer, docs/features/moderation.md) - docker/.env alone
       # does NOT inject arbitrary variables into the container; only vars explicitly listed
       # here (via ${...} interpolation) actually reach the process. This block was missing
@@ -87,6 +90,9 @@ services:
       # Stage E streaming activation (docs/features/stage-e-operations.md) - reads
       # docker/.env; default False = dormant. Phase-3 activation flips the .env value.
       - STAGE_E_STREAMING_ENABLED=${STAGE_E_STREAMING_ENABLED:-False}
+      # Stage C evidence transfer kill-switch (issue #473 PR-2, Tron §8 gate condition) - default
+      # True (transfer ON); docker/.env can flip it False to isolate a live-run anomaly.
+      - STAGE_C_EVIDENCE_TRANSFER_ENABLED=${STAGE_C_EVIDENCE_TRANSFER_ENABLED:-True}
       # Discord OAuth (moderation layer, docs/features/moderation.md) - docker/.env alone
       # does NOT inject arbitrary variables into the container; only vars explicitly listed
       # here (via ${...} interpolation) actually reach the process. This block was missing
@@ -127,15 +133,21 @@ services:
     restart: unless-stopped
     expose:
       - 5432
-    ports: []
+    # !reset (Compose merge tag, v2.24+): a plain `ports: []` does NOT override
+    # the base file's populated `ports:` list through `extends` - Compose only
+    # replaces a list field on a literal override, not through the extend/merge
+    # path, so the base 127.0.0.1:5432 mapping was silently surviving into prod
+    # (issue #475). `!reset` forces the field to actually reset to empty.
+    ports: !reset []
   elasticsearch:
     extends:
       file: docker-compose.yml
       service: elasticsearch
     restart: unless-stopped
     expose:
-      - 5432
-    ports: []
+      - 9200
+    # See the !reset comment on the postgres service above - same bug, same fix.
+    ports: !reset []
     environment:
       - discovery.type=single-node
       - logger.level=WARN

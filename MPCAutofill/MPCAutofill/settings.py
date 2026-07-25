@@ -442,6 +442,17 @@ Q_CLUSTER = {
 # action phase 3 needs to take to go live - no redeploy of this module required.
 STAGE_E_STREAMING_ENABLED = env.bool("STAGE_E_STREAMING_ENABLED", default=False)
 
+# Stage C evidence transfer kill-switch (issue #473 PR-2, Tron §8 gate condition, 2026-07-25) -
+# cardpicker/evidence_transfer.py's own module docstring has the full mechanism writeup. Default
+# `True` (transfer is ON by default for this first pass) so the feature actually runs without an
+# operator having to flip it on first - `False` makes `find_transfer_source` return `None`
+# unconditionally (no query issued), so both call sites (`stage_e_dispatch._run_stage_c`,
+# `run_image_evidence_cohort._fetch_one_card`) fall straight through to their own pre-existing
+# real-fetch path, exactly as if this feature didn't exist. Exists for first-pass reversibility -
+# a single settings flip isolates whether a live-run anomaly originates in transfer, no code change
+# or redeploy needed.
+STAGE_C_EVIDENCE_TRANSFER_ENABLED = env.bool("STAGE_C_EVIDENCE_TRANSFER_ENABLED", default=True)
+
 # Micro-batch size (docs/proposals/stage-e-streaming.md §3 decision (2), sharpened by §10(c)): NOT
 # a value this brief or this change invents precision for - §10(c) ratifies that the real number
 # ships as a MEASURED OUTPUT of the Bug-A tail shakedown's own instrumentation (phase 3, not yet

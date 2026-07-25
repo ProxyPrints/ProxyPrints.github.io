@@ -66,6 +66,7 @@ from typing import Optional
 
 from django.db.models import QuerySet
 
+from cardpicker.image_evidence import current_evidence_queryset
 from cardpicker.local_identify_printing_tags import generate_run_id
 from cardpicker.models import (
     Card,
@@ -393,11 +394,7 @@ def run_ai_art_detector(
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 
-        evidence = (
-            ImageEvidence.objects.filter(card_id=card.pk, content_hash=card.content_phash)
-            .order_by("-updated_at")
-            .first()
-        )
+        evidence = current_evidence_queryset(card).order_by("-updated_at").first()
         if evidence is None:
             result.skip_counts["no-evidence"] = result.skip_counts.get("no-evidence", 0) + 1
             if not dry_run:

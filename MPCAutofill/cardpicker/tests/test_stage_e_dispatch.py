@@ -14,6 +14,8 @@ proves ImageEvidence rows actually land, matching `_evidence()`'s own convention
 """
 
 import io
+import threading
+import time
 from typing import Any
 
 import psycopg2
@@ -92,7 +94,15 @@ def _stub_compute_card_evidence_ok(**field_overrides: Any):
     steer Stage D's own verdict."""
 
     def _stub(
-        card_id: int, content_hash, image, fetch_latency_ms=0.0, profile=None, short_circuit=None, known_set_codes=None
+        card_id: int,
+        content_hash,
+        image,
+        fetch_latency_ms=0.0,
+        profile=None,
+        short_circuit=None,
+        known_set_codes=None,
+        md5_checksum=None,
+        sha256_checksum=None,
     ):
         fields = {
             "fetch_ok": True,
@@ -567,10 +577,20 @@ class TestForceStageCReextract:
             profile=None,
             short_circuit=None,
             known_set_codes=None,
+            md5_checksum=None,
+            sha256_checksum=None,
         ):
             observed_short_circuit.append(short_circuit)
             return _stub_compute_card_evidence_ok()(
-                card_id, content_hash, image, fetch_latency_ms, profile, short_circuit, known_set_codes
+                card_id,
+                content_hash,
+                image,
+                fetch_latency_ms,
+                profile,
+                short_circuit,
+                known_set_codes,
+                md5_checksum,
+                sha256_checksum,
             )
 
         import cardpicker.image_cdn_fetch as image_cdn_fetch_module
@@ -1077,3 +1097,289 @@ class TestBackstopSweepBacklogBExhaustedVsCapHit:
         assert "Backlog exhausted" not in output
         assert "Envelope halt" not in output
         assert "sweep stopped" not in output
+
+
+class TestEvidenceTransferInDispatch:
+    """Issue #473 PR-2's evidence transfer, wired into `_run_stage_c`'s own phase 1 (checked
+    BEFORE a card is ever handed to the fetch-ahead thread)."""
+
+    @STREAMING_ON
+    def test_md5_sibling_transfers_without_ever_fetching(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        sibling = CardFactory(name="Sibling", md5_checksum="abc123", content_phash=111)
+        target = CardFactory(name="Target", md5_checksum="abc123", content_phash=111)
+        ImageEvidenceFactory(
+            card=sibling,
+            content_hash=111,
+            md5_checksum="abc123",
+            extractor_versions={key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS},
+            symbol_phash=999,
+        )
+
+        def _fail_if_called(card: Any, dpi: Any = None) -> Any:
+            raise AssertionError("a transfer-eligible card must never reach the fetch stage")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        outcome = dispatch_micro_batch(card_ids=[target.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_c_completed == 1
+        assert outcome.stage_c_transferred == 1
+        evidence = ImageEvidence.objects.get(card=target)
+        assert evidence.transferred is True
+        assert evidence.transferred_from_card_id == sibling.pk
+        assert evidence.symbol_phash == 999
+        assert evidence.md5_checksum == "abc123"
+
+    @STREAMING_ON
+    def test_a_real_extraction_card_alongside_a_transfer_card_both_land(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sibling = CardFactory(name="Sibling", md5_checksum="abc123", content_phash=111)
+        transfer_target = CardFactory(name="Target", md5_checksum="abc123", content_phash=111)
+        ImageEvidenceFactory(
+            card=sibling,
+            content_hash=111,
+            md5_checksum="abc123",
+            extractor_versions={key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS},
+        )
+        real_card = CardFactory(name="Real", content_phash=222)  # no md5 - always real extraction
+
+        fetched_card_ids: list[int] = []
+
+        def _tracking_fetch(card: Any, dpi: Any = None) -> Any:
+            fetched_card_ids.append(card.pk)
+            return _png_bytes()
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_tracking_fetch)
+
+        outcome = dispatch_micro_batch(card_ids=[transfer_target.pk, real_card.pk])
+
+        assert outcome.stage_c_completed == 2
+        assert outcome.stage_c_transferred == 1
+        assert fetched_card_ids == [real_card.pk]  # the transfer target never hits the fetch stage
+        assert ImageEvidence.objects.get(card=transfer_target).transferred is True
+        assert ImageEvidence.objects.get(card=real_card).transferred is False
+
+
+class TestDecoupledFetchAhead:
+    """Issue #472's fetch-ahead thread + bounded queue, retrofitted into `_run_stage_c`."""
+
+    @STREAMING_ON
+    def test_fetch_ahead_overlaps_with_the_current_cards_own_compute(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Proves genuine OVERLAP, not just correctness: the second card's own fetch must start
+        before the first card's own compute finishes - if fetch and compute were still bundled
+        sequentially (the pre-#472 design), card B's fetch would only ever start AFTER card A's
+        compute (and persist) had already completed."""
+        card_a = CardFactory(name="A", content_phash=1)
+        card_b = CardFactory(name="B", content_phash=2)
+        events: list[tuple[str, int, float]] = []
+
+        def fake_fetch(card: Any, dpi: Any = None) -> Any:
+            events.append(("fetch_start", card.pk, time.monotonic()))
+            time.sleep(0.05)
+            events.append(("fetch_end", card.pk, time.monotonic()))
+            return _png_bytes()
+
+        def fake_compute(
+            card_id: int,
+            content_hash: Any,
+            image: Any,
+            fetch_latency_ms: float = 0.0,
+            profile: Any = None,
+            short_circuit: Any = None,
+            known_set_codes: Any = None,
+            md5_checksum: Any = None,
+            sha256_checksum: Any = None,
+        ) -> Any:
+            events.append(("compute_start", card_id, time.monotonic()))
+            time.sleep(0.1)
+            events.append(("compute_end", card_id, time.monotonic()))
+            return _stub_compute_card_evidence_ok()(
+                card_id,
+                content_hash,
+                image,
+                fetch_latency_ms,
+                profile,
+                short_circuit,
+                known_set_codes,
+                md5_checksum,
+                sha256_checksum,
+            )
+
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+        import cardpicker.image_evidence as image_evidence_module
+
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", fake_fetch)
+        monkeypatch.setattr(image_evidence_module, "compute_card_evidence", fake_compute)
+
+        outcome = dispatch_micro_batch(card_ids=[card_a.pk, card_b.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_c_completed == 2
+        fetch_b_start = next(t for (name, cid, t) in events if name == "fetch_start" and cid == card_b.pk)
+        compute_a_end = next(t for (name, cid, t) in events if name == "compute_end" and cid == card_a.pk)
+        assert fetch_b_start < compute_a_end
+
+    @STREAMING_ON
+    def test_lockout_mid_prefetch_drains_the_already_fetched_card_but_starts_no_more(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        card_a = CardFactory(name="A", content_phash=1)
+        card_b = CardFactory(name="B", content_phash=2)
+        card_c = CardFactory(name="C", content_phash=3)
+        fetched_card_ids: list[int] = []
+
+        def fake_fetch(card: Any, dpi: Any = None) -> Any:
+            fetched_card_ids.append(card.pk)
+            if card.pk == card_b.pk:
+                raise GoogleFetchLockoutError("locked out")
+            return _png_bytes()
+
+        _install_stage_c_stub(monkeypatch, fetch_result=fake_fetch)
+
+        outcome = dispatch_micro_batch(card_ids=[card_a.pk, card_b.pk, card_c.pk])
+
+        assert outcome.status == "completed-with-trip"
+        # in-flight work drains: card A's already-fetched image still gets computed+persisted.
+        assert ImageEvidence.objects.filter(card=card_a).count() == 1
+        assert ImageEvidence.objects.filter(card=card_b).count() == 0
+        assert ImageEvidence.objects.filter(card=card_c).count() == 0
+        # halts NEW fetches immediately - card C is never even attempted.
+        assert card_c.pk not in fetched_card_ids
+
+    @STREAMING_ON
+    def test_fetch_outcome_window_records_in_fetch_submission_order(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cards = [CardFactory(name=f"Card {i}", content_phash=i) for i in range(1, 5)]
+        succeeds_by_pk = {cards[0].pk: True, cards[1].pk: False, cards[2].pk: True, cards[3].pk: False}
+
+        def fake_fetch(card: Any, dpi: Any = None) -> Any:
+            return _png_bytes() if succeeds_by_pk[card.pk] else None
+
+        _install_stage_c_stub(monkeypatch, fetch_result=fake_fetch)
+
+        outcome = dispatch_micro_batch(card_ids=[c.pk for c in cards])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_c_fetch_failures == 2
+        # the window's own recorded order matches the cards' own submission order, despite the
+        # fetch-ahead thread running concurrently with compute - a single serial fetch worker's
+        # own completion order IS its submission order (module docstring's own argument).
+        assert list(stage_e_dispatch._window._window) == [True, False, True, False]
+
+    @STREAMING_ON
+    def test_a_non_lockout_fetch_crash_propagates_instead_of_hanging(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression pin (2026-07-25, found during this PR's own review): an uncaught exception
+        raised INSIDE the fetch-ahead thread must propagate to the caller, not silently hang the
+        main thread's own `queue.get()` waiting for an outcome that will never arrive. Mirrors
+        TestKillSafetyResumeContract's own mid-batch-crash scenario, narrowed to pin the fetch-ahead
+        thread's own exception-forwarding mechanism specifically."""
+        card_a = CardFactory(name="A", content_phash=1)
+        card_b = CardFactory(name="B", content_phash=2)
+
+        def fake_fetch(card: Any, dpi: Any = None) -> Any:
+            if card.pk == card_b.pk:
+                raise RuntimeError("simulated non-lockout fetch crash")
+            return _png_bytes()
+
+        _install_stage_c_stub(monkeypatch, fetch_result=fake_fetch)
+
+        with pytest.raises(RuntimeError, match="simulated non-lockout fetch crash"):
+            dispatch_micro_batch(card_ids=[card_a.pk, card_b.pk], run_id="crash-drill")
+
+        ledger = PilotRunLedger.objects.get(run_id="crash-drill")
+        assert ledger.status == PilotRunLedger.Status.FAILED
+        assert "RuntimeError" in ledger.counters["failure_reason"]
+        # card A's own already-fetched work still committed before the crash.
+        assert ImageEvidence.objects.filter(card=card_a).count() == 1
+        assert ImageEvidence.objects.filter(card=card_b).count() == 0
+
+    @STREAMING_ON
+    def test_a_compute_crash_does_not_wedge_the_fetch_ahead_thread(
+        self, transactional_db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression pin (Tron §8 gate condition 3, 2026-07-25, HIGH severity): a crash during
+        COMPUTE (not fetch) - e.g. a PIL error decoding a corrupt download - must not wedge the
+        fetch-ahead thread forever on a full `out_queue.put(...)` (see `_run_stage_c`'s own
+        `finally` block docstring for the full mechanism this pins: `stop_event.set()` BEFORE
+        `fetch_thread.join()`, plus draining the queue). More cards than the fetch-ahead queue
+        depth so the fetch thread reliably races ahead of compute and is genuinely blocked on its
+        own `put()` by the time compute raises - a bare `join()` with no signal/drain first would
+        hang this test (and, in prod, wedge the dispatch slot with a lying RUNNING ledger row)
+        indefinitely; the `run_thread.join(timeout=...)` below is what actually proves "does not
+        hang" rather than merely "eventually completes if given long enough".
+
+        `transactional_db`, not the plain `db` fixture (2026-07-25, found running this test):
+        `dispatch_micro_batch` runs on a REAL background thread here (needed so the test itself can
+        enforce a wall-clock timeout, since a hang is exactly the bug being pinned) - a thread with
+        its own DB connection reading/writing against fixture data created inside the plain `db`
+        fixture's own uncommitted SAVEPOINT-wrapped transaction is precisely the class of problem
+        `test_run_image_evidence_cohort.py`'s own module docstring documents needing
+        `transaction=True` for (real commit-and-truncate isolation, matching prod's own
+        "no surrounding atomic block" shape) - the plain `db` fixture reproduced a SEPARATE,
+        fixture-level hang (the background thread blocked waiting on the main thread's own
+        transaction) that had nothing to do with the fetch-ahead bug this test exists to pin."""
+        cards = [CardFactory(name=f"Card {i}", content_phash=i) for i in range(1, 6)]  # > queue depth
+
+        def fake_fetch(card: Any, dpi: Any = None) -> Any:
+            return _png_bytes()  # fast, no sleep - lets fetch race ahead of compute
+
+        compute_calls = {"n": 0}
+
+        def fake_compute(
+            card_id: int,
+            content_hash: Any,
+            image: Any,
+            fetch_latency_ms: float = 0.0,
+            profile: Any = None,
+            short_circuit: Any = None,
+            known_set_codes: Any = None,
+            md5_checksum: Any = None,
+            sha256_checksum: Any = None,
+        ) -> Any:
+            compute_calls["n"] += 1
+            if compute_calls["n"] == 2:
+                raise RuntimeError("simulated compute-side crash")
+            return _stub_compute_card_evidence_ok()(
+                card_id,
+                content_hash,
+                image,
+                fetch_latency_ms,
+                profile,
+                short_circuit,
+                known_set_codes,
+                md5_checksum,
+                sha256_checksum,
+            )
+
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+        import cardpicker.image_evidence as image_evidence_module
+
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", fake_fetch)
+        monkeypatch.setattr(image_evidence_module, "compute_card_evidence", fake_compute)
+
+        result_holder: dict[str, Any] = {}
+
+        def _run() -> None:
+            try:
+                dispatch_micro_batch(card_ids=[c.pk for c in cards], run_id="compute-crash-drill")
+            except Exception as exc:  # noqa: BLE001 - captured for the assertion below, not swallowed
+                result_holder["exc"] = exc
+
+        run_thread = threading.Thread(target=_run, daemon=True)
+        run_thread.start()
+        run_thread.join(timeout=10)
+
+        assert not run_thread.is_alive(), (
+            "dispatch_micro_batch hung - the fetch-ahead thread was likely wedged on a full "
+            "queue after the compute-side crash (Tron §8 gate condition 3)"
+        )
+        assert isinstance(result_holder.get("exc"), RuntimeError)
+        ledger = PilotRunLedger.objects.get(run_id="compute-crash-drill")
+        assert ledger.status == PilotRunLedger.Status.FAILED
