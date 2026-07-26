@@ -109,3 +109,11 @@ repos:
           - "@typescript-eslint/parser@5.49.0"
         args:
           - --fix
+  - repo: local
+    hooks:
+      - id: readme-parity
+        name: readme.md parity (publish_readme.py)
+        entry: bash -c 'python3 .github/scripts/publish_readme.py . && git diff --quiet readme.md || { echo "::error::readme.md is stale — rerun python3 .github/scripts/publish_readme.py . and commit the result"; exit 1; }'
+        language: system
+        files: '^(docs/|\.github/scripts/publish_readme\.py|readme\.md)'
+        pass_filenames: false

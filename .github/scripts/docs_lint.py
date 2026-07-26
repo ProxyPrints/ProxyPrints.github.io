@@ -618,11 +618,75 @@ def check_proposal_crossrefs() -> list:
     return findings
 
 
+def check_wiki_publish_map() -> list:
+    """Validate .github/wiki-publish-map.json structure."""
+    findings = []
+    map_path = REPO_ROOT / ".github" / "wiki-publish-map.json"
+    if not map_path.is_file():
+        return findings
+    try:
+        import json
+
+        mapping = json.loads(map_path.read_text())
+    except Exception as e:
+        return [(_rel(map_path), None, f"wiki-publish-map.json is not valid JSON: {e}")]
+
+    valid_targets = {("wiki",), ("site",), ("wiki", "site")}
+    seen_sources = set()
+
+    for group in mapping.get("groups", []):
+        for page in group.get("pages", []):
+            source = page.get("source", "")
+            source_path = REPO_ROOT / source
+
+            # Check source file exists
+            if not source_path.is_file():
+                findings.append((_rel(map_path), None, f"wiki-publish-map.json references missing source {source}"))
+
+            # Check targets are valid
+            targets = tuple(sorted(page.get("targets", [])))
+            if targets not in valid_targets:
+                findings.append(
+                    (
+                        _rel(map_path),
+                        None,
+                        f"{source}: invalid targets {page.get('targets')} — must be ['wiki'], ['site'], or ['wiki', 'site']",
+                    )
+                )
+
+            # Check site target has sitePath
+            if "site" in page.get("targets", []) and not page.get("sitePath"):
+                findings.append((_rel(map_path), None, f"{source}: targets includes 'site' but no sitePath is set"))
+
+            # Check for duplicate sources
+            if source in seen_sources:
+                findings.append((_rel(map_path), None, f"{source}: duplicate source entry across groups"))
+            seen_sources.add(source)
+
+    # Check pointer_pages reference real published pages
+    published_wikis = {
+        page.get("wiki") for group in mapping.get("groups", []) for page in group.get("pages", []) if page.get("wiki")
+    }
+    for pointer in mapping.get("pointer_pages", []):
+        if pointer.get("points_to") not in published_wikis:
+            findings.append(
+                (
+                    _rel(map_path),
+                    None,
+                    f"pointer_pages entry {pointer.get('wiki')!r} points to "
+                    f"{pointer.get('points_to')!r}, which isn't a real published page",
+                )
+            )
+
+    return findings
+
+
 SOFT_CHECKS = (
     ("no-letter-labels", check_no_letter_labels),
     ("orphan", check_orphans),
     ("supersession", check_supersession),
     ("proposal-crossref", check_proposal_crossrefs),
+    ("wiki-publish-map", check_wiki_publish_map),
 )
 
 

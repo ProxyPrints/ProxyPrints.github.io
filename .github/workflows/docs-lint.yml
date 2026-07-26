@@ -40,6 +40,12 @@ on:
     # OUTSIDE docs/ (e.g. a component move that a doc's path reference
     # didn't follow), which a docs/**-scoped PR trigger alone would miss.
     - cron: "0 6 * * 1"
+  push:
+    branches: ["master"]
+    paths:
+      - "docs/**"
+      - ".github/wiki-publish-map.json"
+      - ".github/scripts/**"
   workflow_dispatch:
 
 permissions:
