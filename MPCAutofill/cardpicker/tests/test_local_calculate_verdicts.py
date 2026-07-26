@@ -2168,6 +2168,101 @@ class TestCommandLedgerHardeningAndDryRunGuard:
         assert ledger.finished_at is not None
 
 
+class TestCommandCountersAndDiffReport:
+    """The run_id 20260726T165343-3e8301db counters={} incident's two fixes: the completion-time
+    per-calculator counters MUST land in the PilotRunLedger row itself (not stdout only), and
+    --diff-report MUST produce a reviewable per-card JSONL artifact. Command-level, same
+    zero-network fixture shape as TestCommandLedgerHardeningAndDryRunGuard above."""
+
+    def test_dry_run_counters_land_in_the_ledger_row(self, db):
+        from django.core.management import call_command
+
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        call_command("local_calculate_verdicts", "--allow-missing-scryfall-cache")
+
+        ledger = PilotRunLedger.objects.get(command="local_calculate_verdicts")
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
+        assert ledger.counters["join_key"] == {
+            "considered": 1,
+            "would_cast": 1,
+            "votes_written": 0,
+            "already_voted": 0,
+            "skip_counts": {},
+        }
+        assert ledger.counters["fallback"] == {
+            "considered": 0,
+            "would_cast": 0,
+            "votes_written": 0,
+            "already_voted": 0,
+            "skip_counts": {},
+        }
+        assert ledger.counters["slow_path"] == {"considered": 0, "would_cast": 0, "votes_written": 0, "skip_counts": {}}
+
+    def test_write_counters_land_in_the_ledger_row(self, db):
+        from django.core.management import call_command
+
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        call_command("local_calculate_verdicts", "--write", "--skip-dryrun-check", "--allow-missing-scryfall-cache")
+
+        ledger = PilotRunLedger.objects.get(command="local_calculate_verdicts")
+        assert ledger.counters["join_key"]["would_cast"] == 1
+        assert ledger.counters["join_key"]["votes_written"] == 1
+        # merge_counters preserves the creation-time payload rather than clobbering it.
+        assert ledger.counters["skip_dryrun_check_used"] is True
+
+    def test_skip_reasons_land_in_the_counters_skip_counts(self, db):
+        from django.core.management import call_command
+
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_collector_number="")  # no-text
+
+        call_command("local_calculate_verdicts", "--allow-missing-scryfall-cache")
+
+        ledger = PilotRunLedger.objects.get(command="local_calculate_verdicts")
+        assert ledger.counters["join_key"]["skip_counts"] == {"no-text": 1}
+
+    def test_diff_report_writes_well_formed_jsonl(self, db, tmp_path):
+        from django.core.management import call_command
+
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+        CardPrintingTag.objects.create(
+            card=card, printing=None, is_no_match=True, anonymous_id="another-identity", source=VoteSource.OCR
+        )
+        report_path = tmp_path / "diff.jsonl"
+
+        call_command("local_calculate_verdicts", "--allow-missing-scryfall-cache", "--diff-report", str(report_path))
+
+        lines = report_path.read_text().splitlines()
+        assert len(lines) == 1
+        row = json.loads(lines[0])
+        assert row["card_id"] == card.pk
+        assert row["calculator"] == "join-key"
+        assert row["would_cast"]["is_no_match"] is False
+        assert "detail" in row["would_cast"]
+        assert row["existing_votes"] == [{"anonymous_id": "another-identity", "printing_id": None, "is_no_match": True}]
+
+    def test_diff_report_has_no_rows_for_skip_only_cards(self, db, tmp_path):
+        from django.core.management import call_command
+
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_collector_number="")  # no-text - a skip, not a would-cast
+        report_path = tmp_path / "diff.jsonl"
+
+        call_command("local_calculate_verdicts", "--allow-missing-scryfall-cache", "--diff-report", str(report_path))
+
+        assert report_path.read_text() == ""
+
+
 class TestScryfallCacheGuard:
     """Issue #402's fail-loud staleness guard: `ensure_scryfall_cache_present` (unit-level, pure
     file-existence check - see TestGetBackFaceNames above for the sibling soft-fail lookup it's
