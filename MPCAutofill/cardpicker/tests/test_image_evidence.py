@@ -111,8 +111,8 @@ from cardpicker.local_fallback import (
 )
 from cardpicker.local_ocr import DEFAULT_CROP_BOX, LEGAL_LINE_CROP_BOX
 from cardpicker.local_phash import ART_CROP_BOX
-from cardpicker.models import CardScanLog, ImageEvidence
-from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory
+from cardpicker.models import CardScanLog, CardTagVote, ImageEvidence
+from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory, TagFactory
 
 
 @dataclass(frozen=True)
@@ -1707,6 +1707,44 @@ class TestExtractCardEvidenceQualitySignals:
         assert evidence.image_is_truncated is False
         assert evidence.blur_variance == pytest.approx(123.45)
         assert evidence.image_entropy == pytest.approx(6.7)
+
+
+class TestExtractCardEvidenceBorderColorVote:
+    def test_classified_border_casts_one_vote_per_card(self, db, monkeypatch):
+        TagFactory(name="Black Border")
+        cards = [CardFactory(content_phash=i + 1) for i in range(3)]
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+
+        for card in cards:
+            extract_card_evidence(card)
+
+        assert CardTagVote.objects.count() == len(cards)
+
+    def test_ambiguous_border_casts_no_vote(self, db, monkeypatch):
+        TagFactory(name="Black Border")
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch, None)
+        _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+
+        extract_card_evidence(card)
+
+        assert CardTagVote.objects.count() == 0
+
+    def test_fetch_failure_casts_no_vote(self, db, monkeypatch):
+        TagFactory(name="Black Border")
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        extract_card_evidence(card)
+
+        assert CardTagVote.objects.count() == 0
 
 
 class TestPersistEvidence:

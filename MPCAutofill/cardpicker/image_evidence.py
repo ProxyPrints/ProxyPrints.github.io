@@ -248,6 +248,7 @@ from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
     SYMBOL_STRIP_BOX,
+    cast_border_attribute_vote,
     classify_bleed_edge,
     classify_border_color,
     classify_frame_style,
@@ -555,7 +556,7 @@ def extract_card_evidence(
         raise
     fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
 
-    return compute_card_evidence(
+    result = compute_card_evidence(
         card.pk,
         card.content_phash,
         image,
@@ -566,6 +567,10 @@ def extract_card_evidence(
         md5_checksum=card.md5_checksum,
         sha256_checksum=card.sha256_checksum,
     )
+    vote = cast_border_attribute_vote(card, result.fields.get("layout_class") or None, confidence=0.5)
+    if vote is not None:
+        vote.save()
+    return result
 
 
 def compute_card_evidence(
