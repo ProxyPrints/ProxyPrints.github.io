@@ -431,11 +431,13 @@ class Command(BaseCommand):
         # otherwise the shared cache MUST already exist - downloading 600MB implicitly inside a
         # vote-casting command would hide a big side effect, and the staleness guard's own
         # CommandError names the two commands that populate it.
-        default_cards_path: Path = kwargs["default_cards"] or _cache_path()
-        if kwargs["default_cards"] is None:
+        _raw_default_cards = kwargs["default_cards"]
+        default_cards_path: Path = Path(_raw_default_cards) if _raw_default_cards else _cache_path()
+        if _raw_default_cards is None:
             ensure_scryfall_cache_present(default_cards_path)
 
-        tags_path: Optional[Path] = kwargs["file"]
+        _raw_file = kwargs["file"]
+        tags_path: Optional[Path] = Path(_raw_file) if _raw_file is not None else None
         if tags_path is None:
             uri = _find_art_tags_download_uri()
             print(f"Downloading art tags from {uri}")
