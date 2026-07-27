@@ -2,7 +2,7 @@
 Unit tests for cardpicker.local_image_quality (public issue #150's re-spec, "Stage C
 visual-signal extractors") - pure image-math functions, tested in isolation against real PIL
 images, no DB / no `extract_card_evidence` involvement (that wiring is covered by
-test_image_evidence.py's TestExtractCardEvidenceQualitySignals/ColorProfile).
+test_image_evidence.py's TestExtractCardEvidenceQualitySignals).
 
 is_image_truncated is tested here (rather than through the full extraction pipeline) precisely
 BECAUSE a genuinely truncated real file would also trip up earlier, real-pixel-reading
@@ -20,7 +20,6 @@ from PIL import Image, ImageDraw
 
 from cardpicker.local_image_quality import (
     compute_blur_variance,
-    compute_color_profile,
     compute_entropy,
     is_image_truncated,
 )
@@ -78,20 +77,3 @@ class TestComputeEntropy:
         flat = Image.new("RGB", (200, 200), (100, 100, 100))
         varied = _real_image((200, 200))
         assert compute_entropy(varied) > compute_entropy(flat)
-
-
-class TestComputeColorProfile:
-    def test_solid_color_image_has_exact_mean_and_zero_stddev(self):
-        image = Image.new("RGB", (100, 140), (100, 150, 200))
-
-        mean_rgb, stddev_rgb = compute_color_profile(image)
-
-        assert mean_rgb == pytest.approx([100.0, 150.0, 200.0])
-        assert stddev_rgb == pytest.approx([0.0, 0.0, 0.0])
-
-    def test_returns_three_element_float_lists(self):
-        mean_rgb, stddev_rgb = compute_color_profile(_real_image())
-
-        assert len(mean_rgb) == 3
-        assert len(stddev_rgb) == 3
-        assert all(isinstance(v, float) for v in mean_rgb + stddev_rgb)

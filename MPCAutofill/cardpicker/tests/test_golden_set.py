@@ -153,26 +153,6 @@ class TestGoldenExpectations:
         # comment), not a placeholder.
         assert all(isinstance(e.value, bool) for e in GOLDEN_EXPECTATIONS["quality_signals"])
 
-    def test_color_profile_expectation_covers_every_golden_card(self):
-        card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["color_profile"]}
-        assert card_ids == set(GOLDEN_CARD_IDS)
-
-    def test_color_profile_values_have_mean_and_stddev_rgb_keys(self):
-        # Recorded the same run as quality_signals above. No exact-value comparison here -
-        # color_profile has no discrete signal at all (see golden_set.py's own comment for why
-        # the real recorded numbers are kept as a documentation artifact, not a hard-pinned
-        # assertion) - only structure/type/range are checked, the same bar
-        # test_crop_coordinates_values_have_all_three_boxes_as_four_int_lists applies to its own
-        # pixel-coordinate lists above.
-        for expectation in GOLDEN_EXPECTATIONS["color_profile"]:
-            assert set(expectation.value) == {"color_mean_rgb", "color_stddev_rgb"}
-            for key in ("color_mean_rgb", "color_stddev_rgb"):
-                channel_values = expectation.value[key]
-                assert len(channel_values) == 3
-                for channel_value in channel_values:
-                    assert isinstance(channel_value, float)
-                    assert 0.0 <= channel_value <= 255.0
-
 
 class TestGetGoldenCards:
     def test_raises_when_pinned_ids_are_missing_from_the_db(self, db):
