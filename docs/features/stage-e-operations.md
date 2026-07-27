@@ -1014,6 +1014,55 @@ of §3-§5 as a whole):
   the resulting ledger data (issue #463) is still an owner-polled action,
   gated on the §8 Tron pass.
 
+## `local_calculate_verdicts` observability additions (PR #494)
+
+Two observability additions landed in `local_calculate_verdicts.py`, motivated
+by run `20260726T165343-3e8301db` where `counters={}` appeared in the ledger
+row because stdout was severed before the terminal summary printed.
+
+### `--diff-report PATH`
+
+Writes one JSONL line per card the run **would act on** (skipped cards
+excluded) to the given path. Each line:
+
+```json
+{"card_id": "...", "calculator": "join_key|fallback|slow_path", "would_cast": <pk or null>, "existing_votes": [...]}
+```
+
+- `existing_votes`: every `CardPrintingTag` vote for the card across all
+  `anonymous_id` values — the complete prior-vote picture at the time of the
+  run.
+- Stream-written: appended and flushed after each calculator completes, never
+  buffered in memory.
+- The path is **truncated on open** (not appended to); an unwritable path
+  errors **before** the ledger row is created.
+- Passing `--diff-report` lifts the default audit sample cap from 20 to
+  `sys.maxsize` — use it when you need complete per-card coverage of a batch.
+
+### Per-calculator counters in the ledger row
+
+`PilotRunLedger.counters` now carries a sub-dict per calculator:
+`counters["join_key"]`, `counters["fallback"]`, `counters["slow_path"]`. Each
+has the same shape:
+
+```json
+{
+  "considered": 0,
+  "would_cast": 0,
+  "votes_written": 0,
+  "already_voted": 0,
+  "skip_counts": {}
+}
+```
+
+For `slow_path`, `would_cast`/`votes_written` count its **routed**
+`CardScanLog` rows (the slow-path calculator casts no `CardPrintingTag` votes);
+`skip_counts` is the `reason_counts` breakdown from that calculator.
+
+Counters are persisted to the ledger row **before** the terminal summary is
+printed (counters-before-output discipline), so a severed stdout no longer
+produces an empty `counters={}` record.
+
 ## See also
 
 - [`docs/proposals/stage-e-streaming.md`](../proposals/stage-e-streaming.md)
