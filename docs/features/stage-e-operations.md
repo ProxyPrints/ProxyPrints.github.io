@@ -1063,6 +1063,68 @@ Counters are persisted to the ledger row **before** the terminal summary is
 printed (counters-before-output discipline), so a severed stdout no longer
 produces an empty `counters={}` record.
 
+## `rejudge_fallback_channel` — fallback-channel compare-and-retract (PR #495)
+
+`MPCAutofill/management/commands/rejudge_fallback_channel.py` re-evaluates the
+`stage-d-fallback-v1` channel's existing conclusions against **current stored**
+`ImageEvidence` and retracts the rows where the conclusion changed, making
+those cards eligible for a fresh `local_calculate_verdicts` pass.
+
+### What it does
+
+For each card in the fallback channel, the command re-derives the fallback
+calculator's conclusion from the card's current `ImageEvidence`
+(`layout_class`, `artist_ocr_name`, `symbol_phash`) — zero image fetches, zero
+re-parse. If the conclusion differs from the stored vote or skip, it
+**retracts** (deletes) the `CardPrintingTag` vote and any `CardScanLog` skip
+rows for that card.
+
+The command **never** touches `stage-d-join-key-v1` rows. Fallback eligibility
+is gated on a join-key no-hit; retraction removes only the fallback-channel
+layer, leaving the join-key layer untouched.
+
+### Safety gate
+
+A card is **never** retracted if `resolve_printing(card) is not None`. This
+covers both a resolved printing and a resolved NO_MATCH consensus. Gated cards
+are counted and their PKs are recorded in `counters["gate_refused_card_ids"]`
+for human review before any manual intervention.
+
+### Flags
+
+| Flag                       | Notes                                             |
+| -------------------------- | ------------------------------------------------- |
+| `--selector all-channel`   | Operate on the entire fallback-channel population |
+| `--card-ids-file PATH`     | Operate on a newline-delimited list of card IDs   |
+| `--write`                  | Required to retract (dry-run by default)          |
+| `--skip-dryrun-check`      | Skip the dry-run-window guard                     |
+| `--dry-run-window-hours N` | Override the dry-run-window length                |
+
+`--selector` and `--card-ids-file` are mutually exclusive; exactly one is
+required.
+
+### Counters and ledger row
+
+`PilotRunLedger.votes_written` is repurposed to record the **retracted** count
+(same convention as `reparse_collector_evidence`). Full counter set:
+
+```
+considered, no_evidence, no_prior_fallback_state, unchanged,
+changed, retracted, gate_refused, transitions
+```
+
+`transitions` is a string-keyed breakdown of conclusion changes, e.g.
+`"skip:ambiguous -> vote:12345": 42`.
+
+### Runbook
+
+Two-step sequence to bring retracted cards back into the active population:
+
+1. `python manage.py rejudge_fallback_channel --selector all-channel` (dry-run
+   → review counters and `gate_refused_card_ids`) → rerun with `--write`
+2. `python manage.py local_calculate_verdicts` (unchanged) to fill the
+   retracted cards through the normal calculator chain.
+
 ## See also
 
 - [`docs/proposals/stage-e-streaming.md`](../proposals/stage-e-streaming.md)
