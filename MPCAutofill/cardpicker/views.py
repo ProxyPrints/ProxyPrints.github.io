@@ -19,10 +19,11 @@ from pydantic import ValidationError
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Case, Count, IntegerField, Q, When
+from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Q, When
 from django.http import (
     FileResponse,
     HttpRequest,
@@ -66,6 +67,7 @@ from cardpicker.models import (
     CardArtistVote,
     CardPrintingTag,
     CardReport,
+    CardScanLog,
     CardTagVote,
     CardTypes,
     DFCPair,
@@ -2637,6 +2639,86 @@ def post_get_shared_deck(request: HttpRequest) -> HttpResponse:
             createdAt=dateformat.format(share.created_at, DATE_FORMAT),
         ).model_dump()
     )
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def get_funnel_counts(request: HttpRequest) -> HttpResponse:
+    """
+    Per-zone card counts for the homepage funnel (issue #490). Public, cached hourly.
+
+    Zones:
+      - high_match: cards with at least one machine-cast printing vote (DEDUCTION/OCR,
+        is_no_match=False) at any confidence tier. Confirmed = cards where the machine's
+        suggested printing matches the card's resolved printing (inferred_canonical_card).
+      - no_match: cards with at least one machine is_no_match=True vote. Confirmed = 0.
+      - ambiguous: cards with a CardScanLog skip_reason='ambiguous'. Confirmed = 0.
+      - withheld: cards with a CardScanLog border-mismatch or frame-mismatch veto.
+        Confirmed = 0.
+    """
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+
+    cached = cache.get("funnel-counts-v1")
+    if cached is not None:
+        return JsonResponse(cached)
+
+    machine_vote_filter = Q(
+        printing_tags__source__in=[VoteSource.DEDUCTION, VoteSource.OCR],
+        printing_tags__is_no_match=False,
+    )
+
+    high_match_count = Card.objects.filter(machine_vote_filter).distinct().count()
+
+    high_match_confirmed = (
+        Card.objects.filter(
+            machine_vote_filter,
+            printing_tag_status=PrintingTagStatus.RESOLVED,
+            inferred_canonical_card__isnull=False,
+        )
+        .filter(
+            Exists(
+                CardPrintingTag.objects.filter(
+                    source__in=[VoteSource.DEDUCTION, VoteSource.OCR],
+                    is_no_match=False,
+                    printing=OuterRef("inferred_canonical_card"),
+                    card_id=OuterRef("pk"),
+                )
+            )
+        )
+        .distinct()
+        .count()
+    )
+
+    no_match_count = (
+        Card.objects.filter(
+            printing_tags__source__in=[VoteSource.DEDUCTION, VoteSource.OCR],
+            printing_tags__is_no_match=True,
+        )
+        .distinct()
+        .count()
+    )
+
+    ambiguous_count = CardScanLog.objects.filter(skip_reason="ambiguous").values("card").distinct().count()
+
+    withheld_count = (
+        CardScanLog.objects.filter(skip_reason__in=["border-mismatch", "frame-mismatch"])
+        .values("card")
+        .distinct()
+        .count()
+    )
+
+    result = {
+        "zones": {
+            "high_match": {"count": high_match_count, "confirmed": high_match_confirmed},
+            "no_match": {"count": no_match_count, "confirmed": 0},
+            "ambiguous": {"count": ambiguous_count, "confirmed": 0},
+            "withheld": {"count": withheld_count, "confirmed": 0},
+        },
+    }
+
+    cache.set("funnel-counts-v1", result, 3600)
+    return JsonResponse(result)
 
 
 # endregion
