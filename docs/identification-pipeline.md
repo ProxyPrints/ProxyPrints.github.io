@@ -141,6 +141,13 @@ confirmations start accumulating in volume.
    only by explicit re-extraction. Signals only; nothing that can rebuild the
    image.
 
+**Blur variance: human-rated, not automated.** `blur_variance` (Laplacian-kernel
+edge-response variance) is computed and stored in ImageEvidence but drives no
+automated threshold or pipeline decision. It stays as a signal for human raters
+judging upload quality. Human votes are more reliable for image quality
+assessment than any single automated metric, so no threshold calibration is
+planned until real rater data justifies one.
+
 ## Stage D — the join-key calculator (`local_calculate_verdicts`)
 
 Eligible cards: current evidence exists, no prior vote from this machine
