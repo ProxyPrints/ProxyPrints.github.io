@@ -2763,9 +2763,13 @@ def post_submit_printing_tag_vote(request: HttpRequest) -> HttpResponse:
     Polarity 0 is a retract: deletes the existing vote from this identity for this
     (printing, tag) pair, identical to post_submit_tag_vote's own RETRACT_POLARITY sentinel.
 
-    Per-printing consensus resolution is not triggered here because there is no persisted
-    resolution status on CanonicalCard today — that's deferred to a later commit once a clean
-    additive seam exists (see OPEN ITEMS in PR #497).
+    Per-printing consensus resolution is intentionally not triggered here. Printing-level
+    tag resolution (external-ip, UW/UB) follows a primary-signal / fallback pattern:
+    Scryfall structured data (tagger art_tags, security_stamp) is the authoritative source
+    and resolves without a vote. User votes fill gaps where Scryfall data is ambiguous.
+    The resolution function will be added when a pipeline consumer needs it (card
+    serialisation / question feed expansion — see #437). Until then, votes land correctly
+    but no resolution is computed or surfaced.
     """
     if request.method != "POST":
         raise BadRequestException("Expected POST request.")
