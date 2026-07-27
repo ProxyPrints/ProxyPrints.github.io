@@ -631,7 +631,7 @@ def check_wiki_publish_map() -> list:
     except Exception as e:
         return [(_rel(map_path), None, f"wiki-publish-map.json is not valid JSON: {e}")]
 
-    valid_targets = {("wiki",), ("site",), ("wiki", "site")}
+    valid_targets = {("wiki",), ("site",), ("site", "wiki")}
     seen_sources = set()
 
     for group in mapping.get("groups", []):
