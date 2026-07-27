@@ -1,3 +1,5 @@
+import json
+import sys
 from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
@@ -25,6 +27,48 @@ from cardpicker.pilot_run_lifecycle import (
 )
 from cardpicker.printing_metadata_import import ensure_scryfall_cache_present
 from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
+
+# The engines hand per-card rows back to this command only through their CAPPED `audit` sample
+# (20 by default) - a requested --diff-report lifts that cap so every would-cast row reaches the
+# report, not just the first 20 per calculator.
+_DIFF_REPORT_AUDIT_SAMPLE_SIZE = sys.maxsize
+
+# Keeps the existing-vote lookup's `card_id__in` batches far below postgres's 65535 bind-parameter
+# limit even for a full-catalog dry-run.
+_DIFF_REPORT_EXISTING_VOTES_CHUNK_SIZE = 10000
+
+
+def _existing_votes_by_card(card_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    """Every `CardPrintingTag` vote (any anonymous_id) for the given cards, grouped by card_id.
+    A card is only eligible for a calculator when THAT calculator's own anonymous_id hasn't voted
+    on it yet, so anything found here is necessarily another identity's vote."""
+    votes_by_card: dict[int, list[dict[str, Any]]] = {}
+    for start in range(0, len(card_ids), _DIFF_REPORT_EXISTING_VOTES_CHUNK_SIZE):
+        chunk = card_ids[start : start + _DIFF_REPORT_EXISTING_VOTES_CHUNK_SIZE]
+        for vote in CardPrintingTag.objects.filter(card_id__in=chunk):
+            votes_by_card.setdefault(vote.card_id, []).append(
+                {"anonymous_id": vote.anonymous_id, "printing_id": vote.printing_id, "is_no_match": vote.is_no_match}
+            )
+    return votes_by_card
+
+
+def _write_diff_report_lines(diff_file: Any, calculator: str, audit: list[dict[str, Any]]) -> None:
+    """One JSONL line per `audit` entry, appended+flushed after EACH calculator completes (never
+    assembled as one blob), so a severed stdout still leaves every completed calculator's rows on
+    disk - the same incident class as the counters={} loss this PR's ledger half fixes."""
+    if not audit:
+        return
+    votes_by_card = _existing_votes_by_card([int(entry["card_id"]) for entry in audit])
+    for entry in audit:
+        card_id = int(entry["card_id"])
+        line = {
+            "card_id": card_id,
+            "calculator": calculator,
+            "would_cast": {key: value for key, value in entry.items() if key != "card_id"},
+            "existing_votes": votes_by_card.get(card_id, []),
+        }
+        diff_file.write(json.dumps(line, sort_keys=True) + "\n")
+    diff_file.flush()
 
 
 class Command(BaseCommand):
@@ -59,6 +103,15 @@ class Command(BaseCommand):
         parser.add_argument("--run-id", default=None, help="Reuse a specific run_id. Default: freshly generated.")
         parser.add_argument(
             "--chunk-size", type=int, default=500, help="Queryset .iterator() chunk size. Default: 500."
+        )
+        parser.add_argument(
+            "--diff-report",
+            type=str,
+            default=None,
+            help="Dry-run-oriented: write one JSONL line per card the run would act on (card "
+            "identifier, calculator, would-cast verdict, and the card's existing vote value if "
+            "any) to the given path, for reviewing would-cast vs existing before authorizing "
+            "--write. Stream-written (appended/flushed after each calculator), not buffered.",
         )
         parser.add_argument(
             "--allow-missing-scryfall-cache",
@@ -106,6 +159,12 @@ class Command(BaseCommand):
             scope=None,
         )
 
+        # Opened before the ledger row is created (same fail-fast shape as the precondition
+        # guards above): an unwritable --diff-report path errors here, before any run state
+        # exists. Truncated, so a reused path never mingles two runs' rows.
+        diff_file = open(kwargs["diff_report"], "w") if kwargs["diff_report"] else None
+        audit_sample_size = _DIFF_REPORT_AUDIT_SAMPLE_SIZE if diff_file is not None else 20
+
         ledger = PilotRunLedger.objects.create(
             run_id=run_id,
             command="local_calculate_verdicts",
@@ -116,7 +175,9 @@ class Command(BaseCommand):
         )
 
         try:
-            result = run_join_key_calculator(run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"])
+            result = run_join_key_calculator(
+                run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"], audit_sample_size=audit_sample_size
+            )
             votes_written = result.votes_written + result.no_match_votes_written
             would_cast = result.votes_would_cast + result.no_match_votes_would_cast
             print(
@@ -133,6 +194,8 @@ class Command(BaseCommand):
             )
             for entry in result.audit[:10]:
                 print(f"  sample: {entry}")
+            if diff_file is not None:
+                _write_diff_report_lines(diff_file, "join-key", result.audit)
 
             if not dry_run:
                 # result.audit is capped (audit_sample_size) - the gate check needs the FULL
@@ -161,7 +224,9 @@ class Command(BaseCommand):
             # Ordered BEFORE slow-path routing below deliberately: a card this calculator resolves
             # must not also get routed to human review in the same invocation (see
             # _slow_path_eligible_cards_queryset's own new exclusion for the wiring this depends on).
-            fallback_result = run_fallback_calculator(run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"])
+            fallback_result = run_fallback_calculator(
+                run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"], audit_sample_size=audit_sample_size
+            )
             votes_written += fallback_result.votes_written
             would_cast += fallback_result.votes_would_cast
             print(
@@ -172,6 +237,8 @@ class Command(BaseCommand):
             )
             for entry in fallback_result.audit[:10]:
                 print(f"  sample: {entry}")
+            if diff_file is not None:
+                _write_diff_report_lines(diff_file, "fallback", fallback_result.audit)
 
             if not dry_run:
                 # same rationale as the join-key gate check above - re-derived from this run's own
@@ -201,7 +268,9 @@ class Command(BaseCommand):
             # run_slow_path_calculator's own docstring), so sequencing here matters even though all
             # three ship in this one command. Casts no CardPrintingTag at all (it has no printing
             # to vote for), so there is no analogous gate check to run for it.
-            slow_path_result = run_slow_path_calculator(run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"])
+            slow_path_result = run_slow_path_calculator(
+                run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"], audit_sample_size=audit_sample_size
+            )
             print(
                 f"[slow-path] considered={slow_path_result.cards_considered} "
                 f"routed={'written=' + str(slow_path_result.routed_written) if not dry_run else 'would_cast=' + str(slow_path_result.routed_would_cast)} "
@@ -209,6 +278,8 @@ class Command(BaseCommand):
             )
             for entry in slow_path_result.audit[:10]:
                 print(f"  sample: {entry}")
+            if diff_file is not None:
+                _write_diff_report_lines(diff_file, "slow-path", slow_path_result.audit)
 
             # Counters-before-output (production incident 2026-07-23, see
             # cardpicker.pilot_run_lifecycle's own module docstring point 1): the ledger row is
@@ -217,13 +288,43 @@ class Command(BaseCommand):
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()
             ledger.votes_written = votes_written
-            ledger.counters = merge_counters(ledger.counters, {})
+            # Per-calculator counters, keyed uniformly so a ledger row alone reconstructs what a
+            # run did even when its stdout is lost (run_id 20260726T165343-3e8301db's counters={}
+            # incident). slow-path casts no votes: its "votes" are its routed CardScanLog rows,
+            # its skip breakdown its reason_counts.
+            ledger.counters = merge_counters(
+                ledger.counters,
+                {
+                    "join_key": {
+                        "considered": result.cards_considered,
+                        "would_cast": result.votes_would_cast + result.no_match_votes_would_cast,
+                        "votes_written": result.votes_written + result.no_match_votes_written,
+                        "already_voted": result.already_voted,
+                        "skip_counts": dict(result.skip_counts),
+                    },
+                    "fallback": {
+                        "considered": fallback_result.cards_considered,
+                        "would_cast": fallback_result.votes_would_cast,
+                        "votes_written": fallback_result.votes_written,
+                        "already_voted": fallback_result.already_voted,
+                        "skip_counts": dict(fallback_result.skip_counts),
+                    },
+                    "slow_path": {
+                        "considered": slow_path_result.cards_considered,
+                        "would_cast": slow_path_result.routed_would_cast,
+                        "votes_written": slow_path_result.routed_written,
+                        "skip_counts": dict(slow_path_result.reason_counts),
+                    },
+                },
+            )
             ledger.save(update_fields=["status", "finished_at", "votes_written", "counters"])
             with resilient_terminal_output():
                 print(
                     f"[{mode}] done. run_id={run_id} "
                     f"total_votes={'written' if not dry_run else 'would_cast'}={votes_written if not dry_run else would_cast}"
                 )
+                if kwargs["diff_report"]:
+                    print(f"[{mode}] diff report written to {kwargs['diff_report']}")
         except Exception as exc:
             # Shared FAILED-transition rail (cardpicker.pilot_run_lifecycle.mark_ledger_failed,
             # docs/proposals/stage-e-streaming.md §3 decision (6)/§10) - a no-op if this invocation
@@ -233,3 +334,6 @@ class Command(BaseCommand):
             # FAILED status, closing the "empty-failed-row" gap that helper's own docstring cites.
             mark_ledger_failed(ledger, exc)
             raise
+        finally:
+            if diff_file is not None:
+                diff_file.close()

@@ -983,7 +983,7 @@ class TestRunCohortBackpressure:
                 stdout_write=lambda _msg: None,
             )
 
-        run_thread = threading.Thread(target=_run)
+        run_thread = threading.Thread(target=_run, daemon=True)
         run_thread.start()
 
         deadline = _time.monotonic() + 5
@@ -1112,7 +1112,7 @@ class TestRunCohortFetchMemoryBound:
                 stdout_write=lambda _msg: None,
             )
 
-        run_thread = threading.Thread(target=_run)
+        run_thread = threading.Thread(target=_run, daemon=True)
         run_thread.start()
 
         deadline = _time.monotonic() + 10
