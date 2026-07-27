@@ -247,6 +247,18 @@ directly.
   `coverage-ack: <test id or glob> — <reason>` line (same tether discipline
   as `docs_lint.py`'s in-file `ALLOWLIST`). New tests and un-skipping are
   always fine.
+- `web-ci.yml` per-surface change gating (PR #466): a `changes` job runs
+  first on every push and diffs `HEAD` against the push's pre-image SHA using
+  plain `git diff --name-only` (same pattern as other workflows in this repo,
+  not a paths-filter action). It sets two boolean outputs — `backend`
+  (`MPCAutofill/**` prefix) and `frontend` (`frontend/**` prefix) — and every
+  downstream job gates itself on `needs.changes.outputs.<surface> == 'true'`.
+  `cloudflare-static-site/**` is not wired to any surface. Fallback: on
+  `workflow_dispatch`, a new branch push, or a force-push where no before SHA
+  is available, both outputs are set to `true` (run everything). A
+  `test-pre-commit` job that had been duplicated in `web-ci.yml` was removed
+  in this PR rather than scoped — `test-pre-commit.yml` already runs it
+  unconditionally.
 
 ## Push policy
 

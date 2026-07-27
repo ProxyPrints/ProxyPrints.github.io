@@ -435,24 +435,28 @@ one flattened figure:
 | `20260724T001154-d3986cfc` (post-fire calculator re-pass write)      |                                                                                                                                                       **1** | **§14 "Five further passes" write** — `local_calculate_verdicts` re-run over the lexicon-gate-retracted pool; 52,348 `unknown-set-code` + 16 `no-evidence` skips, 117,442 `to-review` — see §14                                                                                                                                                                                                                                                          |
 
 **Stage C run history** (`ImageEvidence.run_id`, current last-writer row
-count per run — canaries first, then the main leg):
+count per run — updated 2026-07-27 after the full-catalog re-extraction):
 
-| run_id                                     | date          |    rows |
-| ------------------------------------------ | ------------- | ------: |
-| `stagec-canary-20260720T1659Z`             | 2026-07-20    |     223 |
-| `stagec-canary-decoupled-20260720T235127Z` | 2026-07-20    |     206 |
-| `ntx-0721`                                 | 2026-07-20/21 |   9,675 |
-| `stagec-20k-20260721T0227Z`                | 2026-07-20/21 |  10,696 |
-| `stagec-remainder-0721`                    | 2026-07-21/22 | 197,470 |
+| run_id                                  | date          |    rows |
+| --------------------------------------- | ------------- | ------: |
+| `pass-pilot-20260725`                   | 2026-07-25    |     100 |
+| `stage-e-stream-20260725T233633221123Z` | 2026-07-25    |      22 |
+| `stage-e-stream-20260725T233633687349Z` | 2026-07-25    |      23 |
+| `pass-full-20260725`                    | 2026-07-25/26 | 194,831 |
+| `pass-full-20260725-r2`                 | 2026-07-25/26 |  23,132 |
+| **Total**                               |               | 218,108 |
 
-Full chain: the two decoupling canaries (Jul 20) validated the
-fetch/compute-decoupled architecture at small scale, then `ntx-0721` +
-`stagec-20k-20260721T0227Z` (Jul 20–21) ran a combined ~20k-card
-extraction pass, then `stagec-remainder-0721` (Jul 21–22, 197,470-row
-main leg) extracted the bulk of the remaining catalog. See
+The 2026-07-25 full-catalog re-extraction (`pass-full-20260725` +
+`pass-full-20260725-r2`) superseded all prior Stage C last-writer rows —
+the original canaries (`stagec-canary-20260720T1659Z`,
+`stagec-canary-decoupled-20260720T235127Z`), `ntx-0721`,
+`stagec-20k-20260721T0227Z`, and `stagec-remainder-0721` no longer appear
+as last-writer for any `ImageEvidence` row. See
 [`reports/2026-07-20-decoupled-canary-confirm.md`](reports/2026-07-20-decoupled-canary-confirm.md)
 and [`reports/2026-07-21-stagec-20k-extraction.md`](reports/2026-07-21-stagec-20k-extraction.md)
-for the canary/20k narrative detail. None of these Stage C runs have a
+for the original canary/20k narrative detail, and
+[`reports/2026-07-26-stagec-full-catalog-completion.md`](reports/2026-07-26-stagec-full-catalog-completion.md)
+for the full-catalog completion record. None of the Stage C runs have a
 `PilotRunLedger` row of their own — see §11 for what that does and
 doesn't affect.
 
