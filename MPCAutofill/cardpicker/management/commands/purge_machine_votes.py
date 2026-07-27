@@ -13,6 +13,7 @@ from cardpicker.models import (
     CardTagVote,
     PilotRunLedger,
     PrintingTagStatus,
+    PrintingTagVote,
     TagVoteStatus,
     VoteSource,
 )
@@ -33,6 +34,7 @@ class PurgeResult:
     printing_votes_deleted: int = 0
     artist_votes_deleted: int = 0
     tag_votes_deleted: int = 0
+    printing_tag_votes_deleted: int = 0
     affected_card_count: int = 0
     # cards that un-resolved as an EXPECTED, correct consequence of losing machine-only weight -
     # informational, not a violation. See verify_no_machine_only_resolutions' own docstring for
@@ -58,6 +60,11 @@ def verify_no_machine_only_resolutions(card_ids: list[int]) -> list[int]:
     only machine-sourced survivors is a real, halting violation - resolve_weighted_consensus's
     own human-backed gate should have made this structurally impossible, so if it happens here
     it means something upstream is broken, not that the purge itself did anything wrong.
+
+    NOTE: this function checks Card-level resolution status only (printing_tag_status,
+    artist_vote_status, tag_vote_statuses). PrintingTagVote rows have no persisted per-printing
+    resolution status on CanonicalCard today, so per-printing consensus is not checked here.
+    When a per-printing resolution status field is added, add the analogous check then.
 
     Returns the list of violating card pks (empty means clean).
     """
@@ -93,6 +100,7 @@ def purge_run(run_id: str, dry_run: bool = False) -> PurgeResult:
     printing_votes = CardPrintingTag.objects.filter(run_id=run_id)
     artist_votes = CardArtistVote.objects.filter(run_id=run_id)
     tag_votes = CardTagVote.objects.filter(run_id=run_id)
+    printing_tag_votes = PrintingTagVote.objects.filter(run_id=run_id)
 
     affected_card_ids: set[int] = set()
     affected_card_ids.update(printing_votes.values_list("card_id", flat=True))
@@ -102,6 +110,7 @@ def purge_run(run_id: str, dry_run: bool = False) -> PurgeResult:
     printing_count = printing_votes.count()
     artist_count = artist_votes.count()
     tag_count = tag_votes.count()
+    printing_tag_count = printing_tag_votes.count()
 
     if dry_run:
         return PurgeResult(
@@ -110,12 +119,16 @@ def purge_run(run_id: str, dry_run: bool = False) -> PurgeResult:
             printing_votes_deleted=printing_count,
             artist_votes_deleted=artist_count,
             tag_votes_deleted=tag_count,
+            printing_tag_votes_deleted=printing_tag_count,
             affected_card_count=len(affected_card_ids),
         )
 
     printing_votes.delete()
     artist_votes.delete()
     tag_votes.delete()
+    # PrintingTagVote rows are deleted but require no re-resolution - there is no persisted
+    # per-printing resolution status on CanonicalCard today, so consensus is computed on demand.
+    printing_tag_votes.delete()
 
     cards_unresolved = 0
     for card in Card.objects.filter(pk__in=affected_card_ids):
@@ -137,6 +150,7 @@ def purge_run(run_id: str, dry_run: bool = False) -> PurgeResult:
         printing_votes_deleted=printing_count,
         artist_votes_deleted=artist_count,
         tag_votes_deleted=tag_count,
+        printing_tag_votes_deleted=printing_tag_count,
         affected_card_count=len(affected_card_ids),
         cards_unresolved_by_purge=cards_unresolved,
         gate_violations=gate_violations,
@@ -194,6 +208,7 @@ class Command(BaseCommand):
             f"printing votes: {result.printing_votes_deleted}, "
             f"artist votes: {result.artist_votes_deleted}, "
             f"tag votes: {result.tag_votes_deleted}, "
+            f"printing tag votes: {result.printing_tag_votes_deleted}, "
             f"affected cards: {result.affected_card_count}"
         )
 

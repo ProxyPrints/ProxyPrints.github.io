@@ -1,10 +1,11 @@
 """
 Imports Scryfall Tagger's `art:external-ip` community art tag (tagger.scryfall.com) as
-machine-cast `CardTagVote` rows (fix-batch plan 2026-07-27, work item W9) - Universes Beyond
-illustrations (Lord of the Rings, Doctor Who, Warhammer 40K, etc.), identified by the Tagger
-community rather than by anything in our own image pipeline.
+machine-cast `PrintingTagVote` rows (fix-batch plan 2026-07-27, work item W9, revised
+per-printing spec) — Universes Beyond illustrations (Lord of the Rings, Doctor Who,
+Warhammer 40K, etc.), identified by the Tagger community rather than by anything in our
+own image pipeline.
 
-Data flow (plan W9's own diagram):
+Data flow (plan W9's own diagram, revised to per-printing):
     Art Tags bulk JSONL (https://api.scryfall.com/bulk-data, the `art_tags` entry's
     `jsonl_download_uri`, or a local file via --file)
       -> find tag slug "external-ip" -> BFS its child_ids subtree (the parent tag carries no
@@ -13,39 +14,39 @@ Data flow (plan W9's own diagram):
       -> collect taggings[].illustration_id across the subtree
       -> join through the already-on-disk default_cards bulk data (illustration_id -> card id;
          top-level on single-faced rows, per-face under card_faces for double-faced rows)
-      -> match CanonicalCard.identifier
-      -> write CardTagVote rows (polarity=APPLY) for every Card whose effective printing is a
-         match: `canonical_card` (ingestion-time match) directly, or `inferred_canonical_card`
-         when printing_tag_status == RESOLVED (the same precedence
-         models.Card._get_indexed_printing_metadata uses for ES indexing). An UNRESOLVED card
-         with no ingestion match has no known illustration and is skipped - the same
-         withhold-never-manufacture discipline every other engine follows.
+      -> match CanonicalCard.identifier DIRECTLY
+      -> write PrintingTagVote rows (polarity=APPLY) for every matched CanonicalCard (printing).
+
+PER-PRINTING DESIGN (revised 2026-07-27): votes target the Scryfall printing itself
+(`CanonicalCard`) rather than the catalog images (`Card`) that depict it. The same
+physical printing may be depicted by many `Card` images in the catalog; the Tagger
+community tag belongs to the printing once, not duplicated per image. Card-level display/
+attribution of external-ip flows FROM the printing via the metadata deduction seam
+(see `printing_tag_consensus.py`), never stored per card.
 
 SOURCE CHOICE (why not literally source="scryfall_tagger"): `AbstractWeightedVote.source` is a
 CharField(max_length=10, choices=VoteSource.choices), the plan explicitly requires NO model/
-migration change, and "scryfall_tagger" (15 chars) is not a VoteSource value. The established
-convention for a new machine caster is an existing machine VoteSource plus its OWN anonymous_id
-(local-ocr-v1/local-phash-v1/local-fallback-v1/deductive-backfill-v1/ai-art-detector-v1 - see
-local_detect_ai_art.py's AI_ART_ANONYMOUS_ID comment). This import is pure logical inference
-from already-trusted structured data with ZERO image inspection - exactly `VoteSource.DEDUCTION`'s
-own definition (VoteSource's docstring) - so votes are written as
+migration change beyond PrintingTagVote itself, and "scryfall_tagger" (15 chars) is not a
+VoteSource value. The established convention for a new machine caster is an existing machine
+VoteSource plus its OWN anonymous_id
+(local-ocr-v1/local-phash-v1/local-fallback-v1/deductive-backfill-v1/ai-art-detector-v1 -
+see local_detect_ai_art.py's AI_ART_ANONYMOUS_ID comment). This import is pure logical
+inference from already-trusted structured data with ZERO image inspection - exactly
+`VoteSource.DEDUCTION`'s own definition (VoteSource's docstring) - so votes are written as
 (source=DEDUCTION, anonymous_id="scryfall-tagger-v1"). Weight resolves to
-PRINTING_TAG_MACHINE_WEIGHT (default 0.5) via vote_consensus._SOURCE_WEIGHTS on both the
-printing and tag paths, and the 2026-07-23 zero-weight override is scoped to
-(source=DEDUCTION, anonymous_id="deductive-backfill-v1") only, so these votes are unaffected by
-it. They flow through the unmodified g5 human-backed gate (vote_consensus.
-resolve_weighted_consensus): no volume of machine-only votes can ever resolve a card's tag -
-a lone scryfall-tagger vote leaves the pair UNRESOLVED, funneling to human review exactly like
-every other machine engine.
+PRINTING_TAG_MACHINE_WEIGHT (default 0.5) via vote_consensus._SOURCE_WEIGHTS, and the
+2026-07-23 zero-weight override is scoped to (source=DEDUCTION, anonymous_id=
+"deductive-backfill-v1") only, so these votes are unaffected by it.
 
 RE-RUN SEMANTICS (matches the existing machine-vote casters exactly): the
-(card, tag, anonymous_id) uniqueness constraint on CardTagVote plus the eligibility exclusion
-below makes re-runs idempotent - a card this identity already voted on is skipped, so a second
-invocation only ever votes on NEW matches (e.g. illustrations the Tagger community tagged since
-the last run). RETRACTION is the existing run-scoped mechanism, not anything bespoke: every
-invocation stamps a fresh run_id on its votes, and `manage.py purge_machine_votes --run-id <id>`
-deletes exactly one invocation's votes and re-resolves every affected card. To refresh against
-updated Tagger data where a card was UN-tagged upstream: purge the old run_id, then re-run.
+(printing, tag, anonymous_id) uniqueness constraint on PrintingTagVote plus the eligibility
+exclusion below makes re-runs idempotent - a printing this identity already voted on is
+skipped, so a second invocation only ever votes on NEW matches (e.g. illustrations the Tagger
+community tagged since the last run). RETRACTION is the existing run-scoped mechanism, not
+anything bespoke: every invocation stamps a fresh run_id on its votes, and
+`manage.py purge_machine_votes --run-id <id>` deletes exactly one invocation's votes. To
+refresh against updated Tagger data where a printing was UN-tagged upstream: purge the old
+run_id, then re-run.
 """
 
 import gzip
@@ -59,20 +60,14 @@ import requests
 from pydantic import BaseModel, ValidationError
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db.models import Q
 from django.utils import timezone
 
 from cardpicker.integrations.game.mtg import Scryfall
 from cardpicker.local_identify_printing_tags import generate_run_id
-from cardpicker.management.commands.purge_machine_votes import (
-    verify_no_machine_only_resolutions,
-)
 from cardpicker.models import (
     CanonicalCard,
-    Card,
-    CardTagVote,
     PilotRunLedger,
-    PrintingTagStatus,
+    PrintingTagVote,
     Tag,
     VotePolarity,
     VoteSource,
@@ -81,13 +76,12 @@ from cardpicker.printing_metadata_import import (
     _cache_path,
     ensure_scryfall_cache_present,
 )
-from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
 
 # Own anonymous_id, per the per-engine convention (module docstring's SOURCE CHOICE section) -
 # independently purgeable/re-runnable via the existing purge_machine_votes --run-id mechanism,
-# and the (card, tag, anonymous_id) uniqueness constraint is what makes "skip a card already
-# voted by this identity" a plain query rather than bespoke bookkeeping.
+# and the (printing, tag, anonymous_id) uniqueness constraint is what makes "skip a printing
+# already voted by this identity" a plain query rather than bespoke bookkeeping.
 SCRYFALL_TAGGER_ANONYMOUS_ID = "scryfall-tagger-v1"
 
 # The Tagger slug to look up in the art_tags bulk data (a URL-safe identifier that Scryfall
@@ -267,7 +261,7 @@ class ExternalIpImportResult:
     # matched (not canonical per import_canonical_card_data's own filtering).
     skip_counts: dict[str, int] = field(default_factory=dict)
     canonical_cards_matched: int = 0
-    cards_eligible: int = 0
+    printings_eligible: int = 0
     votes_would_cast: int = 0
     votes_written: int = 0
     audit: list[dict[str, object]] = field(default_factory=list)
@@ -285,9 +279,9 @@ def run_external_ip_tag_import(
     The import itself - a plain, testable function with Command.handle() kept thin, matching
     this module family's own convention (purge_machine_votes.purge_run, local_detect_ai_art.
     run_ai_art_detector). `dry_run=True` (the default, matching every other Stage 3+ command's
-    opt-in-to-write convention) parses/joins/counts everything without writing any CardTagVote
-    row or re-resolving any card. GATE VERIFICATION is layered on by the management command,
-    not here - same split as run_ai_art_detector/purge_machine_votes (see their docstrings).
+    opt-in-to-write convention) parses/joins/counts everything without writing any
+    PrintingTagVote row. GATE VERIFICATION is layered on by the management command, not here
+    - same split as run_ai_art_detector/purge_machine_votes (see their docstrings).
     """
     run_id = run_id or generate_run_id()
     result = ExternalIpImportResult(dry_run=dry_run, run_id=run_id)
@@ -309,44 +303,35 @@ def run_external_ip_tag_import(
     if unmatched_illustrations:
         result.skip_counts["illustration-not-in-default-cards"] = unmatched_illustrations
 
-    matched_identifiers = set(
-        CanonicalCard.objects.filter(identifier__in=candidate_identifiers).values_list("identifier", flat=True)
-    )
-    result.canonical_cards_matched = len(matched_identifiers)
-    unmatched_printings = len(candidate_identifiers) - len(matched_identifiers)
+    tag, _ = Tag.objects.get_or_create(name=EXTERNAL_IP_TAG_NAME)
+
+    # Count total canonical cards matched (for reporting, before eligibility exclusion).
+    all_matched = CanonicalCard.objects.filter(identifier__in=candidate_identifiers)
+    result.canonical_cards_matched = all_matched.count()
+    unmatched_printings = len(candidate_identifiers) - result.canonical_cards_matched
     if unmatched_printings:
         result.skip_counts["printing-not-canonical"] = unmatched_printings
 
-    tag, _ = Tag.objects.get_or_create(name=EXTERNAL_IP_TAG_NAME)
+    # Eligible = matched minus already-voted by this identity for this tag (idempotency).
+    # Direct printing-level join: no Card-level inference or effective-printing logic needed —
+    # the illustration_id -> CanonicalCard.identifier join is the complete eligibility check.
+    # The single-exclude-call form (both conditions on the same related row) is correct here,
+    # matching the same pattern local_detect_ai_art._eligible_cards_queryset uses.
+    eligible_printings = all_matched.exclude(
+        printing_tag_votes__anonymous_id=SCRYFALL_TAGGER_ANONYMOUS_ID,
+        printing_tag_votes__tag=tag,
+    ).distinct()
 
-    # Effective-printing eligibility (module docstring): an ingestion-time canonical_card match,
-    # OR a community-RESOLVED inferred_canonical_card match - minus any card THIS identity has
-    # already voted on for this tag (the single-exclude-call form, both conditions on the same
-    # related row - the pitfall local_detect_ai_art._eligible_cards_queryset's own docstring
-    # names). A vote from any OTHER identity (a human's, another engine's) never excludes -
-    # uniqueness is per (card, tag, anonymous_id).
-    eligible_cards = (
-        Card.objects.filter(
-            Q(canonical_card__identifier__in=matched_identifiers)
-            | Q(
-                printing_tag_status=PrintingTagStatus.RESOLVED,
-                inferred_canonical_card__identifier__in=matched_identifiers,
-            )
-        )
-        .exclude(tag_votes__anonymous_id=SCRYFALL_TAGGER_ANONYMOUS_ID, tag_votes__tag=tag)
-        .distinct()
-    )
-
-    votes_batch: list[CardTagVote] = []
-    for card in eligible_cards.iterator(chunk_size=chunk_size):
-        result.cards_eligible += 1
+    votes_batch: list[PrintingTagVote] = []
+    for printing in eligible_printings.iterator(chunk_size=chunk_size):
+        result.printings_eligible += 1
         result.votes_would_cast += 1
         if len(result.audit) < audit_sample_size:
-            result.audit.append({"card_id": card.pk, "card_name": card.name})
+            result.audit.append({"printing_id": str(printing.identifier), "printing_name": printing.name})
         if not dry_run:
             votes_batch.append(
-                CardTagVote(
-                    card_id=card.pk,
+                PrintingTagVote(
+                    printing_id=printing.pk,
                     tag=tag,
                     polarity=VotePolarity.APPLY,
                     anonymous_id=SCRYFALL_TAGGER_ANONYMOUS_ID,
@@ -356,16 +341,12 @@ def run_external_ip_tag_import(
             )
 
     if not dry_run:
-        # ignore_conflicts=True: belt-and-suspenders against the (card, tag, anonymous_id)
-        # uniqueness constraint - the eligibility query above already excludes any card this
+        # ignore_conflicts=True: belt-and-suspenders against the (printing, tag, anonymous_id)
+        # uniqueness constraint - the eligibility query above already excludes any printing this
         # identity has voted on, so a conflict here would only ever come from two concurrent
-        # invocations racing, not from this invocation's own logic. Same comment shape as
-        # run_ai_art_detector's own bulk_create.
-        CardTagVote.objects.bulk_create(votes_batch, ignore_conflicts=True)
+        # invocations racing, not from this invocation's own logic.
+        PrintingTagVote.objects.bulk_create(votes_batch, ignore_conflicts=True)
         result.votes_written = len(votes_batch)
-
-        for card in Card.objects.filter(pk__in=[vote.card_id for vote in votes_batch]):
-            resolve_and_persist_tag_votes(card)
 
     return result
 
@@ -384,12 +365,13 @@ def _find_art_tags_download_uri() -> str:
 class Command(BaseCommand):
     help = (
         "Imports Scryfall Tagger's art:external-ip community tag (and its child-IP tags) as "
-        "machine CardTagVote rows (source=deduction, anonymous_id=scryfall-tagger-v1, machine "
-        "weight 0.5) for cards whose effective printing's illustration the Tagger community "
-        "tagged - fix-batch plan 2026-07-27 W9. Defaults to dry-run and requires an explicit "
-        "--write to actually write, matching every other Stage 3+ command's own convention. "
-        "Idempotent on re-run via the (card, tag, anonymous_id) uniqueness constraint; retract "
-        "one invocation's votes with purge_machine_votes --run-id <id>."
+        "machine PrintingTagVote rows (source=deduction, anonymous_id=scryfall-tagger-v1, "
+        "machine weight 0.5) for CanonicalCard (printing) rows whose illustration the Tagger "
+        "community tagged - fix-batch plan 2026-07-27 W9 (revised per-printing spec). Defaults "
+        "to dry-run and requires an explicit --write to actually write, matching every other "
+        "Stage 3+ command's own convention. Idempotent on re-run via the "
+        "(printing, tag, anonymous_id) uniqueness constraint; retract one invocation's votes "
+        "with purge_machine_votes --run-id <id>."
     )
 
     def add_arguments(self, parser: Any) -> None:
@@ -413,8 +395,8 @@ class Command(BaseCommand):
             "--write",
             action="store_true",
             default=False,
-            help="Actually write CardTagVote rows and re-resolve touched cards. Default is "
-            "dry-run: parse, join, and count everything without writing.",
+            help="Actually write PrintingTagVote rows. Default is dry-run: parse, join, and "
+            "count everything without writing.",
         )
         parser.add_argument(
             "--dry-run",
@@ -486,29 +468,19 @@ class Command(BaseCommand):
             print(
                 f"[external-ip] tags_seen={result.tags_seen} subtree_tags={result.subtree_tag_count} "
                 f"illustrations={result.illustrations_tagged} canonical_cards={result.canonical_cards_matched} "
-                f"eligible_cards={result.cards_eligible} "
+                f"eligible_printings={result.printings_eligible} "
                 f"votes={'written=' + str(result.votes_written) if not dry_run else 'would_cast=' + str(result.votes_would_cast)} "
                 f"skip_counts={dict(result.skip_counts)}"
             )
             for entry in result.audit[:10]:
                 print(f"  sample: {entry}")
 
-            if not dry_run:
-                touched_card_ids = list(
-                    CardTagVote.objects.filter(run_id=run_id, anonymous_id=SCRYFALL_TAGGER_ANONYMOUS_ID).values_list(
-                        "card_id", flat=True
-                    )
-                )
-                violations = verify_no_machine_only_resolutions(touched_card_ids)
-                if violations:
-                    raise CommandError(
-                        f"GATE VIOLATION: {len(violations)} card(s) are RESOLVED with only "
-                        f"machine-sourced surviving votes behind that outcome, which should be "
-                        f"structurally impossible per resolve_weighted_consensus's own human-"
-                        f"backed gate - STOP and investigate before continuing. Affected card "
-                        f"pks: {violations[:50]}" + (" (truncated)" if len(violations) > 50 else "")
-                    )
-                print(f"Gate check passed: 0/{len(touched_card_ids)} touched cards resolved machine-only.")
+            # Note: verify_no_machine_only_resolutions (purge_machine_votes) is card-level
+            # (checks Card.printing_tag_status / tag_vote_statuses). PrintingTagVote writes do
+            # not affect any Card-level resolution status — per-printing consensus resolution
+            # is a separate concern tracked in printing_tag_consensus.py, with no persisted
+            # Card-side status field today. The gate is therefore not applicable here and is
+            # omitted; it remains available for CardTagVote/CardPrintingTag/CardArtistVote runs.
 
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()

@@ -1,14 +1,18 @@
 """
 Tests for cardpicker.management.commands.import_external_ip_tags — the Scryfall Tagger
-art:external-ip community tag import (fix-batch plan 2026-07-27, work item W9).
+art:external-ip community tag import (fix-batch plan 2026-07-27, work item W9,
+revised per-printing spec).
 
 Covers:
   - JSONL parsing: find_external_ip_subtree (BFS from root tag slug),
     collect_illustration_ids (second-pass over subtree only),
     build_illustration_index (illustration_id → card id, including card_faces)
   - run_external_ip_tag_import: dry-run/write, idempotent re-run,
-    illustration-to-card join, unmatched illustration/canonical-card skip
-  - Gate pattern: verify_no_machine_only_resolutions on the write path
+    illustration-to-CanonicalCard join, unmatched illustration/canonical-card skip
+
+Per-printing design: votes target CanonicalCard (Scryfall printing) rows directly —
+no Card (catalog image) rows are needed or created. The illustration_id →
+CanonicalCard.identifier join is the complete eligibility check.
 
 No network calls, no live DB writes — uses hand-built fixture JSONL files in
 tests/fixtures/ and the Django test DB.
@@ -27,8 +31,8 @@ from cardpicker.management.commands.import_external_ip_tags import (
     find_external_ip_subtree,
     run_external_ip_tag_import,
 )
-from cardpicker.models import CanonicalCard, CardTagVote, VotePolarity, VoteSource
-from cardpicker.tests.factories import CanonicalCardFactory, CardFactory
+from cardpicker.models import CanonicalCard, PrintingTagVote, VotePolarity, VoteSource
+from cardpicker.tests.factories import CanonicalCardFactory
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _ART_TAGS_FIXTURE = _FIXTURES / "art_tags.jsonl"
@@ -125,10 +129,6 @@ class TestRunExternalIpTagImport:
         _make_canonical(_RING_ID)
         _make_canonical(_GANDALF_ID)
         _make_canonical(_MARINE_ID)
-        # Cards linked to those canonical cards
-        CardFactory(name="The One Ring", canonical_card=CanonicalCard.objects.get(identifier=_RING_ID))
-        CardFactory(name="Gandalf the Grey", canonical_card=CanonicalCard.objects.get(identifier=_GANDALF_ID))
-        CardFactory(name="Space Marine", canonical_card=CanonicalCard.objects.get(identifier=_MARINE_ID))
 
         result = run_external_ip_tag_import(
             tags_path=_ART_TAGS_FIXTURE,
@@ -142,17 +142,14 @@ class TestRunExternalIpTagImport:
         assert result.subtree_tag_count == 4
         assert result.illustrations_tagged == 3
         assert result.canonical_cards_matched == 3
-        assert result.cards_eligible == 3
+        assert result.printings_eligible == 3
         assert result.votes_would_cast == 3
-        assert CardTagVote.objects.count() == 0  # nothing persisted
+        assert PrintingTagVote.objects.count() == 0  # nothing persisted
 
     def test_write_casts_votes_and_persists(self, db):
-        _make_canonical(_RING_ID)
-        _make_canonical(_GANDALF_ID)
-        _make_canonical(_MARINE_ID)
-        ring = CardFactory(name="The One Ring", canonical_card=CanonicalCard.objects.get(identifier=_RING_ID))
-        gandalf = CardFactory(name="Gandalf the Grey", canonical_card=CanonicalCard.objects.get(identifier=_GANDALF_ID))
-        marine = CardFactory(name="Space Marine", canonical_card=CanonicalCard.objects.get(identifier=_MARINE_ID))
+        ring = _make_canonical(_RING_ID)
+        gandalf = _make_canonical(_GANDALF_ID)
+        marine = _make_canonical(_MARINE_ID)
 
         result = run_external_ip_tag_import(
             tags_path=_ART_TAGS_FIXTURE,
@@ -161,29 +158,19 @@ class TestRunExternalIpTagImport:
         )
 
         assert result.votes_written == 3
-        assert CardTagVote.objects.count() == 3
+        assert PrintingTagVote.objects.count() == 3
 
-        for card, name in [(ring, "The One Ring"), (gandalf, "Gandalf"), (marine, "Space Marine")]:
-            vote = CardTagVote.objects.get(card=card)
+        for printing in [ring, gandalf, marine]:
+            vote = PrintingTagVote.objects.get(printing=printing)
             assert vote.tag.name == "external-ip"
             assert vote.polarity == VotePolarity.APPLY
             assert vote.anonymous_id == SCRYFALL_TAGGER_ANONYMOUS_ID
             assert vote.source == VoteSource.DEDUCTION
             assert vote.run_id == result.run_id
 
-        # verify_no_machine_only_resolutions — a single machine vote alone can never resolve
-        from cardpicker.management.commands.purge_machine_votes import (
-            verify_no_machine_only_resolutions,
-        )
-
-        card_ids = [ring.pk, gandalf.pk, marine.pk]
-        assert verify_no_machine_only_resolutions(card_ids) == []
-
-    def test_idempotent_rerun_skips_already_voted_cards(self, db):
+    def test_idempotent_rerun_skips_already_voted_printings(self, db):
         _make_canonical(_RING_ID)
         _make_canonical(_GANDALF_ID)
-        CardFactory(name="The One Ring", canonical_card=CanonicalCard.objects.get(identifier=_RING_ID))
-        CardFactory(name="Gandalf the Grey", canonical_card=CanonicalCard.objects.get(identifier=_GANDALF_ID))
 
         first = run_external_ip_tag_import(
             tags_path=_ART_TAGS_FIXTURE,
@@ -197,15 +184,14 @@ class TestRunExternalIpTagImport:
             default_cards_path=_DEFAULT_CARDS_FIXTURE,
             dry_run=False,
         )
-        # both cards already voted by this identity → eligibility excludes them
-        assert second.cards_eligible == 0
+        # both printings already voted by this identity → eligibility excludes them
+        assert second.printings_eligible == 0
         assert second.votes_written == 0
-        assert CardTagVote.objects.count() == 2  # unchanged
+        assert PrintingTagVote.objects.count() == 2  # unchanged
 
     def test_skips_printing_without_canonical_card_match(self, db):
         # Only one of the three tagged printings has a CanonicalCard row
         _make_canonical(_RING_ID)
-        CardFactory(name="The One Ring", canonical_card=CanonicalCard.objects.get(identifier=_RING_ID))
 
         result = run_external_ip_tag_import(
             tags_path=_ART_TAGS_FIXTURE,
@@ -214,53 +200,8 @@ class TestRunExternalIpTagImport:
         )
 
         assert result.canonical_cards_matched == 1
-        assert result.cards_eligible == 1
+        assert result.printings_eligible == 1
         assert result.skip_counts.get("printing-not-canonical") == 2
-
-    def test_card_matching_resolved_inferred_printing_is_eligible(self, db):
-        """A card linked via inferred_canonical_card (community-RESOLVED, not
-        ingestion-time canonical_card) is also eligible — the same
-        effective-printing logic the module docstring describes."""
-        from cardpicker.models import PrintingTagStatus
-
-        _make_canonical(_RING_ID)
-        card = CardFactory(
-            name="The One Ring (resolved)",
-            canonical_card=None,
-            inferred_canonical_card=CanonicalCard.objects.get(identifier=_RING_ID),
-            printing_tag_status=PrintingTagStatus.RESOLVED,
-        )
-
-        result = run_external_ip_tag_import(
-            tags_path=_ART_TAGS_FIXTURE,
-            default_cards_path=_DEFAULT_CARDS_FIXTURE,
-            dry_run=False,
-        )
-
-        assert result.votes_written == 1
-        assert CardTagVote.objects.filter(card=card).exists()
-
-    def test_unresolved_inferred_printing_is_not_eligible(self, db):
-        """A card with an inferred_canonical_card that isn't yet community-RESOLVED
-        is withheld — same withhold-never-manufacture rule the module docstring
-        states."""
-        from cardpicker.models import PrintingTagStatus
-
-        _make_canonical(_RING_ID)
-        CardFactory(
-            name="The One Ring (unresolved)",
-            canonical_card=None,
-            inferred_canonical_card=CanonicalCard.objects.get(identifier=_RING_ID),
-            printing_tag_status=PrintingTagStatus.UNRESOLVED,
-        )
-
-        result = run_external_ip_tag_import(
-            tags_path=_ART_TAGS_FIXTURE,
-            default_cards_path=_DEFAULT_CARDS_FIXTURE,
-            dry_run=True,
-        )
-
-        assert result.cards_eligible == 0
 
     def test_source_and_anonymous_id(self, db):
         """Each vote is cast as (source=DEDUCTION, anonymous_id=scryfall-tagger-v1)
@@ -268,7 +209,6 @@ class TestRunExternalIpTagImport:
         normal _SOURCE_WEIGHTS path, and the 2026-07-23 zero-weight override
         scoped to deductive-backfill-v1 is never triggered."""
         _make_canonical(_RING_ID)
-        CardFactory(name="The One Ring", canonical_card=CanonicalCard.objects.get(identifier=_RING_ID))
 
         run_external_ip_tag_import(
             tags_path=_ART_TAGS_FIXTURE,
@@ -276,9 +216,25 @@ class TestRunExternalIpTagImport:
             dry_run=False,
         )
 
-        vote = CardTagVote.objects.get()
+        vote = PrintingTagVote.objects.get()
         assert vote.source == VoteSource.DEDUCTION
         assert vote.anonymous_id == "scryfall-tagger-v1"
+
+    def test_audit_sample_contains_printing_fields(self, db):
+        """Audit sample entries use printing_id/printing_name (not card_id/card_name)."""
+        _make_canonical(_RING_ID)
+
+        result = run_external_ip_tag_import(
+            tags_path=_ART_TAGS_FIXTURE,
+            default_cards_path=_DEFAULT_CARDS_FIXTURE,
+            dry_run=True,
+        )
+
+        assert len(result.audit) == 1
+        entry = result.audit[0]
+        assert "printing_id" in entry
+        assert "printing_name" in entry
+        assert "card_id" not in entry
 
 
 class TestManagementCommand:
@@ -287,7 +243,6 @@ class TestManagementCommand:
 
     def test_dry_run_default_without_write_flag(self, db):
         _make_canonical(_RING_ID)
-        CardFactory(name="The One Ring", canonical_card=CanonicalCard.objects.get(identifier=_RING_ID))
 
         call_command(
             "import_external_ip_tags",
@@ -295,11 +250,10 @@ class TestManagementCommand:
             default_cards=str(_DEFAULT_CARDS_FIXTURE),
         )
 
-        assert CardTagVote.objects.count() == 0  # default is dry-run
+        assert PrintingTagVote.objects.count() == 0  # default is dry-run
 
     def test_write_flag_persists(self, db):
         _make_canonical(_RING_ID)
-        CardFactory(name="The One Ring", canonical_card=CanonicalCard.objects.get(identifier=_RING_ID))
 
         call_command(
             "import_external_ip_tags",
@@ -308,11 +262,10 @@ class TestManagementCommand:
             write=True,
         )
 
-        assert CardTagVote.objects.count() == 1
+        assert PrintingTagVote.objects.count() == 1
 
     def test_dry_run_explicit(self, db):
         _make_canonical(_RING_ID)
-        CardFactory(name="The One Ring", canonical_card=CanonicalCard.objects.get(identifier=_RING_ID))
 
         call_command(
             "import_external_ip_tags",
@@ -321,7 +274,7 @@ class TestManagementCommand:
             dry_run=True,
         )
 
-        assert CardTagVote.objects.count() == 0
+        assert PrintingTagVote.objects.count() == 0
 
     def test_mutually_exclusive_flags_raises(self, db):
         from django.core.management import CommandError
