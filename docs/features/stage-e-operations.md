@@ -1065,7 +1065,7 @@ produces an empty `counters={}` record.
 
 ## `rejudge_fallback_channel` — fallback-channel compare-and-retract (PR #495)
 
-`MPCAutofill/management/commands/rejudge_fallback_channel.py` re-evaluates the
+`MPCAutofill/cardpicker/management/commands/rejudge_fallback_channel.py` re-evaluates the
 `stage-d-fallback-v1` channel's existing conclusions against **current stored**
 `ImageEvidence` and retracts the rows where the conclusion changed, making
 those cards eligible for a fresh `local_calculate_verdicts` pass.
