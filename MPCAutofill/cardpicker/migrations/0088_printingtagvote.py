@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("cardpicker", "0086_imageevidence_artbox_crop_px_and_more"),
+        ("cardpicker", "0087_imageevidence_bleed_diff_mm"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

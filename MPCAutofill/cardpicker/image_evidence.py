@@ -125,37 +125,31 @@ detected` is the moderator-flag signal: a raw True/False fact this extractor emi
 Stage D's calculator (task #151's pipeline-fidelity gate) - never acted on directly here, matching
 every prior extractor's "emit signals, don't act on them" discipline.
 
-color_profile / quality_signals (public issue #150's re-spec, "Stage C visual-signal extractors" -
-the LAST Stage C manifest extractor group; the phash half of the original issue is DROPPED per the
-owner's 2026-07-20 re-spec comment, superseded by user-submitted phash (task #203) - set-symbol
-phash already shipped separately as symbol_region above, not touched by this PR): both consume the
-SAME `local_image_quality.is_image_truncated(image)` call - `quality_signals` runs it first (right
-after legal_line above) and stores the local `truncated` boolean for `color_profile` to reuse a few
-lines later, rather than re-attempting (and re-catching) the same `OSError` a second time. This is
-an explicit cross-extractor dependency, same category as `artist_ocr` reusing `collector_line_ocr`'s
-own raw texts or `crop_coordinates` reusing `geometry_bleed`'s `bleed_class` - documented here for
-the same reason those are documented in their own sections above.
-
-`quality_signals`: `image_is_truncated` is a genuine integrity fact (Pillow only lazily decodes on
-`Image.open()`, so a download cut off partway through can still open successfully and only raise
-`OSError` once something forces a full pixel read - see `local_image_quality.is_image_truncated`'s
-own docstring). Only if the image loaded cleanly does this extractor go on to compute
-`blur_variance` (variance of a Laplacian-kernel edge response over the grayscale image - a standard
-sharpness/blur proxy) and `image_entropy` (Pillow's own `Image.entropy()`, a built-in method, not
-reimplemented) - a truncated image's partial pixel data would produce meaningless numbers for both,
-not a real reading. Both are raw signals only: this extractor never decides what variance/entropy
-counts as "too blurry"/"too flat" - that's Stage D calculator territory, same reasoning every other
+quality_signals (public issue #150's re-spec, "Stage C visual-signal extractors" - the LAST Stage
+C manifest extractor group; the phash half of the original issue is DROPPED per the owner's
+2026-07-20 re-spec comment, superseded by user-submitted phash (task #203) - set-symbol phash
+already shipped separately as symbol_region above, not touched by this PR): `image_is_truncated`
+is a genuine integrity fact (Pillow only lazily decodes on `Image.open()`, so a download cut off
+partway through can still open successfully and only raise `OSError` once something forces a full
+pixel read - see `local_image_quality.is_image_truncated`'s own docstring). Only if the image
+loaded cleanly does this extractor go on to compute `blur_variance` (variance of a
+Laplacian-kernel edge response over the grayscale image - a standard sharpness/blur proxy) and
+`image_entropy` (Pillow's own `Image.entropy()`, a built-in method, not reimplemented) - a
+truncated image's partial pixel data would produce meaningless numbers for both, not a real
+reading. Both are raw signals only: this extractor never decides what variance/entropy counts as
+"too blurry"/"too flat" - that's Stage D calculator territory, same reasoning every other
 extractor in this module gives for staying signal-only. A truncated image is reported through the
 SAME `"fetch_failed"` skip reason `fetch_health` already uses (see that section below) rather than
 a new string - Stage D doesn't need a finer bucket than "no usable image data," and inventing one
 here would cross into the separately-invented-vocabulary problem `docs/features/catalog-completion-
 plan.md`'s own `CardScanLog` design explicitly warns against.
 
-`color_profile`: per-channel (R, G, B) mean and population standard deviation over the FULL fetched
-image (`local_image_quality.compute_color_profile`, a first-party `PIL.ImageStat.Stat` call, not a
-hand-rolled pixel loop) - "color statistics... store the math, not the strip" (FINAL POSTURE item
-2). Skips (sharing `quality_signals`' own `truncated` finding, not a fresh decode attempt) under the
-same `"fetch_failed"` skip reason for the same reason given above.
+`color_profile` (same re-spec group) was RETIRED 2026-07-27: the per-channel (R, G, B) mean/stddev
+it stored (`color_mean_rgb`/`color_stddev_rgb`) was never consumed by any downstream calculator or
+consumer, so the extractor and `local_image_quality.compute_color_profile` were removed outright.
+The two model FIELDS remain (nullable, simply never written anymore) - "stop extracting first,
+migrate later" (owner-confirmed decision) - to be dropped by a future migration once nothing reads
+them.
 
 `local_image_quality.py` is NOT protected core (`docs/upstreaming/license-provenance.md` §2's file
 list doesn't include it) - new helpers land there directly, matching `local_ocr.py`'s own precedent
@@ -254,15 +248,16 @@ from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
     SYMBOL_STRIP_BOX,
+    cast_border_attribute_vote,
     classify_bleed_edge,
     classify_border_color,
     classify_frame_style,
     extract_artist_name,
+    measure_bleed_diff_mm,
     normalize_crop_box,
 )
 from cardpicker.local_image_quality import (
     compute_blur_variance,
-    compute_color_profile,
     compute_entropy,
     is_image_truncated,
 )
@@ -311,11 +306,9 @@ SYMBOL_REGION_EXTRACTOR_VERSION = "symbol-region-v1"
 # `legal_line_proxy_marker_detected` fields are just as engine-dependent as the collector-line
 # group's own OCR output.
 LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v2"
-# NOT bumped: quality_signals (blur_variance/image_entropy - pixel-statistics math, no OCR) and
-# color_profile (per-channel mean/stddev - also pixel-statistics math, no OCR) are both
+# NOT bumped: quality_signals (blur_variance/image_entropy - pixel-statistics math, no OCR) is
 # engine-independent by construction, same reasoning as symbol_region above.
 QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
-COLOR_PROFILE_EXTRACTOR_VERSION = "color-profile-v1"
 ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v1"
 
 # Bit width for the perceptual-hash int representation - matches local_phash.py's own private
@@ -539,7 +532,7 @@ def extract_card_evidence(
     group), `legal_line_ms` (the second Tesseract-backed extractor), `extraction_ms` (everything
     after fetch returns, i.e. every extractor combined), and `other_ms` (`extraction_ms` minus the
     two OCR-group figures - geometry_bleed/layout_class/crop_coordinates/symbol_region/
-    quality_signals/color_profile combined). Diagnostic-only (2026-07-20,
+    quality_signals combined). Diagnostic-only (2026-07-20,
     docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md) - `None` by default, zero behavior
     change and negligible overhead (a handful of extra `time.monotonic()` calls) when not passed;
     never persisted onto `ImageEvidence` itself, per docs/features/catalog-completion-plan.md's
@@ -563,7 +556,7 @@ def extract_card_evidence(
         raise
     fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
 
-    return compute_card_evidence(
+    result = compute_card_evidence(
         card.pk,
         card.content_phash,
         image,
@@ -574,6 +567,10 @@ def extract_card_evidence(
         md5_checksum=card.md5_checksum,
         sha256_checksum=card.sha256_checksum,
     )
+    vote = cast_border_attribute_vote(card, result.fields.get("layout_class") or None, confidence=0.5)
+    if vote is not None:
+        vote.save()
+    return result
 
 
 def compute_card_evidence(
@@ -726,6 +723,9 @@ def compute_card_evidence(
             # "ambiguous" is the pipeline's own pre-existing skip-reason vocabulary
             # (docs/features/catalog-completion-plan.md's CardScanLog section), not a new string.
             skip_reasons["geometry_bleed"] = "ambiguous"
+        bleed_diff = measure_bleed_diff_mm(image)
+        if bleed_diff is not None:
+            fields["bleed_diff_mm"] = bleed_diff
     extractor_versions["geometry_bleed"] = GEOMETRY_BLEED_EXTRACTOR_VERSION
 
     # layout_class (issue #148): reuses this same fetched image + the bleed_class just computed
@@ -1021,15 +1021,12 @@ def compute_card_evidence(
     # input category geometry_bleed's own zero-height guard and symbol_region's degenerate-crop-
     # box guard handle for their own divisions/crops (see those sections above) - real fetched
     # images essentially never hit this. Truncation check next (is_image_truncated forces a full
-    # pixel decode) - `truncated` is reused by color_profile just below rather than
-    # re-attempting the same decode a second time (see module docstring for this explicit
-    # cross-extractor dependency). blur_variance/image_entropy are only computed when the image
-    # loaded cleanly - a truncated image's partial pixel data would produce meaningless numbers,
-    # not a real reading.
+    # pixel decode). blur_variance/image_entropy are only computed when the image loaded cleanly
+    # - a truncated image's partial pixel data would produce meaningless numbers, not a real
+    # reading.
     if image is None:
         skip_reasons["quality_signals"] = "fetch_failed"
     elif width <= 0 or height <= 0:
-        truncated = False  # not truncated - never attempted, a degenerate size instead
         skip_reasons["quality_signals"] = "ambiguous"
     else:
         truncated = is_image_truncated(image)
@@ -1042,22 +1039,6 @@ def compute_card_evidence(
             fields["blur_variance"] = compute_blur_variance(image)
             fields["image_entropy"] = compute_entropy(image)
     extractor_versions["quality_signals"] = QUALITY_SIGNALS_EXTRACTOR_VERSION
-
-    # color_profile (issue #150's re-spec): per-channel (R, G, B) mean/stddev over the FULL
-    # fetched image - "color statistics... store the math, not the strip" (FINAL POSTURE item
-    # 2). Reuses quality_signals' own degenerate-size guard and `truncated` finding above rather
-    # than a fresh decode attempt.
-    if image is None:
-        skip_reasons["color_profile"] = "fetch_failed"
-    elif width <= 0 or height <= 0:
-        skip_reasons["color_profile"] = "ambiguous"
-    elif truncated:
-        skip_reasons["color_profile"] = "fetch_failed"
-    else:
-        mean_rgb, stddev_rgb = compute_color_profile(image)
-        fields["color_mean_rgb"] = mean_rgb
-        fields["color_stddev_rgb"] = stddev_rgb
-    extractor_versions["color_profile"] = COLOR_PROFILE_EXTRACTOR_VERSION
 
     if profile is not None:
         profile["extraction_ms"] = (time.monotonic() - extraction_started_at) * 1000
@@ -1249,7 +1230,6 @@ __all__ = [
     "SYMBOL_REGION_EXTRACTOR_VERSION",
     "LEGAL_LINE_EXTRACTOR_VERSION",
     "QUALITY_SIGNALS_EXTRACTOR_VERSION",
-    "COLOR_PROFILE_EXTRACTOR_VERSION",
     "ARTBOX_PHASH_EXTRACTOR_VERSION",
     "ARTBOX_MODERN_CROP_BOX",
     "ARTBOX_OLD_CROP_BOX",

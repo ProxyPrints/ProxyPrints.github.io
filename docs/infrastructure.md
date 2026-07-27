@@ -20,6 +20,22 @@ them.
   manual invocation after a rebuild — see "Startup vs. scheduled catalog
   sync" below; run it manually only if you want synchronous confirmation
   the catalog is populated before considering a rebuild done.
+- `MPCAutofill/drives.private.csv` (optional overlay, same schema:
+  `name,drive_id,drive_public,description`): `import_sources` merges it
+  with `drives.csv` on every boot — private rows are appended after public
+  rows with ordinals continuing across files. On a duplicate name the
+  private row wins and a warning is printed. A missing file is silently
+  fine; most instances will not have one. **Contributor privacy**: place a
+  privacy-requesting contributor's row here with `drive_public=false` — the
+  contributions page credits them by name but omits the drive link (the API
+  never exposes the raw drive identifier). The file is gitignored alongside
+  `drives.csv`. Container delivery: the existing Dockerfile
+  `COPY MPCAutofill /MPCAutofill/MPCAutofill` bakes it in from the host the
+  same way as `drives.csv`; `.dockerignore` does not exclude it. Place the
+  file at `MPCAutofill/drives.private.csv` and run `up --build -d` to
+  activate. Note: `docker/django/check_drives.sh` guards only `drives.csv`
+  (its line-count check requires at least one row, i.e. at least one public
+  drive); the private overlay has no build-time guard of its own.
 - Server clock: UTC (confirmed via `timedatectl` — `Etc/UTC`, `+0000`).
   All container logs, cron/`qcluster` schedules, and DB timestamps are
   UTC — no per-session guessing needed.
@@ -247,6 +263,18 @@ directly.
   `coverage-ack: <test id or glob> — <reason>` line (same tether discipline
   as `docs_lint.py`'s in-file `ALLOWLIST`). New tests and un-skipping are
   always fine.
+- `web-ci.yml` per-surface change gating (PR #466): a `changes` job runs
+  first on every push and diffs `HEAD` against the push's pre-image SHA using
+  plain `git diff --name-only` (same pattern as other workflows in this repo,
+  not a paths-filter action). It sets two boolean outputs — `backend`
+  (`MPCAutofill/**` prefix) and `frontend` (`frontend/**` prefix) — and every
+  downstream job gates itself on `needs.changes.outputs.<surface> == 'true'`.
+  `cloudflare-static-site/**` is not wired to any surface. Fallback: on
+  `workflow_dispatch`, a new branch push, or a force-push where no before SHA
+  is available, both outputs are set to `true` (run everything). A
+  `test-pre-commit` job that had been duplicated in `web-ci.yml` was removed
+  in this PR rather than scoped — `test-pre-commit.yml` already runs it
+  unconditionally.
 
 ## Push policy
 

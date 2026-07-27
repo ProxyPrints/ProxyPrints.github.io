@@ -26,8 +26,10 @@ sweep finding for `local_phash.py`/`local_fallback.py` - see license-provenance.
   APIs, no hand-rolled convolution or extra numpy dependency needed.
 - `compute_entropy`: `PIL.Image.entropy()` - a built-in Pillow method, not reimplemented here at
   all.
-- `compute_color_profile`: per-channel (R, G, B) mean and population standard deviation over the
-  full image via `PIL.ImageStat.Stat` - again a first-party Pillow API, no manual pixel loop.
+
+`compute_color_profile` (per-channel mean/stddev over the full image) was REMOVED 2026-07-27 -
+its only consumer was Stage C's retired `color_profile` extractor (see image_evidence.py's own
+module docstring), whose stored fields were never read downstream.
 """
 
 from typing import TYPE_CHECKING
@@ -92,14 +94,4 @@ def compute_entropy(image: "Image.Image") -> float:
     return float(image.convert("L").entropy())
 
 
-def compute_color_profile(image: "Image.Image") -> tuple[list[float], list[float]]:
-    """
-    Per-channel (R, G, B) mean and population standard deviation over the FULL fetched image, via
-    `PIL.ImageStat.Stat` - "color statistics... store the math, not the strip" (FINAL POSTURE
-    item 2). Returns `(mean_rgb, stddev_rgb)`, each a 3-element list of floats in `[0, 255]`.
-    """
-    stat = ImageStat.Stat(image.convert("RGB"))
-    return list(stat.mean), list(stat.stddev)
-
-
-__all__ = ["is_image_truncated", "compute_blur_variance", "compute_entropy", "compute_color_profile"]
+__all__ = ["is_image_truncated", "compute_blur_variance", "compute_entropy"]

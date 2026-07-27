@@ -230,8 +230,9 @@ from cardpicker.utils import get_baked_git_sha, read_card_ids_file
 
 logger = logging.getLogger(__name__)
 
-# The full Stage C manifest as of 2026-07-25 (fetch_health + geometry-bleed + geometry-group +
-# OCR-group + artbox-phash + symbol-region + legal-line + quality-signals/color-profile) - matches
+# The full Stage C manifest as of 2026-07-27 (fetch_health + geometry-bleed + geometry-group +
+# OCR-group + artbox-phash + symbol-region + legal-line + quality-signals; color_profile retired
+# 2026-07-27, never consumed downstream) - matches
 # image_evidence.extract_card_evidence's own extractor_versions keys exactly. Keep this set in
 # sync with that function whenever a new extractor group lands (see module docstring).
 MANIFEST_EXTRACTOR_KEYS = frozenset(
@@ -247,7 +248,6 @@ MANIFEST_EXTRACTOR_KEYS = frozenset(
         "symbol_region",
         "legal_line",
         "quality_signals",
-        "color_profile",
     }
 )
 

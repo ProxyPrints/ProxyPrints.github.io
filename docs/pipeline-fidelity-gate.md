@@ -435,24 +435,28 @@ one flattened figure:
 | `20260724T001154-d3986cfc` (post-fire calculator re-pass write)      |                                                                                                                                                       **1** | **§14 "Five further passes" write** — `local_calculate_verdicts` re-run over the lexicon-gate-retracted pool; 52,348 `unknown-set-code` + 16 `no-evidence` skips, 117,442 `to-review` — see §14                                                                                                                                                                                                                                                          |
 
 **Stage C run history** (`ImageEvidence.run_id`, current last-writer row
-count per run — canaries first, then the main leg):
+count per run — updated 2026-07-27 after the full-catalog re-extraction):
 
-| run_id                                     | date          |    rows |
-| ------------------------------------------ | ------------- | ------: |
-| `stagec-canary-20260720T1659Z`             | 2026-07-20    |     223 |
-| `stagec-canary-decoupled-20260720T235127Z` | 2026-07-20    |     206 |
-| `ntx-0721`                                 | 2026-07-20/21 |   9,675 |
-| `stagec-20k-20260721T0227Z`                | 2026-07-20/21 |  10,696 |
-| `stagec-remainder-0721`                    | 2026-07-21/22 | 197,470 |
+| run_id                                  | date          |    rows |
+| --------------------------------------- | ------------- | ------: |
+| `pass-pilot-20260725`                   | 2026-07-25    |     100 |
+| `stage-e-stream-20260725T233633221123Z` | 2026-07-25    |      22 |
+| `stage-e-stream-20260725T233633687349Z` | 2026-07-25    |      23 |
+| `pass-full-20260725`                    | 2026-07-25/26 | 194,831 |
+| `pass-full-20260725-r2`                 | 2026-07-25/26 |  23,132 |
+| **Total**                               |               | 218,108 |
 
-Full chain: the two decoupling canaries (Jul 20) validated the
-fetch/compute-decoupled architecture at small scale, then `ntx-0721` +
-`stagec-20k-20260721T0227Z` (Jul 20–21) ran a combined ~20k-card
-extraction pass, then `stagec-remainder-0721` (Jul 21–22, 197,470-row
-main leg) extracted the bulk of the remaining catalog. See
+The 2026-07-25 full-catalog re-extraction (`pass-full-20260725` +
+`pass-full-20260725-r2`) superseded all prior Stage C last-writer rows —
+the original canaries (`stagec-canary-20260720T1659Z`,
+`stagec-canary-decoupled-20260720T235127Z`), `ntx-0721`,
+`stagec-20k-20260721T0227Z`, and `stagec-remainder-0721` no longer appear
+as last-writer for any `ImageEvidence` row. See
 [`reports/2026-07-20-decoupled-canary-confirm.md`](reports/2026-07-20-decoupled-canary-confirm.md)
 and [`reports/2026-07-21-stagec-20k-extraction.md`](reports/2026-07-21-stagec-20k-extraction.md)
-for the canary/20k narrative detail. None of these Stage C runs have a
+for the original canary/20k narrative detail, and
+[`reports/2026-07-26-stagec-full-catalog-completion.md`](reports/2026-07-26-stagec-full-catalog-completion.md)
+for the full-catalog completion record. None of the Stage C runs have a
 `PilotRunLedger` row of their own — see §11 for what that does and
 doesn't affect.
 
@@ -1079,27 +1083,84 @@ mechanics; not restated here. This is expected behavior under that
 ruling, not a bug: a lone machine vote never resolves anything on its
 own, by design.
 
-### Topline end-state (DB-verified live, queried 2026-07-24)
+### Topline end-state (DB-verified live, queried 2026-07-24; updated 2026-07-26 post-pass — supersedes 2026-07-24 snapshot)
 
-- Total `Card` rows: **218,345**.
-- `printing_tag_status`: unresolved **218,341**, resolved **3**, no_match
-  **1**.
-- `artist_vote_status`: all 218,345 `unresolved` (see "Artist-consensus
+#### FIG-2 pipeline funnel
+
+| Node                                             | Value       | Notes                                                                                                                                                                   |
+| ------------------------------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A — CATALOG (total `Card` rows)                  | **218,360** | +15 vs 2026-07-24 snapshot (218,345)                                                                                                                                    |
+| A1 — no phash yet                                | **15**      | zero-evidence cards; equals A − B                                                                                                                                       |
+| B — phash extracted                              | **218,345** |                                                                                                                                                                         |
+| B1 — phash but no evidence                       | **0**       | clean                                                                                                                                                                   |
+| C — evidence extracted                           | **218,345** |                                                                                                                                                                         |
+| C1 — evidence but no vote                        | **121,298** | 46.4% of evidence-bearing cards — largest funnel gap                                                                                                                    |
+| D — carries ≥1 vote (distinct vote-holder cards) | **97,053**  | distinct cards with at least one vote; the 2026-07-24 figure of 166,066 was total vote rows, not distinct card count — see vote tables below                            |
+| F — RESOLVED                                     | **3**       | unchanged                                                                                                                                                               |
+| H — NO MATCH                                     | **9**       | was 1                                                                                                                                                                   |
+| G — UNRESOLVED                                   | **218,348** |                                                                                                                                                                         |
+| I — REVIEW QUEUE                                 | **3,595**   | most-recent-per-card `CardScanLog` rows with `skip_reason='to-review'`; the 2026-07-24 figure of 134,370 was all-time (not dedup'd to most-recent) — definition differs |
+
+- `artist_vote_status`: all cards `unresolved` (see "Artist-consensus
   finding" above).
-- Review queue: **134,370** distinct cards whose current
-  (most-recent-per card+engine, dedup'd) `CardScanLog` row reads
-  `skip_reason='to-review'` — the closest DB-backed proxy for review-queue
-  size; no separate review-queue table/endpoint exists in the schema.
-- `CardPrintingTag` (printing-consensus votes): **166,066** total —
-  user 58, deduction 28,112, ocr 137,896 by source; by `anonymous_id`:
-  `stage-d-join-key-v1` 48,152, `local-ocr-v1` 39,795,
-  `stage-d-fallback-v1` 29,710, `deductive-backfill-v1` 28,112,
-  `local-fallback-v1` 11,947, `local-phash-v1` 8,292, plus 7 small
-  per-session user `anonymous_id`s (58 rows total). The "legacy pilot"
-  43,425 figure matches run_id `20260716T193408-6613a1a6` specifically,
-  not any single `anonymous_id` bucket (that run spans three engines).
-- `CardArtistVote`: 7,137 total (ocr 7,131, user 6).
-- `CardTagVote`: 61,336 total (ocr 61,294, user 42).
+
+#### CardPrintingTag (printing-consensus votes): 169,429 total
+
+| `anonymous_id`           | rows   |
+| ------------------------ | ------ |
+| `stage-d-join-key-v1`    | 48,754 |
+| `local-ocr-v1`           | 41,023 |
+| `stage-d-fallback-v1`    | 29,714 |
+| `deductive-backfill-v1`  | 28,112 |
+| `local-fallback-v1`      | 11,947 |
+| `local-phash-v1`         | 8,291  |
+| `lands-artist-decomp-v1` | 1,488  |
+| user UUIDs               | 100    |
+
+#### CardArtistVote: 7,137 total (unchanged)
+
+| `anonymous_id`         | rows  |
+| ---------------------- | ----- |
+| `residual-classify-v1` | 6,144 |
+| `art-hash-artist-v1`   | 987   |
+| user UUIDs             | 6     |
+
+#### CardTagVote: 278,175 total (was 61,336)
+
+| `anonymous_id`         | rows    |
+| ---------------------- | ------- |
+| `layout-class-cast-v1` | 216,802 |
+| `local-fallback-v1`    | 53,966  |
+| `residual-classify-v1` | 6,144   |
+| `ai-art-detector-v1`   | 1,183   |
+| user UUIDs             | 80      |
+
+### New vote sources (2026-07-26)
+
+Five `anonymous_id` sources appear in the 2026-07-26 snapshot that were
+absent from the 2026-07-24 topline or were previously lumped into coarser
+buckets:
+
+- **`lands-artist-decomp-v1`** (1,488 `CardPrintingTag` rows) — decomposes
+  land-card art into artist-identity signals and casts a printing vote
+  derived from that decomposition.
+- **`art-hash-artist-v1`** (987 `CardArtistVote` rows) — casts artist-
+  identity votes by matching a perceptual hash of the card art against a
+  known-artist hash index; previously the entire `CardArtistVote` non-user
+  pool was reported as a single "ocr 7,131" bucket.
+- **`layout-class-cast-v1`** (216,802 `CardTagVote` rows) — the
+  borderless-attribute cast: classifies each card's layout and border style
+  and casts a tag vote against the attribute-chip taxonomy seeded by
+  `seed_attribute_tags` (tags 24–30); referenced as the "borderless cast"
+  in the operational notes above.
+- **`residual-classify-v1`** (6,144 rows in both `CardArtistVote` and
+  `CardTagVote`) — runs a residual classifier over cards that other engines
+  left unresolved, casting both an artist and a tag vote from the same
+  classification pass; previously the `CardArtistVote` non-user pool was
+  reported as "ocr 7,131" without this sub-source breakdown.
+- **`ai-art-detector-v1`** (1,183 `CardTagVote` rows) — runs an AI-based
+  art-style detector and casts a tag vote indicating whether the card art
+  is AI-generated.
 
 ### Operational notes
 

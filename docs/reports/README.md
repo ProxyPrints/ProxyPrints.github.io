@@ -73,6 +73,11 @@ a `detail` object read only when the summary signals it's needed.
   `stage-d-join-key-v1` totals reconciled to 11,905, gate re-derived at
   0/12,684 across both the printing- and tag-consensus engines this arc
   touched.
+- `2026-07-26-stagec-full-catalog-completion.md` — Stage C full-catalog
+  extraction completion: 218,108 / 218,516 cards (99.8%), run_ids
+  `pass-full-20260725` + `-r2` superseding all prior Stage C last-writer rows,
+  1,614 fetch_ok=False rows + 408 cards with no evidence (all Google Drive),
+  full-catalog fetch-failure rate 0.74%.
 - `2026-07-22-knowledge-inventory.md` — pipeline-fidelity gate artifact 2
   (knowledge-inventory sweep): a constant-by-constant table of every
   pilot-era value's current home, 3 confirmed MISSING items, 3 open
