@@ -1123,10 +1123,14 @@ class TestRunCohortFetchMemoryBound:
 
         peak_live = 0
         resolved = 0
-        while resolved < cohort_size and _time.monotonic() < deadline:
+        # Separate deadline: gc.collect() in the loop was ~50-100ms per call on Python 3.13
+        # (full-generation collection over thousands of test objects), making the shared 10s
+        # deadline flaky on slow CI runners. _Payload has __slots__ (no cycles), so CPython
+        # refcount frees it immediately - no per-iteration GC needed here.
+        resolution_deadline = _time.monotonic() + 30
+        while resolved < cohort_size and _time.monotonic() < resolution_deadline:
             with pool.lock:
                 unresolved = [(future, card_id) for future, card_id in pool.live if not future.done()]
-            gc.collect()
             with live_lock:
                 peak_live = max(peak_live, len(live_payload_ids))
             if unresolved:
@@ -1136,7 +1140,12 @@ class TestRunCohortFetchMemoryBound:
             else:
                 _time.sleep(0.005)
 
-        run_thread.join(timeout=10)
+        # One explicit collection after the loop catches any remaining objects (e.g. those held
+        # in _run_cohort's stack until it exits) before the peak_live assertion below.
+        gc.collect()
+        with live_lock:
+            peak_live = max(peak_live, len(live_payload_ids))
+        run_thread.join(timeout=30)
         assert not run_thread.is_alive(), "background _run_cohort thread never finished"
         assert resolved == cohort_size
         assert result["value"][0] == cohort_size  # completed count

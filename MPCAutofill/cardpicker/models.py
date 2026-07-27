@@ -1825,16 +1825,17 @@ class ImageEvidence(models.Model):
     extractors" - the phash half of the original issue is DROPPED per the owner's 2026-07-20
     re-spec comment, superseded by user-submitted phash, task #203; set-symbol phash already
     shipped separately as symbol_region above): the LAST Stage C manifest extractor group.
-    `color_mean_rgb`/`color_stddev_rgb` are per-channel (R, G, B) mean/stddev over the FULL
-    fetched image via `cardpicker.local_image_quality.compute_color_profile` (a first-party
-    `PIL.ImageStat.Stat` call, not a hand-rolled pixel loop) - "color statistics... store the
-    math, not the strip" (FINAL POSTURE item 2). `blur_variance`/`image_entropy` are raw
+    `color_mean_rgb`/`color_stddev_rgb` were per-channel (R, G, B) mean/stddev over the FULL
+    fetched image via `cardpicker.local_image_quality.compute_color_profile` - the color_profile
+    extractor was RETIRED 2026-07-27 (never consumed downstream; "stop extracting first, migrate
+    later" - the two fields remain, simply never written anymore, until a future migration drops
+    them). `blur_variance`/`image_entropy` are raw
     sharpness/histogram-entropy signals (`local_image_quality.compute_blur_variance`/
     `compute_entropy`) - Stage D's job to decide what counts as "too blurry"/"too flat," never
     this extractor's. `image_is_truncated` is a genuine integrity fact
     (`local_image_quality.is_image_truncated` forces a full pixel decode and catches the
-    `OSError` Pillow raises for a genuinely truncated download) - checked BEFORE blur/entropy/
-    color stats are computed, since a truncated image's partial pixel data would produce
+    `OSError` Pillow raises for a genuinely truncated download) - checked BEFORE blur/entropy
+    are computed, since a truncated image's partial pixel data would produce
     meaningless numbers rather than a real reading (see `image_evidence.py`'s module docstring
     for the exact ordering). `local_image_quality.py` is NOT protected core - new helpers land
     there directly, same convention `local_ocr.py` already established for OCR-adjacent
@@ -1889,6 +1890,7 @@ class ImageEvidence(models.Model):
     height = models.IntegerField(null=True, blank=True)
     aspect_ratio = models.FloatField(null=True, blank=True)
     bleed_class = models.CharField(max_length=16, blank=True, default="")
+    bleed_diff_mm = models.FloatField(null=True, blank=True)
 
     # geometry-group (issue #148) - layout_class mirrors local_fallback.classify_border_color's
     # own return convention ("black"/"white"/"silver"/"borderless"), same blank-string-as-
@@ -1973,9 +1975,9 @@ class ImageEvidence(models.Model):
     image_entropy = models.FloatField(null=True, blank=True)
 
     # color_profile (issue #150's re-spec) - per-channel (R, G, B) mean/stddev over the full
-    # fetched image (local_image_quality.compute_color_profile), each a 3-element float list.
-    # Null when not yet computed (fetch failure or a truncated image, same convention as
-    # quality_signals' own fields above).
+    # fetched image, each a 3-element float list. EXTRACTOR RETIRED 2026-07-27 (never consumed
+    # downstream): these fields are kept for backwards compatibility, simply never written
+    # anymore - "stop extracting first, migrate later" (a future migration drops them).
     color_mean_rgb = models.JSONField(null=True, blank=True)
     color_stddev_rgb = models.JSONField(null=True, blank=True)
 
