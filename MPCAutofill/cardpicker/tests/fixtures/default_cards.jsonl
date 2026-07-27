@@ -1,0 +1,5 @@
+{"id":"11111111-8888-8888-8888-888888888888","illustration_id":"eeeee111-5555-5555-5555-555555555555","name":"The One Ring","set":"ltr"}
+{"id":"22222222-9999-9999-9999-999999999999","illustration_id":"fffff222-6666-6666-6666-666666666666","name":"Gandalf the Grey","set":"ltr"}
+{"id":"33333333-aaaa-aaaa-aaaa-aaaaaaaaaaaa","illustration_id":"99999aaa-7777-7777-7777-777777777777","name":"Space Marine","set":"40k"}
+{"id":"44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb","illustration_id":"55555555-cccc-cccc-cccc-cccccccccccc","name":"Unmatched Illustration","set":"unm"}
+{"id":"55555555-dddd-dddd-dddd-dddddddddddd","card_faces":[{"illustration_id":"66666666-eeee-eeee-eeee-eeeeeeeeeeee","name":"Day"},{"illustration_id":"77777777-ffff-ffff-ffff-ffffffffffff","name":"Night"}],"name":"DFC Card","set":"dbl"}

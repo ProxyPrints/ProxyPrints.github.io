@@ -334,6 +334,54 @@ printings, artists, tags, and moderation from one screen.
   same weight/gate treatment for both, see `models.py`'s `VoteSource`
   docstring. Production run: 28,112 votes written, 0/28,112 later
   resolved a card on their own (human-backed gate verified at scale).
+- **External-IP tag import (Scryfall Tagger)**: `manage.py import_external_ip_tags`
+  imports `art:external-ip` — a Scryfall Tagger community art tag identifying
+  Universes Beyond illustrations (Lord of the Rings, Doctor Who, Warhammer 40K,
+  etc.) — as machine-cast `CardTagVote` rows via the following data flow:
+
+  1. Fetches `https://api.scryfall.com/bulk-data`, finds the `art_tags`
+     entry, and downloads its `jsonl_download_uri` (or reads a local file
+     via `--file`).
+  2. Parses the tag tree: finds the tag with slug `external-ip`, then BFS
+     its `child_ids` to collect the full subtree (~56 child IP tags).
+  3. Collects all `illustration_id` values from `taggings` across the
+     subtree (only leaf tags carry taggings per Scryfall's documentation).
+  4. Joins `illustration_id` → `default_cards.json` `illustration_id` →
+     `CanonicalCard.identifier` (the same bulk data `import_canonical_card_data`/
+     `import_scryfall_printing_metadata` already maintain).
+  5. Matches `Card` objects via their effective printing
+     (`canonical_card` at ingestion time, or `inferred_canonical_card`
+     when `printing_tag_status == RESOLVED` — the same eligibility rule
+     every other engine follows) and writes `CardTagVote` rows:
+     `tag="external-ip"`, `source=DEDUCTION`, `anonymous_id="scryfall-tagger-v1"`,
+     `polarity=APPLY`.
+
+  **Weighting**: votes carry `PRINTING_TAG_MACHINE_WEIGHT` (default 0.5)
+  through the normal `vote_consensus._SOURCE_WEIGHTS` path — no override
+  applies (the 2026-07-23 zero-weight rule is scoped to
+  `anonymous_id="deductive-backfill-v1"` only). `source=DEDUCTION` is used
+  rather than a bespoke `VoteSource` value because `VoteSource.source` is
+  limited to 10 characters and the plan requires no model/migration changes;
+  `anonymous_id` carries the identifiable provenance for purge/re-run.
+
+  **Idempotent re-run**: the `(card, tag, anonymous_id)` uniqueness
+  constraint on `CardTagVote` means a card this identity has already voted
+  on is skipped. To refresh against updated upstream data (where a card
+  was un-tagged), purge the old `run_id` via `manage.py purge_machine_votes --run-id <id>` then re-run. Every invocation stamps a fresh `run_id`
+  on its votes for independent lifecycle management.
+
+  **Gate**: votes pass through the unmodified g₅ human-backed gate
+  (`vote_consensus.resolve_weighted_consensus`) — a pile of scryfall-tagger
+  votes alone can never resolve a tag, as machine weight alone cannot clear
+  the human-backed requirement. The `import_external_ip_tags` command runs
+  `verify_no_machine_only_resolutions` after every write pass, the same
+  gate check every other machine caster uses.
+
+  **Default dry-run**: like every other Stage 3+ command, `import_external_ip_tags`
+  defaults to dry-run (count-only) and requires an explicit `--write` flag
+  to persist votes. The `--file` argument accepts a local art-tags JSONL(.gz)
+  file (or pretty-printed JSON array) for offline runs and testing.
+
 - **Moderation layer**: builds on the same consensus system — see
   [[moderation.md]] for the sensitive-tag taxonomy, privileged-approval
   gate, and its own Reports/Drives review surface.
