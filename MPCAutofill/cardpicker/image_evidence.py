@@ -252,6 +252,7 @@ from cardpicker.local_fallback import (
     classify_border_color,
     classify_frame_style,
     extract_artist_name,
+    measure_bleed_diff_mm,
     normalize_crop_box,
 )
 from cardpicker.local_image_quality import (
@@ -717,6 +718,9 @@ def compute_card_evidence(
             # "ambiguous" is the pipeline's own pre-existing skip-reason vocabulary
             # (docs/features/catalog-completion-plan.md's CardScanLog section), not a new string.
             skip_reasons["geometry_bleed"] = "ambiguous"
+        bleed_diff = measure_bleed_diff_mm(image)
+        if bleed_diff is not None:
+            fields["bleed_diff_mm"] = bleed_diff
     extractor_versions["geometry_bleed"] = GEOMETRY_BLEED_EXTRACTOR_VERSION
 
     # layout_class (issue #148): reuses this same fetched image + the bleed_class just computed

@@ -1890,6 +1890,7 @@ class ImageEvidence(models.Model):
     height = models.IntegerField(null=True, blank=True)
     aspect_ratio = models.FloatField(null=True, blank=True)
     bleed_class = models.CharField(max_length=16, blank=True, default="")
+    bleed_diff_mm = models.FloatField(null=True, blank=True)
 
     # geometry-group (issue #148) - layout_class mirrors local_fallback.classify_border_color's
     # own return convention ("black"/"white"/"silver"/"borderless"), same blank-string-as-

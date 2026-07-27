@@ -153,6 +153,13 @@ class TestGoldenExpectations:
         # comment), not a placeholder.
         assert all(isinstance(e.value, bool) for e in GOLDEN_EXPECTATIONS["quality_signals"])
 
+    def test_bleed_diff_mm_expectation_covers_every_golden_card(self):
+        card_ids = {e.card_id for e in GOLDEN_EXPECTATIONS["bleed_diff_mm"]}
+        assert card_ids == set(GOLDEN_CARD_IDS)
+
+    def test_bleed_diff_mm_values_are_float(self):
+        assert all(isinstance(e.value, float) for e in GOLDEN_EXPECTATIONS["bleed_diff_mm"])
+
 
 class TestGetGoldenCards:
     def test_raises_when_pinned_ids_are_missing_from_the_db(self, db):
