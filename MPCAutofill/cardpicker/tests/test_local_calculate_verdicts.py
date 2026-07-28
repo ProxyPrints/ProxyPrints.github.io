@@ -47,6 +47,7 @@ from cardpicker.local_calculate_verdicts import (
     TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
     _eligible_cards_queryset,
     _filter_by_symbol_phash,
+    _purge_and_write_printing_tag_votes,
     _resolve_candidates_for_card,
     _split_new_printing_tag_votes,
     _symbol_phash_tiebreak,
@@ -579,6 +580,76 @@ class TestSplitNewPrintingTagVotes:
         assert already_voted == 1
 
 
+class TestPurgeAndWritePrintingTagVotes:
+    """`_purge_and_write_printing_tag_votes` (2026-07-28) - the shared purge+insert primitive all
+    three `CardPrintingTag`-casting calculators now use. Two properties it exists to guarantee:
+    the pair is ATOMIC (the operator kills runs mid-flight deliberately, and an untransacted
+    DELETE-then-INSERT loses votes outright if killed between the two), and the purge is scoped to
+    `new_votes` so a card the collision guard SKIPPED keeps the winner's committed row."""
+
+    def _stale_family_vote(self, card, printing):
+        """A row from an older version of the SAME calculator family - deleted by
+        `purge_stale_machine_votes`, but NOT a collision as far as the split is concerned (it
+        checks the exact current anonymous_id), so its card is genuinely in `new_votes`."""
+        return CardPrintingTag.objects.create(
+            card=card,
+            printing=printing,
+            is_no_match=False,
+            anonymous_id="stage-d-join-key-v0",
+            source=VoteSource.OCR,
+        )
+
+    def test_a_failed_insert_rolls_the_purge_back(self, db, monkeypatch):
+        card = CardFactory(name="Some Card")
+        printing = CanonicalCardFactory(name="Some Card")
+        stale = self._stale_family_vote(card, printing)
+        new_vote = CardPrintingTag(
+            card_id=card.pk, printing_id=printing.pk, is_no_match=False, anonymous_id=JOIN_KEY_ANONYMOUS_ID
+        )
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated mid-flight kill between DELETE and INSERT")
+
+        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", _boom)
+
+        with pytest.raises(RuntimeError):
+            _purge_and_write_printing_tag_votes(JOIN_KEY_ANONYMOUS_ID, [new_vote])
+
+        # without transaction.atomic() the DELETE would already have committed and this row would
+        # be gone, with nothing written in its place.
+        assert CardPrintingTag.objects.filter(pk=stale.pk).exists()
+
+    def test_the_happy_path_purges_the_stale_row_and_writes_the_new_one(self, db):
+        card = CardFactory(name="Some Card")
+        printing = CanonicalCardFactory(name="Some Card")
+        stale = self._stale_family_vote(card, printing)
+        new_vote = CardPrintingTag(
+            card_id=card.pk, printing_id=printing.pk, is_no_match=False, anonymous_id=JOIN_KEY_ANONYMOUS_ID
+        )
+
+        _purge_and_write_printing_tag_votes(JOIN_KEY_ANONYMOUS_ID, [new_vote])
+
+        assert not CardPrintingTag.objects.filter(pk=stale.pk).exists()
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
+
+    def test_an_empty_new_votes_list_purges_nothing(self, db):
+        """A batch in which EVERY vote collided must not purge anything - passing the raw batch
+        here (rather than the split's output) would delete each winner's row and write nothing."""
+        card = CardFactory(name="Some Card")
+        printing = CanonicalCardFactory(name="Some Card")
+        winner = CardPrintingTag.objects.create(
+            card=card,
+            printing=printing,
+            is_no_match=False,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+        )
+
+        _purge_and_write_printing_tag_votes(JOIN_KEY_ANONYMOUS_ID, [])
+
+        assert CardPrintingTag.objects.filter(pk=winner.pk).exists()
+
+
 class TestRunJoinKeyCalculator:
     def test_dry_run_counts_without_writing(self, db):
         card = CardFactory(name="Some Card", content_phash=42)
@@ -725,11 +796,17 @@ class TestRunJoinKeyCalculator:
 
         result = run_join_key_calculator(dry_run=False)  # must not raise IntegrityError
 
-        # With purge-on-write the "winner" vote is deleted before the loser writes, so the
-        # loser overwrites rather than skips. No crash; one vote remains.
-        assert result.already_voted == 0
+        # 2026-07-28: the split/count now runs BEFORE the purge, so the guard actually guards -
+        # the loser SKIPS and counts, and the winner's committed row is left alone (a skipped
+        # card is not in `new_votes`, so `_purge_and_write_printing_tag_votes` never purges it).
+        # Previously the purge ran first and deleted exactly the row the split then went looking
+        # for, making `already_voted` structurally 0 in every deployment forever - the "zero
+        # forever would suggest the guard itself is dead code" failure
+        # `stage_e_dispatch.DispatchOutcome.stage_d_join_key_already_voted`'s own comment warns
+        # about. No crash; one vote remains.
+        assert result.already_voted == 1
         assert result.votes_written == 0
-        assert result.no_match_votes_written == 1
+        assert result.no_match_votes_written == 0
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
 
     def test_ignore_conflicts_survives_a_race_the_pre_write_check_itself_missed(self, db, monkeypatch):
@@ -1901,10 +1978,11 @@ class TestRunFallbackCalculator:
 
         result = run_fallback_calculator(dry_run=False)  # must not raise IntegrityError
 
-        # With purge-on-write the "winner" vote is deleted before the loser writes, so the
-        # loser overwrites rather than skips. No crash; one vote remains.
-        assert result.already_voted == 0
-        assert result.votes_written == 1
+        # 2026-07-28: split/count BEFORE purge - see the identical assertion's own comment in
+        # `test_concurrent_dispatch_collision_is_skipped_not_crashed` above. The loser skips and
+        # counts; the winner's committed row survives. No crash; one vote remains.
+        assert result.already_voted == 1
+        assert result.votes_written == 0
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 1
 
 

@@ -851,14 +851,17 @@ class TestConcurrentDispatchVoteCollision:
         outcome = dispatch_micro_batch(card_ids=[card.pk])  # must not raise IntegrityError
 
         assert outcome.status == "completed"
-        # With purge-on-write the "winner" vote is deleted before the loser writes,
-        # so already_voted=0 and the vote is overwritten, not skipped.
-        assert outcome.stage_d_join_key_already_voted == 0
+        # 2026-07-28: the calculator's split/count now runs BEFORE its purge, so the loser skips
+        # and the counter this field exists to surface is genuinely non-zero. Under the previous
+        # ordering the purge deleted the winner's row before the split looked for it, so this
+        # counter read 0 in EVERY deployment - the literal "zero forever would suggest the guard
+        # itself is dead code" case this field's own definition comment warns about.
+        assert outcome.stage_d_join_key_already_voted == 1
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
 
         ledger = PilotRunLedger.objects.get(run_id=outcome.run_id)
         assert ledger.status == PilotRunLedger.Status.COMPLETED
-        assert ledger.counters["stage_d_join_key_already_voted"] == 0
+        assert ledger.counters["stage_d_join_key_already_voted"] == 1
 
 
 class TestBackstopSweep:

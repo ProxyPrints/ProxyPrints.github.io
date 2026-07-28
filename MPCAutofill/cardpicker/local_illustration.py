@@ -2,8 +2,7 @@
 Stage D illustration deduction calculator (public issue #507, ``stage-d-illustration-v1``) — a
 new calculator in the Stage D framework that uses the ``illustration_id`` field imported from
 Scryfall (issue #506) to deduce printing identity. When an artist-OCR hit identifies the artist,
-and that artist has printings associated with exactly one ``illustration_id`` for this card name,
-we vote for all printings carrying that illustration.
+and that artist's printings of this card name narrow to exactly ONE printing, we vote for it.
 
 Anonymous ID: ``stage-d-illustration-v1``
 Source: ``VoteSource.DEDUCTION``
@@ -16,16 +15,40 @@ Logic:
   2. For each eligible card, use ``match_artist`` to fuzzy-match the OCR-extracted artist name
      against the card's candidate artists.
   3. For each surviving artist, look up the illustration index by ``(artist_pk, searchable_name)``.
-  4. Collect unique ``illustration_id`` values:
-     - 0 → abstain (no vote, skip logged)
-     - 1 → vote every printing of that illustration at ``BASE_CONFIDENCE``
-     - N>1 → union of printings across the N illustrations (plain set union), one vote each at
-       ``BASE_CONFIDENCE / N``
+  4. Resolve a printing ONLY at 1:1 — exactly one surviving ``illustration_id`` AND that
+     illustration mapping to exactly one printing:
+     - 0 illustrations → abstain (``no-illustration-index-entry``)
+     - 1 illustration → 1 printing → vote that printing at ``BASE_CONFIDENCE``
+     - 1 illustration → N printings → abstain (``multiple-printings-one-illustration``)
+     - N>1 illustrations → abstain (``multiple-illustrations``)
 
-NO vote pooling across illustration siblings — each printing gets its own independent vote.
-Confidence is currently informational-only (``resolve_vote_weight`` weights by source, never
-confidence — see ``vote_consensus.py``); the base/N division must NOT be "fixed" into weight
-math.
+THE 1:1 RULE (issue #525, 2026-07-28) — WHY BOTH MULTI-OUTCOME BRANCHES ABSTAIN. This calculator
+previously emitted one ``CardPrintingTag`` per printing in the verdict, so a single machine
+identity ended up voting simultaneously for several MUTUALLY EXCLUSIVE printings of the same
+card. The ``BASE_CONFIDENCE / N`` spread that was supposed to discount them is decorative:
+``vote_consensus.resolve_vote_weight(source, anonymous_id)`` takes no confidence argument and
+``VoteTuple`` carries no confidence field, so confidence NEVER reaches the tally — every emitted
+row landed at full ``PRINTING_TAG_MACHINE_WEIGHT``. The DB does not stop it either:
+``cardprintingtag_unique_printing_vote`` is on (card, printing, anonymous_id), so different
+printings under one identity all persist. Where md5 identity-group pooling is active those rows
+read as self-contradiction and get withheld; where it is not, they all count, at full machine
+weight, for outcomes that cannot all be true. The human submit path cannot do this —
+``post_submit_printing_tag`` deletes the voter's prior rows for the card before creating.
+
+Confidence stays informational-only. The base/N division must NOT be "fixed" into weight math
+(see ``vote_consensus.py``'s own warning); the fix is to stop casting the contradiction, not to
+make the consensus layer honour a discount.
+
+ABSTAIN-WITH-EVIDENCE, AND WHY THE TWO ABSTAIN REASONS ARE DISTINCT. Both multi-outcome cases
+record a ``CardScanLog`` row rather than dropping silently, but only ONE of them carries a
+recoverable fact: at 1 illustration → N printings the calculator KNOWS the illustration identity
+with full confidence and merely cannot choose a printing, so ``IllustrationVerdict`` retains that
+``illustration_id`` and the candidate printing pks. At N>1 illustrations there is no single
+identity to retain and none is invented. The two are separate ``skip_reason`` strings so the
+recoverable population is queryable. Nothing about the retained identity is PERSISTED here:
+human illustration answers have no vote model yet (issue #524, ``CardIllustrationVote``), and
+persisting the machine side is that issue's job — this abstain is the seam it plugs into, not
+the intended end state.
 
 Wired into ``local_calculate_verdicts.py`` (management command) after the fallback calculator,
 before slow-path routing. Reuses ``_eligible_cards_queryset`` from that module for the base
@@ -38,13 +61,14 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-from django.db.models import Q, QuerySet
+from django.db.models import Count, Max, Q, QuerySet
 
 from cardpicker.image_evidence import current_evidence_queryset
 from cardpicker.local_fallback import match_artist
 from cardpicker.local_identify_printing_tags import CandidateNameIndex, generate_run_id
 from cardpicker.models import (
     CanonicalCard,
+    CanonicalPrintingMetadata,
     Card,
     CardPrintingTag,
     CardScanLog,
@@ -52,7 +76,6 @@ from cardpicker.models import (
     ImageEvidence,
     PrintingTagStatus,
     VoteSource,
-    purge_stale_machine_votes,
 )
 from cardpicker.printing_consensus import resolve_and_persist_printing
 from cardpicker.search.sanitisation import to_searchable
@@ -84,7 +107,20 @@ NO_ARTIST_OCR_SKIP_REASON = "no-artist-ocr"
 SINGLE_FACED_ONLY_SKIP_REASON = "multi-faced-v1"
 NO_CANDIDATE_MATCH_SKIP_REASON = "no-candidate-match"
 NO_ILLUSTRATION_INDEX_ENTRY_SKIP_REASON = "no-illustration-index-entry"
+
+# The two 1:1-rule abstentions (issue #525 — see the module docstring's "THE 1:1 RULE" section).
+# Deliberately TWO strings, not one: only the second carries a fact issue #524 can later persist
+# without re-deriving it, so the recoverable population has to be separable by a plain
+# `WHERE skip_reason = '...'` query.
+#
+# N>1 surviving illustrations — genuinely ambiguous, no single illustration identity exists to
+# retain. (This constant already existed in this module but was never reachable; the N>1 branch
+# cast N competing votes instead of using it. It now does what its name always said.)
 MULTIPLE_ILLUSTRATIONS_SKIP_REASON = "multiple-illustrations"
+# Exactly 1 surviving illustration, but it maps to more than one printing — the illustration
+# identity IS known; only the printing choice is undetermined. `IllustrationVerdict` carries the
+# `illustration_id` and the candidate printing pks on this abstention.
+MULTIPLE_PRINTINGS_SKIP_REASON = "multiple-printings-one-illustration"
 
 # Cards the join-key calculator already concluded have no confident hit —
 # this calculator only considers those. Carried verbatim from
@@ -121,8 +157,10 @@ class IllustrationIndex:
       - ``artist_by_pk``: ``{card_pk → artist_name}`` for ``match_artist``
       - ``card_pk_to_artist_pk``: ``{canonical_card_pk → artist_pk}`` for post-match lookups
 
-    Built once per calculator invocation, cached for the duration (same pattern as
-    ``CandidateNameIndex`` in ``local_calculate_verdicts.py``).
+    CATALOG-WIDE, NOT BATCH-SCOPED — two full ``CanonicalCard`` scans (113,224 rows live). Never
+    construct this directly from a Stage E hot path; go through
+    ``_get_cached_illustration_index()`` below, which memoizes one instance per worker process
+    behind a cheap version stamp (see that function and the section comment above it).
     """
 
     def __init__(self) -> None:
@@ -133,17 +171,22 @@ class IllustrationIndex:
         # canonical_card_pk → artist_pk (for post-match lookup)
         self.card_pk_to_artist_pk: dict[int, int] = {}
 
-        rows = (
-            CanonicalCard.objects.filter(printing_metadata__illustration_id__isnull=False)
-            .select_related("artist", "printing_metadata")
-            .values_list(
-                "pk",
-                "name",
-                "artist__pk",
-                "artist__name",
-                "printing_metadata__pk",
-                "printing_metadata__illustration_id",
-            )
+        # No `.select_related(...)` here: chained BEFORE a `.values_list()` that already names
+        # its own traversals (`artist__name`, `printing_metadata__illustration_id`), it is a
+        # documented no-op - `values_list` builds its own JOINs from the traversal arguments and
+        # discards the select_related plan entirely, so the call added zero rows to the SELECT and
+        # zero saved queries. Removed rather than "made effective" (i.e. rather than dropping the
+        # traversals and hydrating model instances instead): hydrating 113,224 CanonicalCard +
+        # CanonicalArtist + CanonicalPrintingMetadata objects to read four columns off each is the
+        # expensive direction, and `values_list` is exactly what `CandidateNameIndex` itself uses
+        # for the same catalog-wide-index-build job.
+        rows = CanonicalCard.objects.filter(printing_metadata__illustration_id__isnull=False).values_list(
+            "pk",
+            "name",
+            "artist__pk",
+            "artist__name",
+            "printing_metadata__pk",
+            "printing_metadata__illustration_id",
         )
 
         for card_pk, card_name, artist_pk, artist_name, printing_pk, illustration_id in rows:
@@ -169,6 +212,91 @@ class IllustrationIndex:
         return dict(self._index.get((artist_pk, searchable_card_name), {}))
 
 
+# ---------------------------------------------------------------------------------------------
+# LAZY, PER-WORKER-PROCESS ``IllustrationIndex`` CACHE — the same shape (and the same reason)
+# ``local_calculate_verdicts._get_cached_candidate_name_index()`` already implements for
+# ``CandidateNameIndex`` under issue #469, applied here because this calculator is invoked from
+# ``stage_e_dispatch._run_stage_d`` ONCE PER 25-CARD MICRO-BATCH. ``IllustrationIndex.__init__``
+# issues two catalog-wide ``CanonicalCard`` queries (113,224 rows live) — one filtered on
+# ``printing_metadata__illustration_id``, one unfiltered over every card with an artist — and
+# builds full-catalog dicts from both. Rebuilding that per micro-batch is O(catalog) work inside
+# a conveyor whose whole contract (issues #458/#460) is O(batch), and it dominates the cost of a
+# micro-batch that ends up with one eligible card, or none.
+#
+# Invalidation is a cheap version-stamp CHECK per call, not a write-time hook — the same
+# "no soundness implication" trade ``_candidate_name_index_version_stamp`` documents. The stamp
+# is ``(CanonicalCard max pk, CanonicalCard count, CanonicalPrintingMetadata max pk,
+# CanonicalPrintingMetadata count, count of NON-NULL illustration_id)``. The first four catch any
+# INSERT (a fresh max pk) or DELETE (count moves even when max pk doesn't) in either table; the
+# fifth exists because this index's whole input is a column that is BACKFILLED IN PLACE —
+# ``import_scryfall_printing_metadata`` populates ``illustration_id`` on rows that already exist,
+# an UPDATE that moves neither max pk nor row count. Without that fifth term a worker process
+# that built the index before an illustration backfill would serve a stale, under-populated index
+# for its whole lifetime. ``illustration_id`` is ``db_index=True``, so the extra term is an
+# index-only count, not a table scan.
+#
+# STILL NOT DETECTED (accepted, same reasoning as the CandidateNameIndex cache's own comment): an
+# in-place rename of a ``CanonicalCard.name`` or ``CanonicalArtist.name``, or an in-place change
+# of an ALREADY-NON-NULL ``illustration_id`` to a different value. Those are catalog-data edits,
+# not routine, and a stale index in that narrow case re-derives the same deduction a fresh one
+# would for every card whose row did not change. No vote-soundness exposure: this is a pure
+# performance change.
+# ---------------------------------------------------------------------------------------------
+
+IllustrationIndexVersionStamp = tuple[int, int, int, int, int]
+
+_illustration_index_cache: Optional[tuple[IllustrationIndexVersionStamp, "IllustrationIndex"]] = None
+
+
+def _illustration_index_version_stamp() -> IllustrationIndexVersionStamp:
+    """
+    Cheap (index-only aggregates, not table scans) stamp used to detect a
+    ``CanonicalCard``/``CanonicalPrintingMetadata`` write since the cached ``IllustrationIndex``
+    was built — see this section's own comment above for the full invalidation-shape rationale,
+    including why the non-null ``illustration_id`` count is a term and what is deliberately not
+    detected.
+    """
+    canonical_card_agg = CanonicalCard.objects.aggregate(max_pk=Max("pk"), count=Count("pk"))
+    printing_metadata_agg = CanonicalPrintingMetadata.objects.aggregate(max_pk=Max("pk"), count=Count("pk"))
+    illustration_id_count = CanonicalPrintingMetadata.objects.filter(illustration_id__isnull=False).count()
+    return (
+        canonical_card_agg["max_pk"] or 0,
+        canonical_card_agg["count"] or 0,
+        printing_metadata_agg["max_pk"] or 0,
+        printing_metadata_agg["count"] or 0,
+        illustration_id_count,
+    )
+
+
+def _get_cached_illustration_index() -> "IllustrationIndex":
+    """
+    Returns the current worker process's cached ``IllustrationIndex``, building (or rebuilding, on
+    a version-stamp mismatch) it exactly once per distinct stamp. Call this LAZILY — only once
+    there is a card that actually needs an illustration lookup, never unconditionally at the top
+    of a dispatch — so a micro-batch whose ``card_ids``-scoped eligible set is empty pays neither
+    the index build nor even this function's own version-stamp query.
+    """
+    global _illustration_index_cache
+    stamp = _illustration_index_version_stamp()
+    if _illustration_index_cache is not None and _illustration_index_cache[0] == stamp:
+        return _illustration_index_cache[1]
+    index = IllustrationIndex()
+    _illustration_index_cache = (stamp, index)
+    return index
+
+
+def reset_illustration_index_cache_for_tests() -> None:
+    """
+    TEST-ONLY hook, never called from any production code path — clears the module-level
+    ``IllustrationIndex`` cache above, so a test asserting an exact construction COUNT starts from
+    a known-empty cache instead of depending on Postgres's own incidental
+    sequence-advance-across-rollback behaviour. Mirrors
+    ``local_calculate_verdicts.reset_candidate_name_index_cache_for_tests``.
+    """
+    global _illustration_index_cache
+    _illustration_index_cache = None
+
+
 # ---------------------------------------------------------------------------
 # Verdict dataclass
 # ---------------------------------------------------------------------------
@@ -176,13 +304,36 @@ class IllustrationIndex:
 
 @dataclass(frozen=True)
 class IllustrationVerdict:
-    """Pure result of one card's illustration deduction — no DB write yet."""
+    """
+    Pure result of one card's illustration deduction — no DB write yet.
+
+    ``printing_pks`` is the vote to cast and is EMPTY on every abstention. The narrowing evidence
+    an abstention did establish lives in the three fields below it, deliberately kept out of
+    ``printing_pks`` so no future reordering of the runner's loop can turn retained evidence into
+    cast votes:
+
+      - ``illustration_id``: the resolved illustration, as a string. Set when exactly one
+        illustration survived — i.e. on the 1:1 vote AND on the
+        ``MULTIPLE_PRINTINGS_SKIP_REASON`` abstention, which is the case issue #524
+        (``CardIllustrationVote``) will be able to persist without re-deriving anything. Empty
+        when N>1 illustrations survived: there is no single identity and none is invented.
+      - ``candidate_printing_pks``: the printings that illustration narrowed to. Populated on the
+        ``MULTIPLE_PRINTINGS_SKIP_REASON`` abstention.
+      - ``illustration_count``/``printing_count``: how ambiguous the abstention was, so the
+        narrowing is measurable rather than merely counted.
+
+    Nothing here is persisted beyond the ``CardScanLog.skip_reason`` string — see the module
+    docstring's "ABSTAIN-WITH-EVIDENCE" section.
+    """
 
     card_id: int
     printing_pks: tuple[int, ...] = ()
     confidence: float = 0.0
     skip_reason: str = ""
     illustration_count: int = 0
+    printing_count: int = 0
+    illustration_id: str = ""
+    candidate_printing_pks: tuple[int, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +352,14 @@ class IllustrationCalculatorResult:
     already_voted: int = 0
     skip_counts: dict[str, int] = field(default_factory=dict)
     audit: list[dict[str, Any]] = field(default_factory=list)
+    # THE COVERAGE COST OF THE 1:1 RULE (issue #525), made measurable rather than asserted.
+    # `cards_abstained_ambiguous` is how many cards the calculator would have voted on before the
+    # rule and now abstains on; `printing_votes_withheld` is how many CardPrintingTag rows those
+    # cards would have produced (one per competing printing). The ratio between them is the
+    # per-card contradiction width. Both are counted in dry-run mode too, so the figure can be
+    # obtained from a dry run rather than a live write.
+    cards_abstained_ambiguous: int = 0
+    printing_votes_withheld: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +371,7 @@ def _eligible_illustration_cards_queryset(
     join_key_voted_card_ids: Iterable[int],
     join_key_scanned_card_ids: Iterable[int],
     chunk_size: int = 500,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> "QuerySet[Card]":
     """
     Cards the join-key calculator already concluded have no confident hit, plus the same base
@@ -225,6 +385,12 @@ def _eligible_illustration_cards_queryset(
         no DFC layout_class reading; multi-faced cards have ``layout_class`` in
         {"split", "transform", "meld", "double_faced"}).  Multi-faced cards are counted and
         skipped (logged), not errored — v1 scope limitation.
+
+    ``card_ids`` (Stage E micro-batch scoping) mirrors
+    ``local_calculate_verdicts._eligible_cards_queryset``'s own parameter exactly — a pure scope
+    narrowing, applied to BOTH the outer ``Card`` queryset and the ``CardScanLog`` subquery below.
+    ``None`` (BULK mode) leaves both unscoped, byte-identical to this function's pre-``card_ids``
+    behaviour.
     """
     # Start with the same base query every Stage D calculator uses: unresolved, no
     # confirmed match, card_type=CARD, no own-vote, no non-rescannable scan-log,
@@ -232,6 +398,17 @@ def _eligible_illustration_cards_queryset(
     non_rescannable_scanned = CardScanLog.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).exclude(
         skip_reason__in=RESCANNABLE_SKIP_REASONS
     )
+    if card_ids is not None:
+        # Issue #469 (Tron §8 gate finding, 2026-07-25), carried over to this calculator: CardScanLog
+        # is 2,093,147 rows live and append-only, growing — when the caller has already narrowed the
+        # outer Card queryset to `card_ids` (as `stage_e_dispatch._run_stage_d` does, 25 cards at a
+        # time), this subquery must be scoped the same way rather than scanning the whole table.
+        # Purely a cost narrowing, not a behaviour change: the resulting excluded-pk set is
+        # equivalent for THIS caller either way, since a row this subquery would find outside
+        # `card_ids` could never survive the outer queryset's own `.filter(pk__in=card_ids)`
+        # (applied below) regardless. `card_ids is None` (BULK mode) leaves this exactly as it was
+        # before this fix — unscoped over the whole table.
+        non_rescannable_scanned = non_rescannable_scanned.filter(card_id__in=card_ids)
 
     queryset = (
         Card.objects.filter(
@@ -250,6 +427,8 @@ def _eligible_illustration_cards_queryset(
         .distinct()
         .select_related("source")
     )
+    if card_ids is not None:
+        queryset = queryset.filter(pk__in=card_ids)
     return queryset
 
 
@@ -274,7 +453,10 @@ def calculate_illustration_verdict(
       2. For each surviving candidate pk, get its artist_pk via
          ``illustration_index.card_pk_to_artist_pk``.
       3. Look up ``(artist_pk, searchable_card_name)`` in the illustration index → illustration_ids.
-      4. 0 → abstain; 1 → full confidence; N>1 → spread.
+      4. Resolve a printing ONLY at 1:1 (issue #525 — see the module docstring's "THE 1:1 RULE"):
+         0 illustrations → abstain; 1 illustration → 1 printing → vote; 1 illustration → N
+         printings → abstain, RETAINING the illustration identity; N>1 illustrations → abstain,
+         retaining nothing but the counts.
 
     ``candidates`` is a list of objects with a ``.pk`` attribute (CanonicalCard pks) — either
     real ``CandidatePrinting`` objects from ``CandidateNameIndex.candidates_for()`` or lightweight
@@ -303,29 +485,54 @@ def calculate_illustration_verdict(
     n_illustrations = len(illustration_printing_map)
 
     if n_illustrations > 1:
-        # N>1 illustrations: union of printings across all illustrations, each at BASE_CONFIDENCE/N.
-        all_printing_pks: list[int] = []
+        # N>1 illustrations — abstain (issue #525). This branch used to cast the union of
+        # printings across all N illustrations, one vote each at BASE_CONFIDENCE/N: N
+        # full-machine-weight votes for mutually exclusive printings under ONE anonymous_id,
+        # because confidence never reaches the tally. Nothing is retained beyond the counts:
+        # there is no single illustration identity here and inventing a representative would be
+        # picking an answer the evidence does not support.
+        distinct_printing_pks: list[int] = []
         seen_pks: set[int] = set()
         for printing_pks in illustration_printing_map.values():
             for pk in printing_pks:
                 if pk not in seen_pks:
                     seen_pks.add(pk)
-                    all_printing_pks.append(pk)
-        confidence = BASE_CONFIDENCE / n_illustrations
+                    distinct_printing_pks.append(pk)
         return IllustrationVerdict(
             card_id=card_id,
-            printing_pks=tuple(all_printing_pks),
-            confidence=confidence,
+            skip_reason=MULTIPLE_ILLUSTRATIONS_SKIP_REASON,
             illustration_count=n_illustrations,
+            printing_count=len(distinct_printing_pks),
         )
 
-    # Exactly 1 illustration: vote every printing at full BASE_CONFIDENCE.
-    single_illustration_pks = next(iter(illustration_printing_map.values()))
+    single_illustration_id, single_illustration_pks_raw = next(iter(illustration_printing_map.items()))
+    # de-duplicate: the same printing can be reached twice when two surviving candidates share an
+    # artist, which would otherwise read as "ambiguous" for a genuinely 1:1 narrowing.
+    single_illustration_pks = list(dict.fromkeys(single_illustration_pks_raw))
+
+    if len(single_illustration_pks) != 1:
+        # Exactly 1 illustration, but it maps to N printings — the common case for any reprinted
+        # artwork, not an edge case. Abstain (issue #525), but RETAIN what was genuinely
+        # established: the illustration identity is known with full confidence, only the printing
+        # choice is undetermined. Issue #524 (`CardIllustrationVote`) is where this becomes a
+        # persisted answer; nothing is written here.
+        return IllustrationVerdict(
+            card_id=card_id,
+            skip_reason=MULTIPLE_PRINTINGS_SKIP_REASON,
+            illustration_count=1,
+            printing_count=len(single_illustration_pks),
+            illustration_id=single_illustration_id,
+            candidate_printing_pks=tuple(single_illustration_pks),
+        )
+
+    # 1:1 — exactly one illustration, exactly one printing. The only case that votes.
     return IllustrationVerdict(
         card_id=card_id,
-        printing_pks=tuple(single_illustration_pks),
+        printing_pks=(single_illustration_pks[0],),
         confidence=BASE_CONFIDENCE,
         illustration_count=1,
+        printing_count=1,
+        illustration_id=single_illustration_id,
     )
 
 
@@ -364,12 +571,15 @@ def run_illustration_calculator(
     run_id = run_id or generate_run_id()
     result = IllustrationCalculatorResult(dry_run=dry_run, run_id=run_id)
 
-    # Lazy illustration index — built once per invocation (same pattern as
-    # ``CandidateNameIndex`` in ``run_fallback_calculator``).
+    # Lazy, CACHED indexes — both are catalog-wide builds, resolved on first actual need below and
+    # never unconditionally here, so a micro-batch whose eligible set turns out empty pays for
+    # neither. See ``_get_cached_illustration_index`` above and
+    # ``local_calculate_verdicts._get_cached_candidate_name_index`` (issue #469) for the shared
+    # per-worker-process, version-stamped caching these local variables sit in front of; the local
+    # variables themselves exist only so the version-stamp CHECK is paid once per invocation
+    # rather than once per card, exactly as ``run_join_key_calculator``/``run_fallback_calculator``
+    # do with their own ``index`` locals.
     illustration_index: Optional[IllustrationIndex] = None
-
-    # Lazy CandidateNameIndex for candidate lookup — same cached pattern as
-    # ``_get_cached_candidate_name_index()`` in ``local_calculate_verdicts.py``.
     candidate_name_index: Optional[CandidateNameIndex] = None
 
     votes_batch: list[CardPrintingTag] = []
@@ -380,25 +590,28 @@ def run_illustration_calculator(
     from cardpicker.local_calculate_verdicts import (
         JOIN_KEY_ANONYMOUS_ID,
         JOIN_KEY_NO_HIT_SKIP_REASONS,
+        _get_cached_candidate_name_index,
     )
 
-    join_key_no_match_card_ids = list(
-        CardPrintingTag.objects.filter(anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True).values_list(
-            "card_id", flat=True
-        )
-    )
-    join_key_no_hit_scanned_card_ids = list(
-        CardScanLog.objects.filter(
-            anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
-        ).values_list("card_id", flat=True)
-    )
+    # Deliberately NOT wrapped in `list(...)`: these stay lazy querysets so Django compiles them
+    # into SQL subqueries of the `Q(pk__in=...) | Q(pk__in=...)` filter below, evaluated inside the
+    # one eligibility query and narrowed by its own `card_ids` scope. Materializing them instead
+    # pulled every join-key no-match vote and every join-key no-hit CardScanLog row (2,093,147 rows
+    # live, append-only) into this process's memory on EVERY micro-batch, before any card_ids
+    # scoping applied. Matches `local_calculate_verdicts._fallback_eligible_cards_queryset`, which
+    # has always kept the identical pair lazy.
+    join_key_no_match_card_ids = CardPrintingTag.objects.filter(
+        anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
+    ).values_list("card_id", flat=True)
+    join_key_no_hit_scanned_card_ids = CardScanLog.objects.filter(
+        anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
+    ).values_list("card_id", flat=True)
 
     queryset = _eligible_illustration_cards_queryset(
         join_key_voted_card_ids=join_key_no_match_card_ids,
         join_key_scanned_card_ids=join_key_no_hit_scanned_card_ids,
+        card_ids=card_ids,
     )
-    if card_ids is not None:
-        queryset = queryset.filter(pk__in=card_ids)
 
     multi_faced_skipped = 0
 
@@ -406,9 +619,10 @@ def run_illustration_calculator(
         if card.content_phash is None:
             continue  # no stable hash to key ImageEvidence lookup
 
-        # Lazy illustration index — built once we know there are eligible cards.
+        # Lazy illustration index — resolved once we know there are eligible cards, from the
+        # per-worker-process cache (NOT a fresh catalog-wide build per micro-batch).
         if illustration_index is None:
-            illustration_index = IllustrationIndex()
+            illustration_index = _get_cached_illustration_index()
 
         evidence = (
             current_evidence_queryset(card)
@@ -463,9 +677,14 @@ def run_illustration_calculator(
 
         result.cards_considered += 1
 
-        # Lazy CandidateNameIndex — same pattern as run_fallback_calculator.
+        # Lazy CandidateNameIndex — resolved through `local_calculate_verdicts`' own
+        # per-worker-process cache (issue #469), the same call `run_join_key_calculator`/
+        # `run_fallback_calculator` make. This used to call `CandidateNameIndex()` directly while
+        # claiming in a comment to use "the same cached pattern" — it did not: it bypassed the
+        # cache entirely and paid a fresh 113,224-row, 1.48s catalog scan on every micro-batch
+        # that had at least one card with artist OCR.
         if candidate_name_index is None:
-            candidate_name_index = CandidateNameIndex()
+            candidate_name_index = _get_cached_candidate_name_index()
 
         # Build candidate list for match_artist — adapter objects with .pk.
         raw_candidates = candidate_name_index.candidates_for(card.name)
@@ -483,6 +702,26 @@ def run_illustration_calculator(
 
         if verdict.skip_reason:
             result.skip_counts[verdict.skip_reason] = result.skip_counts.get(verdict.skip_reason, 0) + 1
+            if verdict.skip_reason in (MULTIPLE_ILLUSTRATIONS_SKIP_REASON, MULTIPLE_PRINTINGS_SKIP_REASON):
+                # The 1:1 rule's own coverage cost (issue #525) - see the result dataclass' own
+                # comment. `printing_count` is exactly the number of CardPrintingTag rows the
+                # pre-#525 code would have written for this card.
+                result.cards_abstained_ambiguous += 1
+                result.printing_votes_withheld += verdict.printing_count
+                if len(result.audit) < audit_sample_size:
+                    # The retained narrowing, carried into the audit sample so an operator can see
+                    # WHAT was established without querying anything. `illustration_id` is set only
+                    # for the single-illustration case - issue #524's recoverable population.
+                    result.audit.append(
+                        {
+                            "card_id": card.pk,
+                            "skip_reason": verdict.skip_reason,
+                            "illustration_count": verdict.illustration_count,
+                            "printing_count": verdict.printing_count,
+                            "illustration_id": verdict.illustration_id,
+                            "candidate_printing_pks": list(verdict.candidate_printing_pks),
+                        }
+                    )
             if not dry_run:
                 scan_log_batch.append(
                     CardScanLog(
@@ -494,7 +733,10 @@ def run_illustration_calculator(
                 )
             continue
 
-        # Vote to cast: one CardPrintingTag per printing in the verdict.
+        # Vote to cast. Post-#525 this is always exactly one printing - the 1:1 rule is the only
+        # branch that reaches here with a non-empty `printing_pks` - but the loop below is left
+        # general rather than asserting a length, since the batching shape is shared with the
+        # other Stage D calculators.
         n_printings = len(verdict.printing_pks)
         result.votes_would_cast += n_printings
 
@@ -503,6 +745,8 @@ def run_illustration_calculator(
                 {
                     "card_id": card.pk,
                     "illustration_count": verdict.illustration_count,
+                    "printing_count": verdict.printing_count,
+                    "illustration_id": verdict.illustration_id,
                     "confidence": verdict.confidence,
                     "printing_pks": list(verdict.printing_pks),
                 }
@@ -526,15 +770,21 @@ def run_illustration_calculator(
     result.multi_faced_skipped = multi_faced_skipped
 
     if not dry_run:
-        from cardpicker.local_calculate_verdicts import _split_new_printing_tag_votes
+        from cardpicker.local_calculate_verdicts import (
+            _purge_and_write_printing_tag_votes,
+            _split_new_printing_tag_votes,
+        )
 
-        if votes_batch:
-            purge_stale_machine_votes(
-                CardPrintingTag, ILLUSTRATION_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
-            )
+        # ORDER MATTERS — split/count FIRST, purge SECOND, purge+insert inside ONE transaction.
+        # See `_purge_and_write_printing_tag_votes`' own docstring for both halves: running the
+        # purge first deleted exactly the rows `_split_new_printing_tag_votes` looks for (so
+        # `already_voted` was structurally 0 forever — the "zero forever would suggest the guard
+        # itself is dead code" case
+        # `stage_e_dispatch.DispatchOutcome.stage_d_illustration_already_voted` documents), and an
+        # untransacted DELETE-then-INSERT loses votes outright if the process is killed between
+        # the two, which this project's operator does deliberately, mid-flight.
         new_votes, result.already_voted = _split_new_printing_tag_votes(votes_batch)
-        if new_votes:
-            CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)
+        _purge_and_write_printing_tag_votes(ILLUSTRATION_ANONYMOUS_ID, new_votes)
         if scan_log_batch:
             CardScanLog.objects.bulk_create(scan_log_batch)
         for touched_card in Card.objects.filter(pk__in=touched_card_ids):
