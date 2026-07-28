@@ -1,4 +1,5 @@
 import itertools
+import re
 import uuid
 from collections import defaultdict
 from datetime import datetime
@@ -782,6 +783,36 @@ class VoteSource(models.TextChoices):
     # views.post_cast_implicit_vote/post_retract_implicit_vote, distinguished from every other
     # source's vote_surface values by always carrying "display-editor-filter" there.
     IMPLICIT = "implicit", gettext_lazy("Implicit")
+
+
+CALCULATOR_VERSION_RE = re.compile(r"^(?P<family>.+)-v\d+$")
+
+
+def calculator_family(anonymous_id: str) -> "str | None":
+    """Return the versionless family prefix of a machine calculator
+    anonymous_id (e.g. 'local-ocr' for 'local-ocr-v1'), or None if the
+    id does not follow the machine naming convention (human voters use
+    UUIDs, which never match)."""
+    m = CALCULATOR_VERSION_RE.match(anonymous_id)
+    return m.group("family") if m else None
+
+
+def purge_stale_machine_votes(model_class: Any, anonymous_id: str, target_field: str, target_ids: Sequence[Any]) -> int:
+    """Before a calculator writes votes for target_ids, delete existing
+    rows from the SAME CALCULATOR FAMILY (any version, including the
+    current one) for those targets. Returns rows deleted.
+
+    Purges nothing and returns 0 if calculator_family() returns None
+    (i.e. anonymous_id is a UUID — human votes are never touched)."""
+    family = calculator_family(anonymous_id)
+    if family is None:
+        return 0
+    escaped = re.escape(family)
+    deleted, _ = model_class.objects.filter(
+        anonymous_id__regex=rf"^{escaped}-v\d+$",
+        **{f"{target_field}__in": list(target_ids)},
+    ).delete()
+    return deleted
 
 
 class AbstractWeightedVote(models.Model):

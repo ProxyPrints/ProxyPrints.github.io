@@ -64,6 +64,7 @@ from cardpicker.models import (
     CardTypes,
     PrintingTagStatus,
     VoteSource,
+    purge_stale_machine_votes,
 )
 from cardpicker.search.sanitisation import strip_bracketed_groups, to_searchable
 
@@ -1243,8 +1244,18 @@ def run_pilot(
             votes_batch, tag_votes_batch, batch_written_card_ids, scan_log_batch = [], [], [], []
             return
         if tag_votes_batch:
+            _by_anon: dict[str, list[int]] = collections.defaultdict(list)
+            for _v in tag_votes_batch:
+                _by_anon[_v.anonymous_id].append(_v.card_id)
+            for _anon_id, _card_ids in _by_anon.items():
+                purge_stale_machine_votes(CardTagVote, _anon_id, "card_id", _card_ids)
             CardTagVote.objects.bulk_create(tag_votes_batch, ignore_conflicts=True)
         if votes_batch:
+            _by_anon2: dict[str, list[int]] = collections.defaultdict(list)
+            for _pv in votes_batch:
+                _by_anon2[_pv.anonymous_id].append(_pv.card_id)
+            for _anon_id, _card_ids in _by_anon2.items():
+                purge_stale_machine_votes(CardPrintingTag, _anon_id, "card_id", _card_ids)
             CardPrintingTag.objects.bulk_create(votes_batch)
         if scan_log_batch:
             CardScanLog.objects.bulk_create(scan_log_batch)
@@ -1839,6 +1850,9 @@ def run_name_frequency_elimination(
             votes_batch, batch_written_card_ids = [], []
             return
         if votes_batch:
+            purge_stale_machine_votes(
+                CardPrintingTag, NAME_FREQUENCY_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
+            )
             CardPrintingTag.objects.bulk_create(votes_batch)
         if batch_written_card_ids:
             result.gate_violations.extend(verify_zero_resolutions(batch_written_card_ids))

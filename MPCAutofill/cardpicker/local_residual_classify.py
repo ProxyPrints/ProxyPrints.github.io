@@ -75,6 +75,7 @@ from cardpicker.models import (
     Tag,
     VotePolarity,
     VoteSource,
+    purge_stale_machine_votes,
 )
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.vote_consensus import is_human_backed_source
@@ -331,7 +332,15 @@ def run_frame_mismatch_recovery(
             result.outcomes.append(outcome)
 
     if not dry_run:
+        if artist_votes_batch:
+            purge_stale_machine_votes(
+                CardArtistVote, RESIDUAL_CLASSIFY_ANONYMOUS_ID, "card_id", [_v.card_id for _v in artist_votes_batch]
+            )
         CardArtistVote.objects.bulk_create(artist_votes_batch)
+        if tag_votes_batch:
+            purge_stale_machine_votes(
+                CardTagVote, RESIDUAL_CLASSIFY_ANONYMOUS_ID, "card_id", [_v.card_id for _v in tag_votes_batch]
+            )
         CardTagVote.objects.bulk_create(tag_votes_batch)
         for card in Card.objects.filter(pk__in=touched_card_ids):
             resolve_and_persist_artist(card)
@@ -453,6 +462,10 @@ def run_d0_sibling_artist_propagation(
             touched_card_ids.append(card.pk)
 
     if not dry_run:
+        if votes_batch:
+            purge_stale_machine_votes(
+                CardArtistVote, ART_HASH_ARTIST_ANONYMOUS_ID, "card_id", [v.card_id for v in votes_batch]
+            )
         CardArtistVote.objects.bulk_create(votes_batch)
         for card in Card.objects.filter(pk__in=touched_card_ids):
             resolve_and_persist_artist(card)

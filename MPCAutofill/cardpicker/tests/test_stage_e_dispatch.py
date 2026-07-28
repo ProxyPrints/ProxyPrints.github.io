@@ -851,12 +851,14 @@ class TestConcurrentDispatchVoteCollision:
         outcome = dispatch_micro_batch(card_ids=[card.pk])  # must not raise IntegrityError
 
         assert outcome.status == "completed"
-        assert outcome.stage_d_join_key_already_voted == 1
+        # With purge-on-write the "winner" vote is deleted before the loser writes,
+        # so already_voted=0 and the vote is overwritten, not skipped.
+        assert outcome.stage_d_join_key_already_voted == 0
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
 
         ledger = PilotRunLedger.objects.get(run_id=outcome.run_id)
         assert ledger.status == PilotRunLedger.Status.COMPLETED
-        assert ledger.counters["stage_d_join_key_already_voted"] == 1
+        assert ledger.counters["stage_d_join_key_already_voted"] == 0
 
 
 class TestBackstopSweep:

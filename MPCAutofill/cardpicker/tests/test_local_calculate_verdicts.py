@@ -725,9 +725,11 @@ class TestRunJoinKeyCalculator:
 
         result = run_join_key_calculator(dry_run=False)  # must not raise IntegrityError
 
-        assert result.already_voted == 1
+        # With purge-on-write the "winner" vote is deleted before the loser writes, so the
+        # loser overwrites rather than skips. No crash; one vote remains.
+        assert result.already_voted == 0
         assert result.votes_written == 0
-        assert result.no_match_votes_written == 0
+        assert result.no_match_votes_written == 1
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).count() == 1
 
     def test_ignore_conflicts_survives_a_race_the_pre_write_check_itself_missed(self, db, monkeypatch):
@@ -1899,8 +1901,10 @@ class TestRunFallbackCalculator:
 
         result = run_fallback_calculator(dry_run=False)  # must not raise IntegrityError
 
-        assert result.already_voted == 1
-        assert result.votes_written == 0
+        # With purge-on-write the "winner" vote is deleted before the loser writes, so the
+        # loser overwrites rather than skips. No crash; one vote remains.
+        assert result.already_voted == 0
+        assert result.votes_written == 1
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 1
 
 

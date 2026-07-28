@@ -24,6 +24,7 @@ from cardpicker.models import (
     CardPrintingTag,
     PrintingTagStatus,
     VoteSource,
+    purge_stale_machine_votes,
 )
 from cardpicker.search.sanitisation import to_searchable
 
@@ -208,6 +209,9 @@ def run_backfill(
         if not pending:
             return
         if not dry_run:
+            purge_stale_machine_votes(
+                CardPrintingTag, DEDUCTIVE_BACKFILL_ANONYMOUS_ID, "card_id", [v.card_id for v in pending]
+            )
             CardPrintingTag.objects.bulk_create(
                 [
                     CardPrintingTag(

@@ -115,6 +115,7 @@ from cardpicker.models import (
     ImageEvidence,
     LandsAmbiguousResidue,
     VoteSource,
+    purge_stale_machine_votes,
 )
 
 # "=s800" tier addendum (task #130's tier-routing idea, applied here first): OCR only needs to
@@ -637,6 +638,7 @@ def run_lands_identify(
         )
 
     if not dry_run and votes_batch:
+        purge_stale_machine_votes(CardPrintingTag, LANDS_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch])
         new_votes, result.already_voted = _split_new_votes(votes_batch)
         if new_votes:
             CardPrintingTag.objects.bulk_create(new_votes)
