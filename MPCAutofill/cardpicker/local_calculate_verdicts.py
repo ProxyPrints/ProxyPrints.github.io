@@ -377,6 +377,7 @@ from typing import Iterable, Optional
 
 import imagehash
 
+from django.db import transaction
 from django.db.models import Count, Max, Q, QuerySet
 
 from cardpicker.image_evidence import current_evidence_queryset
@@ -1098,6 +1099,45 @@ def _split_new_printing_tag_votes(
     return new_votes, len(votes_batch) - len(new_votes)
 
 
+def _purge_and_write_printing_tag_votes(anonymous_id: str, new_votes: list[CardPrintingTag]) -> None:
+    """
+    PURGE/SPLIT ORDERING + CANCEL-SAFETY (2026-07-28) - the single write primitive every
+    `CardPrintingTag`-casting calculator in this module (and `local_illustration`'s) now shares.
+
+    ORDERING: callers MUST run `_split_new_printing_tag_votes` BEFORE calling this, and pass its
+    `new_votes` output, never the raw batch. `purge_stale_machine_votes` deletes by CALCULATOR
+    FAMILY (`^<family>-v\\d+$`, see `models.purge_stale_machine_votes`), which necessarily includes
+    the caller's own CURRENT anonymous_id - so a purge run FIRST deletes exactly the rows
+    `_split_new_printing_tag_votes` then goes looking for, making `already_voted` structurally 0 in
+    every deployment forever. That is not "races never happen": it is the guard reporting on a
+    table it just emptied. `stage_e_dispatch.DispatchOutcome.stage_d_join_key_already_voted`'s own
+    comment states the contract this broke - "a healthy streaming deployment should see this
+    occasionally, not never (zero forever would suggest the guard itself is dead code)".
+
+    SCOPED TO `new_votes`, NOT THE FULL BATCH: a card whose vote the split just skipped as
+    already-cast by a concurrent dispatch must keep that winner's row. Purging on the full batch
+    would delete the winner and then NOT re-insert (the loser's vote is no longer in `new_votes`),
+    silently destroying a committed vote. Note the split checks the EXACT current
+    `(card_id, anonymous_id)` pair, so a STALE-VERSION row (`...-v1` when this calculator is now
+    `...-v2`) is never counted as "already voted" - such a card stays in `new_votes`, gets purged,
+    and is overwritten. The calculator-version self-overwrite behaviour (#519/#520) is preserved
+    exactly.
+
+    CANCEL-SAFETY: the purge is a DELETE and the insert is a separate statement. Without a
+    surrounding transaction a process killed between them - which this project's operator does
+    deliberately, mid-flight - leaves the affected cards with their previous vote deleted and no
+    replacement written. `transaction.atomic()` makes the pair all-or-nothing.
+
+    `ignore_conflicts=True` is retained as the second line of defense for the residual
+    check-then-insert window `_split_new_printing_tag_votes`' own docstring describes.
+    """
+    if not new_votes:
+        return
+    with transaction.atomic():
+        purge_stale_machine_votes(CardPrintingTag, anonymous_id, "card_id", [_v.card_id for _v in new_votes])
+        CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)
+
+
 # ---------------------------------------------------------------------------------------------
 # LAZY, PER-WORKER-PROCESS `CandidateNameIndex` CACHE (issue #469, Tron §8 gate finding,
 # 2026-07-25): `CandidateNameIndex()` scans all 113,224 CanonicalCard rows (measured 1.48s) - the
@@ -1283,13 +1323,10 @@ def run_join_key_calculator(
         # crash-proofing (the check above still leaves a narrow query-to-insert race window) -
         # same belt-and-suspenders precedent as local_layout_class_cast.py:300/
         # local_detect_ai_art.py:459/local_identify_printing_tags.py:1246 for CardTagVote.
-        if votes_batch:
-            purge_stale_machine_votes(
-                CardPrintingTag, JOIN_KEY_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
-            )
+        #
+        # SPLIT BEFORE PURGE - see this module's own "PURGE/SPLIT ORDERING" section below.
         new_votes, result.already_voted = _split_new_printing_tag_votes(votes_batch)
-        if new_votes:
-            CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)
+        _purge_and_write_printing_tag_votes(JOIN_KEY_ANONYMOUS_ID, new_votes)
         CardScanLog.objects.bulk_create(scan_log_batch)
         for touched_card in Card.objects.filter(pk__in=touched_card_ids):
             resolve_and_persist_printing(touched_card)
@@ -1611,13 +1648,10 @@ def run_fallback_calculator(
         # under its own STAGE_D_FALLBACK_ANONYMOUS_ID and is equally exposed to the concurrent-
         # dispatch collision that fixes). ignore_conflicts=True is the actual crash-proofing -
         # same rationale as run_join_key_calculator's own identical call site.
-        if votes_batch:
-            purge_stale_machine_votes(
-                CardPrintingTag, STAGE_D_FALLBACK_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
-            )
+        #
+        # SPLIT BEFORE PURGE - see `_purge_and_write_printing_tag_votes`' own docstring.
         new_votes, result.already_voted = _split_new_printing_tag_votes(votes_batch)
-        if new_votes:
-            CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)
+        _purge_and_write_printing_tag_votes(STAGE_D_FALLBACK_ANONYMOUS_ID, new_votes)
         CardScanLog.objects.bulk_create(scan_log_batch)
         for touched_card in Card.objects.filter(pk__in=touched_card_ids):
             resolve_and_persist_printing(touched_card)

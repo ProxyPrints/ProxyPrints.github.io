@@ -38,13 +38,14 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-from django.db.models import Q, QuerySet
+from django.db.models import Count, Max, Q, QuerySet
 
 from cardpicker.image_evidence import current_evidence_queryset
 from cardpicker.local_fallback import match_artist
 from cardpicker.local_identify_printing_tags import CandidateNameIndex, generate_run_id
 from cardpicker.models import (
     CanonicalCard,
+    CanonicalPrintingMetadata,
     Card,
     CardPrintingTag,
     CardScanLog,
@@ -52,7 +53,6 @@ from cardpicker.models import (
     ImageEvidence,
     PrintingTagStatus,
     VoteSource,
-    purge_stale_machine_votes,
 )
 from cardpicker.printing_consensus import resolve_and_persist_printing
 from cardpicker.search.sanitisation import to_searchable
@@ -121,8 +121,10 @@ class IllustrationIndex:
       - ``artist_by_pk``: ``{card_pk → artist_name}`` for ``match_artist``
       - ``card_pk_to_artist_pk``: ``{canonical_card_pk → artist_pk}`` for post-match lookups
 
-    Built once per calculator invocation, cached for the duration (same pattern as
-    ``CandidateNameIndex`` in ``local_calculate_verdicts.py``).
+    CATALOG-WIDE, NOT BATCH-SCOPED — two full ``CanonicalCard`` scans (113,224 rows live). Never
+    construct this directly from a Stage E hot path; go through
+    ``_get_cached_illustration_index()`` below, which memoizes one instance per worker process
+    behind a cheap version stamp (see that function and the section comment above it).
     """
 
     def __init__(self) -> None:
@@ -133,17 +135,22 @@ class IllustrationIndex:
         # canonical_card_pk → artist_pk (for post-match lookup)
         self.card_pk_to_artist_pk: dict[int, int] = {}
 
-        rows = (
-            CanonicalCard.objects.filter(printing_metadata__illustration_id__isnull=False)
-            .select_related("artist", "printing_metadata")
-            .values_list(
-                "pk",
-                "name",
-                "artist__pk",
-                "artist__name",
-                "printing_metadata__pk",
-                "printing_metadata__illustration_id",
-            )
+        # No `.select_related(...)` here: chained BEFORE a `.values_list()` that already names
+        # its own traversals (`artist__name`, `printing_metadata__illustration_id`), it is a
+        # documented no-op - `values_list` builds its own JOINs from the traversal arguments and
+        # discards the select_related plan entirely, so the call added zero rows to the SELECT and
+        # zero saved queries. Removed rather than "made effective" (i.e. rather than dropping the
+        # traversals and hydrating model instances instead): hydrating 113,224 CanonicalCard +
+        # CanonicalArtist + CanonicalPrintingMetadata objects to read four columns off each is the
+        # expensive direction, and `values_list` is exactly what `CandidateNameIndex` itself uses
+        # for the same catalog-wide-index-build job.
+        rows = CanonicalCard.objects.filter(printing_metadata__illustration_id__isnull=False).values_list(
+            "pk",
+            "name",
+            "artist__pk",
+            "artist__name",
+            "printing_metadata__pk",
+            "printing_metadata__illustration_id",
         )
 
         for card_pk, card_name, artist_pk, artist_name, printing_pk, illustration_id in rows:
@@ -167,6 +174,91 @@ class IllustrationIndex:
     def illustration_printings(self, artist_pk: int, searchable_card_name: str) -> dict[str, list[int]]:
         """Return ``{illustration_id_str → [printing_pk]}`` for the given (artist, card_name) key."""
         return dict(self._index.get((artist_pk, searchable_card_name), {}))
+
+
+# ---------------------------------------------------------------------------------------------
+# LAZY, PER-WORKER-PROCESS ``IllustrationIndex`` CACHE — the same shape (and the same reason)
+# ``local_calculate_verdicts._get_cached_candidate_name_index()`` already implements for
+# ``CandidateNameIndex`` under issue #469, applied here because this calculator is invoked from
+# ``stage_e_dispatch._run_stage_d`` ONCE PER 25-CARD MICRO-BATCH. ``IllustrationIndex.__init__``
+# issues two catalog-wide ``CanonicalCard`` queries (113,224 rows live) — one filtered on
+# ``printing_metadata__illustration_id``, one unfiltered over every card with an artist — and
+# builds full-catalog dicts from both. Rebuilding that per micro-batch is O(catalog) work inside
+# a conveyor whose whole contract (issues #458/#460) is O(batch), and it dominates the cost of a
+# micro-batch that ends up with one eligible card, or none.
+#
+# Invalidation is a cheap version-stamp CHECK per call, not a write-time hook — the same
+# "no soundness implication" trade ``_candidate_name_index_version_stamp`` documents. The stamp
+# is ``(CanonicalCard max pk, CanonicalCard count, CanonicalPrintingMetadata max pk,
+# CanonicalPrintingMetadata count, count of NON-NULL illustration_id)``. The first four catch any
+# INSERT (a fresh max pk) or DELETE (count moves even when max pk doesn't) in either table; the
+# fifth exists because this index's whole input is a column that is BACKFILLED IN PLACE —
+# ``import_scryfall_printing_metadata`` populates ``illustration_id`` on rows that already exist,
+# an UPDATE that moves neither max pk nor row count. Without that fifth term a worker process
+# that built the index before an illustration backfill would serve a stale, under-populated index
+# for its whole lifetime. ``illustration_id`` is ``db_index=True``, so the extra term is an
+# index-only count, not a table scan.
+#
+# STILL NOT DETECTED (accepted, same reasoning as the CandidateNameIndex cache's own comment): an
+# in-place rename of a ``CanonicalCard.name`` or ``CanonicalArtist.name``, or an in-place change
+# of an ALREADY-NON-NULL ``illustration_id`` to a different value. Those are catalog-data edits,
+# not routine, and a stale index in that narrow case re-derives the same deduction a fresh one
+# would for every card whose row did not change. No vote-soundness exposure: this is a pure
+# performance change.
+# ---------------------------------------------------------------------------------------------
+
+IllustrationIndexVersionStamp = tuple[int, int, int, int, int]
+
+_illustration_index_cache: Optional[tuple[IllustrationIndexVersionStamp, "IllustrationIndex"]] = None
+
+
+def _illustration_index_version_stamp() -> IllustrationIndexVersionStamp:
+    """
+    Cheap (index-only aggregates, not table scans) stamp used to detect a
+    ``CanonicalCard``/``CanonicalPrintingMetadata`` write since the cached ``IllustrationIndex``
+    was built — see this section's own comment above for the full invalidation-shape rationale,
+    including why the non-null ``illustration_id`` count is a term and what is deliberately not
+    detected.
+    """
+    canonical_card_agg = CanonicalCard.objects.aggregate(max_pk=Max("pk"), count=Count("pk"))
+    printing_metadata_agg = CanonicalPrintingMetadata.objects.aggregate(max_pk=Max("pk"), count=Count("pk"))
+    illustration_id_count = CanonicalPrintingMetadata.objects.filter(illustration_id__isnull=False).count()
+    return (
+        canonical_card_agg["max_pk"] or 0,
+        canonical_card_agg["count"] or 0,
+        printing_metadata_agg["max_pk"] or 0,
+        printing_metadata_agg["count"] or 0,
+        illustration_id_count,
+    )
+
+
+def _get_cached_illustration_index() -> "IllustrationIndex":
+    """
+    Returns the current worker process's cached ``IllustrationIndex``, building (or rebuilding, on
+    a version-stamp mismatch) it exactly once per distinct stamp. Call this LAZILY — only once
+    there is a card that actually needs an illustration lookup, never unconditionally at the top
+    of a dispatch — so a micro-batch whose ``card_ids``-scoped eligible set is empty pays neither
+    the index build nor even this function's own version-stamp query.
+    """
+    global _illustration_index_cache
+    stamp = _illustration_index_version_stamp()
+    if _illustration_index_cache is not None and _illustration_index_cache[0] == stamp:
+        return _illustration_index_cache[1]
+    index = IllustrationIndex()
+    _illustration_index_cache = (stamp, index)
+    return index
+
+
+def reset_illustration_index_cache_for_tests() -> None:
+    """
+    TEST-ONLY hook, never called from any production code path — clears the module-level
+    ``IllustrationIndex`` cache above, so a test asserting an exact construction COUNT starts from
+    a known-empty cache instead of depending on Postgres's own incidental
+    sequence-advance-across-rollback behaviour. Mirrors
+    ``local_calculate_verdicts.reset_candidate_name_index_cache_for_tests``.
+    """
+    global _illustration_index_cache
+    _illustration_index_cache = None
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +304,7 @@ def _eligible_illustration_cards_queryset(
     join_key_voted_card_ids: Iterable[int],
     join_key_scanned_card_ids: Iterable[int],
     chunk_size: int = 500,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> "QuerySet[Card]":
     """
     Cards the join-key calculator already concluded have no confident hit, plus the same base
@@ -225,6 +318,12 @@ def _eligible_illustration_cards_queryset(
         no DFC layout_class reading; multi-faced cards have ``layout_class`` in
         {"split", "transform", "meld", "double_faced"}).  Multi-faced cards are counted and
         skipped (logged), not errored — v1 scope limitation.
+
+    ``card_ids`` (Stage E micro-batch scoping) mirrors
+    ``local_calculate_verdicts._eligible_cards_queryset``'s own parameter exactly — a pure scope
+    narrowing, applied to BOTH the outer ``Card`` queryset and the ``CardScanLog`` subquery below.
+    ``None`` (BULK mode) leaves both unscoped, byte-identical to this function's pre-``card_ids``
+    behaviour.
     """
     # Start with the same base query every Stage D calculator uses: unresolved, no
     # confirmed match, card_type=CARD, no own-vote, no non-rescannable scan-log,
@@ -232,6 +331,17 @@ def _eligible_illustration_cards_queryset(
     non_rescannable_scanned = CardScanLog.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).exclude(
         skip_reason__in=RESCANNABLE_SKIP_REASONS
     )
+    if card_ids is not None:
+        # Issue #469 (Tron §8 gate finding, 2026-07-25), carried over to this calculator: CardScanLog
+        # is 2,093,147 rows live and append-only, growing — when the caller has already narrowed the
+        # outer Card queryset to `card_ids` (as `stage_e_dispatch._run_stage_d` does, 25 cards at a
+        # time), this subquery must be scoped the same way rather than scanning the whole table.
+        # Purely a cost narrowing, not a behaviour change: the resulting excluded-pk set is
+        # equivalent for THIS caller either way, since a row this subquery would find outside
+        # `card_ids` could never survive the outer queryset's own `.filter(pk__in=card_ids)`
+        # (applied below) regardless. `card_ids is None` (BULK mode) leaves this exactly as it was
+        # before this fix — unscoped over the whole table.
+        non_rescannable_scanned = non_rescannable_scanned.filter(card_id__in=card_ids)
 
     queryset = (
         Card.objects.filter(
@@ -250,6 +360,8 @@ def _eligible_illustration_cards_queryset(
         .distinct()
         .select_related("source")
     )
+    if card_ids is not None:
+        queryset = queryset.filter(pk__in=card_ids)
     return queryset
 
 
@@ -364,12 +476,15 @@ def run_illustration_calculator(
     run_id = run_id or generate_run_id()
     result = IllustrationCalculatorResult(dry_run=dry_run, run_id=run_id)
 
-    # Lazy illustration index — built once per invocation (same pattern as
-    # ``CandidateNameIndex`` in ``run_fallback_calculator``).
+    # Lazy, CACHED indexes — both are catalog-wide builds, resolved on first actual need below and
+    # never unconditionally here, so a micro-batch whose eligible set turns out empty pays for
+    # neither. See ``_get_cached_illustration_index`` above and
+    # ``local_calculate_verdicts._get_cached_candidate_name_index`` (issue #469) for the shared
+    # per-worker-process, version-stamped caching these local variables sit in front of; the local
+    # variables themselves exist only so the version-stamp CHECK is paid once per invocation
+    # rather than once per card, exactly as ``run_join_key_calculator``/``run_fallback_calculator``
+    # do with their own ``index`` locals.
     illustration_index: Optional[IllustrationIndex] = None
-
-    # Lazy CandidateNameIndex for candidate lookup — same cached pattern as
-    # ``_get_cached_candidate_name_index()`` in ``local_calculate_verdicts.py``.
     candidate_name_index: Optional[CandidateNameIndex] = None
 
     votes_batch: list[CardPrintingTag] = []
@@ -380,25 +495,28 @@ def run_illustration_calculator(
     from cardpicker.local_calculate_verdicts import (
         JOIN_KEY_ANONYMOUS_ID,
         JOIN_KEY_NO_HIT_SKIP_REASONS,
+        _get_cached_candidate_name_index,
     )
 
-    join_key_no_match_card_ids = list(
-        CardPrintingTag.objects.filter(anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True).values_list(
-            "card_id", flat=True
-        )
-    )
-    join_key_no_hit_scanned_card_ids = list(
-        CardScanLog.objects.filter(
-            anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
-        ).values_list("card_id", flat=True)
-    )
+    # Deliberately NOT wrapped in `list(...)`: these stay lazy querysets so Django compiles them
+    # into SQL subqueries of the `Q(pk__in=...) | Q(pk__in=...)` filter below, evaluated inside the
+    # one eligibility query and narrowed by its own `card_ids` scope. Materializing them instead
+    # pulled every join-key no-match vote and every join-key no-hit CardScanLog row (2,093,147 rows
+    # live, append-only) into this process's memory on EVERY micro-batch, before any card_ids
+    # scoping applied. Matches `local_calculate_verdicts._fallback_eligible_cards_queryset`, which
+    # has always kept the identical pair lazy.
+    join_key_no_match_card_ids = CardPrintingTag.objects.filter(
+        anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
+    ).values_list("card_id", flat=True)
+    join_key_no_hit_scanned_card_ids = CardScanLog.objects.filter(
+        anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
+    ).values_list("card_id", flat=True)
 
     queryset = _eligible_illustration_cards_queryset(
         join_key_voted_card_ids=join_key_no_match_card_ids,
         join_key_scanned_card_ids=join_key_no_hit_scanned_card_ids,
+        card_ids=card_ids,
     )
-    if card_ids is not None:
-        queryset = queryset.filter(pk__in=card_ids)
 
     multi_faced_skipped = 0
 
@@ -406,9 +524,10 @@ def run_illustration_calculator(
         if card.content_phash is None:
             continue  # no stable hash to key ImageEvidence lookup
 
-        # Lazy illustration index — built once we know there are eligible cards.
+        # Lazy illustration index — resolved once we know there are eligible cards, from the
+        # per-worker-process cache (NOT a fresh catalog-wide build per micro-batch).
         if illustration_index is None:
-            illustration_index = IllustrationIndex()
+            illustration_index = _get_cached_illustration_index()
 
         evidence = (
             current_evidence_queryset(card)
@@ -463,9 +582,14 @@ def run_illustration_calculator(
 
         result.cards_considered += 1
 
-        # Lazy CandidateNameIndex — same pattern as run_fallback_calculator.
+        # Lazy CandidateNameIndex — resolved through `local_calculate_verdicts`' own
+        # per-worker-process cache (issue #469), the same call `run_join_key_calculator`/
+        # `run_fallback_calculator` make. This used to call `CandidateNameIndex()` directly while
+        # claiming in a comment to use "the same cached pattern" — it did not: it bypassed the
+        # cache entirely and paid a fresh 113,224-row, 1.48s catalog scan on every micro-batch
+        # that had at least one card with artist OCR.
         if candidate_name_index is None:
-            candidate_name_index = CandidateNameIndex()
+            candidate_name_index = _get_cached_candidate_name_index()
 
         # Build candidate list for match_artist — adapter objects with .pk.
         raw_candidates = candidate_name_index.candidates_for(card.name)
@@ -526,15 +650,21 @@ def run_illustration_calculator(
     result.multi_faced_skipped = multi_faced_skipped
 
     if not dry_run:
-        from cardpicker.local_calculate_verdicts import _split_new_printing_tag_votes
+        from cardpicker.local_calculate_verdicts import (
+            _purge_and_write_printing_tag_votes,
+            _split_new_printing_tag_votes,
+        )
 
-        if votes_batch:
-            purge_stale_machine_votes(
-                CardPrintingTag, ILLUSTRATION_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
-            )
+        # ORDER MATTERS — split/count FIRST, purge SECOND, purge+insert inside ONE transaction.
+        # See `_purge_and_write_printing_tag_votes`' own docstring for both halves: running the
+        # purge first deleted exactly the rows `_split_new_printing_tag_votes` looks for (so
+        # `already_voted` was structurally 0 forever — the "zero forever would suggest the guard
+        # itself is dead code" case
+        # `stage_e_dispatch.DispatchOutcome.stage_d_illustration_already_voted` documents), and an
+        # untransacted DELETE-then-INSERT loses votes outright if the process is killed between
+        # the two, which this project's operator does deliberately, mid-flight.
         new_votes, result.already_voted = _split_new_printing_tag_votes(votes_batch)
-        if new_votes:
-            CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)
+        _purge_and_write_printing_tag_votes(ILLUSTRATION_ANONYMOUS_ID, new_votes)
         if scan_log_batch:
             CardScanLog.objects.bulk_create(scan_log_batch)
         for touched_card in Card.objects.filter(pk__in=touched_card_ids):
