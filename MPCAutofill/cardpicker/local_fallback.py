@@ -555,20 +555,33 @@ def classify_bleed_edge(card_image: "Image.Image") -> Optional[str]:
     return "bleed" if dist_to_bleed < dist_to_trim else "trimmed"
 
 
-def measure_bleed_diff_mm(card_image: "Image.Image") -> Optional[float]:
-    """Returns `_BLEED_MARGIN_MM - measured`, where `measured` is the per-edge bleed margin in mm
-    derived from the image's aspect ratio by solving `r = (trim_w + 2m)/(trim_h + 2m)` for m.
-    Positive means less bleed than the 3.175 mm standard; negative means more; zero is perfect
-    standard bleed. Returns None for a degenerate (zero-height or non-portrait) image."""
+def compute_bleed_diff_mm(card_image: "Image.Image") -> Optional[float]:
+    """Quantitative per-edge bleed measurement: returns the difference (in mm) between the
+    standard 3.175mm reference bleed and the actual per-edge bleed derived from the image's
+    own pixel dimensions.
+
+    Convention: negative = over-bleed (actual bleed exceeds 3.175mm), positive = under-bleed
+    (actual bleed falls short), zero = exactly at standard.
+
+    Formula (symmetric-bleed assumption): given aspect ratio r = width/height,
+    actual_bleed_mm = (88 * r - 63) / (2 * (1 - r)), then
+    bleed_diff_mm = 3.175 - actual_bleed_mm.
+
+    Returns None when the image is non-classifiable (aspect ratio too far from both known
+    reference ratios, or degenerate height==0) — the same abstain condition classify_bleed_edge
+    uses, since the derived mm value is meaningless without a confident ratio classification."""
     width, height = card_image.size
     if height == 0:
         return None
     ratio = width / height
-    if ratio >= 1.0:
+    dist_to_trim = abs(ratio - TRIM_ASPECT_RATIO)
+    dist_to_bleed = abs(ratio - BLEED_ASPECT_RATIO)
+    if min(dist_to_trim, dist_to_bleed) > _BLEED_CLASSIFICATION_TOLERANCE:
         return None
-    # m = (trim_h * r - trim_w) / (2 * (1 - r))
-    measured_mm = (_CARD_TRIM_HEIGHT_MM * ratio - _CARD_TRIM_WIDTH_MM) / (2.0 * (1.0 - ratio))
-    return _BLEED_MARGIN_MM - measured_mm
+    # Symmetric-bleed derivation: from r = (63 + 2b) / (88 + 2b), solve for b:
+    # b = (88*r - 63) / (2 * (1 - r))
+    actual_bleed_mm = (88 * ratio - 63) / (2 * (1 - ratio))
+    return round(_BLEED_MARGIN_MM - actual_bleed_mm, 4)
 
 
 def cast_bleed_edge_vote(card: Card, bleed_class: Optional[str], run_id: Optional[str] = None) -> Optional[CardTagVote]:
@@ -700,7 +713,7 @@ __all__ = [
     "BLEED_EDGE_TAG_NAME",
     "BLEED_EDGE_VOTE_CONFIDENCE",
     "classify_bleed_edge",
-    "measure_bleed_diff_mm",
+    "compute_bleed_diff_mm",
     "cast_bleed_edge_vote",
     "normalize_crop_box",
     "FallbackOutcome",

@@ -252,6 +252,7 @@ from cardpicker.local_fallback import (
     classify_bleed_edge,
     classify_border_color,
     classify_frame_style,
+    compute_bleed_diff_mm,
     extract_artist_name,
     measure_bleed_diff_mm,
     normalize_crop_box,
@@ -718,6 +719,7 @@ def compute_card_evidence(
         fields["aspect_ratio"] = (width / height) if height else None
         bleed_class = classify_bleed_edge(image)
         fields["bleed_class"] = bleed_class or ""
+        fields["bleed_diff_mm"] = compute_bleed_diff_mm(image)
         if bleed_class is None:
             # classify_bleed_edge's own documented "genuinely non-standard image" outcome -
             # "ambiguous" is the pipeline's own pre-existing skip-reason vocabulary
