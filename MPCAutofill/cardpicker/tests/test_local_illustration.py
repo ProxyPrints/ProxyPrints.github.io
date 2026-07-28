@@ -87,7 +87,7 @@ class TestIllustrationIndex:
         index = IllustrationIndex()
 
         assert str(illustration_uuid) in index.illustration_printings(artist.pk, "lightning bolt")
-        assert index.artist_by_pk[artist.pk] == "Christopher Rush"
+        assert index.artist_by_pk[cc.pk] == "Christopher Rush"
         assert index.card_pk_to_artist_pk[cc.pk] == artist.pk
 
     def test_multiple_illustrations_for_same_artist_name(self, db):
