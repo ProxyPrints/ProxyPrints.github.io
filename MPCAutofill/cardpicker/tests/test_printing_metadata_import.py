@@ -1,11 +1,15 @@
 import json
 import os
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
 import requests
+
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 
 from cardpicker import printing_metadata_import
 from cardpicker.models import CanonicalPrintingMetadata
@@ -42,6 +46,36 @@ def _record(**overrides: Any) -> dict[str, Any]:
     }
     base.update(overrides)
     return base
+
+
+def _seed_row_matching_record(canonical_card: Any) -> None:
+    """
+    Seeds a CanonicalPrintingMetadata row field-identical to what `_record()`'s base bulk
+    record produces for the same card - the "unchanged" leg of diff-aware sync tests.
+    """
+    CanonicalPrintingMetadataFactory(canonical_card=canonical_card, edhrec_rank=1234, released_at=date(2015, 1, 1))
+
+
+class _BulkWriteSpy:
+    """Records every bulk_create/bulk_update call (obj pks + kwargs) on the default manager."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch):
+        self.create_calls: list[dict[str, Any]] = []
+        self.update_calls: list[dict[str, Any]] = []
+        manager = CanonicalPrintingMetadata.objects
+        real_create = manager.bulk_create
+        real_update = manager.bulk_update
+
+        def spy_create(objs: Any, **kwargs: Any) -> Any:
+            self.create_calls.append({"pks": [obj.pk for obj in objs], "kwargs": kwargs})
+            return real_create(objs, **kwargs)
+
+        def spy_update(objs: Any, **kwargs: Any) -> Any:
+            self.update_calls.append({"pks": [obj.pk for obj in objs], "kwargs": kwargs})
+            return real_update(objs, **kwargs)
+
+        monkeypatch.setattr(manager, "bulk_create", spy_create)
+        monkeypatch.setattr(manager, "bulk_update", spy_update)
 
 
 class TestImportScryfallPrintingMetadata:
@@ -104,7 +138,8 @@ class TestImportScryfallPrintingMetadata:
         stats = import_scryfall_printing_metadata(default_cards_path=path)
 
         assert stats["created"] == 0
-        assert stats["skipped"] == 1
+        assert stats["no_matching_card"] == 1
+        assert stats["skipped"] == 0  # skipped counts unchanged rows, not unmatched bulk rows
         assert CanonicalPrintingMetadata.objects.count() == 0
 
     def test_printings_count_denormalised_per_oracle_card(self, db, tmp_path):
@@ -145,12 +180,19 @@ class TestImportScryfallPrintingMetadata:
         path = _write_bulk_data_file(tmp_path, [record])
 
         import_scryfall_printing_metadata(default_cards_path=path)
-        stats = import_scryfall_printing_metadata(default_cards_path=path)
+        with CaptureQueriesContext(connection) as queries:
+            stats = import_scryfall_printing_metadata(default_cards_path=path)
 
+        # diff-aware sync: a row identical on every synced field is skipped outright - the
+        # rerun issues no row writes at all (the OOM regression this test guards against was
+        # a whole-table UPDATE on every run).
         assert stats["created"] == 0
-        assert stats["updated"] == 1  # bulk_sync always re-updates matched rows
+        assert stats["updated"] == 0
         assert stats["deleted"] == 0
+        assert stats["skipped"] == 1
         assert CanonicalPrintingMetadata.objects.count() == 1
+        writes = [q for q in queries if q["sql"].startswith(("INSERT INTO", "UPDATE", "DELETE"))]
+        assert writes == []
 
     def test_metadata_deleted_when_no_longer_in_bulk_data(self, db, tmp_path):
         canonical_card = CanonicalCardFactory()
@@ -161,6 +203,124 @@ class TestImportScryfallPrintingMetadata:
 
         assert stats["deleted"] == 1
         assert CanonicalPrintingMetadata.objects.count() == 0
+
+    def test_unchanged_row_is_excluded_from_bulk_update(self, db, tmp_path, monkeypatch):
+        changed_card = CanonicalCardFactory()
+        unchanged_card = CanonicalCardFactory()
+        _seed_row_matching_record(changed_card)
+        _seed_row_matching_record(unchanged_card)
+        records = [
+            _record(id=str(changed_card.identifier), full_art=True),  # one synced field differs
+            _record(id=str(unchanged_card.identifier)),  # identical to the seeded row
+        ]
+        path = _write_bulk_data_file(tmp_path, records)
+        spy = _BulkWriteSpy(monkeypatch)
+
+        stats = import_scryfall_printing_metadata(default_cards_path=path)
+
+        assert stats["updated"] == 1
+        assert stats["skipped"] == 1
+        assert [call["pks"] for call in spy.update_calls] == [[changed_card.pk]]
+
+    def test_bulk_create_is_batched(self, db, tmp_path, monkeypatch):
+        monkeypatch.setattr(printing_metadata_import, "_METADATA_WRITE_BATCH_SIZE", 2)
+        cards = [CanonicalCardFactory() for _ in range(3)]
+        path = _write_bulk_data_file(tmp_path, [_record(id=str(card.identifier)) for card in cards])
+        spy = _BulkWriteSpy(monkeypatch)
+
+        with CaptureQueriesContext(connection) as queries:
+            stats = import_scryfall_printing_metadata(default_cards_path=path)
+
+        assert stats["created"] == 3
+        assert [call["kwargs"] for call in spy.create_calls] == [{"batch_size": 2}]
+        inserts = [q for q in queries if q["sql"].startswith("INSERT INTO")]
+        assert len(inserts) == 2  # 3 rows at batch_size=2 -> statements of 2 + 1
+
+    def test_bulk_update_is_batched(self, db, tmp_path, monkeypatch):
+        monkeypatch.setattr(printing_metadata_import, "_METADATA_WRITE_BATCH_SIZE", 2)
+        cards = [CanonicalCardFactory() for _ in range(3)]
+        for card in cards:
+            _seed_row_matching_record(card)
+        records = [_record(id=str(card.identifier), full_art=True) for card in cards]
+        path = _write_bulk_data_file(tmp_path, records)
+        spy = _BulkWriteSpy(monkeypatch)
+
+        with CaptureQueriesContext(connection) as queries:
+            stats = import_scryfall_printing_metadata(default_cards_path=path)
+
+        assert stats["updated"] == 3
+        update_kwargs = [call["kwargs"] for call in spy.update_calls]
+        assert update_kwargs == [{"batch_size": 2, "fields": printing_metadata_import._METADATA_SYNC_FIELDS}]
+        updates = [q for q in queries if q["sql"].startswith("UPDATE")]
+        assert len(updates) == 2  # 3 rows at batch_size=2 -> statements of 2 + 1
+
+    def test_stale_rows_deleted_in_batches(self, db, tmp_path, monkeypatch):
+        monkeypatch.setattr(printing_metadata_import, "_METADATA_WRITE_BATCH_SIZE", 2)
+        for _ in range(3):
+            CanonicalPrintingMetadataFactory()
+        path = _write_bulk_data_file(tmp_path, [])  # bulk file no longer contains any of them
+
+        with CaptureQueriesContext(connection) as queries:
+            stats = import_scryfall_printing_metadata(default_cards_path=path)
+
+        # full-sync delete semantics survive batching: every stale row is gone
+        assert stats["deleted"] == 3
+        assert CanonicalPrintingMetadata.objects.count() == 0
+        deletes = [q for q in queries if q["sql"].startswith("DELETE")]
+        assert len(deletes) == 2  # 3 stale keys at batch_size=2 -> chunks of 2 + 1
+
+    def test_stats_counts_across_a_mixed_scenario(self, db, tmp_path):
+        unchanged_card = CanonicalCardFactory()
+        changed_card = CanonicalCardFactory()
+        new_card = CanonicalCardFactory()
+        stale_card = CanonicalCardFactory()
+        _seed_row_matching_record(unchanged_card)
+        _seed_row_matching_record(changed_card)
+        CanonicalPrintingMetadataFactory(canonical_card=stale_card)
+        records = [
+            _record(id=str(unchanged_card.identifier)),
+            _record(id=str(changed_card.identifier), full_art=True),
+            _record(id=str(new_card.identifier)),
+        ]
+        path = _write_bulk_data_file(tmp_path, records)
+
+        stats = import_scryfall_printing_metadata(default_cards_path=path)
+
+        assert stats == {"created": 1, "updated": 1, "deleted": 1, "skipped": 1, "no_matching_card": 0}
+        assert CanonicalPrintingMetadata.objects.count() == 3
+        assert CanonicalPrintingMetadata.objects.get(canonical_card=changed_card).full_art is True
+
+    def test_none_vs_value_changes_are_detected(self, db, tmp_path):
+        none_to_value_card = CanonicalCardFactory()
+        value_to_none_card = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(
+            canonical_card=none_to_value_card, edhrec_rank=None, released_at=date(2015, 1, 1)
+        )
+        _seed_row_matching_record(value_to_none_card)
+        records = [
+            _record(id=str(none_to_value_card.identifier)),  # edhrec_rank 1234 vs stored None
+            _record(id=str(value_to_none_card.identifier), edhrec_rank=None),  # None vs stored 1234
+        ]
+        path = _write_bulk_data_file(tmp_path, records)
+
+        stats = import_scryfall_printing_metadata(default_cards_path=path)
+
+        assert stats["updated"] == 2
+        assert CanonicalPrintingMetadata.objects.get(canonical_card=none_to_value_card).edhrec_rank == 1234
+        assert CanonicalPrintingMetadata.objects.get(canonical_card=value_to_none_card).edhrec_rank is None
+
+    def test_list_field_changes_are_detected(self, db, tmp_path):
+        canonical_card = CanonicalCardFactory()
+        _seed_row_matching_record(canonical_card)
+        record = _record(id=str(canonical_card.identifier), frame_effects=["showcase"], promo_types=["foil"])
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        stats = import_scryfall_printing_metadata(default_cards_path=path)
+
+        assert stats["updated"] == 1
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=canonical_card)
+        assert metadata.frame_effects == ["showcase"]
+        assert metadata.promo_types == ["foil"]
 
 
 class TestGetBackFaceNames:

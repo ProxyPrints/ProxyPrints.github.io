@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from bulk_sync import bulk_sync
 from pydantic import BaseModel, ValidationError
 
 from django.conf import settings
 from django.core.management.base import CommandError
+from django.db import transaction
 
 from cardpicker.integrations.game.mtg import Scryfall
 from cardpicker.models import CanonicalCard, CanonicalPrintingMetadata
@@ -297,6 +297,102 @@ def is_back_face(name: str, default_cards_path: Path | None = None) -> bool:
     return name in get_back_face_names(default_cards_path)
 
 
+# The fields `_sync_printing_metadata` writes on CanonicalPrintingMetadata - the single source
+# of truth for both the diff comparison (which fields count as "changed") and the bulk_update
+# call (which columns the UPDATE statements touch). `canonical_card_id` is the table's primary
+# key and the diff's join key, so it is deliberately not in this list.
+_METADATA_SYNC_FIELDS = [
+    "full_art",
+    "border_color",
+    "frame",
+    "frame_effects",
+    "promo_types",
+    "edhrec_rank",
+    "printings_count",
+    "released_at",
+    "lang",
+    "art_crop_url",
+    "illustration_id",
+]
+
+# Read/write chunk sizes for `_sync_printing_metadata`. The read side streams existing rows so
+# the whole table is never materialised at once; the write side bounds every INSERT/UPDATE/
+# DELETE statement to this many rows so no single statement ever spans the table again (see
+# `_sync_printing_metadata`'s docstring for the prod OOM this guards against).
+_METADATA_READ_CHUNK_SIZE = 2000
+_METADATA_WRITE_BATCH_SIZE = 1000
+
+
+def _sync_printing_metadata(metadata_rows: list[CanonicalPrintingMetadata]) -> dict[str, int]:
+    """
+    Diff-aware, batched replacement for the django-bulk-sync call this import used to make.
+
+    `bulk_sync(filters=None)` issued ONE giant CASE-WHEN UPDATE spanning the whole
+    CanonicalPrintingMetadata table on every run; on this command's first prod run
+    (2026-07-28 11:01Z) that single statement ballooned a postgres backend to 15.5GB
+    anon-RSS and the kernel OOM-killed it (signal 9, crash recovery). This sync instead:
+
+    1. DIFFS desired rows against existing rows, joined on `canonical_card_id` (the table's
+       primary key): no existing match -> CREATE; at least one synced field differs ->
+       UPDATE; identical on every synced field -> SKIP (no write at all); an existing key
+       absent from the desired set -> DELETE (preserving `bulk_sync(filters=None)`'s
+       full-sync delete semantics).
+    2. STREAMS the existing table via `.values()` + `.iterator(chunk_size=...)`, so the
+       comparison never materialises the table as model instances - peak memory stays
+       bounded by the desired row list (already in memory from `_parse_rows`) plus one
+       chunk of plain dicts and the (int-keyed) existing-id set.
+    3. WRITES in batches of `_METADATA_WRITE_BATCH_SIZE` (`bulk_create` / `bulk_update` /
+       chunked `filter(...).delete()`), so no single statement ever spans the whole table.
+
+    Comparison correctness: DB values come from `.values()` and desired values from the model
+    instances built in `import_scryfall_printing_metadata` - both sides carry the same Python
+    types (date, UUID, JSONField lists, None), so `!=` cannot produce a false "unchanged"
+    verdict. A false "changed" verdict (e.g. an equivalent-but-not-identical JSON
+    representation) costs one redundant single-row UPDATE - the safe direction.
+
+    All writes run in ONE transaction: readers never observe a half-synced table, and the
+    incident this fixes was statement size, not transaction size. The diff read happens
+    outside the transaction deliberately - this command is the table's only writer, and a
+    chunked `iterator()` holds no server-side cursor on PostgreSQL.
+
+    Returns stats {created, updated, deleted, skipped} where `skipped` counts unchanged rows.
+    """
+    desired_by_id = {row.canonical_card_id: row for row in metadata_rows}
+    existing_ids: set[int] = set()
+    to_update: list[CanonicalPrintingMetadata] = []
+    stale_ids: list[int] = []
+    unchanged = 0
+
+    existing_rows = CanonicalPrintingMetadata.objects.values("canonical_card_id", *_METADATA_SYNC_FIELDS).iterator(
+        chunk_size=_METADATA_READ_CHUNK_SIZE
+    )
+    for existing in existing_rows:
+        canonical_card_id = existing["canonical_card_id"]
+        existing_ids.add(canonical_card_id)
+        desired = desired_by_id.get(canonical_card_id)
+        if desired is None:
+            stale_ids.append(canonical_card_id)
+        elif any(existing[field] != getattr(desired, field) for field in _METADATA_SYNC_FIELDS):
+            to_update.append(desired)
+        else:
+            unchanged += 1
+
+    to_create = [row for key, row in desired_by_id.items() if key not in existing_ids]
+
+    with transaction.atomic():
+        CanonicalPrintingMetadata.objects.bulk_create(to_create, batch_size=_METADATA_WRITE_BATCH_SIZE)
+        if to_update:
+            CanonicalPrintingMetadata.objects.bulk_update(
+                to_update, fields=_METADATA_SYNC_FIELDS, batch_size=_METADATA_WRITE_BATCH_SIZE
+            )
+        for i in range(0, len(stale_ids), _METADATA_WRITE_BATCH_SIZE):
+            CanonicalPrintingMetadata.objects.filter(
+                canonical_card_id__in=stale_ids[i : i + _METADATA_WRITE_BATCH_SIZE]
+            ).delete()
+
+    return {"created": len(to_create), "updated": len(to_update), "deleted": len(stale_ids), "skipped": unchanged}
+
+
 @section_timer(name="import scryfall printing metadata")
 def import_scryfall_printing_metadata(default_cards_path: Path | None = None) -> dict[str, Any]:
     """
@@ -314,6 +410,13 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
     at the last download, and the ~558MB file is only re-fetched when the remote has actually
     changed (a missing/unreadable sidecar re-downloads once - intended on the first run after
     deploy).
+
+    The write phase is diff-aware (`_sync_printing_metadata`): existing rows are compared
+    field-by-field against the parsed bulk data and only deltas are written (created /
+    updated / deleted), in bounded batches - a re-import against an unchanged bulk file
+    issues no row writes at all. The returned stats dict's `skipped` therefore counts
+    unchanged rows; bulk-data rows with no matching `CanonicalCard` are reported separately
+    under `no_matching_card`.
     """
     path = default_cards_path or _cache_path()
     if default_cards_path is None:
@@ -336,11 +439,11 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
             canonical_id_counts[canonical_id] += 1
 
     metadata_rows: list[CanonicalPrintingMetadata] = []
-    skipped = 0
+    no_matching_card = 0
     for row in rows:
         canonical_card_pk = identifier_to_pk.get(row.id)
         if canonical_card_pk is None:
-            skipped += 1
+            no_matching_card += 1
             continue
         canonical_id = pk_to_canonical_id[canonical_card_pk]
         printings_count = canonical_id_counts[canonical_id] if canonical_id is not None else 1
@@ -361,15 +464,9 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
             )
         )
 
-    logger.info("Skipped %d row(s) with no matching CanonicalCard", skipped)
-    result = bulk_sync(
-        new_models=metadata_rows,
-        key_fields=["canonical_card_id"],
-        db_class=CanonicalPrintingMetadata,
-        filters=None,
-    )
-    stats = dict(result["stats"])
-    stats["skipped"] = skipped
+    logger.info("Skipped %d row(s) with no matching CanonicalCard", no_matching_card)
+    stats = _sync_printing_metadata(metadata_rows)
+    stats["no_matching_card"] = no_matching_card
     logger.info(
         "CanonicalPrintingMetadata sync: %(created)d created, %(updated)d updated, "
         "%(deleted)d deleted, %(skipped)d skipped",
