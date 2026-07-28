@@ -302,17 +302,26 @@ printings, artists, tags, and moderation from one screen.
   _effective indexed_ printing/tags actually change, so a vote that just
   resolved consensus is searchable immediately rather than waiting for the
   next scheduled `update_database` scan.
-- **No-match reason tags**: six `Tag` rows (`custom-art`, `altered-frame`,
-  `upscaled`, `ai-art`, `no-collector-line`, `non-english`) seeded by
-  `manage.py seed_no_match_reason_tags` (a management command, **not** a
-  migration — see [[../lessons.md]]'s data-migration-vs-command-seeding
+- **No-match reason tags**: seven `Tag` rows (`custom-art`, `altered-frame`,
+  `upscaled`, `ai-art`, `no-collector-line`, `non-english`, `external-ip`)
+  seeded by `manage.py seed_no_match_reason_tags` (a management command,
+  **not** a migration — see [[../lessons.md]]'s data-migration-vs-command-seeding
   entry). **These exact strings are a federation interchange contract**
   (other instances consuming our vote export expect them) — renaming any
   of them is a breaking change. Deliberately a separate taxonomy from
   `DEFAULT_TAGS` even where concepts overlap (`upscaled` vs `Upscaled`
   etc.), since one is cast at upload-time from filename parsing and the
   other is a human's queue-time judgment — kept exact-string-distinct so
-  the two vote populations don't silently merge.
+  the two vote populations don't silently merge. `external-ip` (added
+  2026-07-28, WTC artist question re-frame) is deliberately the same
+  string as `EXTERNAL_IP_TAG_NAME` in
+  `management/commands/import_external_ip_tags.py` — both the human
+  no-match reason and that machine Scryfall-Tagger import converge on one
+  `Tag.name` so `tag:external-ip` is a single predicate over the catalog.
+  Not named after the official "Universes Beyond" Wizards product line:
+  that name covers OFFICIAL Magic printings, so a custom proxy bearing
+  e.g. Warhammer or Lord of the Rings art isn't one of those — it's
+  non-official art drawn from an external IP.
 - **Tag identity vs. presentation**: `Tag.name` is the immutable machine
   key (votes, `Card.tags`, filename-bracket matching, federation);
   `Tag.display_name` (nullable, additive) is freely-editable presentation

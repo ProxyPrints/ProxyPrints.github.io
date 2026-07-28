@@ -1073,6 +1073,15 @@ export function QuestionFeed() {
       ? ""
       : getWorkerImageURL(item.card, "small") ?? item.card.smallThumbnailUrl;
 
+  // Artist questions re-frame the subject as the artwork itself (WTC artist re-frame): the
+  // backend surfaces the canonical printing's Scryfall art-crop URL on these items, so the
+  // voter judges the art without the scanned card's frame/glare. Falls back to the plain
+  // card image when the item carries no art crop (no canonical printing / no harvested URL).
+  const subjectImageSrc =
+    item.type === "artist" && item.scryfallIllustrationUrl != null
+      ? item.scryfallIllustrationUrl
+      : heroImageSrc;
+
   // The subject card's art + reveal overlay - no starburst (owner ruling 1 retires BurstSvg;
   // the token-derived `--wtc-field`/`--wtc-reveal-glow` carry the reveal moment's "game feel"
   // instead - ANNEX C).
@@ -1518,14 +1527,18 @@ export function QuestionFeed() {
     }
   } else {
     // Artist / tag question types - the plain reference image these have always used moves
-    // into the shared subject slot as-is, with no reveal treatment added.
+    // into the shared subject slot as-is, with no reveal treatment added. Artist questions
+    // substitute the Scryfall art crop when the item carries one (see subjectImageSrc).
     cardNode = (
       <SubjectCardBox>
         <SubjectArt>
           <img
             ref={cardImageRef}
-            src={heroImageSrc}
+            src={subjectImageSrc}
             alt={item.card.name}
+            data-testid={
+              item.type === "artist" ? "question-feed-artist-art" : undefined
+            }
             style={{ width: "100%", height: "100%", objectFit: "cover" }}
             onLoad={() => onCardImageSettled(false)}
             onError={() =>

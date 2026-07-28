@@ -19,6 +19,8 @@ from cardpicker.models import (
 )
 from cardpicker.printing_consensus import resolve_and_persist_printing
 from cardpicker.question_feed import (
+    _artist_item,
+    _scryfall_illustration_url,
     _tier_1_confirm_suggestion,
     get_next_question_feed_item,
     get_remaining_estimate,
@@ -28,6 +30,7 @@ from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
+    CanonicalPrintingMetadataFactory,
     CardArtistVoteFactory,
     CardFactory,
     CardPrintingTagFactory,
@@ -208,6 +211,69 @@ class TestGetNextQuestionFeedItem:
         assert item.type.value == "tag"
         assert item.card.identifier == card.identifier
         assert item.tagName == tag_b.name
+
+
+class TestScryfallIllustrationUrl:
+    """`_scryfall_illustration_url` (WTC artist question re-frame) surfaces the canonical
+    printing's harvested Scryfall art-crop URL on artist-type feed items - see that function's
+    own docstring for the precedence it delegates to `Card._get_indexed_printing_metadata`."""
+
+    def test_returns_the_art_crop_url_when_the_canonical_printing_has_one(self, db):
+        printing = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(
+            canonical_card=printing, art_crop_url="https://cards.scryfall.io/art_crop/example.jpg"
+        )
+        card = CardFactory(canonical_card=printing)
+
+        assert _scryfall_illustration_url(card) == "https://cards.scryfall.io/art_crop/example.jpg"
+
+    def test_returns_none_when_the_canonical_printing_has_an_empty_art_crop_url(self, db):
+        printing = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(canonical_card=printing, art_crop_url="")
+        card = CardFactory(canonical_card=printing)
+
+        assert _scryfall_illustration_url(card) is None
+
+    def test_returns_none_when_there_is_no_canonical_printing_at_all(self, db):
+        # no canonical_card, and printing_tag_status defaults to UNRESOLVED so
+        # inferred_canonical_card is never consulted either - see
+        # Card._get_indexed_printing_metadata's own RESOLVED-gated fallback.
+        card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+
+        assert _scryfall_illustration_url(card) is None
+
+    def test_falls_back_to_inferred_canonical_card_only_once_resolved(self, db):
+        printing = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(
+            canonical_card=printing, art_crop_url="https://cards.scryfall.io/art_crop/inferred.jpg"
+        )
+        unresolved_card = CardFactory(
+            canonical_card=None, inferred_canonical_card=printing, printing_tag_status=PrintingTagStatus.UNRESOLVED
+        )
+        assert _scryfall_illustration_url(unresolved_card) is None
+
+        resolved_card = CardFactory(
+            canonical_card=None, inferred_canonical_card=printing, printing_tag_status=PrintingTagStatus.RESOLVED
+        )
+        assert _scryfall_illustration_url(resolved_card) == "https://cards.scryfall.io/art_crop/inferred.jpg"
+
+    def test_artist_item_carries_the_field(self, db):
+        printing = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(
+            canonical_card=printing, art_crop_url="https://cards.scryfall.io/art_crop/example.jpg"
+        )
+        card = CardFactory(canonical_card=printing)
+
+        item = _artist_item(card)
+
+        assert item.scryfallIllustrationUrl == "https://cards.scryfall.io/art_crop/example.jpg"
+
+    def test_artist_item_carries_none_when_there_is_no_art_crop(self, db):
+        card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+
+        item = _artist_item(card)
+
+        assert item.scryfallIllustrationUrl is None
 
 
 class TestGetRemainingEstimate:
