@@ -117,7 +117,7 @@ class IllustrationIndex:
 
     Built from ``CanonicalCard`` rows that have ``CanonicalPrintingMetadata.illustration_id``
     non-null. Also exposes:
-      - ``artist_by_pk``: ``{artist_pk → artist_name}`` for ``match_artist``
+      - ``artist_by_pk``: ``{card_pk → artist_name}`` for ``match_artist``
       - ``card_pk_to_artist_pk``: ``{canonical_card_pk → artist_pk}`` for post-match lookups
 
     Built once per calculator invocation, cached for the duration (same pattern as
@@ -152,7 +152,15 @@ class IllustrationIndex:
             key = (artist_pk, searchable_name)
             illustration_str = str(illustration_id)
             self._index[key][illustration_str].append(printing_pk)
-            self.artist_by_pk[artist_pk] = artist_name
+
+        # Populate artist_by_pk and card_pk_to_artist_pk from ALL canonical cards (not just
+        # those with illustration metadata) so match_artist can identify artists even when
+        # they have no illustration data yet. The illustration lookup (illustration_printings)
+        # will still return empty for cards whose artists have no metadata, correctly producing
+        # NO_ILLUSTRATION_INDEX_ENTRY_SKIP_REASON.
+        all_cards = CanonicalCard.objects.filter(artist__isnull=False).values_list("pk", "artist__pk", "artist__name")
+        for card_pk, artist_pk, artist_name in all_cards:
+            self.artist_by_pk[card_pk] = artist_name
             self.card_pk_to_artist_pk[card_pk] = artist_pk
 
     def illustration_printings(self, artist_pk: int, searchable_card_name: str) -> dict[str, list[int]]:

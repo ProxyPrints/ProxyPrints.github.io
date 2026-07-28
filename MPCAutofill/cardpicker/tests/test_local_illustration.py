@@ -52,6 +52,7 @@ def _eligible_card(**overrides):
         name="Lightning Bolt",
         printing_tag_status=PrintingTagStatus.UNRESOLVED,
         canonical_card=None,
+        content_phash=1,  # non-null required: run_illustration_calculator skips content_phash=None
     )
     defaults.update(overrides)
     return CardFactory(**defaults)
@@ -60,7 +61,7 @@ def _eligible_card(**overrides):
 def _join_key_no_hit_card(card):
     CardPrintingTag.objects.create(
         card=card,
-        printing=CanonicalCardFactory(),
+        printing=None,
         is_no_match=True,
         anonymous_id=JOIN_KEY_ANONYMOUS_ID,
         source=VoteSource.OCR,
@@ -160,8 +161,6 @@ class TestCalculateIllustrationVerdict:
         index, candidates = self._build_index_and_mocks(
             "Christopher Rush", "Lightning Bolt", illustration_uuid, printing_pk=100
         )
-        CanonicalArtistFactory.objects.get(name="Christopher Rush")
-
         verdict = calculate_illustration_verdict(
             card_id=1,
             evidence=type("E", (), {"artist_ocr_name": "Christopher Rush"})(),
@@ -202,7 +201,7 @@ class TestCalculateIllustrationVerdict:
             card_id=1,
             evidence=type("E", (), {"artist_ocr_name": "Christopher Rush"})(),
             illustration_index=index,
-            candidates=candidate,
+            candidates=[candidate],
             searchable_card_name="lightning bolt",
         )
 
@@ -349,6 +348,6 @@ class TestRunIllustrationCalculator:
 
         from django.core.management import call_command
 
-        call_command("purge_machine_votes", run_id=run_id, interactive=False)
+        call_command("purge_machine_votes", run_id=run_id)
 
         assert CardPrintingTag.objects.filter(run_id=run_id).count() == 0
