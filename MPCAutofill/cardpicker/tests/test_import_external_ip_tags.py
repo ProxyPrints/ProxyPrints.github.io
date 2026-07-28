@@ -8,7 +8,9 @@ Covers:
     collect_illustration_ids (second-pass over subtree only),
     build_illustration_index (illustration_id → card id, including card_faces)
   - run_external_ip_tag_import: dry-run/write, idempotent re-run,
-    illustration-to-CanonicalCard join, unmatched illustration/canonical-card skip
+    illustration-to-CanonicalCard join, unmatched illustration/canonical-card skip,
+    dual-polarity voting (APPLY for positive Tagger matches, NOT_APPLICABLE for
+    confirmed printings outside the positive set, abstain when no default_cards data)
 
 Per-printing design: votes target CanonicalCard (Scryfall printing) rows directly —
 no Card (catalog image) rows are needed or created. The illustration_id →
@@ -235,6 +237,87 @@ class TestRunExternalIpTagImport:
         assert "printing_id" in entry
         assert "printing_name" in entry
         assert "card_id" not in entry
+
+    def test_write_casts_both_polarities(self, db):
+        ring = _make_canonical(_RING_ID)
+        gandalf = _make_canonical(_GANDALF_ID)
+        marine = _make_canonical(_MARINE_ID)
+        unmatched = _make_canonical(_UNMATCHED_PRINTING_ID)
+
+        result = run_external_ip_tag_import(
+            tags_path=_ART_TAGS_FIXTURE,
+            default_cards_path=_DEFAULT_CARDS_FIXTURE,
+            dry_run=False,
+        )
+
+        assert PrintingTagVote.objects.count() == 4
+        assert PrintingTagVote.objects.filter(polarity=VotePolarity.APPLY).count() == 3
+        for printing in [ring, gandalf, marine]:
+            vote = PrintingTagVote.objects.get(printing=printing)
+            assert vote.polarity == VotePolarity.APPLY
+
+        negative_vote = PrintingTagVote.objects.get(polarity=VotePolarity.NOT_APPLICABLE)
+        assert negative_vote.printing == unmatched
+        assert negative_vote.tag.name == "external-ip"
+        assert negative_vote.anonymous_id == SCRYFALL_TAGGER_ANONYMOUS_ID
+        assert negative_vote.source == VoteSource.DEDUCTION
+        assert negative_vote.run_id == result.run_id
+        assert result.votes_written == 3
+        assert result.negative_votes_written == 1
+
+    def test_negative_excludes_printings_not_in_default_cards(self, db):
+        # Absent from default_cards entirely = no data = abstain (no vote of either polarity)
+        unknown = _make_canonical(uuid.UUID("66666666-0000-0000-0000-000000000000"))
+
+        run_external_ip_tag_import(
+            tags_path=_ART_TAGS_FIXTURE,
+            default_cards_path=_DEFAULT_CARDS_FIXTURE,
+            dry_run=False,
+        )
+
+        assert PrintingTagVote.objects.filter(printing=unknown).count() == 0
+        assert PrintingTagVote.objects.count() == 0
+
+    def test_idempotent_rerun_skips_both_polarities(self, db):
+        _make_canonical(_RING_ID)
+        _make_canonical(_UNMATCHED_PRINTING_ID)
+
+        first = run_external_ip_tag_import(
+            tags_path=_ART_TAGS_FIXTURE,
+            default_cards_path=_DEFAULT_CARDS_FIXTURE,
+            dry_run=False,
+        )
+        assert first.votes_written == 1
+        assert first.negative_votes_written == 1
+
+        second = run_external_ip_tag_import(
+            tags_path=_ART_TAGS_FIXTURE,
+            default_cards_path=_DEFAULT_CARDS_FIXTURE,
+            dry_run=False,
+        )
+        assert second.printings_eligible == 0
+        assert second.negative_printings_eligible == 0
+        assert second.votes_written == 0
+        assert second.negative_votes_written == 0
+        assert PrintingTagVote.objects.count() == 2  # unchanged
+
+    def test_dry_run_counts_both_polarities(self, db):
+        _make_canonical(_RING_ID)
+        _make_canonical(_UNMATCHED_PRINTING_ID)
+
+        result = run_external_ip_tag_import(
+            tags_path=_ART_TAGS_FIXTURE,
+            default_cards_path=_DEFAULT_CARDS_FIXTURE,
+            dry_run=True,
+        )
+
+        assert result.votes_would_cast == 1
+        assert result.negative_votes_would_cast == 1
+        assert PrintingTagVote.objects.count() == 0  # nothing persisted
+        assert len(result.negative_audit) == 1
+        entry = result.negative_audit[0]
+        assert "printing_id" in entry
+        assert "printing_name" in entry
 
 
 class TestManagementCommand:

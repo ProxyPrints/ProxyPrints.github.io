@@ -15,7 +15,11 @@ Data flow (plan W9's own diagram, revised to per-printing):
       -> join through the already-on-disk default_cards bulk data (illustration_id -> card id;
          top-level on single-faced rows, per-face under card_faces for double-faced rows)
       -> match CanonicalCard.identifier DIRECTLY
-      -> write PrintingTagVote rows (polarity=APPLY) for every matched CanonicalCard (printing).
+      -> write PrintingTagVote rows for every confirmed CanonicalCard (printing), casting
+         BOTH polarities on the external-ip tag: polarity=APPLY for positive Tagger matches,
+         and polarity=NOT_APPLICABLE for confirmed printings (present in the default_cards
+         bulk data) NOT in the positive Tagger set. Every confirmed printing gets exactly one
+         machine vote; printings with no data at all abstain (no vote of either polarity).
 
 PER-PRINTING DESIGN (revised 2026-07-27): votes target the Scryfall printing itself
 (`CanonicalCard`) rather than the catalog images (`Card`) that depict it. The same
@@ -265,6 +269,10 @@ class ExternalIpImportResult:
     votes_would_cast: int = 0
     votes_written: int = 0
     audit: list[dict[str, object]] = field(default_factory=list)
+    negative_printings_eligible: int = 0
+    negative_votes_would_cast: int = 0
+    negative_votes_written: int = 0
+    negative_audit: list[dict[str, object]] = field(default_factory=list)
 
 
 def run_external_ip_tag_import(
@@ -292,6 +300,9 @@ def run_external_ip_tag_import(
     result.illustrations_tagged = len(illustration_ids)
 
     illustration_index = build_illustration_index(default_cards_path)
+    all_card_ids: set[uuid.UUID] = set()
+    for indexed_card_ids in illustration_index.values():
+        all_card_ids.update(indexed_card_ids)
     candidate_identifiers: set[uuid.UUID] = set()
     unmatched_illustrations = 0
     for illustration_id in illustration_ids:
@@ -302,6 +313,7 @@ def run_external_ip_tag_import(
         candidate_identifiers.update(card_ids)
     if unmatched_illustrations:
         result.skip_counts["illustration-not-in-default-cards"] = unmatched_illustrations
+    negative_identifiers = all_card_ids - candidate_identifiers
 
     tag, _ = Tag.objects.get_or_create(name=EXTERNAL_IP_TAG_NAME)
 
@@ -347,6 +359,38 @@ def run_external_ip_tag_import(
         # invocations racing, not from this invocation's own logic.
         PrintingTagVote.objects.bulk_create(votes_batch, ignore_conflicts=True)
         result.votes_written = len(votes_batch)
+
+    # Negative pass: vote NOT_APPLICABLE for confirmed printings not in the positive set
+    negative_printings = (
+        CanonicalCard.objects.filter(identifier__in=negative_identifiers)
+        .exclude(
+            printing_tag_votes__anonymous_id=SCRYFALL_TAGGER_ANONYMOUS_ID,
+            printing_tag_votes__tag=tag,
+        )
+        .distinct()
+    )
+
+    negative_batch: list[PrintingTagVote] = []
+    for printing in negative_printings.iterator(chunk_size=chunk_size):
+        result.negative_printings_eligible += 1
+        result.negative_votes_would_cast += 1
+        if len(result.negative_audit) < audit_sample_size:
+            result.negative_audit.append({"printing_id": str(printing.identifier), "printing_name": printing.name})
+        if not dry_run:
+            negative_batch.append(
+                PrintingTagVote(
+                    printing_id=printing.pk,
+                    tag=tag,
+                    polarity=VotePolarity.NOT_APPLICABLE,
+                    anonymous_id=SCRYFALL_TAGGER_ANONYMOUS_ID,
+                    source=VoteSource.DEDUCTION,
+                    run_id=run_id,
+                )
+            )
+
+    if not dry_run and negative_batch:
+        PrintingTagVote.objects.bulk_create(negative_batch, ignore_conflicts=True)
+        result.negative_votes_written = len(negative_batch)
 
     return result
 
@@ -471,7 +515,9 @@ class Command(BaseCommand):
                 f"[external-ip] tags_seen={result.tags_seen} subtree_tags={result.subtree_tag_count} "
                 f"illustrations={result.illustrations_tagged} canonical_cards={result.canonical_cards_matched} "
                 f"eligible_printings={result.printings_eligible} "
-                f"votes={'written=' + str(result.votes_written) if not dry_run else 'would_cast=' + str(result.votes_would_cast)} "
+                f"negative_eligible={result.negative_printings_eligible} "
+                f"{'positive_written=' + str(result.votes_written) if not dry_run else 'positive_would_cast=' + str(result.votes_would_cast)} "
+                f"{'negative_written=' + str(result.negative_votes_written) if not dry_run else 'negative_would_cast=' + str(result.negative_votes_would_cast)} "
                 f"skip_counts={dict(result.skip_counts)}"
             )
             for entry in result.audit[:10]:
@@ -486,12 +532,12 @@ class Command(BaseCommand):
 
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()
-            ledger.votes_written = result.votes_written
+            ledger.votes_written = result.votes_written + result.negative_votes_written
             ledger.save(update_fields=["status", "finished_at", "votes_written"])
             print(
                 f"[{mode}] done. run_id={run_id} "
                 f"total_votes_{'written' if not dry_run else 'would_cast'}="
-                f"{result.votes_written if not dry_run else result.votes_would_cast}"
+                f"{result.votes_written + result.negative_votes_written if not dry_run else result.votes_would_cast + result.negative_votes_would_cast}"
             )
         except Exception:
             ledger.status = PilotRunLedger.Status.FAILED
