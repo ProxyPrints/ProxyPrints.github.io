@@ -14,6 +14,26 @@ These tag names are a federation interchange contract (see docs/features/printin
 - other instances that consume our vote export are expected to recognise these exact strings.
 Renaming any of them is a breaking data migration, not a refactor.
 
+WTC phase B (2026-07-28): the seven tags below actually answer two DIFFERENT questions, not
+one, and the frontend (`NoMatchReasonStrip.tsx`'s exported `NO_MATCH_REASON_TAG_GROUPS`, the
+single source of truth for this split on that side) now presents them as two labelled groups
+instead of one flat chip wall. Documented here too so backend and frontend agree on the
+partition without either side re-deriving it from the other:
+
+- "not-official-printing": `altered-frame`, `upscaled`, `no-collector-line`, `non-english` -
+  the artwork is genuine, the physical card is not. The artwork question stays ANSWERABLE for
+  these cards.
+- "not-official-art": `custom-art`, `ai-art`, `external-ip` - the artwork itself isn't from
+  any official card. The artwork question is UNANSWERABLE for these cards.
+
+That partition is exhaustive over this taxonomy - every tag below belongs to exactly one
+side. A future addition to `NO_MATCH_REASON_TAGS` must also be added to exactly one side of
+`NO_MATCH_REASON_TAG_GROUPS` in `NoMatchReasonStrip.tsx`, or it silently falls out of the UI
+grouping (a frontend test asserts the union/no-overlap invariant, but nothing here enforces
+it from the backend side). This module makes NO routing decision on the partition itself -
+phase C (illustration funnel: not-official-*printing* cards stay in it, not-official-*art*
+cards drop out) is the only consumer of it as a routing signal.
+
 Deliberately a separate, lowercase-kebab-case taxonomy from `cardpicker.default_tags`'s Title
 Case DEFAULT_TAGS (which parses filename bracket content at upload time, e.g. "Upscaled",
 "Custom", "AI-Generated"). `upscaled`/`custom-art`/`ai-art` below cover near-identical
@@ -29,13 +49,25 @@ from cardpicker.models import Tag
 # it - see Tag.display_name's help_text); `display_name` is real, seeded presentation text
 # the frontend looks up dynamically (useTagDisplayName) rather than hardcoding, so this list
 # is the single source of truth for both the machine key and its human label.
+#
+# Axis inline below (see the module docstring's "WTC phase B" section for the full
+# rationale) - not a schema change, just a reading aid: which of the two questions
+# (not-official-printing vs. not-official-art) each row answers.
 NO_MATCH_REASON_TAGS: list[tuple[str, str, str]] = [
+    # axis: not-official-art
     ("custom-art", "Original or alternate artwork - does not depict a real printing", "Custom art"),
+    # axis: not-official-printing
     ("altered-frame", "Real printing's art in a modified frame", "Altered frame"),
+    # axis: not-official-printing
     ("upscaled", "AI-upscaled version of an official image", "Upscaled"),
+    # axis: not-official-art
     ("ai-art", "AI-generated artwork", "AI art"),
+    # axis: not-official-printing
     ("no-collector-line", "No legible collector line on the card face", "No collector line"),
+    # axis: not-official-printing
     ("non-english", "Non-English printing", "Non-English"),
+    # axis: not-official-art (see the dedicated comment on this tag below for its own,
+    # unrelated "why this exact string" rationale)
     # Deliberately the SAME string as EXTERNAL_IP_TAG_NAME in
     # management/commands/import_external_ip_tags.py (2026-07-28) - both channels (this human
     # no-match reason and that machine Scryfall-Tagger import) write into the same card.tags

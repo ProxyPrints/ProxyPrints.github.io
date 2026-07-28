@@ -15,6 +15,16 @@
  * tag, looked up dynamically (useTagDisplayName), so editing a display_name in admin changes
  * what's shown here without a frontend deploy.
  *
+ * WTC phase B (2026-07-28): the seven reason chips actually answer two DIFFERENT questions,
+ * conflated into one flat wall of chips until now - see NO_MATCH_REASON_TAG_GROUPS below,
+ * the single source of truth for the split, rendered here as two headed chip groups within
+ * the same strip (not a two-step choose-axis-then-reason flow: the whole taxonomy is only
+ * seven tags, so a second tap-through step would cost more than the one flat strip it
+ * replaces, and grouped headers already make the two questions legible at a glance). This
+ * component still only ever casts ONE positive CardTagVote per tap, through the same
+ * endpoint, regardless of which group the tapped chip is in - the split is presentational
+ * plus a shared routing constant, not a new vote shape.
+ *
  * Graceful degradation for an instance where that command hasn't been run yet: filters the
  * chips down to whichever tags `useGetTagsQuery` (the existing, already-cached `2/tags/`
  * query used elsewhere for the search-filter tag tree - no new endpoint/fetch introduced
@@ -23,6 +33,8 @@
  * unseeded one always would (a caught, toasted "Vote failed"), it's not a worse outcome than
  * today's baseline. Once loaded, unseeded chips are hidden entirely rather than shown
  * disabled, since there's nothing useful for a voter to do with one that will only ever 400.
+ * Applies per-group here too: a group with zero visible chips (once loaded) renders nothing,
+ * not an empty header.
  */
 
 import React, { useState } from "react";
@@ -40,15 +52,46 @@ import { setNotification } from "@/store/slices/toastsSlice";
 
 const APPLY = 1;
 
-const NO_MATCH_REASON_TAG_NAMES: Array<string> = [
-  "custom-art",
-  "altered-frame",
-  "upscaled",
-  "ai-art",
-  "no-collector-line",
-  "non-english",
-  "external-ip",
-];
+/**
+ * The two-way partition of the no-match reason taxonomy, exported so downstream consumers
+ * (the phase-C illustration funnel: not-official-*printing* cards stay in it, not-official-
+ * *art* cards drop out) import this instead of re-deriving which chips mean "the art itself
+ * isn't official" - see reason_tags.py's docstring for the same split documented backend-side
+ * and the owner-decided rationale in docs/features/printing-tags.md.
+ *
+ * Exhaustive over the current seven-tag taxonomy - asserted by a test in
+ * NoMatchReasonStrip.spec.ts (union covers every tag, no overlap) specifically so a future
+ * tag added to reason_tags.py without a corresponding entry here fails loudly instead of
+ * silently missing from the UI (and from phase C's routing).
+ *
+ * - "not-official-printing": the artwork is genuine, the physical card is not. The artwork
+ *   question stays ANSWERABLE for these cards.
+ * - "not-official-art": the artwork itself isn't from any official card. The artwork
+ *   question is UNANSWERABLE for these cards.
+ */
+export const NO_MATCH_REASON_TAG_GROUPS = {
+  "not-official-printing": {
+    label: "Not an official printing",
+    hint: "The art is genuine - this copy of the card isn't.",
+    tagNames: ["altered-frame", "upscaled", "no-collector-line", "non-english"],
+  },
+  "not-official-art": {
+    label: "Not official art",
+    hint: "The artwork itself isn't from any official card.",
+    tagNames: ["custom-art", "ai-art", "external-ip"],
+  },
+} as const;
+
+export type NoMatchReasonGroupKey = keyof typeof NO_MATCH_REASON_TAG_GROUPS;
+
+// Derived from NO_MATCH_REASON_TAG_GROUPS above (the source of truth), not hand-maintained.
+// Exported (rather than kept file-private like before the phase B split) since a flat "every
+// no-match reason tag name" list is still the right shape for a couple of things: the
+// exhaustiveness test in NoMatchReasonStrip.spec.ts, and any future caller that wants "is
+// this tag a no-match reason at all" without caring which axis.
+export const NO_MATCH_REASON_TAG_NAMES: Array<string> = (
+  Object.keys(NO_MATCH_REASON_TAG_GROUPS) as Array<NoMatchReasonGroupKey>
+).flatMap((groupKey) => [...NO_MATCH_REASON_TAG_GROUPS[groupKey].tagNames]);
 
 interface NoMatchReasonStripProps {
   backendURL: string;
@@ -76,9 +119,8 @@ export function NoMatchReasonStrip({
   const { data: existingTags } = useGetTagsQuery();
   const existingTagNames =
     existingTags != null ? new Set(existingTags.map((tag) => tag.name)) : null;
-  const visibleReasonTagNames = NO_MATCH_REASON_TAG_NAMES.filter(
-    (tagName) => existingTagNames == null || existingTagNames.has(tagName)
-  );
+  const isVisible = (tagName: string) =>
+    existingTagNames == null || existingTagNames.has(tagName);
 
   const choose = (tagName: string) => {
     setSubmittingTagName(tagName);
@@ -114,19 +156,42 @@ export function NoMatchReasonStrip({
   return (
     <div data-testid="no-match-reason-strip">
       <h6>Why no match?</h6>
-      <Row className="g-2" xs={2} md={3}>
-        {visibleReasonTagNames.map((tagName) => (
-          <Col key={tagName}>
-            <ChipCard
-              label={getTagDisplayName(tagName)}
-              disabled={submittingTagName != null}
-              onClick={() => choose(tagName)}
-              data-testid={`no-match-reason-${tagName}`}
-              variant="danger"
-            />
-          </Col>
-        ))}
-      </Row>
+      {(
+        Object.keys(NO_MATCH_REASON_TAG_GROUPS) as Array<NoMatchReasonGroupKey>
+      ).map((groupKey) => {
+        const group = NO_MATCH_REASON_TAG_GROUPS[groupKey];
+        const visibleTagNames = group.tagNames.filter(isVisible);
+        if (visibleTagNames.length === 0) {
+          // Graceful degradation applies per-group too (see file header comment) - a group
+          // with nothing visible in it renders no header at all rather than a bare label.
+          return null;
+        }
+        return (
+          <div
+            key={groupKey}
+            className="mb-3"
+            data-testid={`no-match-reason-group-${groupKey}`}
+          >
+            <div className="small text-uppercase text-muted fw-bold mb-1">
+              {group.label}
+            </div>
+            <div className="small text-muted mb-2">{group.hint}</div>
+            <Row className="g-2" xs={2} md={3}>
+              {visibleTagNames.map((tagName) => (
+                <Col key={tagName}>
+                  <ChipCard
+                    label={getTagDisplayName(tagName)}
+                    disabled={submittingTagName != null}
+                    onClick={() => choose(tagName)}
+                    data-testid={`no-match-reason-${tagName}`}
+                    variant="danger"
+                  />
+                </Col>
+              ))}
+            </Row>
+          </div>
+        );
+      })}
       <div className="mt-2">
         <Button
           variant="outline-secondary"
