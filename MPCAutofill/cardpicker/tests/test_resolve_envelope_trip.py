@@ -11,7 +11,11 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 
 from cardpicker.models import EnvelopeTrip
-from cardpicker.operating_envelope import EnvelopeSignals, check_envelope
+from cardpicker.operating_envelope import (
+    RSS_MB_PER_WORKER_CEILING,
+    EnvelopeSignals,
+    check_envelope,
+)
 
 
 class TestRequiredArguments:
@@ -66,7 +70,7 @@ class TestAcknowledging:
 
     def test_acknowledging_one_trip_does_not_touch_another(self, db):
         trip_a = check_envelope(EnvelopeSignals(load_avg=8.0))
-        trip_b = check_envelope(EnvelopeSignals(rss_mb_per_worker=600.0))
+        trip_b = check_envelope(EnvelopeSignals(rss_mb_per_worker=RSS_MB_PER_WORKER_CEILING + 0.1))
 
         call_command("resolve_envelope_trip", "--acknowledge-trip", trip_a.trip_id, "--note", "resolved a")
 
