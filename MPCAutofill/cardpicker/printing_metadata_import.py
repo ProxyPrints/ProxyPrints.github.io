@@ -58,6 +58,11 @@ class PrintingMetadataRow(BaseModel):
     frame_effects: list[str] = []
     promo_types: list[str] = []
     edhrec_rank: int | None = None
+    # Scryfall's own illustration UUID — identifies the artwork independently of any specific
+    # printing. Single-faced cards carry it at the top level; double-faced cards nest it inside
+    # each element of card_faces (one illustration per face). The resolved_illustration_id
+    # property below normalises both shapes into one value for the import path.
+    illustration_id: uuid.UUID | None = None
     # Scryfall's bulk-data card object already carries this - single-faced cards have it
     # top-level, double-faced cards nest it under the first face instead (Scryfall's own
     # documented convention). Extra top-level keys the model doesn't declare (name, mana_cost,
@@ -69,6 +74,16 @@ class PrintingMetadataRow(BaseModel):
     # split/adventure/flip card's second MODE (both shapes nest under card_faces, only the former
     # is actually printed on the back of the physical card). See DOUBLE_FACED_LAYOUTS' own comment.
     layout: str = ""
+
+    @property
+    def resolved_illustration_id(self) -> uuid.UUID | None:
+        if self.illustration_id is not None:
+            return self.illustration_id
+        if self.card_faces:
+            raw = self.card_faces[0].get("illustration_id")
+            if raw is not None:
+                return uuid.UUID(raw) if isinstance(raw, str) else raw
+        return None
 
     @property
     def art_crop_url(self) -> str:
@@ -281,6 +296,7 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
                 released_at=row.released_at,
                 lang=row.lang,
                 art_crop_url=row.art_crop_url,
+                illustration_id=row.resolved_illustration_id,
             )
         )
 
