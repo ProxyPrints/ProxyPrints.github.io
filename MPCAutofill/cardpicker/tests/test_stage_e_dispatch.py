@@ -610,16 +610,41 @@ class TestForceStageCReextract:
         assert ImageEvidence.objects.filter(card=card).count() == 1
 
     @STREAMING_ON
-    def test_force_true_forces_short_circuit_false_into_compute_card_evidence(
-        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "dispatch_kwargs, expected_short_circuit",
+        [
+            # THE DECOUPLING ITSELF (2026-07-28): force_stage_c_reextract no longer implies
+            # short_circuit=False. `_run_stage_c` used to hardcode
+            # `False if force_stage_c_reextract else None`, because its only caller
+            # (stage_e_shakedown) wanted both - see that function's own "WHY THE TWO WERE
+            # CONFLATED, AND WHY THEY NO LONGER ARE" docstring note. A forced re-extraction now
+            # leaves short_circuit at None, i.e. compute_card_evidence resolves it from the
+            # STAGE_C_NO_SHORTCIRCUIT env var at call time.
+            ({"force_stage_c_reextract": True}, None),
+            # The escalation-forcing behaviour is still reachable, now on its own parameter (the
+            # equivalent of run_image_evidence_cohort's own --no-shortcircuit flag) - this exact
+            # pair is what stage_e_shakedown now passes explicitly.
+            ({"force_stage_c_reextract": True, "short_circuit": False}, False),
+            # ...and the other direction of the independence: short_circuit reaches
+            # compute_card_evidence with no forced re-extraction at all.
+            ({"short_circuit": False}, False),
+            ({"short_circuit": True}, True),
+            ({}, None),
+        ],
+    )
+    def test_short_circuit_is_independent_of_force_stage_c_reextract(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, dispatch_kwargs: dict, expected_short_circuit: Any
     ) -> None:
-        """The escalation-forcing equivalent of run_image_evidence_cohort's own --no-shortcircuit
-        (that command's own docstring) - force_stage_c_reextract=True must pass short_circuit=False
-        through to compute_card_evidence, never leave it at None (which would defer to the
-        STAGE_C_NO_SHORTCIRCUIT env-var default instead of forcing the escalation)."""
+        """`short_circuit` and `force_stage_c_reextract` are two INDEPENDENT parameters of
+        `dispatch_micro_batch`: the first is forwarded verbatim to `compute_card_evidence`, the
+        second only controls whether the already-done manifest check is skipped. Neither implies
+        anything about the other."""
         card = CardFactory(name="Some Card", content_phash=42)
         CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
-        _full_evidence(card)
+        if dispatch_kwargs.get("force_stage_c_reextract"):
+            # A card the already-done check WOULD otherwise skip, so reaching compute_card_evidence
+            # at all also proves the force flag is still doing its own half of the job.
+            _full_evidence(card)
 
         observed_short_circuit: list[Any] = []
 
@@ -653,9 +678,9 @@ class TestForceStageCReextract:
         monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", lambda card, dpi=None: _png_bytes())
         monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _recording_stub)
 
-        dispatch_micro_batch(card_ids=[card.pk], force_stage_c_reextract=True)
+        dispatch_micro_batch(card_ids=[card.pk], **dispatch_kwargs)
 
-        assert observed_short_circuit == [False]
+        assert observed_short_circuit == [expected_short_circuit]
 
 
 class TestConcurrencyCapIntegration:

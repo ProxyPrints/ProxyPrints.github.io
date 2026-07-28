@@ -1543,6 +1543,87 @@ class StageESweepCursor(models.Model):
         )
 
 
+class StageEFullCatalogCursor(models.Model):
+    """
+    2026-07-28 - the resume high-water mark for `management/commands/stream_full_catalog.py`'s
+    full-catalog streaming pass. One row, ever (`singleton_key` is `unique=True`, the same
+    singleton shape `StageEThrottleCounter` immediately above uses).
+
+    DELIBERATELY NOT A `StageESweepCursor` ROW, and the distinction is the whole reason this model
+    exists. That model's semantics are BACKLOG-sweep semantics: its `position` is a claim token
+    advanced by an optimistic CAS so concurrent dispatches sweep disjoint ranges, and reaching the
+    end of the pk space WRAPS it back to 0 and increments `wrap_count` - a lap counter over a
+    backlog that is expected to be mostly-empty and re-swept forever. `stream_full_catalog` is not
+    a backlog sweep: it drives an EXPLICIT, fully-enumerated cohort (every card with a
+    `content_phash`, in pk order, nothing skipped for being already done), it must never wrap (a
+    wrap would silently restart a 230k-card pass from the beginning instead of ending it), and it
+    must never CAS-claim ranges away from the sweep cursors that the event-driven trigger and the
+    cron backstop sweep depend on. Reusing `StageESweepCursor` would have coupled a full-catalog
+    pass's own progress to those two live mechanisms' progress - advancing this pass would make the
+    backstop sweep skip pk ranges it had never actually examined.
+
+    `position` is the highest Card pk belonging to a batch this command has COMPLETED (dispatched
+    without a halt/throttle) - the next invocation resumes at `pk__gt=position`. Advanced
+    monotonically (`advance` below only ever moves it forward), so an out-of-order or replayed
+    completion can never rewind a pass's progress; `reset_to` is the explicit operator override
+    behind `--start-pk`, the only thing that can move it backwards. `cards_dispatched` is a
+    cumulative, best-effort progress counter across every invocation - audit/observability only,
+    never read back as control state.
+
+    NOT WRITTEN BY `--sample` OR `--dry-run` RUNS (see that command's own module docstring): a
+    sample run walks a pseudo-random subset spread across the whole pk space, so letting it advance
+    this mark would jump a real catalog pass's resume point to near the end of the pk space after
+    a single measurement batch.
+    """
+
+    singleton_key = models.PositiveSmallIntegerField(default=1, unique=True)
+    position = models.BigIntegerField(default=0)
+    cards_dispatched = models.BigIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Stage E full-catalog cursor position={self.position} cards_dispatched={self.cards_dispatched}"
+
+    @classmethod
+    def get_position(cls) -> int:
+        """The stored high-water mark, `0` on a deployment where this command has never run (no
+        row yet) - `0` is also the correct "start from the very beginning" value, since the walk
+        resumes at `pk__gt=position` and Card pks are positive."""
+        row = cls.objects.filter(singleton_key=1).first()
+        return row.position if row is not None else 0
+
+    @classmethod
+    def advance(cls, to_position: int, cards_dispatched: int = 0) -> None:
+        """Record a completed batch. MONOTONIC - a `to_position` that is not ahead of the stored
+        one leaves `position` alone (the `position__lt` guard in the UPDATE's own filter), so this
+        is safe to call unconditionally after every completed batch without a read-modify-write
+        race. Creates the singleton row on first use."""
+        now = timezone.now()
+        updated = cls.objects.filter(singleton_key=1, position__lt=to_position).update(
+            position=to_position,
+            cards_dispatched=models.F("cards_dispatched") + cards_dispatched,
+            updated_at=now,
+        )
+        if updated:
+            return
+        if cls.objects.filter(singleton_key=1).exists():
+            # Row exists but is already at or ahead of `to_position` - monotonic no-op by design.
+            return
+        cls.objects.get_or_create(
+            singleton_key=1, defaults={"position": to_position, "cards_dispatched": cards_dispatched}
+        )
+
+    @classmethod
+    def reset_to(cls, position: int) -> None:
+        """The `--start-pk` override (`stream_full_catalog`): the ONLY way `position` ever moves
+        backwards. An explicit operator instruction to resume from a specific pk must win over
+        whatever a prior invocation stored, otherwise `--start-pk 0` (restart the whole pass) would
+        run its first batch and then silently snap back to the old mark on the next invocation."""
+        updated = cls.objects.filter(singleton_key=1).update(position=position, updated_at=timezone.now())
+        if not updated:
+            cls.objects.get_or_create(singleton_key=1, defaults={"position": position})
+
+
 class CardScanLog(models.Model):
     """
     Persists ABSTENTION evidence exactly like `AbstractWeightedVote` subclasses persist assent

@@ -911,15 +911,26 @@ cohort itself for a pilot-sized run.
 `force_stage_c_reextract: bool = False` (threaded to `_run_stage_c`) — the
 default-False path is byte-identical to before this change (proven by the
 full pre-existing `test_stage_e_dispatch.py` suite passing unmodified).
-`True`, passed ONLY by this driver, does two things a tail card's own
-"CURRENT full-manifest evidence, every field blank" shape needs: (a) skips
-the already-done exclusion, so a card the ordinary check would wrongly treat
-as finished gets a fresh fetch + extract anyway (`persist_evidence`'s own
-`get_or_create` semantics overwrite the same `(card, content_hash)` row in
-place — no duplication), and (b) forces `short_circuit=False` into
-`compute_card_evidence` — the same escalation-forcing effect
-`run_image_evidence_cohort`'s own `--no-shortcircuit` flag has, reused here
-rather than reimplemented.
+`True`, passed by this driver, skips the already-done exclusion, so a card
+the ordinary check would wrongly treat as finished gets a fresh fetch +
+extract anyway (`persist_evidence`'s own `get_or_create` semantics overwrite
+the same `(card, content_hash)` row in place — no duplication).
+
+**Decoupled 2026-07-28.** Until then that same `True` ALSO forced
+`short_circuit=False` into `compute_card_evidence` — the escalation-forcing
+effect `run_image_evidence_cohort`'s own `--no-shortcircuit` flag has. The
+two were conflated because this driver was the only caller and wanted both:
+a tail card is in the cohort precisely BECAUSE its tier-1 collector-line read
+came back blank, so re-extracting one while still permitting the tier-1
+short-circuit would only reproduce that same blank read. The full-catalog
+driver below is the first caller that wants forced re-extraction WITHOUT
+forced escalation (6 extra tesseract calls per card, across the whole
+catalog, for cards that read fine at tier 1), so `short_circuit: Optional[bool] = None` is now a separate, independent passthrough parameter
+on both `dispatch_micro_batch` and `_run_stage_c`; `None` resolves from the
+`STAGE_C_NO_SHORTCIRCUIT` env var at call time, exactly as
+`compute_card_evidence` has always documented. **Nothing about the shakedown
+driver's own behaviour changed** — it now passes `short_circuit=False`
+explicitly at its own call site, which is the value it always received.
 
 ### Resume contract (`--reextracted-after`, REQUIRED)
 
@@ -1037,6 +1048,211 @@ build — this is the invocation sequence for whoever runs them:
   cross-checked against `ImageEvidence.updated_at` for the killed run's own
   in-flight cards — nothing already committed before the kill should be
   re-fetched by the resumed invocation.
+
+## Full-catalog driver (2026-07-28)
+
+`manage.py stream_full_catalog` — pushes EVERY catalog card with a stable
+content hash through the same streaming conveyor
+(`cardpicker.stage_e_dispatch.dispatch_micro_batch`), OCR extraction and
+deduction as one workflow, one `PilotRunLedger` row per batch. It follows the
+shakedown driver's shape (explicit, fully-enumerated cohort chunked and fed
+in), not the backstop sweep's (fill-from-the-backlog).
+
+**This section documents the mechanism the command ships. It does NOT
+authorize a prod run** — the same §8 Tron-pass precondition the shakedown
+driver's own section states applies here unchanged, and this command touches
+far more cards than that one does.
+
+### Why it exists rather than a fix to the sweep
+
+Neither existing driver can do a full-catalog pass:
+
+- `stream_backstop_sweep` is a BACKLOG processor. Both of its selectors are
+  "cards that still need work", so it SKIPS everything already done — which
+  is most of the catalog, and exactly the cards a re-extraction pass exists
+  to revisit. It also terminates on `_cursor_chunk_walk`'s `exhausted=True`,
+  which means only "this cursor reached the end of the pk space and wrapped",
+  not "the backlog is empty" — a full-catalog pass driven that way would end
+  at the first lap boundary.
+- `stage_e_shakedown` has the right driver shape but a cohort hardcoded to
+  the issue-#418 Bug-A blank-tier-1 tail.
+
+**It neither reads nor advances either `StageESweepCursor` row, and cannot
+terminate on a cursor wrap.** That is structural, not a convention: every
+dispatch passes an explicit `card_ids=<chunk>` together with
+`batch_size=len(chunk)`, so `_select_micro_batch` returns at its first branch
+and never reaches the cursor-backed backlog fill. A full-catalog pass can
+therefore never advance the Stage C sweep cursor past pk ranges the backstop
+sweep has not actually examined.
+
+### Stage 0 — Scryfall freshness, inside the run, exactly once
+
+Issue #513 item 2 (owner ruling): "Freshness belongs inside the streaming
+process, not as a pre-step… the streaming run should verify/refresh Scryfall
+freshness as an integrated stage rather than relying on an operator-sequenced
+step before the train starts." This supersedes the interim
+`scryfall_refresh_import.sh` wrapper in the orchestration repo for this
+command's own runs.
+
+Before batch 0 dispatches, the command verifies that the Scryfall
+printing-metadata cache matches the remote bulk entry and refreshes it if not,
+by CALLING `cardpicker/printing_metadata_import.py`'s own entry points. That
+module is not modified here, and issue #513 item 1 is separate open work.
+
+- **Once, at the start — never during the run.** This is the non-obvious
+  constraint. Stage D's illustration deduction (`cardpicker/local_illustration.py`)
+  builds its matching index from `CanonicalPrintingMetadata`, which is exactly
+  the table a refresh rewrites. Refreshing mid-traversal would change that
+  index underneath a running pass: early batches would deduce against one
+  reference set and late batches against another, under a single `run_id`,
+  producing results that are neither comparable across the run nor
+  reproducible from it. Do not "improve" this later by adding a periodic
+  mid-run refresh.
+- **Fail before any dispatch.** Any stage-0 failure — network, partial
+  download, import error — aborts with a non-zero exit before a single batch
+  is dispatched, writing nothing. For an unattended ~230k-card run the
+  acceptable outcomes are "did not start" and "ran to completion", never
+  "started against stale or half-imported reference data".
+- **Reports what it decided**, including the remote `updated_at` it compared
+  against and the local cache's age. A refresh on a RESUMED run is called out
+  loudly: it has the same early/late inconsistency as a mid-run refresh, only
+  spread across two invocations, since the batches the earlier invocation
+  completed were deduced against the old reference data.
+
+`--skip-freshness` bypasses stage 0 entirely (tests, bounded `--sample`
+trials, resumed runs where the operator knows the data has not moved).
+`--require-fresh` makes it verify-only — fail rather than refresh.
+`--dry-run` skips it too, since a refresh is a real download and a real DB
+write.
+
+Deliberately NOT included: any catalog / Google Drive rescan or
+`update_database` stage. That is a different concern with different risk (a
+stale catalog only shrinks the cohort, and is self-healing via the
+event-driven card-create trigger), and issue #513's ruling does not cover it.
+
+### Cohort
+
+Every `Card` with `content_phash__isnull=False`, in pk order, with NO
+eligibility filter — nothing is skipped for being already done. The walk is
+keyset-paginated (`pk__gt=<last dispatched pk>` LIMIT `--batch-size`, a pure
+pk-index range scan per batch), never a materialised full-cohort id list nor
+a server-side cursor held open across hours of OCR work.
+
+### Every tunable is a flag
+
+The operator's working method is launch, watch, kill, change a setting,
+relaunch — so changing ANY setting must cost a kill and a relaunch, never a
+rebuild and a redeploy. Nothing this command decides comes from `settings.py`
+or an env var (`--batch-size`'s DEFAULT reads
+`settings.STAGE_E_MICRO_BATCH_SIZE`; the flag always wins when passed):
+
+- `--batch-size N` — chunk size, and the `batch_size` passed per chunk.
+- `--start-pk N` — resume from a pk, EXCLUSIVE. Overrides AND resets the
+  stored high-water mark, so `--start-pk 0` genuinely restarts the pass.
+- `--max-batches N` — bound one invocation.
+- `--sample N` — a deterministic pseudo-random subset of N cards drawn across
+  the WHOLE pk space (seeded from N itself, never the clock), for
+  representative throughput measurement; a pk-ordered prefix is not
+  representative, since pk order correlates with import order and hence with
+  source, image size and OCR difficulty.
+- `--reextract` — force Stage C re-extraction regardless of manifest
+  completeness.
+- `--short-circuit` / `--no-short-circuit` — independent of `--reextract`.
+  Omitted leaves `short_circuit=None`, i.e. inherit the
+  `STAGE_C_NO_SHORTCIRCUIT` env default (resolved at call time).
+- `--dry-run` — report the cohort size and batch plan, write nothing.
+- `--skip-freshness`, `--require-fresh` — stage 0 controls (see "Stage 0"
+  below).
+- `--max-throttle-retries N`, `--throttle-backoff-initial S`,
+  `--throttle-backoff-max S` — the throttle retry budget and backoff schedule
+  (see "Stop conditions" below).
+- `--progress-every-batches N`, `--progress-every-seconds S` — rolled-up
+  progress summary cadence (see "Progress output" below).
+
+### Resume
+
+A pk high-water mark persisted to `cardpicker.models.StageEFullCatalogCursor`
+(a small dedicated singleton model) after every COMPLETED batch; a killed run
+resumes exactly where it stopped on the next bare invocation. Deliberately
+NOT a `StageESweepCursor` row — that model's semantics are backlog-sweep
+semantics (wrap/lap counting, CAS chunk claiming), and both are actively
+harmful here: a wrap would silently restart a 230k-card pass from the
+beginning instead of ending it, and CAS-claiming ranges would make the
+backstop sweep skip pk space it never examined. `--sample` and `--dry-run`
+runs never read or write the mark (a sample is spread across the whole pk
+space, so advancing a real pass's resume point from one would jump it to near
+the end of the catalog).
+
+### Stop conditions — deliberately asymmetric
+
+This is a ONE-SHOT, run-to-completion driver, not a cron job: it is intended
+to run unattended across the whole catalog in a single invocation.
+`stream_backstop_sweep` may stop on any obstacle because it is cron-invoked
+and "the next scheduled sweep picks up where this one stopped" is a real
+recovery path — **this command has no next invocation.** Kill-and-relaunch is
+the operator's contingency if the design fails, not the expected operating
+mode. `_HALT_STATUSES` and `_THROTTLED_STATUS` are still imported from
+`stream_backstop_sweep`, not redefined; what differs is what the driver does
+with each. A throttle is the system being BUSY; a trip is the system saying
+STOP.
+
+- **`halted-open-trip` / `halted-new-trip` — HARD STOP**, immediately, no
+  retry, no backoff, ever. NO SELF-RESUME is a binding design gate: an
+  envelope trip clears only via an explicit human `resolve_envelope_trip`
+  (see the runbook above), and nothing in this command may retry past one,
+  sleep hoping it clears, or acknowledge it.
+- **`throttled-concurrency-cap` — BOUNDED EXPONENTIAL BACKOFF AND RETRY** of
+  the same chunk, not a stop. A throttle means every
+  `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` slot is currently held; it is
+  transient and self-clearing as those dispatches finish, so ending a
+  multi-hour unattended pass on it would strand the run for no reason. The
+  retry sleeps `--throttle-backoff-initial` seconds (default 5), doubling per
+  consecutive throttle up to `--throttle-backoff-max` (default 60), for at
+  most `--max-throttle-retries` (default 20) CONSECUTIVE throttled attempts;
+  the consecutive counter resets on any successful dispatch. Exhausting the
+  budget means the cap is genuinely not clearing: the command then stops,
+  prints the resume pk, and **exits non-zero** so a supervisor can detect it.
+
+  This does NOT contradict `stage_e_dispatch.py`'s (and
+  `stream_backstop_sweep.py`'s) warning against a "hot, backoff-free loop"
+  that "would just re-sample an already-saturated cap with no backoff…
+  precisely when the host is already at its concurrency ceiling". The
+  objection there is to the ABSENCE of backoff, not to retrying — a capped
+  exponential sleep is the mitigation that paragraph asks for, and the
+  bounded consecutive-retry budget keeps the worst case finite. Every backoff
+  is logged with its wait and attempt number so an operator reading the log
+  can tell a SATURATED pipeline from a STALLED one.
+
+A halted or throttled batch did no work, so its pks do NOT advance the
+high-water mark; the retry (or the relaunch) re-dispatches exactly that
+chunk. The resume pk is printed on every exit path.
+
+### Progress output, built for unattended running
+
+Assume nobody is watching most of the time. The PER-BATCH line (batch number,
+pk range, chunk size, dispatch status, Stage C/D counters, cumulative cards
+done, elapsed, running cards/second) is debug-level — `logger.debug` always,
+stdout only at `--verbosity 2` or higher, because ~9,200 of them at the
+default batch size is a log nobody reads.
+
+What stdout always carries is a periodic rolled-up `PROGRESS` summary, emitted
+whenever EITHER `--progress-every-batches` batches have completed (default 25)
+OR `--progress-every-seconds` have elapsed (default 300), whichever comes
+first, plus once unconditionally at the end. Each carries cards done, cards
+remaining, elapsed, the cards/second rate since the last summary and
+cumulatively, a projected completion timestamp, the cumulative throttle-retry
+count, and the CURRENT RESUME PK — that last one so a process that dies
+unexpectedly (OOM kill, deploy, host reboot) still leaves a recent, valid
+resume point in the log.
+
+### Ledger convention
+
+Nothing new — every batch gets its own `PilotRunLedger` row via
+`dispatch_micro_batch` (`command="stage_e_streaming_dispatch"`,
+`trigger_reason="full-catalog"`, which is what separates this pass's rows from
+`"shakedown"` / `"backstop-sweep"` / `"evidence-change"` rows). `run_id` prefix
+is `stage-e-fullcat-b<batch-size>-<microsecond-precision invocation timestamp>`,
+the same collision-safe shape the shakedown driver adopted.
 
 ## Phase 3 (not yet built)
 
